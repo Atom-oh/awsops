@@ -18,21 +18,31 @@ name, or a roster audit finds users in the pool nobody recognises.
 ## 원인 후보 / Candidate causes
 1. **계정이 그대로 살아 있다** — 오프보딩에서 Cognito 를 건드리지 않았다. 가장 흔하다.
 2. **주소 재할당 + 계정 복구** — `ForgotPassword`/`ConfirmForgotPassword` 는 무서명 public API 이고 확인
-   코드는 그 계정의 email 로 간다. mailbox 를 쥔 사람이 곧 계정 보유자가 된다. `write_attributes` 축소도
-   `allow_admin_create_user_only` 도 이 경로는 막지 못한다(ADR-002 잔여 위험).
+   코드는 그 계정의 email 로 간다. **`account_recovery_setting = admin_only`(ADR-002) 로 이 경로는 닫혀
+   있어야 한다** — pool 설정이 그렇게 되어 있는지 먼저 확인한다(`describe-user-pool`). 열려 있으면
+   mailbox 를 쥔 사람이 곧 계정 보유자다.
 3. **self-registered 잔존 계정** — `allow_admin_create_user_only` 는 앞으로의 signup 만 막는다.
 
 1. **The account is still alive** — offboarding never touched Cognito. The common case.
 2. **Address reassignment + account recovery** — `ForgotPassword`/`ConfirmForgotPassword` are unsigned
-   public APIs and the code goes to the account's email, so the mailbox holder becomes the account
-   holder. Neither the narrowed `write_attributes` nor `allow_admin_create_user_only` blocks this path
-   (ADR-002, accepted residual risk).
+   public APIs and the code goes to the account's email. **`account_recovery_setting = admin_only`
+   (ADR-002) is supposed to have closed this** — check the pool actually has it
+   (`describe-user-pool`). If it does not, the mailbox holder is the account holder.
 3. **Leftover self-registered accounts** — `allow_admin_create_user_only` only stops future signups.
 
 ## 확인 / Verification
 ```bash
 # 환경변수는 web task def 와 같은 값 / same values the web task definition uses
 SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
+
+# 아래 SQL 은 파괴적이다. DSN 이 비어 있으면 psql 이 로컬 소켓에 붙어 엉뚱한 DB 를 건드릴 수 있으므로
+# `:?` 로 fail-closed 한다. DSN 은 v1-to-v2-aurora-backfill.md 와 같은 방식으로 준비한다(Aurora
+# endpoint + IAM DB auth 토큰; 이 앱도 master secret 이 아니라 IAM 인증을 쓴다).
+# The SQL below is destructive. An empty DSN would let psql fall back to a local socket and hit the
+# wrong database, so `:?` makes it fail closed. Build DSN the same way as
+# v1-to-v2-aurora-backfill.md does (Aurora endpoint + an IAM DB auth token — the app authenticates
+# that way too, not with the master secret).
+: "${DSN:?set DSN (postgresql://<user>@<aurora-endpoint>:5432/awsops?sslmode=require) first}"
 ```
 
 ```bash
@@ -113,17 +123,17 @@ Skip step 3 and the person stays logged in for **up to 12 more hours**. Step 4 i
 the allowlist trusts an ADDRESS, not an account, so an entry left behind hands admin to whoever holds that
 address next.
 
-**비활성화/삭제가 이 경로의 유일한 확실한 차단**이다. MFA 를 켜도 그것만으로는 부족하다 — MFA 는 이미 enroll 된 계정만 보호하고, 미등록 계정은 복구 후 `MFA_SETUP` 을 공격자가 스스로 끝낼 수 있다. 그리고 `legacy_email_owner_match=true` 인 동안에는 주소가 재할당되면
+복구 경로는 `admin_only` 가 닫지만, **계정을 남겨두면 그 사람이 알던 비밀번호로 계속 로그인할 수 있다** — 그래서 비활성화/삭제가 여전히 필수다(MFA 는 이 경로의 대체재가 아니다: 이미 enroll 된 계정만 보호한다). 그리고 `legacy_email_owner_match=true` 인 동안에는 주소가 재할당되면
 그 주소로 기록된 legacy 행이 새 보유자와 매칭된다. 컷오버(ADR-009) 이후에는 sub 만 매칭하므로 legacy 행
-노출은 사라지지만, **계정 인수 경로는 그대로다** — 그 계정을 지우지 않는 한. MFA 는 enroll 된 계정에만 유효하다.
+노출은 사라진다. 만료되지 않는 것은 **떠난 사람이 이미 아는 비밀번호**이므로, 계정 자체를 없애야 한다.
 
-Disabling/deleting is the only certain block for this path. Turning MFA on is not a substitute: it
-protects accounts that are already ENROLLED, while an unenrolled one lets the attacker finish the
-`MFA_SETUP` challenge themselves after recovery. And while
+`admin_only` closes the recovery path, but **an account left alive can still be logged into with the
+password its owner already knew** — so disabling/deleting remains required. (MFA is not a substitute
+here either: it only protects accounts that are already enrolled.) And while
 `legacy_email_owner_match=true`, a reassigned address
 matches the legacy rows written under it. After the cutover (ADR-009) only the sub matches, so that
-exposure ends, but **the account-takeover path does not** — not unless the account itself is gone. MFA
-only helps for accounts that are enrolled.
+exposure ends. What never expires is the password the departing person already knows, so the account
+itself has to go.
 
 ## 관련 파일 / Related files
 - `terraform/v2/foundation/auth.tf` — user pool, `allow_admin_create_user_only`, `write_attributes`, `mfa_configuration`
@@ -132,5 +142,5 @@ only helps for accounts that are enrolled.
 - `docs/runbooks/v1-decommission.md` — v1→v2 사용자 이관 및 pool 명부 대조
 
 ## ADR
-- **ADR-002** — 인증/로그인, `email_verified` 게이트, 계정 복구 인수 = 수용된 잔여 위험(통제: 이 런북. MFA 는 enroll 된 계정에 한해 보조)
+- **ADR-002** — 인증/로그인, `email_verified` 게이트, `account_recovery_setting = admin_only`(계정 복구 인수 차단)
 - **ADR-009** — 소유권 키 컷오버(`legacy_email_owner_match`), backfill 절차

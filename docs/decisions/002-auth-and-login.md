@@ -74,16 +74,21 @@ The cutoff lookup goes through a **5-second per-sub in-process cache** (`web/lib
 
 **개정 (PR #203):** `verifyUser()` 는 이제 **`email_verified === true` 일 때만** 토큰의 `email` claim 을 채택한다(unverified 주소는 `undefined` 로 떨어진다). Cognito 는 기본적으로 사용자가 자기 email 을 바꿀 수 있게 했으므로(이 PR 이 client `write_attributes` 축소 + `allow_admin_create_user_only` 로 그 경로를 닫기 전까지) unverified claim 을 신뢰하면 email 기반 소유권·admin 판정을 self-service 로 통과할 수 있었다. 따라서 **SSM allowlist 판정도 verified email 에만 적용된다** — allowlist 에 있는 주소가 해당 계정에서 verified 가 아니면 그 사용자는 admin 이 아니다(fail-closed 방향이지만, 배포 시 allowlist 대상들의 verified 상태를 먼저 확인해야 lockout 을 피한다). user pool client 의 `write_attributes` 에서도 `email`·`email_verified` 를 제거했다.
 
-**이 PR 이 닫지 못하는 것: 계정 복구를 통한 인수.** Cognito 의 `ForgotPassword`/`ConfirmForgotPassword` 는 무서명 public API 이고, 확인 코드는 **그 계정의 email 주소로** 간다. 따라서 퇴사자의 재할당 mailbox 를 쥔 사람은 그 사람의 **기존 계정 자체를 인수**할 수 있고, 그 순간 email-keyed 행뿐 아니라 sub-keyed 행까지 전부 그 사람 것이 된다 — `write_attributes` 축소도, `allow_admin_create_user_only` 도, backfill 의 계정 나이 게이트도 이 경로는 막지 못한다(codex stop-gate). 이건 이 PR 이 만든 결함이 아니라 **email 기반 복구의 신뢰 모델 자체**다: mailbox 를 신뢰하는 순간 mailbox 보유자가 계정 보유자다. 실효 통제는 둘이며 **별도 변경으로 다룬다**: (1) **offboarding 에서 Cognito 사용자를 삭제/비활성화**한다 — 절차는 `docs/runbooks/user-offboarding.md` — 스케줄 정지 → 계정 비활성화 → **세션 revocation** → **admin allowlist/그룹 회수** → 삭제. `admin-disable-user` 만으로는 끊기지 않는다는 점이 핵심이다: id_token 은 발급 후 취소 불가라 revocation 없이는 최대 12h 로그인 상태가 유지되고, allowlist 는 계정이 아니라 주소를 신뢰하므로 항목을 남기면 그 주소를 나중에 쥔 사람이 admin 을 물려받는다. 주소 재할당 전에 계정을 없애면 이 경로는 확실히 닫힌다. (2) MFA(`mfa_configuration` 현재 `OFF`)는 **이미 enroll 된 계정의** 복구를 막는다 — 미등록 계정은 `ForgotPassword` 로 비밀번호를 바꾼 뒤 로그인 시 나오는 `MFA_SETUP` challenge 를 **공격자가 스스로 완료**할 수 있어 mailbox 단독 인수가 여전히 성립한다(PR #203 리뷰 MAJOR: 이전 서술은 '남겨둔 계정까지 덮는다'고 과대 기술했다). 따라서 MFA 는 **전 계정 enrollment 확인 + 미등록 잔존 계정 비활성화**가 전제이며, 자체 `/login` 은 Cognito challenge 를 처리하지 않으므로(위 ADR-042 항목) 롤아웃에 Hosted UI 폴백 경로가 선행돼야 한다. (1)은 이 PR 에서 런북으로 제공하고, (2)는 별도 변경이다 — 그래서 **잔여 위험으로 명시**한다.
+**계정 복구를 통한 인수 — 이 PR 에서 닫았다.** Cognito 의 `ForgotPassword`/`ConfirmForgotPassword` 는 무서명 public API 이고, 확인 코드는 **그 계정의 email 주소로** 간다. 따라서 **기본 설정에서는** 퇴사자의 재할당 mailbox 를 쥔 사람이 그 사람의 **기존 계정 자체를 인수**할 수 있었고, 그러면 email-keyed 행뿐 아니라 sub-keyed 행까지 전부 넘어간다 — `write_attributes` 축소도, `allow_admin_create_user_only` 도, backfill 의 계정 나이 게이트도 이 경로는 막지 못한다. 이건 이 PR 이 만든 결함이 아니라 **email 기반 복구의 신뢰 모델 자체**다: mailbox 를 신뢰하는 순간 mailbox 보유자가 계정 보유자다. **닫은 방법: `account_recovery_setting { recovery_mechanism { name = "admin_only" } }`** — self-service 복구 경로 자체를 없앤다(리뷰 지적으로 채택: 이 항목은 직전까지 '수용된 잔여 위험'으로 기록돼 있었다). 대가는 사용자가 자기 비밀번호를 재설정할 수 없다는 것이고, 이 pool 은 이미 그렇게 동작한다 — 계정은 admin 이 만들고 자체 `/login` 은 Cognito challenge 를 처리하지 않으므로 비밀번호 분실은 이미 운영자 작업이다(`admin-set-user-password --permanent`). AWS 자격증명을 가진 운영자는 마지막 admin 까지 언제든 복구할 수 있다. 그리고 남은 두 통제: (1) **offboarding 에서 Cognito 사용자를 삭제/비활성화**한다 — 절차는 `docs/runbooks/user-offboarding.md` — 스케줄 정지 → 계정 비활성화 → **세션 revocation** → **admin allowlist/그룹 회수** → 삭제. `admin-disable-user` 만으로는 끊기지 않는다는 점이 핵심이다: id_token 은 발급 후 취소 불가라 revocation 없이는 최대 12h 로그인 상태가 유지되고, allowlist 는 계정이 아니라 주소를 신뢰하므로 항목을 남기면 그 주소를 나중에 쥔 사람이 admin 을 물려받는다. 주소 재할당 전에 계정을 없애면 이 경로는 확실히 닫힌다. (2) MFA(`mfa_configuration` 현재 `OFF`)는 이 경로의 대안으로 검토했다가 **부적절**하다고 판정했다: MFA 는 **이미 enroll 된 계정의** 복구만 막고, 미등록 계정은 비밀번호 재설정 후 `MFA_SETUP` challenge 를 공격자가 스스로 완료할 수 있다(PR #203 리뷰 MAJOR — 직전 서술은 MFA 가 '남겨둔 계정까지 덮는다'고 과대 기술했다). 게다가 자체 `/login` 은 Cognito challenge 를 처리하지 않으므로 롤아웃에 Hosted UI 경로가 선행돼야 한다. 즉 이 경로는 `admin_only` 가 닫고, MFA 는 세션 하이재킹 등 **다른** 위협에 대한 별개 하드닝으로 남는다.
 
-**What this PR does NOT close: takeover via account recovery.** Cognito's `ForgotPassword` /
+**Takeover via account recovery — closed in this PR.** Cognito's `ForgotPassword` /
 `ConfirmForgotPassword` are unsigned public APIs and the confirmation code goes **to the account's email
 address**. Whoever holds a departed colleague's reassigned mailbox can therefore take over that person's
 EXISTING account, and at that point everything is theirs — sub-keyed rows included, not just email-keyed
 ones. Narrowing `write_attributes`, `allow_admin_create_user_only`, and the backfill's account-age gate
 all fail to stop this path. It is not a defect introduced here: it is the trust model of email-based
-recovery, where trusting the mailbox means the mailbox holder is the account holder. Two controls
-actually close it, and both belong in their own change: (1) **delete or disable the Cognito user during
+recovery, where trusting the mailbox means the mailbox holder is the account holder. The control that closes it is
+**`account_recovery_setting { recovery_mechanism { name = "admin_only" } }`**, which removes the
+self-service recovery path outright — adopted on review, having been recorded as accepted residual risk
+until then. The cost is that users cannot reset their own password, which is how this pool already
+behaves: accounts are admin-created and the self-hosted `/login` does not implement Cognito challenges,
+so a forgotten password is already an operator task (`admin-set-user-password --permanent`). An operator
+with AWS credentials can still recover any account, including the last admin. Alongside it: (1) **delete or disable the Cognito user during
 offboarding** — the procedure, including the ordering trap (deleting the account without disabling
 `report_schedules` leaves the diagnosis running and billing Bedrock), is
 `docs/runbooks/user-offboarding.md`: disable the schedule, disable the account, **revoke the session**,
@@ -91,15 +96,13 @@ offboarding** — the procedure, including the ordering trap (deleting the accou
 access — an id_token cannot be retracted once issued, so without the revocation they stay logged in for up
 to 12h — and the allowlist trusts an address rather than an account, so an entry left behind hands admin to
 whoever holds that address next. Removing the account before the address is reassigned closes the recovery
-path; while MFA is off it is the only thing that does. (2) turn
-on MFA (`mfa_configuration` is `OFF` today), which blocks recovery for accounts that are ALREADY
-ENROLLED. It does not cover an unenrolled account: the attacker resets the password via `ForgotPassword`
-and then completes the `MFA_SETUP` challenge themselves, so mailbox-only takeover still works (PR #203
-review MAJOR — this previously claimed MFA covers the accounts nobody remembered to remove). MFA therefore
-presupposes verifying enrollment across every account and disabling unenrolled leftovers, and its rollout
-presupposes a Hosted UI path, since the self-hosted `/login` does not handle Cognito challenges (see the
-ADR-042 note above). (1) ships with this PR as the runbook; (2) is a separate change — which is why this
-stays recorded as accepted residual risk rather than closed.
+path; while MFA is off it is the only thing that does. MFA (`mfa_configuration` is `OFF` today) was
+considered for this path and rejected as the wrong instrument: it blocks recovery only for accounts that
+are ALREADY ENROLLED, while an unenrolled one lets the attacker reset the password and then complete the
+`MFA_SETUP` challenge themselves (PR #203 review MAJOR — this previously claimed MFA covers the accounts
+nobody remembered to remove). Its rollout would also need a Hosted UI path, since the self-hosted `/login`
+does not handle Cognito challenges. So `admin_only` closes this path, and MFA remains separate hardening
+for other threats such as session hijacking.
 
 **효력 시점: 신규 토큰부터다.** `verifyUser()` 는 토큰 안의 claim 만 본다. id_token 유효기간이 12h 이므로 배포 **이전에** 발급된 토큰(`email_verified: true` + 그 당시 email)은 최대 12h 동안 계속 legacy 소유권 매칭을 통과한다 — 컨트롤을 켠 그 순간부터 닫히는 게 아니다. 반대 방향도 있다: 배포 직후 verified 로 올려준 admin 은 **재로그인 전까지 admin 이 아니다**(옛 토큰에 `email_verified` 가 없거나 false). 따라서 (a) 이 변경이 즉시 유효해야 한다면 강제 재인증(쿠키 무효화)을 함께 하고, (b) 아니라면 12h 가 지나기 전에는 "닫혔다"고 간주하지 않는다.
 

@@ -71,7 +71,7 @@ contents) are not covered.
 (그 조회는 `worker_job_id` 를 경유하고 그 값은 link 전까지 NULL 이다). 승자는 **ledger payload** 가 정한다 —
 워커가 `payload.report_id` 를 실행하므로 link 순서로 정하면 워커가 쓰는 대상과 어긋난다. 마이그레이션
 `01KZ2A4M…` 의 partial unique index(`worker_job_id IS NOT NULL AND deleted_at IS NULL`)가 DB 층에서
-받쳐준다. 패자는 soft-delete 한다(실행된 적이 없으므로 `failed` 로 표시하면 오보다). ledger 가 가리키는
+받쳐준다. **ledger 패자**(payload 가 지목하지 않은 report)는 soft-delete 한다 — 실행된 적이 없으므로 `failed` 로 표시하면 오보다. **링크 경합 패자 중 payload 가 지목한 report 는 삭제하지 않는다**(위 항목): 워커가 그 행을 렌더하므로 링크만 포기하고 보존한다. ledger 가 가리키는
 report 가 이미 삭제됐다면 202 로 404 나는 id 를 돌려주는 대신 409 로 사실을 말한다.
 
 **One report per job (EN):** concurrent same-key requests both pass the pre-check (it joins through
@@ -79,8 +79,9 @@ report 가 이미 삭제됐다면 202 로 404 나는 id 를 돌려주는 대신 
 `payload.report_id`, so deciding by link order diverges from what the worker actually writes to. The
 partial unique index in migration `01KZ2A4M…` (`worker_job_id IS NOT NULL AND deleted_at IS NULL`)
 backs this at the DB layer; `deleted_at` is in the predicate so a soft-deleted loser does not keep
-occupying the slot. The loser is soft-deleted, not marked `failed` — it never ran, so `failed`
-misreports it. If the report the ledger names has itself been deleted, the route returns 409 stating
+occupying the slot. The LEDGER loser — the report the payload does not name — is soft-deleted, not marked `failed`: it never
+ran, so `failed` misreports it. A report that merely lost the LINK while the payload names it is NOT
+deleted (see the bullet above); the worker renders it, so it keeps its row and gives up only the link. If the report the ledger names has itself been deleted, the route returns 409 stating
 that rather than a 202 pointing at an id that 404s.
 
 ### 소유권 키 계약 / Ownership key contract (PR #203)

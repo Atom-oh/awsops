@@ -20,6 +20,26 @@ resource "aws_cognito_user_pool" "main" {
     allow_admin_create_user_only = true
   }
 
+  # And the other half of the same threat: self-service RECOVERY. `ForgotPassword` /
+  # `ConfirmForgotPassword` are unsigned public APIs and the code goes to the account's email, so whoever
+  # holds a departed colleague's reassigned mailbox could reset that account's password and take it over
+  # — inheriting the sub-keyed rows too, not just the email-keyed ones. Blocking signup does nothing about
+  # accounts that already exist, and MFA only helps for accounts already ENROLLED (an unenrolled one lets
+  # the attacker finish MFA_SETUP themselves). `admin_only` removes the self-service path outright, which
+  # is the control that actually closes it (PR #203 review; previously recorded as accepted residual risk).
+  #
+  # The cost: users cannot reset their own password. That matches how this pool already works — accounts
+  # are admin-created (above) and the self-hosted /login does not implement Cognito challenges anyway, so
+  # a forgotten password is already an operator task: `admin-set-user-password --permanent`, per
+  # docs/runbooks/v1-decommission.md. An operator with AWS credentials can always recover any account,
+  # including the last admin.
+  account_recovery_setting {
+    recovery_mechanism {
+      name     = "admin_only"
+      priority = 1
+    }
+  }
+
   password_policy {
     minimum_length    = 8
     require_uppercase = true
