@@ -15,6 +15,7 @@ only) and (b) a live dry-run against the connector, asserting a non-error respon
 import json
 import logging
 import os
+import re
 
 _FORBIDDEN_SQL_KEYWORDS = (
     "insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke",
@@ -81,6 +82,9 @@ def _generate_expr(kind, schema, invoke=None):
     text = (invoke(prompt) or "").strip()
     if text.startswith("```"):
         text = text.strip("`").strip()
+        first_line, _, rest = text.partition("\n")
+        if rest and re.fullmatch(r"[a-zA-Z]+", first_line.strip()):
+            text = rest
     return text.strip()
 
 
@@ -95,20 +99,27 @@ def _static_check(kind, expr):
         if not lowered.lstrip().startswith("select"):
             return False
         for kw in _FORBIDDEN_SQL_KEYWORDS:
-            if f" {kw} " in f" {lowered} " or lowered.startswith(kw):
+            if re.search(rf"\b{kw}\b", lowered):
                 return False
     return True
 
 
 def _dry_run_check(kind, expr, integration_id, invoke_connector):
-    """(b) Live dry run against the connector; False on ANY failure (conservative)."""
-    tool = _KIND_TOOL.get(kind, f"{kind}_query")
+    """(b) Live dry run against the connector; False on ANY failure (conservative), and False on a
+    generic error-envelope response even when no exception was raised."""
     arg_name = "sql" if kind == "clickhouse" else "query"
+    args = {arg_name: expr, "instance_id": integration_id}
+    if kind == "clickhouse":
+        args["max_rows"] = 1
     try:
-        invoke_connector({arg_name: expr, "instance_id": integration_id})
-        return True
+        result = invoke_connector(args)
     except Exception:
         return False
+    if not result:
+        return False
+    if isinstance(result, dict) and "error" in result:
+        return False
+    return True
 
 
 def try_generate_signal(kind, schema, integration_id, invoke_connector, invoke_llm=None):

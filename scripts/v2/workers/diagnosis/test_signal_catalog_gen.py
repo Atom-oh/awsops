@@ -6,7 +6,6 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import pytest  # noqa: E402
 import signal_catalog_gen as scg  # noqa: E402
 
 SCHEMA = {"metrics": ["custom_app_requests_total", "custom_app_latency_seconds"]}
@@ -25,6 +24,10 @@ class TestGenerateQuery:
         scg._generate_expr("prometheus", SCHEMA, invoke=fake_invoke)
         assert "custom_app_requests_total" in seen["prompt"] and "prometheus" in seen["prompt"]
 
+    def test_strips_a_leading_language_tag_from_a_fenced_response(self):
+        expr = scg._generate_expr("prometheus", SCHEMA, invoke=lambda p: "```promql\nrate(a[5m])\n```")
+        assert expr == "rate(a[5m])"
+
 
 class TestStaticCheck:
     def test_accepts_a_plausible_read_expression(self):
@@ -33,6 +36,10 @@ class TestStaticCheck:
     def test_rejects_sql_mutating_keywords_for_clickhouse(self):
         assert scg._static_check("clickhouse", "DROP TABLE x") is False
         assert scg._static_check("clickhouse", "SELECT * FROM x; DROP TABLE x") is False
+
+    def test_rejects_mutating_keywords_on_a_newline_or_paren_adjacent(self):
+        assert scg._static_check("clickhouse", "select 1\ndrop table x") is False
+        assert scg._static_check("clickhouse", "select * from t where a=1 and(drop)") is False
 
     def test_rejects_blank_or_non_string(self):
         assert scg._static_check("prometheus", "") is False
@@ -47,6 +54,12 @@ class TestDryRunCheck:
         def boom(args):
             raise RuntimeError("down")
         assert scg._dry_run_check("prometheus", "up", 7, boom) is False
+
+    def test_fails_on_an_error_envelope_response(self):
+        assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"error": "no such metric"}) is False
+
+    def test_fails_on_a_falsy_response(self):
+        assert scg._dry_run_check("prometheus", "up", 7, lambda args: None) is False
 
 
 class TestTryGenerateSignal:
