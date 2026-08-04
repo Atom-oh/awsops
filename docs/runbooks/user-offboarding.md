@@ -50,15 +50,31 @@ SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
 ```bash
 V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)
 
-# 1) pool 전체를 명부와 대조 / reconcile the whole pool against your roster
-aws cognito-idp list-users --user-pool-id "$V2_POOL" \
-  --query 'Users[].{u:Username,created:UserCreateDate,status:UserStatus,enabled:Enabled}' --output table
+# 주소는 변수로만 다룬다 — 이 런북의 위협모델이 "명부에 없는 self-registered 계정"이라 주소를 공격자가
+# 골랐을 수 있다. `'` 나 `$( )` 가 든 주소를 명령줄에 그대로 치환하면 SQL 오작동/셸 주입이 된다.
+# Keep the address in a variable. This runbook's own threat model is "self-registered accounts nobody
+# recognises", so the address may be ATTACKER-CHOSEN: pasting one containing `'` or `$( )` straight into a
+# command is a SQL or shell injection (review finding).
+EMAIL='<email>'          # 따옴표 안에 그대로 / verbatim, inside the quotes
 
-# 2) 그 사람 명의로 남아있는 상태 / what still exists in their name
-#    (sub 는 list-users 의 Attributes 에서 확인)
-# DSN 은 이 디렉토리의 v1-to-v2-aurora-backfill.md 와 같은 컨벤션 / same convention as the sibling runbook
-psql "$DSN" -c "SELECT 'schedules' AS what, count(*) FROM report_schedules WHERE user_sub IN ('<sub>','<email>') AND enabled
-         UNION ALL SELECT 'reports', count(*) FROM diagnosis_reports WHERE requested_by IN ('<sub>','<email>') AND deleted_at IS NULL"
+# 1) pool 전체를 명부와 대조 — sub 도 함께 뽑는다(아래 단계들이 요구한다)
+#    Reconcile the pool against your roster, and project the sub too: the steps below need it, and the
+#    earlier version of this command dropped Attributes while telling you to read the sub from them.
+aws cognito-idp list-users --user-pool-id "$V2_POOL" \
+  --query 'Users[].{u:Username,sub:Attributes[?Name==`sub`]|[0].Value,created:UserCreateDate,status:UserStatus,enabled:Enabled}' \
+  --output table
+
+# 이 한 사람의 sub / this one person's sub
+SUB=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAIL" \
+  --query 'UserAttributes[?Name==`sub`]|[0].Value' --output text)
+: "${SUB:?admin-get-user returned no sub — check the username}"
+
+# 2) 그 사람 명의로 남아있는 상태 / what still exists in their name.
+#    -v + :'name' 로 psql 이 인용을 담당한다 — 문자열 보간이 아니다.
+#    psql does the quoting via -v + :'name'; nothing is interpolated into the SQL text.
+psql "$DSN" -v sub="$SUB" -v email="$EMAIL" -c \
+  "SELECT 'schedules' AS what, count(*) FROM report_schedules WHERE user_sub IN (:'sub', :'email') AND enabled
+   UNION ALL SELECT 'reports', count(*) FROM diagnosis_reports WHERE requested_by IN (:'sub', :'email') AND deleted_at IS NULL"
 ```
 
 ## 조치 / Action
@@ -70,15 +86,18 @@ set -euo pipefail
 : "${DSN:?set DSN (postgresql://<user>@<aurora-endpoint>:5432/awsops?sslmode=require) first}"
 : "${V2_POOL:?set V2_POOL (terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)}"
 : "${SSM_ADMIN_EMAILS_PARAM:=/ops/awsops-v2/admin_emails}"
+: "${EMAIL:?set EMAIL to the departing person's address (quoted, verbatim)}"
+: "${SUB:?set SUB — see the Verification block's admin-get-user step}"
 
 # 1) 스케줄을 먼저 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다
 #    Disable the schedule FIRST: deleting the account does not remove report_schedules rows, and the
 #    dispatcher fires every enabled row regardless of whether the user still exists.
-psql "$DSN" -c "UPDATE report_schedules SET enabled = false, updated_at = NOW() WHERE user_sub IN ('<sub>','<email>')"
+psql "$DSN" -v sub="$SUB" -v email="$EMAIL" -c \
+  "UPDATE report_schedules SET enabled = false WHERE user_sub IN (:'sub', :'email')"
 
 # 2) 계정 비활성화 (되돌릴 수 있음 — 인수 경로는 즉시 닫힌다)
 #    Disable the account (reversible, and it closes the takeover path immediately)
-aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "<email>"
+aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 
 # 3) 이미 발급된 세션을 끊는다 — admin-disable-user 는 새 로그인만 막고, 손에 든 awsops_token
 #    쿠키는 최대 12h 그대로 유효하다. 이 앱은 verifyUser() 가 session_revocations 를 보므로,
@@ -90,9 +109,10 @@ aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "<email>
 #    unreachable (documented in ADR-002), so during a DB outage this step does not hold — steps 2/5 are
 #    what survive that. / 단, isRevoked() 는 Aurora 장애 시 fail-open 이므로(ADR-002) DB 장애 중에는
 #    이 단계가 보장되지 않는다 — 그때 남는 것은 2/5 단계다.
-psql "$DSN" -c "INSERT INTO session_revocations (user_sub, revoked_at) VALUES ('<sub>', NOW())
-         ON CONFLICT (user_sub) DO UPDATE SET revoked_at = NOW()
-         WHERE session_revocations.revoked_at < NOW()"
+psql "$DSN" -v sub="$SUB" -c \
+  "INSERT INTO session_revocations (user_sub, revoked_at) VALUES (:'sub', NOW())
+   ON CONFLICT (user_sub) DO UPDATE SET revoked_at = NOW()
+   WHERE session_revocations.revoked_at < NOW()"
 
 # 4) admin 권한 회수 — SSM allowlist 는 EMAIL 로 매칭하므로 계정을 지워도 항목이 남는다.
 #    주소가 재할당되고 새 보유자가 그 주소를 verified 로 만들면 그 사람이 admin 이 된다.
@@ -112,10 +132,10 @@ aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overw
 #    next apply.
 # admins 그룹에 있었다면 / if they were in the group:
 aws cognito-idp admin-remove-user-from-group --user-pool-id "$V2_POOL" \
-  --username "<email>" --group-name "${ADMIN_GROUP:-admins}"
+  --username "$EMAIL" --group-name "${ADMIN_GROUP:-admins}"
 
 # 5) 유예기간 후 삭제 / delete after your grace period
-aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "<email>"
+aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 ```
 
 **순서가 중요하다**: 2번만 하고 1번을 빠뜨리면 스케줄이 계속 진단을 돌려 Bedrock 비용이 나가고, 그

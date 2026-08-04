@@ -108,12 +108,17 @@ export async function createReport(
        -- Two tiers, in this order (PR #203 review, both directions):
        --   1. a properly ATTRIBUTED baseline — its job is found through the link or the payload, and its
        --      account must then match. Attributed rows are never allowed across accounts.
-       --   2. only if there is none: a row we cannot attribute at all (NOT EXISTS any job). The worker's
-       --      fallback path (scripts/v2/workers/handlers.py) creates reports with worker_job_id NULL and
-       --      never writes the id into the payload, so a user's whole history can be like this; requiring
-       --      attribution made those users' parent_report_id permanently NULL, fixed at INSERT. Falling
-       --      back only when tier 1 is empty means the choice is "unattributed baseline" vs "no diff at
-       --      all", never "unattributed instead of the correct one".
+       --   2. only if there is none AND this call is not account-scoped: a row we cannot attribute at all
+       --      (NOT EXISTS any job). The worker's fallback path (scripts/v2/workers/handlers.py) creates
+       --      reports with worker_job_id NULL and never writes the id into the payload, so a user's whole
+       --      history can be like that, and requiring attribution leaves those users with no baseline.
+       --      But when the caller DID name an account, an unattributable row cannot be shown to belong to
+       --      it — and a baseline from the wrong account is worse than none, because the diff then reports
+       --      a regression that never happened, permanently (parent_report_id is fixed at INSERT). Two
+       --      reviews pulled in opposite directions here; misleading output loses to missing output, so
+       --      tier 2 is limited to calls with no account ($5 IS NULL). The consequence, stated: a user
+       --      whose history is entirely unattributed gets no baseline for an account-scoped diagnosis
+       --      until they have one report from the current code, which always attributes.
        -- The payload branch is fenced three ways, because a payload is client-adjacent data:
        --   type = 'report'  — the generic POST /api/jobs allowlist is {noop, noop-heavy}, so a report job
        --                      can only come from /api/diagnosis (server-computed report_id, account
@@ -133,7 +138,8 @@ export async function createReport(
              AND ($5::text IS NULL OR j.payload->>'account' = $5)
            ORDER BY r.created_at DESC LIMIT 1),
          (SELECT r.id FROM diagnosis_reports r
-           WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
+           WHERE $5::text IS NULL                       -- see the tier-2 note above
+             AND r.tier = $1 AND r.requested_by = ANY($4::text[])
              AND r.status = 'succeeded' AND r.deleted_at IS NULL
              AND NOT EXISTS (SELECT 1 FROM worker_jobs j2
                               WHERE j2.job_id = r.worker_job_id

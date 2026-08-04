@@ -105,8 +105,11 @@ def test_lineage_parent_is_scoped_by_owner_and_account(monkeypatch):
     assert "COALESCE(" in sql
     assert "(:acct IS NULL OR j.payload->>'account' = :acct)" in sql
     assert "NOT EXISTS (SELECT 1 FROM worker_jobs j2" in sql
-    tier2 = sql.split("NOT EXISTS", 1)[1]
-    assert ":acct" not in tier2  # the unattributed tier has no job to read an account from
+    # tier 2 is only reachable when NO account was named: an unattributable row cannot be shown to belong
+    # to the account being diagnosed, and a wrong-account baseline is worse than none (it reports a
+    # regression that never happened, and parent_report_id is fixed at INSERT).
+    tier2 = sql.split("COALESCE(", 1)[1].split("NOT EXISTS", 1)[0].rsplit("(SELECT r.id", 1)[1]
+    assert ":acct IS NULL" in tier2
     # link OR payload — a report whose link lost the one-report-per-job race is still the row the
     # worker renders, so it must stay eligible as a baseline. TEXT comparison, never a ::bigint cast of
     # the payload: AND does not order evaluation in Postgres, so a regex guard cannot stop an oversized

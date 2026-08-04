@@ -68,11 +68,12 @@ def _create_report(conn, tier, owner_sub, model, account=None):
         # Two tiers, mirroring the BFF (PR #203 review, both directions):
         #   1. an ATTRIBUTED baseline — its job is found through the link or the payload, and its account
         #      must then match. Attributed rows never cross accounts.
-        #   2. only if tier 1 is empty: a row that cannot be attributed at all. The _report handler
-        #      self-creates reports with worker_job_id NULL and never writes the id into the payload, so
-        #      requiring attribution made those users' parent permanently NULL (fixed at INSERT). The
-        #      fallback therefore chooses between "unattributed baseline" and "no diff at all", never
-        #      between unattributed and correct.
+        #   2. only if tier 1 is empty AND this call is not account-scoped: a row that cannot be attributed
+        #      at all. The _report handler self-creates reports with worker_job_id NULL and never writes the
+        #      id into the payload, so requiring attribution can leave a user with no baseline — but when an
+        #      account IS named, an unattributable row cannot be shown to belong to it, and a baseline from
+        #      the wrong account is worse than none (the diff would report a regression that never happened,
+        #      fixed at INSERT). So tier 2 requires :acct IS NULL.
         # Payload branch fences: type = 'report' (the generic /api/jobs allowlist excludes it), same
         # owner (a type value is not provenance), and a TEXT compare against r.id::text — never a
         # ::bigint cast of the payload, since AND does not order evaluation in Postgres.
@@ -86,7 +87,8 @@ def _create_report(conn, tier, owner_sub, model, account=None):
         "      AND (:acct IS NULL OR j.payload->>'account' = :acct) "
         "    ORDER BY r.created_at DESC LIMIT 1), "
         "   (SELECT r.id FROM diagnosis_reports r "
-        "    WHERE r.tier = :t AND r.requested_by = ANY(:ok) "
+        "    WHERE :acct IS NULL "
+        "      AND r.tier = :t AND r.requested_by = ANY(:ok) "
         "      AND r.status = 'succeeded' AND r.deleted_at IS NULL "
         "      AND NOT EXISTS (SELECT 1 FROM worker_jobs j2 "
         "                       WHERE j2.job_id = r.worker_job_id "
