@@ -98,12 +98,25 @@ def _bedrock_invoke(prompt):
     return "".join(p.get("text", "") for p in payload.get("content", []))
 
 
+_SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$")
+_MAX_PROMPT_NAMES = 60
+
+
+def _prompt_safe_names(names):
+    """Schema identifiers come from a user-registered datasource, so they are OUTSIDE the trust boundary:
+    a table literally named `-- ignore previous instructions …` is prompt injection (review MAJOR, L3-M3).
+    Only plain identifiers reach the prompt, and the list is capped. The downstream static/relevance gates
+    stay the real defence — this just stops the prompt from carrying prose."""
+    out = [n for n in (str(x) for x in (names or [])) if _SAFE_IDENT.match(n)]
+    return out[:_MAX_PROMPT_NAMES]
+
+
 def _generate_expr(kind, schema, invoke=None):
     """Ask the model for one query expression against `schema`'s vocabulary. `invoke` is injectable
     (tests never call Bedrock for real). May raise — the caller wraps this."""
     invoke = invoke or _bedrock_invoke
     vocab_key = _VOCAB_KEY.get(kind, "names")
-    vocab = ", ".join(_vocab_names(schema, vocab_key)) or "(none)"
+    vocab = ", ".join(_prompt_safe_names(_vocab_names(schema, vocab_key))) or "(none)"
     prompt = _PROMPT_TEMPLATE.format(
         lang=_QUERY_LANG.get(kind, "query"), kind=kind, vocab_key=vocab_key, vocab=vocab)
     text = (invoke(prompt) or "").strip()
@@ -113,6 +126,12 @@ def _generate_expr(kind, schema, invoke=None):
         if rest and re.fullmatch(r"[a-zA-Z]+", first_line.strip()):
             text = rest
     return text.strip()
+
+
+# A query-level `SETTINGS max_execution_time=0` overrides the URL parameter, undoing the dry-run's scan
+# bound (review MAJOR, L3-M1). A generated signal query never needs SETTINGS, so reject the clause
+# outright rather than trying to police its contents.
+_SETTINGS_CLAUSE = re.compile(r"\bsettings\b", re.IGNORECASE)
 
 
 def _static_check(kind, expr):
@@ -126,6 +145,8 @@ def _static_check(kind, expr):
         if not lowered.lstrip().startswith("select"):
             return False
         if _TABLE_FN.search(lowered):
+            return False
+        if _SETTINGS_CLAUSE.search(lowered):
             return False
         for kw in _FORBIDDEN_SQL_KEYWORDS:
             if re.search(rf"\b{kw}\b", lowered):
@@ -419,7 +440,10 @@ def _anchor_names(kind, schema):
 # A name inside a STRING LITERAL or a COMMENT is not a reference to it: `SELECT 'duration' FROM spans`
 # and `SELECT 1 /* duration */ FROM spans` are constants, yet both anchored on the column `duration` and
 # were stored as ready signals (review, fourteenth pass). Literals are blanked before any name matching.
-_SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
+# `#` and `#!` are line comments in ClickHouse as well as MySQL — sql_readonly_guard.py's `hash_comment`
+# flag already says so, and leaving it out let `select 1 # trace_spans` satisfy the relevance gate while
+# the server ran the constant `select 1` (review MAJOR, L2-M1).
+_SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*|#![^\n]*|#[^\n]*", re.DOTALL)
 # BACKSLASH escapes, not just doubling: ClickHouse and PromQL both write `'it\\'s'`, and a regex that
 # ends the literal at the escaped quote leaves its tail exposed as code — `'a\\'duration\\''` then anchored
 # on the column `duration` (review, fifteenth pass). Backticks are RAW in both dialects (no escapes).
@@ -465,11 +489,20 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
     and (False, True) when the call itself threw, which is retryable."""
     arg_name = "sql" if kind == "clickhouse" else "query"
     args = {arg_name: expr, "instance_id": integration_id}
+    # Bound the dry run with whatever the connector actually accepts. This path newly executes
+    # MODEL-WRITTEN queries against a user's backend, so an unbounded high-cardinality PromQL or a wide
+    # LogQL range is this change's responsibility (review MAJOR, L3-M2). Loki/Tempo expose no server-side
+    # execution bound through their connectors — `limit` plus the datasource's own query timeout is what
+    # there is; Prometheus/Mimir take the API's `timeout`.
     if kind == "clickhouse":
         args["max_rows"] = 1
         # max_rows caps the RETURNED rows, not the SCAN: `SELECT count() FROM spans` reads the whole table
         # on every rebuild (review MAJOR, L4-M4). 5s is plenty for a signal query and cheap to abandon.
         args["max_execution_time"] = 5
+    elif kind in ("prometheus", "mimir"):
+        args["timeout"] = "5s"
+    elif kind in ("loki", "tempo"):
+        args["limit"] = 1
     try:
         result = invoke_connector(args)
     except Exception:           # noqa: BLE001 — never propagated; see the note below

@@ -108,7 +108,9 @@ Amended #3). The candidate goes through:
    merely measure a constant (`SELECT 1`, `vector(1)`, a name inside a string literal or an alias). This
    was not in the plan and is the gate most of the review passes were spent on.
 3. Live dry-run against the connector (`{kind}_query` / `{kind}_search` with the smallest applicable
-   window/limit and a 5s ClickHouse execution bound), asserting a non-error response. An empty response
+   window/limit and, per connector, whatever bound it accepts: ClickHouse `max_execution_time=5` +
+   `max_rows=1`, Prometheus/Mimir the API's `timeout=5s`, Loki/Tempo `limit=1` — Loki and Tempo expose no
+   server-side execution bound through their connectors), asserting a non-error response. An empty response
    is retryable, not a verdict — a quiet window is not a wrong query.
 
 Only a candidate that passes all three is persisted as a `ready` row with `meta.provenance = "generated"`;

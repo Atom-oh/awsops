@@ -98,11 +98,22 @@ def _bound(data):
     return {"resultType": data.get("resultType"), "result": out}, truncated
 
 
+def _timeout_param(v):
+    """Optional Prometheus API `timeout` (e.g. "5s"), clamped to 1..60s. The connector bounds response SIZE
+    but had no execution bound, which matters now that a caller can run model-written PromQL (review)."""
+    m = re.fullmatch(r"\s*(\d{1,3})s?\s*", str(v or ""))
+    return f"{max(1, min(60, int(m.group(1))))}s" if m else None
+
+
 def prometheus_query(args):
     query = (args.get("query") or "").strip()
     if not query:
         return err("query (PromQL) required")
-    data = _get(_ds(), "/api/v1/query", {"query": query, "time": _parse_time(args.get("time"))})
+    params = {"query": query, "time": _parse_time(args.get("time"))}
+    timeout = _timeout_param(args.get("timeout"))
+    if timeout:
+        params["timeout"] = timeout
+    data = _get(_ds(), "/api/v1/query", params)
     bounded, truncated = _bound(data)
     return ok({"truncated": truncated, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
 
