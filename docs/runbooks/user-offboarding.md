@@ -283,6 +283,28 @@ ALLOW_LC=$(printf '%s' "${ALLOW// /}" | tr '[:upper:]' '[:lower:]')
 EMAIL_LC=$(printf '%s' "$EMAIL" | tr '[:upper:]' '[:lower:]')
 case ",${ALLOW_LC}," in *,"$EMAIL_LC",*) echo "step 2 not done: still in the admin allowlist"; exit 1;; esac
 
+# 이 계정이 Terraform 관리 대상인지 확인한다 — `aws_cognito_user.admin`(auth.tf)이 있다. CLI 로 지우면
+# 다음 `terraform apply` 가 tfvars 의 `admin_email`/`admin_password` 로 **같은 계정을 재생성**해 오프보딩이
+# 조용히 되돌아간다(리뷰 지적, base 로 확인).
+# Check whether this account is Terraform-managed: `aws_cognito_user.admin` exists in auth.tf. Deleting it
+# with the CLI lets the next `terraform apply` RECREATE it from tfvars (`admin_email`/`admin_password`),
+# silently undoing the offboarding (review finding, confirmed against base).
+TF_ADMIN=$(terraform -chdir=terraform/v2/foundation state list 2>/dev/null | grep -c '^aws_cognito_user\.' || true)
+if [ "${TF_ADMIN:-0}" != "0" ]; then
+  TF_ADMIN_EMAIL=$(terraform -chdir=terraform/v2/foundation state show aws_cognito_user.admin 2>/dev/null \
+    | sed -n 's/^ *username *= *"\(.*\)"$/\1/p')
+  if [ "$TF_ADMIN_EMAIL" = "$EMAIL" ]; then
+    echo "STOP: $EMAIL is aws_cognito_user.admin in Terraform state."
+    echo "  Deleting it here would be undone by the next apply. Instead:"
+    echo "   1. point terraform.tfvars' admin_email at the person taking over (and rotate admin_password),"
+    echo "   2. terraform plan -out tfplan && apply tfplan  # replaces the account under management,"
+    echo "   3. or remove the resource and 'terraform state rm aws_cognito_user.admin' if no admin user"
+    echo "      should be managed at all."
+    echo "  The disable/revoke/allowlist steps above have already run and still hold."
+    exit 1
+  fi
+fi
+
 printf 'all steps verified. retype %s to delete irreversibly: ' "$EMAIL"; IFS= read -r CONFIRM < /dev/tty
 [ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch - nothing was deleted'; exit 1; }
 aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "$EMAIL"
@@ -292,16 +314,17 @@ aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 없어 아무에게도 보이지 않는다. **Disabling the account without disabling the schedule** leaves the
 diagnosis running (billed Bedrock) while its output belongs to nobody.
 
-**2번만으로는 접근이 끊기지 않는다** — 이것이 이 절차에서 가장 놓치기 쉬운 지점이다. `admin-disable-user`
-는 *새* 인증만 막고, id_token 은 서버가 발급 후 취소할 수 없는 자기완결 토큰이다. 3번(세션 revocation)을
-하지 않으면 그 사람은 **최대 12시간 더 로그인 상태로 남는다.** 4번도 마찬가지로 잊기 쉽다: allowlist 는
-계정이 아니라 **주소**를 신뢰하므로, 항목을 남겨두면 그 주소를 나중에 쥔 사람이 admin 을 물려받는다.
+**1번(계정 비활성화)만으로는 접근이 끊기지 않는다** — 이것이 이 절차에서 가장 놓치기 쉬운 지점이다.
+`admin-disable-user` 는 *새* 인증만 막고, id_token 은 서버가 발급 후 취소할 수 없는 자기완결 토큰이다.
+**4번(세션 revocation)** 을 하지 않으면 그 사람은 **최대 12시간 더 로그인 상태로 남는다.** **2번(admin 회수)**
+도 잊기 쉽다: allowlist 는 계정이 아니라 **주소**를 신뢰하므로, 항목을 남겨두면 그 주소를 나중에 쥔 사람이
+admin 을 물려받는다.
 
-**Step 2 alone does not cut access** — the easiest thing to miss here. `admin-disable-user` blocks only
-*new* authentication, and an id_token is self-contained: nothing server-side can retract it once issued.
-Skip step 3 and the person stays logged in for **up to 12 more hours**. Step 4 is equally easy to forget:
-the allowlist trusts an ADDRESS, not an account, so an entry left behind hands admin to whoever holds that
-address next.
+**Step 1 (disabling the account) alone does not cut access** — the easiest thing to miss here.
+`admin-disable-user` blocks only *new* authentication, and an id_token is self-contained: nothing
+server-side can retract it once issued. Skip **step 4 (session revocation)** and the person stays logged in
+for **up to 12 more hours**. **Step 2 (pulling admin rights)** is equally easy to forget: the allowlist
+trusts an ADDRESS, not an account, so an entry left behind hands admin to whoever holds that address next.
 
 **무엇이 무엇을 닫는지는 ADR-002 가 단일 진실이다**(이 런북은 그 문장을 인용만 한다): *계정 복구 인수는*
 `account_recovery_setting = admin_only` *가 닫고, 오프보딩은 떠난 사람이 이미 아는 비밀번호·세션·admin 권한을
