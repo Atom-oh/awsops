@@ -69,7 +69,7 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" \
 
 **Future signups being blocked does NOT clean up existing accounts** (PR #203). `allow_admin_create_user_only = true` only stops future `SignUp` calls; an account that already self-registered keeps working, with a verified address of its own choosing. If such an account holds a departed colleague's reassigned mailbox address, it bypasses every control in this PR. Terraform cannot decide this (Cognito records no "created by" provenance) — reconcile the pool against your operator roster ONCE right after the deploy with the command above, and `admin-disable-user` anything you do not recognise.
 
-**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — 이 앱 UI 에는 email 검증 화면이 없다(BFF 는 `InitiateAuth` 결과에서 `IdToken` 만 읽고 AccessToken 은 쓰지 않는다). 다만 user pool client 는 시크릿 없는 public client 이므로 사용자가 Hosted UI/PKCE 로 직접 AccessToken 을 얻어 Cognito 의 `VerifyUserAttribute` 를 호출할 수는 있다 — 즉 **자기 계정에 이미 설정된 주소의 검증은 사용자도 가능하다**(codex stop-gate: 이전 서술은 '불가능'이라 단정했다). 보안 결론은 바뀌지 않는다: 막은 것은 주소를 *바꾸는* 것(`write_attributes`)과 새 계정을 *만드는* 것(`allow_admin_create_user_only`)이다. 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
+**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — **사용자가 스스로 검증할 방법은 이 스택에 없다**: client 의 `allowed_oauth_scopes` 는 `["openid","email","profile"]` 뿐이고 user-scoped attribute API(`GetUserAttributeVerificationCode` / `VerifyUserAttribute`)에 필요한 `aws.cognito.signin.user.admin` 이 없다 — Hosted UI 로 토큰을 받아도 그 API 는 호출할 수 없다. 게다가 `account_recovery_setting = admin_only` 로 self-service 복구 자체가 없다. (이 문서는 한때 '사용자도 검증 가능'이라고 썼다가 다시 '불가능'으로 돌아왔는데, 두 번째가 맞고 근거는 scope 부재다 — 리뷰 지적.) 따라서 `email_verified` 는 **admin API 로만** 설정된다: `admin-create-user` 또는 `admin-update-user-attributes`. 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
 
 - v1 사용자 목록(이관 원본)에 그 주소가 그 사람의 것으로 기록되어 있는가 — 오타나 추측이 아닌가
 - 그 사람이 **지금도** 그 mailbox 를 보유하는가 (퇴사자 주소 재할당이 이 PR 이 막는 위협모델이다)
@@ -80,12 +80,14 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" \
 **`email_verified` is this procedure's decision point** (PR #203). `verifyUser()` adopts the token's
 `email` claim only when `email_verified` is true, so setting this flag is **not a verification — it is
 the operator asserting one**, and it immediately grants that address (1) eligibility for the SSM
-allowlist admin check and (2) ownership of every legacy email-keyed row written under it. this app's UI offers no email-verification screen (the BFF reads only `IdToken` from `InitiateAuth`
-and never uses the AccessToken). It is NOT unreachable, though: the pool client is public and secretless, so a
-user can obtain an AccessToken themselves via Hosted UI/PKCE and call Cognito's `VerifyUserAttribute` — a user
-CAN verify an address already set on their own account (codex stop-gate: this previously claimed otherwise).
-The security conclusion is unchanged: what is blocked is CHANGING the address (`write_attributes`) and
-CREATING a new account (`allow_admin_create_user_only`).
+allowlist admin check and (2) ownership of every legacy email-keyed row written under it. there is no way for a user to verify their own address on this
+stack. The client's `allowed_oauth_scopes` are `["openid","email","profile"]` only — no
+`aws.cognito.signin.user.admin`, which the user-scoped attribute APIs
+(`GetUserAttributeVerificationCode` / `VerifyUserAttribute`) require — so a Hosted UI token cannot call
+them, and `account_recovery_setting = admin_only` removes self-service recovery on top of that. (This
+document said "possible" for one revision after saying "impossible"; the second answer is the correct one
+and the evidence is the missing scope — review finding.) `email_verified` is therefore set by ADMIN APIs
+only: `admin-create-user` or `admin-update-user-attributes`.
 **Never set it in bulk.** Per address, confirm all three first:
 
 - the v1 user list (the migration source) records that address for that person — not a typo or a guess

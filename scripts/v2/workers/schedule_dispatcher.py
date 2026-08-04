@@ -72,12 +72,16 @@ def _create_report(conn, tier, owner_sub, model, account=None):
         # excludes 'report'), same-owner (a type value alone is not provenance), and a TEXT comparison
         # against r.id::text — never a ::bigint cast of the payload, since AND does not order evaluation
         # in Postgres and an oversized value would abort the query with 22003.
-        "     JOIN worker_jobs j ON (j.job_id = r.worker_job_id "
+        # LEFT, not INNER: the _report handler self-creates reports with worker_job_id NULL and does not
+        # write the id into the payload, so those rows match neither branch. An INNER JOIN made them
+        # permanently unusable as a baseline (PR #203 review MAJOR). The join supplies the account when it
+        # can; a row whose account cannot be established stays eligible on the owner scope alone.
+        "     LEFT JOIN worker_jobs j ON (j.job_id = r.worker_job_id "
         "        OR (j.type = 'report' AND j.payload->>'report_id' = r.id::text "
         "            AND j.requested_by = r.requested_by)) "
         "    WHERE r.tier = :t AND r.requested_by = ANY(:ok) "
         "      AND r.status = 'succeeded' AND r.deleted_at IS NULL "
-        "      AND (:acct IS NULL OR j.payload->>'account' = :acct) "
+        "      AND (:acct IS NULL OR j.job_id IS NULL OR j.payload->>'account' = :acct) "
         "    ORDER BY r.created_at DESC LIMIT 1), :m) RETURNING id",
         t=tier, rb=owner_sub, m=model, ok=[owner_sub], acct=account,
     )

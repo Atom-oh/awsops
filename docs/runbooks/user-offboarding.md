@@ -1,12 +1,13 @@
 # Runbook: 사용자 오프보딩 (Cognito) / User Offboarding (Cognito)
 
-사람이 떠날 때 v2 Cognito 계정을 처리하는 절차. **미룰 수 없는 이유**: 계정을 남겨두면 그 email 주소가
-재할당되는 순간 새 보유자가 그 계정을 인수할 수 있고, 인수되면 email-keyed 행뿐 아니라 **sub-keyed 행까지
-전부** 넘어간다.
+사람이 떠날 때 v2 Cognito 계정을 처리하는 절차. **미룰 수 없는 이유**: 떠난 사람은 자기 비밀번호를 알고 있고,
+손에 든 세션 쿠키는 최대 12h 살아 있고, admin allowlist 항목과 예약 진단은 계정과 무관하게 계속 작동한다.
+(주소 재할당을 통한 *계정 인수* 는 별개 통제로 닫혀 있다 — ADR-002 의 `account_recovery_setting = admin_only`.)
 
-What to do with a v2 Cognito account when a person leaves. **Why it cannot wait**: leave the account alive
-and, the moment the email address is reassigned, the new holder can take the account over — which hands
-them the sub-keyed rows too, not just the email-keyed ones.
+What to do with a v2 Cognito account when a person leaves. **Why it cannot wait**: the departing person
+knows their password, the session cookie in their hand lives for up to 12h, and their admin-allowlist
+entry and scheduled diagnoses keep working regardless of the account. (*Takeover* via a reassigned
+address is closed by a separate control — `account_recovery_setting = admin_only`, ADR-002.)
 
 ## 증상 / Symptom
 떠난 사람의 리소스가 다른 사람 화면에 보이거나, 떠난 사람 명의로 진단·스케줄이 계속 실행된다. 또는
@@ -18,16 +19,17 @@ name, or a roster audit finds users in the pool nobody recognises.
 ## 원인 후보 / Candidate causes
 1. **계정이 그대로 살아 있다** — 오프보딩에서 Cognito 를 건드리지 않았다. 가장 흔하다.
 2. **주소 재할당 + 계정 복구** — `ForgotPassword`/`ConfirmForgotPassword` 는 무서명 public API 이고 확인
-   코드는 그 계정의 email 로 간다. **`account_recovery_setting = admin_only`(ADR-002) 로 이 경로는 닫혀
-   있어야 한다** — pool 설정이 그렇게 되어 있는지 먼저 확인한다(`describe-user-pool`). 열려 있으면
-   mailbox 를 쥔 사람이 곧 계정 보유자다.
+   코드는 그 계정의 email 로 간다. **`account_recovery_setting = admin_only`(ADR-002) 가 이 경로를 닫는다** — 이 런북의 몫이 아니므로,
+   pool 설정이 실제로 그렇게 되어 있는지만 확인한다(`describe-user-pool`). 열려 있다면 그건 인프라 회귀이고,
+   그 상태에서는 mailbox 를 쥔 사람이 곧 계정 보유자다.
 3. **self-registered 잔존 계정** — `allow_admin_create_user_only` 는 앞으로의 signup 만 막는다.
 
 1. **The account is still alive** — offboarding never touched Cognito. The common case.
 2. **Address reassignment + account recovery** — `ForgotPassword`/`ConfirmForgotPassword` are unsigned
-   public APIs and the code goes to the account's email. **`account_recovery_setting = admin_only`
-   (ADR-002) is supposed to have closed this** — check the pool actually has it
-   (`describe-user-pool`). If it does not, the mailbox holder is the account holder.
+   public APIs and the code goes to the account's email. **`account_recovery_setting = admin_only` (ADR-002)
+   closes this path** — not this runbook's job, so all that is needed here is confirming the pool really
+   has it (`describe-user-pool`). If it does not, that is an infrastructure regression, and until it is
+   fixed the mailbox holder is the account holder.
 3. **Leftover self-registered accounts** — `allow_admin_create_user_only` only stops future signups.
 
 ## 확인 / Verification
@@ -131,13 +133,16 @@ Skip step 3 and the person stays logged in for **up to 12 more hours**. Step 4 i
 the allowlist trusts an ADDRESS, not an account, so an entry left behind hands admin to whoever holds that
 address next.
 
-복구 경로는 `admin_only` 가 닫지만, **계정을 남겨두면 그 사람이 알던 비밀번호로 계속 로그인할 수 있다** — 그래서 비활성화/삭제가 여전히 필수다(MFA 는 이 경로의 대체재가 아니다: 이미 enroll 된 계정만 보호한다). 그리고 `legacy_email_owner_match=true` 인 동안에는 주소가 재할당되면
+**무엇이 무엇을 닫는지는 ADR-002 가 단일 진실이다**(이 런북은 그 문장을 인용만 한다): *계정 복구 인수는*
+`account_recovery_setting = admin_only` *가 닫고, 오프보딩은 떠난 사람이 이미 아는 비밀번호·세션·admin 권한을
+닫는다.* 그래서 이 절차는 복구 경로를 막기 위한 것이 아니라 **남아 있는 접근**을 끝내기 위한 것이다. 그리고 `legacy_email_owner_match=true` 인 동안에는 주소가 재할당되면
 그 주소로 기록된 legacy 행이 새 보유자와 매칭된다. 컷오버(ADR-009) 이후에는 sub 만 매칭하므로 legacy 행
 노출은 사라진다. 만료되지 않는 것은 **떠난 사람이 이미 아는 비밀번호**이므로, 계정 자체를 없애야 한다.
 
-`admin_only` closes the recovery path, but **an account left alive can still be logged into with the
-password its owner already knew** — so disabling/deleting remains required. (MFA is not a substitute
-here either: it only protects accounts that are already enrolled.) And while
+**ADR-002 is the single truth on which control closes what** — this runbook only quotes it: *recovery
+takeover is closed by* `account_recovery_setting = admin_only`*; offboarding closes the access that a
+departing person's already-known password, live session and standing admin rights still provide.* So this
+procedure exists to end REMAINING access, not to block the recovery path. And while
 `legacy_email_owner_match=true`, a reassigned address
 matches the legacy rows written under it. After the cutover (ADR-009) only the sub matches, so that
 exposure ends. What never expires is the password the departing person already knows, so the account

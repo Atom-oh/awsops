@@ -25,20 +25,39 @@
 -- must stay legal.
 --
 -- The UPDATE first: live data may already violate this (that is what the backfill review found), and a
--- CREATE UNIQUE INDEX against violating rows aborts the migration and blocks the deploy. Keeping the
--- most recently updated row is not an arbitrary choice — it is what upsertSchedule() would have left
--- enabled, since it disables the others on every write.
+-- CREATE UNIQUE INDEX against violating rows aborts the migration and blocks the deploy.
+--
+-- Tiebreak on created_at, NOT updated_at. `report_schedules` carries a BEFORE UPDATE trigger
+-- (trg_schedule_touch → touch_updated_at, schema.sql), and schedule_dispatcher's hourly claim does
+-- `UPDATE … SET last_run_at, next_run_at`, so updated_at moves every time a schedule FIRES. Tiebreaking on
+-- it would have kept the row that fired most recently and disabled the one the user most recently
+-- CONFIGURED — silently, and unrecoverably once this migration has run (review MAJOR, verified against the
+-- trigger and the claim SQL). created_at is not touched by firing.
+--
+-- RETURNING + a NOTICE per disabled row, because this is an irreversible pick made without an operator
+-- watching: the log is the only way to answer "which schedule did the migration turn off?" afterwards.
 --
 -- CONCURRENTLY is deliberately NOT used: migrate.mjs runs statements inside an advisory-locked
 -- transaction, which CREATE INDEX CONCURRENTLY cannot join. report_schedules holds at most a few rows
 -- per user, so the brief write lock is not a concern.
 
-UPDATE report_schedules s SET enabled = false, updated_at = NOW()
- WHERE s.enabled
-   AND s.id <> (SELECT t.id FROM report_schedules t
-                 WHERE t.user_sub = s.user_sub AND t.enabled
-                 ORDER BY t.updated_at DESC NULLS LAST, t.id DESC
-                 LIMIT 1);
+DO $mig$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN
+    UPDATE report_schedules s SET enabled = false          -- updated_at: the trigger sets it
+     WHERE s.enabled
+       AND s.id <> (SELECT t.id FROM report_schedules t
+                     WHERE t.user_sub = s.user_sub AND t.enabled
+                     ORDER BY t.created_at DESC, t.id DESC
+                     LIMIT 1)
+    RETURNING s.id, s.user_sub, s.schedule_type
+  LOOP
+    RAISE NOTICE 'one-active de-dup: disabled report_schedules id=% user_sub=% type=%',
+      r.id, r.user_sub, r.schedule_type;
+  END LOOP;
+END
+$mig$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_schedule_one_active
     ON report_schedules (user_sub) WHERE enabled;

@@ -121,12 +121,20 @@ export async function createReport(
           --   same owner       — and NOT type alone (codex stop-gate: a type value is not provenance).
           --                      The job that supplies the account must belong to the same principal as
           --                      the report, so no other user's job can label someone's baseline.
-          JOIN worker_jobs j ON (j.job_id = r.worker_job_id
+          -- LEFT, not INNER. The worker's fallback path (scripts/v2/workers/handlers.py) creates a
+          -- report itself with worker_job_id NULL and never writes that id back into the payload, so
+          -- reports from that path can satisfy NEITHER branch above. An INNER JOIN made them permanently
+          -- ineligible as a baseline: a user whose history came that way silently got parent_report_id =
+          -- NULL, fixed at INSERT and unrecoverable (PR #203 review MAJOR, verified against handlers.py).
+          -- So the join is a PREFERENCE: it supplies the account when it can, and a row whose account
+          -- cannot be established stays eligible on the owner scope alone — which is what the base
+          -- behaviour was, since base had no join at all.
+          LEFT JOIN worker_jobs j ON (j.job_id = r.worker_job_id
             OR (j.type = 'report' AND j.payload->>'report_id' = r.id::text
                 AND j.requested_by = r.requested_by))
          WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
            AND r.status = 'succeeded' AND r.deleted_at IS NULL
-           AND ($5::text IS NULL OR j.payload->>'account' = $5)
+           AND ($5::text IS NULL OR j.job_id IS NULL OR j.payload->>'account' = $5)
          ORDER BY r.created_at DESC LIMIT 1),
        $3)
      RETURNING id`,
