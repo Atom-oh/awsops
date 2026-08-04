@@ -38,13 +38,21 @@ name, or a roster audit finds users in the pool nobody recognises.
 SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
 
 # 아래 SQL 은 파괴적이다. DSN 이 비어 있으면 psql 이 로컬 소켓에 붙어 엉뚱한 DB 를 건드릴 수 있으므로
-# `:?` 로 fail-closed 한다. DSN 은 v1-to-v2-aurora-backfill.md 와 같은 방식으로 준비한다(Aurora
-# endpoint + IAM DB auth 토큰; 이 앱도 master secret 이 아니라 IAM 인증을 쓴다).
-# The SQL below is destructive. An empty DSN would let psql fall back to a local socket and hit the
-# wrong database, so `:?` makes it fail closed. Build DSN the same way as
-# v1-to-v2-aurora-backfill.md does (Aurora endpoint + an IAM DB auth token — the app authenticates
-# that way too, not with the master secret).
-: "${DSN:?set DSN (postgresql://<user>@<aurora-endpoint>:5432/awsops?sslmode=require) first}"
+# `:?` 로 fail-closed 한다. 앱과 같은 IAM DB auth 를 쓴다(master secret 아님) — 아래가 완결된 절차다.
+# (이전 판은 "v1-to-v2-aurora-backfill.md 와 같은 방식"이라고만 했는데 그 런북은 master-secret 경로만
+# 문서화해서 따라할 수 없었다 — 리뷰 지적, 2개 모델.)
+# The SQL below is destructive: an empty DSN would let psql fall back to a local socket and hit the wrong
+# database, so `:?` fails closed. Authenticate the way the app does — IAM DB auth, not the master secret.
+# This is the complete recipe (the previous text pointed at v1-to-v2-aurora-backfill.md, which documents
+# only the master-secret path, so it was not followable — review finding, 2 models).
+AWS_REGION=${AWS_REGION:-ap-northeast-2}
+AURORA_ENDPOINT=$(terraform -chdir=terraform/v2/foundation output -raw aurora_endpoint)
+PGUSER=${PGUSER:-awsops_web}          # 앱과 같은 역할 / the role the app uses
+PGPASSWORD=$(aws rds generate-db-auth-token --hostname "$AURORA_ENDPOINT" --port 5432 \
+  --username "$PGUSER" --region "$AWS_REGION")     # 15분 유효 / valid 15 minutes
+export PGPASSWORD
+DSN="postgresql://${PGUSER}@${AURORA_ENDPOINT}:5432/awsops?sslmode=require"
+: "${DSN:?DSN is empty — the terraform output above must have failed}"
 ```
 
 ```bash
@@ -135,15 +143,22 @@ SUB_NOW=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$
 [ -n "$SUB_NOW" ] && [ "$SUB_NOW" = "$SUB" ] \
   || { echo "SUB does not belong to $EMAIL (resolved '$SUB_NOW') — nothing was done"; exit 1; }
 
-# 1) 스케줄을 먼저 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다
-#    Disable the schedule FIRST: deleting the account does not remove report_schedules rows, and the
-#    dispatcher fires every enabled row regardless of whether the user still exists.
+# 순서 주의: `set -euo pipefail` 이므로 앞 단계가 실패하면 뒤는 실행되지 않는다. 그래서 **DB 에 의존하지
+# 않는 단계를 먼저** 둔다 — Aurora 장애 중에 DB 단계가 먼저 있으면 거기서 abort 되어 계정 비활성화·admin
+# 회수까지 도달하지 못하고 fail-OPEN 이 된다(리뷰 지적).
+# Order matters: with `set -euo pipefail` a failure stops everything after it, so the steps that do NOT
+# depend on the database come FIRST. With the DB step first, an Aurora outage aborts the script before the
+# account is disabled and before admin rights are pulled — fail-OPEN (review finding).
+
+# 1) 계정 비활성화 — DB 무관, 새 로그인을 즉시 막는다 / Disable the account: no DB, blocks new logins now
+aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "$EMAIL"
+
+# 2) 스케줄을 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다.
+#    Aurora 장애로 여기서 멈추면 **스케줄은 아직 살아 있다** — 복구 후 이 지점부터 다시 실행한다.
+#    Disable the schedule: report_schedules rows outlive the account and the dispatcher fires every enabled
+#    row. If an Aurora outage stops the script here, THE SCHEDULE IS STILL LIVE — resume from this step.
 psql "$DSN" -v sub="$SUB" -v email="$EMAIL" -c \
   "UPDATE report_schedules SET enabled = false WHERE user_sub IN (:'sub', :'email')"
-
-# 2) 계정 비활성화 (되돌릴 수 있음 — 인수 경로는 즉시 닫힌다)
-#    Disable the account (reversible, and it closes the takeover path immediately)
-aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 
 # 3) 이미 발급된 세션을 끊는다 — admin-disable-user 는 새 로그인만 막고, 손에 든 awsops_token
 #    쿠키는 최대 12h 그대로 유효하다. 이 앱은 verifyUser() 가 session_revocations 를 보므로,
@@ -186,13 +201,27 @@ aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overw
 aws cognito-idp admin-remove-user-from-group --user-pool-id "$V2_POOL" \
   --username "$EMAIL" --group-name "${ADMIN_GROUP:-admins}"
 
-# 5) 유예기간 후 삭제 / delete after your grace period
+# 삭제는 이 블록에 없다 — 아래 별도 단계 5 참조 / Deletion is NOT here: see step 5 below.
+```
+
+### 5) 유예기간이 지난 뒤 — 별도로 실행 / after the grace period — run separately
+
+위 블록은 통째로 붙여넣는 용도이므로 삭제를 그 안에 두면 "유예기간 후"라고 써놓고 **즉시 삭제**된다
+(리뷰 지적). 삭제는 되돌릴 수 없고 `diagnosis_reports.requested_by` 같은 sub-keyed 행은 남아 소유자를
+잃으므로, 유예기간이 실제로 지난 뒤 이 한 줄만 따로 실행한다. 계정은 이미 비활성이라 급할 이유도 없다.
+
+The block above is meant to be pasted whole, so putting deletion inside it deletes immediately while the
+comment says "after the grace period" (review finding). Deletion is irreversible and leaves sub-keyed rows
+like `diagnosis_reports.requested_by` without an owner, so run this single line separately once the grace
+period has actually elapsed. Nothing is urgent — the account is already disabled.
+
+```bash
 aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 ```
 
-**순서가 중요하다**: 2번만 하고 1번을 빠뜨리면 스케줄이 계속 진단을 돌려 Bedrock 비용이 나가고, 그
-결과물은 소유자가 없어 아무에게도 보이지 않는다. **Order matters**: disable the account without disabling
-the schedule and the diagnosis keeps running (billed Bedrock) while its output belongs to nobody.
+**계정만 비활성화하고 스케줄을 빠뜨리면** 진단이 계속 돌아 Bedrock 비용이 나가고, 그 결과물은 소유자가
+없어 아무에게도 보이지 않는다. **Disabling the account without disabling the schedule** leaves the
+diagnosis running (billed Bedrock) while its output belongs to nobody.
 
 **2번만으로는 접근이 끊기지 않는다** — 이것이 이 절차에서 가장 놓치기 쉬운 지점이다. `admin-disable-user`
 는 *새* 인증만 막고, id_token 은 서버가 발급 후 취소할 수 없는 자기완결 토큰이다. 3번(세션 revocation)을
