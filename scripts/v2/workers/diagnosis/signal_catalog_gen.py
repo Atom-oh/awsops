@@ -192,13 +192,49 @@ _IDENT = re.compile(r'`((?:[^`]|``)*)`|"((?:[^"]|"")*)"|([A-Za-z_][\w$]*)')
 _ALIAS_DEF = re.compile(r"\bas\s+(?:`(?:[^`]|``)*`|\"(?:[^\"]|\"\")*\"|[A-Za-z_][\w$]*)", re.IGNORECASE)
 
 
-def _strip_alias_defs(text):
-    """Remove `AS <name>` so an alias cannot impersonate a schema name.
+def _strip_parens(text):
+    """Replace every parenthesised group with a single marker.
 
-    `SELECT 1 AS duration FROM spans` and `FROM numbers(10) AS spans` both borrowed the vocabulary without
-    measuring anything from it (review MAJOR): the alias was matched as if it were the real column/table.
+    A subquery's alias is an alias: `FROM (SELECT 1) spans` names no table of this instance, but with the
+    group left in place the trailing `spans` read as a table reference (review, eleventh pass). Collapsing
+    the group leaves `FROM # spans`, and the marker is what tells the caller the next name is an alias.
+    Function calls collapse too, which is fine — the value checks look at names, not at call syntax.
     """
-    return _ALIAS_DEF.sub(" ", text)
+    out, depth = [], 0
+    for ch in text:
+        if ch == "(":
+            if depth == 0:
+                out.append("#")
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _strip_alias_defs(text):
+    """Remove `AS <name>`, and any name that directly follows a collapsed parenthesised group.
+
+    The second rule is what makes `FROM (SELECT 1) spans` and `FROM numbers(10) spans` stop counting as
+    references to `spans` (review, eleventh pass). It is deliberately NOT the "drop a trailing identifier"
+    rule — in a FROM clause the trailing identifier is the TABLE, and applying that rule there erased the
+    very name the check is looking for.
+    """
+    text = _ALIAS_DEF.sub(" ", text)
+    return re.sub(r"#\s*(?:`(?:[^`]|``)*`|\"(?:[^\"]|\"\")*\"|[A-Za-z_][\w$]*)", " # ", text)
+
+
+def _strip_select_item_aliases(select_list):
+    """Drop each select item's trailing implicit alias: `1 duration`, `count() total`.
+
+    SQL lets AS be omitted, so `SELECT 1 duration FROM spans` matched the column `duration` while measuring
+    a literal (review, tenth pass). Only valid inside the SELECT list — see _strip_alias_defs.
+    """
+    out = []
+    for item in _strip_alias_defs(select_list).split(","):
+        out.append(re.sub(r"(\S)\s+(?:`(?:[^`]|``)*`|\"(?:[^\"]|\"\")*\"|[A-Za-z_][\w$]*)\s*$", r"\1 ", item))
+    return ",".join(out)
 
 
 def _parse_ident_chains(text):
@@ -246,9 +282,9 @@ def _table_ref_matches(cached, chain):
 
 
 def _references_schema_table(schema, text):
-    # aliases stripped first, and a chain that is a table function's name (immediately followed by `(`)
-    # is not a table reference — `FROM numbers(10) AS spans` names no table of this instance
-    chains = _parse_ident_chains(_strip_alias_defs(text))
+    # Parenthesised groups collapse to a marker and aliases (explicit or implicit) are removed first, so
+    # neither `FROM numbers(10) AS spans` nor `FROM (SELECT 1) spans` counts as naming this instance.
+    chains = _parse_ident_chains(_strip_alias_defs(_strip_parens(text)))
     return any(_table_ref_matches(t, c) for t in _schema_table_names(schema) for c in chains)
 
 
@@ -339,7 +375,8 @@ def _sql_value_is_measured(schema, expr):
         return True
     if _references_schema_table(schema, select_list):
         return True
-    return any(_token_present(n, _strip_alias_defs(select_list)) for n in _schema_column_names(schema))
+    return any(_token_present(n, _strip_select_item_aliases(select_list))
+               for n in _schema_column_names(schema))
 
 
 def _is_constant_expr(kind, schema, expr):
@@ -396,16 +433,13 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
         args["max_rows"] = 1
     try:
         result = invoke_connector(args)
-    except Exception as e:      # noqa: BLE001 — classified below, never propagated
-        # datasource_index._lambda_invoke raises RuntimeError for BOTH "the connector said 400 because the
-        # query is wrong" and "the invoke failed". Treating every exception as transient meant a query that
-        # is permanently invalid (bad syntax, missing table) got `{version}:retry` forever, so Bedrock was
-        # re-invoked daily for a query that can never work (review MAJOR). A 4xx is the connector judging
-        # the query — conclusive. 5xx / FunctionError / anything else is the attempt failing — retryable.
-        msg = str(e)
-        m = re.search(r"statusCode\s+(\d{3})", msg)
-        if m and 400 <= int(m.group(1)) < 500:
-            return False, False
+    except Exception:           # noqa: BLE001 — never propagated; see the note below
+        # NOT classified by status code. The connectors collapse everything into `err(...)` = 400 —
+        # `prometheus_mcp.py`'s handler wraps upstream failures, SSRF blocks and runtime errors alike — so a
+        # 503 from the datasource arrives as 400 and "4xx means the query is wrong" would freeze a genuine
+        # outage into a permanent skip (review). Since the signal cannot be recovered from the response, the
+        # retry is BOUNDED instead: datasource_index counts attempts in the stored version and stops after
+        # _MAX_RETRY_ATTEMPTS, which caps the Bedrock cost without pretending to know the cause.
         return False, True
     if not result:
         return False, True

@@ -335,28 +335,23 @@ class TestVocabNames:
             ["up", "http_requests_total"]
 
 
-class TestConnector4xxIsAVerdict:
-    """`_lambda_invoke` raises for both "the connector said 400 because the query is wrong" and "the invoke
-    failed". Treating every exception as transient re-invoked Bedrock daily for a query that can never work
-    (review MAJOR)."""
+class TestExceptionsAreNotClassifiedByStatusCode:
+    """The connectors collapse everything into err(...) = 400 — prometheus_mcp's handler wraps upstream
+    failures, SSRF blocks and runtime errors alike — so a 503 from the datasource arrives as 400. Reading
+    the code and calling 4xx "the query is wrong" would freeze a real outage into a permanent skip (review,
+    tenth pass). Every exception is retryable here; datasource_index BOUNDS the retries instead."""
 
     def _boom(self, msg):
         def f(args):
             raise RuntimeError(msg)
         return f
 
-    def test_4xx_is_conclusive(self):
-        assert scg._dry_run_check("clickhouse", "SELECT 1", 7,
-                                  self._boom("clickhouse-mcp clickhouse_query returned statusCode 400")) == (False, False)
-        assert scg._dry_run_check("loki", "{}", 7,
-                                  self._boom("loki-mcp loki_query_range returned statusCode 422")) == (False, False)
-
-    def test_5xx_and_function_errors_stay_retryable(self):
-        assert scg._dry_run_check("loki", "{}", 7,
-                                  self._boom("loki-mcp loki_query_range returned statusCode 503")) == (False, True)
-        assert scg._dry_run_check("loki", "{}", 7,
-                                  self._boom("loki-mcp invoke FunctionError: Unhandled")) == (False, True)
-        assert scg._dry_run_check("loki", "{}", 7, self._boom("connection reset")) == (False, True)
+    def test_every_exception_is_retryable(self):
+        for msg in ("clickhouse-mcp clickhouse_query returned statusCode 400",
+                    "loki-mcp loki_query_range returned statusCode 503",
+                    "loki-mcp invoke FunctionError: Unhandled",
+                    "connection reset"):
+            assert scg._dry_run_check("loki", "{}", 7, self._boom(msg)) == (False, True), msg
 
 
 class TestStaticCheckMatchesTheConnectorGuard:
@@ -379,6 +374,24 @@ class TestAliasesCannotImpersonateSchemaNames:
     def test_alias_named_after_a_column_is_not_a_measurement(self):
         sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
         assert scg._is_constant_expr("clickhouse", sch, "SELECT 1 AS duration FROM spans") is True
+
+    def test_an_implicit_alias_is_still_an_alias(self):
+        # SQL lets AS be omitted, and a subquery takes an alias the same way — both borrowed the vocabulary
+        # without measuring anything (review, tenth and eleventh passes).
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT 1 duration FROM spans") is True
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM (SELECT 1) spans") is True
+
+    def test_a_table_function_with_an_implicit_alias_is_not_a_table(self):
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM numbers(10) spans") is True
+
+    def test_the_from_clause_table_is_not_mistaken_for_an_alias(self):
+        # The trailing-identifier rule is only valid inside the SELECT list: in a FROM clause the trailing
+        # identifier IS the table, and applying it there erased the name the check looks for.
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM spans") is False
+        assert scg._mentions_schema_vocabulary("clickhouse", sch, "SELECT count() FROM spans") is True
 
     def test_table_function_aliased_to_a_schema_table_is_not_that_table(self):
         sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}

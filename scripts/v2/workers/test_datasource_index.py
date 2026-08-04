@@ -168,9 +168,9 @@ class TestGeneratedFallback:
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})  # catalog yields nothing
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
-        assert out["schema_version"].endswith(":retry") and out.get("retry")
+        assert out["schema_version"].endswith(":retry1") and out.get("retry")
         # the stored version cannot equal the version the next run computes, so it rebuilds
-        assert all(p["sv"].endswith(":retry") for p in c.inserts)
+        assert all(p["sv"].endswith(":retry1") for p in c.inserts)
 
     def test_transient_failure_with_unavailable_catalog_rows_also_retries(self, monkeypatch):
         # The first version of this guard only fired on an EMPTY build, so loki/tempo — which normally
@@ -184,8 +184,33 @@ class TestGeneratedFallback:
         c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})  # rows, none ready
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert out["built"] > 0 and out["ready"] == 0
-        assert out["schema_version"].endswith(":retry") and out.get("retry")
-        assert c.inserts and all(p["sv"].endswith(":retry") for p in c.inserts)
+        assert out["schema_version"].endswith(":retry1") and out.get("retry")
+        assert c.inserts and all(p["sv"].endswith(":retry1") for p in c.inserts)
+
+    def test_the_retry_is_bounded(self, monkeypatch):
+        # The connectors collapse upstream failures into the same 400 as a bad query, so the cause cannot be
+        # read off the response — an unbounded `:retry` meant daily Bedrock calls for a query that may never
+        # work (review, tenth pass). After _MAX_RETRY_ATTEMPTS the real version is stored and the daily job
+        # skips until the schema itself changes.
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        base = dsi._schema_version({"tables": {"t": ["c"]}})
+        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}},
+                     existing_version=f"{base}:retry{dsi._MAX_RETRY_ATTEMPTS}")
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert out["schema_version"] == base and not out.get("retry")
+        assert all(p["sv"] == base for p in c.inserts)
+
+    def test_the_attempt_counter_advances(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        base = dsi._schema_version({"tables": {"t": ["c"]}})
+        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}}, existing_version=f"{base}:retry1")
+        assert dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"] == f"{base}:retry2"
 
     def test_conclusive_empty_build_records_the_sentinel(self, monkeypatch):
         # Flag off (or the model answered and was rejected): nothing will change until the schema or an

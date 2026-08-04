@@ -154,9 +154,13 @@ def _graph_schema_version(schema):
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
+_MAX_RETRY_ATTEMPTS = 3   # per schema_version; see the bounded-retry note below
+
+
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     version = _schema_version(schema)
-    if wdb.read_signal_schema_version(conn, iid) == version:
+    existing_version = wdb.read_signal_schema_version(conn, iid)
+    if existing_version == version:
         return {"skipped": True, "schema_version": version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
     gen_status = None
@@ -176,8 +180,23 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # `unavailable` catalog rows, and persisting THOSE under the real version skips the retry just as
     # effectively. So the rows are still written — they carry the "metric X missing" text the UI shows —
     # but under a deliberately mismatching version, which makes the next run rebuild and retry.
+    # BOUNDED retry. A transient generation failure must not record the real version (that skips forever),
+    # but it must not retry forever either: the connectors collapse upstream 503s into the same 400 as a
+    # bad query, so the cause is unknowable from the response and an unbounded `:retry` meant daily Bedrock
+    # calls for a query that may never work (review, twice). The attempt count rides in the stored version;
+    # after _MAX_RETRY_ATTEMPTS we store the plain version and stop until the schema itself changes.
     retry_needed = gen_status == _signal_gen.TRANSIENT and not any(r["status"] == "ready" for r in rows)
-    stored_version = f"{version}:retry" if retry_needed else version
+    attempt = 0
+    if existing_version and existing_version.startswith(f"{version}:retry"):
+        try:
+            attempt = int(existing_version.rsplit("retry", 1)[1] or 0)
+        except ValueError:
+            attempt = 0
+    if retry_needed and attempt >= _MAX_RETRY_ATTEMPTS:
+        logging.warning("[datasource_index] integration %s: generation failed %s times for this schema; "
+                        "recording the version and giving up until the schema changes", iid, attempt)
+        retry_needed = False
+    stored_version = f"{version}:retry{attempt + 1}" if retry_needed else version
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
