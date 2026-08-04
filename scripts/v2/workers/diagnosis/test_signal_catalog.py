@@ -31,8 +31,9 @@ class TestFullSchemaAllReady:
     def test_all_signals_ready_for_prometheus(self):
         rows = sc.build_signals("prometheus", {"metrics": ALL_METRICS})
         by = _by_key(rows)
-        assert len(rows) == len(sc.CATALOG)
-        for key in (s["key"] for s in sc.CATALOG):
+        prom_keys = [s["key"] for s in sc.CATALOG if "prometheus" in s["kinds"]]
+        assert len(rows) == len(prom_keys)
+        for key in prom_keys:
             assert by[key]["status"] == "ready", f"{key} should be ready"
             assert by[key]["query"]["tool"] == "prometheus_query"
             assert by[key]["query"]["queries"], "ready signal must carry at least one query"
@@ -114,9 +115,26 @@ class TestCatalogShape:
 class TestKindScoping:
     def test_existing_k8s_entries_scoped_to_prometheus_and_mimir(self):
         for sig in sc.CATALOG:
-            assert sig["kinds"] == ("prometheus", "mimir"), sig["key"]
+            if sig["key"] in ("container_cpu_throttling", "oom_kills", "node_memory_pressure",
+                              "node_disk_usage", "network_pps", "pod_right_sizing",
+                              "cpu_saturation", "pod_restarts"):
+                assert sig["kinds"] == ("prometheus", "mimir"), sig["key"]
 
     def test_build_signals_omits_entries_outside_their_kind(self):
         rows = sc.build_signals("loki", {"labels": ["job", "level"]})
         keys = {r["signal_key"] for r in rows}
         assert "cpu_saturation" not in keys
+
+
+class TestClickhouseSystemTableSignals:
+    def test_system_table_signals_always_ready_for_clickhouse(self):
+        rows = sc.build_signals("clickhouse", {"tables": []})  # empty user-table list
+        by = _by_key(rows)
+        for key in ("clickhouse_slow_queries", "clickhouse_table_growth", "clickhouse_error_log_rate"):
+            assert by[key]["status"] == "ready", f"{key} should be ready (system table, schema-independent)"
+            assert by[key]["query"]["tool"] == "clickhouse_query"
+
+    def test_clickhouse_signals_absent_for_other_kinds(self):
+        rows = sc.build_signals("prometheus", {"metrics": ALL_METRICS})
+        keys = {r["signal_key"] for r in rows}
+        assert "clickhouse_slow_queries" not in keys

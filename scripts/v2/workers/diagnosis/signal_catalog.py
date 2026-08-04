@@ -109,6 +109,40 @@ CATALOG = [
         }],
         "threshold": 3, "unit": "count",
     },
+    {
+        "key": "clickhouse_slow_queries", "title": "느린 쿼리 상위", "pillar": "performance",
+        "matcher": "table_columns", "kinds": ("clickhouse",), "system_table": True,
+        "required_columns": ["query_duration_ms", "query"],
+        "queries": [{
+            "label": "slow_queries",
+            "expr": ("SELECT query, query_duration_ms, event_time FROM system.query_log "
+                     "WHERE type = 'QueryFinish' ORDER BY query_duration_ms DESC LIMIT 20"),
+        }],
+        "threshold": 1000, "unit": "ms",
+    },
+    {
+        "key": "clickhouse_table_growth", "title": "테이블 크기 상위", "pillar": "cost",
+        "matcher": "table_columns", "kinds": ("clickhouse",), "system_table": True,
+        "required_columns": ["database", "table", "bytes_on_disk"],
+        "queries": [{
+            "label": "table_bytes",
+            "expr": ("SELECT database, table, sum(bytes_on_disk) AS bytes "
+                     "FROM system.parts WHERE active GROUP BY database, table "
+                     "ORDER BY bytes DESC LIMIT 20"),
+        }],
+        "threshold": 0, "unit": "bytes",
+    },
+    {
+        "key": "clickhouse_error_log_rate", "title": "에러 로그 비율", "pillar": "reliability",
+        "matcher": "table_columns", "kinds": ("clickhouse",), "system_table": True,
+        "required_columns": ["level", "message", "event_time"],
+        "queries": [{
+            "label": "error_rate",
+            "expr": ("SELECT count() FROM system.text_log "
+                     "WHERE level = 'Error' AND event_time >= now() - INTERVAL 1 HOUR"),
+        }],
+        "threshold": 0, "unit": "count",
+    },
 ]
 
 
@@ -123,6 +157,8 @@ def _missing_for(sig, schema):
             have = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
         return [m for m in sig["required_metrics"] if m not in have]
     if matcher == "table_columns":
+        if sig.get("system_table"):
+            return []  # ClickHouse built-in system tables are always present — no schema check needed
         tables = (schema or {}).get("tables") or [] if isinstance(schema, dict) else []
         required = set(sig["required_columns"])
         for t in tables:
