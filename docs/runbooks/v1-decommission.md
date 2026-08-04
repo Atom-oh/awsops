@@ -69,17 +69,18 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" \
 
 **Future signups being blocked does NOT clean up existing accounts** (PR #203). `allow_admin_create_user_only = true` only stops future `SignUp` calls; an account that already self-registered keeps working, with a verified address of its own choosing. If such an account holds a departed colleague's reassigned mailbox address, it bypasses every control in this PR. Terraform cannot decide this (Cognito records no "created by" provenance) — reconcile the pool against your operator roster ONCE right after the deploy with the command above, and `admin-disable-user` anything you do not recognise.
 
-**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — **사용자도 자기 계정의 주소를 검증할 수 있다** — 이 문장은 세 번 뒤집혔으니 근거를 남긴다. `allowed_oauth_scopes` 에 `aws.cognito.signin.user.admin` 이 없는 것은 사실이지만 그건 **OAuth(Hosted UI) 플로우에만** 적용된다. 이 client 는 시크릿 없는 public client 이고 `ALLOW_USER_PASSWORD_AUTH` 가 켜져 있어, 사용자가 자기 자격증명으로 `InitiateAuth` 를 직접 호출하면 **`aws.cognito.signin.user.admin` scope 를 가진 AccessToken** 을 받는다 — 그 토큰으로 `GetUserAttributeVerificationCode`/`VerifyUserAttribute` 가 동작한다(앱 UI 에 그 화면이 없을 뿐이다; BFF 는 `IdToken` 만 읽는다). 즉 **이미 자기 계정에 설정된 주소의 검증**은 사용자가 할 수 있고, 막혀 있는 것은 주소를 *바꾸는* 것(`write_attributes`), 계정을 *만드는* 것(`allow_admin_create_user_only`), *복구*(`account_recovery_setting = admin_only`)다. 그래서 아래 확인 단계가 여전히 의미를 갖는다 — 운영자가 `email_verified` 를 켜는 것은 그 주소를 **누가 통제하는지에 대한 주장**이고, 사용자가 스스로 verified 를 만들 수 있다는 사실이 그 주장의 무게를 덜어주지는 않는다. 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
+**이 절차의 판단 지점은 계정에 올리는 주소다**(PR #203) — `email_verified` 플래그가 아니다(아래 참조). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — **사용자도 자기 계정의 주소를 검증할 수 있다** — 이 문장은 세 번 뒤집혔으니 근거를 남긴다. `allowed_oauth_scopes` 에 `aws.cognito.signin.user.admin` 이 없는 것은 사실이지만 그건 **OAuth(Hosted UI) 플로우에만** 적용된다. 이 client 는 시크릿 없는 public client 이고 `ALLOW_USER_PASSWORD_AUTH` 가 켜져 있어, 사용자가 자기 자격증명으로 `InitiateAuth` 를 직접 호출하면 **`aws.cognito.signin.user.admin` scope 를 가진 AccessToken** 을 받는다 — 그 토큰으로 `GetUserAttributeVerificationCode`/`VerifyUserAttribute` 가 동작한다(앱 UI 에 그 화면이 없을 뿐이다; BFF 는 `IdToken` 만 읽는다). 즉 **이미 자기 계정에 설정된 주소의 검증**은 사용자가 할 수 있고, 막혀 있는 것은 주소를 *바꾸는* 것(`write_attributes`), 계정을 *만드는* 것(`allow_admin_create_user_only`), *복구*(`account_recovery_setting = admin_only`)다. 그래서 아래 확인 단계가 여전히 의미를 갖는다 — 운영자가 `email_verified` 를 켜는 것은 그 주소를 **누가 통제하는지에 대한 주장**이고, 사용자가 스스로 verified 를 만들 수 있다는 사실이 그 주장의 무게를 덜어주지는 않는다. 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
 
 - v1 사용자 목록(이관 원본)에 그 주소가 그 사람의 것으로 기록되어 있는가 — 오타나 추측이 아닌가
 - 그 사람이 **지금도** 그 mailbox 를 보유하는가 (퇴사자 주소 재할당이 이 PR 이 막는 위협모델이다)
 - 그 주소가 SSM admin allowlist 에 있다면, 그 사람에게 admin 을 주는 것이 맞는가
 
-확인되지 않는 주소는 **그 주소로 계정을 만들지 않는다.** 이게 실제 결정 지점이다 — `email_verified` 를 빼두는 것은 fail-closed 가 아니다: 위에서 본 대로 사용자는 `InitiateAuth` → `VerifyUserAttribute` 로 **자기 계정에 이미 설정된 주소를 스스로 verified 로 만들 수 있다.** 즉 플래그를 빼는 것은 초기값일 뿐이고 지속적인 운영자 통제가 아니다(리뷰 지적: 이전 서술은 이 절차를 fail-closed 라고 불렀는데, 사용자가 그 자리에서 뒤집을 수 있으므로 사실이 아니다). 통제는 **주소 자체**다 — 계정에 올린 주소는 그 사람이 검증할 수 있고, 검증되면 그 주소로 기록된 legacy 행의 소유권과 (allowlist 에 있다면) admin 자격이 따라온다. 그러므로 확인 못 한 주소는 아예 쓰지 말고, 확인된 뒤에 계정을 만든다. 계정을 이미 만들었다면 정정 방법은 플래그가 아니라 계정을 지우는 것(`admin-delete-user`)이다.
+확인되지 않는 주소는 **그 주소로 계정을 만들지 않는다.** 이게 실제 결정 지점이다 — `email_verified` 를 빼두는 것은 fail-closed 가 아니다: 위에서 본 대로 사용자는 `InitiateAuth` → `VerifyUserAttribute` 로 **자기 계정에 이미 설정된 주소를 스스로 verified 로 만들 수 있다.** 즉 플래그를 빼는 것은 초기값일 뿐이고 지속적인 운영자 통제가 아니다(리뷰 지적: 이전 서술은 이 절차를 fail-closed 라고 불렀는데, 사용자가 그 자리에서 뒤집을 수 있으므로 사실이 아니다). 통제는 **주소 자체**다 — 계정에 올린 주소는 그 사람이 검증할 수 있고, 검증되면 그 주소로 기록된 legacy 행의 소유권과 (allowlist 에 있다면) admin 자격이 따라온다. 그러므로 확인 못 한 주소는 아예 쓰지 말고, 확인된 뒤에 계정을 만든다. 계정을 이미 만들었다면 정정은 플래그가 아니라 **그 계정을 제거하는 것**이고, 절차는 `docs/runbooks/user-offboarding.md` 를 따른다 — `admin-delete-user` 만 실행하면 그 사람 명의의 `report_schedules` 가 계속 발화하고(계정과 무관하게 동작한다) 세션 쿠키와 admin allowlist 항목도 남는다.
 
 아래 명령의 주소는 위 확인을 통과한 것이어야 하고, `email_verified=true` 는 그 확인을 명시적으로 기록하는 의미다(사용자가 스스로 만들 수도 있는 상태이므로 보류해도 얻는 것이 없다). **효력은 다음 로그인부터다** — id_token 이 12h 유효하므로 방금 verified 로 올린 사용자도 재로그인 전까지는 email claim 이 없고, 반대로 회수한 경우에도 기존 토큰은 최대 12h 동안 남는다(즉시 필요하면 재인증을 요구한다):
 
-**`email_verified` is this procedure's decision point** (PR #203). `verifyUser()` adopts the token's
+**This procedure's decision point is the ADDRESS you put on the account** (PR #203) — not the
+`email_verified` flag; see below. `verifyUser()` adopts the token's
 `email` claim only when `email_verified` is true, so setting this flag is **not a verification — it is
 the operator asserting one**, and it immediately grants that address (1) eligibility for the SSM
 allowlist admin check and (2) ownership of every legacy email-keyed row written under it. a user CAN verify an address already set on their own
@@ -106,11 +107,15 @@ verify an address already on their own account themselves (`InitiateAuth` → `V
 flag is an initial state, not an ongoing operator control (review finding: the earlier text called this
 procedure fail-closed, which it is not). The control is the ADDRESS: whatever address you put on the
 account, that person can get verified, and verification carries ownership of the legacy rows written
-under it plus admin eligibility if it is on the allowlist. So confirm first and create afterwards; if the
-account already exists, the correction is `admin-delete-user`, not the flag.
+under it plus admin eligibility if it is on the allowlist. So confirm first and create afterwards; if the account already
+exists, the correction is to REMOVE that account, following
+`docs/runbooks/user-offboarding.md` — a bare `admin-delete-user` leaves their `report_schedules` firing
+(those run regardless of the account), their session cookie live, and their admin-allowlist entry in
+place.
 
-passed those checks, and `email_verified=true` records that the check happened (withholding it buys
-nothing, since the user can set it). **It takes effect at their next login** — an id_token is valid for 12h, so a user
+The address in the command below must be one that passed those checks, and `email_verified=true` records
+that the check happened (withholding it buys nothing, since the user can set it themselves).
+**It takes effect at their next login** — an id_token is valid for 12h, so a user
 you just verified has no email claim until they sign in again, and a revocation likewise leaves the old
 token usable for up to 12h (force re-authentication if it must be immediate):
 
