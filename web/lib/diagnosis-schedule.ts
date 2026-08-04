@@ -57,6 +57,14 @@ export async function readSchedule(userSub: string): Promise<DiagnosisSchedule |
   return rows.length ? mapRow(rows[0]) : null;
 }
 
+/** Another writer holds this user's single active-schedule slot (see uq_schedule_one_active). */
+export class ScheduleSlotTakenError extends Error {
+  constructor() {
+    super('another write is holding this user\'s active schedule slot; retry in a moment');
+    this.name = 'ScheduleSlotTakenError';
+  }
+}
+
 /** Create/replace the caller's schedule. next_run_at is always recomputed (NOT NULL); `enabled` gates firing. */
 export async function upsertSchedule(
   userSub: string,
@@ -72,13 +80,26 @@ export async function upsertSchedule(
     `UPDATE report_schedules SET enabled = false WHERE user_sub = $1 AND schedule_type <> $2`,
     [userSub, input.scheduleType],
   );
-  const { rows } = await getPool().query<Row>(
-    `INSERT INTO report_schedules (user_sub, schedule_type, enabled, next_run_at, config)
-     VALUES ($1, $2, $3, $4, $5::jsonb)
-     ON CONFLICT (user_sub, schedule_type)
-     DO UPDATE SET enabled = EXCLUDED.enabled, next_run_at = EXCLUDED.next_run_at, config = EXCLUDED.config
-     RETURNING schedule_type, enabled, next_run_at, last_run_at, config`,
-    [userSub, input.scheduleType, input.enabled, nextRunAt, JSON.stringify(config)],
-  );
-  return mapRow(rows[0]);
+  try {
+    const { rows } = await getPool().query<Row>(
+      `INSERT INTO report_schedules (user_sub, schedule_type, enabled, next_run_at, config)
+       VALUES ($1, $2, $3, $4, $5::jsonb)
+       ON CONFLICT (user_sub, schedule_type)
+       DO UPDATE SET enabled = EXCLUDED.enabled, next_run_at = EXCLUDED.next_run_at, config = EXCLUDED.config
+       RETURNING schedule_type, enabled, next_run_at, last_run_at, config`,
+      [userSub, input.scheduleType, input.enabled, nextRunAt, JSON.stringify(config)],
+    );
+    return mapRow(rows[0]);
+  } catch (e) {
+    // uq_schedule_one_active (migration 01KZ3C7Q…) now enforces one enabled row per user at the DB.
+    // The disable above means this insert cannot collide with the caller's own rows, so reaching here
+    // means something else claimed the slot concurrently — in practice the owner-sub backfill moving a
+    // legacy email-keyed row onto this sub. Say so with a 409 rather than letting a raw 23505 surface
+    // as a 500.
+    if ((e as { code?: string }).code === '23505'
+        && String((e as { constraint?: string }).constraint || '').includes('one_active')) {
+      throw new ScheduleSlotTakenError();
+    }
+    throw e;
+  }
 }

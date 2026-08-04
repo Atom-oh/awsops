@@ -146,6 +146,20 @@ export async function linkReportJob(reportId: number, workerJobId: string): Prom
 
 // Idempotency-first: return the report already attached to an existing job for this key, if any.
 export async function reportForIdempotencyKey(key: string): Promise<number | null> {
+  // Resolve through the job PAYLOAD first, because that is what the worker obeys: it renders the
+  // report_id the payload names, whatever the link says. Those two can disagree — a link that lost the
+  // one-report-per-job race leaves the rendered report unlinked — and following the link then returned a
+  // report nothing will ever render (codex stop-gate). Fall back to the link for jobs whose payload
+  // carries no usable id (older rows, other enqueue paths).
+  const byPayload = await getPool().query(
+    `SELECT r.id FROM worker_jobs j
+       JOIN diagnosis_reports r ON r.id = (j.payload->>'report_id')::bigint
+      WHERE j.idempotency_key = $1 AND j.payload->>'report_id' ~ '^[0-9]+$'
+        AND r.deleted_at IS NULL
+      ORDER BY r.id DESC LIMIT 1`,
+    [key],
+  );
+  if (byPayload.rows[0]) return Number(byPayload.rows[0].id);
   const { rows } = await getPool().query(
     `SELECT r.id FROM diagnosis_reports r JOIN worker_jobs j ON j.job_id = r.worker_job_id
      WHERE j.idempotency_key = $1 AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`,

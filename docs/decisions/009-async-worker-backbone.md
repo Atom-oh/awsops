@@ -83,7 +83,7 @@ that rather than a 202 pointing at an id that 404s.
 
 - **쓰기 키 = immutable `sub`(단일)** — 사용자 경로 enqueue 는 전부 `user.sub` 를 기록한다
   (`/api/jobs`, `/api/diagnosis`, `/api/compliance/run`). `/api/diagnosis/intent` 는 enqueue 가 아니라
-  admin CRUD 이며 `created_by` 에 같은 키를 쓴다. `report_schedules` 와 그 dispatcher 도 sub 다. lineage 서브쿼리가 `worker_jobs` 를 JOIN 해 `payload->>'account'` 로 좁히므로, account 키가 없는 구세대 payload 행은 baseline 후보에서 빠진다 — 배포 직후 1회 NULL parent 가 나올 수 있고, 이는 account 스코핑의 의도된 대가다(review MINOR).
+  admin CRUD 이며 `created_by` 에 같은 키를 쓴다. `report_schedules` 와 그 dispatcher 도 sub 다. **사용자당 활성 스케줄 1개는 이제 DB 가 강제한다** (partial unique index `uq_schedule_one_active`, migration 01KZ3C7Q…) — `upsertSchedule()` 안에만 있던 불변식이라 backfill 이 다른 주기의 활성 행 위로 소유자를 옮겨도 아무 제약이 걸리지 않았다. 트랜잭션 내 검사도 시도했지만 PG 17 실측에서 SERIALIZABLE 스냅샷이 동시 커밋을 가려 검사를 통과시켰다 — 읽기 검사로는 막을 수 없다는 신호였고, 그래서 인덱스로 옮겼다. lineage 서브쿼리가 `worker_jobs` 를 JOIN 해 `payload->>'account'` 로 좁히므로, account 키가 없는 구세대 payload 행은 baseline 후보에서 빠진다 — 배포 직후 1회 NULL parent 가 나올 수 있고, 이는 account 스코핑의 의도된 대가다(review MINOR).
   **Write key = the immutable `sub`, single** — every user-path enqueue records `user.sub`
   (`/api/jobs`, `/api/diagnosis`, `/api/compliance/run`); `/api/diagnosis/intent` is admin CRUD, not
   an enqueue path, and records the same key as `created_by`. `report_schedules` and its dispatcher

@@ -486,6 +486,12 @@ async function apply(client) {
   let committed = false;
   let commitSent = false;
   const applied = [];
+  // Default isolation (READ COMMITTED) on purpose. SERIALIZABLE was tried here for the
+  // one-active-schedule check and measured WORSE on PG 17: its snapshot hides a concurrent commit, so
+  // the check passes and both transactions land two enabled rows, where READ COMMITTED sees the commit
+  // and aborts. The invariant is enforced by the partial unique index uq_schedule_one_active
+  // (migration 01KZ3C7Q…) instead — the one layer that sees both transactions regardless of isolation.
+  // The check below stays as the path that produces a readable message when it CAN see the conflict.
   await client.query('BEGIN');
   try {
     for (const e of entries) {
@@ -518,7 +524,6 @@ async function apply(client) {
       total += e.changedIds.length;
       applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${e.changedIds.length} rows)`);
     }
-    commitSent = true;
     // The DB enforces (user_sub, schedule_type) itself, but nothing enforces "one ENABLED schedule per
     // user" — that invariant lives in upsertSchedule(). So a schedule created (or re-enabled) between
     // plan and apply would sail through the plan-time checks and leave two rows firing, with no
@@ -539,6 +544,11 @@ async function apply(client) {
           + ' — something changed since the plan; re-plan against reality');
       }
     }
+    // Set immediately before COMMIT and nowhere earlier: this flag is what makes the catch report an
+    // UNKNOWN outcome instead of a rollback, so anything that throws before the COMMIT is sent — the
+    // stale-plan count check, the one-active-schedule check — must still be reported as "nothing was
+    // written", because that is what happened (codex stop-gate).
+    commitSent = true;
     await client.query('COMMIT');
     committed = true;
   } catch (err) {
@@ -568,6 +578,11 @@ async function apply(client) {
     try { journal('rolled-back'); } catch { /* the message below is the real signal */ }
     console.error('\nROLLED BACK — nothing was rewritten:');
     console.error(`  ${err?.message || err}`);
+    if (err?.code === '23505' && String(err.constraint || '').includes('one_active')) {
+      console.error('  (a schedule write landed on one of these users while this apply was running, and');
+      console.error('   uq_schedule_one_active refused the second active row. Nothing was written —');
+      console.error('   re-plan so the collision is reported, then re-run.)');
+    }
     die('resolve the error and re-run --apply with the same plan; no rows were changed');
   }
 

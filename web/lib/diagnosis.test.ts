@@ -89,6 +89,25 @@ describe('diagnosis queries', () => {
     const id = await reportForIdempotencyKey('report:u@x.io:mid:2026-06-11T00');
     expect(id).toBe(9);
   });
+  it('reportForIdempotencyKey resolves through the job PAYLOAD before the link', async () => {
+    // The worker renders the report_id the payload names, so when the link and the payload disagree
+    // (a link that lost the one-report-per-job race leaves the rendered report unlinked) the link
+    // points at a report nothing will ever render (codex stop-gate).
+    query.mockClear();
+    query.mockImplementationOnce(async () => ({ rows: [{ id: 42 }] })); // payload hit
+    const id = await reportForIdempotencyKey('k');
+    expect(id).toBe(42);
+    expect(query.mock.calls).toHaveLength(1); // the link query is never reached
+    expect(query.mock.calls[0][0]).toContain("payload->>'report_id'");
+  });
+  it('reportForIdempotencyKey falls back to the link when the payload has no id', async () => {
+    query.mockClear();
+    query.mockImplementationOnce(async () => ({ rows: [] }));            // no payload match
+    query.mockImplementationOnce(async () => ({ rows: [{ id: 9 }] }));   // link match
+    expect(await reportForIdempotencyKey('k')).toBe(9);
+    expect(query.mock.calls).toHaveLength(2);
+    expect(query.mock.calls[1][0]).toContain('r.worker_job_id');
+  });
   it('linkReportJob issues an UPDATE setting worker_job_id', async () => {
     await linkReportJob(7, 'job-1');
     const [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
