@@ -38,6 +38,7 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
    나가지 않는다.
 2. **모델이 쓴 조회문을 라이브로 dry-run 한다.** 실행은 기존 read-only 커넥터에서만
    (`readonly=1` · `assert_read_only` · `assert_host_allowed`) 이뤄지고, 모델은 실행 권한을 갖지 않는다.
+   dry-run 이 error envelope 나 빈 payload 를 돌려주면 그 후보는 캐시되지 않는다.
 3. **정적 게이트를 먼저 통과해야 한다** — read-only/단일문/table-function denylist.
 4. **캐시된 결과만 쓴다** — 생성물은 스키마 버전에 키를 두고 저장되며, 매 실행 재생성이 아니다.
 5. **ADR-005와 무관하다** — 생성물은 SQL/PromQL/LogQL 조회문이고 AWS API 호출 경로가 아니다.
@@ -46,9 +47,11 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 
 1. **식별자 정화**: 평범한 식별자만(`^[A-Za-z_][\w.:-]*$`) 60개 상한으로 프롬프트에 넣는다(프롬프트 인젝션).
 2. **관련성 게이트**: 그 인스턴스 어휘를 실제로 언급하고 상수를 측정하지 않아야 한다.
-3. **dry-run 상한**: ClickHouse `max_execution_time=5`+`max_rows=1`, Prometheus/Mimir `timeout=5s`,
+3. **dry-run 상한 + 빈 응답의 분류**: ClickHouse `max_execution_time=5`+`max_rows=1`, Prometheus/Mimir `timeout=5s`,
    Loki/Tempo `limit=1`. **Loki/Tempo는 커넥터를 통한 서버측 실행시간 상한이 없다** — 알려진 잔여 리스크이며,
-   그래서 생성 표현식을 자동 반복 실행 경로에 두지 않는다.
+   그래서 생성 표현식을 자동 반복 실행 경로에 두지 않는다. 빈 응답은 §A-2 대로 캐시되지 않지만, 그 **분류**는
+   REJECTED 가 아니라 TRANSIENT 다 — 조용한 시간대의 정상 datasource 가 영구 skip 되지 않도록 주간 예산
+   안에서 재시도한다.
 4. **비용 예산**: 인스턴스당 **ISO 주 3회**. 마커(`:<pend|done>N w<주차>`)는 스키마 해시와 독립적으로 읽어
    churn이 예산을 리셋하지 못하게 하고, conclusive 결과에서도 사용량을 유지해 flap이 예산을 사지 못하게 한다.
    플래그가 꺼진 기간은 과금하지 않는다.

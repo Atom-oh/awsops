@@ -119,8 +119,10 @@ Amended #3). The candidate goes through:
 3. Live dry-run against the connector (`{kind}_query` / `{kind}_search` with the smallest applicable
    window/limit and, per connector, whatever bound it accepts: ClickHouse `max_execution_time=5` +
    `max_rows=1`, Prometheus/Mimir the API's `timeout=5s`, Loki/Tempo `limit=1` — Loki and Tempo expose no
-   server-side execution bound through their connectors), asserting a non-error response. An empty response
-   is retryable, not a verdict — a quiet window is not a wrong query.
+   server-side execution bound through their connectors). The response must be neither an error envelope nor
+   an empty payload — an invented metric name returning `result: []` is not stored as a ready chip. Only the
+   CLASSIFICATION of emptiness differs from a rejection: it counts as TRANSIENT, so it retries under the
+   weekly budget instead of settling the schema, because a quiet window is not a wrong query.
 
 Only a candidate that passes all three is persisted as a `ready` row with `meta.provenance = "generated"`;
 everything else stays `unavailable`. Generated rows feed the **Explore chips only** — `_signal_plan`
@@ -187,12 +189,12 @@ before the connectors were probed.
    indistinguishable from the legitimate "conclusively nothing to build" row that must keep skipping, so a
    row written that way would never generate again. The bump invalidates every hash once, and from v4 on
    exhaustion is a week-scoped marker (item 6) while the plain hash means only "conclusive".
-5. **An empty dry-run response is a RETRY, not the verdict this spec first asked for.** Decision 2 asked
-   for "a non-error, non-empty-shape response", and `_nonempty_result()` does check the payload per kind —
-   an invented metric name returning Prometheus `result: []` is not accepted as a ready chip. But treating
-   emptiness as conclusive froze a legitimately quiet datasource (night, low traffic) signal-less until its
-   schema drifted, so an empty payload is classified TRANSIENT and retried under the weekly budget. What
-   rejects a query that can never match is the relevance gate, not emptiness (later review).
+5. **`_nonempty_result()` still gates, but emptiness is classified TRANSIENT.** Decision 2 asked for "a
+   non-error, non-empty-shape response" and that is enforced — an invented metric name returning Prometheus
+   `result: []` is never stored as a ready chip. What a later review changed is only what emptiness MEANS for
+   the schema: treating it as conclusive froze a legitimately quiet datasource (night, low traffic)
+   signal-less until its schema drifted, so it retries under the weekly budget. What rejects a query that can
+   never match is the relevance gate, not emptiness.
 6. **Exhaustion is `:doneN w<week>`, not `:spent<week>`.** The marker grammar in item 4's text was an
    intermediate form; the shipped encoding is `<hash>:<pend|done><attempts>w<isoweek>` — see ADR-018 §B-4.
 
