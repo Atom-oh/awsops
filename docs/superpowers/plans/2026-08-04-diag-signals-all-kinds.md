@@ -220,7 +220,7 @@ def build_signals(kind, schema):
 Run: `cd scripts/v2/workers/diagnosis && python -m pytest test_signal_catalog.py -v`
 Expected: PASS. Also re-run `test_datasource_index.py` to confirm nothing downstream broke:
 Run: `cd scripts/v2/workers && python -m pytest test_datasource_index.py -v`
-Expected: PASS (the loki/tempo/prometheus graph-query tests are independent of `signal_catalog`, and `test_non_prom_kind_skipped`'s `skipped_kind` assertion is untouched — that gate is removed in Task 5, not here).
+Expected: PASS (the loki/tempo/prometheus graph-query tests are independent of `signal_catalog`, and `test_non_prom_kind_skipped`'s `skipped_kind` assertion is untouched — that gate is removed in Task 7, not here).
 
 - [ ] **Step 5: Commit**
 
