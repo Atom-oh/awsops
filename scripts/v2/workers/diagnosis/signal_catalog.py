@@ -25,7 +25,7 @@ _KIND_TOOL = {"prometheus": "prometheus_query", "mimir": "mimir_query"}
 CATALOG = [
     {
         "key": "container_cpu_throttling", "title": "컨테이너 CPU 스로틀링", "pillar": "performance",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["container_cpu_cfs_throttled_periods_total", "container_cpu_cfs_periods_total"],
         "queries": [{
             "label": "throttled_ratio",
@@ -36,7 +36,7 @@ CATALOG = [
     },
     {
         "key": "oom_kills", "title": "OOM Kill", "pillar": "reliability",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["kube_pod_container_status_last_terminated_reason"],
         "queries": [{
             "label": "oomkilled_pods",
@@ -47,7 +47,7 @@ CATALOG = [
     },
     {
         "key": "node_memory_pressure", "title": "노드 메모리 압박", "pillar": "reliability",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["node_memory_MemAvailable_bytes", "node_memory_MemTotal_bytes"],
         "queries": [{
             "label": "mem_used_ratio",
@@ -57,7 +57,7 @@ CATALOG = [
     },
     {
         "key": "node_disk_usage", "title": "노드 디스크 사용률", "pillar": "reliability",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["node_filesystem_avail_bytes", "node_filesystem_size_bytes"],
         "queries": [{
             "label": "disk_used_ratio",
@@ -68,7 +68,7 @@ CATALOG = [
     },
     {
         "key": "network_pps", "title": "네트워크 PPS·드롭", "pillar": "performance",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["node_network_receive_packets_total", "node_network_receive_drop_total"],
         "queries": [
             {"label": "rx_pps", "expr": "topk(10, rate(node_network_receive_packets_total[5m]))"},
@@ -78,7 +78,7 @@ CATALOG = [
     },
     {
         "key": "pod_right_sizing", "title": "Pod 라이트사이징", "pillar": "cost",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["container_memory_working_set_bytes", "kube_pod_container_resource_requests"],
         "queries": [
             {"label": "mem_usage_p95",
@@ -91,7 +91,7 @@ CATALOG = [
     },
     {
         "key": "cpu_saturation", "title": "노드 CPU 포화", "pillar": "performance",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["node_cpu_seconds_total"],
         "queries": [{
             "label": "cpu_busy_ratio",
@@ -101,7 +101,7 @@ CATALOG = [
     },
     {
         "key": "pod_restarts", "title": "Pod 재시작", "pillar": "reliability",
-        "matcher": "metrics",
+        "matcher": "metrics", "kinds": ("prometheus", "mimir"),
         "required_metrics": ["kube_pod_container_status_restarts_total"],
         "queries": [{
             "label": "restarts_1h",
@@ -155,6 +155,8 @@ def build_signals(kind, schema):
     tool = _KIND_TOOL.get(kind, f"{kind}_query")
     rows = []
     for sig in CATALOG:
+        if kind not in sig["kinds"]:
+            continue
         missing = _missing_for(sig, schema)
         meta = {"pillar": sig["pillar"], "threshold": sig["threshold"],
                 "kind": kind, "unit": sig["unit"]}

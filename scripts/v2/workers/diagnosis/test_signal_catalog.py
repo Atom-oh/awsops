@@ -109,3 +109,14 @@ class TestCatalogShape:
     def test_oom_uses_window_max_not_instant(self):
         by = _by_key(sc.build_signals("prometheus", {"metrics": ALL_METRICS}))
         assert "max_over_time" in by["oom_kills"]["query"]["queries"][0]["expr"]
+
+
+class TestKindScoping:
+    def test_existing_k8s_entries_scoped_to_prometheus_and_mimir(self):
+        for sig in sc.CATALOG:
+            assert sig["kinds"] == ("prometheus", "mimir"), sig["key"]
+
+    def test_build_signals_omits_entries_outside_their_kind(self):
+        rows = sc.build_signals("loki", {"labels": ["job", "level"]})
+        keys = {r["signal_key"] for r in rows}
+        assert "cpu_saturation" not in keys
