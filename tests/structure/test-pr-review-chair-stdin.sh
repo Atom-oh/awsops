@@ -40,4 +40,30 @@ else
   pass "run_chair does not read the bare \$DIFF file (would drop all panel content)"
 fi
 
+# --- chair MCP isolation (PR #204) ---------------------------------------------------------------
+# A user-scope MCP server whose auth is broken makes `claude -p` wait for the tool with no error until
+# CHAIR_TIMEOUT, which kills primary AND fallback and fails the gate regardless of the diff (observed on
+# PR #194/#197/#202, and seven times on #203). --strict-mcp-config is the switch that stops MCP loading;
+# --allowedTools is only a permission allowlist and does NOT substitute for it.
+if echo "$RUN_CHAIR_BODY" | grep -q -- '--strict-mcp-config'; then
+  pass "chair call passes --strict-mcp-config (ignores user-scope MCP servers)"
+else
+  fail "chair call passes --strict-mcp-config (ignores user-scope MCP servers)"
+fi
+
+if echo "$RUN_CHAIR_BODY" | grep -q -- '--allowedTools'; then
+  pass "chair call narrows --allowedTools"
+else
+  fail "chair call narrows --allowedTools"
+fi
+
+# No Bash in the allowlist: the step has no GH_TOKEN so it buys nothing, while promoting Bash from
+# "auto-denied in non-interactive mode" to auto-approved would let the chair fetch an unscrubbed,
+# untruncated diff around strip_controls|scrub_secrets.
+if echo "$RUN_CHAIR_BODY" | grep -- '--allowedTools' | grep -q 'Bash'; then
+  fail "chair allowlist has no Bash (would bypass the input scrub via gh)"
+else
+  pass "chair allowlist has no Bash (would bypass the input scrub via gh)"
+fi
+
 [ "$FAILED" -eq 0 ] || exit 1

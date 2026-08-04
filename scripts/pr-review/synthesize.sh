@@ -185,13 +185,25 @@ chair_label() { case "$1" in
 esac ; }
 
 run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도 || true 로 계속.
-  # --allowedTools 를 명시적으로 좁힌다(diff 파일 + 패널 요약만 종합하면 되므로 read-only
-  # 로컬 도구로 충분) — 지정하지 않으면 claude CLI 가 글로벌 설치된 MCP 플러그인(예: github)
-  # 까지 기본 도구 후보에 포함시킨다. github MCP 인증이 깨지면(관찰된 실패: "HTTP 400:
-  # Authorization header is badly formatted") claude -p 는 에러를 내지 않고 그 도구 확보를
-  # 기다리며 CHAIR_TIMEOUT(600s) 까지 응답 없이 멈춘다. primary/fallback 이 같은 호출을
-  # 공유하므로 한 번 걸리면 두 chair 가 통째로 죽어 fail-closed 게이트가 실제 diff 와
-  # 무관하게 FAIL(관찰: PR #194, #197, #202).
+  # chair 는 stdin 으로 받은 diff + 패널 출력을 종합하고, 프롬프트가 요구하는 base 검증은
+  # checkout 에 대한 read/grep 으로 한다 — 그래서 도구는 로컬 read-only 로 충분하다.
+  #
+  # 근본 원인은 MCP 다: 글로벌(유저 스코프) MCP 설정이 세션 초기화 때 로드·접속되고, github MCP
+  # 인증이 깨지면(관찰: "HTTP 400: Authorization header is badly formatted") claude -p 는 에러
+  # 없이 그 도구 확보를 기다리며 CHAIR_TIMEOUT(600s) 까지 무응답으로 멈춘다. primary/fallback 이
+  # 같은 호출 형태를 쓰므로 한 번 걸리면 두 chair 가 함께 죽고, fail-closed 게이트가 실제 diff 와
+  # 무관하게 FAIL 한다(관찰: PR #194, #197, #202, 그리고 #203 에서 7회).
+  #
+  # 그러므로 원인 스위치는 `--strict-mcp-config` 다("Only use MCP servers from --mcp-config,
+  # ignoring all other MCP configurations" — 러너의 claude --help 로 확인). `--allowedTools` 는
+  # permission allowlist 일 뿐 MCP 로드를 끄지 않으므로 그것만으로는 이 행을 막지 못한다
+  # (리뷰 MAJOR, 4개 셀 독립 지적). allowlist 는 그 위의 defence-in-depth 로 유지한다.
+  #
+  # allowlist 에 gh 를 넣지 않는다: 이 step 의 env 에는 GH_TOKEN 이 없고 checkout 은
+  # persist-credentials:false 라 효용이 0 인데, 비대화형 claude -p 에서 원래 자동 거부되던 Bash 를
+  # 일부 auto-approve 로 승격시키는 대가가 있다 — chair 입력은 전량 신뢰 불가 데이터이고, 러너는
+  # non-ephemeral 이라 잔여 gh 크리덴셜이 있으면 그 grant 가 살아나 `gh pr diff` 로
+  # strip_controls|scrub_secrets 와 절단을 우회한 원본 diff 를 확보할 수 있다(리뷰 MAJOR).
   # 두 출력 모두 디스크에 닿기 전에 scrub 한다. $OUT 은 pr-review.yml 이 PR 코멘트로 verbatim
   # 게시하므로 출력 스크럽이 실제 경계이고(모델이 입력에 없던 형태를 재구성할 수도, 향후 누가
   # 새 입력 소스를 추가하며 스크럽을 빼먹을 수도 있다), 입력 스크럽은 defence-in-depth 다.
@@ -235,7 +247,7 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
   local scrub_err=$!
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    --allowedTools "Read Grep Glob Bash(gh pr diff:*) Bash(gh pr view:*)" \
+    --strict-mcp-config --allowedTools "Read Grep Glob" \
     < "$WORK/synth-stdin.txt" \
     > "$outfifo" 2> "$errfifo" &
   CHAIR_JOB_PID=$!
