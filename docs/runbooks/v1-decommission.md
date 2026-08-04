@@ -49,11 +49,20 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" --query 'Users[].Username' 
 
 v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-042 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내).
 
-**`email_verified=true` 를 반드시 함께 준다**(PR #203): `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택하므로, 이 값이 빠진 채 생성된 사용자는 email 이 `undefined` 가 되어 (1) SSM allowlist admin 판정에서 탈락하고, (2) legacy email-keyed 행의 소유권 매칭이 끊기고, (3) `make backfill-owner-sub` 계획에서 "unverified" 로 제외된다. `admin-create-user` 는 client 의 `write_attributes` 제약을 받지 않으므로 여기서 설정 가능하다. 이미 이 절차로 만든 사용자는 `admin-update-user-attributes ... Name=email_verified,Value=true` 로 보정한다:
+**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — v2 에는 사용자가 스스로 email 을 검증할 경로가 없다(BFF 가 access token 을 버리므로 `VerifyUserAttribute` 를 호출할 수 없다). 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
+
+- v1 사용자 목록(이관 원본)에 그 주소가 그 사람의 것으로 기록되어 있는가 — 오타나 추측이 아닌가
+- 그 사람이 **지금도** 그 mailbox 를 보유하는가 (퇴사자 주소 재할당이 이 PR 이 막는 위협모델이다)
+- 그 주소가 SSM admin allowlist 에 있다면, 그 사람에게 admin 을 주는 것이 맞는가
+
+확인되지 않는 주소는 **`email_verified` 없이 생성한다** — fail-closed 다. 그 사용자는 로그인은 되지만 email claim 이 없어 admin 판정과 legacy 행 매칭에서 빠지고, `make backfill-owner-sub` 계획에도 "unverified" 로 남아 눈에 보인다. 확인이 끝난 뒤 개별로 `admin-update-user-attributes --user-attributes Name=email_verified,Value=true` 로 올린다. (`admin-create-user`/`admin-update-user-attributes` 는 client 의 `write_attributes` 제약을 받지 않으므로 여기서 설정 가능하다 — 사용자 자신은 바꿀 수 없다.) 아래 명령의 `email_verified` 부분은 위 확인을 통과한 주소에만 붙인다:
 
 ```bash
 aws cognito-idp admin-create-user --user-pool-id "$V2_POOL" --username <email> \
-  --user-attributes Name=email,Value=<email> Name=email_verified,Value=true --message-action SUPPRESS
+  --user-attributes Name=email,Value=<email> --message-action SUPPRESS
+  # 위 확인을 통과한 주소에만: --user-attributes 에 Name=email_verified,Value=true 를 추가 (또는 사후
+  #   aws cognito-idp admin-update-user-attributes --user-pool-id "$V2_POOL" --username <email> \
+  #     --user-attributes Name=email_verified,Value=true )
 aws cognito-idp admin-set-user-password --user-pool-id "$V2_POOL" --username <email> \
   --password '<temp-password>' --permanent
 # 완료 조건: 실제 로그인 성공까지 확인 (POST /api/auth/login 200 응답)
