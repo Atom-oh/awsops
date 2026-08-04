@@ -222,6 +222,20 @@ class TestGeneratedFallback:
         assert version == f"{base}:spent{dsi._iso_week()}"
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS
 
+    def test_a_weekless_legacy_marker_reads_as_a_fresh_budget(self, monkeypatch):
+        # An earlier commit wrote `:retryN` with no week. It must not park the instance — reading it as a
+        # fresh budget is the safe direction, and the plain-hash "gave up" encoding cannot reach this code
+        # from a deployed row because the hash basis itself changed in this commit.
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        base = dsi._schema_version(schema)
+        c = FakeConn(kind="clickhouse", schema=schema, existing_version=f"{base}:retry2")
+        assert dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"] == \
+            f"{base}:retry1w{dsi._iso_week()}"
+
     def test_the_park_expires_when_the_week_rolls_over(self, monkeypatch):
         # It used to be permanent: the plain version was stored, and since a quiet datasource's schema never
         # changes, an instance idle for three runs stayed chip-less forever (review MAJOR, L4-M3).

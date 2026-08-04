@@ -171,6 +171,12 @@ def _retry_state(existing, version):
     week's tries; `:spent<week>` means they are gone, and since neither marker equals `version` the
     rebuild still runs each day — it just skips the Bedrock call until the week rolls over.
     """
+    # UPGRADE PATH. Two older encodings can be in the column, and neither may become a permanent park:
+    #   * the plain hash meaning "gave up" — unreachable from a deployed row, because this change also puts
+    #     the whole schema and both querygen flags into the hash basis (main hashed `metrics` + the catalog
+    #     version only), so every pre-existing row's version differs and rebuilds once;
+    #   * `:retryN` without a week, written by an earlier commit on this branch — it falls through both
+    #     patterns below and reads as a FRESH budget, which is the safe direction (retry, not park).
     if not existing or not existing.startswith(f"{version}:"):
         return 0, False
     marker, week = existing[len(version) + 1:], _iso_week()
