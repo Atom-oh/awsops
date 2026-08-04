@@ -6,7 +6,8 @@ warm/refresh path), attempts a LIVE re-introspection via the connector's `{kind}
 detection — docs/superpowers/specs/2026-07-08-registry-graph-sources-design.md), and rebuilds two
 independent tables, each gated on its OWN schema-version hash so a rebuild only happens when something
 actually changed:
-  - datasource_diag_signals (diagnosis/signal_catalog.py) — prometheus/mimir only, v1 scope, unchanged.
+  - datasource_diag_signals (diagnosis/signal_catalog.py) — all datasource kinds; per-kind catalog +
+    LLM hybrid fallback when a kind's catalog has zero ready matches.
   - datasource_graph_queries (graph_catalog.py) — ALL 5 connector kinds (capability-driven: only
     clickhouse/tempo get span queries, prometheus/mimir get them only with a service-graph metric,
     loki is structurally unavailable — see graph_catalog.py).
@@ -29,7 +30,10 @@ except ImportError:  # noqa: F401
 import graph_catalog as _graph_cat  # always flat next to this file — never under a package
 import graph_querygen as _querygen  # hybrid LLM fallback (v1 scope: clickhouse trace_spans only)
 
-_DIAG_KINDS = ("prometheus", "mimir")  # datasource_diag_signals scope — unchanged from v1
+try:  # fargate/tests: package path; lambda worker zip flattens it to signal_catalog_gen.py
+    from diagnosis import signal_catalog_gen as _signal_gen
+except ImportError:  # noqa: F401
+    import signal_catalog_gen as _signal_gen  # flattened in the worker_src lambda bundle
 
 
 def _read_cached_schema(conn, integration_id):
@@ -139,6 +143,12 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     if wdb.read_signal_schema_version(conn, iid) == version:
         return {"skipped": True, "schema_version": version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
+    if not any(r["status"] == "ready" for r in rows):
+        generated = _signal_gen.try_generate_signal(
+            kind, schema, iid,
+            lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
+        if generated:
+            rows = list(rows) + [generated]
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
@@ -231,13 +241,7 @@ def run(payload, conn):
             out["no_schema"] = True
             return out
 
-        if kind in _DIAG_KINDS:
-            out.update(_rebuild_diag_signals(conn, wdb, iid, kind, schema))
-        else:
-            # out of diag-signal scope (diagnosis keeps the generic planner for these) — graph queries
-            # still get built below regardless; the two tables are independent.
-            out["skipped_kind"] = kind
-
+        out.update(_rebuild_diag_signals(conn, wdb, iid, kind, schema))
         out.update(_rebuild_graph_queries(conn, wdb, iid, kind, schema))
         return out
     except Exception as e:  # noqa: BLE001 — never sink the dispatcher; surface on the job result

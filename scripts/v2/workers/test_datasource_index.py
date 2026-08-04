@@ -132,11 +132,37 @@ class TestDefensive:
         out = dsi.run({"integration_id": 7}, Boom())
         assert out.get("error")  # surfaced, not raised
 
-    def test_non_prom_kind_skipped(self):
-        c = FakeConn(kind="loki")
-        out = dsi.run({"integration_id": 7}, c)
-        assert out.get("skipped_kind") == "loki"
-        assert c.inserts == []
+    def test_non_prom_kind_now_builds_diag_signals_too(self):
+        # loki has its own kind-scoped catalog entries (signal_catalog.py) — no longer skipped.
+        c = FakeConn(kind="loki", schema={"labels": ["job", "namespace"]})
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert "skipped_kind" not in out
+        assert out.get("built", 0) > 0
+        assert any(p["st"] == "ready" for p in c.inserts)
+
+
+class TestGeneratedFallback:
+    def test_fallback_invoked_and_appended_when_catalog_has_zero_ready(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "try_generate_signal": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: {
+                "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
+                "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "count_over_time({job=\"x\"}[5m])"}]},
+                "missing_metrics": None, "meta": {"kind": "loki", "provenance": "generated"},
+            }),
+        }))
+        # a loki schema with NO recognized labels ("job"/"namespace") → catalog itself has zero ready
+        c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert any(p["sk"] == "generated_signal" for p in c.inserts)
+
+    def test_fallback_not_invoked_when_catalog_already_has_a_ready_row(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "try_generate_signal": staticmethod(lambda *a, **k: called.append(1) or None),
+        }))
+        c = FakeConn(kind="loki", schema={"labels": ["job"]})  # loki_error_rate matches → 1+ ready
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert called == []
 
 
 # ── Task 11: end-to-end smoke — catalog → index(build) → diag_signals → collect → coverage "사용" ──
@@ -257,13 +283,13 @@ class TestGraphQueriesAllKinds:
         out = dsi.run({"integration_id": 7, "kind": "tempo"}, c)
         assert c.graph_inserts == [] and out.get("graph_skipped") is True
 
-    def test_graph_build_happens_even_when_kind_is_out_of_diag_signal_scope(self):
-        # loki is out of diag-signal scope (skipped_kind) but STILL gets pre-built graph-query rows.
-        c = FakeConn(kind="loki", schema={"labels": []})
+    def test_graph_build_independent_of_diag_signal_build(self):
+        # graph queries and diag signals are built from independent catalogs/tables — confirm both
+        # run for loki now that it has its own diag-signal entries too (Task 4).
+        c = FakeConn(kind="loki", schema={"labels": ["job", "namespace"]})
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
-        assert out.get("skipped_kind") == "loki"
-        assert c.inserts == []            # no diag signals — out of scope
-        assert len(c.graph_inserts) == 2  # but graph queries still built
+        assert "skipped_kind" not in out
+        assert len(c.graph_inserts) == 2  # graph queries: still always-unavailable for loki (graph_catalog.py)
 
 
 # ── Live re-introspection (drift detection, 2026-07-08) ─────────────────────────────────────────────
