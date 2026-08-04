@@ -186,11 +186,15 @@ before the connectors were probed.
    catalog edit: v3 encoded "generation budget exhausted" as the plain schema hash, which is
    indistinguishable from the legitimate "conclusively nothing to build" row that must keep skipping, so a
    row written that way would never generate again. The bump invalidates every hash once, and from v4 on
-   exhaustion is `:spent<week>` while the plain hash means only "conclusive".
-5. **The dry run now enforces the non-empty shape this spec already required.** Decision 2 asks for "a
-   non-error, non-empty-shape response", but the first implementation accepted any successful envelope —
-   so an invented metric name returning Prometheus `result: []` was stored as a ready chip that stays
-   permanently empty. `_nonempty_result()` checks the payload per kind.
+   exhaustion is a week-scoped marker (item 6) while the plain hash means only "conclusive".
+5. **An empty dry-run response is a RETRY, not the verdict this spec first asked for.** Decision 2 asked
+   for "a non-error, non-empty-shape response", and `_nonempty_result()` does check the payload per kind —
+   an invented metric name returning Prometheus `result: []` is not accepted as a ready chip. But treating
+   emptiness as conclusive froze a legitimately quiet datasource (night, low traffic) signal-less until its
+   schema drifted, so an empty payload is classified TRANSIENT and retried under the weekly budget. What
+   rejects a query that can never match is the relevance gate, not emptiness (later review).
+6. **Exhaustion is `:doneN w<week>`, not `:spent<week>`.** The marker grammar in item 4's text was an
+   intermediate form; the shipped encoding is `<hash>:<pend|done><attempts>w<isoweek>` — see ADR-018 §B-4.
 
 Two further review findings changed code, not scope: a schema whose catalog yields nothing now records
 its `schema_version` through a sentinel row (`db.SCHEMA_VERSION_SENTINEL_KEY`, filtered out of the BFF
