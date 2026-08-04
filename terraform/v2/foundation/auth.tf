@@ -10,6 +10,12 @@ resource "aws_cognito_user_pool" "main" {
   # on that address and self-verify it via the emailed code (auto_verified_attributes = email) —
   # inheriting that person's legacy email-keyed rows for as long as legacy_email_owner_match is on.
   # This is an internal ops dashboard: accounts are provisioned, never self-registered.
+  #
+  # It only closes FUTURE signups — an account that already self-registered keeps working, with a
+  # verified email it chose (codex stop-gate). Applying this is therefore step 1 of 2; step 2 is the
+  # one-time roster reconciliation in docs/runbooks/v1-decommission.md (list the pool, disable anything
+  # that is not a known operator). Terraform cannot do that part: Cognito records no "created by"
+  # provenance, so deciding which existing accounts are legitimate is a human judgement.
   admin_create_user_config {
     allow_admin_create_user_only = true
   }

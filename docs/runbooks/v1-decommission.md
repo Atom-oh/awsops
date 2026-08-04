@@ -49,7 +49,18 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" --query 'Users[].Username' 
 
 v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-042 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내).
 
-**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — v2 에는 사용자가 스스로 email 을 검증할 경로가 없다(BFF 가 access token 을 버리므로 `VerifyUserAttribute` 를 호출할 수 없다). 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
+**신규 signup 차단은 기존 계정을 정리하지 않는다** (PR #203, codex stop-gate). `allow_admin_create_user_only = true` 는 앞으로의 `SignUp` 만 막고, **이미 self-registered 된 계정은 그대로 살아 있다** — 자기가 고른 주소가 verified 인 채로. 그 계정이 퇴사자의 재할당 mailbox 주소를 들고 있으면 이 PR 의 컨트롤을 모두 우회한다. Terraform 으로는 판정할 수 없다(Cognito 는 "누가 만들었는지"를 기록하지 않는다) — 배포 직후 **한 번** 아래로 대조하고, 알려진 운영자가 아닌 계정은 비활성화한다:
+
+```bash
+aws cognito-idp list-users --user-pool-id "$V2_POOL" \
+  --query 'Users[].{u:Username,created:UserCreateDate,status:UserStatus,attrs:Attributes[?Name==`email` || Name==`email_verified`].[Name,Value]}' \
+  --output table
+# 명부에 없는 계정: aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username <u>
+```
+
+**Future signups being blocked does NOT clean up existing accounts** (PR #203). `allow_admin_create_user_only = true` only stops future `SignUp` calls; an account that already self-registered keeps working, with a verified address of its own choosing. If such an account holds a departed colleague's reassigned mailbox address, it bypasses every control in this PR. Terraform cannot decide this (Cognito records no "created by" provenance) — reconcile the pool against your operator roster ONCE right after the deploy with the command above, and `admin-disable-user` anything you do not recognise.
+
+**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — 이 앱 UI 에는 email 검증 화면이 없다(BFF 는 `InitiateAuth` 결과에서 `IdToken` 만 읽고 AccessToken 은 쓰지 않는다). 다만 user pool client 는 시크릿 없는 public client 이므로 사용자가 Hosted UI/PKCE 로 직접 AccessToken 을 얻어 Cognito 의 `VerifyUserAttribute` 를 호출할 수는 있다 — 즉 **자기 계정에 이미 설정된 주소의 검증은 사용자도 가능하다**(codex stop-gate: 이전 서술은 '불가능'이라 단정했다). 보안 결론은 바뀌지 않는다: 막은 것은 주소를 *바꾸는* 것(`write_attributes`)과 새 계정을 *만드는* 것(`allow_admin_create_user_only`)이다. 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
 
 - v1 사용자 목록(이관 원본)에 그 주소가 그 사람의 것으로 기록되어 있는가 — 오타나 추측이 아닌가
 - 그 사람이 **지금도** 그 mailbox 를 보유하는가 (퇴사자 주소 재할당이 이 PR 이 막는 위협모델이다)
@@ -60,8 +71,12 @@ v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user
 **`email_verified` is this procedure's decision point** (PR #203). `verifyUser()` adopts the token's
 `email` claim only when `email_verified` is true, so setting this flag is **not a verification — it is
 the operator asserting one**, and it immediately grants that address (1) eligibility for the SSM
-allowlist admin check and (2) ownership of every legacy email-keyed row written under it. v2 offers no
-user-driven alternative: the BFF discards the access token, so `VerifyUserAttribute` is unreachable.
+allowlist admin check and (2) ownership of every legacy email-keyed row written under it. this app's UI offers no email-verification screen (the BFF reads only `IdToken` from `InitiateAuth`
+and never uses the AccessToken). It is NOT unreachable, though: the pool client is public and secretless, so a
+user can obtain an AccessToken themselves via Hosted UI/PKCE and call Cognito's `VerifyUserAttribute` — a user
+CAN verify an address already set on their own account (codex stop-gate: this previously claimed otherwise).
+The security conclusion is unchanged: what is blocked is CHANGING the address (`write_attributes`) and
+CREATING a new account (`allow_admin_create_user_only`).
 **Never set it in bulk.** Per address, confirm all three first:
 
 - the v1 user list (the migration source) records that address for that person — not a typo or a guess

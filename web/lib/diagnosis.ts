@@ -114,14 +114,15 @@ export async function createReport(
           --   type = 'report'  — the generic POST /api/jobs allowlist is {noop, noop-heavy}, so a
           --                      report job can only come from /api/diagnosis (server-computed
           --                      report_id, account validated against the accounts table) or the dispatcher;
-          --   {1,18} digits    — an unbounded ^[0-9]+$ passes a 23-digit string that then overflows
-          --                      bigint and aborts the whole query with 22003;
+          --   text compare     — r.id::text, never (payload->>'report_id')::bigint. A regex guard cannot
+          --                      protect that cast: AND does not order evaluation in Postgres, so a
+          --                      23-digit payload could still be cast and abort the query with 22003
+          --                      (codex stop-gate). Casting the trusted side is always safe;
           --   same owner       — and NOT type alone (codex stop-gate: a type value is not provenance).
           --                      The job that supplies the account must belong to the same principal as
           --                      the report, so no other user's job can label someone's baseline.
           JOIN worker_jobs j ON (j.job_id = r.worker_job_id
-            OR (j.type = 'report' AND j.payload->>'report_id' ~ '^[0-9]{1,18}$'
-                AND (j.payload->>'report_id')::bigint = r.id
+            OR (j.type = 'report' AND j.payload->>'report_id' = r.id::text
                 AND j.requested_by = r.requested_by))
          WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
            AND r.status = 'succeeded' AND r.deleted_at IS NULL
@@ -169,9 +170,8 @@ export async function reportForIdempotencyKey(key: string): Promise<number | nul
   // carries no usable id (older rows, other enqueue paths).
   const byPayload = await getPool().query(
     `SELECT r.id FROM worker_jobs j
-       JOIN diagnosis_reports r ON r.id = (j.payload->>'report_id')::bigint
+       JOIN diagnosis_reports r ON j.payload->>'report_id' = r.id::text
       WHERE j.idempotency_key = $1 AND j.type = 'report'
-        AND j.payload->>'report_id' ~ '^[0-9]{1,18}$'
         AND r.deleted_at IS NULL
       ORDER BY r.id DESC LIMIT 1`,
     [key],
@@ -185,7 +185,7 @@ export async function reportForIdempotencyKey(key: string): Promise<number | nul
   const { rows } = await getPool().query(
     `SELECT r.id FROM diagnosis_reports r JOIN worker_jobs j ON j.job_id = r.worker_job_id
      WHERE j.idempotency_key = $1 AND r.deleted_at IS NULL
-       AND (j.payload->>'report_id' IS NULL OR j.payload->>'report_id' !~ '^[0-9]{1,18}$')
+       AND j.payload->>'report_id' IS NULL
      ORDER BY r.id DESC LIMIT 1`,
     [key],
   );

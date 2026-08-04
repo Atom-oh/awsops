@@ -101,8 +101,13 @@ def test_lineage_parent_is_scoped_by_owner_and_account(monkeypatch):
     assert "(:acct IS NULL OR j.payload->>'account' = :acct)" in sql
     assert "JOIN worker_jobs j ON (j.job_id = r.worker_job_id" in sql
     # link OR payload — a report whose link lost the one-report-per-job race is still the row the
-    # worker renders, so it must stay eligible as a baseline
-    assert "(j.payload->>'report_id')::bigint = r.id" in sql
+    # worker renders, so it must stay eligible as a baseline. TEXT comparison, never a ::bigint cast of
+    # the payload: AND does not order evaluation in Postgres, so a regex guard cannot stop an oversized
+    # value from being cast and aborting the query (22003).
+    assert "j.payload->>'report_id' = r.id::text" in sql
+    assert "::bigint" not in sql
+    # and the payload branch is owner-anchored — a type value alone is not provenance
+    assert "j.requested_by = r.requested_by" in sql
     assert kw["ok"] == ["u1"] and kw["acct"] == "180294183052"
 
 
