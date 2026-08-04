@@ -114,8 +114,27 @@ set -euo pipefail
 # Everything below is destructive. Show the resolved values and require the address to be typed again: the
 # last stop against a stale variable or a typo taking out the wrong person. No command runs without it.
 printf 'about to offboard:\n  EMAIL=%s\n  SUB=%s\nretype the address to proceed: ' "$EMAIL" "$SUB"
-if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then CONFIRM="$EMAIL"; else IFS= read -r CONFIRM < /dev/tty; fi
+if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then
+  # 비대화형에서 CONFIRM="$EMAIL" 로 자동 통과시키면 이 관문이 그 경로에서 사라진다 — 잔여 EMAIL 이 스스로를
+  # 승인하게 된다(리뷰 지적). 호출자가 주소를 **독립적으로 한 번 더** 명시해야 한다.
+  # Auto-satisfying this in non-interactive mode deletes the gate on that path: a stale EMAIL confirms
+  # itself (review finding). The caller must state the address a SECOND, independent time.
+  : "${OFFBOARD_CONFIRM_EMAIL:?non-interactive: set OFFBOARD_CONFIRM_EMAIL to the same address to confirm}"
+  CONFIRM="$OFFBOARD_CONFIRM_EMAIL"
+else
+  IFS= read -r CONFIRM < /dev/tty
+fi
 [ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch — nothing was done'; exit 1; }
+
+# SUB 은 변수라 잔여값일 수 있다. EMAIL 로 다시 조회해 일치를 강제한다 — 이러면 stale SUB 은 모드와 무관하게
+# 통과하지 못한다(session_revocations 는 sub 로 쓰므로 틀리면 엉뚱한 사람의 세션을 끊는다).
+# SUB is just a variable and may be left over. Re-resolve it from EMAIL and require a match, which kills
+# the stale-SUB case in BOTH modes — session_revocations is keyed by sub, so a wrong one cuts the wrong
+# person's session.
+SUB_NOW=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAIL" \
+  --query 'UserAttributes[?Name==`sub`]|[0].Value' --output text)
+[ -n "$SUB_NOW" ] && [ "$SUB_NOW" = "$SUB" ] \
+  || { echo "SUB does not belong to $EMAIL (resolved '$SUB_NOW') — nothing was done"; exit 1; }
 
 # 1) 스케줄을 먼저 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다
 #    Disable the schedule FIRST: deleting the account does not remove report_schedules rows, and the
