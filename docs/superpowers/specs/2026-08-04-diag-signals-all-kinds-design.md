@@ -153,6 +153,8 @@ every run and re-invoked Bedrock daily wherever the flag is on; and `DiagSignalC
 state at the start of every effect, since after the kind gate was removed a failed fetch on a datasource
 switch left the previous instance's chips clickable.
 
+The sentinel is written only when the emptiness is CONCLUSIVE. `try_generate_signal_with_status()` reports DISABLED / REJECTED / TRANSIENT / GENERATED, and a TRANSIENT outcome (Bedrock throttled, connector down — anything that threw) writes no row at all so the next run retries. Recording the version there would have frozen a retryable failure into a permanent skip: the schema never changes, so the daily job would skip forever and the signal would never appear even after the outage ended (review finding on the first version of the sentinel).
+
 The `GRAPH_QUERYGEN_ENABLED` scope note in Decision 2 ("renamed scope-wise in docs") is now honoured in
 `terraform/v2/foundation/variables.tf`: the operator-facing description says the flag gates the
 diag-signal fallback for every fallback-eligible kind, not just the ClickHouse graph query.

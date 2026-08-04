@@ -128,10 +128,20 @@ def _nonempty_result(kind, result):
     return bool(result)
 
 
+# Outcomes, so the caller can tell "this schema has nothing to offer" (worth remembering) from "the
+# attempt broke" (worth retrying). datasource_index only records a version sentinel for the former —
+# otherwise a Bedrock throttle or a connector outage would be frozen into a permanent skip
+# (review: the sentinel turned retryable failures into permanent ones).
+DISABLED = "disabled"      # flag off — nothing changes until an operator acts
+REJECTED = "rejected"      # the model answered and the answer failed a check: conclusive for this schema
+TRANSIENT = "transient"    # something threw: retry next run
+GENERATED = "generated"
+
+
 def _dry_run_check(kind, expr, integration_id, invoke_connector):
-    """(b) Live dry run against the connector; False on ANY failure (conservative), False on a
-    generic error-envelope response even when no exception was raised, and False when the response
-    succeeded but carried no rows (see _nonempty_result)."""
+    """(b) Live dry run against the connector. Returns (ok, transient): False on a generic
+    error-envelope response or an empty payload (conclusive for this schema — see _nonempty_result),
+    and (False, True) when the call itself threw, which is retryable."""
     arg_name = "sql" if kind == "clickhouse" else "query"
     args = {arg_name: expr, "instance_id": integration_id}
     if kind == "clickhouse":
@@ -139,33 +149,45 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
     try:
         result = invoke_connector(args)
     except Exception:
-        return False
+        return False, True      # connector down / timeout — not a verdict on the query
     if not result:
-        return False
+        return False, False
     if isinstance(result, dict) and "error" in result:
-        return False
-    return _nonempty_result(kind, result)
+        return False, False
+    return _nonempty_result(kind, result), False
 
 
 def try_generate_signal(kind, schema, integration_id, invoke_connector, invoke_llm=None):
+    """Back-compat wrapper: the row or None. Prefer try_generate_signal_with_status()."""
+    return try_generate_signal_with_status(
+        kind, schema, integration_id, invoke_connector, invoke_llm)[0]
+
+
+def try_generate_signal_with_status(kind, schema, integration_id, invoke_connector, invoke_llm=None):
     """Entry point, called from datasource_index.py only when signal_catalog.build_signals matched
-    zero ready rows for this kind. Returns a ready row dict (same shape as build_signals' rows,
-    plus meta.provenance='generated') on success, or None — never raises."""
+    zero ready rows for this kind. Returns (row_or_None, status) where status is one of DISABLED /
+    GENERATED / REJECTED / TRANSIENT — never raises.
+
+    The status exists so the caller can decide whether "no signal" is worth remembering. REJECTED
+    means the model answered and its answer failed a check, which will repeat for the same schema;
+    TRANSIENT means the attempt itself broke and the next run should try again.
+    """
     if os.environ.get("GRAPH_QUERYGEN_ENABLED") != "true":
-        return None
+        return None, DISABLED
     try:
         expr = _generate_expr(kind, schema, invoke=invoke_llm)
         if not _static_check(kind, expr):
-            return None
-        if not _dry_run_check(kind, expr, integration_id, invoke_connector):
-            return None
+            return None, REJECTED
+        ok, transient = _dry_run_check(kind, expr, integration_id, invoke_connector)
+        if not ok:
+            return None, (TRANSIENT if transient else REJECTED)
         tool = _KIND_TOOL.get(kind, f"{kind}_query")
         return {
             "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
             "query": {"tool": tool, "queries": [{"label": "generated", "expr": expr}]},
             "missing_metrics": None,
             "meta": {"kind": kind, "provenance": "generated"},
-        }
+        }, GENERATED
     except Exception as e:  # noqa: BLE001 — never break the catalog-based rebuild
         logging.warning("[signal_catalog_gen] generation failed for integration %s: %s", integration_id, e)
-        return None
+        return None, TRANSIENT

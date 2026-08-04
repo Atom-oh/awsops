@@ -145,11 +145,12 @@ class TestDefensive:
 class TestGeneratedFallback:
     def test_fallback_invoked_and_appended_when_catalog_has_zero_ready(self, monkeypatch):
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "try_generate_signal": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: ({
                 "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                 "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "count_over_time({job=\"x\"}[5m])"}]},
                 "missing_metrics": None, "meta": {"kind": "loki", "provenance": "generated"},
-            }),
+            }, "generated")),
         }))
         # a loki schema with NO recognized labels ("job"/"namespace") → catalog itself has zero ready
         c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})
@@ -158,10 +159,37 @@ class TestGeneratedFallback:
         assert out["built"] == 4  # 3 catalog rows (all unavailable) + 1 generated
         assert out["ready"] == 1  # only the generated row is ready
 
+    def test_transient_generation_failure_writes_nothing_so_the_next_run_retries(self, monkeypatch):
+        # An empty build normally records a version sentinel so the daily job stops rebuilding. But a
+        # Bedrock throttle or a connector outage is retryable: recording the version there would freeze
+        # it into a permanent skip, since the schema never changes (review finding).
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})  # catalog yields nothing
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert out["schema_version"] is None and out["built"] == 0
+        assert c.inserts == []          # no sentinel, no rows at all
+
+    def test_conclusive_empty_build_records_the_sentinel(self, monkeypatch):
+        # Flag off (or the model answered and was rejected): nothing will change until the schema or an
+        # operator does, so the version IS recorded and the next run skips.
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "disabled")),
+        }))
+        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert out["schema_version"] is not None
+        assert [p["sk"] for p in c.inserts] == ["__schema_version__"]
+
     def test_fallback_not_invoked_when_catalog_already_has_a_ready_row(self, monkeypatch):
         called = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "try_generate_signal": staticmethod(lambda *a, **k: called.append(1) or None),
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (called.append(1) or None, "rejected")),
         }))
         c = FakeConn(kind="loki", schema={"labels": ["job"]})  # loki_error_rate matches → 1+ ready
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
@@ -195,11 +223,12 @@ class TestSchemaVersionCoversFullSchemaAndFlag:
 
         monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "try_generate_signal": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: ({
                 "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                 "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "x"}]},
                 "missing_metrics": None, "meta": {"kind": "loki", "provenance": "generated"},
-            }),
+            }, "generated")),
         }))
         c1 = FakeConn(kind="loki", schema=schema, existing_version=version_off)
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c1)

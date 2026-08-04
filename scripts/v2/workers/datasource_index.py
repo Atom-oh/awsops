@@ -150,12 +150,21 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     if wdb.read_signal_schema_version(conn, iid) == version:
         return {"skipped": True, "schema_version": version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
+    gen_status = None
     if not any(r["status"] == "ready" for r in rows):
-        generated = _signal_gen.try_generate_signal(
+        generated, gen_status = _signal_gen.try_generate_signal_with_status(
             kind, schema, iid,
             lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
         if generated:
             rows = list(rows) + [generated]
+    # An empty build is remembered via a version sentinel (db.upsert_diag_signals) so the daily job
+    # stops rebuilding — but ONLY when the emptiness is conclusive. A Bedrock throttle or a connector
+    # outage returns TRANSIENT, and recording the version there would freeze a retryable failure into a
+    # permanent skip: the schema never changes, so the job would skip forever and the signal would never
+    # appear even after the outage ends (review). Leave no row in that case and let the next run retry.
+    if not rows and gen_status == _signal_gen.TRANSIENT:
+        return {"built": 0, "ready": 0, "retry": "generation failed transiently",
+                "schema_version": None}
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
