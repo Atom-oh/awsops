@@ -103,7 +103,11 @@ set -euo pipefail
 : "${V2_POOL:?set V2_POOL (terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)}"
 : "${SSM_ADMIN_EMAILS_PARAM:=/ops/awsops-v2/admin_emails}"
 : "${EMAIL:?set EMAIL first — run the Verification block above, which prompts for it}"
-: "${SUB:?set SUB — see the Verification block's admin-get-user step}"
+# 아포스트로피를 쓰지 않는다 — `${VAR:?...}` 안의 `'` 는 인용 상태를 열어 **블록 전체 파싱을 깨뜨린다**
+# (리뷰 지적으로 발견; bash -n 으로 재현).
+# No apostrophes here: a `'` inside `${VAR:?...}` opens a quote state and breaks the WHOLE block's parse
+# (found by review, reproduced with bash -n).
+: "${SUB:?set SUB by running the Verification block above (its admin-get-user step)}"
 
 # 여기서부터 파괴적이다. 값을 눈으로 확인하고 주소를 다시 입력하게 한다 — 잔여 변수/오타로 엉뚱한 사람을
 # 지우는 것을 막는 마지막 관문이며, 이 확인 없이는 어떤 명령도 실행되지 않는다.
