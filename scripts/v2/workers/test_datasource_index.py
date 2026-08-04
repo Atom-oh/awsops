@@ -190,18 +190,38 @@ class TestGeneratedFallback:
     def test_the_retry_is_bounded(self, monkeypatch):
         # The connectors collapse upstream failures into the same 400 as a bad query, so the cause cannot be
         # read off the response — an unbounded `:retry` meant daily Bedrock calls for a query that may never
-        # work (review, tenth pass). After _MAX_RETRY_ATTEMPTS the real version is stored and the daily job
-        # skips until the schema itself changes.
+        # work (review, tenth pass). Once _MAX_GENERATION_ATTEMPTS tries are used up the real version is
+        # stored and the daily job skips until the schema itself changes.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         base = dsi._schema_version({"tables": {"t": ["c"]}})
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}},
-                     existing_version=f"{base}:retry{dsi._MAX_RETRY_ATTEMPTS}")
+                     existing_version=f"{base}:retry{dsi._MAX_GENERATION_ATTEMPTS - 1}")
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
         assert out["schema_version"] == base and not out.get("retry")
         assert all(p["sv"] == base for p in c.inserts)
+
+    def test_the_generation_runs_exactly_max_attempts_times(self, monkeypatch):
+        # _MAX_GENERATION_ATTEMPTS counts GENERATIONS, not extra ones: `:retryN` already means N ran, so
+        # comparing N (rather than N+1) against the cap spent one attempt more than the name promises.
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        base = dsi._schema_version(schema)
+        version = None
+        for _ in range(10):   # more runs than the cap: the extra ones must not generate again
+            c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
+            version = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"]
+            if version == base:
+                break
+        assert version == base
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS
 
     def test_the_attempt_counter_advances(self, monkeypatch):
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {

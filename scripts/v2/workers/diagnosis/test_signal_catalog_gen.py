@@ -382,6 +382,15 @@ class TestAliasesCannotImpersonateSchemaNames:
         assert scg._is_constant_expr("clickhouse", sch, "SELECT 1 duration FROM spans") is True
         assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM (SELECT 1) spans") is True
 
+    def test_a_keyword_or_operator_before_a_name_is_not_an_alias(self):
+        # An implicit alias only follows a COMPLETE operand. After DISTINCT or an operator the trailing name
+        # is the measured column itself, and stripping it there rejected valid SQL.
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}, {"name": "service"},
+                                                       {"name": "ts"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT DISTINCT service FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT 1 + duration FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT max(ts) last_seen FROM spans") is False
+
     def test_a_table_function_with_an_implicit_alias_is_not_a_table(self):
         sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
         assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM numbers(10) spans") is True

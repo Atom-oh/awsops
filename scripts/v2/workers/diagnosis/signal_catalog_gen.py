@@ -225,15 +225,30 @@ def _strip_alias_defs(text):
     return re.sub(r"#\s*(?:`(?:[^`]|``)*`|\"(?:[^\"]|\"\")*\"|[A-Za-z_][\w$]*)", " # ", text)
 
 
+# A trailing identifier is an implicit alias only when what precedes it is a COMPLETE operand. After a
+# keyword (`DISTINCT service`) or an operator (`1 + duration`) the trailing name is the measured column
+# itself, and stripping it there rejected valid SQL (review, twelfth pass).
+_NOT_AN_OPERAND = frozenset("""
+select distinct all not and or case when then else in like ilike between is null interval as on using
+""".split())
+_IMPLICIT_ALIAS = re.compile(
+    r"""(?P<prev> [)`"\w$] ) \s+ (?P<alias> `(?:[^`]|``)*` | "(?:[^"]|"")*" | [A-Za-z_][\w$]* ) \s*$""",
+    re.VERBOSE)
+
+
 def _strip_select_item_aliases(select_list):
-    """Drop each select item's trailing implicit alias: `1 duration`, `count() total`.
+    """Drop each select item's trailing implicit alias: `1 duration`, `count() total`, `max(ts) last_seen`.
 
     SQL lets AS be omitted, so `SELECT 1 duration FROM spans` matched the column `duration` while measuring
-    a literal (review, tenth pass). Only valid inside the SELECT list — see _strip_alias_defs.
+    a literal (review, tenth pass). Only valid inside the SELECT list — see _strip_alias_defs — and only
+    after a complete operand — see _NOT_AN_OPERAND.
     """
     out = []
     for item in _strip_alias_defs(select_list).split(","):
-        out.append(re.sub(r"(\S)\s+(?:`(?:[^`]|``)*`|\"(?:[^\"]|\"\")*\"|[A-Za-z_][\w$]*)\s*$", r"\1 ", item))
+        m = _IMPLICIT_ALIAS.search(item)
+        if m and item[:m.start("alias")].strip().rsplit(None, 1)[-1].lower() not in _NOT_AN_OPERAND:
+            item = item[:m.start("prev") + 1] + " "
+        out.append(item)
     return ",".join(out)
 
 

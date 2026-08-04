@@ -154,7 +154,7 @@ def _graph_schema_version(schema):
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
-_MAX_RETRY_ATTEMPTS = 3   # per schema_version; see the bounded-retry note below
+_MAX_GENERATION_ATTEMPTS = 3   # TOTAL tries per schema_version, retries included
 
 
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
@@ -184,7 +184,10 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # but it must not retry forever either: the connectors collapse upstream 503s into the same 400 as a
     # bad query, so the cause is unknowable from the response and an unbounded `:retry` meant daily Bedrock
     # calls for a query that may never work (review, twice). The attempt count rides in the stored version;
-    # after _MAX_RETRY_ATTEMPTS we store the plain version and stop until the schema itself changes.
+    # calls for a query that may never work (review, twice). The attempt count rides in the stored version:
+    # `:retryN` means N generations already ran, so this run is number N+1 and _MAX_GENERATION_ATTEMPTS is a
+    # count of GENERATIONS, not of extra ones (review, thirteenth pass — it was off by one the other way).
+    # Once they are used up we store the plain version and stop until the schema itself changes.
     retry_needed = gen_status == _signal_gen.TRANSIENT and not any(r["status"] == "ready" for r in rows)
     attempt = 0
     if existing_version and existing_version.startswith(f"{version}:retry"):
@@ -192,9 +195,10 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             attempt = int(existing_version.rsplit("retry", 1)[1] or 0)
         except ValueError:
             attempt = 0
-    if retry_needed and attempt >= _MAX_RETRY_ATTEMPTS:
-        logging.warning("[datasource_index] integration %s: generation failed %s times for this schema; "
-                        "recording the version and giving up until the schema changes", iid, attempt)
+    if retry_needed and attempt + 1 >= _MAX_GENERATION_ATTEMPTS:
+        logging.warning("[datasource_index] integration %s: generation failed on all %s attempts for this "
+                        "schema; recording the version and giving up until the schema changes",
+                        iid, attempt + 1)
         retry_needed = False
     stored_version = f"{version}:retry{attempt + 1}" if retry_needed else version
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
