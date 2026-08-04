@@ -159,9 +159,8 @@ class TestGeneratedFallback:
         assert out["built"] == 4  # 3 catalog rows (all unavailable) + 1 generated
         assert out["ready"] == 1  # only the generated row is ready
 
-    def test_transient_generation_failure_writes_nothing_so_the_next_run_retries(self, monkeypatch):
-        # An empty build normally records a version sentinel so the daily job stops rebuilding. But a
-        # Bedrock throttle or a connector outage is retryable: recording the version there would freeze
+    def test_transient_generation_failure_stores_a_mismatching_version_so_the_next_run_retries(self, monkeypatch):
+        # A Bedrock throttle or a connector outage is retryable: recording the REAL version would freeze
         # it into a permanent skip, since the schema never changes (review finding).
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient",
@@ -169,8 +168,24 @@ class TestGeneratedFallback:
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})  # catalog yields nothing
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
-        assert out["schema_version"] is None and out["built"] == 0
-        assert c.inserts == []          # no sentinel, no rows at all
+        assert out["schema_version"].endswith(":retry") and out.get("retry")
+        # the stored version cannot equal the version the next run computes, so it rebuilds
+        assert all(p["sv"].endswith(":retry") for p in c.inserts)
+
+    def test_transient_failure_with_unavailable_catalog_rows_also_retries(self, monkeypatch):
+        # The first version of this guard only fired on an EMPTY build, so loki/tempo — which normally
+        # produce `unavailable` rows — persisted those under the real version and skipped the retry just
+        # as effectively (review, second pass). The rows are still written (the UI shows their "metric X
+        # missing" text); only the version is tagged.
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})  # rows, none ready
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert out["built"] > 0 and out["ready"] == 0
+        assert out["schema_version"].endswith(":retry") and out.get("retry")
+        assert c.inserts and all(p["sv"].endswith(":retry") for p in c.inserts)
 
     def test_conclusive_empty_build_records_the_sentinel(self, monkeypatch):
         # Flag off (or the model answered and was rejected): nothing will change until the schema or an
@@ -181,7 +196,7 @@ class TestGeneratedFallback:
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
-        assert out["schema_version"] is not None
+        assert out["schema_version"] is not None and not out["schema_version"].endswith(":retry")
         assert [p["sk"] for p in c.inserts] == ["__schema_version__"]
 
     def test_fallback_not_invoked_when_catalog_already_has_a_ready_row(self, monkeypatch):

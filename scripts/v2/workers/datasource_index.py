@@ -157,20 +157,24 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
         if generated:
             rows = list(rows) + [generated]
-    # An empty build is remembered via a version sentinel (db.upsert_diag_signals) so the daily job
-    # stops rebuilding — but ONLY when the emptiness is conclusive. A Bedrock throttle or a connector
-    # outage returns TRANSIENT, and recording the version there would freeze a retryable failure into a
-    # permanent skip: the schema never changes, so the job would skip forever and the signal would never
-    # appear even after the outage ends (review). Leave no row in that case and let the next run retry.
-    if not rows and gen_status == _signal_gen.TRANSIENT:
-        return {"built": 0, "ready": 0, "retry": "generation failed transiently",
-                "schema_version": None}
+    # A build with no ready signal is remembered via the recorded schema_version (plus a sentinel row when
+    # there is nothing at all) so the daily job stops rebuilding — but ONLY when that outcome is
+    # conclusive. A Bedrock throttle or a connector outage returns TRANSIENT, and recording the real
+    # version then freezes a retryable failure into a permanent skip: the schema never changes, so the job
+    # skips forever and the signal never appears even after the outage ends.
+    #
+    # Note this is NOT limited to an empty build (review, second pass): loki/tempo normally produce
+    # `unavailable` catalog rows, and persisting THOSE under the real version skips the retry just as
+    # effectively. So the rows are still written — they carry the "metric X missing" text the UI shows —
+    # but under a deliberately mismatching version, which makes the next run rebuild and retry.
+    retry_needed = gen_status == _signal_gen.TRANSIENT and not any(r["status"] == "ready" for r in rows)
+    stored_version = f"{version}:retry" if retry_needed else version
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
     conn.run("BEGIN")
     try:
-        written = wdb.upsert_diag_signals(conn, iid, rows, version)
+        written = wdb.upsert_diag_signals(conn, iid, rows, stored_version)
         # Sweep against what was WRITTEN, not against `rows`: an empty build writes a version sentinel
         # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back.
         wdb.sweep_diag_signals(conn, iid, written)
@@ -179,7 +183,8 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         conn.run("ROLLBACK")
         raise
     return {"built": len(rows), "ready": sum(1 for r in rows if r["status"] == "ready"),
-            "schema_version": version}
+            "schema_version": stored_version,
+            **({"retry": "generation failed transiently"} if retry_needed else {})}
 
 
 def _hybrid_fallback(kind, schema, iid, rows):
