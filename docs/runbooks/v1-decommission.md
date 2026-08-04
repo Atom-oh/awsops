@@ -57,6 +57,27 @@ v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user
 
 확인되지 않는 주소는 **`email_verified` 없이 생성한다** — fail-closed 다. 그 사용자는 로그인은 되지만 email claim 이 없어 admin 판정과 legacy 행 매칭에서 빠지고, `make backfill-owner-sub` 계획에도 "unverified" 로 남아 눈에 보인다. 확인이 끝난 뒤 개별로 `admin-update-user-attributes --user-attributes Name=email_verified,Value=true` 로 올린다. (`admin-create-user`/`admin-update-user-attributes` 는 client 의 `write_attributes` 제약을 받지 않으므로 여기서 설정 가능하다 — 사용자 자신은 바꿀 수 없다.) 아래 명령의 `email_verified` 부분은 위 확인을 통과한 주소에만 붙인다:
 
+**`email_verified` is this procedure's decision point** (PR #203). `verifyUser()` adopts the token's
+`email` claim only when `email_verified` is true, so setting this flag is **not a verification — it is
+the operator asserting one**, and it immediately grants that address (1) eligibility for the SSM
+allowlist admin check and (2) ownership of every legacy email-keyed row written under it. v2 offers no
+user-driven alternative: the BFF discards the access token, so `VerifyUserAttribute` is unreachable.
+**Never set it in bulk.** Per address, confirm all three first:
+
+- the v1 user list (the migration source) records that address for that person — not a typo or a guess
+- that person **still** holds the mailbox (reassignment of a departed colleague's address is the very
+  threat model this PR exists for)
+- if the address is on the SSM admin allowlist, granting them admin is intended
+
+Anything you cannot confirm is created **without** the flag — that is fail-closed and visible: they can
+log in, but carry no email claim, so they are excluded from the admin check and from legacy ownership
+matching, and they show up as "unverified" in the `make backfill-owner-sub` plan until resolved.
+Promote per user afterwards with `admin-update-user-attributes
+--user-attributes Name=email_verified,Value=true`. (`admin-create-user` and
+`admin-update-user-attributes` are not bound by the client's `write_attributes`, so they can set it —
+the user themselves cannot.) Add the `email_verified` part of the command below only for addresses that
+passed those checks:
+
 ```bash
 aws cognito-idp admin-create-user --user-pool-id "$V2_POOL" --username <email> \
   --user-attributes Name=email,Value=<email> --message-action SUPPRESS
