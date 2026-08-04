@@ -65,24 +65,34 @@ def _create_report(conn, tier, owner_sub, model, account=None):
         # is fixed at INSERT, so a later `make backfill-owner-sub` does NOT restore the lineage — run
         # the backfill BEFORE relying on scheduled regression diffs. The log line below makes the
         # loss visible; without it the user just sees "no change" instead of "no baseline".
-        "  (SELECT r.id FROM diagnosis_reports r "
-        # link OR payload: the worker renders the report_id the payload names, so a report whose link
-        # lost the one-report-per-job race is still a real baseline (PR #203 review MAJOR).
-        # link OR payload, and the payload branch is fenced: type (the generic /api/jobs allowlist
-        # excludes 'report'), same-owner (a type value alone is not provenance), and a TEXT comparison
-        # against r.id::text — never a ::bigint cast of the payload, since AND does not order evaluation
-        # in Postgres and an oversized value would abort the query with 22003.
-        # LEFT, not INNER: the _report handler self-creates reports with worker_job_id NULL and does not
-        # write the id into the payload, so those rows match neither branch. An INNER JOIN made them
-        # permanently unusable as a baseline (PR #203 review MAJOR). The join supplies the account when it
-        # can; a row whose account cannot be established stays eligible on the owner scope alone.
-        "     LEFT JOIN worker_jobs j ON (j.job_id = r.worker_job_id "
+        # Two tiers, mirroring the BFF (PR #203 review, both directions):
+        #   1. an ATTRIBUTED baseline — its job is found through the link or the payload, and its account
+        #      must then match. Attributed rows never cross accounts.
+        #   2. only if tier 1 is empty: a row that cannot be attributed at all. The _report handler
+        #      self-creates reports with worker_job_id NULL and never writes the id into the payload, so
+        #      requiring attribution made those users' parent permanently NULL (fixed at INSERT). The
+        #      fallback therefore chooses between "unattributed baseline" and "no diff at all", never
+        #      between unattributed and correct.
+        # Payload branch fences: type = 'report' (the generic /api/jobs allowlist excludes it), same
+        # owner (a type value is not provenance), and a TEXT compare against r.id::text — never a
+        # ::bigint cast of the payload, since AND does not order evaluation in Postgres.
+        "  COALESCE("
+        "   (SELECT r.id FROM diagnosis_reports r "
+        "     JOIN worker_jobs j ON (j.job_id = r.worker_job_id "
         "        OR (j.type = 'report' AND j.payload->>'report_id' = r.id::text "
         "            AND j.requested_by = r.requested_by)) "
         "    WHERE r.tier = :t AND r.requested_by = ANY(:ok) "
         "      AND r.status = 'succeeded' AND r.deleted_at IS NULL "
-        "      AND (:acct IS NULL OR j.job_id IS NULL OR j.payload->>'account' = :acct) "
-        "    ORDER BY r.created_at DESC LIMIT 1), :m) RETURNING id",
+        "      AND (:acct IS NULL OR j.payload->>'account' = :acct) "
+        "    ORDER BY r.created_at DESC LIMIT 1), "
+        "   (SELECT r.id FROM diagnosis_reports r "
+        "    WHERE r.tier = :t AND r.requested_by = ANY(:ok) "
+        "      AND r.status = 'succeeded' AND r.deleted_at IS NULL "
+        "      AND NOT EXISTS (SELECT 1 FROM worker_jobs j2 "
+        "                       WHERE j2.job_id = r.worker_job_id "
+        "                          OR (j2.type = 'report' AND j2.payload->>'report_id' = r.id::text "
+        "                              AND j2.requested_by = r.requested_by)) "
+        "    ORDER BY r.created_at DESC LIMIT 1)), :m) RETURNING id",
         t=tier, rb=owner_sub, m=model, ok=[owner_sub], acct=account,
     )
     report_id = rows[0][0]

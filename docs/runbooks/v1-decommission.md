@@ -69,7 +69,7 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" \
 
 **Future signups being blocked does NOT clean up existing accounts** (PR #203). `allow_admin_create_user_only = true` only stops future `SignUp` calls; an account that already self-registered keeps working, with a verified address of its own choosing. If such an account holds a departed colleague's reassigned mailbox address, it bypasses every control in this PR. Terraform cannot decide this (Cognito records no "created by" provenance) — reconcile the pool against your operator roster ONCE right after the deploy with the command above, and `admin-disable-user` anything you do not recognise.
 
-**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — **사용자가 스스로 검증할 방법은 이 스택에 없다**: client 의 `allowed_oauth_scopes` 는 `["openid","email","profile"]` 뿐이고 user-scoped attribute API(`GetUserAttributeVerificationCode` / `VerifyUserAttribute`)에 필요한 `aws.cognito.signin.user.admin` 이 없다 — Hosted UI 로 토큰을 받아도 그 API 는 호출할 수 없다. 게다가 `account_recovery_setting = admin_only` 로 self-service 복구 자체가 없다. (이 문서는 한때 '사용자도 검증 가능'이라고 썼다가 다시 '불가능'으로 돌아왔는데, 두 번째가 맞고 근거는 scope 부재다 — 리뷰 지적.) 따라서 `email_verified` 는 **admin API 로만** 설정된다: `admin-create-user` 또는 `admin-update-user-attributes`. 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
+**`email_verified` 는 이 절차의 판단 지점이다**(PR #203). `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택한다. 따라서 이 플래그를 켜는 것은 **검증이 아니라 운영자의 주장**이며, 켜는 즉시 그 주소로 (1) SSM allowlist admin 판정 자격과 (2) 그 주소로 기록된 legacy email-keyed 행 전체의 소유권을 부여한다 — **사용자도 자기 계정의 주소를 검증할 수 있다** — 이 문장은 세 번 뒤집혔으니 근거를 남긴다. `allowed_oauth_scopes` 에 `aws.cognito.signin.user.admin` 이 없는 것은 사실이지만 그건 **OAuth(Hosted UI) 플로우에만** 적용된다. 이 client 는 시크릿 없는 public client 이고 `ALLOW_USER_PASSWORD_AUTH` 가 켜져 있어, 사용자가 자기 자격증명으로 `InitiateAuth` 를 직접 호출하면 **`aws.cognito.signin.user.admin` scope 를 가진 AccessToken** 을 받는다 — 그 토큰으로 `GetUserAttributeVerificationCode`/`VerifyUserAttribute` 가 동작한다(앱 UI 에 그 화면이 없을 뿐이다; BFF 는 `IdToken` 만 읽는다). 즉 **이미 자기 계정에 설정된 주소의 검증**은 사용자가 할 수 있고, 막혀 있는 것은 주소를 *바꾸는* 것(`write_attributes`), 계정을 *만드는* 것(`allow_admin_create_user_only`), *복구*(`account_recovery_setting = admin_only`)다. 그래서 아래 확인 단계가 여전히 의미를 갖는다 — 운영자가 `email_verified` 를 켜는 것은 그 주소를 **누가 통제하는지에 대한 주장**이고, 사용자가 스스로 verified 를 만들 수 있다는 사실이 그 주장의 무게를 덜어주지는 않는다. 그러므로 **일괄로 붙이지 않는다.** 주소 하나하나에 대해 아래를 확인한 뒤에만 `Name=email_verified,Value=true` 를 준다:
 
 - v1 사용자 목록(이관 원본)에 그 주소가 그 사람의 것으로 기록되어 있는가 — 오타나 추측이 아닌가
 - 그 사람이 **지금도** 그 mailbox 를 보유하는가 (퇴사자 주소 재할당이 이 PR 이 막는 위협모델이다)
@@ -80,14 +80,17 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" \
 **`email_verified` is this procedure's decision point** (PR #203). `verifyUser()` adopts the token's
 `email` claim only when `email_verified` is true, so setting this flag is **not a verification — it is
 the operator asserting one**, and it immediately grants that address (1) eligibility for the SSM
-allowlist admin check and (2) ownership of every legacy email-keyed row written under it. there is no way for a user to verify their own address on this
-stack. The client's `allowed_oauth_scopes` are `["openid","email","profile"]` only — no
-`aws.cognito.signin.user.admin`, which the user-scoped attribute APIs
-(`GetUserAttributeVerificationCode` / `VerifyUserAttribute`) require — so a Hosted UI token cannot call
-them, and `account_recovery_setting = admin_only` removes self-service recovery on top of that. (This
-document said "possible" for one revision after saying "impossible"; the second answer is the correct one
-and the evidence is the missing scope — review finding.) `email_verified` is therefore set by ADMIN APIs
-only: `admin-create-user` or `admin-update-user-attributes`.
+allowlist admin check and (2) ownership of every legacy email-keyed row written under it. a user CAN verify an address already set on their own
+account — this sentence has flipped three times, so here is the evidence. The client's
+`allowed_oauth_scopes` do lack `aws.cognito.signin.user.admin`, but that list governs the OAuth (Hosted UI)
+flows only. This client is public and secretless with `ALLOW_USER_PASSWORD_AUTH` enabled, so a user calling
+`InitiateAuth` with their own credentials receives an AccessToken that DOES carry
+`aws.cognito.signin.user.admin` — and `GetUserAttributeVerificationCode` / `VerifyUserAttribute` work with
+it. The app simply offers no screen for it (the BFF reads `IdToken` only). What is blocked is CHANGING the
+address (`write_attributes`), CREATING an account (`allow_admin_create_user_only`) and RECOVERY
+(`account_recovery_setting = admin_only`). That is why the checks below still matter: an operator setting
+`email_verified` is asserting who CONTROLS the address, and the user's ability to self-verify does not make
+that assertion any lighter.
 **Never set it in bulk.** Per address, confirm all three first:
 
 - the v1 user list (the migration source) records that address for that person — not a typo or a guess

@@ -105,37 +105,41 @@ export async function createReport(
   const { rows } = await getPool().query(
     `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status, parent_report_id, model)
      VALUES (NULL, $1, $2, 'running',
-       (SELECT r.id FROM diagnosis_reports r
-          -- Reached through the link OR the payload: a report whose link lost the one-report-per-job
-          -- race is still the row the worker renders (the payload names it), so excluding it here would
-          -- silently drop a real baseline and stamp NULL parent instead (PR #203 review MAJOR).
-          --
-          -- The payload branch is fenced three ways, because a payload is client-adjacent data:
-          --   type = 'report'  — the generic POST /api/jobs allowlist is {noop, noop-heavy}, so a
-          --                      report job can only come from /api/diagnosis (server-computed
-          --                      report_id, account validated against the accounts table) or the dispatcher;
-          --   text compare     — r.id::text, never (payload->>'report_id')::bigint. A regex guard cannot
-          --                      protect that cast: AND does not order evaluation in Postgres, so a
-          --                      23-digit payload could still be cast and abort the query with 22003
-          --                      (codex stop-gate). Casting the trusted side is always safe;
-          --   same owner       — and NOT type alone (codex stop-gate: a type value is not provenance).
-          --                      The job that supplies the account must belong to the same principal as
-          --                      the report, so no other user's job can label someone's baseline.
-          -- LEFT, not INNER. The worker's fallback path (scripts/v2/workers/handlers.py) creates a
-          -- report itself with worker_job_id NULL and never writes that id back into the payload, so
-          -- reports from that path can satisfy NEITHER branch above. An INNER JOIN made them permanently
-          -- ineligible as a baseline: a user whose history came that way silently got parent_report_id =
-          -- NULL, fixed at INSERT and unrecoverable (PR #203 review MAJOR, verified against handlers.py).
-          -- So the join is a PREFERENCE: it supplies the account when it can, and a row whose account
-          -- cannot be established stays eligible on the owner scope alone — which is what the base
-          -- behaviour was, since base had no join at all.
-          LEFT JOIN worker_jobs j ON (j.job_id = r.worker_job_id
-            OR (j.type = 'report' AND j.payload->>'report_id' = r.id::text
-                AND j.requested_by = r.requested_by))
-         WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
-           AND r.status = 'succeeded' AND r.deleted_at IS NULL
-           AND ($5::text IS NULL OR j.job_id IS NULL OR j.payload->>'account' = $5)
-         ORDER BY r.created_at DESC LIMIT 1),
+       -- Two tiers, in this order (PR #203 review, both directions):
+       --   1. a properly ATTRIBUTED baseline — its job is found through the link or the payload, and its
+       --      account must then match. Attributed rows are never allowed across accounts.
+       --   2. only if there is none: a row we cannot attribute at all (NOT EXISTS any job). The worker's
+       --      fallback path (scripts/v2/workers/handlers.py) creates reports with worker_job_id NULL and
+       --      never writes the id into the payload, so a user's whole history can be like this; requiring
+       --      attribution made those users' parent_report_id permanently NULL, fixed at INSERT. Falling
+       --      back only when tier 1 is empty means the choice is "unattributed baseline" vs "no diff at
+       --      all", never "unattributed instead of the correct one".
+       -- The payload branch is fenced three ways, because a payload is client-adjacent data:
+       --   type = 'report'  — the generic POST /api/jobs allowlist is {noop, noop-heavy}, so a report job
+       --                      can only come from /api/diagnosis (server-computed report_id, account
+       --                      validated against the accounts table) or the dispatcher;
+       --   text compare     — r.id::text, never (payload->>'report_id')::bigint: AND does not order
+       --                      evaluation in Postgres, so a regex guard cannot stop an oversized value from
+       --                      being cast and aborting the query with 22003;
+       --   same owner       — a type value is not provenance, so the job that supplies the account must
+       --                      belong to the same principal as the report.
+       COALESCE(
+         (SELECT r.id FROM diagnosis_reports r
+            JOIN worker_jobs j ON (j.job_id = r.worker_job_id
+              OR (j.type = 'report' AND j.payload->>'report_id' = r.id::text
+                  AND j.requested_by = r.requested_by))
+           WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
+             AND r.status = 'succeeded' AND r.deleted_at IS NULL
+             AND ($5::text IS NULL OR j.payload->>'account' = $5)
+           ORDER BY r.created_at DESC LIMIT 1),
+         (SELECT r.id FROM diagnosis_reports r
+           WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
+             AND r.status = 'succeeded' AND r.deleted_at IS NULL
+             AND NOT EXISTS (SELECT 1 FROM worker_jobs j2
+                              WHERE j2.job_id = r.worker_job_id
+                                 OR (j2.type = 'report' AND j2.payload->>'report_id' = r.id::text
+                                     AND j2.requested_by = r.requested_by))
+           ORDER BY r.created_at DESC LIMIT 1)),
        $3)
      RETURNING id`,
     [tier, requestedBy, model, ownerKeys, account],

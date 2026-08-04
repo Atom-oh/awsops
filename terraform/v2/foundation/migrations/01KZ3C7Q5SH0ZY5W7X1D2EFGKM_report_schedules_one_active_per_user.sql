@@ -27,16 +27,25 @@
 -- The UPDATE first: live data may already violate this (that is what the backfill review found), and a
 -- CREATE UNIQUE INDEX against violating rows aborts the migration and blocks the deploy.
 --
--- Tiebreak on created_at, NOT updated_at. `report_schedules` carries a BEFORE UPDATE trigger
--- (trg_schedule_touch → touch_updated_at, schema.sql), and schedule_dispatcher's hourly claim does
--- `UPDATE … SET last_run_at, next_run_at`, so updated_at moves every time a schedule FIRES. Tiebreaking on
--- it would have kept the row that fired most recently and disabled the one the user most recently
--- CONFIGURED — silently, and unrecoverably once this migration has run (review MAJOR, verified against the
--- trigger and the claim SQL). created_at is not touched by firing.
+-- NO TIEBREAK: when a user has more than one active row, ALL of them are disabled.
 --
--- RETURNING + a NOTICE per disabled row, because this is an irreversible pick made without an operator
--- watching: the log is the only way to answer "which schedule did the migration turn off?" afterwards.
+-- Two attempts at picking a winner were both wrong, for the same reason — this schema has no
+-- "configured at" column:
+--   updated_at — moved by FIRING, not configuring: report_schedules has a BEFORE UPDATE trigger
+--                (trg_schedule_touch → touch_updated_at) and schedule_dispatcher UPDATEs every row it
+--                fires, so the most recently fired row would win over the user's actual choice.
+--   created_at — not configuration recency either: upsertSchedule() is ON CONFLICT DO UPDATE, so a user
+--                switching back to weekly REACTIVATES the old row without touching its created_at.
+-- Both reviews were right, and the conclusion is that the information is simply not in the table.
 --
+-- So this does not guess. Every active row of an affected user is disabled: their configs are preserved
+-- (disabled rows are kept deliberately) and the UI shows no active schedule, which is visible and
+-- correctable in one click — where a wrong guess would silently run the wrong schedule forever. Users
+-- with exactly one active row, which is everyone once the index exists, are untouched.
+--
+-- Each disabled row is RAISE NOTICE'd, and scripts/v2/migrate.mjs now has a notice listener, so the
+-- decision actually reaches the operator's log instead of being discarded by the driver.
+
 -- CONCURRENTLY is deliberately NOT used: migrate.mjs runs statements inside an advisory-locked
 -- transaction, which CREATE INDEX CONCURRENTLY cannot join. report_schedules holds at most a few rows
 -- per user, so the brief write lock is not a concern.
@@ -47,14 +56,13 @@ BEGIN
   FOR r IN
     UPDATE report_schedules s SET enabled = false          -- updated_at: the trigger sets it
      WHERE s.enabled
-       AND s.id <> (SELECT t.id FROM report_schedules t
-                     WHERE t.user_sub = s.user_sub AND t.enabled
-                     ORDER BY t.created_at DESC, t.id DESC
-                     LIMIT 1)
+       AND EXISTS (SELECT 1 FROM report_schedules t
+                    WHERE t.user_sub = s.user_sub AND t.enabled AND t.id <> s.id)
     RETURNING s.id, s.user_sub, s.schedule_type
   LOOP
-    RAISE NOTICE 'one-active de-dup: disabled report_schedules id=% user_sub=% type=%',
-      r.id, r.user_sub, r.schedule_type;
+    RAISE NOTICE 'one-active de-dup: disabled report_schedules id=% user_sub=% type=% '
+      '(user had multiple active rows; which one they wanted is not recorded anywhere, so none was kept '
+      '— they must re-enable one)', r.id, r.user_sub, r.schedule_type;
   END LOOP;
 END
 $mig$;

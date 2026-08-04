@@ -98,10 +98,15 @@ def test_lineage_parent_is_scoped_by_owner_and_account(monkeypatch):
     sd.lambda_handler({}, None)
     sql, kw = next(c for c in conn.calls if c[0].startswith("INSERT INTO diagnosis_reports"))
     assert "r.requested_by = ANY(:ok)" in sql
-    assert "(:acct IS NULL OR j.job_id IS NULL OR j.payload->>'account' = :acct)" in sql
-    # LEFT join: reports the _report handler self-created (worker_job_id NULL, no payload reference)
-    # must stay eligible as a baseline — an INNER join made them permanently invisible.
-    assert "LEFT JOIN worker_jobs j ON (j.job_id = r.worker_job_id" in sql
+    # Two tiers: an ATTRIBUTED baseline must match the account; a report that cannot be attributed at all
+    # (the _report handler self-creates with worker_job_id NULL and no payload reference) is a LAST RESORT.
+    # Requiring attribution made those users' parent permanently NULL; allowing it in one tier let an
+    # account-unknown row beat a known-good one.
+    assert "COALESCE(" in sql
+    assert "(:acct IS NULL OR j.payload->>'account' = :acct)" in sql
+    assert "NOT EXISTS (SELECT 1 FROM worker_jobs j2" in sql
+    tier2 = sql.split("NOT EXISTS", 1)[1]
+    assert ":acct" not in tier2  # the unattributed tier has no job to read an account from
     # link OR payload — a report whose link lost the one-report-per-job race is still the row the
     # worker renders, so it must stay eligible as a baseline. TEXT comparison, never a ::bigint cast of
     # the payload: AND does not order evaluation in Postgres, so a regex guard cannot stop an oversized
