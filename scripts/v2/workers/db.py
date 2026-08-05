@@ -173,13 +173,7 @@ def read_signal_schema_version(conn, integration_id):
     rows = conn.run(
         "SELECT COUNT(DISTINCT schema_version), MIN(schema_version) "
         "FROM datasource_diag_signals "
-        "WHERE account_id='self' AND integration_id=:iid "
-        # The generated row can be sweep-spared (kept untouched, on its OLD version) when a carry-over
-        # read fails — see datasource_index._rebuild_diag_signals. If its stale version counted here, that
-        # one spared row would poison "all rows agree" for every deterministic row too, resetting the
-        # attempts/streak budget on every future run — the same unbounded-cost bypass a prior review round
-        # already found and fixed once. Its own currency is checked separately, not via this function.
-        "AND signal_key <> 'generated_signal'",
+        "WHERE account_id='self' AND integration_id=:iid",
         iid=integration_id)
     if not rows:
         return None
@@ -201,6 +195,26 @@ def list_diag_signals(conn, integration_id):
         d["meta"] = _maybe_json(d["meta"])
         out.append(d)
     return out
+
+
+def touch_generated_signal_version(conn, integration_id, schema_version):
+    """Bump the generated row's OWN schema_version column to match this call's, without touching its
+    content — a no-op if the row doesn't exist (0 rows affected).
+
+    Exists for exactly one case: a carry-over read failed, so the row is sweep-spared (never deleted on the
+    strength of a read error we can't attribute to the row itself), but its version is now stale relative
+    to the deterministic rows this same call DID write. read_signal_schema_version() requires ALL rows to
+    agree — a version-blind EXCLUSION of this one key was tried first and broke the opposite way: for a kind
+    whose deterministic catalog is ALWAYS empty (clickhouse), the generated row can be the ONLY row in the
+    table, and excluding it left zero rows to check, so the version read as permanently absent and the
+    build regenerated on every single call forever (review, this round). Touching only the version column —
+    never the content, since an unread row's content is exactly what we don't know — keeps the agreement
+    check meaningful without needing to know or preserve anything about the row beyond its fixed key.
+    """
+    conn.run(
+        "UPDATE datasource_diag_signals SET schema_version=:sv "
+        "WHERE account_id='self' AND integration_id=:iid AND signal_key='generated_signal'",
+        iid=integration_id, sv=schema_version)
 
 
 def sweep_diag_signals(conn, integration_id, keep_keys):

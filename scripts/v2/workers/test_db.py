@@ -88,15 +88,31 @@ class TestReadSchemaVersion:
         sql, p = c.calls[0]
         assert "COUNT(DISTINCT schema_version)" in sql and p["iid"] == 7
 
-    def test_excludes_the_generated_row_from_the_agreement_check(self):
-        # The generated row can be sweep-spared on its OWN (older) version when a carry-over read fails
-        # (datasource_index._rebuild_diag_signals) — if THIS query counted it, that one spared row would
-        # poison "all rows agree" for every deterministic row too, resetting the attempts/streak budget on
-        # every future call: the exact unbounded-cost bypass a prior review round already fixed once.
+    def test_does_not_exclude_the_generated_row(self):
+        # A version-blind exclusion of the generated row was tried and reverted: for a kind whose
+        # deterministic catalog is ALWAYS empty (clickhouse), the generated row can be the ONLY row in the
+        # table, and excluding it left zero rows to check — reading as no version forever and regenerating
+        # on every single call (review, this round). Staleness after a sweep-spared read failure is instead
+        # resolved by touch_generated_signal_version(), which brings the row back into agreement without
+        # needing to read or preserve its content.
         c = FakeConn(returns=[[[1, "abc123"]]])
         db.read_signal_schema_version(c, 7)
         sql, _ = c.calls[0]
-        assert "generated_signal" in sql
+        assert "generated_signal" not in sql
+
+class TestTouchGeneratedSignalVersion:
+    def test_updates_only_the_version_column_for_the_fixed_key(self):
+        # Exists so a sweep-spared (unverified) generated row's version can be brought back into agreement
+        # with the rest of the table WITHOUT touching content we never read — the version-blind EXCLUSION
+        # approach tried first broke the opposite way: excluding the generated key left a clickhouse-only
+        # (deterministic catalog always empty) build with zero rows to check, reading as no version forever
+        # and regenerating on every single call (review, this round).
+        c = FakeConn()
+        db.touch_generated_signal_version(c, 7, "newversion")
+        sql, p = c.calls[0]
+        assert sql.strip().startswith("UPDATE datasource_diag_signals")
+        assert "signal_key='generated_signal'" in sql
+        assert p == {"iid": 7, "sv": "newversion"}
 
     def test_returns_none_when_absent(self):
         c = FakeConn(returns=[[[0, None]]])

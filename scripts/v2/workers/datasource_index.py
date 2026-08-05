@@ -353,6 +353,11 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         # is ALSO always spared when it was unverifiable this call — see generated_key_unverified above.
         sweep_keep = written + [_signal_gen.GENERATED_SIGNAL_KEY] if generated_key_unverified else written
         wdb.sweep_diag_signals(conn, iid, sweep_keep)
+        if generated_key_unverified:
+            # The spared row's version is now stale relative to `stored_version` — bump ONLY that column
+            # (never its content, which we never read) so read_signal_schema_version()'s agreement check
+            # stays meaningful. A no-op if the row doesn't exist.
+            wdb.touch_generated_signal_version(conn, iid, stored_version)
         conn.run("COMMIT")
     except Exception:
         conn.run("ROLLBACK")

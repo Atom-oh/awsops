@@ -63,6 +63,7 @@ class FakeConn:
         self.inserts, self.deletes = [], []
         self.graph_inserts, self.graph_deletes = [], []
         self.schema_writes = []
+        self.generated_version_touches = []
 
     def run(self, sql, **p):
         if "FROM datasource_schemas" in sql:
@@ -90,6 +91,8 @@ class FakeConn:
             self.graph_deletes.append(p); return []
         if sql.strip().startswith("INSERT INTO datasource_schemas"):
             self.schema_writes.append(p); return []
+        if sql.strip().startswith("UPDATE datasource_diag_signals"):
+            self.generated_version_touches.append(p); return []
         return []
 
 
@@ -307,6 +310,33 @@ class TestGeneratedFallback:
                      existing_rows=[self.GENERATED_ROW])
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
+
+    def test_a_generated_only_build_settles_instead_of_regenerating_forever(self, monkeypatch):
+        """A kind whose deterministic catalog is ALWAYS empty (clickhouse) can end up with the generated
+        row as the ONLY row in the table. A version-blind exclusion of that key from
+        read_signal_schema_version() left zero rows to check in that case, reading as permanently
+        version-less and regenerating on every single call forever (review, this round)."""
+        calls = []
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi._cat, "build_signals", lambda kind, schema: [])
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "GENERATED_SIGNAL_KEY": "generated_signal",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (
+                calls.append(1),
+                ({"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
+                  "query": {"tool": "clickhouse_query", "queries": [{"label": "g", "expr": "SELECT 1"}]},
+                  "missing_metrics": None, "meta": {"kind": "clickhouse", "provenance": "generated"}},
+                 "generated"))[1]),
+        }))
+        schema = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        base = dsi._schema_version(schema)
+        version = None
+        for _ in range(3):
+            c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
+            version = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"]
+        assert len(calls) == 1              # generated once, then settled — not once per run
+        assert version == base              # plain version, readable back every time
 
     def test_a_read_failure_while_parked_does_not_sweep_the_chip(self, monkeypatch):
         """The carry-over exists so a connector blip doesn't destroy a verified chip (MAJOR-2). While parked
