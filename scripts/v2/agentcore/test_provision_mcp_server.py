@@ -478,6 +478,49 @@ class TestLegacyRetireCrossesGateways(unittest.TestCase):
         self.assertIn(("target:tempo-mcp-target", "RETIRED"), [(r[0], r[1]) for r in provision.report])
 
 
+class TestRetiredCatalogEntries(unittest.TestCase):
+    """MAJOR-2 (PR #207 review): a preset REMOVED from the catalog leaves its remote target and
+    vendor-token credential provider live forever — the per-preset loop only reaches names still in
+    MCP_SERVER_TARGETS, and prune_moved_targets() KEEPs unknown names on purpose. The tombstone list
+    is what closes that, so assert the deletion, not just the absence from the catalog."""
+
+    def setUp(self):
+        provision.report.clear()
+
+    def test_retired_catalog_entry_is_deleted_with_its_credential_provider(self):
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
+        ac = {"official_mcp_endpoints": {}, "lambda_arns": {}, "region": "ap-northeast-2",
+              "integrations_secret_name": None}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS",
+                               (("clickhouse-mcp-server-target", "clickhouse"),)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-old")
+        ctrl.delete_api_key_credential_provider.assert_any_call(name="awsops-v2-clickhouse-mcp")
+        self.assertIn(("target:clickhouse-mcp-server-target", "RETIRED"),
+                      [(r[0], r[1]) for r in provision.report])
+
+    def test_absent_retired_target_is_not_an_error(self):
+        # The tombstone list stays in the catalog long after every deployment converged, so the
+        # common case is "nothing to delete" — it must not ERR or churn the control plane.
+        ctrl = _ctrl_with_targets({"gw-1": []})
+        ac = {"official_mcp_endpoints": {}, "lambda_arns": {}, "region": "ap-northeast-2",
+              "integrations_secret_name": None}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS",
+                               (("clickhouse-mcp-server-target", "clickhouse"),)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.delete_gateway_target.assert_not_called()
+        self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
+    def test_every_real_tombstone_names_a_preset_no_longer_in_the_catalog(self):
+        # Guards the tombstone list itself: an entry that is STILL declared would make the
+        # provisioner delete the target it is about to create, every run.
+        live = {s["preset_key"] for s in provision.catalog.MCP_SERVER_TARGETS.values()}
+        for tname, preset_key in provision.catalog.RETIRED_MCP_SERVER_TARGETS:
+            self.assertNotIn(preset_key, live, f"{tname} is tombstoned but still declared")
+
+
 class TestRound4Findings(unittest.TestCase):
     """Round-4 PR #194 review (2026-07-31)."""
 

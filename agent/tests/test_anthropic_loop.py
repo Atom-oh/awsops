@@ -388,12 +388,14 @@ class _FakeMCPClient:
 
 class _CapturingBedrock:
     instances = []
+    script = None  # set by a test to drive multi-turn (e.g. tool_use) conversations
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.closed = False
-        # one end_turn turn so the loop completes with a single delta
-        self.messages = _FakeMessages([(["hi"], _final("end_turn", [_text("hi")]))])
+        # default: one end_turn turn so the loop completes with a single delta
+        self.messages = _FakeMessages(
+            _CapturingBedrock.script or [(["hi"], _final("end_turn", [_text("hi")]))])
         _CapturingBedrock.instances.append(self)
 
     async def aclose(self):
@@ -418,7 +420,7 @@ def _install_agent_stub(gateway_tools, *, footer="FOOTER", skill_prompt="SKILLPR
         return [t for t in tools if getattr(t, "tool_name", None) in s]
     m._filter_tools = _filter
     # ADR-017 gates: default pass-through; individual tests override with a spy.
-    m.apply_official_mcp_gates = lambda gateway_tools, gateway_key, stack: (list(gateway_tools), [])
+    m.apply_official_mcp_gates = lambda gateway_tools, gateway_key, stack: (list(gateway_tools), [], None)
     m.build_skill_prompt = lambda role, tools: skill_prompt  # real impl already includes the footer
     m.build_account_directive = lambda aid, alias: (f"\nACCT:{aid}" if aid and aid != "__all__" else "")
     m.effective_account_id = lambda aid: "" if (not aid or aid == "__all__") else aid
@@ -480,7 +482,7 @@ class RunAnthropicLoopTest(unittest.TestCase):
             seen["names"] = [t.tool_name for t in gateway_tools]
             seen["gateway_key"] = gateway_key
             return ([t for t in gateway_tools if t.tool_name != "vendor_write"],
-                    [FakeTool("ch_stdio")])
+                    [FakeTool("ch_stdio")], None)
         m.apply_official_mcp_gates = spy
         run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "x"}]}))
         # (a) the spy saw the RAW gateway list, before dedup/allowlist
@@ -490,6 +492,30 @@ class RunAnthropicLoopTest(unittest.TestCase):
         # (c) the gated gateway list AND the stdio tools are both unioned into what the model sees
         tool_names = [t["name"] for t in _CapturingBedrock.instances[-1].messages.calls[0]["tools"]]
         self.assertEqual(tool_names, ["raw_gw", "ch_stdio"])
+
+    def test_stdio_tool_calls_dispatch_to_the_stdio_client(self):
+        # Review MAJOR regression guard: stdio tools were ADVERTISED but every call went to the
+        # gateway client, so they all failed — and the mutual exclusion had already dropped the
+        # in-house clickhouse lambda fallback. Assert EXECUTION routing, not just the tool list.
+        m = _install_agent_stub([FakeTool("raw_gw")])
+        stdio = _FakeMCPClient(("transport", "stdio"))
+        gateways = []
+        m.MCPClient = lambda tf: gateways.append(_FakeMCPClient(tf)) or gateways[-1]
+        m.apply_official_mcp_gates = lambda gateway_tools, gateway_key, stack: (
+            list(gateway_tools), [FakeTool("ch_stdio")], stdio)
+        # Drive one tool_use turn per client, then finish.
+        _CapturingBedrock.script = [
+            (["a"], _final("tool_use", [_tooluse("u1", "ch_stdio", {"q": "1"})])),
+            (["b"], _final("tool_use", [_tooluse("u2", "raw_gw", {"q": "2"})])),
+            (["c"], _final("end_turn", [_text("done")])),
+        ]
+        try:
+            run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "x"}]}))
+        finally:
+            _CapturingBedrock.script = None
+        # the stdio-owned tool executed on the stdio client, the gateway tool on the gateway client
+        self.assertEqual([c[1] for c in stdio.tool_calls], ["ch_stdio"])
+        self.assertEqual([c[1] for c in gateways[0].tool_calls], ["raw_gw"])
 
     def test_builtin_prompt_does_not_double_footer(self):
         _install_agent_stub([FakeTool("t")], footer="FOOTER", skill_prompt="SKILLPROMPT")

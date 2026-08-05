@@ -124,7 +124,9 @@ Runtime configuration is **flag-gated in Terraform** (`variables.tf`). The featu
 | `integrations_enabled` | remaining 6 AgentCore Lambda slices |
 | `workers_enabled` | the async worker tier (SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | the Steampipe inventory-sync data layer |
-| `official_mcp_enabled` | ADR-017 curated official-vendor MCP presets (external-obs `mcpServer` targets) |
+| `official_mcp_enabled` | ADR-017 curated official-vendor MCP presets — the **3 vendor-hosted** ones (Datadog·Dynatrace·New Relic) as external-obs `mcpServer` targets, plus the runtime fail-closed tool allowlist |
+
+One more ADR-017 gate is **not** a terraform flag: **`CLICKHOUSE_OFFICIAL_MCP`** is an AgentCore runtime env recorded by the provisioner (`CLICKHOUSE_OFFICIAL_MCP=true make agentcore`) that embeds the official `mcp-clickhouse` as a stdio subprocess in the runtime container. It is **FROZEN / do-not-enable**: the stdio path has no replacement for the in-house lambda's table-function SSRF guard, so unfreezing requires both the technical precondition and a new ADR + multi-AI panel + dated owner-override (ADR-017 §Status, BASELINE §2).
 
 Two companion **maps** (not booleans, both default `{}`) configure ADR-017 per preset — `official_mcp_endpoints` (`map(string)`, `preset_key` -> `https://` endpoint) and `official_mcp_read_only_ack` (`map(string)`, `preset_key` -> **the exact endpoint URL the operator reviewed**, echoed verbatim — *not* `true`). A preset provisions only when its ack equals its current endpoint; anything else is a fail-closed SKIP that retires any live target:
 
@@ -288,7 +290,9 @@ make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 ->
 | `integrations_enabled` | 나머지 AgentCore Lambda 슬라이스 6개 |
 | `workers_enabled` | 비동기 워커 계층(SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | Steampipe 인벤토리 sync 데이터 계층 |
-| `official_mcp_enabled` | ADR-017 큐레이션 공식 벤더 MCP 프리셋(external-obs `mcpServer` target) |
+| `official_mcp_enabled` | ADR-017 큐레이션 공식 벤더 MCP 프리셋 — **벤더 호스팅 3종**(Datadog·Dynatrace·New Relic)을 external-obs `mcpServer` target으로 등록 + 런타임 fail-closed 툴 allowlist |
+
+ADR-017에는 terraform flag가 **아닌** 게이트가 하나 더 있습니다: **`CLICKHOUSE_OFFICIAL_MCP`** — provisioner가 기록하는 AgentCore 런타임 env(`CLICKHOUSE_OFFICIAL_MCP=true make agentcore`)로, 공식 `mcp-clickhouse`를 런타임 컨테이너에 stdio 서브프로세스로 내장합니다. **FROZEN / do-not-enable**입니다: 자체 람다의 테이블 함수 SSRF 가드에 대응하는 방어가 stdio 경로에 없어, 해제에는 기술 선결조건과 새 ADR + 멀티-AI 패널 + 날짜박힌 owner-override가 모두 필요합니다(ADR-017 §Status, BASELINE §2).
 
 ADR-017은 프리셋별 설정용 **맵 변수 2개**(불리언 아님, 둘 다 기본 `{}`)를 함께 씁니다 — `official_mcp_endpoints`(`map(string)`, `preset_key` -> `https://` 엔드포인트)와 `official_mcp_read_only_ack`(`map(string)`, `preset_key` -> **운영자가 검토한 엔드포인트 URL 그대로**. `true`가 아닙니다). ack 값이 현재 엔드포인트와 정확히 같을 때만 provisioning되고, 그 밖의 모든 경우는 fail-closed SKIP(기존 target 회수)입니다:
 

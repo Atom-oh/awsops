@@ -524,6 +524,22 @@ MCP_SERVER_TARGETS = {
     },
 }
 
+# ADR-017 (amended 2026-08-05) tombstones: mcpServer targets this catalog USED to declare and no
+# longer does. `MCP_SERVER_TARGETS` alone can't retire them — provision.py's "no endpoint → retire"
+# kill-switch only iterates the CURRENT catalog, and prune_moved_targets() deliberately KEEPs any
+# target it doesn't recognize ("manual?"). Without this list a deployment that once provisioned the
+# self-hosted presets keeps their remote targets AND their vendor-token credential providers
+# forever, so the control plane never converges on the declared catalog (review MAJOR, PR #207).
+# Entries are (target_name, preset_key); preset_key derives the provider name exactly as the live
+# path does. Delete an entry only once no deployment can still be carrying it.
+RETIRED_MCP_SERVER_TARGETS = (
+    ("clickhouse-mcp-server-target", "clickhouse"),  # → embedded stdio instead (ADR-017 §Decision 3)
+    ("tempo-mcp-server-target", "tempo"),            # self-hosted: no vendor token issuance exists
+    ("jaeger-mcp-server-target", "jaeger"),
+    ("grafana-mcp-server-target", "grafana"),
+    ("splunk-mcp-server-target", "splunk"),
+)
+
 # ADR-017 mutual-exclusion guard: a preset_key's kind must not be live as BOTH a lambda TARGETS
 # entry and an MCP_SERVER_TARGETS entry at once — the gateway would otherwise expose the same tool
 # name from two targets and agent.py's _dedup_by_tool_name pick is non-deterministic (agent.py:599).

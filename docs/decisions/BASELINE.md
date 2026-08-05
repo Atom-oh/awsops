@@ -47,7 +47,7 @@
 
 ## §2 게이트 / 동결 register (Gated / Frozen)
 
-> 2-티어: **FROZEN**(do-not-enable, 풀려면 새 ADR+패널+owner-override) vs **GATED**(거버넌스 하 활성화 가능, 현재 OFF). 아래 **feature gate** 는 전부 terraform flag default=false 와 일치한다. 예외로 아래 **마이그레이션 창 스위치**(`legacy_email_owner_match`) 행은 기본 **true** 다 — 기능을 켜는 플래그가 아니라 이관이 끝날 때까지 legacy 동작을 유지하는 스위치이므로, 기본값이 반대다.
+> 2-티어: **FROZEN**(do-not-enable, 풀려면 새 ADR+패널+owner-override) vs **GATED**(거버넌스 하 활성화 가능, 현재 OFF). 아래 **feature gate** 는 default=false 와 일치한다 — 대부분 terraform flag이고, `CLICKHOUSE_OFFICIAL_MCP` 한 건은 provisioner가 기록하는 **AgentCore 런타임 env** 다(게이트 종류가 다를 뿐 default-off invariant는 동일하게 적용). 예외로 아래 **마이그레이션 창 스위치**(`legacy_email_owner_match`) 행은 기본 **true** 다 — 기능을 켜는 플래그가 아니라 이관이 끝날 때까지 legacy 동작을 유지하는 스위치이므로, 기본값이 반대다.
 
 | 상태 | 항목 | flag | 켜는 조건 / 비고 | 근거 ADR |
 |---|---|---|---|---|

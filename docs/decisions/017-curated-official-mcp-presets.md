@@ -5,7 +5,12 @@
 
 게이트 2개, 둘 다 기본 false:
 - **`official_mcp_enabled`** (`ai.tf`) — 벤더 **호스팅** 공식 MCP 3종(Datadog·Dynatrace·New Relic)을 external-obs `mcpServer` target으로 등록. 종전 `do-not-enable` 이었던 활성화 차단 사유 2개는 이번 개정으로 해소되었다: ① 런타임 per-preset 툴 allowlist가 구현됨(아래 §Decision — fail-closed), ② 자체 호스팅 프리셋이 이 경로에서 **제거**되어 도달성 미검증 문제 자체가 소멸(남은 3종은 공용 SaaS 엔드포인트). 이제 일반 GATED — 켜려면 프리셋별 `official_mcp_read_only_ack` (fail-closed)까지 필요하다.
-- **`CLICKHOUSE_OFFICIAL_MCP`** (AgentCore 런타임 env, provisioner가 기록 — `CLICKHOUSE_OFFICIAL_MCP=true make agentcore`) — ClickHouse 공식 MCP(`mcp-clickhouse`)를 런타임 컨테이너에 **stdio로 내장** 실행. 기본 off이며, **do-not-enable**: 자체 람다 경로(`agent/lambda/clickhouse_mcp.py`)의 1차 방어(테이블 함수 SSRF 차단 `_TABLE_FN` + ClickHouse `readonly=1` + connect-time `assert_host_allowed`)를 stdio 경로는 대체 없이 갖지 못한다(아래 §Trade-offs) — `ALLOW_WRITE_ACCESS=false`/`ALLOW_DROP=false` 코드 고정만으로는 동등하지 않다. 켜려면 stdio 앞단에 동등한 쿼리 가드 또는 ClickHouse 서버측 최소권한 프로필을 먼저 갖춰야 한다(리뷰 2026-08-05, PR #207).
+- **`CLICKHOUSE_OFFICIAL_MCP`** (AgentCore 런타임 env, provisioner가 기록 — `CLICKHOUSE_OFFICIAL_MCP=true make agentcore`) — ClickHouse 공식 MCP(`mcp-clickhouse`)를 런타임 컨테이너에 **stdio로 내장** 실행. 기본 off이며, **do-not-enable**: 자체 람다 경로(`agent/lambda/clickhouse_mcp.py`)의 1차 방어(테이블 함수 SSRF 차단 `_TABLE_FN` + ClickHouse `readonly=1` + connect-time `assert_host_allowed`)를 stdio 경로는 대체 없이 갖지 못한다(아래 §Trade-offs) — `ALLOW_WRITE_ACCESS=false`/`ALLOW_DROP=false` 코드 고정만으로는 동등하지 않다. 
+  **분류 = FROZEN**(BASELINE §2 register 2-티어 중 FROZEN — GATED가 아니다. 리뷰 2026-08-05, PR #207). 즉 "거버넌스 하에 켤 수 있는 기능"이 아니라 **동결**이며, 아래 두 조건을 **모두** 만족해야 해제된다:
+  1. **기술 선결조건** — stdio 앞단의 동등한 쿼리 가드(`_TABLE_FN` 급 테이블 함수 차단 + connect-time DNS-rebinding-safe host 검증) **또는** ClickHouse 서버측 최소권한 롤/프로필로 테이블 함수 자체를 비활성. 둘 중 하나가 코드/서버에 존재하고 테스트로 고정되어야 한다.
+  2. **거버넌스 절차** — BASELINE §2의 FROZEN 해제 절차와 동일: **새 ADR**(본 ADR의 이 판정을 명시 번복) + **멀티-AI 패널 리뷰** + **날짜박힌 owner-override**. 문서 정리·재해석·이 ADR의 in-place 수정으로는 풀지 않는다.
+
+  terraform flag가 아닌 런타임 env 게이트라는 점은 분류를 약화시키지 않는다 — `make agentcore`가 기록하는 provisioner 입력이므로 동일하게 default-off invariant의 대상이다.
 
 - **Owner 지시 1:** 오준석(Junseok Oh), 2026-07-29 — "우리가 만든 mcp는 앞으로 유지보수가 걸림돌이 될거 같아서 외부에서 잘 관리되는 mcp가 맞는거 같아서, 다만 유명한 데이터 소스의 mcp를 우리가 먼저 정해주는게 좋긴 할거 같아".
 - **Owner 지시 2:** 오준석, 2026-08-05 — 초기 구현(토큰만 받는 커넥터 카드 + 운영자가 MCP 서버를 직접 호스팅하는 원격 target 모델)은 의도가 아니었다. "공식 MCP는 token으로만 등록되어 있는 것이 문제 — 실제로 사용 불가능한 UX. 공식 MCP를 넣어달라고 한 것은 직접 만든 clickhouse mcp보다 schema 등 API 연결이 잘 될 것을 기대해서. 어딘가에 mcp 서버를 띄우고 관리하는 것은 원한 게 아님." → 본 개정.

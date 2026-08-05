@@ -519,6 +519,21 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
             existing_by_gw[gw_key] = {t.get("name"): t for t in _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)}
         return gw_id, existing_by_gw[gw_key]
 
+    # Converge on the DECLARED catalog: retire targets (and their vendor-token credential providers)
+    # that this catalog no longer declares. The per-preset loop below only reaches names that are
+    # still IN the catalog, and prune_moved_targets() KEEPs unknown names on purpose — so without
+    # this pass a removed preset's remote target lives on forever (review MAJOR, PR #207).
+    # Gated on the target actually being PRESENT: this tombstone list outlives every deployment that
+    # ever carried these presets, so an unconditional delete would hit the control plane 5x on every
+    # run forever (and would delete a credential provider an operator re-created by hand). Any
+    # deployment that provisioned a preset has both objects, so the target is a sound trigger.
+    for tname, preset_key in getattr(catalog, "RETIRED_MCP_SERVER_TARGETS", ()):
+        gw_id, existing = gw_existing("external-obs")
+        if not gw_id or tname not in existing:
+            continue
+        _retire_gateway_target(ctrl, gw_id, existing, tname, "removed from the catalog — retiring (ADR-017 amended)")
+        _delete_api_key_provider(ctrl, f"awsops-v2-{preset_key}-mcp")
+
     for tname, spec in catalog.MCP_SERVER_TARGETS.items():
         preset_key = spec["preset_key"]
         endpoint = endpoints.get(preset_key)
