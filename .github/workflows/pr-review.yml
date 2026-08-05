@@ -97,9 +97,11 @@ jobs:
           # PR the docs/ diff (sorting before scripts/terraform/web) ate the truncation budget and
           # the panel kept raising phantom "X is missing" CRITICALs about the very code files that
           # got cut (PR #205, 4 recurring artifacts). Reviewable code must survive truncation ahead
-          # of prose — emit everything EXCEPT docs first, then append docs/docs-site last.
-          git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- . ':(exclude)docs' ':(exclude)docs-site' > /tmp/pr-diff-raw.txt
-          git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- docs docs-site >> /tmp/pr-diff-raw.txt
+          # of prose — emit everything EXCEPT docs/ first, then append docs/ last. Only docs/ is
+          # demoted: docs-site/ contains SERVED executable assets (the oversized-line rule below
+          # already classifies it with web/ as source, fail-closed) so it stays in the code group.
+          git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- . ':(exclude)docs' > /tmp/pr-diff-raw.txt
+          git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- docs >> /tmp/pr-diff-raw.txt
           rm -f /tmp/pr-diff-omitted.txt /tmp/pr-diff-omitted-source.txt
           # Authoritative (old-path, new-path) pairs, in the SAME order `git diff` (above) emits
           # `diff --git` headers for the same two trees — both walk the identical tree-diff/rename
@@ -110,8 +112,8 @@ jobs:
           # misclassifies the file — verified empirically, not merely asserted (see PR #170 review).
           # Same code-first two-pass split as the content diff above — the (old-path, new-path)
           # pairs MUST stay in the same order the concatenated diff emits its headers.
-          git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- . ':(exclude)docs' ':(exclude)docs-site' > /tmp/pr-diff-namestatus.nul
-          git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- docs docs-site >> /tmp/pr-diff-namestatus.nul
+          git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- . ':(exclude)docs' > /tmp/pr-diff-namestatus.nul
+          git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- docs >> /tmp/pr-diff-namestatus.nul
           python3 - <<'PYEOF'
           data = open('/tmp/pr-diff-namestatus.nul', 'rb').read().decode('utf-8', 'surrogateescape')
           parts = data.split('\0')
@@ -291,11 +293,20 @@ jobs:
             grep '^diff --git ' /tmp/pr-diff-truncated.txt | sort -u > /tmp/diff-files-seen.txt
             comm -23 /tmp/diff-files-all.txt /tmp/diff-files-seen.txt \
               | sed 's/^diff --git a\///; s/ b\/.*$//' > /tmp/diff-files-unseen.txt
+            # Boundary file: the LAST header inside the cap is present in "seen" but its content is
+            # (almost always) cut mid-file — the exact shape the phantom-"missing X" findings came
+            # from. Over-approximate deliberately: always list it as partial (detecting an exact
+            # cut-at-file-boundary isn't worth the machinery; the cost is one suppressed
+            # absence-claim about one file).
+            BOUNDARY_FILE=$(grep '^diff --git ' /tmp/pr-diff-truncated.txt | tail -1 | sed 's/^diff --git a\///; s/ b\/.*$//')
+            if [ -n "$BOUNDARY_FILE" ]; then
+              echo "${BOUNDARY_FILE} (PARTIAL — last file inside the cap; its diff is likely cut mid-hunk)" >> /tmp/diff-files-unseen.txt
+            fi
             for f in /tmp/pr-review/lenses/*.txt; do
               echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed (code files are ordered before docs)." >> "$f"
               if [ -s /tmp/diff-files-unseen.txt ]; then
                 {
-                  echo "TRUNCATED-OUT FILES: this PR ALSO changes the files below, but their diff content did NOT reach you — and your checkout is the BASE branch, so you cannot read their new content either. The last file in your diff may also be cut mid-hunk. DO NOT report that any symbol/file/hook/variable is missing, absent, or unwired when its definition could live in one of these files — such a finding is unverifiable here and must be omitted:"
+                  echo "TRUNCATED-OUT FILES: this PR ALSO changes the files below, but their diff content did NOT (or only partially) reach you — and your checkout is the BASE branch, so you cannot read their new content either. DO NOT report that any symbol/file/hook/variable is missing, absent, or unwired when its definition could live in one of these files — such a finding is unverifiable here and must be omitted:"
                   sed 's/^/  - /' /tmp/diff-files-unseen.txt
                 } >> "$f"
               fi
