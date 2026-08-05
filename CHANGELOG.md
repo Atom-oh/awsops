@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-05
+
 ### Added
 
 - Add a Direct Connect page (`/direct-connect`, Network group): connection / VIF / DX gateway inventory with per-region fan-out (gateways are global, fetched once) and `AWS/DX` CloudWatch analysis — down detection over the selected range (`ConnectionState`/`VirtualInterfaceBgpStatus` minimums), per-VIF monitoring numbers (average/peak Bps, average Pps, peak utilization from the percent-published `VirtualInterfaceUtilization*` metrics with a peak-bps ÷ bandwidth fallback covering LAG bandwidth, and latest `BgpPrefixesAccepted`/`Advertised` counts — hosted sub-1G connections only publish VIF-level Bps), BGP route visibility via the 2026-07 `ListVirtualInterfaceRoutes` API (accepted/advertised routes with AS path, communities, installed time; 200-route cap per VIF, honest degrade where unsupported), and a location-redundancy lens that flags a single-location single point of failure (Resiliency Toolkit recommends 2+ locations); KPI tiles, VIF type/traffic charts, four tables with sectioned detail panels; BGP secrets (`authKey`, `customerRouterConfig`) are stripped and never leave the server; read-only `directconnect:Describe*`+`ListVirtualInterfaceRoutes` IAM grant (applied, terraform in lockstep); 4-language i18n.
@@ -460,7 +462,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1
@@ -486,6 +489,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-08-05
 
 ### Added
 
@@ -932,7 +937,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1
