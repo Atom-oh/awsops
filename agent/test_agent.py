@@ -604,9 +604,10 @@ class TestApplyOfficialMcpGates(unittest.TestCase):
         # flag off + OFFICIAL_MCP_TOOL_ALLOWLIST_JSON unset (deny-all): preset tools drop.
         agent.CLICKHOUSE_OFFICIAL_MCP = False
         raw = [FakeTool('datadog-mcp-server-target___create_datadog_monitor'), FakeTool('plain_tool')]
-        gw, stdio = agent.apply_official_mcp_gates(raw, 'v2-external-obs', None)
+        gw, stdio, client = agent.apply_official_mcp_gates(raw, 'v2-external-obs', None)
         self.assertEqual(names(gw), ['plain_tool'])
         self.assertEqual(stdio, [])
+        self.assertIsNone(client)
 
     def test_non_external_obs_gateway_never_connects_stdio(self):
         agent.CLICKHOUSE_OFFICIAL_MCP = True
@@ -614,22 +615,26 @@ class TestApplyOfficialMcpGates(unittest.TestCase):
 
         def fake_connect(stack):
             connected.append(stack)
-            return [FakeTool('ch')]
+            return object(), [FakeTool('ch')]
         agent._connect_clickhouse_stdio = fake_connect
         raw = [FakeTool('clickhouse-mcp-target___clickhouse_query'), FakeTool('plain_tool')]
-        gw, stdio = agent.apply_official_mcp_gates(raw, 'v2-data', None)
+        gw, stdio, client = agent.apply_official_mcp_gates(raw, 'v2-data', None)
         self.assertEqual(connected, [])
         self.assertEqual(stdio, [])
+        self.assertIsNone(client)
         self.assertEqual(names(gw), ['clickhouse-mcp-target___clickhouse_query', 'plain_tool'])
 
     def test_external_obs_stdio_replaces_lambda_clickhouse_tools(self):
         agent.CLICKHOUSE_OFFICIAL_MCP = True
-        agent._connect_clickhouse_stdio = lambda stack: [FakeTool('run_select_query')]
+        sentinel = object()  # stands in for the MCPClient that OWNS the stdio tools
+        agent._connect_clickhouse_stdio = lambda stack: (sentinel, [FakeTool('run_select_query')])
         raw = [FakeTool('clickhouse-mcp-target___clickhouse_query'), FakeTool('plain_tool')]
-        gw, stdio = agent.apply_official_mcp_gates(raw, 'v2-external-obs', None)
+        gw, stdio, client = agent.apply_official_mcp_gates(raw, 'v2-external-obs', None)
         self.assertNotIn('clickhouse-mcp-target___clickhouse_query', names(gw))
         self.assertIn('plain_tool', names(gw))
         self.assertEqual(names(stdio), ['run_select_query'])
+        # the dark path dispatches stdio tools by name, so it MUST get the owning client back
+        self.assertIs(client, sentinel)
 
     def test_stdio_connect_failure_is_isolated(self):
         agent.CLICKHOUSE_OFFICIAL_MCP = True
@@ -638,8 +643,11 @@ class TestApplyOfficialMcpGates(unittest.TestCase):
             raise RuntimeError('boom')
         agent._connect_clickhouse_stdio = boom
         raw = [FakeTool('clickhouse-mcp-target___clickhouse_query'), FakeTool('plain_tool')]
-        gw, stdio = agent.apply_official_mcp_gates(raw, 'v2-external-obs', None)  # must NOT raise
+        gw, stdio, client = agent.apply_official_mcp_gates(raw, 'v2-external-obs', None)  # must NOT raise
         self.assertEqual(stdio, [])
+        # no stdio tools => no client to route to; a stale client here would make the dark path
+        # send gateway tool calls into a dead subprocess.
+        self.assertIsNone(client)
         # mutual exclusion must NOT fire when the stdio connect failed — both survive.
         self.assertEqual(names(gw), ['clickhouse-mcp-target___clickhouse_query', 'plain_tool'])
 

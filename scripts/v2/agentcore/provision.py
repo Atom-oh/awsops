@@ -407,13 +407,18 @@ def _api_key_provider_fields(credential_provider_configurations):
 
 
 def _delete_api_key_provider(ctrl, provider_name):
-    """Best-effort delete — a missing provider is not an error (nothing to retire)."""
+    """Best-effort delete — a missing provider is not an error (nothing to retire). Returns True when
+    the provider is GONE (deleted now, or already absent), False when the delete failed. Callers that
+    use another object's existence as their retry trigger must not retire that trigger on False."""
     try:
         ctrl.delete_api_key_credential_provider(name=provider_name)
         log(f"mcp-server-provider:{provider_name}", "DELETED", "retired")
+        return True
     except ClientError as e:
-        if e.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
-            log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
+        if e.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
+            return True
+        log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
+        return False
 
 
 # Gateway target lifecycle states (GetGatewayTarget `status`), confirmed against the botocore
@@ -523,16 +528,18 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
     # that this catalog no longer declares. The per-preset loop below only reaches names that are
     # still IN the catalog, and prune_moved_targets() KEEPs unknown names on purpose — so without
     # this pass a removed preset's remote target lives on forever (review MAJOR, PR #207).
-    # Gated on the target actually being PRESENT: this tombstone list outlives every deployment that
-    # ever carried these presets, so an unconditional delete would hit the control plane 5x on every
-    # run forever (and would delete a credential provider an operator re-created by hand). Any
-    # deployment that provisioned a preset has both objects, so the target is a sound trigger.
+    # The target's presence is BOTH the "is there anything to do" gate and the retry trigger — this
+    # tombstone list outlives every deployment that ever carried these presets, so an unconditional
+    # pass would hit the control plane 5x on every run forever. That makes the ordering load-bearing:
+    # the target is only retired once the provider delete has actually SUCCEEDED (or found nothing).
+    # Retiring the target on a failed provider delete would erase the retry trigger and orphan the
+    # vendor token forever; retiring it first has the same hole if the provider delete then fails.
     for tname, preset_key in getattr(catalog, "RETIRED_MCP_SERVER_TARGETS", ()):
         gw_id, existing = gw_existing("external-obs")
         if not gw_id or tname not in existing:
             continue
-        _retire_gateway_target(ctrl, gw_id, existing, tname, "removed from the catalog — retiring (ADR-017 amended)")
-        _delete_api_key_provider(ctrl, f"awsops-v2-{preset_key}-mcp")
+        if _delete_api_key_provider(ctrl, f"awsops-v2-{preset_key}-mcp"):
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "removed from the catalog — retiring (ADR-017 amended)")
 
     for tname, spec in catalog.MCP_SERVER_TARGETS.items():
         preset_key = spec["preset_key"]

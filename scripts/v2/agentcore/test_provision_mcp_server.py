@@ -500,6 +500,35 @@ class TestRetiredCatalogEntries(unittest.TestCase):
         self.assertIn(("target:clickhouse-mcp-server-target", "RETIRED"),
                       [(r[0], r[1]) for r in provision.report])
 
+    def _run_tombstone(self, ctrl):
+        ac = {"official_mcp_endpoints": {}, "lambda_arns": {}, "region": "ap-northeast-2",
+              "integrations_secret_name": None}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS",
+                               (("clickhouse-mcp-server-target", "clickhouse"),)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+
+    def test_failed_provider_delete_keeps_the_target_so_the_next_run_retries(self):
+        # The target's presence is the ONLY retry trigger (the pass is gated on it, so it doesn't
+        # churn the control plane every run forever). So retiring the target while the provider
+        # delete failed would orphan the vendor token permanently: the next run sees no target and
+        # skips. The provider delete must therefore gate the target delete.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
+        ctrl.delete_api_key_credential_provider.side_effect = _client_error("ThrottlingException")
+        self._run_tombstone(ctrl)
+        ctrl.delete_gateway_target.assert_not_called()
+        self.assertIn(("mcp-server-provider:awsops-v2-clickhouse-mcp", "ERR"),
+                      [(r[0], r[1]) for r in provision.report])
+
+    def test_already_absent_provider_does_not_block_the_target_delete(self):
+        # The retry above only converges because "already gone" counts as success — otherwise a run
+        # that deleted the provider and then failed on the target would deadlock: every later run
+        # would get NotFound on the provider and never retire the target.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
+        ctrl.delete_api_key_credential_provider.side_effect = _raise_not_found
+        self._run_tombstone(ctrl)
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-old")
+
     def test_absent_retired_target_is_not_an_error(self):
         # The tombstone list stays in the catalog long after every deployment converged, so the
         # common case is "nothing to delete" — it must not ERR or churn the control plane.
@@ -675,6 +704,14 @@ class TestEndpointBlocked(unittest.TestCase):
 
     def test_localhost_hostname_rejected(self):
         self.assertIsNotNone(provision._endpoint_blocked("https://localhost/mcp"))
+
+
+def _client_error(code):
+    """side_effect factory for an arbitrary (non-NotFound) control-plane failure."""
+    def _raise(*_a, **_kw):
+        from botocore.exceptions import ClientError
+        raise ClientError({"Error": {"Code": code, "Message": "nope"}}, "DeleteGatewayTarget")
+    return _raise
 
 
 def _raise_not_found(*_a, **_kw):
