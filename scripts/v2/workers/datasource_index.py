@@ -379,7 +379,12 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     write_rows = list(rows)
     if stored_budget is not None:
         write_rows.append({"signal_key": wdb.BUDGET_KEY, "title": "(diag-signal retry budget)",
-                           "status": "disabled", "query": None, "missing_metrics": None,
+                           # `status` has a DB CHECK(status IN ('ready','unavailable')) — 'disabled' is a
+                           # try_generate_signal_with_status() return value, not a valid row status, and
+                           # writing it here violated that constraint every single call, so the budget
+                           # could never actually persist (review, this round). 'unavailable' matches the
+                           # convention SCHEMA_VERSION_SENTINEL_KEY already uses for a non-signal row.
+                           "status": "unavailable", "query": None, "missing_metrics": None,
                            "meta": {"budget": stored_budget}})
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and

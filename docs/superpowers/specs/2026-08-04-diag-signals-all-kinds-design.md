@@ -183,12 +183,14 @@ before the connectors were probed.
    implementation asks for a single expression and validates that one. Generating several would
    multiply the Bedrock cost and the dry-run traffic for a chip that only ever shows one query, and
    nothing consumes the runners-up.
-4. **`CATALOG_VERSION` is `v4`, not `v2`.** main is on `v1`; `v2` and `v3` existed only in intermediate
-   commits of this branch, so deployed instances move v1 → v4 in one step. The v3 → v4 step is not a
-   catalog edit: v3 encoded "generation budget exhausted" as the plain schema hash, which is
-   indistinguishable from the legitimate "conclusively nothing to build" row that must keep skipping, so a
-   row written that way would never generate again. The bump invalidates every hash once, and from v4 on
-   exhaustion is a week-scoped marker (item 6) while the plain hash means only "conclusive".
+4. **`CATALOG_VERSION` is `v5`, not `v2`.** main is on `v1`; `v2`/`v3`/`v4` existed only in intermediate
+   commits of this branch, so deployed instances move v1 → v5 in one step. Neither later bump is a catalog
+   edit: v3 encoded "generation budget exhausted" as the plain schema hash, indistinguishable from the
+   legitimate "conclusively nothing to build" row that must keep skipping, so a row written that way would
+   never generate again; v4 → v5 moved the weekly-retry marker OUT of `schema_version` into its own
+   bookkeeping row (`db.BUDGET_KEY`), and without a bump every already-capped instance would silently read
+   as "no budget, fresh start" on rollout. Each bump invalidates every hash once; from v5 on, exhaustion is
+   a marker in a dedicated row's `meta.budget` field (item 6), never in `schema_version` at all.
 5. **`_nonempty_result()` still gates, but emptiness is classified TRANSIENT.** Decision 2 asked for "a
    non-error, non-empty-shape response" and that is enforced — an invented metric name returning Prometheus
    `result: []` is never stored as a ready chip. What a later review changed is only what emptiness MEANS for

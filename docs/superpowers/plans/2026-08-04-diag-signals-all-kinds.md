@@ -1,6 +1,6 @@
 > **THIS PLAN HAS DRIFTED FROM THE SHIPPED CODE (2026-08-04).** The spec's
 > "Amended 2026-08-04" section is the accurate record. Beyond the per-task banners below: Task 9 says
-> `CATALOG_VERSION = "v2"` but the shipped value is `v4` (main is on `v1`); Task 7's wiring example
+> `CATALOG_VERSION = "v2"` but the shipped value is `v5` (main is on `v1`); Task 7's wiring example
 > shows APIs that no longer exist (`try_generate_signal(...)` without a status, a 3-argument
 > `upsert_diag_signals`, a list-comprehension sweep); and Task 6's module body predates
 > `_nonempty_result`, the status constants, the schema-vocabulary gate and the separate
@@ -20,7 +20,7 @@
 
 - `build_signals(kind, schema)` and every matcher function stay PURE — no DB, no boto3, no egress, never raises (spec §Error handling).
 - **DRIFTED (2026-08-04):** the LLM fallback is gated on its OWN `DIAG_SIGNAL_QUERYGEN_ENABLED`, not the shared `GRAPH_QUERYGEN_ENABLED` this plan assumed (spec Amended #4) and follows `graph_querygen.py`'s exact contract: any failure at any stage returns no candidates, never raises, never blocks the deterministic rebuild.
-- `signal_catalog.CATALOG_VERSION` must be bumped once, at the end, after all catalog entries are added (spec §Decision 4; shipped value is `v4`) — forces a one-time rebuild across all instances via the existing daily dispatcher.
+- `signal_catalog.CATALOG_VERSION` must be bumped once, at the end, after all catalog entries are added (spec §Decision 4; shipped value is `v5`) — forces a one-time rebuild across all instances via the existing daily dispatcher.
 - `datasource_diag_signals` table schema is unchanged — no migration in this plan.
 - Metric/table/label/tag names used in matchers are module constants only, never derived from user input (spec, `signal_catalog.py`'s existing docstring guarantee).
 

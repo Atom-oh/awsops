@@ -16,19 +16,24 @@ never inject into a query.
 rebuild even when the datasource's metric set is unchanged.
 """
 
-CATALOG_VERSION = "v4"  # bumped 2026-08-04: kind-scoped matchers + loki/tempo catalog entries +
-                         # LLM hybrid fallback for kinds with zero deterministic entries.
-                         # main is on "v1"; v2/v3 existed only in intermediate commits of this PR, so
-                         # deployed instances jump v1 -> v4.
-                         # v3 -> v4 exists for the UPGRADE PATH, not for a catalog edit: v3 encoded
-                         # "generation budget exhausted" as the PLAIN schema hash, which is
-                         # indistinguishable from the legitimate "conclusively nothing to build" row that
-                         # must keep skipping (Codex stop-gate). A row written that way under v3 would
-                         # never generate again. The bump changes every hash once, so the ambiguous
-                         # encoding cannot survive into v4. A ready/settled outcome (including a
-                         # weekly budget spent with nothing to show) now stores the PLAIN version once
-                         # nothing remains to retry; only an active or exhausted-this-week retry keeps
-                         # a `:<pend|done>N w<isoweek>[s<streak>]` marker (see datasource_index.py)
+CATALOG_VERSION = "v5"  # bumped 2026-08-04, twice, for two different UPGRADE-PATH reasons (neither is a
+                         # catalog edit) — main is on "v1"; v2/v3/v4 existed only in intermediate commits
+                         # of this PR, so deployed instances jump v1 -> v5 in one step:
+                         #   v3 -> v4: v3 encoded "generation budget exhausted" as the PLAIN schema hash,
+                         #     which is indistinguishable from the legitimate "conclusively nothing to
+                         #     build" row that must keep skipping — a row written that way under v3 would
+                         #     never generate again.
+                         #   v4 -> v5: the weekly-retry marker moved OUT of schema_version entirely, into
+                         #     its own bookkeeping row (db.BUDGET_KEY, see datasource_index.py). v5's code
+                         #     only ever reads the marker from that dedicated row, which no pre-v5 instance
+                         #     has, so without this bump every already-capped/parked instance would
+                         #     silently read as "no budget, fresh start" on rollout — an UNDOCUMENTED reset
+                         #     of every existing cap (Codex stop-gate).
+                         # Each bump changes every hash once: content rebuilds once, and the fresh budget
+                         # that comes with a "new" schema_version is the INTENDED behaviour of a version
+                         # bump, not a silent side effect of one. From v5 on, a ready/settled outcome
+                         # stores the PLAIN version with no bookkeeping row at all; only an active or
+                         # exhausted-this-week retry keeps one, in `meta.budget`, never in schema_version.
 
 # kind → connector tool name (PromQL is identical for both)
 _KIND_TOOL = {

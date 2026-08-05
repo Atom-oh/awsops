@@ -109,6 +109,12 @@ class FakeConn:
                 return json.loads(p["me"]).get("budget")
         return None
 
+    def budget_row_status(self):
+        for p in self.inserts:
+            if p.get("sk") == wdb.BUDGET_KEY:
+                return p.get("st")
+        return None
+
 
 class TestRebuildOnChange:
     def test_changed_schema_builds_upserts_and_sweeps(self):
@@ -258,11 +264,21 @@ class TestGeneratedFallback:
         """v3 wrote the PLAIN hash for an exhausted budget, which reads exactly like the legitimate
         "conclusively nothing to build" row that must keep skipping — so such a row would never generate
         again (Codex stop-gate). The only way out is to invalidate every hash once."""
-        assert dsi._cat.CATALOG_VERSION == "v4", "bump the catalog version to retire v3's plain-hash marker"
+        assert dsi._cat.CATALOG_VERSION == "v5", "bump the catalog version to retire v3's plain-hash marker"
         schema = {"tables": {"t": ["c"]}}
         now = dsi._schema_version(schema)
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v3")
         assert dsi._schema_version(schema) != now   # every v3 row, plain marker included, rebuilds once
+
+    def test_the_catalog_version_retires_the_schema_version_embedded_marker(self, monkeypatch):
+        """v4's marker lived embedded in schema_version itself; v5 moved it to a dedicated bookkeeping row
+        that no pre-v5 instance has, so without a bump every already-capped/parked instance would silently
+        read as "no budget, fresh start" on rollout — an undocumented reset of every existing cap
+        (Codex stop-gate). The only way to make that reset explicit is to invalidate every hash once."""
+        schema = {"tables": {"t": ["c"]}}
+        now = dsi._schema_version(schema)
+        monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v4")
+        assert dsi._schema_version(schema) != now   # every v4 row rebuilds once, budget genuinely fresh
 
     GENERATED_ROW = {"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                      "query": {"tool": "loki_query_range",
@@ -578,6 +594,20 @@ class TestGeneratedFallback:
         out2 = dsi.run({"integration_id": 7, "kind": "prometheus"}, c2)
         assert out2.get("skipped") is not True              # must rebuild — content (C) does not match B
         assert c2.inserts and all(p["sv"] == base_b for p in c2.inserts)  # B's rows correctly tagged
+
+    def test_the_budget_row_uses_a_status_the_db_check_constraint_actually_allows(self, monkeypatch):
+        """datasource_diag_signals has `CHECK (status IN ('ready', 'unavailable'))`. Writing 'disabled' for
+        the budget row — a try_generate_signal_with_status() return VALUE, not a valid row status — would
+        violate that constraint on every real Postgres write, so the budget could never actually persist
+        (Codex stop-gate); the mock-based FakeConn never validates the constraint, which is why no other
+        test caught it."""
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert c.budget_row_status() in ("ready", "unavailable")
 
     def test_a_rejected_answer_parks_for_the_week_and_does_not_freeze(self, monkeypatch):
         """The model is not deterministic and the gates change, so "failed a gate once" is not a permanent
