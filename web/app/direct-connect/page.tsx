@@ -154,6 +154,17 @@ type Selected =
   | { kind: 'vif'; row: DxVifRow }
   | { kind: 'gw'; row: DxGatewayRow };
 
+type Variant = 'default' | 'danger' | 'warn';
+
+/** KPI 배지 판정 — 확인된 위험(danger)은 절대 저하(degraded)로 강등하지 않는다.
+ *  degraded는 "더 나쁠 수도 있다"는 뜻일 뿐, 이미 확인된 위험을 무효화하는 근거가
+ *  아니다. danger가 아닐 때만 degraded가 warn으로 격상된다. */
+function kpiVariant(hasRealDanger: boolean, degraded: boolean): Variant {
+  if (hasRealDanger) return 'danger';
+  if (degraded) return 'warn';
+  return 'default';
+}
+
 export default function DirectConnectPage() {
   const { tt } = useI18n();
   const [range, setRange] = useState(86400);
@@ -399,18 +410,15 @@ export default function DirectConnectPage() {
           // 자체가 낙관적일 수 있으면 "정상/0건"을 확신 있는 색으로 보여주지 않는다.
           const resourcesDegraded = data.degradedRegions.length > 0;
           const anyMetricsDegraded = resourcesDegraded || data.metricsDegradedRegions.length > 0;
-          const downTileVariant = t.connectionsDown + t.vifsDown > 0
-            ? 'danger' : anyMetricsDegraded ? 'warn' : 'default';
-          const downHint = anyMetricsDegraded
+          const downTileVariant = kpiVariant(t.connectionsDown + t.vifsDown > 0, anyMetricsDegraded);
+          const downHint = downTileVariant !== 'danger' && anyMetricsDegraded
             ? tt('일부 리전 조회 실패 — 실제보다 적게 집계될 수 있음')
             : `${tt('커넥션')} ${t.connectionsDown} · VIF ${t.vifsDown}`;
-          const gwTileVariant = data.gatewaysDegraded
-            ? 'warn' : t.gatewaysUnassociated > 0 ? 'warn' : 'default';
+          const gwTileVariant = kpiVariant(false, data.gatewaysDegraded || t.gatewaysUnassociated > 0);
           const gwHint = data.gatewaysDegraded
             ? tt('DX Gateway 조회 실패 — 확인 불가')
             : `${tt('미연결')} ${t.gatewaysUnassociated}`;
-          const utilTileVariant = anyMetricsDegraded
-            ? 'warn' : (t.maxUtilizationPct ?? 0) >= 80 ? 'danger' : 'default';
+          const utilTileVariant = kpiVariant((t.maxUtilizationPct ?? 0) >= 80, anyMetricsDegraded);
           return (
           <>
             {/* ① KPI — 다운(danger) + 단일 로케이션/미연결 DXGW(warn) + 피크 사용률 */}
@@ -426,7 +434,7 @@ export default function DirectConnectPage() {
                 label="가상 인터페이스"
                 value={resourcesDegraded ? `${t.vifs}+` : t.vifs}
                 hint={`BGP down ${t.bgpPeersDown}`}
-                variant={t.vifsDown > 0 ? 'danger' : resourcesDegraded ? 'warn' : 'default'}
+                variant={kpiVariant(t.vifsDown > 0, resourcesDegraded)}
                 icon={<Network size={16} />}
               />
               <StatTile
@@ -454,7 +462,7 @@ export default function DirectConnectPage() {
                 label="피크 사용률"
                 value={t.maxUtilizationPct == null ? '—' : `${t.maxUtilizationPct}%`}
                 variant={utilTileVariant}
-                hint={anyMetricsDegraded ? tt('일부 리전 조회 실패 — 확인 불가') : "기간 내 피크 bps ÷ 대역폭"}
+                hint={utilTileVariant !== 'danger' && anyMetricsDegraded ? tt('일부 리전 조회 실패 — 확인 불가') : "기간 내 피크 bps ÷ 대역폭"}
                 icon={<Activity size={16} />}
               />
             </div>
