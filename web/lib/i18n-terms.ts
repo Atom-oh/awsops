@@ -1076,7 +1076,7 @@ export const TERMS: Record<string, Pair> = {
   '커넥션': { en: 'Connections', zh: '连接', ja: '接続' },
   '가상 인터페이스': { en: 'Virtual interfaces', zh: '虚拟接口', ja: '仮想インターフェイス' },
   '로케이션': { en: 'Locations', zh: '位置', ja: 'ロケーション' },
-  '미연결(DX)': { en: 'Unassociated', zh: '未关联', ja: '未関連付け' },
+  '미할당': { en: 'Unassociated', zh: '未关联', ja: '未関連付け' },
   '총 대역폭': { en: 'Total bandwidth', zh: '总带宽', ja: '合計帯域幅' },
   '커넥션 대역폭 합계': { en: 'Sum of connection bandwidth', zh: '连接带宽总和', ja: '接続帯域幅の合計' },
   '다운 감지': { en: 'Down detected', zh: '检测到宕机', ja: 'ダウン検知' },
