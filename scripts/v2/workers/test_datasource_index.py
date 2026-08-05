@@ -467,12 +467,14 @@ class TestGeneratedFallback:
         dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS   # still capped — no 4th call
 
-    def test_a_genuine_mid_week_schema_change_unparks_immediately(self, monkeypatch):
-        """The un-park-on-schema-change fix from last round only checked the hash at the multi-week
-        streak-cap boundary, so an ordinary same-week exhaustion kept reusing a DIFFERENT schema's done
-        state if the schema changed mid-week — the caller never compared hashes for that branch at all
-        (review MAJOR, this round). A DONE marker must now check the hash regardless of which branch
-        produced it; only PEND (budget still available) stays hash-blind, per the test above."""
+    def test_a_mid_week_schema_change_still_waits_for_the_hard_weekly_cap(self, monkeypatch):
+        """The weekly budget is a HARD per-INSTANCE ceiling (ADR-018 §B-4: "인스턴스당 ISO 주 3회"), not a
+        per-schema one. Un-parking on ANY same-week hash mismatch — tried once — let a schema that
+        genuinely changes N times in one week grant a fresh 3-try budget N times: 3N Bedrock calls in a
+        single week, straight through the cap (review, this round: reverted). Once this week's budget is
+        spent, a real schema change still has to wait for the week to roll, exactly like an unchanged
+        schema would — only the multi-week streak-cap boundary compares hashes, and only because that
+        never spends a SECOND budget within one week (see test above)."""
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
@@ -489,8 +491,8 @@ class TestGeneratedFallback:
         new_schema = {"metrics": ["genuinely_different"]}                # a real change, same ISO week
         c = FakeConn(kind="prometheus", schema=new_schema, existing_version=version)
         out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
-        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS + 1             # unparked: got a try, same week
-        assert out["schema_version"].startswith(f"{dsi._schema_version(new_schema)}:pend1w")
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS                 # NOT unparked — the week isn't over
+        assert out["schema_version"].endswith(f":done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}s1")
 
     def test_a_rejected_answer_parks_for_the_week_and_does_not_freeze(self, monkeypatch):
         """The model is not deterministic and the gates change, so "failed a gate once" is not a permanent

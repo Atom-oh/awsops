@@ -184,31 +184,38 @@ def _marker_state(existing, version):
     ambiguous "gave up" meaning), while this branch's earlier `:retryN`, `:retryNw<week>` and `:spent<week>`
     forms read as a fresh, NOT-settled budget — retrying is the safe direction for an unrecognised marker.
 
-    `version` is needed for exactly ONE decision: whether to un-park an instance with nothing left to try
-    THIS attempt cycle. A PEND marker (budget still available) reads attempts regardless of which hash
-    prefixes it — that's what makes the budget survive ordinary schema churn while actively retrying (a
-    Prometheus whose metric set shifts on every run must not get a fresh 3-try budget every run just
-    because the hash moved — review MAJOR-3). But a DONE marker means "nothing more will be tried until X",
-    and X has to be the SCHEMA — checking that only at the multi-week streak-cap boundary left an ordinary
-    same-week exhaustion still reusing a DIFFERENT schema's done/attempts if the schema changed mid-week
-    (review MAJOR, this round: the first attempt at this fix scoped the check too narrowly). So ANY DONE
-    marker — same-week or streak-capped — now compares the hash and returns fully fresh state on a
-    mismatch; only PEND (an attempt cycle actively in progress) stays hash-blind.
+    `version` is needed for exactly ONE decision: whether to un-park a streak-capped instance, and it is
+    checked ONLY when crossing a WEEK BOUNDARY, never within the same week. That asymmetry is load-bearing,
+    not an oversight — two review rounds landed on opposite sides of it:
+      * checking the hash WITHIN a week — even scoped to only the same-week `done` branch — means a schema
+        that genuinely changes N times in one week grants a fresh 3-try budget N times, i.e. 3N Bedrock
+        calls in a single week. "3 per ISO week" (ADR-018 §B-4) is a HARD per-instance ceiling, not a
+        per-schema one; a tried-once-this-round fix that un-parked on any same-week hash mismatch broke
+        exactly this (review, this round — reverted).
+      * NOT checking the hash at the multi-week streak-cap boundary left a genuinely NEW schema, arriving
+        after 3 consecutive spent weeks, blocked until the schema-unrelated week rolled over again — the
+        earlier review round's fix (kept below). This is safe from the same over-spend risk because it only
+        ever grants the SAME weekly renewal that would happen anyway once `streak < _MAX_SPENT_WEEKS` — it
+        decides WHETHER a week's normal budget renews, never adds a second budget within one week.
+    Within a week, attempts/streak are read regardless of which hash prefixes the marker — that's what
+    makes the budget survive ordinary schema churn while actively retrying (review MAJOR-3, three rounds
+    ago). A schema that changes mid-week while already exhausted for the week simply waits for the next
+    week, same as an unchanged schema would — that is the hard cap working as intended, not a gap.
     """
     m = _MARKER_RE.search(existing or "")
     if not m:
         base, _, marker = (existing or "").partition(":")
         return base, 0, bool(base) and not marker, 0
     state, attempts, week, streak = m.group(1), int(m.group(2)), m.group(3), int(m.group(4) or 0)
-    base = existing[:m.start()]
-    done = state == _DONE
-    if done and base != version:
-        return base, 0, False, 0
     if week == _iso_week():
-        return base, attempts, done, streak
+        return existing[:m.start()], attempts, state == _DONE, streak
+    base = existing[:m.start()]
     # A new week. The budget returns, but only while the streak of spent weeks is under the cap; at the cap
-    # the instance stays settled (schema unchanged, per the check above).
+    # the instance stays settled UNLESS its schema has genuinely changed, which is the only new information
+    # that justifies spending another 3-week budget on it.
     if streak >= _MAX_SPENT_WEEKS:
+        if base != version:
+            return base, 0, False, 0
         return base, _MAX_GENERATION_ATTEMPTS, True, streak
     return base, 0, False, streak
 
