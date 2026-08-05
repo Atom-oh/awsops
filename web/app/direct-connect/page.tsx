@@ -362,7 +362,7 @@ export default function DirectConnectPage() {
       key: 'assoc', label: tt('연결 대상'),
       value: (r) => (r.associations.length ? r.associations.map((a) => a.id).join(' ') : null),
       render: (r) => r.associations.length === 0
-        ? <Badge tone="negative" variant="soft">{tt('미연결')}</Badge>
+        ? <Badge tone="negative" variant="soft">{tt('미할당')}</Badge>
         : (
           <span className="inline-flex flex-wrap gap-1">
             {r.associations.map((a) => (
@@ -417,7 +417,7 @@ export default function DirectConnectPage() {
           const gwTileVariant = kpiVariant(false, data.gatewaysDegraded || t.gatewaysUnassociated > 0);
           const gwHint = data.gatewaysDegraded
             ? tt('DX Gateway 조회 실패 — 확인 불가')
-            : `${tt('미연결')} ${t.gatewaysUnassociated}`;
+            : `${tt('미할당')} ${t.gatewaysUnassociated}`;
           const utilTileVariant = kpiVariant((t.maxUtilizationPct ?? 0) >= 80, anyMetricsDegraded);
           return (
           <>
