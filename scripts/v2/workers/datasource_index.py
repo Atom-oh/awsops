@@ -235,9 +235,19 @@ def _marker_state(existing, version):
     return base, 0, False, streak
 
 
-def _marker(version, attempts, state, streak):
+def _marker_parts(version, state, streak):
+    """(prefix, suffix) of the marker grammar with the attempt COUNT left out, so the count can be
+    spliced in by either side: here (_marker) or inside db.write_diag_signal_budget's UPDATE, which
+    re-derives it from the LIVE counter because the caller's own number is read before a
+    multi-second Bedrock call and a concurrent reservation must not be lost from it (review
+    MAJOR-1). One source of truth for the grammar _MARKER_RE parses."""
     tail = f"s{streak}" if streak else ""
-    return f"{version}:{state}{attempts}w{_iso_week()}{tail}"
+    return f"{version}:{state}", f"w{_iso_week()}{tail}"
+
+
+def _marker(version, attempts, state, streak):
+    pre, suf = _marker_parts(version, state, streak)
+    return f"{pre}{attempts}{suf}"
 
 
 def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
@@ -317,6 +327,26 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             _streak = int(_legacy.group(4) or 0)
             _same_week_attempts = int(_legacy.group(2)) if _legacy.group(3) == _iso_week() else 0
             existing_budget = _marker(version, _same_week_attempts, _PEND, _streak)
+        else:
+            # A CHARGED-BUT-UNFINISHED RESERVATION (review CRITICAL). reserve_diag_signal_attempt
+            # writes the numeric meta.week/meta.attempts durably before the Bedrock call, while the
+            # marker is only written at the very END of this function — so a crash in between
+            # (Lambda timeout, OOM, uncaught raise) leaves the counter charged and NO marker at all.
+            # Reading only the marker made that state indistinguishable from "brand new, nothing
+            # ever owed", which skips unconditionally whenever the content version still matches —
+            # i.e. FOREVER for an unchanged schema, with the spent reservation invisible and the
+            # rebuild never reaching write_diag_signal_budget to close the loop. Synthesizing a PEND
+            # marker says exactly what happened: an attempt cycle is in progress and is NOT settled,
+            # so this run rebuilds and does write a marker, while the reservation's cost still counts
+            # against the cap (it rides in as `known_attempts`, so reserve charges 1->2, not 0->1 —
+            # no bonus free attempt). Attempts carry ONLY within the same ISO week, exactly like the
+            # bootstrap above: a reservation from a past week is just the week rolling over. Streak
+            # stays 0 — it lives only in the marker, and there is none.
+            _res = wdb.read_diag_signal_reservation(conn, iid)
+            if _res is not None:
+                _res_week, _res_attempts = _res
+                existing_budget = _marker(
+                    version, _res_attempts if _res_week == _iso_week() else 0, _PEND, 0)
     base, attempts, marker_settled, streak = _marker_state(existing_budget, version)
     # Skip only when BOTH agree there is nothing to do: the CONTENT is fresh (this exact schema was the
     # last one actually built, so `rows` would come out the same) AND the BUDGET says settled for this
@@ -331,6 +361,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     exhausted = attempts >= _MAX_GENERATION_ATTEMPTS
     gen_status = None
     generated_key_unverified = False
+    carry_attempted = False
     reserved = None
     if not any(r["status"] == "ready" for r in rows):
         if not exhausted:
@@ -370,6 +401,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         # chip away, which is the same deletion MAJOR-2 was about.
         if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" \
                 and not any(r["status"] == "ready" for r in rows):
+            carry_attempted = True
             carried = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
             if carried is None:
                 # Could not verify whether a previously-good generated row still exists or is still
@@ -441,7 +473,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     if state == _CONC and not spent and not new_streak:
         # The ONLY case that leaves no budget row at all: a conclusive outcome in a week that spent nothing
         # and carries no streak — there is literally nothing to remember, so the sweep clears any stale row.
-        stored_budget = None
+        stored_budget, budget_live = None, None
     elif state == _DONE and not charged and gen_status is None and base and base != version:
         # Exhausted already (no attempt made THIS call) and the schema genuinely differs from the one the
         # cap applies to. Writing a marker under the CURRENT schema's hash here would silently claim we'd
@@ -451,9 +483,16 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         # arriving mid-week while capped stayed parked indefinitely (review, an earlier round). The budget
         # marker is left byte-for-byte unchanged; the capped-schema identity cannot drift until an attempt
         # is actually spent against it.
-        stored_budget = existing_budget
+        # budget_live stays None: this marker's count describes the OTHER schema, so it must be
+        # stored byte-for-byte, never re-derived from this week's live counter.
+        stored_budget, budget_live = existing_budget, None
     else:
-        stored_budget = _marker(version, spent, state, new_streak)
+        # `spent` is a FLOOR, not the final word: db.write_diag_signal_budget re-derives the
+        # embedded count from the row's live meta.attempts, so a worker that reserved during our
+        # Bedrock call is not erased from the marker (review MAJOR-1).
+        _pre, _suf = _marker_parts(version, state, new_streak)
+        stored_budget = f"{_pre}{spent}{_suf}"
+        budget_live = (_pre, _suf, _iso_week(), spent)
     # CONTENT rows always carry the CURRENT schema's real version — never a preserved/stale one. Content
     # freshness and budget tracking used to share one column, and every fix to protect the budget's
     # identity (preserving a stale marker, excluding a key from the agreement check) ended up tagging
@@ -477,7 +516,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     try:
         written = wdb.upsert_diag_signals(conn, iid, rows, version)
         if stored_budget is not None:
-            wdb.write_diag_signal_budget(conn, iid, stored_budget, version)
+            wdb.write_diag_signal_budget(conn, iid, stored_budget, version, live_attempts=budget_live)
             written = written + [wdb.BUDGET_KEY]
         # Sweep against what was WRITTEN, not against `rows`: an empty build writes a version sentinel
         # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back. Not including
@@ -485,6 +524,28 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         # prior budget row — a settled, unspent week should leave none behind. GENERATED_SIGNAL_KEY is ALSO
         # always spared when it was unverifiable this call — see generated_key_unverified above.
         sweep_keep = written + [_signal_gen.GENERATED_SIGNAL_KEY] if generated_key_unverified else written
+        if carry_attempted and not generated_key_unverified:
+            # TOCTOU (review MAJOR-2, this round): the carry-over read above ran BEFORE this
+            # transaction — and before a multi-second Bedrock call — so a generated row another
+            # worker committed in that window is invisible to it, and the sweep below would delete
+            # it. That is the same "sweep destroys a verified row" failure the carry-over exists to
+            # prevent, reached through a different door. Re-run the very same
+            # verified-and-still-relevant check here, adjacent to the DELETE, and spare what it
+            # finds through the mechanism already in this function (sweep_keep +
+            # touch_generated_signal_version below), rather than carrying content we did not build
+            # this call. Gated on carry_attempted so a ready deterministic build — or one with the
+            # querygen flag off, where generated content must stop being served — cannot resurrect a
+            # row it is supposed to supersede. A None read error yields nothing to spare, which is
+            # today's behaviour for a read that succeeds and finds nothing. No-op on the
+            # non-racing path. Under READ COMMITTED this narrows the window to the gap between two
+            # adjacent statements rather than closing it; closing it fully would need an advisory
+            # lock over the whole rebuild, which is out of scope here.
+            late = [r["signal_key"]
+                    for r in (_keep_last_good_generated(conn, wdb, iid, kind, schema, []) or [])
+                    if r["signal_key"] not in sweep_keep]
+            if late:
+                sweep_keep = sweep_keep + late
+                generated_key_unverified = True
         wdb.sweep_diag_signals(conn, iid, sweep_keep)
         if generated_key_unverified:
             # The spared row's CONTENT-version is now stale relative to `version` — bump ONLY that column

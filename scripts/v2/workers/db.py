@@ -201,6 +201,19 @@ BUDGET_KEY = "__diag_signal_budget__"   # bookkeeping row: NOT a signal, filtere
 BUDGET_TITLE = "(diag-signal retry budget)"   # its human label — never a signal title
 
 
+def _diag_signal_budget_meta(conn, integration_id):
+    """The bookkeeping row's whole `meta` object ({} when the row does not exist). Shared by the
+    two readers below: the MARKER and the numeric COUNTER live in the same row's meta, and both
+    are needed to tell a crashed attempt apart from a never-attempted one."""
+    rows = conn.run(
+        f"SELECT meta FROM datasource_diag_signals WHERE account_id='self' AND integration_id=:iid "
+        f"AND signal_key=:sk",
+        iid=integration_id, sk=BUDGET_KEY)
+    if not rows:
+        return {}
+    return _maybe_json(rows[0][0]) or {}
+
+
 def read_diag_signal_budget(conn, integration_id):
     """The weekly-retry marker (`<hash>:<pend|done>N w<week>[s<streak>]`), stored in a DEDICATED row's
     `meta.budget` field — deliberately NOT in that row's own `schema_version` column, and deliberately NOT
@@ -217,14 +230,30 @@ def read_diag_signal_budget(conn, integration_id):
     free to always carry the CURRENT schema's real version (content freshness stays correct in every case)
     while the budget tracks its own, completely independent state in its own column.
     """
-    rows = conn.run(
-        f"SELECT meta FROM datasource_diag_signals WHERE account_id='self' AND integration_id=:iid "
-        f"AND signal_key=:sk",
-        iid=integration_id, sk=BUDGET_KEY)
-    if not rows:
+    return _diag_signal_budget_meta(conn, integration_id).get("budget")
+
+
+def read_diag_signal_reservation(conn, integration_id):
+    """`(week, attempts)` from the bookkeeping row's NUMERIC counter, or None when no attempt was
+    ever reserved for this instance.
+
+    reserve_diag_signal_attempt() writes `meta.week`/`meta.attempts` durably BEFORE the Bedrock
+    call (pg8000 autocommits outside the caller's explicit BEGIN), while the marker string is only
+    written at the very END of the rebuild. A crash in between — Lambda timeout, OOM, uncaught
+    raise — therefore leaves a charged reservation with NO marker at all, and a marker-only read
+    reported that as None. datasource_index read None as "nothing was ever owed", i.e. settled, so
+    an unchanged schema skipped FOREVER and the reservation's cost stayed invisible (review
+    CRITICAL). These two fields are the only durable evidence that the attempt happened.
+    """
+    meta = _diag_signal_budget_meta(conn, integration_id)
+    week = meta.get("week")
+    if not week:
         return None
-    meta = _maybe_json(rows[0][0]) or {}
-    return meta.get("budget")
+    try:
+        attempts = int(meta.get("attempts") or 0)
+    except (TypeError, ValueError):   # a hand-edited row must not sink the rebuild
+        attempts = 0
+    return week, attempts
 
 
 def reserve_diag_signal_attempt(conn, integration_id, week, max_attempts, schema_version,
@@ -291,7 +320,7 @@ def release_diag_signal_attempt(conn, integration_id, week):
         iid=integration_id, sk=BUDGET_KEY, wk=week)
 
 
-def write_diag_signal_budget(conn, integration_id, marker, schema_version):
+def write_diag_signal_budget(conn, integration_id, marker, schema_version, live_attempts=None):
     """Upsert the bookkeeping row's marker string + schema_version, WITHOUT touching the numeric
     `meta.attempts`/`meta.week` counter that reserve/release own.
 
@@ -300,16 +329,38 @@ def write_diag_signal_budget(conn, integration_id, marker, schema_version):
     this call's (older) view of the count — reopening exactly the race the reservation closes. `status`
     stays 'unavailable' because the table has CHECK (status IN ('ready','unavailable')) and this row is
     bookkeeping, not a signal.
+
+    `live_attempts=(prefix, suffix, week, floor)` re-derives the attempt COUNT embedded in the
+    stored marker from the row's own LIVE `meta.attempts`, inside the UPDATE itself, as
+    `prefix || GREATEST(live, floor) || suffix`. The caller builds its marker from a count read
+    BEFORE the multi-second Bedrock call, so a second worker that reserved in that window had its
+    increment silently overwritten by this call's older number: the numeric counter stayed
+    correctly capped, but the marker `_marker_state()` parses under-counted, so marker-driven
+    parking logic under-counted with it (review MAJOR). `floor` keeps it monotonic in the other
+    direction too (the caller's own count is never regressed), and the week guard is the same
+    `CASE WHEN meta->>'week' = :wk` reserve() uses, so a previous week's count cannot leak in.
+    The INSERT path keeps the caller's marker verbatim: with no row there is no live counter, and
+    GREATEST(0, floor) would produce that same string anyway. Omit `live_attempts` to store
+    `marker` byte-for-byte — the one caller that must, because its marker deliberately belongs to
+    a DIFFERENT schema whose embedded count describes that schema, not this week's live number.
     """
+    bg_expr = ":bg::text"
+    extra = {}
+    if live_attempts is not None:
+        pre, suf, week, floor = live_attempts
+        bg_expr = (":pre::text || GREATEST(CASE WHEN datasource_diag_signals.meta->>'week' = :wk::text "
+                   "THEN coalesce((datasource_diag_signals.meta->>'attempts')::int, 0) ELSE 0 END, "
+                   ":floor)::text || :suf::text")
+        extra = dict(pre=pre, suf=suf, wk=week, floor=floor)
     conn.run(
         "INSERT INTO datasource_diag_signals "
         "(account_id, integration_id, signal_key, title, status, meta, schema_version, built_at) "
         "VALUES ('self', :iid, :sk, :ti, :st, jsonb_build_object('budget', :bg::text), :sv, now()) "
         "ON CONFLICT (account_id, integration_id, signal_key) DO UPDATE SET "
-        "meta = jsonb_set(datasource_diag_signals.meta, '{budget}', to_jsonb(:bg::text)), "
+        f"meta = jsonb_set(datasource_diag_signals.meta, '{{budget}}', to_jsonb({bg_expr})), "
         "schema_version = :sv, built_at = now()",
         iid=integration_id, sk=BUDGET_KEY, ti=BUDGET_TITLE, st="unavailable",
-        bg=marker, sv=schema_version)
+        bg=marker, sv=schema_version, **extra)
 
 
 def touch_generated_signal_version(conn, integration_id, schema_version):
