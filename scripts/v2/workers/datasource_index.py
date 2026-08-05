@@ -348,8 +348,22 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # ages out of `week == _iso_week()`, `done` reverts to False, and generation ran again on an unchanged
     # schema, which also directly contradicted ADR-018 §A-4/Sustainability ("cached, not regenerated").
     needs_marker = not ready_now and (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED) or exhausted)
-    stored_version = _marker(version, spent, done=not retry_needed, streak=new_streak) if needs_marker \
-        else version
+    if not needs_marker:
+        stored_version = version
+    elif gen_status is None and base and base != version:
+        # Exhausted already (no attempt made THIS call) and the schema genuinely differs from the one the
+        # cap applies to. Writing a marker under the CURRENT schema's hash here would silently claim we'd
+        # tried IT too — the mark-and-sweep write always tags rows with `version`, so a schema that was
+        # NEVER evaluated would look, from the very next read, exactly like "tried 3 times and failed" for
+        # THAT schema. At the next week boundary the streak-cap's hash check would then compare against a
+        # hash that never got a real try, so a genuinely new schema arriving mid-week while capped stayed
+        # parked indefinitely — it was absorbed into the old capped identity without ever being tried
+        # (review, this round). The marker is left byte-for-byte unchanged; only the deterministic rows
+        # (freshly built from the CURRENT schema, correct content) get re-upserted under the OLD marker,
+        # so the capped-schema identity cannot drift until an attempt is actually spent against it.
+        stored_version = existing_version
+    else:
+        stored_version = _marker(version, spent, done=not retry_needed, streak=new_streak)
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.

@@ -492,7 +492,39 @@ class TestGeneratedFallback:
         c = FakeConn(kind="prometheus", schema=new_schema, existing_version=version)
         out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS                 # NOT unparked — the week isn't over
-        assert out["schema_version"].endswith(f":done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}s1")
+        assert out["schema_version"] == version   # byte-for-byte preserved — the marker's identity does not
+        # drift to the untried schema; see the next test for why that matters.
+
+    def test_a_never_tried_schema_is_not_silently_absorbed_into_an_old_cap(self, monkeypatch):
+        """Re-stamping the marker with the CURRENT schema's hash while doing nothing new (exhausted, no
+        attempt this call) made a schema that was NEVER evaluated look, from the very next read, exactly
+        like "tried 3 times and failed" for THAT schema — the next week's streak-cap hash check then
+        compared against a hash that never got a real try, so the untried schema stayed parked
+        indefinitely for as long as it happened to stay stable (review, this round)."""
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        old_schema = {"metrics": ["custom_only"]}
+        old_hash = dsi._schema_version(old_schema)
+        capped = f"{old_hash}:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}s{dsi._MAX_SPENT_WEEKS}"
+        new_schema = {"metrics": ["never_tried"]}          # arrives mid-week, while capped — never evaluated
+        c = FakeConn(kind="prometheus", schema=new_schema, existing_version=capped)
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert out["schema_version"] == capped             # unchanged: new_schema's hash never absorbed in
+
+        # Next week: the streak-cap check must compare against the OLD (never-tried-against) hash, not
+        # new_schema's — so it correctly un-parks and gives new_schema its first real try.
+        monkeypatch.setattr(dsi, "_iso_week", lambda: "209952")
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        c2 = FakeConn(kind="prometheus", schema=new_schema, existing_version=out["schema_version"])
+        dsi.run({"integration_id": 7, "kind": "prometheus"}, c2)
+        assert calls == [1]        # new_schema finally gets its first try — not parked indefinitely
 
     def test_a_rejected_answer_parks_for_the_week_and_does_not_freeze(self, monkeypatch):
         """The model is not deterministic and the gates change, so "failed a gate once" is not a permanent
