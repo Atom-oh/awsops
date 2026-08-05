@@ -173,7 +173,13 @@ def read_signal_schema_version(conn, integration_id):
     rows = conn.run(
         "SELECT COUNT(DISTINCT schema_version), MIN(schema_version) "
         "FROM datasource_diag_signals "
-        "WHERE account_id='self' AND integration_id=:iid",
+        "WHERE account_id='self' AND integration_id=:iid "
+        # The generated row can be sweep-spared (kept untouched, on its OLD version) when a carry-over
+        # read fails — see datasource_index._rebuild_diag_signals. If its stale version counted here, that
+        # one spared row would poison "all rows agree" for every deterministic row too, resetting the
+        # attempts/streak budget on every future run — the same unbounded-cost bypass a prior review round
+        # already found and fixed once. Its own currency is checked separately, not via this function.
+        "AND signal_key <> 'generated_signal'",
         iid=integration_id)
     if not rows:
         return None

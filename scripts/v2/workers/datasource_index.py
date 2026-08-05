@@ -263,6 +263,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
     exhausted = attempts >= _MAX_GENERATION_ATTEMPTS
     gen_status = None
+    generated_key_unverified = False
     if not any(r["status"] == "ready" for r in rows):
         if not exhausted:
             generated, gen_status = _signal_gen.try_generate_signal_with_status(
@@ -278,21 +279,19 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" \
                 and not any(r["status"] == "ready" for r in rows):
             carried = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
-            if carried is None and gen_status is None:
-                # The carry-over read failed AND no Bedrock attempt happened this call (generation was
-                # skipped — exhausted this week, or the flag is off). Nothing new to record either way, so
-                # it's safe to write nothing rather than risk the sweep deleting a chip we couldn't verify.
-                return {"diag_signal_read_failed": True, "schema_version": existing_version}
             if carried is None:
-                # The read failed, but an attempt WAS just made and cost real money (gen_status is
-                # TRANSIENT/REJECTED/GENERATED). That charge must still be recorded — aborting here let a
-                # persistent read failure retry for free forever, bypassing the weekly budget entirely
-                # (review, this round: fixing the sweep-deletion case reintroduced this the other way).
-                # Proceeding without a carry MAY let the write below sweep away an unverified generated row
-                # in this specific compound-failure case; that is the accepted, self-healing trade against
-                # an otherwise-unbounded cost bypass.
-                logging.warning("[datasource_index] integration %s: could not verify a carry-over candidate "
-                                "after a charged attempt; recording the spend anyway", iid)
+                # Could not verify whether a previously-good generated row still exists or is still
+                # relevant. Two things must BOTH hold, and one fix at a time broke the other (two prior
+                # review rounds): a charged attempt's cost must still be recorded (spend the budget as
+                # normal below — aborting the whole write let a persistent read failure retry for free
+                # forever), AND the row itself must not be deleted on the strength of nothing but our own
+                # read error. `generated_key_unverified` carries that second requirement past this point:
+                # the sweep below spares GENERATED_SIGNAL_KEY whenever this is set, regardless of whether
+                # it ends up in `written` this call, so an unread row's OWN (older) schema_version is left
+                # untouched rather than swept — read_signal_schema_version() ignores that key entirely for
+                # exactly this reason, so a spared stale-versioned row can never poison the budget tracking
+                # for the deterministic rows that DO get a fresh version every call.
+                generated_key_unverified = True
             else:
                 rows = carried
     # WHICH OUTCOMES ARE WORTH REMEMBERING. A build with no ready signal is remembered (plus a sentinel row
@@ -350,8 +349,10 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     try:
         written = wdb.upsert_diag_signals(conn, iid, rows, stored_version)
         # Sweep against what was WRITTEN, not against `rows`: an empty build writes a version sentinel
-        # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back.
-        wdb.sweep_diag_signals(conn, iid, written)
+        # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back. GENERATED_SIGNAL_KEY
+        # is ALSO always spared when it was unverifiable this call — see generated_key_unverified above.
+        sweep_keep = written + [_signal_gen.GENERATED_SIGNAL_KEY] if generated_key_unverified else written
+        wdb.sweep_diag_signals(conn, iid, sweep_keep)
         conn.run("COMMIT")
     except Exception:
         conn.run("ROLLBACK")

@@ -195,6 +195,7 @@ def _nonempty_result(kind, result):
 # otherwise a Bedrock throttle or a connector outage would be frozen into a permanent skip
 # (review: the sentinel turned retryable failures into permanent ones).
 DISABLED = "disabled"      # flag off — nothing changes until an operator acts
+GENERATED_SIGNAL_KEY = "generated_signal"   # fixed regardless of kind/schema — the sweep-protection key
 REJECTED = "rejected"      # the model answered and the answer failed a check — NOT conclusive: the
                            # model, prompt and gates all change, so datasource_index.py retries it under
                            # the same weekly budget as TRANSIENT (this constant used to say "conclusive",
@@ -600,7 +601,7 @@ def try_generate_signal_with_status(kind, schema, integration_id, invoke_connect
             return None, (TRANSIENT if transient else REJECTED)
         tool = _KIND_TOOL.get(kind, f"{kind}_query")
         return {
-            "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
+            "signal_key": GENERATED_SIGNAL_KEY, "title": "AI 생성 신호", "status": "ready",
             "query": {"tool": tool, "queries": [{"label": "generated", "expr": expr}]},
             "missing_metrics": None,
             "meta": {"kind": kind, "provenance": "generated"},

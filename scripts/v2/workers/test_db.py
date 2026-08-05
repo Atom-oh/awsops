@@ -88,6 +88,16 @@ class TestReadSchemaVersion:
         sql, p = c.calls[0]
         assert "COUNT(DISTINCT schema_version)" in sql and p["iid"] == 7
 
+    def test_excludes_the_generated_row_from_the_agreement_check(self):
+        # The generated row can be sweep-spared on its OWN (older) version when a carry-over read fails
+        # (datasource_index._rebuild_diag_signals) — if THIS query counted it, that one spared row would
+        # poison "all rows agree" for every deterministic row too, resetting the attempts/streak budget on
+        # every future call: the exact unbounded-cost bypass a prior review round already fixed once.
+        c = FakeConn(returns=[[[1, "abc123"]]])
+        db.read_signal_schema_version(c, 7)
+        sql, _ = c.calls[0]
+        assert "generated_signal" in sql
+
     def test_returns_none_when_absent(self):
         c = FakeConn(returns=[[[0, None]]])
         assert db.read_signal_schema_version(c, 7) is None

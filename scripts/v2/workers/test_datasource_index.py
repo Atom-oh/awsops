@@ -308,14 +308,15 @@ class TestGeneratedFallback:
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
 
-    def test_a_read_failure_while_parked_does_not_sweep_and_costs_nothing_new(self, monkeypatch):
+    def test_a_read_failure_while_parked_does_not_sweep_the_chip(self, monkeypatch):
         """The carry-over exists so a connector blip doesn't destroy a verified chip (MAJOR-2). While parked
-        (exhausted this week — no new Bedrock attempt this call), a failed carry-over read can safely write
-        nothing: there is no new charge to record either way, so it's safe to skip rather than risk the
-        sweep deleting the exact row this function exists to protect."""
+        (exhausted this week — no new Bedrock attempt this call), a failed carry-over read must not let the
+        sweep delete the row it couldn't verify: GENERATED_SIGNAL_KEY is always spared from the sweep
+        whenever it wasn't confirmed this call, regardless of whether the write itself still proceeds."""
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "GENERATED_SIGNAL_KEY": "generated_signal",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: pytest.fail("must not generate while parked")),
             "still_relevant": staticmethod(lambda *a: True),
@@ -325,19 +326,20 @@ class TestGeneratedFallback:
         parked = f"{base}:pend{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}"
         c = FakeConn(kind="loki", schema=schema, existing_version=parked,
                      existing_rows=[self.GENERATED_ROW], fail_list_read=True)
-        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
-        assert out.get("diag_signal_read_failed") is True
-        assert c.inserts == [] and c.deletes == []          # nothing written, nothing swept
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert not any(d.get("keep") and "generated_signal" not in d["keep"] for d in c.deletes)
 
-    def test_a_read_failure_after_a_charged_attempt_still_records_the_spend(self, monkeypatch):
-        """A read failure must not become a free retry loop. When an attempt WAS just made (charged), its
-        cost has to be recorded even if the carry-over read that follows also fails — otherwise a
-        persistent read failure lets every future run retry for free, bypassing the weekly budget entirely
-        (review, this round — the direct consequence of the previous fix's abort-on-any-read-failure)."""
+    def test_a_read_failure_after_a_charged_attempt_still_records_the_spend_and_spares_the_chip(
+            self, monkeypatch):
+        """A read failure must not become a free retry loop, AND must not delete the last-known-good chip —
+        fixing one broke the other across two prior review rounds. When an attempt WAS just made
+        (charged), its cost is recorded (bounding the budget) while the unverifiable row is still spared
+        from the sweep (protecting the chip)."""
         calls = []
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "GENERATED_SIGNAL_KEY": "generated_signal",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
             "still_relevant": staticmethod(lambda *a: True),
@@ -346,8 +348,10 @@ class TestGeneratedFallback:
         base = dsi._schema_version(schema)
         version = None
         for _ in range(10):    # persistent read failure across many runs must NOT mean 10 Bedrock calls
-            c = FakeConn(kind="loki", schema=schema, existing_version=version, fail_list_read=True)
+            c = FakeConn(kind="loki", schema=schema, existing_version=version,
+                         existing_rows=[self.GENERATED_ROW], fail_list_read=True)
             version = dsi.run({"integration_id": 7, "kind": "loki"}, c)["schema_version"]
+            assert not any(d.get("keep") and "generated_signal" not in d["keep"] for d in c.deletes)
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS      # bounded, not one per run
         assert version.startswith(f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}")
 
