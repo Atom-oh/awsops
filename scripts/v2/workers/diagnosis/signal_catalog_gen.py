@@ -133,7 +133,11 @@ def _generate_expr(kind, schema, invoke=None):
         first_line, _, rest = text.partition("\n")
         if rest and re.fullmatch(r"[a-zA-Z]+", first_line.strip()):
             text = rest
-    return text.strip()
+    # A trailing `;` is fatal downstream, not cosmetic: clickhouse_mcp._run_sql sends
+    # `f"{sql}\nFORMAT JSON"`, so `SELECT … ;` becomes `… ; FORMAT JSON` — a syntax error that made the
+    # dry run fail every time and burn the weekly budget on a query that was otherwise fine (review
+    # MAJOR-2). Models emit one routinely, so strip it here rather than reject the candidate.
+    return text.strip().rstrip(";").strip()
 
 
 # A query-level `SETTINGS max_execution_time=0` overrides the URL parameter, undoing the dry-run's scan
@@ -148,7 +152,7 @@ def _static_check(kind, expr):
         return False
     if kind == "clickhouse":
         lowered = expr.lower()
-        if ";" in expr.rstrip(";"):
+        if ";" in expr:          # stripped in _generate_expr; anything left is multi-statement
             return False
         if not lowered.lstrip().startswith("select"):
             return False

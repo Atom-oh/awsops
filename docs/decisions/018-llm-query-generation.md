@@ -39,7 +39,11 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 2. **모델이 쓴 조회문을 라이브로 dry-run 한다.** 실행은 기존 read-only 커넥터에서만
    (`readonly=1` · `assert_read_only` · `assert_host_allowed`) 이뤄지고, 모델은 실행 권한을 갖지 않는다.
    dry-run 이 error envelope 나 빈 payload 를 돌려주면 그 후보는 캐시되지 않는다.
-3. **정적 게이트를 먼저 통과해야 한다** — read-only/단일문/table-function denylist.
+3. **정적 게이트를 먼저 통과해야 한다** — mutating 키워드 denylist + 단일문 검사. 두 경로 모두 자기 정적
+   검사를 갖는다(`graph_querygen._static_readonly_check`, `signal_catalog_gen._static_check`). 단, **생성기
+   단계의 table-function denylist(`url`/`s3`/`remote` 등 SSRF 표면)는 diag-signal 쪽에만 있다** — graph 쪽은
+   실행 시 커넥터의 `assert_read_only(extra_forbidden_re=_TABLE_FN)` 이 막는다. 즉 파이프라인은 두 경로 모두
+   보호되지만 *어느 층에서* 막느냐가 다르다(리뷰 MAJOR-8: 이 차이를 "공통"으로 뭉개면 안 된다).
 4. **캐시된 결과만 쓴다** — 생성물은 스키마 버전에 키를 두고 저장되며, 매 실행 재생성이 아니다.
 5. **ADR-005와 무관하다** — 생성물은 SQL/PromQL/LogQL 조회문이고 AWS API 호출 경로가 아니다.
 
@@ -66,7 +70,7 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 
 1. **AgentCore Code Interpreter 사전검사**(advisory, `agentcore_enabled` 필요) — B에는 없는 단계다.
 2. **필수 alias 존재 검사** + `LIMIT 1` dry-run.
-3. 식별자 정화·관련성 게이트·주간 예산·읽기 게이트는 **없다**. 범위가 ClickHouse `trace_spans` 쿼리 1건으로
+3. 식별자 정화·관련성 게이트·주간 예산·읽기 게이트·생성기 단계 table-function denylist는 **없다**(마지막 항목은 실행 시 커넥터가 막는다 — §A-3). 범위가 ClickHouse `trace_spans` 쿼리 1건으로
    좁고 소비 표면이 토폴로지 그래프 하나이기 때문에 현재로선 수용하지만, **의도된 설계가 아니라 현행 사실**이다.
    B의 방어를 C로 넓히는 것은 후속 작업이며, 그 전에 `graph_querygen_enabled` 의 범위를 넓히지 않는다.
 

@@ -161,21 +161,24 @@ def _iso_week():
     return datetime.now(timezone.utc).strftime("%G%V")
 
 
-# The stored value is `<hash>` or `<hash>:<state><attempts>w<isoweek>`, state ∈ {pend, done}.
-# `attempts` is how many GENERATIONS this instance has spent this week; `done` means nothing more should be
-# tried until the week rolls. Three review rounds shaped this grammar and each constraint came from one:
+# The stored value is `<hash>` or `<hash>:<state><attempts>w<isoweek>[s<streak>]`, state ∈ {pend, done}.
+# `attempts` = generations spent this week; `streak` = consecutive weeks whose budget was spent without
+# producing anything. Four review rounds shaped this grammar, each closing the previous one's hole:
 #   * the budget must survive schema churn — the marker is read regardless of which hash prefixes it, or a
 #     Prometheus whose metric set moves on every deploy gets a fresh budget daily (MAJOR-3);
-#   * a spent budget must not freeze the instance — the week rolls and the retry comes back (L4-M3);
-#   * a READY (or otherwise conclusive) outcome must not erase the week's usage either, or an instance whose
-#     catalog match flaps in and out buys 3 more tries per flap (Codex stop-gate) — hence `done` still
-#     carries `attempts`, where the earlier encoding dropped the marker entirely.
-_MARKER_RE = re.compile(r":(pend|done)(\d+)w(\d{5,8})$")
+#   * a spent budget must not freeze the instance forever — the week rolls and the retry comes back (L4-M3);
+#   * a READY/conclusive outcome must not erase the week's usage, or an instance whose catalog match flaps
+#     buys 3 more tries per flap (stop-gate);
+#   * but "the week rolls" cannot mean retrying forever either: with an unchanged schema that keeps failing,
+#     weekly retries are unbounded Bedrock spend (MAJOR-1/-7). After _MAX_SPENT_WEEKS consecutive spent
+#     weeks the instance stops until the SCHEMA changes — which is the only new information there is.
+_MARKER_RE = re.compile(r":(pend|done)(\d+)w(\d{5,8})(?:s(\d+))?$")
 _PEND, _DONE = "pend", "done"
+_MAX_SPENT_WEEKS = 3
 
 
 def _marker_state(existing):
-    """(base_hash, attempts_used_this_week, done_for_this_week) from the stored schema_version.
+    """(base_hash, attempts_used_this_week, done_for_this_week, spent_week_streak).
 
     Legacy encodings: a plain hash is conclusive and keeps skipping (CATALOG_VERSION v4 retired its
     ambiguous "gave up" meaning), while this branch's earlier `:retryN`, `:retryNw<week>` and `:spent<week>`
@@ -184,15 +187,20 @@ def _marker_state(existing):
     m = _MARKER_RE.search(existing or "")
     if not m:
         base, _, marker = (existing or "").partition(":")
-        return base, 0, bool(base) and not marker   # plain hash = a conclusive outcome was recorded
-    state, attempts, week = m.group(1), int(m.group(2)), m.group(3)
-    if week != _iso_week():
-        return existing[:m.start()], 0, False     # last week's marker: full budget, retry allowed
-    return existing[:m.start()], attempts, state == _DONE
+        return base, 0, bool(base) and not marker, 0
+    state, attempts, week, streak = m.group(1), int(m.group(2)), m.group(3), int(m.group(4) or 0)
+    if week == _iso_week():
+        return existing[:m.start()], attempts, state == _DONE, streak
+    # A new week. The budget returns, but only while the streak of spent weeks is under the cap; at the cap
+    # the instance stays settled until its schema changes.
+    if streak >= _MAX_SPENT_WEEKS:
+        return existing[:m.start()], _MAX_GENERATION_ATTEMPTS, True, streak
+    return existing[:m.start()], 0, False, streak
 
 
-def _marker(version, attempts, done):
-    return f"{version}:{_DONE if done else _PEND}{attempts}w{_iso_week()}"
+def _marker(version, attempts, done, streak):
+    tail = f"s{streak}" if streak else ""
+    return f"{version}:{_DONE if done else _PEND}{attempts}w{_iso_week()}{tail}"
 
 
 def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
@@ -226,7 +234,7 @@ def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     version = _schema_version(schema)
     existing_version = wdb.read_signal_schema_version(conn, iid)
-    base, attempts, done = _marker_state(existing_version)
+    base, attempts, done, streak = _marker_state(existing_version)
     # Skip only when the schema is unchanged AND this week is settled — either the last outcome was
     # conclusive or the budget is spent. A `pend` marker means a retry is owed, so it must NOT skip.
     if base == version and done:
@@ -274,7 +282,17 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # Enabling a feature must not be pre-empted by the period it spent disabled (Codex stop-gate).
     charged = gen_status is not None and gen_status != _signal_gen.DISABLED
     spent = attempts + (1 if charged else 0)
-    stored_version = _marker(version, spent, done=not retry_needed)
+    ready_now = any(r["status"] == "ready" for r in rows)
+    # The streak counts WEEKS that ended with the budget spent and nothing to show. It advances once per
+    # week (only on the run that exhausts the budget), resets the moment something is ready, and caps the
+    # weekly retry at _MAX_SPENT_WEEKS so an unchanged, permanently failing schema stops costing Bedrock.
+    if ready_now:
+        new_streak = 0
+    elif not retry_needed and spent >= _MAX_GENERATION_ATTEMPTS and attempts < _MAX_GENERATION_ATTEMPTS:
+        new_streak = streak + 1
+    else:
+        new_streak = streak
+    stored_version = _marker(version, spent, done=not retry_needed, streak=new_streak)
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.

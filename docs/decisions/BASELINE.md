@@ -95,6 +95,6 @@
 | [015](015-operational-self-healing.md) | 운영 자가치유 | 호스트 자기 서비스 force-new-deployment 자율 복구(Aurora secret 회전), default-off·IAM 1 ARN·secret-id fail-closed; **ADR-005 불완화**(별개 범주) | 안정성·보안 |
 | [016](016-v1-decommission.md) | v1 레거시 폐기 | 5단계 폐기(데이터확보→도메인컷오버→정지/유예→삭제→코드정리) + `awsops.atomai.click` v2 컷오버; owner 지시, ADR-005 무관(수동 작업) | 비용최적화·운영우수성 |
 | [017](017-curated-official-mcp-presets.md) | 큐레이션 공식 MCP 프리셋 | external-obs `mcpServer` target으로 벤더 공식 MCP(Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk 등) 등록; 자체 람다 유지보수 이관, capability=read 고정, `custom_mcp`(임의 BYO) 폐기 불변. **현재 `do-not-enable`** — 런타임 툴 allowlist 미구현(§2 GATED 표) | 운영우수성·보안 |
-| [018](018-llm-query-generation.md) | LLM 쿼리 생성 (읽기 전용) | 결정론 카탈로그가 ready 0행인 인스턴스에서만 스키마 어휘로 조회문 1건 생성; 정적 read-only → 관련성 게이트 → 상한 걸린 라이브 dry-run, 인스턴스당 **주 3회** 예산, 생성물은 사용자가 읽는 표면(Explore 칩) 전용 — 진단 리포트/자동 판정 근거로 쓰지 않음. `graph_querygen_enabled`·`diag_signal_querygen_enabled` 둘 다 기본 false | 보안·비용·신뢰성 |
+| [018](018-llm-query-generation.md) | LLM 쿼리 생성 (읽기 전용) | **공통(§A)**: 스키마 이름만 Bedrock 으로, 정적 게이트 후 read-only 커넥터에서만 dry-run, 스키마 버전 캐시, AWS API 경로 없음. **경로별로 방어가 다르다** — 관련성 게이트·식별자 정화·주 3회 예산·읽기측 플래그 게이트·생성물의 칩 전용 제한은 `diag_signal_querygen_enabled`(§B)에만 있고, `graph_querygen_enabled`(§C)에는 없다(Code Interpreter 사전검사는 반대로 §C 에만). 둘 다 기본 false | 보안·비용·신뢰성 |
 
 새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 이 §3(또는 §2) 갱신 필수**(anti-drift, §1).

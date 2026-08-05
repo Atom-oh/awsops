@@ -211,8 +211,8 @@ class TestGeneratedFallback:
                      existing_version=f"{base}:pend{dsi._MAX_GENERATION_ATTEMPTS - 1}w{dsi._iso_week()}")
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
         spent = f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}"
-        assert out["schema_version"] == spent and not out.get("retry")
-        assert all(p["sv"] == spent for p in c.inserts)
+        assert out["schema_version"].startswith(spent) and not out.get("retry")
+        assert all(p["sv"].startswith(spent) for p in c.inserts)
 
     def test_the_generation_runs_exactly_max_attempts_times(self, monkeypatch):
         # _MAX_GENERATION_ATTEMPTS counts GENERATIONS, not extra ones: `:retryN` already means N ran, so
@@ -229,7 +229,7 @@ class TestGeneratedFallback:
         for _ in range(10):   # more runs than the cap: the extra ones must not generate again
             c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
             version = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"]
-        assert version == f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}"
+        assert version.startswith(f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}")
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS
 
     def test_the_catalog_version_retires_the_ambiguous_plain_marker(self, monkeypatch):
@@ -349,7 +349,7 @@ class TestGeneratedFallback:
                          existing_version=None if i == 0 else version)
             version = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)["schema_version"]
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS   # not one per run
-        assert version.endswith(f":done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}")
+        assert f":done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}" in version
 
     def test_a_rejected_answer_parks_for_the_week_and_does_not_freeze(self, monkeypatch):
         """The model is not deterministic and the gates change, so "failed a gate once" is not a permanent
@@ -413,6 +413,42 @@ class TestGeneratedFallback:
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert out["schema_version"] == f"{base}:done2w{dsi._iso_week()}"   # 2 carried over, not 0
 
+    def test_the_weekly_retry_is_capped_by_a_spent_week_streak(self, monkeypatch):
+        """"The week rolls" must not mean retrying forever: with an unchanged schema that keeps failing, a
+        weekly budget is unbounded Bedrock spend (review MAJOR-1/-7). After _MAX_SPENT_WEEKS consecutive
+        spent weeks the instance stops until the SCHEMA changes — the only new information there is."""
+        calls = []
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        schema = {"labels": ["custom_only"]}
+        version = None
+        for week in range(1, 8):                      # seven weeks, same schema, always failing
+            monkeypatch.setattr(dsi, "_iso_week", lambda w=week: f"20260{w}")
+            for _ in range(dsi._MAX_GENERATION_ATTEMPTS + 1):
+                c = FakeConn(kind="loki", schema=schema, existing_version=version)
+                version = dsi.run({"integration_id": 7, "kind": "loki"}, c)["schema_version"]
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS * dsi._MAX_SPENT_WEEKS
+        assert version.endswith(f"s{dsi._MAX_SPENT_WEEKS}")
+
+    def test_a_ready_build_clears_the_spent_week_streak(self, monkeypatch):
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        schema = {"labels": ["job"]}                  # the loki catalog DOES match this
+        base = dsi._schema_version(schema)
+        c = FakeConn(kind="loki", schema=schema,
+                     existing_version=f"{prev_base(dsi)}:done{dsi._MAX_GENERATION_ATTEMPTS}w200001s2")
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert out["schema_version"] == f"{base}:done0w{dsi._iso_week()}"   # no s-suffix → streak cleared
+
     def test_the_park_expires_when_the_week_rolls_over(self, monkeypatch):
         # It used to be permanent: the plain version was stored, and since a quiet datasource's schema never
         # changes, an instance idle for three runs stayed chip-less forever (review MAJOR, L4-M3).
@@ -429,11 +465,13 @@ class TestGeneratedFallback:
         for _ in range(5):
             c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
             version = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"]
-        assert version == f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w202601" and len(calls) == dsi._MAX_GENERATION_ATTEMPTS
+        assert version.startswith(f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w202601")
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS
         monkeypatch.setattr(dsi, "_iso_week", lambda: "202602")   # next week: a fresh budget
         c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
+        # the spent-week streak rides along (s1) — the budget is fresh, the streak is what caps the weeks
         assert dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"] == \
-            f"{base}:pend1w202602"
+            f"{base}:pend1w202602s1"
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS + 1
 
     def test_the_attempt_counter_advances(self, monkeypatch):

@@ -403,6 +403,17 @@ class TestDialectAndBoundsOfTheGeneratedQuery:
         assert scg._is_constant_expr(
             "clickhouse", self.SCHEMA, "SELECT avg(duration) FROM trace_spans # hourly") is False
 
+    def test_a_trailing_semicolon_is_stripped_before_the_dry_run(self):
+        """clickhouse_mcp sends `f"{sql}\\nFORMAT JSON"`, so `SELECT … ;` became `… ; FORMAT JSON` — a syntax
+        error that failed the dry run every time and burned the weekly budget on an otherwise fine query
+        (review MAJOR-2). Models emit one routinely, so it is stripped, not rejected."""
+        expr = scg._generate_expr("clickhouse", self.SCHEMA,
+                                  invoke=lambda p: "SELECT count() FROM trace_spans;")
+        assert expr == "SELECT count() FROM trace_spans"
+        assert scg._static_check("clickhouse", expr) is True
+        # anything still carrying a semicolon after that is a multi-statement attempt
+        assert scg._static_check("clickhouse", "SELECT count() FROM trace_spans;") is False
+
     def test_a_settings_clause_is_rejected(self):
         # A query-level SETTINGS overrides the URL parameter, so it can undo the dry run's scan bound.
         assert scg._static_check(
