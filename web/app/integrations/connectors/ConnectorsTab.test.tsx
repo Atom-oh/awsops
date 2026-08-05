@@ -23,15 +23,20 @@ describe('ConnectorsTab', () => {
     expect(screen.queryByText('clickhouse')).toBeNull();
   });
 
-  // ADR-017 — the catalog now has 9 preset cards (Notion + 8 curated official-MCP vendors), each
-  // with its own token input/connect button, so queries must be scoped to Notion's own card.
-  it('lists the ADR-017 official-MCP presets alongside Notion, each badged', async () => {
+  // ADR-017 (amended 2026-08-05) — 4 cards: Notion + the 3 vendor-HOSTED official-MCP vendors.
+  // Self-hosted/in-binary kinds (ClickHouse/Tempo/Jaeger/Grafana/Splunk) must have NO card —
+  // ClickHouse is stdio-embedded in the agent runtime, tempo/jaeger register via Datasources.
+  it('lists ONLY the vendor-hosted official-MCP presets alongside Notion, each badged', async () => {
     render(<ConnectorsTab canManage />);
     await waitFor(() => expect(screen.getByText('Datadog')).toBeTruthy());
-    for (const label of ['Datadog', 'ClickHouse', 'Tempo', 'Jaeger', 'Grafana', 'Dynatrace', 'Splunk', 'New Relic']) {
+    for (const label of ['Datadog', 'Dynatrace', 'New Relic']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
-    expect(screen.getAllByText('공식 MCP').length).toBe(8); // every preset but Notion
+    for (const gone of ['ClickHouse', 'Tempo', 'Jaeger', 'Grafana', 'Splunk']) {
+      expect(screen.queryByText(gone)).toBeNull();
+    }
+    expect(screen.getAllByText('공식 MCP (hosted)').length).toBe(3); // every preset but Notion
+    expect(screen.getAllByText(/게이트됨/).length).toBe(3); // honest gated badge on each
     expect(screen.getByText('벤더 preview')).toBeTruthy(); // New Relic only
   });
 
@@ -67,7 +72,7 @@ describe('ConnectorsTab', () => {
     render(<ConnectorsTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy());
     expect(screen.queryByPlaceholderText(/토큰/)).toBeNull();
-    expect(screen.getAllByText(/관리자 전용/).length).toBe(9); // one per preset card
+    expect(screen.getAllByText(/관리자 전용/).length).toBe(4); // one per preset card
   });
 
   // Regression for the 2026-07-31 kiro review: an ADR-017 preset with a stored credential must
@@ -86,7 +91,7 @@ describe('ConnectorsTab', () => {
     expect(screen.queryByText(/^connected$/)).toBeNull();
     const notionCard = screen.getByText('Notion').closest('[class*="p-4"]') as HTMLElement;
     expect(within(notionCard).getByText(/connected/)).toBeTruthy(); // Notion alone keeps "connected"
-    expect(screen.getAllByText(/official_mcp_enabled 플래그와/).length).toBe(8); // one per official preset
+    expect(screen.getAllByText(/official_mcp_enabled 플래그와/).length).toBe(3); // one per official preset
   });
 
   // Round-2 review MAJOR: a plain-slug (datasource-mirror) credential for a slug that is ALSO an

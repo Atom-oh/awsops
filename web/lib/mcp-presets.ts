@@ -32,9 +32,14 @@ export interface McpPreset {
   readOnlyNote: string;
 }
 
-// Notion kept first (pre-existing token connector, unchanged behavior) — official hosted MCP
-// exists but is OAuth-3LO-only (no headless/service-account auth), so it stays on the direct
-// internal-integration-token path rather than becoming an ADR-017 mcpServer preset.
+// ADR-017 amendment 2026-08-05: cards exist ONLY for vendors where "paste one token" is a real
+// vendor capability — Notion (direct token connector, works today) + the 3 vendor-HOSTED official
+// MCPs (Datadog/Dynatrace/New Relic; gated behind official_mcp_enabled + per-preset ack, so the
+// card stores the credential in advance and says so honestly). The self-hosted/in-binary kinds
+// (clickhouse/tempo/jaeger/grafana/splunk) have NO card: ClickHouse's official MCP is
+// stdio-embedded in the agent runtime off the existing Datasources registration
+// (CLICKHOUSE_OFFICIAL_MCP), tempo/jaeger run on the in-house lambdas via Datasources,
+// grafana/splunk are unsupported.
 export const MCP_PRESETS: McpPreset[] = [
   {
     slug: 'notion',
@@ -48,41 +53,9 @@ export const MCP_PRESETS: McpPreset[] = [
     slug: 'datadog',
     label: 'Datadog',
     official: true,
-    help: 'Datadog 공식 MCP(mcp.datadoghq.com). API 서비스 토큰(PAT)을 발급해 붙여넣으세요.',
+    help: 'Datadog 공식 hosted MCP. Personal/Service Access Token(bearer)을 붙여넣으세요.',
     docsUrl: 'https://docs.datadoghq.com/mcp_server/setup/',
-    readOnlyNote: 'RBAC mcp_read',
-  },
-  {
-    slug: 'clickhouse',
-    label: 'ClickHouse',
-    official: true,
-    help: 'ClickHouse 공식 MCP(self-hosted). 서버가 발급한 API 토큰을 붙여넣으세요.',
-    docsUrl: 'https://github.com/ClickHouse/mcp-clickhouse',
-    readOnlyNote: '기본 읽기 전용',
-  },
-  {
-    slug: 'tempo',
-    label: 'Tempo',
-    official: true,
-    help: 'Tempo 바이너리 내장 MCP(/api/mcp). 기존 Tempo 인증 토큰을 붙여넣으세요.',
-    docsUrl: 'https://grafana.com/docs/tempo/latest/api_docs/mcp-server/',
-    readOnlyNote: '조회 전용 툴',
-  },
-  {
-    slug: 'jaeger',
-    label: 'Jaeger',
-    official: true,
-    help: 'Jaeger v2 내장 MCP(/api/ai/mcp/, ai.enable_mcp 필요). 인증 토큰을 붙여넣으세요.',
-    docsUrl: 'https://github.com/jaegertracing/jaeger/blob/main/docs/adr/002-mcp-server.md',
-    readOnlyNote: '읽기 전용 9개 툴',
-  },
-  {
-    slug: 'grafana',
-    label: 'Grafana',
-    official: true,
-    help: 'Grafana 공식 MCP(self-hosted, --disable-write). API 토큰을 붙여넣으세요.',
-    docsUrl: 'https://github.com/grafana/mcp-grafana',
-    readOnlyNote: '--disable-write',
+    readOnlyNote: 'RBAC mcp_read + 런타임 allowlist',
   },
   {
     slug: 'dynatrace',
@@ -90,15 +63,7 @@ export const MCP_PRESETS: McpPreset[] = [
     official: true,
     help: 'Dynatrace 공식 hosted MCP 게이트웨이. Platform Token을 붙여넣으세요.',
     docsUrl: 'https://docs.dynatrace.com/docs/dynatrace-intelligence/dynatrace-mcp',
-    readOnlyNote: '스코프 기반 read',
-  },
-  {
-    slug: 'splunk',
-    label: 'Splunk',
-    official: true,
-    help: 'Splunk 공식 MCP(Splunkbase 앱 7931, self-hosted). 앱이 발급한 토큰을 붙여넣으세요.',
-    docsUrl: 'https://help.splunk.com/en/splunk-cloud-platform/mcp-server-for-splunk-platform/1.1/about-mcp-server-for-splunk-platform',
-    readOnlyNote: 'mcp_tool_execute만 부여',
+    readOnlyNote: '스코프 기반 read + 런타임 allowlist',
   },
   {
     slug: 'newrelic',
@@ -107,6 +72,6 @@ export const MCP_PRESETS: McpPreset[] = [
     preview: true,
     help: 'New Relic 공식 MCP(mcp.newrelic.com, Preview). 읽기 전용 User API Key를 붙여넣으세요.',
     docsUrl: 'https://docs.newrelic.com/docs/agentic-ai/mcp/overview/',
-    readOnlyNote: '벤더 preview 단계',
+    readOnlyNote: '벤더 preview + 런타임 allowlist',
   },
 ];
