@@ -278,13 +278,23 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" \
                 and not any(r["status"] == "ready" for r in rows):
             carried = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
-            if carried is None:
-                # Could not read the table to check for a carry-over candidate. Writing now — even the
-                # UNCHANGED catalog rows — would still run the sweep and delete a real generated row this
-                # call never saw. Do nothing this run rather than risk destroying verified content; the
-                # existing schema_version is untouched, so the next run retries normally.
+            if carried is None and gen_status is None:
+                # The carry-over read failed AND no Bedrock attempt happened this call (generation was
+                # skipped — exhausted this week, or the flag is off). Nothing new to record either way, so
+                # it's safe to write nothing rather than risk the sweep deleting a chip we couldn't verify.
                 return {"diag_signal_read_failed": True, "schema_version": existing_version}
-            rows = carried
+            if carried is None:
+                # The read failed, but an attempt WAS just made and cost real money (gen_status is
+                # TRANSIENT/REJECTED/GENERATED). That charge must still be recorded — aborting here let a
+                # persistent read failure retry for free forever, bypassing the weekly budget entirely
+                # (review, this round: fixing the sweep-deletion case reintroduced this the other way).
+                # Proceeding without a carry MAY let the write below sweep away an unverified generated row
+                # in this specific compound-failure case; that is the accepted, self-healing trade against
+                # an otherwise-unbounded cost bypass.
+                logging.warning("[datasource_index] integration %s: could not verify a carry-over candidate "
+                                "after a charged attempt; recording the spend anyway", iid)
+            else:
+                rows = carried
     # WHICH OUTCOMES ARE WORTH REMEMBERING. A build with no ready signal is remembered (plus a sentinel row
     # when there is nothing at all) so the daily job stops rebuilding — but only when the outcome is
     # conclusive, and "conclusive" cost three review rounds to pin down:

@@ -308,23 +308,48 @@ class TestGeneratedFallback:
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
 
-    def test_a_transient_read_failure_does_not_let_the_sweep_delete_a_good_chip(self, monkeypatch):
-        """The carry-over exists so a connector blip doesn't destroy a verified chip (MAJOR-2). But the read
-        that FINDS the chip to carry can itself fail transiently — and silently falling back to `rows`
-        unchanged meant the caller still wrote and swept, deleting the exact row this function exists to
-        protect, based on nothing but our own read error (review, this round: the same deletion, reached
-        through a different door)."""
+    def test_a_read_failure_while_parked_does_not_sweep_and_costs_nothing_new(self, monkeypatch):
+        """The carry-over exists so a connector blip doesn't destroy a verified chip (MAJOR-2). While parked
+        (exhausted this week — no new Bedrock attempt this call), a failed carry-over read can safely write
+        nothing: there is no new charge to record either way, so it's safe to skip rather than risk the
+        sweep deleting the exact row this function exists to protect."""
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
-            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: pytest.fail("must not generate while parked")),
             "still_relevant": staticmethod(lambda *a: True),
         }))
         schema = {"labels": ["custom_only"]}
-        c = FakeConn(kind="loki", schema=schema, existing_rows=[self.GENERATED_ROW], fail_list_read=True)
+        base = dsi._schema_version(schema)
+        parked = f"{base}:pend{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}"
+        c = FakeConn(kind="loki", schema=schema, existing_version=parked,
+                     existing_rows=[self.GENERATED_ROW], fail_list_read=True)
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert out.get("diag_signal_read_failed") is True
         assert c.inserts == [] and c.deletes == []          # nothing written, nothing swept
+
+    def test_a_read_failure_after_a_charged_attempt_still_records_the_spend(self, monkeypatch):
+        """A read failure must not become a free retry loop. When an attempt WAS just made (charged), its
+        cost has to be recorded even if the carry-over read that follows also fails — otherwise a
+        persistent read failure lets every future run retry for free, bypassing the weekly budget entirely
+        (review, this round — the direct consequence of the previous fix's abort-on-any-read-failure)."""
+        calls = []
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        schema = {"labels": ["custom_only"]}
+        base = dsi._schema_version(schema)
+        version = None
+        for _ in range(10):    # persistent read failure across many runs must NOT mean 10 Bedrock calls
+            c = FakeConn(kind="loki", schema=schema, existing_version=version, fail_list_read=True)
+            version = dsi.run({"integration_id": 7, "kind": "loki"}, c)["schema_version"]
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS      # bounded, not one per run
+        assert version.startswith(f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}")
 
     def test_a_genuine_schema_change_unparks_a_streak_capped_instance(self, monkeypatch):
         """The comment says a streak-capped instance 'stays settled until its schema changes' — but the
