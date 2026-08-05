@@ -269,21 +269,31 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         if _legacy:
             # v4 -> v5 TRANSITION ONLY. The marker used to live embedded in the CONTENT rows' shared
             # schema_version column; a pre-v5 instance's stored value can still literally BE that old
-            # marker string. Bumping CATALOG_VERSION makes the CONTENT mismatch (forcing a one-time
-            # rebuild, not a false permanent skip) but does nothing by itself to preserve the CAP that
-            # marker represented — every already-parked instance would otherwise read
-            # `existing_budget=None` and get a silently fresh 3-try budget on its first post-deploy run, a
-            # hard-cap violation across the whole fleet at once (Codex stop-gate, first pass).
+            # marker string, and every already-parked instance would otherwise read `existing_budget=None`
+            # (no dedicated row exists pre-v5) and get a silently fresh 3-try budget on its first
+            # post-deploy run — a hard-cap violation across the whole fleet at once (Codex stop-gate,
+            # first pass).
             #
-            # The hash prefix is REWRITTEN to the CURRENT `version`, not carried over verbatim — a pre-v5
-            # marker's embedded hash was computed under the OLD CATALOG_VERSION, so it can never equal a
-            # freshly computed v5 hash even for an IDENTICAL, unchanged schema. Left verbatim, that
-            # permanent mismatch fools the streak-cap's un-park check (`base != version`) into treating
-            # this deploy's version-scheme change as if the SCHEMA had genuinely changed, un-parking every
-            # streak-capped pre-v5 instance the moment the week rolls over (Codex stop-gate, second pass).
-            # Re-anchoring to `version` while keeping the state/attempts/streak means the streak cap only
-            # reacts to a REAL schema change from here on, exactly as it does for any v5-native marker.
-            existing_budget = version + existing_content_version[_legacy.start():]
+            # Carrying the OLD attempts/done state over VERBATIM broke the week-rollover un-park check: a
+            # pre-v5 hash can never equal a freshly computed v5 hash even for an unchanged schema, so
+            # `base != version` misread this deploy's version-scheme change as a real schema change
+            # (second pass). Re-anchoring the hash to `version` instead fixed that, but introduced a third
+            # failure mode this deploy cannot rule out: the CURRENT schema, at the moment of this exact
+            # bootstrap read, might already be a GENUINELY different schema than whatever the v4 marker
+            # was originally capped for — nothing in the stored data can tell the two apart, because the
+            # very reason for re-anchoring is that hashes computed under different CATALOG_VERSIONs are not
+            # comparable in EITHER direction. Forcing "done, capped" onto whatever schema happens to be
+            # current would then permanently trap a schema that was never actually tried once, absorbed
+            # into a cap that was never really about it (Codex stop-gate, third pass).
+            #
+            # So the bootstrap does not claim "capped" at all. Only the STREAK (how many consecutive weeks
+            # this instance has been failing) carries over, as a fresh PEND0 for the CURRENT week — this
+            # deploy costs each previously-capped instance up to one week's worth of real, bounded
+            # attempts (never unbounded — still capped by _MAX_GENERATION_ATTEMPTS this week), which is a
+            # one-time, honestly-scoped price for never mis-attributing a schema across an algorithm change
+            # that makes the two hashes fundamentally incomparable.
+            _streak = int(_legacy.group(4) or 0)
+            existing_budget = _marker(version, 0, done=False, streak=_streak)
     base, attempts, done, streak = _marker_state(existing_budget, version)
     # Skip only when BOTH agree there is nothing to do: the CONTENT is fresh (this exact schema was the
     # last one actually built, so `rows` would come out the same) AND the BUDGET says settled for this

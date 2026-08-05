@@ -279,13 +279,20 @@ class TestGeneratedFallback:
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v4")
         assert dsi._schema_version(schema) != now
 
-    def test_a_pre_v5_capped_instance_does_not_get_a_free_budget_on_rollout(self, monkeypatch):
-        """The CATALOG_VERSION bump alone does not preserve a cap — it only makes the CONTENT mismatch, so
-        without also bootstrapping the budget, `read_diag_signal_budget` finds no dedicated row (no pre-v5
-        instance has one) and every already-parked instance reads as fresh, a hard-cap violation across
-        the whole fleet at once on the very first post-deploy run (Codex stop-gate). A pre-v5 row's
-        schema_version literally IS the old embedded marker string — bootstrapping the budget from it this
-        one time carries the real attempts/streak forward instead of resetting them."""
+    def test_a_pre_v5_row_bootstraps_a_fresh_bounded_weekly_budget(self, monkeypatch):
+        """The CATALOG_VERSION bump alone does not preserve anything about a cap — it only makes the
+        CONTENT mismatch, so without bootstrapping, every already-parked instance would read
+        `existing_budget=None` (no dedicated row exists pre-v5) and generation would look identical to a
+        brand-new instance's. Three review passes landed here: carrying the old DONE state over verbatim
+        broke week-rollover un-parking (a pre-v5 hash can never equal a v5 hash even unchanged); re-anchoring
+        the hash to the current version then risked permanently trapping a schema that genuinely changed
+        RIGHT AT this bootstrap moment, since a v4 hash and a v5 hash are not comparable in either direction
+        — nothing in the stored data can tell "still the same schema" apart from "coincidentally changed
+        the moment this deployed." So the bootstrap claims nothing about being capped: only the STREAK
+        (consecutive bad weeks) carries over, as a fresh, bounded PEND0 for the current week. Whatever
+        schema is active now gets a real, honest evaluation — capped at _MAX_GENERATION_ATTEMPTS, never
+        unbounded — which is the one-time price of never mis-attributing a schema across an incomparable
+        hash-algorithm change."""
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
@@ -293,36 +300,57 @@ class TestGeneratedFallback:
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
         schema = {"tables": {"t": ["c"]}}
+        base = dsi._schema_version(schema)
         # A pre-v5 row: no dedicated budget row exists, and CONTENT itself carries the old embedded marker
         # — capped, with no budget left, under the OLD (v4-scheme) hash.
-        legacy_embedded = f"legacy-v4-hash:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}s2"
+        legacy_embedded = f"legacy-v4-hash:done{dsi._MAX_GENERATION_ATTEMPTS}w202601s2"
         c = FakeConn(kind="clickhouse", schema=schema, existing_version=legacy_embedded)
         dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
-        assert calls == []                    # still capped — bootstrapped, not reset to a fresh budget
-        assert c.budget() is not None and c.budget().endswith(f"s2")
+        assert calls == [1]                       # a real, bounded attempt — not a free-for-all, not zero
+        assert c.budget() == f"{base}:pend1w{dsi._iso_week()}s2"   # streak(2) carried; attempts fresh at 1
 
-    def test_a_pre_v5_streak_capped_row_stays_parked_across_a_week_rollover(self, monkeypatch):
-        """Carrying the OLD embedded hash prefix over VERBATIM fixed the same-week case but broke the
-        streak-cap's week-rollover un-park check: a pre-v5 marker's hash was computed under the OLD
-        CATALOG_VERSION, so it can never equal a freshly computed v5 hash even for an IDENTICAL, unchanged
-        schema — `base != version` reads as "the schema genuinely changed" and un-parks every streak-capped
-        pre-v5 instance the moment the week rolls, purely because of this deploy's version-scheme change
-        (Codex stop-gate, second pass). The bootstrap must re-anchor the hash to the CURRENT version so the
-        streak cap only reacts to a REAL schema change from here on."""
+    def test_a_bootstrapped_instance_still_caps_at_max_attempts_this_week(self, monkeypatch):
+        """The fresh weekly budget the bootstrap grants is still a WEEKLY budget, not a free pass — an
+        instance that keeps failing this week re-caps at the normal limit, and the streak resumes counting
+        from where the pre-v5 marker left off."""
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
-        schema = {"tables": {"t": ["c"]}}          # same schema before and after — never actually changes
-        legacy_embedded = (f"legacy-v4-hash:done{dsi._MAX_GENERATION_ATTEMPTS}"
-                           f"w200001s{dsi._MAX_SPENT_WEEKS}")
-        monkeypatch.setattr(dsi, "_iso_week", lambda: "200002")   # a new week: the streak-cap branch fires
-        c = FakeConn(kind="clickhouse", schema=schema, existing_version=legacy_embedded)
+        schema = {"tables": {"t": ["c"]}}
+        base = dsi._schema_version(schema)
+        legacy_embedded = f"legacy-v4-hash:done{dsi._MAX_GENERATION_ATTEMPTS}w202601s2"
+        budget = None
+        for i in range(dsi._MAX_GENERATION_ATTEMPTS):
+            c = FakeConn(kind="clickhouse", schema=schema,
+                        existing_version=legacy_embedded if i == 0 else base, existing_budget=budget)
+            dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+            budget = c.budget()
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS      # bounded, not unbounded
+        assert budget == f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}s3"  # streak: 2 -> 3
+
+    def test_a_pre_v5_row_at_the_streak_cap_still_gets_a_real_try_not_a_false_absorb(self, monkeypatch):
+        """This is the case the third review pass was about: a pre-v5 marker already AT the streak cap
+        (`s{_MAX_SPENT_WEEKS}`) looks, under the second attempt's fix (re-anchor the hash to the current
+        version verbatim), EXACTLY like "already capped for the current schema" — `base == version` by
+        construction, `done=True` carried over — so generation would be skipped even though the CURRENT
+        schema was never actually evaluated once. It might genuinely be a different schema than whatever
+        the v4 marker was originally about; a v4 hash and a v5 hash are not comparable in either direction,
+        so there is no way to tell from the stored data. The bootstrap must still attempt generation."""
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        legacy_at_cap = (f"legacy-v4-hash:done{dsi._MAX_GENERATION_ATTEMPTS}"
+                        f"w202601s{dsi._MAX_SPENT_WEEKS}")
+        c = FakeConn(kind="clickhouse", schema=schema, existing_version=legacy_at_cap)
         dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
-        assert calls == []                          # still capped — NOT treated as a genuine schema change
-        assert c.budget() is None or c.budget().endswith(f"s{dsi._MAX_SPENT_WEEKS}")
+        assert calls == [1]     # a real attempt happened — not silently absorbed into the old cap
 
     GENERATED_ROW = {"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                      "query": {"tool": "loki_query_range",
