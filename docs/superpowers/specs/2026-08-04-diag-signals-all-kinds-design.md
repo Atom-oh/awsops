@@ -198,7 +198,12 @@ before the connectors were probed.
    signal-less until its schema drifted, so it retries under the weekly budget. What rejects a query that can
    never match is the relevance gate, not emptiness.
 6. **Exhaustion is `:doneN w<week>`, not `:spent<week>`.** The marker grammar in item 4's text was an
-   intermediate form; the shipped encoding is `<hash>:<pend|done><attempts>w<isoweek>` — see ADR-018 §B-4.
+   intermediate form; the shipped encoding is `<hash>:<pend|done|conc><attempts>w<isoweek>[s<streak>]` — see
+   ADR-018 §B-4. The state has THREE values: `pend` (a retry is owed this week), `done` (this week's budget
+   is spent; expires when the week rolls, subject to the consecutive-spent-week streak cap) and `conc`
+   (conclusively settled for this SCHEMA — ready, or the flag off — which does NOT expire when the week
+   rolls). `attempts` is week-scoped for all three, so a conclusive outcome no longer hands back the
+   attempts the week already spent.
 
 Two further review findings changed code, not scope: a schema whose catalog yields nothing now records
 its `schema_version` through a sentinel row (`db.SCHEMA_VERSION_SENTINEL_KEY`, filtered out of the BFF
@@ -207,10 +212,12 @@ every run and re-invoked Bedrock daily wherever the flag is on; and `DiagSignalC
 state at the start of every effect, since after the kind gate was removed a failed fetch on a datasource
 switch left the previous instance's chips clickable.
 
-The version is recorded only when the outcome is CONCLUSIVE. `try_generate_signal_with_status()` reports DISABLED / REJECTED / TRANSIENT / GENERATED, and on TRANSIENT (Bedrock throttled, connector down — anything that threw) the rows are still written but under `{version}:pendN w<week>` — a marker the skip check treats as "a retry is owed", so the next run rebuilds; once the week is settled it becomes `:doneN w<week>` and the daily job skips outright. REJECTED is treated
+The retry/settled state is recorded only in the dedicated bookkeeping row (`db.BUDGET_KEY`), in its `meta.budget` marker (`<hash>:<pend|done|conc><attempts>w<isoweek>[s<streak>]`); content rows ALWAYS carry the current schema's real `schema_version` — the marker riding in the content rows' own `schema_version` (`{version}:pendN w<week>`) was the retired v4 scheme (item 4). `try_generate_signal_with_status()` reports DISABLED / REJECTED / TRANSIENT / GENERATED, and on TRANSIENT (Bedrock throttled, connector down — anything that threw) the rows are still written while the budget row's marker records `pend` — a state the skip check treats as "a retry is owed", so the next run rebuilds; once the week is settled it becomes `done` and the daily job skips outright. REJECTED is treated
 the same way: the model is not deterministic and the gates change, so a single failed gate is not a
-permanent fact about the schema (a later review found the plain-version encoding froze it). Only DISABLED
-records the plain version — and the flag is part of the hash, so flipping it rebuilds anyway. This is not limited to an empty build: loki/tempo normally produce `unavailable` rows, and persisting those under the real version would skip the retry just as effectively (a second review pass caught exactly that). Recording the version there would have frozen a retryable failure into a permanent skip: the schema never changes, so the daily job would skip forever and the signal would never appear even after the outage ended (review finding on the first version of the sentinel).
+permanent fact about the schema (a later review found a conclusive encoding froze it). Of the outcomes that
+produce no ready row, only DISABLED settles conclusively (a `conc` marker, which is also what a ready row —
+catalog match, fresh GENERATED row or carried-over chip — stores) — and the flag is part of the hash, so
+flipping it rebuilds anyway. This is not limited to an empty build: loki/tempo normally produce `unavailable` rows, and settling those as conclusive would skip the retry just as effectively (a second review pass caught exactly that). A conclusive state there would have frozen a retryable failure into a permanent skip: the schema never changes, so the daily job would skip forever and the signal would never appear even after the outage ended (review finding on the first version of the sentinel).
 
 Decision 2 said this would ride on `GRAPH_QUERYGEN_ENABLED` ("renamed scope-wise in docs"). It does
 not: the fallback has its own flag, `diag_signal_querygen_enabled` /
@@ -242,11 +249,14 @@ Later passes added four things the earlier ones had not reached:
   marker is read whatever version prefixes it, because the version hashes the whole schema and a production
   Prometheus changes its metric set on every deploy — keying the cap to the version made it a daily call.
   A `pend`/`done` marker (with the ISO week and, once the weekly cap is hit repeatedly, a consecutive-
-  spent-week streak) is stored ONLY while something is genuinely unresolved — an active retry, or a week
+  spent-week streak) is stored while something is genuinely unresolved — an active retry, or a week
   just exhausted with nothing to show. The moment the build has something ready (a deterministic catalog
-  match, a fresh generation success, or a carried-over last-known-good chip), the marker is dropped and the
-  PLAIN version is stored instead, exactly like the deterministic-only path always did — a later review
-  found that keeping the marker on a ready outcome made the marker's week age out and the daily job
+  match, a fresh generation success, or a carried-over last-known-good chip), the marker becomes `conc`:
+  conclusively settled for this SCHEMA regardless of the week, while KEEPING this week's attempt count, so
+  a mid-week ready flap cannot hand back the attempts the week already spent. The only case that stores no
+  marker at all is a conclusive outcome in a week that spent nothing and carries no streak. `conc` is
+  week-independent because a WEEK-SCOPED marker on a ready outcome was exactly the bug — a later review
+  found that keeping such a marker made the marker's week age out and the daily job
   re-invoke Bedrock on an unchanged, already-successfully-served schema, which directly contradicted the
   "cached, not regenerated" design. Reaching the streak cap parks the instance until its SCHEMA changes, not
   merely until the week rolls — an even later review found the code only checked that for the skip

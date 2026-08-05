@@ -153,6 +153,58 @@ class TestDiagSignalBudget:
         assert db.read_signal_schema_version(c, 7) is None
 
 
+class TestDiagSignalAttemptReservation:
+    """Charging the weekly budget used to be read → call Bedrock → write, a read-modify-write with a
+    multi-second gap in the middle: two workers racing on one integration both read the same attempts
+    count, both called Bedrock, and both wrote back the same incremented value, so real usage was
+    undercounted against a HARD per-week cap (review MAJOR). The charge is now a RESERVATION — one
+    INSERT ... ON CONFLICT DO UPDATE ... RETURNING statement, committed before the model call — and no
+    mock-driven test can execute the SQL, so these assert the statement's SHAPE (the semantics were
+    verified against a real PostgreSQL 17)."""
+
+    def test_reserve_returns_the_new_attempt_count(self):
+        c = FakeConn(returns=[[[2]]])
+        assert db.reserve_diag_signal_attempt(c, 7, "202632", 3, "v1") == 2
+
+    def test_reserve_returns_none_when_the_week_is_already_spent(self):
+        c = FakeConn(returns=[[]])          # the cap guard in the WHERE clause matched no row
+        assert db.reserve_diag_signal_attempt(c, 7, "202632", 3, "v1") is None
+
+    def test_reserve_is_one_atomic_returning_statement(self):
+        c = FakeConn(returns=[[[1]]])
+        db.reserve_diag_signal_attempt(c, 7, "202632", 3, "v1", known_attempts=2)
+        assert len(c.calls) == 1            # not read-then-write: one statement, one row lock
+        sql, p = c.calls[0]
+        assert "ON CONFLICT" in sql and "RETURNING" in sql
+        assert "'{attempts}'" in sql and "+ 1" in sql        # incremented in SQL, never in Python
+        assert p == {"iid": 7, "sk": db.BUDGET_KEY, "ti": db.BUDGET_TITLE, "st": "unavailable",
+                     "wk": "202632", "sv": "v1", "cap": 3, "known": 2}
+
+    def test_reserve_refuses_at_the_cap_inside_the_statement(self):
+        c = FakeConn(returns=[[[1]]])
+        db.reserve_diag_signal_attempt(c, 7, "202632", 3, "v1")
+        sql, _p = c.calls[0]
+        assert "< :cap" in sql              # the DB enforces the cap, not the caller's stale read
+        assert "GREATEST" in sql            # …and never below what the caller already knows was spent
+
+    def test_release_is_scoped_to_its_own_week_and_floored(self):
+        c = FakeConn()
+        db.release_diag_signal_attempt(c, 7, "202632")
+        sql, p = c.calls[0]
+        assert "GREATEST" in sql and "meta->>'week' = :wk" in sql
+        assert p == {"iid": 7, "sk": db.BUDGET_KEY, "wk": "202632"}
+
+    def test_the_marker_write_never_clobbers_the_reservation_counter(self):
+        # upsert_diag_signals' `meta = EXCLUDED.meta` would replace the whole object and drop a count a
+        # concurrent worker had already charged — which is why the budget row has its own writer.
+        c = FakeConn()
+        db.write_diag_signal_budget(c, 7, "v1:pend1w202632", "v1")
+        sql, p = c.calls[0]
+        assert "jsonb_set" in sql and "'{budget}'" in sql
+        assert "'{attempts}'" not in sql and "'{week}'" not in sql
+        assert p["bg"] == "v1:pend1w202632" and p["sv"] == "v1" and p["st"] == "unavailable"
+
+
 class TestList:
     def test_list_returns_parsed_rows(self):
         c = FakeConn(returns=[[

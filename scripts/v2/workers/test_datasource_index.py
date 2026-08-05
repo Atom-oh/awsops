@@ -66,6 +66,13 @@ class FakeConn:
         self.graph_inserts, self.graph_deletes = [], []
         self.schema_writes = []
         self.generated_version_touches = []
+        self.reservations, self.releases = [], []
+        # The real budget row carries a NUMERIC mirror of the week's attempt count next to the marker
+        # (db.reserve_diag_signal_attempt increments it in SQL, since a packed marker string cannot be
+        # bumped atomically). Seed it the way Postgres would see it: same week → the marker's own count,
+        # any other week → 0.
+        _m = dsi._MARKER_RE.search(existing_budget or "")
+        self._attempts = int(_m.group(2)) if _m and _m.group(3) == dsi._iso_week() else 0
 
     def run(self, sql, **p):
         if "FROM datasource_schemas" in sql:
@@ -87,6 +94,22 @@ class FakeConn:
                 raise RuntimeError("transient read error")
             return [[r["signal_key"], r.get("title"), r["status"], json.dumps(r.get("query")),
                      None, json.dumps(r.get("meta"))] for r in self.existing_rows]
+        # The three budget-row statements come FIRST: they are also INSERT/UPDATE on
+        # datasource_diag_signals, and letting the generic branches below claim them would record a
+        # reservation as a content insert (breaking every per-row count assertion in this file).
+        if "RETURNING" in sql and "datasource_diag_signals" in sql:   # atomic weekly reservation
+            self.reservations.append(p)
+            floor = max(self._attempts, p["known"])   # GREATEST(stored, known) — see db.py's docstring
+            if floor >= p["cap"]:
+                return []                                            # the cap guard matched no row
+            self._attempts = floor + 1
+            return [[self._attempts]]
+        if "'{attempts}'" in sql:                                     # reservation handed back (DISABLED)
+            self.releases.append(p)
+            self._attempts = max(self._attempts - 1, 0)
+            return []
+        if "'{budget}'" in sql:                                       # marker write (not a content row)
+            self.inserts.append(p); return []
         if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
             self.inserts.append(p); return []
         if sql.strip().startswith("DELETE FROM datasource_diag_signals"):
@@ -103,10 +126,11 @@ class FakeConn:
 
     def budget(self):
         """The `meta.budget` marker this call actually wrote for the dedicated budget row, or None if the
-        call didn't write one (a settled outcome deliberately keeps none — see _rebuild_diag_signals)."""
+        call didn't write one (only a conclusive outcome in a week that spent nothing and carries no
+        streak keeps none — see _rebuild_diag_signals)."""
         for p in self.inserts:
             if p.get("sk") == wdb.BUDGET_KEY:
-                return json.loads(p["me"]).get("budget")
+                return p.get("bg")
         return None
 
     def budget_row_status(self):
@@ -754,12 +778,17 @@ class TestGeneratedFallback:
         # see test_a_ready_outcome_settles_with_the_plain_version for why that matters)
         assert out2["schema_version"] == base and c2.budget() is None
 
-    def test_a_ready_outcome_settles_with_the_plain_version(self, monkeypatch):
-        """A conclusive (ready) outcome gets the PLAIN version, not a marker — storing a marker for it was
-        the other MAJOR this round found: the marker's week ages out every ISO week, `done` reverts to
-        False, and the daily job called Bedrock again on an unchanged, already-successfully-served schema
-        (directly contradicting ADR-018 §A-4/Sustainability, "cached, not regenerated every run"). Whatever
-        budget usage preceded this outcome becomes moot — there is nothing left to retry."""
+    def test_a_ready_outcome_settles_the_schema_without_resetting_this_weeks_attempts(self, monkeypatch):
+        """A conclusive (ready) outcome must settle the SCHEMA without handing back the attempts this ISO
+        week already spent. Two review rounds pull in opposite directions here and both must hold:
+          * storing a WEEK-SCOPED marker for a ready outcome made the marker's week age out every ISO
+            week, `done` revert to False, and the daily job call Bedrock again on an unchanged,
+            already-successfully-served schema (ADR-018 §A-4/Sustainability, "cached, not regenerated");
+          * but storing NO marker at all (the fix for that) let the sweep delete the row, so the next
+            not-ready rebuild in the SAME week started a fresh budget — 3 more Bedrock calls per flip
+            (review MAJOR, this round).
+        `conc` satisfies both: it keeps `attempts`, and it is read as settled regardless of the week for
+        as long as its hash still matches."""
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
@@ -768,7 +797,100 @@ class TestGeneratedFallback:
         base = dsi._schema_version(ready_schema)
         c = FakeConn(kind="loki", schema=ready_schema, existing_budget=f"{base}:pend2w{dsi._iso_week()}")
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
-        assert out["schema_version"] == base and c.budget() is None
+        assert out["schema_version"] == base                        # content: the plain, real version
+        assert c.budget() == f"{base}:conc2w{dsi._iso_week()}"      # settled, attempts NOT reset
+        # A NEW ISO week must not un-settle it: same schema → still skipped, no rebuild, no Bedrock.
+        monkeypatch.setattr(dsi, "_iso_week", lambda: "209952")
+        c2 = FakeConn(kind="loki", schema=ready_schema, existing_version=base,
+                      existing_budget=c.budget())
+        out2 = dsi.run({"integration_id": 7, "kind": "loki"}, c2)
+        assert out2.get("skipped") is True and c2.inserts == []
+
+    def test_a_ready_flap_mid_week_does_not_refresh_the_weekly_budget(self, monkeypatch):
+        """MAJOR-1(a): a deterministic catalog match that appears and disappears within one ISO week used to
+        hand the whole budget back on every "ready" transition (no marker stored → the sweep deleted the
+        row), so a flapping schema bought _MAX_GENERATION_ATTEMPTS fresh Bedrock calls per flap."""
+        calls = []
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        no_match, match = {"labels": ["custom_only"]}, {"labels": ["job"]}
+        budget = None
+        for schema in (no_match, match, no_match, no_match, no_match):
+            c = FakeConn(kind="loki", schema=schema, existing_budget=budget)
+            dsi.run({"integration_id": 7, "kind": "loki"}, c)
+            budget = c.budget()
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS      # not 1 + a whole fresh budget after the flap
+        assert f":done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}" in budget
+
+    def test_toggling_the_querygen_flag_mid_week_does_not_refresh_the_weekly_budget(self, monkeypatch):
+        """MAJOR-1(b): DISABLED is conclusive, and a conclusive outcome used to store no marker at all, so
+        turning the flag off and back on mid-week granted a whole fresh budget. The flag is part of
+        _schema_version, so each toggle legitimately rebuilds — only the attempt count must survive it."""
+        calls = []
+        gen_on = type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+            "still_relevant": staticmethod(lambda *a: True),
+        })
+        gen_off = type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "disabled")),
+            "still_relevant": staticmethod(lambda *a: True),
+        })
+        schema = {"labels": ["custom_only"]}
+        budget = None
+        for on, gen in ((True, gen_on), (True, gen_on), (False, gen_off), (True, gen_on), (True, gen_on)):
+            if on:
+                monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+            else:
+                monkeypatch.delenv("DIAG_SIGNAL_QUERYGEN_ENABLED", raising=False)
+            monkeypatch.setattr(dsi, "_signal_gen", gen)
+            c = FakeConn(kind="loki", schema=schema, existing_budget=budget)
+            dsi.run({"integration_id": 7, "kind": "loki"}, c)
+            budget = c.budget()
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS   # the off/on toggle grants no second budget
+
+    def test_two_workers_racing_on_one_integration_cannot_both_spend_the_same_attempt(self, monkeypatch):
+        """MAJOR-2: budget-read → Bedrock → budget-write is a read-modify-write with a multi-second gap, so
+        two workers both read attempts=N, both called Bedrock and both wrote N+1 — real usage undercounted
+        against a HARD cap. The attempt is now charged in the DB BEFORE the model call, so racing workers
+        get distinct numbers and the ones past the cap are refused outright."""
+        calls, reserved = [], []
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        shared = {"attempts": 0}          # ONE budget row; many workers
+
+        class RacingConn(FakeConn):
+            """Every worker reads the same stale "nothing spent yet" budget — that IS the race — but the
+            reservation counter is shared, exactly like one Postgres row under concurrent UPDATEs."""
+            def run(self, sql, **p):
+                if "RETURNING" in sql and "datasource_diag_signals" in sql:
+                    self.reservations.append(p)
+                    floor = max(shared["attempts"], p["known"])
+                    if floor >= p["cap"]:
+                        reserved.append(None)
+                        return []
+                    shared["attempts"] = floor + 1
+                    reserved.append(shared["attempts"])
+                    return [[shared["attempts"]]]
+                return super().run(sql, **p)
+
+        for _ in range(dsi._MAX_GENERATION_ATTEMPTS + 2):
+            dsi.run({"integration_id": 7, "kind": "clickhouse"},
+                    RacingConn(kind="clickhouse", schema=schema, existing_budget=None))
+        assert reserved == list(range(1, dsi._MAX_GENERATION_ATTEMPTS + 1)) + [None, None]  # never 1,1,1
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS   # the cap held despite every stale read
 
     def test_the_weekly_retry_is_capped_by_a_spent_week_streak(self, monkeypatch):
         """"The week rolls" must not mean retrying forever: with an unchanged schema that keeps failing, a

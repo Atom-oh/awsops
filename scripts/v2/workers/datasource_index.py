@@ -161,7 +161,7 @@ def _iso_week():
     return datetime.now(timezone.utc).strftime("%G%V")
 
 
-# The stored value is `<hash>` or `<hash>:<state><attempts>w<isoweek>[s<streak>]`, state ∈ {pend, done}.
+# The stored value is `<hash>` or `<hash>:<state><attempts>w<isoweek>[s<streak>]`, state ∈ {pend, done, conc}.
 # `attempts` = generations spent this week; `streak` = consecutive weeks whose budget was spent without
 # producing anything. Four review rounds shaped this grammar, each closing the previous one's hole:
 #   * the budget must survive schema churn — the marker is read regardless of which hash prefixes it, or a
@@ -172,13 +172,21 @@ def _iso_week():
 #   * but "the week rolls" cannot mean retrying forever either: with an unchanged schema that keeps failing,
 #     weekly retries are unbounded Bedrock spend (MAJOR-1/-7). After _MAX_SPENT_WEEKS consecutive spent
 #     weeks the instance stops until the SCHEMA changes — which is the only new information there is.
-_MARKER_RE = re.compile(r":(pend|done)(\d+)w(\d{5,8})(?:s(\d+))?$")
-_PEND, _DONE = "pend", "done"
+# A FIFTH round split the state into three, because one boolean was answering two independent questions
+# (review MAJOR, this round): "is this integration settled, and until when" and "how much of THIS ISO week's
+# budget is already gone". Conflating them let any ready/DISABLED outcome erase the week's usage — no marker
+# was stored, the sweep deleted the row, and the next not-ready rebuild in the SAME week started a fresh
+# 3-attempt budget, so a flapping catalog match or a flag toggled off-and-on bought 3 more Bedrock calls per
+# flip. `conc` records "conclusively settled for this SCHEMA" while still carrying `attempts`, and — unlike
+# `done` — it does NOT expire when the week rolls, which is what keeps the bullet above (a marker whose week
+# ages out regenerates an unchanged, already-served schema) fixed rather than traded away.
+_MARKER_RE = re.compile(r":(pend|done|conc)(\d+)w(\d{5,8})(?:s(\d+))?$")
+_PEND, _DONE, _CONC = "pend", "done", "conc"
 _MAX_SPENT_WEEKS = 3
 
 
 def _marker_state(existing, version):
-    """(base_hash, attempts_used_this_week, done_for_this_week, spent_week_streak).
+    """(base_hash, attempts_used_this_week, settled, spent_week_streak).
 
     Legacy encodings: a plain hash is conclusive and keeps skipping (CATALOG_VERSION v4 retired its
     ambiguous "gave up" meaning), while this branch's earlier `:retryN`, `:retryNw<week>` and `:spent<week>`
@@ -207,9 +215,16 @@ def _marker_state(existing, version):
         base, _, marker = (existing or "").partition(":")
         return base, 0, bool(base) and not marker, 0
     state, attempts, week, streak = m.group(1), int(m.group(2)), m.group(3), int(m.group(4) or 0)
-    if week == _iso_week():
-        return existing[:m.start()], attempts, state == _DONE, streak
     base = existing[:m.start()]
+    same_week = week == _iso_week()
+    if state == _CONC:
+        # Conclusive for this SCHEMA, not merely for this week: settled-ness does not expire when the week
+        # rolls (that expiry is exactly what made the daily job re-invoke Bedrock every week on an
+        # unchanged, already-served schema), while the ATTEMPT COUNT stays week-scoped like every other
+        # state's. That separation is the whole reason a third state exists.
+        return base, (attempts if same_week else 0), base == version, streak
+    if same_week:
+        return base, attempts, state == _DONE, streak
     # A new week. The budget returns, but only while the streak of spent weeks is under the cap; at the cap
     # the instance stays settled UNLESS its schema has genuinely changed, which is the only new information
     # that justifies spending another 3-week budget on it.
@@ -220,9 +235,9 @@ def _marker_state(existing, version):
     return base, 0, False, streak
 
 
-def _marker(version, attempts, done, streak):
+def _marker(version, attempts, state, streak):
     tail = f"s{streak}" if streak else ""
-    return f"{version}:{_DONE if done else _PEND}{attempts}w{_iso_week()}{tail}"
+    return f"{version}:{state}{attempts}w{_iso_week()}{tail}"
 
 
 def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
@@ -301,28 +316,53 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             # over, exactly like any other hash-blind week transition in this system.
             _streak = int(_legacy.group(4) or 0)
             _same_week_attempts = int(_legacy.group(2)) if _legacy.group(3) == _iso_week() else 0
-            existing_budget = _marker(version, _same_week_attempts, done=False, streak=_streak)
-    base, attempts, done, streak = _marker_state(existing_budget, version)
+            existing_budget = _marker(version, _same_week_attempts, _PEND, _streak)
+    base, attempts, marker_settled, streak = _marker_state(existing_budget, version)
     # Skip only when BOTH agree there is nothing to do: the CONTENT is fresh (this exact schema was the
     # last one actually built, so `rows` would come out the same) AND the BUDGET says settled for this
-    # exact schema (no marker at all means the last outcome was ready and no marker was kept; a marker
-    # means check `done` AND that its own hash still matches — a preserved marker from a DIFFERENT schema
+    # exact schema (no marker at all means nothing was owed and nothing was spent; a marker means check
+    # its settled-ness AND that its own hash still matches — a preserved marker from a DIFFERENT schema
     # must not skip a rebuild for the current one). A `pend` marker means a retry is owed, so it must NOT
-    # skip either.
-    settled = existing_budget is None or (base == version and done)
+    # skip either; a `conc` one is settled for as long as the hash holds, week boundaries included.
+    settled = existing_budget is None or (base == version and marker_settled)
     if existing_content_version == version and settled:
         return {"skipped": True, "schema_version": existing_content_version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
     exhausted = attempts >= _MAX_GENERATION_ATTEMPTS
     gen_status = None
     generated_key_unverified = False
+    reserved = None
     if not any(r["status"] == "ready" for r in rows):
         if not exhausted:
-            generated, gen_status = _signal_gen.try_generate_signal_with_status(
-                kind, schema, iid,
-                lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
-            if generated:
-                rows = list(rows) + [generated]
+            # RESERVE BEFORE THE MODEL CALL (review MAJOR, this round). Read → Bedrock → write is a
+            # read-modify-write with a multi-second gap in the middle, so two workers on the same
+            # integration (daily dispatcher vs. a schema-refresh or user enqueue) both read the same
+            # count, both called Bedrock, and both stored the same incremented value — undercounting real
+            # usage against a HARD cap. The DB counter is charged first and IS the authority; the
+            # `attempts` parsed from the marker above only decides whether it is worth asking at all.
+            # `attempts` rides along as a FLOOR: it is what the marker already established about this same
+            # week, which the number cannot always know (the v4→v5 bootstrap has no bookkeeping row yet).
+            reserved = wdb.reserve_diag_signal_attempt(conn, iid, _iso_week(),
+                                                      _MAX_GENERATION_ATTEMPTS, version,
+                                                      known_attempts=attempts)
+            if reserved is None:
+                # Lost the race: another worker spent the last of this week's budget between our read and
+                # this reservation. Adopt the DB's verdict and park exactly like a locally observed
+                # exhaustion — that keeps a budget row written (never swept back to a fresh budget) and
+                # sends no second Bedrock call.
+                attempts, exhausted = _MAX_GENERATION_ATTEMPTS, True
+            else:
+                generated, gen_status = _signal_gen.try_generate_signal_with_status(
+                    kind, schema, iid,
+                    lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
+                if generated:
+                    rows = list(rows) + [generated]
+                if gen_status == _signal_gen.DISABLED:
+                    # The flag is off, so nothing reached the model: hand the reservation back. Charging a
+                    # disabled period exhausted the week with the feature OFF and then made turning it ON
+                    # a no-op for up to a week (Codex stop-gate — kept, now enforced in the DB).
+                    reserved = None
+                    wdb.release_diag_signal_attempt(conn, iid, _iso_week())
         # Carrying the last-known-good chip is PART OF THE FEATURE, so it is gated like the feature: with
         # the flag off, generated content must stop being served, and preserving it there kept an LLM row
         # alive indefinitely after the gate closed (Codex stop-gate). It must also run when the week is
@@ -362,18 +402,20 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # REJECTED retries under the weekly budget too — the model is not deterministic and the prompt, catalog
     # and gates all change, so "the answer failed a gate once" is not a fact about this schema. It only
     # differs from TRANSIENT in the log message a caller might want; both are retried the same way.
+    # Count only the attempts that actually reached the model — a reservation handed back (DISABLED, flag
+    # off) is not one, because no Bedrock call happened: charging the budget for it meant three rebuilds
+    # with the feature OFF exhausted the week, and then turning the flag ON did nothing for up to a week
+    # (the flag change rebuilds, being in the hash, but the instance already read as "exhausted"). Enabling
+    # a feature must not be pre-empted by the period it spent disabled (Codex stop-gate). When we DID
+    # charge, `spent` is the number the DB itself enforced the cap against, even if a concurrent worker has
+    # moved the counter since our own read.
+    charged = reserved is not None
+    spent = reserved if charged else attempts
     retry_needed = gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED) and not ready_now
-    if retry_needed and attempts + 1 >= _MAX_GENERATION_ATTEMPTS:
+    if retry_needed and spent >= _MAX_GENERATION_ATTEMPTS:
         logging.warning("[datasource_index] integration %s: generation failed on all %s attempts this week; "
-                        "parking it until the week rolls over or the schema changes", iid, attempts + 1)
+                        "parking it until the week rolls over or the schema changes", iid, spent)
         retry_needed = False
-    # Count only the attempts that actually reached the model. DISABLED means the flag is off, so no Bedrock
-    # call happened — charging the budget for it meant three rebuilds with the feature OFF exhausted the
-    # week, and then turning the flag ON did nothing for up to a week: the flag change rebuilds (it is in
-    # the hash) but `attempts` is read whatever hash prefixes it, so the instance was already "exhausted".
-    # Enabling a feature must not be pre-empted by the period it spent disabled (Codex stop-gate).
-    charged = gen_status is not None and gen_status != _signal_gen.DISABLED
-    spent = attempts + (1 if charged else 0)
     # The streak counts WEEKS that ended with the budget spent and nothing to show. It advances once per
     # week (only on the run that exhausts the budget), resets the moment something is ready, and caps the
     # weekly retry at _MAX_SPENT_WEEKS so an unchanged, permanently failing schema stops costing Bedrock.
@@ -383,18 +425,24 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         new_streak = streak + 1
     else:
         new_streak = streak
-    # A marker (week + attempts + streak) is only worth carrying when something is genuinely UNRESOLVED —
-    # an active or exhausted-this-week retry. Everything else (ready now, including a carried-over
-    # last-known-good chip; or DISABLED, whose flag state is already in the hash) is fully conclusive and
-    # gets the PLAIN version, exactly like the deterministic-catalog path always has. Storing a marker for a
-    # ready/settled outcome was the other MAJOR this review round found: it made the daily job re-invoke
-    # Bedrock every week for a schema that was already being served successfully — every ISO week the marker
-    # ages out of `week == _iso_week()`, `done` reverts to False, and generation ran again on an unchanged
-    # schema, which also directly contradicted ADR-018 §A-4/Sustainability ("cached, not regenerated").
-    needs_marker = not ready_now and (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED) or exhausted)
-    if not needs_marker:
+    # WHICH STATE THE MARKER CARRIES. One boolean (`needs_marker`) used to answer two questions at once —
+    # "is this settled" and "is this week's usage moot" — so a ready/DISABLED outcome wrote NO marker, the
+    # sweep deleted the row, and the next not-ready rebuild THAT SAME WEEK started a fresh budget: 3 more
+    # Bedrock calls per catalog flap or flag toggle (review MAJOR, this round). The state now answers
+    # "settled until when" and `spent` answers "how much of this week is gone", independently:
+    #   conc — conclusive for this SCHEMA (ready now, including a carried-over last-known-good chip; or
+    #          DISABLED, whose flag state is in the hash anyway). Settled REGARDLESS of the week, so the
+    #          marker's week can no longer age out and re-invoke Bedrock on an already-served schema — the
+    #          other MAJOR of an earlier round, which the plain-version encoding fixed and this must not
+    #          undo (ADR-018 §A-4/Sustainability, "cached, not regenerated");
+    #   pend — a retry is owed this week;   done — this week's budget is spent (parked until it rolls).
+    conclusive = ready_now or gen_status == _signal_gen.DISABLED
+    state = _CONC if conclusive else (_PEND if retry_needed else _DONE)
+    if state == _CONC and not spent and not new_streak:
+        # The ONLY case that leaves no budget row at all: a conclusive outcome in a week that spent nothing
+        # and carries no streak — there is literally nothing to remember, so the sweep clears any stale row.
         stored_budget = None
-    elif gen_status is None and base and base != version:
+    elif state == _DONE and not charged and gen_status is None and base and base != version:
         # Exhausted already (no attempt made THIS call) and the schema genuinely differs from the one the
         # cap applies to. Writing a marker under the CURRENT schema's hash here would silently claim we'd
         # tried IT too — a schema that was NEVER evaluated would look, from the very next read, exactly
@@ -405,7 +453,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         # is actually spent against it.
         stored_budget = existing_budget
     else:
-        stored_budget = _marker(version, spent, done=not retry_needed, streak=new_streak)
+        stored_budget = _marker(version, spent, state, new_streak)
     # CONTENT rows always carry the CURRENT schema's real version — never a preserved/stale one. Content
     # freshness and budget tracking used to share one column, and every fix to protect the budget's
     # identity (preserving a stale marker, excluding a key from the agreement check) ended up tagging
@@ -414,26 +462,27 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # the wrong (newer, mistagged) content as current (review, this round). The budget's own state now
     # lives in a dedicated row's `meta` field (db.read/write_diag_signal_budget), decoupled from
     # schema_version entirely, so content can always be tagged truthfully.
-    write_rows = list(rows)
-    if stored_budget is not None:
-        write_rows.append({"signal_key": wdb.BUDGET_KEY, "title": "(diag-signal retry budget)",
-                           # `status` has a DB CHECK(status IN ('ready','unavailable')) — 'disabled' is a
-                           # try_generate_signal_with_status() return value, not a valid row status, and
-                           # writing it here violated that constraint every single call, so the budget
-                           # could never actually persist (review, this round). 'unavailable' matches the
-                           # convention SCHEMA_VERSION_SENTINEL_KEY already uses for a non-signal row.
-                           "status": "unavailable", "query": None, "missing_metrics": None,
-                           "meta": {"budget": stored_budget}})
+    # The budget row is NOT part of the content upsert: upsert_diag_signals sets `meta = EXCLUDED.meta`,
+    # which would replace the whole object and so overwrite the numeric `meta.attempts`/`meta.week` counter
+    # that reserve/release own — handing back an attempt a concurrent worker had already charged and
+    # reopening the race the reservation closes. db.write_diag_signal_budget touches only `meta.budget` (and
+    # the row's schema_version, so read_signal_schema_version()'s agreement check still sees one version
+    # across every row). One consequence: an otherwise-empty build now writes db.SCHEMA_VERSION_SENTINEL_KEY
+    # (the budget row used to be the one non-empty write that suppressed it), which is that sentinel doing
+    # its documented job.
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
     conn.run("BEGIN")
     try:
-        written = wdb.upsert_diag_signals(conn, iid, write_rows, version)
+        written = wdb.upsert_diag_signals(conn, iid, rows, version)
+        if stored_budget is not None:
+            wdb.write_diag_signal_budget(conn, iid, stored_budget, version)
+            written = written + [wdb.BUDGET_KEY]
         # Sweep against what was WRITTEN, not against `rows`: an empty build writes a version sentinel
         # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back. Not including
-        # the budget row in `write_rows` (stored_budget is None) naturally lets the sweep delete any STALE
-        # prior budget row — a settled outcome should leave none behind. GENERATED_SIGNAL_KEY is ALSO
+        # the budget row in `written` (stored_budget is None) naturally lets the sweep delete any STALE
+        # prior budget row — a settled, unspent week should leave none behind. GENERATED_SIGNAL_KEY is ALSO
         # always spared when it was unverifiable this call — see generated_key_unverified above.
         sweep_keep = written + [_signal_gen.GENERATED_SIGNAL_KEY] if generated_key_unverified else written
         wdb.sweep_diag_signals(conn, iid, sweep_keep)
