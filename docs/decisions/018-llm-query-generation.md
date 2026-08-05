@@ -37,11 +37,15 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 1. **스키마 식별자가 Bedrock으로 나간다.** 테이블/컬럼/메트릭/라벨 **이름**만 나가고 데이터 행·자격증명은
    나가지 않는다.
 2. **모델이 쓴 조회문을 라이브로 dry-run 한다.** 실행은 기존 read-only 커넥터에서만 이뤄지고, 모델은 실행
-   권한을 갖지 않는다. `readonly=1` · `assert_read_only` · `assert_host_allowed` 는 **ClickHouse 전용**
-   런타임 가드다 — Prometheus/Mimir/Loki/Tempo API 자체가 읽기 전용 엔드포인트라 동등한 가드가 필요 없다.
-   dry-run 이 error envelope 나 빈 payload 를 돌려주면 그 후보는 캐시되지 않는다.
-3. **정적 게이트를 먼저 통과해야 한다** — mutating 키워드 denylist + 단일문 검사. 두 경로 모두 자기 정적
-   검사를 갖는다(`graph_querygen._static_readonly_check`, `signal_catalog_gen._static_check`). 단, **생성기
+   권한을 갖지 않는다. **`assert_host_allowed`(SSRF 호스트 핀, `datasource_http.py`)는 모든 kind 공통 가드다**
+   (`prometheus_mcp.py`·`loki_mcp.py`·`tempo_mcp.py`·`mimir_mcp.py`·`clickhouse_mcp.py` 전부 호출). `readonly=1` ·
+   `assert_read_only`는 **ClickHouse 전용**이다 — Prometheus/Mimir/Loki/Tempo API 자체가 읽기 전용 엔드포인트라
+   SQL 레벨 read-only 강제가 필요 없다(그 API들엔 애초에 mutating 호출이 없다). dry-run 이 error envelope 나
+   빈 payload 를 돌려주면 그 후보는 캐시되지 않는다.
+3. **정적 게이트를 먼저 통과해야 한다** — **ClickHouse만** mutating 키워드 denylist + 단일문 검사를 한다
+   (`signal_catalog_gen._static_check`는 `kind == "clickhouse"`일 때만 이 검사를 수행하고, 다른 kind는
+   그대로 통과시킨다 — PromQL/LogQL/TraceQL 에는 애초에 mutating 동사가 없으므로 no-op). graph 경로의
+   `graph_querygen._static_readonly_check`도 ClickHouse `trace_spans` 전용이라 마찬가지다. **생성기
    단계의 table-function denylist(`url`/`s3`/`remote` 등 SSRF 표면)는 diag-signal 쪽에만 있다** — graph 쪽은
    실행 시 커넥터의 `assert_read_only(extra_forbidden_re=_TABLE_FN)` 이 막는다. 즉 파이프라인은 두 경로 모두
    보호되지만 *어느 층에서* 막느냐가 다르다(리뷰 MAJOR-8: 이 차이를 "공통"으로 뭉개면 안 된다).

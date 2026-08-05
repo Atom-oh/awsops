@@ -440,24 +440,57 @@ class TestGeneratedFallback:
         out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
         assert calls.count("on") == 1 and out["schema_version"].endswith(f":pend1w{dsi._iso_week()}")
 
-    def test_the_weekly_budget_survives_a_schema_change(self, monkeypatch):
+    def test_the_weekly_budget_survives_ordinary_churn_while_actively_retrying(self, monkeypatch):
         """The version hashes the whole schema and a production Prometheus changes its metric set on every
         deploy, so keying the cap to the version turned "3 tries a week" into a daily Bedrock call (review
-        MAJOR-3). The marker is read regardless of which version prefixes it."""
+        MAJOR-3). A PEND marker (an attempt cycle in progress, budget not yet spent) reads attempts
+        regardless of which hash prefixes it — this is the property that survives churn; a DONE marker's
+        behaviour is covered separately (see the settle/unpark tests below)."""
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
-        schema = {"metrics": ["custom_only"]}
-        for i in range(6):                       # a different schema — hence version — every single run
+        version = None
+        for i in range(dsi._MAX_GENERATION_ATTEMPTS):    # a different schema — hence version — every call
             drifting = {"metrics": ["custom_only", f"new_metric_{i}"]}
-            c = FakeConn(kind="prometheus", schema=drifting,
-                         existing_version=None if i == 0 else version)
+            c = FakeConn(kind="prometheus", schema=drifting, existing_version=version)
             version = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)["schema_version"]
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS   # not one per run
         assert f":done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}" in version
+
+        # Once DONE, a call against the SAME (now-stable) schema must stay capped — this is the actual
+        # MAJOR-3 invariant: a repeatedly-failing, UNCHANGING schema does not retry again this week.
+        stable_schema = {"metrics": ["custom_only", f"new_metric_{dsi._MAX_GENERATION_ATTEMPTS - 1}"]}
+        c = FakeConn(kind="prometheus", schema=stable_schema, existing_version=version)
+        dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS   # still capped — no 4th call
+
+    def test_a_genuine_mid_week_schema_change_unparks_immediately(self, monkeypatch):
+        """The un-park-on-schema-change fix from last round only checked the hash at the multi-week
+        streak-cap boundary, so an ordinary same-week exhaustion kept reusing a DIFFERENT schema's done
+        state if the schema changed mid-week — the caller never compared hashes for that branch at all
+        (review MAJOR, this round). A DONE marker must now check the hash regardless of which branch
+        produced it; only PEND (budget still available) stays hash-blind, per the test above."""
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        version = None
+        for i in range(dsi._MAX_GENERATION_ATTEMPTS):   # same schema each call, in-progress retry cycle
+            c = FakeConn(kind="prometheus", schema={"metrics": ["custom_only"]}, existing_version=version)
+            version = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)["schema_version"]
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS
+        assert f":done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}" in version   # parked this week
+
+        new_schema = {"metrics": ["genuinely_different"]}                # a real change, same ISO week
+        c = FakeConn(kind="prometheus", schema=new_schema, existing_version=version)
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS + 1             # unparked: got a try, same week
+        assert out["schema_version"].startswith(f"{dsi._schema_version(new_schema)}:pend1w")
 
     def test_a_rejected_answer_parks_for_the_week_and_does_not_freeze(self, monkeypatch):
         """The model is not deterministic and the gates change, so "failed a gate once" is not a permanent

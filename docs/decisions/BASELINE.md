@@ -74,7 +74,7 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> 통합 ADR 16개. 상세·근거는 각 ADR. (옛 46개 → `../history/ADR-MAPPING.md`, 본문은 git tag `adr-legacy-2026-06-22`.)
+> 통합 ADR 18개. 상세·근거는 각 ADR. (옛 46개 → `../history/ADR-MAPPING.md`, 본문은 git tag `adr-legacy-2026-06-22`.)
 
 | ADR | 토픽 | 한 줄 | 6기둥 |
 |---|---|---|---|
