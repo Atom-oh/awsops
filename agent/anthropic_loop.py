@@ -302,9 +302,16 @@ async def run_anthropic_loop(payload):
         with ExitStack() as stack:
             stack.enter_context(mcp_client)
             gateway_tools = agent.get_all_tools(mcp_client)
+            # ADR-017 (amended): the SAME shared gates the Strands handler applies — fail-closed
+            # vendor-MCP allowlist on the RAW gateway list + the embedded official ClickHouse stdio
+            # server and its tool-layer mutual exclusion. This path skipping them was a review
+            # CRITICAL (raw vendor write tools reached the model); never inline a second copy here.
+            gateway_tools, clickhouse_stdio_tools = agent.apply_official_mcp_gates(
+                gateway_tools, gateway_key, stack)
             # Same ceiling/order as the Strands path: dedup (gateway precedence) THEN allowlist,
             # applied to the MCP tool objects BEFORE schema conversion.
-            tools = agent._filter_tools(agent._dedup_by_tool_name(gateway_tools), tool_allowlist)
+            tools = agent._filter_tools(
+                agent._dedup_by_tool_name(gateway_tools + clickhouse_stdio_tools), tool_allowlist)
 
             if system_prompt_override:
                 tool_lines = []
