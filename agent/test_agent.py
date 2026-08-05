@@ -516,5 +516,61 @@ class StreamTextTest(unittest.TestCase):
         self.assertEqual(out, [{"model": agent.MODEL_ID}])
 
 
+class TestFilterOfficialMcpTools(unittest.TestCase):
+    """ADR-017 (amended 2026-08-05): fail-closed allowlist over `*-mcp-server-target___*` tools."""
+
+    TOOLS = [
+        FakeTool('datadog-mcp-server-target___search_datadog_logs'),
+        FakeTool('datadog-mcp-server-target___create_datadog_monitor'),   # vendor write tool
+        FakeTool('dynatrace-mcp-server-target___execute_dql'),            # target with empty allowlist
+        FakeTool('clickhouse-mcp-target___clickhouse_query'),             # lambda target — not a preset
+        FakeTool('plain_tool'),
+    ]
+
+    def test_allowlisted_tool_survives_and_rest_of_preset_tools_drop(self):
+        allow = {'datadog-mcp-server-target': {'search_datadog_logs'}, 'dynatrace-mcp-server-target': set()}
+        self.assertEqual(
+            names(agent.filter_official_mcp_tools(self.TOOLS, allow)),
+            ['datadog-mcp-server-target___search_datadog_logs',
+             'clickhouse-mcp-target___clickhouse_query', 'plain_tool'])
+
+    def test_missing_map_is_deny_all_for_preset_tools_only(self):
+        self.assertEqual(
+            names(agent.filter_official_mcp_tools(self.TOOLS, {})),
+            ['clickhouse-mcp-target___clickhouse_query', 'plain_tool'])
+
+    def test_env_parse_failure_fails_closed(self):
+        import os
+        os.environ['OFFICIAL_MCP_TOOL_ALLOWLIST_JSON'] = 'not-json'
+        try:
+            self.assertEqual(agent._official_mcp_allowlist(), {})
+        finally:
+            del os.environ['OFFICIAL_MCP_TOOL_ALLOWLIST_JSON']
+
+
+class TestClickhouseStdioEnv(unittest.TestCase):
+    """ADR-017 (amended): datasource kind-mirror blob → mcp-clickhouse env, read-only pinned."""
+
+    def test_https_endpoint_maps_with_default_port_and_readonly_pins(self):
+        env = agent._clickhouse_stdio_env({'endpoint': 'https://ch.internal', 'username': 'ro', 'password': 'pw'})
+        self.assertEqual(env['CLICKHOUSE_HOST'], 'ch.internal')
+        self.assertEqual(env['CLICKHOUSE_PORT'], '8443')
+        self.assertEqual(env['CLICKHOUSE_SECURE'], 'true')
+        self.assertEqual(env['CLICKHOUSE_USER'], 'ro')
+        self.assertEqual(env['CLICKHOUSE_ALLOW_WRITE_ACCESS'], 'false')
+        self.assertEqual(env['CLICKHOUSE_ALLOW_DROP'], 'false')
+
+    def test_http_endpoint_with_port(self):
+        env = agent._clickhouse_stdio_env({'endpoint': 'http://10.0.3.7:8123'})
+        self.assertEqual((env['CLICKHOUSE_HOST'], env['CLICKHOUSE_PORT'], env['CLICKHOUSE_SECURE']),
+                         ('10.0.3.7', '8123', 'false'))
+        self.assertEqual(env['CLICKHOUSE_USER'], 'default')
+
+    def test_non_http_endpoint_rejected(self):
+        for ep in ('clickhouse://x', '', 'https://'):
+            with self.assertRaises(ValueError):
+                agent._clickhouse_stdio_env({'endpoint': ep})
+
+
 if __name__ == '__main__':
     unittest.main()

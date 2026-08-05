@@ -9,3 +9,5 @@ anthropic[bedrock]==0.111.0
 bedrock-agentcore<=0.1.5
 bedrock-agentcore-starter-toolkit==0.1.14
 psycopg2-binary
+# ADR-017 (amended): official ClickHouse MCP, stdio-embedded (CLICKHOUSE_OFFICIAL_MCP). Image installs via Dockerfile — keep in sync.
+mcp-clickhouse
