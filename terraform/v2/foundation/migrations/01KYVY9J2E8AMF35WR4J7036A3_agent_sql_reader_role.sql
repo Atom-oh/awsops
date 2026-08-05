@@ -109,8 +109,9 @@ BEGIN
   END IF;
 END $$;
 
--- Idempotent + explicit: state every attribute rather than relying on CREATE ROLE defaults, so
--- re-running against a pre-existing role converges to the same least-privilege shape.
+-- Idempotent + explicit for every attribute EXCEPT the three below: state CREATEDB/CREATEROLE/
+-- INHERIT explicitly rather than relying on CREATE ROLE defaults, so re-running against a
+-- pre-existing role converges to the same least-privilege shape.
 -- SUPERUSER/REPLICATION/BYPASSRLS are deliberately NOT restated here (unlike CREATEDB/CREATEROLE/
 -- INHERIT): PostgreSQL requires the CALLER to itself hold one of these three specific attributes to
 -- set or clear it on another role (only a true superuser is exempt from all three) — and the

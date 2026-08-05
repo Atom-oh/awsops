@@ -100,21 +100,36 @@ step needs answered. `DRY_RUN=1 make migrate` connects and diffs against the liv
   creates the role. Done.
 - **이미 적용됨**인데 롤이 없다(손으로 DROP, 또는 그 이전 스냅샷에서 복원): 기록된 checksum 때문에
   그 파일은 재실행 불가다. 롤·`sql_reader` 뷰·grant 를 다시 만드는 **신규 repair 마이그레이션**을
-  추가한다 — DDL 은 `01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql` 에서 복사하면 된다(재실행
-  가능하게 작성돼 있다: 롤은 `IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'awsops_sql_reader')`
-  로 가드된 `DO` 블록 안에서 만들고 — Postgres 에 `CREATE ROLE IF NOT EXISTS` 는 없다 — 모든 속성을
-  `ALTER ROLE` 로 명시하며, 각 뷰는 `CREATE` 앞에 `DROP VIEW IF EXISTS` 한다). 그 다음 `make migrate`.
+  추가한다. 손으로 잘못 재생성한 롤 등을 복구하면서 `DROP ROLE` 이 필요하다면, 그 **직전에**
+  `DROP OWNED BY awsops_sql_reader` 를 먼저 실행해야 한다. 그러지 않으면 남아 있는 뷰 grant 때문에
+  `DROP ROLE` 이 실패한다. 롤이 애초에 생성된 적이 없거나 이미 부재한 경우에는 이 단계가 필요 없다.
+  DDL 은 현재 수정된 `01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql` 과 **같은 패턴**을
+  따라야 한다: 롤은 `IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'awsops_sql_reader')` 로
+  가드된 `DO` 블록 안에서 만들되(Postgres 에 `CREATE ROLE IF NOT EXISTS` 는 없다),
+  `ALTER ROLE` 에서 SUPERUSER/REPLICATION/BYPASSRLS 를 다시 명시하지 않는다. `CREATE ROLE` 자체의
+  기본값이 NOSUPERUSER/NOREPLICATION/NOBYPASSRLS 이며, 셋 중 하나라도 다시 명시하면
+  `01KYVY9J…` 에 설명된 같은 이유로 Aurora master user 에서 실패한다. 각 뷰는 `CREATE` 앞에
+  `DROP VIEW IF EXISTS` 한다. 그 다음 `make migrate`. 재생성된 롤이 잘못된 상태라면
+  `01KZ87KAJFA2Y27KY0QSMVBBDS_agent_sql_reader_elevated_attr_guard.sql` 과 `migrate.mjs` 의
+  매 실행 `syncSqlReaderPassword` 검사가 큰 소리로 실패한다.
   **원본 파일은 수정하지 않는다**: `migrate.mjs` 가 checksum drift 로 거부하고, 다른 모든 환경의
   이력까지 바꾸게 된다.
   **Already applied** but the role is gone (dropped by hand, restored from a snapshot predating it):
   the recorded checksum makes that file un-runnable. Add a **new repair migration** that recreates
-  the role, its `sql_reader` views and the grants — copy the DDL from
-  `01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql`, which is written to be re-runnable (the role
-  is created inside a `DO` block guarded by `IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname =
-  'awsops_sql_reader')` — Postgres has no `CREATE ROLE IF NOT EXISTS` — every attribute is then stated
-  explicitly by `ALTER ROLE`, and each view is `DROP VIEW IF EXISTS`-ed before `CREATE`) — then
-  `make migrate`. Do not edit the original file: `migrate.mjs` will refuse on checksum drift, and
-  editing it would also change history for every other environment.
+  the role, its `sql_reader` views and the grants. If recovery from a bad manual recreation requires
+  `DROP ROLE`, first run `DROP OWNED BY awsops_sql_reader` **immediately before it** or the outstanding
+  view grants will make `DROP ROLE` fail. This step is not needed when the role never existed or is
+  already absent. Follow the **same pattern** as the now-fixed
+  `01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql`: create the role inside a `DO` block guarded
+  by `IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'awsops_sql_reader')` (Postgres has no
+  `CREATE ROLE IF NOT EXISTS`), but do not restate SUPERUSER/REPLICATION/BYPASSRLS via `ALTER ROLE`.
+  `CREATE ROLE` already defaults to NOSUPERUSER/NOREPLICATION/NOBYPASSRLS, and restating any of the
+  three fails against the Aurora master user for the reason documented in `01KYVY9J…`. Drop each
+  view with `DROP VIEW IF EXISTS` before recreating it, then run `make migrate`. The
+  `01KZ87KAJFA2Y27KY0QSMVBBDS_agent_sql_reader_elevated_attr_guard.sql` migration and the standing
+  `syncSqlReaderPassword` check in `migrate.mjs` fail loud if the recreated role is in a bad state.
+  Do not edit the original file: `migrate.mjs` will refuse on checksum drift, and editing it would
+  also change history for every other environment.
 
 회전 시 자동 수렴 훅은 **의도적으로 없다**. Terraform 쪽 비밀번호 변경과 다음 `make migrate` 사이의
 창은 알려진 갭이며, 없애기보다 수용했다 — 닫으려면 Aurora 에 `ALTER ROLE` 권한을 가진 회전 트리거
