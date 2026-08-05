@@ -103,7 +103,11 @@ def _timeout_param(v):
     but had no execution bound, which matters now that a caller can run model-written PromQL (review)."""
     # No digit cap: `\d{1,3}` made "1000" or "3600s" fall through to None, i.e. NO bound — a clamp that
     # fails open for exactly the values that need clamping (review MINOR). Only non-numeric input is None.
-    m = re.fullmatch(r"\s*(\d+)s?\s*", str(v or ""))
+    # `v or ""` turns numeric 0 into "" (falsy), which then fails the match and returns None —
+    # i.e. NO bound for exactly the value that most needs clamping. Only skip on a true absence.
+    if v is None or v == "":
+        return None
+    m = re.fullmatch(r"\s*(\d+)s?\s*", str(v))
     return f"{max(1, min(60, int(m.group(1))))}s" if m else None
 
 

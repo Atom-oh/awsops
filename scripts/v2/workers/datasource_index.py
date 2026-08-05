@@ -177,12 +177,22 @@ _PEND, _DONE = "pend", "done"
 _MAX_SPENT_WEEKS = 3
 
 
-def _marker_state(existing):
+def _marker_state(existing, version):
     """(base_hash, attempts_used_this_week, done_for_this_week, spent_week_streak).
 
     Legacy encodings: a plain hash is conclusive and keeps skipping (CATALOG_VERSION v4 retired its
     ambiguous "gave up" meaning), while this branch's earlier `:retryN`, `:retryNw<week>` and `:spent<week>`
     forms read as a fresh, NOT-settled budget — retrying is the safe direction for an unrecognised marker.
+
+    `version` is needed for exactly ONE decision: whether to un-park a streak-capped instance. Everywhere
+    else, attempts/streak are read regardless of which hash prefixes the marker — that's what makes the
+    budget survive ordinary schema churn WITHIN a week (a Prometheus whose metric set shifts on every run
+    must not get a fresh 3-try budget every run just because the hash moved — review MAJOR-3, three rounds
+    ago). But "stops until the SCHEMA changes" (the streak-cap comment below) is a promise this function has
+    to keep too: forcing attempts=MAX unconditionally in that branch meant a genuinely NEW schema, arriving
+    in a new week after the streak cap, stayed parked forever — the comment's own recovery path didn't exist
+    (review MAJOR, this round). So only the streak-capped branch compares the hash; ordinary within-budget
+    retries are untouched.
     """
     m = _MARKER_RE.search(existing or "")
     if not m:
@@ -191,11 +201,15 @@ def _marker_state(existing):
     state, attempts, week, streak = m.group(1), int(m.group(2)), m.group(3), int(m.group(4) or 0)
     if week == _iso_week():
         return existing[:m.start()], attempts, state == _DONE, streak
+    base = existing[:m.start()]
     # A new week. The budget returns, but only while the streak of spent weeks is under the cap; at the cap
-    # the instance stays settled until its schema changes.
+    # the instance stays settled UNLESS its schema has genuinely changed, which is the only new information
+    # that justifies spending another 3-week budget on it.
     if streak >= _MAX_SPENT_WEEKS:
-        return existing[:m.start()], _MAX_GENERATION_ATTEMPTS, True, streak
-    return existing[:m.start()], 0, False, streak
+        if base != version:
+            return base, 0, False, 0
+        return base, _MAX_GENERATION_ATTEMPTS, True, streak
+    return base, 0, False, streak
 
 
 def _marker(version, attempts, done, streak):
@@ -234,7 +248,7 @@ def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     version = _schema_version(schema)
     existing_version = wdb.read_signal_schema_version(conn, iid)
-    base, attempts, done, streak = _marker_state(existing_version)
+    base, attempts, done, streak = _marker_state(existing_version, version)
     # Skip only when the schema is unchanged AND this week is settled — either the last outcome was
     # conclusive or the budget is spent. A `pend` marker means a retry is owed, so it must NOT skip.
     if base == version and done:
@@ -269,8 +283,11 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     #   * DISABLED is — the flag is part of the hash, so flipping it rebuilds anyway.
     # The rows are written either way (they carry the "metric X missing" text the UI shows); what differs is
     # whether the marker says this week is settled.
-    retry_needed = (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED)
-                    and not any(r["status"] == "ready" for r in rows))
+    ready_now = any(r["status"] == "ready" for r in rows)
+    # REJECTED retries under the weekly budget too — the model is not deterministic and the prompt, catalog
+    # and gates all change, so "the answer failed a gate once" is not a fact about this schema. It only
+    # differs from TRANSIENT in the log message a caller might want; both are retried the same way.
+    retry_needed = gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED) and not ready_now
     if retry_needed and attempts + 1 >= _MAX_GENERATION_ATTEMPTS:
         logging.warning("[datasource_index] integration %s: generation failed on all %s attempts this week; "
                         "parking it until the week rolls over or the schema changes", iid, attempts + 1)
@@ -282,7 +299,6 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # Enabling a feature must not be pre-empted by the period it spent disabled (Codex stop-gate).
     charged = gen_status is not None and gen_status != _signal_gen.DISABLED
     spent = attempts + (1 if charged else 0)
-    ready_now = any(r["status"] == "ready" for r in rows)
     # The streak counts WEEKS that ended with the budget spent and nothing to show. It advances once per
     # week (only on the run that exhausts the budget), resets the moment something is ready, and caps the
     # weekly retry at _MAX_SPENT_WEEKS so an unchanged, permanently failing schema stops costing Bedrock.
@@ -292,7 +308,17 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         new_streak = streak + 1
     else:
         new_streak = streak
-    stored_version = _marker(version, spent, done=not retry_needed, streak=new_streak)
+    # A marker (week + attempts + streak) is only worth carrying when something is genuinely UNRESOLVED —
+    # an active or exhausted-this-week retry. Everything else (ready now, including a carried-over
+    # last-known-good chip; or DISABLED, whose flag state is already in the hash) is fully conclusive and
+    # gets the PLAIN version, exactly like the deterministic-catalog path always has. Storing a marker for a
+    # ready/settled outcome was the other MAJOR this review round found: it made the daily job re-invoke
+    # Bedrock every week for a schema that was already being served successfully — every ISO week the marker
+    # ages out of `week == _iso_week()`, `done` reverts to False, and generation ran again on an unchanged
+    # schema, which also directly contradicted ADR-018 §A-4/Sustainability ("cached, not regenerated").
+    needs_marker = not ready_now and (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED) or exhausted)
+    stored_version = _marker(version, spent, done=not retry_needed, streak=new_streak) if needs_marker \
+        else version
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.

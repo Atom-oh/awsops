@@ -36,8 +36,9 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 
 1. **스키마 식별자가 Bedrock으로 나간다.** 테이블/컬럼/메트릭/라벨 **이름**만 나가고 데이터 행·자격증명은
    나가지 않는다.
-2. **모델이 쓴 조회문을 라이브로 dry-run 한다.** 실행은 기존 read-only 커넥터에서만
-   (`readonly=1` · `assert_read_only` · `assert_host_allowed`) 이뤄지고, 모델은 실행 권한을 갖지 않는다.
+2. **모델이 쓴 조회문을 라이브로 dry-run 한다.** 실행은 기존 read-only 커넥터에서만 이뤄지고, 모델은 실행
+   권한을 갖지 않는다. `readonly=1` · `assert_read_only` · `assert_host_allowed` 는 **ClickHouse 전용**
+   런타임 가드다 — Prometheus/Mimir/Loki/Tempo API 자체가 읽기 전용 엔드포인트라 동등한 가드가 필요 없다.
    dry-run 이 error envelope 나 빈 payload 를 돌려주면 그 후보는 캐시되지 않는다.
 3. **정적 게이트를 먼저 통과해야 한다** — mutating 키워드 denylist + 단일문 검사. 두 경로 모두 자기 정적
    검사를 갖는다(`graph_querygen._static_readonly_check`, `signal_catalog_gen._static_check`). 단, **생성기
@@ -56,9 +57,13 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
    그래서 생성 표현식을 자동 반복 실행 경로에 두지 않는다. 빈 응답은 §A-2 대로 캐시되지 않지만, 그 **분류**는
    REJECTED 가 아니라 TRANSIENT 다 — 조용한 시간대의 정상 datasource 가 영구 skip 되지 않도록 주간 예산
    안에서 재시도한다.
-4. **비용 예산**: 인스턴스당 **ISO 주 3회**. 마커(`:<pend|done>N w<주차>`)는 스키마 해시와 독립적으로 읽어
-   churn이 예산을 리셋하지 못하게 하고, conclusive 결과에서도 사용량을 유지해 flap이 예산을 사지 못하게 한다.
-   플래그가 꺼진 기간은 과금하지 않는다.
+4. **비용 예산**: 인스턴스당 **ISO 주 3회**, 그리고 **연속 3주** 소진되면 스키마가 바뀔 때까지 정지
+   (`_MAX_SPENT_WEEKS`). 아직 해소되지 않은(active retry 또는 이번 주 소진) 경우에만 마커
+   (`:<pend|done>N w<주차>[s<연속소진주차수>]`)를 저장한다 — ready 로 정산됐거나 플래그가 꺼진(DISABLED) 경우는
+   **plain 버전**(마커 없음)으로 저장해 다음 실행이 재생성을 시도하지 않는다(review MAJOR: marker 를 ready 인
+   경우까지 붙였더니 스키마 불변에도 매주 Bedrock 을 재호출했다). 마커는 스키마 해시와 독립적으로 읽어 churn이
+   예산을 리셋하지 못하게 하고, 스키마가 실제로 바뀌면 attempts/streak 를 리셋해 3주 park 이 새 스키마까지
+   이어지지 않게 한다. 플래그가 꺼진 기간은 과금하지 않는다.
 5. **플래그를 끄면 제공이 멈춘다 — 쓰기와 읽기 양쪽에서.** 저장된 생성 행은 검증 실패/park 구간에 보존되지만
    그 보존이 플래그 뒤에 있어 게이트를 닫으면 다음 rebuild의 sweep이 걷어낸다. **그 rebuild는 워커가 돌아야
    일어나므로** BFF read path도 같은 플래그로 게이트한다(`web/lib/diag-signals.ts`, web task env

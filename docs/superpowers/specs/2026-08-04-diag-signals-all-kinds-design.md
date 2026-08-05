@@ -239,10 +239,21 @@ Later passes added four things the earlier ones had not reached:
   after which the instance is parked for the rest of the week. The budget is per INSTANCE per week: the
   marker is read whatever version prefixes it, because the version hashes the whole schema and a production
   Prometheus changes its metric set on every deploy — keying the cap to the version made it a daily call.
-  A conclusive outcome keeps the week's usage (`:doneN`), so an instance whose catalog match flaps in and
-  out cannot buy a fresh budget per flap. Only attempts that reached the model are charged: with the flag
-  off no call happens, so those runs cost nothing and enabling the flag is never pre-empted by the period it
-  spent disabled.
+  A `pend`/`done` marker (with the ISO week and, once the weekly cap is hit repeatedly, a consecutive-
+  spent-week streak) is stored ONLY while something is genuinely unresolved — an active retry, or a week
+  just exhausted with nothing to show. The moment the build has something ready (a deterministic catalog
+  match, a fresh generation success, or a carried-over last-known-good chip), the marker is dropped and the
+  PLAIN version is stored instead, exactly like the deterministic-only path always did — a later review
+  found that keeping the marker on a ready outcome made the marker's week age out and the daily job
+  re-invoke Bedrock on an unchanged, already-successfully-served schema, which directly contradicted the
+  "cached, not regenerated" design. Reaching the streak cap parks the instance until its SCHEMA changes, not
+  merely until the week rolls — an even later review found the code only checked that for the skip
+  decision, not for the exhaustion decision, so a genuinely new schema stayed parked forever; the
+  streak-capped state alone now compares the stored hash to the current one and un-parks on a real change,
+  while an in-progress retry's attempt count still survives ordinary hash churn within the week regardless
+  of the hash, preserving the original churn-survival property. Only attempts that reached the model are
+  charged: with the flag off no call happens, so those runs cost nothing and enabling the flag is never
+  pre-empted by the period it spent disabled.
 - **The static check must not be looser than the connector it feeds.** It lacked the ClickHouse
   table-function denylist, so `FROM url('http://169.254.169.254/…')` reached the dry run and the check
   itself became the egress attempt. `_TABLE_FN` now mirrors `clickhouse_mcp.py` deliberately — a check that

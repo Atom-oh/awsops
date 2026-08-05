@@ -298,11 +298,38 @@ class TestGeneratedFallback:
             "still_relevant": staticmethod(lambda *a: True),
         }))
         schema = {"labels": ["custom_only"]}
-        parked = f"{prev_base(dsi)}:pend{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}"
+        base = dsi._schema_version(schema)
+        parked = f"{base}:pend{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}"
         c = FakeConn(kind="loki", schema=schema, existing_version=parked,
                      existing_rows=[self.GENERATED_ROW])
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
+
+    def test_a_genuine_schema_change_unparks_a_streak_capped_instance(self, monkeypatch):
+        """The comment says a streak-capped instance 'stays settled until its schema changes' — but the
+        caller only used `base == version` for the SKIP check, not for the exhaustion check, so a genuinely
+        new schema arriving after the park stayed blocked forever (review MAJOR, this round)."""
+        calls = []
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        old_schema = {"labels": ["custom_only"]}
+        old_base = dsi._schema_version(old_schema)
+        parked = f"{old_base}:done{dsi._MAX_GENERATION_ATTEMPTS}w200001s{dsi._MAX_SPENT_WEEKS}"
+        monkeypatch.setattr(dsi, "_iso_week", lambda: "200002")   # a new week, still capped for the OLD schema
+        c_same = FakeConn(kind="loki", schema=old_schema, existing_version=parked)
+        assert dsi.run({"integration_id": 7, "kind": "loki"}, c_same)["schema_version"] == parked
+        assert calls == []                                       # unchanged schema: still parked, no call
+
+        new_schema = {"labels": ["different_label"]}              # a genuinely NEW schema
+        c_new = FakeConn(kind="loki", schema=new_schema, existing_version=parked)
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c_new)
+        assert calls == [1]                                       # unparked: the new schema gets a try
+        assert out["schema_version"].startswith(f"{dsi._schema_version(new_schema)}:pend1w")
 
     def test_the_flag_being_off_does_not_spend_the_budget(self, monkeypatch):
         """DISABLED means no Bedrock call happened. Charging for it exhausted the week with the feature OFF,
@@ -321,7 +348,8 @@ class TestGeneratedFallback:
             drifting = {"metrics": ["custom_only", f"m{i}"]}
             c = FakeConn(kind="prometheus", schema=drifting, existing_version=version)
             version = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)["schema_version"]
-        assert version.endswith(f":done0w{dsi._iso_week()}")     # 0 spent, not 3
+        base = dsi._schema_version({"metrics": ["custom_only", "m3"]})   # last drifting schema, i=3
+        assert version == base     # plain — DISABLED settles immediately, no marker needed
 
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {   # operator turns the flag on
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
@@ -397,21 +425,25 @@ class TestGeneratedFallback:
         c2 = FakeConn(kind="loki", schema=schema, existing_version=settled)
         out2 = dsi.run({"integration_id": 7, "kind": "loki"}, c2)
         assert any(p["st"] == "ready" for p in c2.inserts)          # the catalog matches this schema
-        assert out2["schema_version"] == f"{base}:done0w209952"     # settled again, with a fresh budget
+        # a READY outcome is fully conclusive — plain version, no marker at all (no more weekly re-checks;
+        # see test_a_ready_outcome_settles_with_the_plain_version for why that matters)
+        assert out2["schema_version"] == base
 
-    def test_a_ready_outcome_keeps_this_weeks_usage(self, monkeypatch):
-        """A conclusive outcome must not ERASE the week's usage: dropping the marker let an instance whose
-        catalog match flaps in and out buy a fresh 3-try budget on every flap (Codex stop-gate)."""
+    def test_a_ready_outcome_settles_with_the_plain_version(self, monkeypatch):
+        """A conclusive (ready) outcome gets the PLAIN version, not a marker — storing a marker for it was
+        the other MAJOR this round found: the marker's week ages out every ISO week, `done` reverts to
+        False, and the daily job called Bedrock again on an unchanged, already-successfully-served schema
+        (directly contradicting ADR-018 §A-4/Sustainability, "cached, not regenerated every run"). Whatever
+        budget usage preceded this outcome becomes moot — there is nothing left to retry."""
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         ready_schema = {"labels": ["job"]}                  # catalog matches → conclusive, no generation
         base = dsi._schema_version(ready_schema)
-        c = FakeConn(kind="loki", schema=ready_schema,
-                     existing_version=f"{prev_base(dsi)}:pend2w{dsi._iso_week()}")
+        c = FakeConn(kind="loki", schema=ready_schema, existing_version=f"{base}:pend2w{dsi._iso_week()}")
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
-        assert out["schema_version"] == f"{base}:done2w{dsi._iso_week()}"   # 2 carried over, not 0
+        assert out["schema_version"] == base
 
     def test_the_weekly_retry_is_capped_by_a_spent_week_streak(self, monkeypatch):
         """"The week rolls" must not mean retrying forever: with an unchanged schema that keeps failing, a
@@ -435,7 +467,7 @@ class TestGeneratedFallback:
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS * dsi._MAX_SPENT_WEEKS
         assert version.endswith(f"s{dsi._MAX_SPENT_WEEKS}")
 
-    def test_a_ready_build_clears_the_spent_week_streak(self, monkeypatch):
+    def test_a_ready_build_settles_even_after_a_spent_week_streak(self, monkeypatch):
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
@@ -445,9 +477,9 @@ class TestGeneratedFallback:
         schema = {"labels": ["job"]}                  # the loki catalog DOES match this
         base = dsi._schema_version(schema)
         c = FakeConn(kind="loki", schema=schema,
-                     existing_version=f"{prev_base(dsi)}:done{dsi._MAX_GENERATION_ATTEMPTS}w200001s2")
+                     existing_version=f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w200001s2")
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
-        assert out["schema_version"] == f"{base}:done0w{dsi._iso_week()}"   # no s-suffix → streak cleared
+        assert out["schema_version"] == base           # plain — the streak is moot once something is ready
 
     def test_the_park_expires_when_the_week_rolls_over(self, monkeypatch):
         # It used to be permanent: the plain version was stored, and since a quiet datasource's schema never

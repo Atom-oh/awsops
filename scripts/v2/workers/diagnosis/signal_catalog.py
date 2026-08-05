@@ -25,7 +25,10 @@ CATALOG_VERSION = "v4"  # bumped 2026-08-04: kind-scoped matchers + loki/tempo c
                          # indistinguishable from the legitimate "conclusively nothing to build" row that
                          # must keep skipping (Codex stop-gate). A row written that way under v3 would
                          # never generate again. The bump changes every hash once, so the ambiguous
-                         # encoding cannot survive into v4, where exhaustion is `:spent<week>` instead
+                         # encoding cannot survive into v4. A ready/settled outcome (including a
+                         # weekly budget spent with nothing to show) now stores the PLAIN version once
+                         # nothing remains to retry; only an active or exhausted-this-week retry keeps
+                         # a `:<pend|done>N w<isoweek>[s<streak>]` marker (see datasource_index.py)
 
 # kind → connector tool name (PromQL is identical for both)
 _KIND_TOOL = {

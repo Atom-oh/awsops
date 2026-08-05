@@ -195,7 +195,10 @@ def _nonempty_result(kind, result):
 # otherwise a Bedrock throttle or a connector outage would be frozen into a permanent skip
 # (review: the sentinel turned retryable failures into permanent ones).
 DISABLED = "disabled"      # flag off — nothing changes until an operator acts
-REJECTED = "rejected"      # the model answered and the answer failed a check: conclusive for this schema
+REJECTED = "rejected"      # the model answered and the answer failed a check — NOT conclusive: the
+                           # model, prompt and gates all change, so datasource_index.py retries it under
+                           # the same weekly budget as TRANSIENT (this constant used to say "conclusive",
+                           # which contradicted the caller — review L5)
 TRANSIENT = "transient"    # something threw: retry next run
 GENERATED = "generated"
 

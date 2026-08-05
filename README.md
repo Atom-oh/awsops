@@ -32,7 +32,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito auth) -> VPC Origin (https-only
   -> async workers: POST /api/jobs -> SQS -> Step Functions -> Lambda or Fargate worker
 ```
 
-Stats: 21 pages, 65 API routes, 72 components (`web/`), 17 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
+Stats: 21 pages, 65 API routes, 72 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
 
 > **No public ALB.** The edge is fully private — CloudFront reaches the ALB only through a VPC Origin, and the ALB only accepts traffic from CloudFront's managed security group. v2's posture is a **read-only ops dashboard + AI diagnosis**: AWS-resource mutation and autonomous remediation are FROZEN by design (ADR-005) — infra changes stay with the operator's own IaC/Change Manager, with one narrowly-scoped exception for self-healing service restarts (ADR-015).
 
@@ -146,7 +146,7 @@ awsops/
   terraform/v2/foundation/  # single Terraform root: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/             # configure/deploy/migrate/agentcore/workers tooling (all Node.js/Python)
   tests/                  # repo-wide hook/structure tests + PR-review/Steampipe/ExternalId wiring checks
-  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 17 consolidated ADRs)
+  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 18 consolidated ADRs)
   docs-site/              # Docusaurus user guide (deployed separately)
 ```
 
@@ -198,7 +198,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
   -> 비동기 워커: POST /api/jobs -> SQS -> Step Functions -> Lambda 또는 Fargate 워커
 ```
 
-현황: 21 페이지, 65 API 라우트, 72 컴포넌트(`web/`), 17개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
+현황: 21 페이지, 65 API 라우트, 72 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
 
 > **공개 ALB 없음.** 엣지는 완전히 비공개입니다 — CloudFront는 VPC Origin을 통해서만 ALB에 도달하고, ALB는 CloudFront 관리형 보안 그룹의 트래픽만 허용합니다. v2의 자세는 **read-only 운영 대시보드 + AI 진단**입니다: AWS 리소스 변경·자율 조치는 설계상 FROZEN(ADR-005) — 인프라 변경은 운영자 자신의 IaC/Change Manager가 담당하며, 자가치유 서비스 재시작 하나만 좁게 예외 허용됩니다(ADR-015).
 
@@ -312,7 +312,7 @@ awsops/
   terraform/v2/foundation/  # 단일 Terraform 루트: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/               # configure/deploy/migrate/agentcore/workers 도구(전부 Node.js/Python)
   tests/                    # repo 전반의 hook/structure 테스트 + PR-review/Steampipe/ExternalId 배선 체크
-  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 17개)
+  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 18개)
   docs-site/                # Docusaurus 사용자 가이드(별도 배포)
 ```
 
