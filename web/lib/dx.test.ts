@@ -234,6 +234,9 @@ describe('dxAnalysis', () => {
     expect(a.locations).toEqual([
       { location: 'TLS10', region: 'ap-northeast-2', connections: 2, bandwidthBps: 100_000_000 },
     ]);
+    expect(a.degradedRegions).toEqual([]);
+    expect(a.metricsDegradedRegions).toEqual([]);
+    expect(a.gatewaysDegraded).toBe(false);
   });
 
   it('민감정보(authKey/customerRouterConfig)는 어떤 형태로도 응답에 실리지 않음', async () => {
@@ -282,7 +285,7 @@ describe('dxAnalysis', () => {
     expect(a.totals.connectionsDown).toBe(1);
   });
 
-  it('리전 degrade: 실패 리전은 건너뛰고 나머지 리전+게이트웨이 유지', async () => {
+  it('리전 degrade: 실패 리전은 건너뛰고 나머지 리전+게이트웨이 유지, degradedRegions에 노출', async () => {
     mockDb(['us-west-2']);
     mockDc({
       conns: { 'ap-northeast-2': [CONNS[0]] },
@@ -296,6 +299,45 @@ describe('dxAnalysis', () => {
     expect(a.connections).toHaveLength(1);
     expect(a.vifs).toHaveLength(1);
     expect(a.gateways).toHaveLength(1);
+    // 실패 리전을 조용히 삼키지 않고 노출 — UI가 singleLocation/다운/대역폭 집계가
+    // 낙관적일 수 있음을 경고할 근거.
+    expect(a.degradedRegions).toEqual(['us-west-2']);
+    expect(a.metricsDegradedRegions).toEqual([]);
+    expect(a.gatewaysDegraded).toBe(false);
+  });
+
+  it('메트릭 degrade: CloudWatch 호출 자체 실패 → metricsDegradedRegions에 노출, 리소스 목록은 유지', async () => {
+    mockDb([]);
+    mockDc({ conns: { 'ap-northeast-2': [CONNS[0]] }, vifs: { 'ap-northeast-2': [VIFS[0]] }, gws: [GW], assocs: [ASSOC] });
+    cwSend.mockImplementation(async () => { throw new Error('boom cw'); });
+    const { dxAnalysis } = await import('./dx');
+    const a = await dxAnalysis(3600);
+    expect(a.connections).toHaveLength(1);
+    expect(a.vifs).toHaveLength(1);
+    expect(a.degradedRegions).toEqual([]);
+    expect(a.metricsDegradedRegions).toEqual(['ap-northeast-2']);
+    expect(a.gatewaysDegraded).toBe(false);
+  });
+
+  it('DX Gateway degrade: DescribeDirectConnectGateways 실패 → gatewaysDegraded true, 나머지 데이터 유지', async () => {
+    mockDb([]);
+    mockDc({ conns: { 'ap-northeast-2': [CONNS[0]] }, vifs: { 'ap-northeast-2': [VIFS[0]] } });
+    dcSend.mockImplementation(async (cmd: Cmd, region: string) => {
+      if (cmd.constructor.name === 'DescribeDirectConnectGatewaysCommand') throw new Error('boom gw');
+      switch (cmd.constructor.name) {
+        case 'DescribeConnectionsCommand': return { connections: region === 'ap-northeast-2' ? [CONNS[0]] : [] };
+        case 'DescribeVirtualInterfacesCommand': return { virtualInterfaces: region === 'ap-northeast-2' ? [VIFS[0]] : [] };
+        case 'DescribeLagsCommand': return { lags: [] };
+        case 'ListVirtualInterfaceRoutesCommand': return { routes: [] };
+        default: return {};
+      }
+    });
+    mockCw([], {});
+    const { dxAnalysis } = await import('./dx');
+    const a = await dxAnalysis(3600);
+    expect(a.connections).toHaveLength(1);
+    expect(a.gateways).toEqual([]);
+    expect(a.gatewaysDegraded).toBe(true);
   });
 
   it('메트릭 전무(CW 미발행) → 트래픽/사용률 null, API 상태만으로 판정', async () => {

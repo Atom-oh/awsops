@@ -127,6 +127,15 @@ export interface DxAnalysis {
   gateways: DxGatewayRow[];
   /** 로케이션별 커넥션 집계 (이중화 분석용). */
   locations: { location: string; region: string; connections: number; bandwidthBps: number }[];
+  /** 리소스 목록(Describe*) 자체가 실패해 그 리전의 커넥션/VIF가 전부 빠진 리전 —
+   *  singleLocation·다운 카운트·총 대역폭이 실제보다 낙관적일 수 있다(누락된 리전에
+   *  이중화용 두 번째 로케이션이나 다운 리소스가 있었을 수 있음). UI가 반드시 경고해야 함. */
+  degradedRegions: string[];
+  /** 리소스 목록은 받았지만 CloudWatch 메트릭 호출이 실패한 리전 — 그 리전 커넥션/VIF의
+   *  다운 감지는 API 현재 상태로만 강등되고, 기간 내 과거 다운/사용률은 놓칠 수 있다. */
+  metricsDegradedRegions: string[];
+  /** DX Gateway(글로벌) 조회 자체가 실패 — gatewaysUnassociated/vifCount 등이 0으로 강등됨. */
+  gatewaysDegraded: boolean;
   totals: {
     connections: number; connectionsDown: number;
     vifs: number; vifsDown: number; bgpPeersDown: number;
@@ -193,6 +202,9 @@ interface RegionMetrics {
   /** vifId → BgpPrefixes{Accepted,Advertised} 최신값 (패밀리 합산). */
   pfxAcc: Record<string, number | null>;
   pfxAdv: Record<string, number | null>;
+  /** false = CloudWatch 호출 자체가 실패해 이 리전은 메트릭 없이(null) 나감 — 기간 내
+   *  다운 감지는 API 현재 상태로만 강등되어 과거 다운을 놓칠 수 있다. 호출자가 노출. */
+  ok: boolean;
 }
 
 // Utilization*은 퍼센트로 발행 (실측: bps 1,672 ÷ 50Mbps = 0.0033% ↔ 메트릭 0.00334 일치).
@@ -225,7 +237,7 @@ async function dxMetrics(
   region: string, rangeSec: number,
   conns: { id: string }[], vifs: { id: string; connectionId: string; families: Set<string> }[],
 ): Promise<RegionMetrics> {
-  const out: RegionMetrics = { connState: {}, vif: {}, bgpMin: {}, pfxAcc: {}, pfxAdv: {} };
+  const out: RegionMetrics = { connState: {}, vif: {}, bgpMin: {}, pfxAcc: {}, pfxAdv: {}, ok: true };
   const connIds = conns.map((c) => c.id).slice(0, 100);
   const vifList = vifs.slice(0, 100);
   try {
@@ -330,7 +342,7 @@ async function dxMetrics(
       const adv = pfxByTuple.pfxadv[i];
       if (adv != null) out.pfxAdv[t.vifId] = (out.pfxAdv[t.vifId] ?? 0) + adv;
     });
-  } catch { /* region degrade — 메트릭 없이 리스트만 */ }
+  } catch { out.ok = false; /* region degrade — 메트릭 없이 리스트만, 호출자에 노출 */ }
   return out;
 }
 
@@ -375,8 +387,9 @@ async function vifRoutes(region: string, vifId: string): Promise<{ routes: DxRou
   }
 }
 
-/** DX Gateway(글로벌) + association — 홈 리전에서 1회, 페이지네이션 수용. */
-async function fetchGateways(vifs: DxVifRow[]): Promise<DxGatewayRow[]> {
+/** DX Gateway(글로벌) + association — 홈 리전에서 1회, 페이지네이션 수용.
+ *  실패 시 [] + ok=false — 호출자가 "게이트웨이 0건"과 "조회 실패"를 구분해 경고할 수 있게. */
+async function fetchGateways(vifs: DxVifRow[]): Promise<{ gateways: DxGatewayRow[]; ok: boolean }> {
   const raw: RawGw[] = [];
   try {
     let nextToken: string | undefined;
@@ -386,9 +399,9 @@ async function fetchGateways(vifs: DxVifRow[]): Promise<DxGatewayRow[]> {
       raw.push(...(r.directConnectGateways ?? []));
       nextToken = r.nextToken;
     } while (nextToken);
-  } catch { return []; }
+  } catch { return { gateways: [], ok: false }; }
 
-  return Promise.all(raw.map(async (g): Promise<DxGatewayRow> => {
+  const gateways = await Promise.all(raw.map(async (g): Promise<DxGatewayRow> => {
     const id = g.directConnectGatewayId ?? '';
     let associations: DxGatewayRow['associations'] = [];
     try {
@@ -416,6 +429,7 @@ async function fetchGateways(vifs: DxVifRow[]): Promise<DxGatewayRow[]> {
       unassociated: associations.length === 0,
     };
   }));
+  return { gateways, ok: true };
 }
 
 /** 전 리전 DX 커넥션/VIF + 글로벌 DX Gateway + 메트릭 분석. */
@@ -433,7 +447,7 @@ export async function dxAnalysis(rangeSec: number): Promise<DxAnalysis> {
         ]);
         const rawConns = cr.connections ?? [];
         const rawVifs = vr.virtualInterfaces ?? [];
-        if (rawConns.length === 0 && rawVifs.length === 0) return { connections: [], vifs: [] };
+        if (rawConns.length === 0 && rawVifs.length === 0) return { region, connections: [], vifs: [], degraded: false, metricsDegraded: false };
 
         const vifIds = rawVifs.map((v) => v.virtualInterfaceId ?? '').filter(Boolean);
         const [metrics, routesById] = await Promise.all([
@@ -515,13 +529,15 @@ export async function dxAnalysis(rangeSec: number): Promise<DxAnalysis> {
             down: !['available', 'ordering', 'requested', 'pending'].includes(state) || stateMin === 0,
           };
         });
-        return { connections, vifs };
-      } catch { return { connections: [] as DxConnectionRow[], vifs: [] as DxVifRow[] }; }
+        return { region, connections, vifs, degraded: false, metricsDegraded: !metrics.ok };
+      } catch { return { region, connections: [] as DxConnectionRow[], vifs: [] as DxVifRow[], degraded: true, metricsDegraded: false }; }
     }));
 
     const connections = perRegion.flatMap((r) => r.connections);
     const vifs = perRegion.flatMap((r) => r.vifs);
-    const gateways = await fetchGateways(vifs);
+    const degradedRegions = perRegion.filter((r) => r.degraded).map((r) => r.region);
+    const metricsDegradedRegions = perRegion.filter((r) => r.metricsDegraded).map((r) => r.region);
+    const { gateways, ok: gatewaysOk } = await fetchGateways(vifs);
 
     const locMap = new Map<string, { location: string; region: string; connections: number; bandwidthBps: number }>();
     for (const c of connections) {
@@ -547,6 +563,9 @@ export async function dxAnalysis(rangeSec: number): Promise<DxAnalysis> {
       maxUtilizationPct: utils.length ? Math.max(...utils) : null,
       singleLocation: connections.length > 0 && new Set(connections.map((c) => c.location)).size === 1,
     };
-    return { connections, vifs, gateways, locations, totals, rangeSec };
+    return {
+      connections, vifs, gateways, locations, totals, rangeSec,
+      degradedRegions, metricsDegradedRegions, gatewaysDegraded: !gatewaysOk,
+    };
   });
 }

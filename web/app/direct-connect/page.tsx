@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Cable, CheckCircle2, Gauge, Network, Unplug, Waypoints } from 'lucide-react';
+import { Activity, AlertTriangle, Cable, CheckCircle2, Gauge, Network, Unplug, Waypoints } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
@@ -378,6 +378,21 @@ export default function DirectConnectPage() {
           <div className="text-[13px] text-rose-600">{tt('Direct Connect 조회 실패')}: {err}</div>
         )}
         {!data && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
+
+        {data && (data.degradedRegions.length > 0 || data.metricsDegradedRegions.length > 0 || data.gatewaysDegraded) && (
+          <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-[12px] text-warning-text">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              {data.degradedRegions.length > 0 && (
+                <>{tt('일부 리전 조회 실패')} ({data.degradedRegions.join(', ')}) — {tt('해당 리전의 커넥션·VIF가 누락되어 이중화·다운·대역폭 집계가 실제보다 낙관적일 수 있습니다.')} </>
+              )}
+              {data.metricsDegradedRegions.length > 0 && (
+                <>{tt('일부 리전 메트릭 조회 실패')} ({data.metricsDegradedRegions.join(', ')}) — {tt('해당 리전은 API 현재 상태로만 판정되어 기간 내 과거 다운이 누락될 수 있습니다.')} </>
+              )}
+              {data.gatewaysDegraded && tt('DX Gateway 조회 실패 — 미연결 게이트웨이 집계를 신뢰할 수 없습니다.')}
+            </span>
+          </div>
+        )}
 
         {data && t && (
           <>
