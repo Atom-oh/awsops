@@ -57,13 +57,15 @@ variable "istio_vpc_enabled" {
   default     = false
 }
 
-# ADR-017 — curated official-vendor MCP presets registered as external-obs `mcpServer` gateway
-# targets (scripts/v2/agentcore/provision.py), replacing the hand-written Lambda for kinds that
-# ship a vendor-official MCP server (Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk/...).
+# ADR-017 (amended 2026-08-05) — curated official-vendor MCP presets registered as external-obs
+# `mcpServer` gateway targets (scripts/v2/agentcore/provision.py). VENDOR-HOSTED ONLY:
+# Datadog / Dynatrace / New Relic. Self-hosted official MCP servers (clickhouse/tempo/jaeger/
+# grafana/splunk) do NOT use this path — ClickHouse's is stdio-embedded in the agent runtime
+# (CLICKHOUSE_OFFICIAL_MCP env, `make agentcore`), tempo/jaeger stay on the in-house lambdas.
 # Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0, plan = No changes).
 variable "official_mcp_enabled" {
   type        = bool
-  description = "Register curated official-vendor MCP servers (ADR-017) as external-obs gateway mcpServer targets. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0)."
+  description = "Register curated vendor-HOSTED official MCP servers (ADR-017: Datadog/Dynatrace/New Relic) as external-obs gateway mcpServer targets. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0)."
   default     = false
 }
 

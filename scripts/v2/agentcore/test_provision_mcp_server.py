@@ -141,6 +141,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-legacy")
@@ -252,6 +253,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         # The new target creation failed — the legacy target must NOT have been deleted, or the
@@ -296,6 +298,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.delete_gateway_target.assert_not_called()  # legacy target untouched
@@ -468,6 +471,7 @@ class TestLegacyRetireCrossesGateways(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _TEMPO_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _TEMPO_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"tempo": "tempo-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:tempo": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-obs", "monitoring": "gw-mon"})
         ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-mon", targetId="t-legacy")
@@ -506,6 +510,7 @@ class TestRound4Findings(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.create_gateway_target.assert_not_called()

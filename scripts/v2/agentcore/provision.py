@@ -874,7 +874,20 @@ def ensure_runtime(ctrl, ac, gw_ids):
            # Dark-path chat loop (ADR-008 amended / BASELINE §2) — default OFF. Set explicitly on the
            # runtime so it survives re-provisioning and is toggleable via the normal deploy path:
            # `ANTHROPIC_AGENT_LOOP_ENABLED=true make agentcore`.
-           "ANTHROPIC_AGENT_LOOP_ENABLED": os.environ.get("ANTHROPIC_AGENT_LOOP_ENABLED", "false")}
+           "ANTHROPIC_AGENT_LOOP_ENABLED": os.environ.get("ANTHROPIC_AGENT_LOOP_ENABLED", "false"),
+           # ADR-017 (amended 2026-08-05) — runtime fail-closed tool allowlist for the vendor-hosted
+           # official-MCP presets. Written on EVERY run (not just when official_mcp_enabled) so a
+           # stale/absent map can never fail-open: agent.py drops all `*-mcp-server-target___*`
+           # tools that aren't in this map.
+           "OFFICIAL_MCP_TOOL_ALLOWLIST_JSON": json.dumps(
+               {tname: sorted(spec.get("tool_allowlist") or ())
+                for tname, spec in catalog.MCP_SERVER_TARGETS.items()}),
+           # ADR-017 (amended) — official mcp-clickhouse stdio embedding, default OFF. Toggle via
+           # `CLICKHOUSE_OFFICIAL_MCP=true make agentcore` (same pattern as the loop flag above).
+           "CLICKHOUSE_OFFICIAL_MCP": os.environ.get("CLICKHOUSE_OFFICIAL_MCP", "false"),
+           # Where agent.py reads the datasource kind-mirror credentials for the stdio path (same
+           # single integrations secret the connector lambdas use).
+           "INTEGRATIONS_SECRET_NAME": f"ops/{ac.get('project', 'awsops-v2')}/integrations/credentials"}
     existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
     try:
         if RUNTIME_NAME in existing:

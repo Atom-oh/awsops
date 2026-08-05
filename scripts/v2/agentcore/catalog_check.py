@@ -94,6 +94,13 @@ for target_name, entry in MCP_SERVER_TARGETS.items():
             if not auth.get(field):
                 errors.append(f"{target_name}: auth.mode=api_key requires '{field}'")
 
+    # ADR-017 amendment 2026-08-05: every preset MUST declare tool_allowlist (tuple/list of str;
+    # empty = provision the target but expose zero tools). Absence would silently fail-closed at
+    # the runtime anyway, but here it's a catalog bug — the field is the documented contract.
+    ta = entry.get("tool_allowlist")
+    if not isinstance(ta, (tuple, list)) or any(not isinstance(x, str) or not x for x in ta):
+        errors.append(f"{target_name}: tool_allowlist must be a tuple/list of non-empty strings (empty tuple allowed)")
+
 if errors:
     print("FAIL")
     for e in errors:
