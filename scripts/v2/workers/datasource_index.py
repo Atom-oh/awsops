@@ -27,7 +27,7 @@ import boto3
 
 try:  # fargate/tests: package path; lambda worker zip flattens it to signal_catalog.py
     from diagnosis import signal_catalog as _cat
-except ImportError:  # noqa: F401
+except ImportError:
     import signal_catalog as _cat  # flattened in the worker_src lambda bundle
 
 import graph_catalog as _graph_cat  # always flat next to this file — never under a package
@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 
 try:  # fargate/tests: package path; lambda worker zip flattens it to signal_catalog_gen.py
     from diagnosis import signal_catalog_gen as _signal_gen
-except ImportError:  # noqa: F401
+except ImportError:
     import signal_catalog_gen as _signal_gen  # flattened in the worker_src lambda bundle
 
 

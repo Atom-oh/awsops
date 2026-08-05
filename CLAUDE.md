@@ -137,7 +137,7 @@ make workers     # arm64 worker 이미지 push (workers_enabled=true로 apply �
 - 옛 ADR 001~046 본문은 **트리에 없음** — git tag `adr-legacy-2026-06-22` 보존, 매핑 `docs/decisions/ADR-MAPPING.md`. **명시 요청 없이는 옛 본문(tag)을 읽지 않는다.**
 - **AWS 리소스 변경·자율 = FROZEN (ADR-005, do-not-enable).** 완화는 *문서 정리가 아니라* 새 ADR + 멀티-AI 패널 + 날짜박힌 owner-override가 필요한 별도 제품 결정. 외부 DATA read/write는 거버넌스 하 별개(ADR-007).
   - **첫 예외: ADR-015**(운영 자가치유) — 오준석 owner-override(2026-07-01)로 **딱 하나만** 허용: 자기 web 서비스의 `ecs:UpdateService force-new-deployment`(재시작. 이미지/task def 불변, 코드 배포 아님), Aurora secret 회전 이벤트 한정, IAM 1 ARN, secret-id fail-closed, default-off. ADR-005의 나머지(코드 배포, remediation, mutating tools)는 그대로 FROZEN.
-- 새 ADR = 최고번호+1(현재 **015**), single Status, **같은 PR에서 BASELINE 갱신 필수**(anti-drift). 규칙은 `docs/decisions/CLAUDE.md`.
+- 새 ADR = 최고번호+1(현재 **018**), single Status, **같은 PR에서 BASELINE 갱신 필수**(anti-drift). 규칙은 `docs/decisions/CLAUDE.md`.
 
 ---
 
@@ -280,7 +280,7 @@ make workers     # arm64 worker image push (after apply with workers_enabled=tru
 - Old ADRs 001–046 bodies are **not in the tree** — preserved in git tag `adr-legacy-2026-06-22`, mapped in `docs/decisions/ADR-MAPPING.md`. **Do not read the old bodies (from the tag) unless explicitly asked.**
 - **AWS-resource mutation + autonomy = FROZEN (ADR-005, do-not-enable).** Unfreezing is a separate product decision requiring a new ADR + multi-AI panel + dated owner-override — never a doc-cleanup reinterpretation. External DATA read/write is governed and separate (ADR-007).
   - **First exception: ADR-015** (operational self-healing) — owner-override by 오준석 (2026-07-01), scoped to exactly one thing: `ecs:UpdateService force-new-deployment` (a restart — same image/task-def, not a code deploy) on the host's own web service, only on its own Aurora secret-rotation event, IAM scoped to one ARN, secret-id fail-closed, default-off. The rest of ADR-005 (code deploys, remediation, mutating tools) stays FROZEN.
-- New ADR = highest + 1 (currently **015**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules: `docs/decisions/CLAUDE.md`.
+- New ADR = highest + 1 (currently **018**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules: `docs/decisions/CLAUDE.md`.
 
 ## Implementation References
 <!-- AUTO-MANAGED:references — /project-init sync가 이 블록을 관리. 수동 편집은 마커 밖에. -->
