@@ -130,15 +130,6 @@ BASE CONTEXT (오탐 차단): 이 repo 의 BASE 브랜치가 현재 작업 디�
 스키마 = 동결된 data/schema.sql 베이스라인 + migrations/*.sql(make migrate). schema.sql 에 없어도
 migrations/ 가 추가하는 컬럼은 결함이 아니다. base 에서 재현 못 하는 "없음" 지적은 게이트에서 제외하고
 "unverified against base"로만 기록하라.
-$( # 절단 런에서만 존재/유효 (pr-review.yml 이 매 절단 런마다 재생성, 비절단 런은 삭제) — 절단으로
-   # 아무 패널도 못 본 변경 파일 목록. 그 파일들에 정의가 있을 수 있는 "없음" 주장은 검증 불가.
-   if [ "${panel_truncated:-0}" = "1" ] && [ -s /tmp/diff-files-unseen.txt ]; then
-     echo "TRUNCATION (오탐 차단 2): diff 절단으로 아래 변경 파일들의 내용은 어떤 패널에게도 전달되지"
-     echo "않았거나(PARTIAL 표기는 중간에서 잘림) 일부만 전달됐고, 체크아웃은 base 라 새 내용을 읽을"
-     echo "수도 없다. 이 파일들에 정의/배선이 있을 수 있는 '없음/미연결/누락' CRITICAL·MAJOR 는"
-     echo "unverifiable 이므로 게이트에서 제외하라:"
-     sed 's/^/  - /' /tmp/diff-files-unseen.txt
-   fi )
 
 Project rules (awsops — AWS+Kubernetes ops 대시보드, Next.js/TS + Python + Terraform/CDK, lens 별 체크리스트):
 - L2(코드 정확성): TS/React 프론트엔드 + Python API 실제 로직 버그·엣지케이스.
@@ -179,14 +170,13 @@ PROMPT_EOF
 # opus-4-8 로 고정된 repo) 그대로 재사용하면 PRIMARY==FALLBACK 으로 붕괴해
 # fallback 자체가 무력화된다. chair 전용 CHAIR_PRIMARY_MODEL 로 완전히 분리.
 #
-# CHAIR_TIMEOUT 900s: 600s(oh-my-cloud-skills #105의 286s 실측 ×2 여유)는 대형 PR 에서
-# 모자랐다 — PR #205 (2026-08-05, chair input ~300KB: diff 200KB + panel 96KB) 에서 Fable 5
-# primary 가 같은 날 세 실행 연속으로 600s 캡에 잘렸다(stderr 공백 = 오류가 아니라 아직
-# 생성 중이던 프로세스를 timeout 이 죽인 것; 작은 diff 실행에선 동일 chair 가 정상 완료).
-# 900s ×2(chair 2회) + 패널 ~10분 ≈ 40분 — job timeout-minutes 45 안에 여전히 들어온다.
+# CHAIR_TIMEOUT 600s (oh-my-cloud-skills #105 실측 근거 재사용): 같은 러너 이미지/서비스
+# 어카운트를 쓰는 ttobak 에서, 타임아웃 없는 구(4-패널) 버전 스크립트가 357줄 diff 종합에
+# 286초를 정상적으로 썼다. 매트릭스(4→16 패널 출력)는 체어 입력이 더 커 286s 실측조차
+# 밑돎 — job timeout-minutes 여유를 반영해 600s로 상향.
 PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
-CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-900}"
+CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-600}"
 
 chair_label() { case "$1" in
   *fable-5*)  echo "Claude Fable 5" ;;
@@ -307,25 +297,7 @@ echo "chair input: diff=${DIFF_BYTES}B, panel=${PANEL_BYTES}B, total=${TOTAL_BYT
 
 # primary/fallback 이 같은 chair.err 를 공유하면 fallback 이 primary 의 stderr 를 덮어써
 # 실패 원인이 사후에 안 보였다 — 시도별로 분리.
-#
-# fast-fail 1회 재시도 (PR #205, 2026-08-05 관찰): fallback(Opus 5)이 74초 만에 빈 응답으로
-# 죽어 chair 가 이중 실패했다. CHAIR_TIMEOUT 에 잘린 것(느린 생성)과 달리, 수십 초 내의
-# invalid 는 일과성 API/연결 오류 패턴이므로 같은 모델로 딱 1회 재시도한다. 타임아웃 케이스
-# (경과 ≥ FAST_FAIL_SECS)는 재시도해도 같은 벽에 다시 부딪히므로 재시도하지 않는다 —
-# 그건 CHAIR_TIMEOUT 상향이 담당. 재시도의 stderr 는 같은 파일에 덮어쓴다(1차도 fast-fail
-# 이면 원인이 사실상 동일하고, 시도 횟수는 warning 로그로 남는다).
-FAST_FAIL_SECS=120
-attempt_chair() {  # $1=model $2=err-file
-  local t0 elapsed
-  t0=$(date +%s)
-  run_chair "$1" "$2"
-  elapsed=$(( $(date +%s) - t0 ))
-  if ! chair_valid && [ "$elapsed" -lt "$FAST_FAIL_SECS" ]; then
-    echo "::warning::chair '$(chair_label "$1")' returned invalid output in ${elapsed}s (fast-fail — transient API error pattern): $(scrubbed_err_excerpt "$2") — one retry"
-    run_chair "$1" "$2"
-  fi
-}
-attempt_chair "$PRIMARY_MODEL" "$WORK/chair-primary.err"
+run_chair "$PRIMARY_MODEL" "$WORK/chair-primary.err"
 CHAIR_USED="$PRIMARY_MODEL"
 FALLBACK_RAN=0
 # PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면(예: job env 의
@@ -334,7 +306,7 @@ FALLBACK_RAN=0
 if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
   FALLBACK_RAN=1
   echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(scrubbed_err_excerpt "$WORK/chair-primary.err") — falling back to '$(chair_label "$FALLBACK_MODEL")'"
-  attempt_chair "$FALLBACK_MODEL" "$WORK/chair-fallback.err"
+  run_chair "$FALLBACK_MODEL" "$WORK/chair-fallback.err"
   if chair_valid; then
     CHAIR_USED="$FALLBACK_MODEL"
   else
