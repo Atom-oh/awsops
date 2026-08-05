@@ -264,6 +264,17 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     version = _schema_version(schema)
     existing_content_version = wdb.read_signal_schema_version(conn, iid)
     existing_budget = wdb.read_diag_signal_budget(conn, iid)
+    if existing_budget is None and _MARKER_RE.search(existing_content_version or ""):
+        # v4 -> v5 TRANSITION ONLY. The marker used to live embedded in the CONTENT rows' shared
+        # schema_version column; a pre-v5 instance's stored value can still literally BE that old marker
+        # string. Bumping CATALOG_VERSION makes the CONTENT mismatch (forcing a one-time rebuild, not a
+        # false permanent skip) but does nothing by itself to preserve the CAP that marker represented —
+        # every already-parked instance would otherwise read `existing_budget=None` and get a silently
+        # fresh 3-try budget on its first post-deploy run, a hard-cap violation across the whole fleet at
+        # once (Codex stop-gate). Bootstrapping the budget from the old embedded value this one time
+        # carries the real attempts/streak forward; `_marker_state` already ignores which hash prefixes a
+        # PEND/same-week marker, so the CATALOG_VERSION-driven hash change here does not itself reset it.
+        existing_budget = existing_content_version
     base, attempts, done, streak = _marker_state(existing_budget, version)
     # Skip only when BOTH agree there is nothing to do: the CONTENT is fresh (this exact schema was the
     # last one actually built, so `rows` would come out the same) AND the BUDGET says settled for this

@@ -270,15 +270,36 @@ class TestGeneratedFallback:
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v3")
         assert dsi._schema_version(schema) != now   # every v3 row, plain marker included, rebuilds once
 
-    def test_the_catalog_version_retires_the_schema_version_embedded_marker(self, monkeypatch):
-        """v4's marker lived embedded in schema_version itself; v5 moved it to a dedicated bookkeeping row
-        that no pre-v5 instance has, so without a bump every already-capped/parked instance would silently
-        read as "no budget, fresh start" on rollout — an undocumented reset of every existing cap
-        (Codex stop-gate). The only way to make that reset explicit is to invalidate every hash once."""
+    def test_the_catalog_version_forces_a_one_time_rebuild_for_v4_instances(self, monkeypatch):
+        """v4's marker lived embedded in schema_version itself; v5 moved it to a dedicated bookkeeping row.
+        The bump forces every v4 row's CONTENT to look stale once, so the transition is a deliberate
+        rebuild rather than a false permanent skip (a v4 row's stored value is never a valid v5 hash)."""
         schema = {"tables": {"t": ["c"]}}
         now = dsi._schema_version(schema)
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v4")
-        assert dsi._schema_version(schema) != now   # every v4 row rebuilds once, budget genuinely fresh
+        assert dsi._schema_version(schema) != now
+
+    def test_a_pre_v5_capped_instance_does_not_get_a_free_budget_on_rollout(self, monkeypatch):
+        """The CATALOG_VERSION bump alone does not preserve a cap — it only makes the CONTENT mismatch, so
+        without also bootstrapping the budget, `read_diag_signal_budget` finds no dedicated row (no pre-v5
+        instance has one) and every already-parked instance reads as fresh, a hard-cap violation across
+        the whole fleet at once on the very first post-deploy run (Codex stop-gate). A pre-v5 row's
+        schema_version literally IS the old embedded marker string — bootstrapping the budget from it this
+        one time carries the real attempts/streak forward instead of resetting them."""
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        # A pre-v5 row: no dedicated budget row exists, and CONTENT itself carries the old embedded marker
+        # — capped, with no budget left, under the OLD (v4-scheme) hash.
+        legacy_embedded = f"legacy-v4-hash:done{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}s2"
+        c = FakeConn(kind="clickhouse", schema=schema, existing_version=legacy_embedded)
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert calls == []                    # still capped — bootstrapped, not reset to a fresh budget
+        assert c.budget() is not None and c.budget().endswith(f"s2")
 
     GENERATED_ROW = {"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                      "query": {"tool": "loki_query_range",
