@@ -301,6 +301,29 @@ class TestGeneratedFallback:
         assert calls == []                    # still capped — bootstrapped, not reset to a fresh budget
         assert c.budget() is not None and c.budget().endswith(f"s2")
 
+    def test_a_pre_v5_streak_capped_row_stays_parked_across_a_week_rollover(self, monkeypatch):
+        """Carrying the OLD embedded hash prefix over VERBATIM fixed the same-week case but broke the
+        streak-cap's week-rollover un-park check: a pre-v5 marker's hash was computed under the OLD
+        CATALOG_VERSION, so it can never equal a freshly computed v5 hash even for an IDENTICAL, unchanged
+        schema — `base != version` reads as "the schema genuinely changed" and un-parks every streak-capped
+        pre-v5 instance the moment the week rolls, purely because of this deploy's version-scheme change
+        (Codex stop-gate, second pass). The bootstrap must re-anchor the hash to the CURRENT version so the
+        streak cap only reacts to a REAL schema change from here on."""
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"tables": {"t": ["c"]}}          # same schema before and after — never actually changes
+        legacy_embedded = (f"legacy-v4-hash:done{dsi._MAX_GENERATION_ATTEMPTS}"
+                           f"w200001s{dsi._MAX_SPENT_WEEKS}")
+        monkeypatch.setattr(dsi, "_iso_week", lambda: "200002")   # a new week: the streak-cap branch fires
+        c = FakeConn(kind="clickhouse", schema=schema, existing_version=legacy_embedded)
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert calls == []                          # still capped — NOT treated as a genuine schema change
+        assert c.budget() is None or c.budget().endswith(f"s{dsi._MAX_SPENT_WEEKS}")
+
     GENERATED_ROW = {"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                      "query": {"tool": "loki_query_range",
                                "queries": [{"label": "generated",
