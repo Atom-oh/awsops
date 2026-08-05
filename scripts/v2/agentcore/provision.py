@@ -644,34 +644,33 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # listingMode DEFAULT = the control plane caches the tool list it discovered, i.e. THE VENDOR
         # DECIDES WHICH TOOLS THIS GATEWAY EXPOSES.
         #
-        # ACTIVATION BLOCKER — not an accepted risk. ADR-017 §Status keeps official_mcp_enabled
-        # do-not-enable until a runtime per-preset tool allowlist exists (agent.py:get_all_tools,
-        # same fail-closed shape as select_integration_tools). An earlier revision of this
-        # comment called it "knowingly accepted", which contradicted BASELINE §1's governance
-        # requirement and the ADR's own §Trade-offs (PR #194 review MAJOR, L5).
-        # ADR-017's `capability = read` is a DECLARATIVE LABEL, NOT SERVER-SIDE ENFORCEMENT on this
-        # path. A `mcp.lambda` target caps its tool set with toolSchema.inlinePayload; an mcpServer
-        # target on an API_KEY credential has NO equivalent cap available:
-        #   - bedrock-agentcore-control has no tool-listing operation at all (target ops are only
-        #     Create/Get/List/Update/DeleteGatewayTarget + SynchronizeGatewayTargets, and no response
-        #     carries tool names — verified against the botocore 2023-06-05 model), so provision.py
-        #     cannot even read, let alone diff, the vendor's advertised tools; and
-        #   - the one field that WOULD cap them, McpServerTargetConfiguration.mcpToolSchema, is
-        #     documented as "Supported only when the credential provider is configured with an
-        #     authorization code grant type" — these presets are API_KEY, and setting it disables
-        #     tool synchronization entirely.
-        # Consequence, stated plainly: if a vendor adds a WRITE tool (mute monitor, create incident,
-        # delete dashboard) to an ALREADY-ACKED preset, the sync-on-EXISTS above absorbs it into the
-        # agent's tool surface on the next `make agentcore` — no re-ack, no PR, no review. The
-        # `read_only_note` and the operator ack attest to a VENDOR-SIDE control (RBAC scope /
-        # --disable-write / read-scoped token), which does keep applying to later-added tools; they
-        # do NOT and cannot attest to a tool list.
-        # This risk is knowingly accepted because AgentCore offers no tool-schema cap on the API_KEY
-        # path. The compensating controls are: `official_mcp_enabled` + `integrations_enabled`
-        # default-off; the curated catalog (only vendors WE list get a preset_key at all — see
-        # MCP_SERVER_TARGETS); the fail-closed per-preset `official_mcp_read_only_ack` bound to the
-        # exact endpoint; and `integrations_write_enabled` staying off so no external write tier is
-        # live. Recorded in ADR-017 §Decision/§Trade-offs and the ADR-004/ADR-007 amendments.
+        # RESOLVED (2026-08-05, ADR-017 re-amendment) — this used to be an ACTIVATION BLOCKER, not
+        # an accepted risk: bedrock-agentcore-control has no tool-listing operation at all (target
+        # ops are only Create/Get/List/Update/DeleteGatewayTarget + SynchronizeGatewayTargets, no
+        # response carries tool names — verified against the botocore 2023-06-05 model), so
+        # provision.py cannot read, let alone diff, the vendor's advertised tools; and the one field
+        # that WOULD cap them, McpServerTargetConfiguration.mcpToolSchema, requires an
+        # authorization-code-grant credential unavailable to these API_KEY presets. A vendor adding
+        # a WRITE tool to an already-acked preset used to be absorbed into the agent's tool surface
+        # on the next `make agentcore` with no re-ack, no PR, no review.
+        # That gap is now closed a layer up, at the RUNTIME, not the control plane: each catalog
+        # entry below declares `tool_allowlist` (read-only tool names TRANSCRIBED from vendor docs —
+        # see catalog.py's per-entry provenance comments), written here to
+        # OFFICIAL_MCP_TOOL_ALLOWLIST_JSON (below) and intersected in agent.py against every
+        # `<target>___<tool>` name coming back from the gateway — empty/untranscribed allowlist or a
+        # missing env var both mean zero tools for that preset (fail-closed), and this same gate is
+        # shared (not duplicated) between the Strands handler and the anthropic_loop dark-path
+        # handler (PR #207 CRITICAL fix — a prior revision only gated the Strands path). A vendor
+        # adding a write tool no longer reaches the model: it's simply not in the allowlist.
+        # `listingMode=DEFAULT` above still means the control plane itself imposes no cap — the
+        # allowlist is enforced entirely in agent.py, not here — so this file still cannot verify
+        # what the vendor's server advertises; it only bounds what's let through downstream.
+        # Compensating controls, unchanged: `official_mcp_enabled` + `integrations_enabled`
+        # default-off; the curated catalog (only vendors WE list get a preset_key — see
+        # MCP_SERVER_TARGETS, now vendor-hosted-only per ADR-017); the fail-closed per-preset
+        # `official_mcp_read_only_ack` bound to the exact endpoint; `integrations_write_enabled`
+        # staying off. Recorded in ADR-017 §Decision/§Trade-offs and the ADR-004/ADR-007 amendments
+        # (both carry a 2026-08-05 follow-up noting this resolution).
         cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
         tid_final = None
         tid_to_sync = None

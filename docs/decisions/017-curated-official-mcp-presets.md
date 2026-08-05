@@ -5,7 +5,7 @@
 
 게이트 2개, 둘 다 기본 false:
 - **`official_mcp_enabled`** (`ai.tf`) — 벤더 **호스팅** 공식 MCP 3종(Datadog·Dynatrace·New Relic)을 external-obs `mcpServer` target으로 등록. 종전 `do-not-enable` 이었던 활성화 차단 사유 2개는 이번 개정으로 해소되었다: ① 런타임 per-preset 툴 allowlist가 구현됨(아래 §Decision — fail-closed), ② 자체 호스팅 프리셋이 이 경로에서 **제거**되어 도달성 미검증 문제 자체가 소멸(남은 3종은 공용 SaaS 엔드포인트). 이제 일반 GATED — 켜려면 프리셋별 `official_mcp_read_only_ack` (fail-closed)까지 필요하다.
-- **`CLICKHOUSE_OFFICIAL_MCP`** (AgentCore 런타임 env, provisioner가 기록 — `CLICKHOUSE_OFFICIAL_MCP=true make agentcore`) — ClickHouse 공식 MCP(`mcp-clickhouse`)를 런타임 컨테이너에 **stdio로 내장** 실행. 기본 off.
+- **`CLICKHOUSE_OFFICIAL_MCP`** (AgentCore 런타임 env, provisioner가 기록 — `CLICKHOUSE_OFFICIAL_MCP=true make agentcore`) — ClickHouse 공식 MCP(`mcp-clickhouse`)를 런타임 컨테이너에 **stdio로 내장** 실행. 기본 off이며, **do-not-enable**: 자체 람다 경로(`agent/lambda/clickhouse_mcp.py`)의 1차 방어(테이블 함수 SSRF 차단 `_TABLE_FN` + ClickHouse `readonly=1` + connect-time `assert_host_allowed`)를 stdio 경로는 대체 없이 갖지 못한다(아래 §Trade-offs) — `ALLOW_WRITE_ACCESS=false`/`ALLOW_DROP=false` 코드 고정만으로는 동등하지 않다. 켜려면 stdio 앞단에 동등한 쿼리 가드 또는 ClickHouse 서버측 최소권한 프로필을 먼저 갖춰야 한다(리뷰 2026-08-05, PR #207).
 
 - **Owner 지시 1:** 오준석(Junseok Oh), 2026-07-29 — "우리가 만든 mcp는 앞으로 유지보수가 걸림돌이 될거 같아서 외부에서 잘 관리되는 mcp가 맞는거 같아서, 다만 유명한 데이터 소스의 mcp를 우리가 먼저 정해주는게 좋긴 할거 같아".
 - **Owner 지시 2:** 오준석, 2026-08-05 — 초기 구현(토큰만 받는 커넥터 카드 + 운영자가 MCP 서버를 직접 호스팅하는 원격 target 모델)은 의도가 아니었다. "공식 MCP는 token으로만 등록되어 있는 것이 문제 — 실제로 사용 불가능한 UX. 공식 MCP를 넣어달라고 한 것은 직접 만든 clickhouse mcp보다 schema 등 API 연결이 잘 될 것을 기대해서. 어딘가에 mcp 서버를 띄우고 관리하는 것은 원한 게 아님." → 본 개정.
@@ -47,10 +47,11 @@ Prometheus·Mimir는 공식 MCP가 없어(2026-07 조사) 자체 람다 유지, 
 - stdio spawn은 게이트웨이 호출당 서브프로세스 기동 비용(수백 ms)을 더한다 — external-obs 경로에서만, 플래그 ON일 때만.
 - Dynatrace 프리셋은 hosted 툴 목록 전사 전까지 툴 0개로 provisioning된다(의도된 fail-closed).
 - 멀티 인스턴스 datasource(ADR-039)의 비-default 인스턴스는 stdio 경로가 아직 읽지 않는다(kind-mirror=default 인스턴스만). 필요 시 후속.
+- **stdio ClickHouse는 자체 람다 경로의 1차 방어를 대체 없이 잃는다(리뷰 2026-08-05, PR #207 — do-not-enable 사유).** `agent/lambda/clickhouse_mcp.py`는 `url`/`file`/`remote`/`s3`/`mysql` 등 ClickHouse 테이블 함수가 "`readonly=1`이 막지 못하는 server-side SSRF/cross-datastore exfil 벡터"임을 명시하고 `_TABLE_FN` 정규식 차단 + 쿼리에 `?readonly=1` 강제 + 요청마다 DNS-rebinding-safe `assert_host_allowed()`로 막는다(`agent/lambda/CLAUDE.md`: "ClickHouse 커넥터는 DB-롤 경계가 없어 어휘 가드가 1차 방어"). 공식 `mcp-clickhouse` stdio 서브프로세스는 이 세 가지 중 아무것도 갖지 않는다 — `CLICKHOUSE_ALLOW_WRITE_ACCESS=false`/`ALLOW_DROP=false` env 2개와 URL scheme 검사만 남는다. 프롬프트 인젝션된 에이전트가 `SELECT * FROM url('http://169.254.169.254/...')` 류로 in-VPC/메타데이터에 도달할 수 있는 경로가 코드상 존재하며, 기본 off인 것이 유일한 방어다. 동등한 쿼리 가드(또는 ClickHouse 서버측 최소권한 롤/프로필로 테이블 함수 자체를 비활성)가 갖춰지기 전까지 `CLICKHOUSE_OFFICIAL_MCP`는 **do-not-enable**이다 — §Status 갱신, BASELINE §2 동기화(같은 PR).
 - 챗 라우팅 정적성 주의는 유지: legacy lambda target이 있는 kind를 원격 프리셋으로 cutover할 때 `web/lib/route.ts` 키워드 이동이 REQUIRED 단계다(현재 남은 대상: 없음 — tempo가 카탈로그에서 빠져 cutover 시나리오 자체가 소멸).
 
 ## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
-- **Security**: 원격 프리셋의 read 강제 = 벤더측 컨트롤 ack(`official_mcp_read_only_ack`, fail-closed) **+ 런타임 툴 allowlist(fail-closed, 코드 강제)** 2중. stdio ClickHouse의 read 강제 = `CLICKHOUSE_ALLOW_WRITE_ACCESS=false` 코드 고정 + ClickHouse `readonly=1`. 자격증명은 기존 Secrets Manager 재사용(신규 저장소 없음), stdio env로만 전달(로그 금지). BYO-MCP 폐기 유지.
+- **Security**: 원격 프리셋의 read 강제 = 벤더측 컨트롤 ack(`official_mcp_read_only_ack`, fail-closed) **+ 런타임 툴 allowlist(fail-closed, 코드 강제)** 2중, 그리고 이 allowlist는 `agent.py`(Strands 경로)와 `anthropic_loop.py`(다크 경로) 양쪽 모두에서 동일하게 강제된다(공유 헬퍼 — 리뷰 2026-08-05 CRITICAL 수정, PR #207). stdio ClickHouse의 read 강제는 `CLICKHOUSE_ALLOW_WRITE_ACCESS=false`/`ALLOW_DROP=false` 코드 고정뿐이다 — **ClickHouse `readonly=1`이 아니다**: 그 서버측 파라미터는 자체 람다 경로(`clickhouse_mcp.py`)에만 존재하고, `mcp-clickhouse` stdio env 계약에는 대응 항목이 없다(정정, 이전 판이 잘못 주장함). 테이블 함수 SSRF 차단도 stdio 경로에 없다 — 위 §Trade-offs 참조, 이 gap이 `CLICKHOUSE_OFFICIAL_MCP`를 do-not-enable로 유지하는 이유다. 자격증명은 기존 Secrets Manager 재사용(신규 저장소 없음), stdio env로만 전달(로그 금지). BYO-MCP 폐기 유지.
 - **Operational Excellence**: 커넥터 유지보수의 벤더 이관(ClickHouse 스키마 툴 등), dead UI 제거로 운영자 혼란 제거.
 - **Reliability**: stdio spawn 실패는 게이트웨이 툴에 영향 없이 해당 툴만 결손(기존 integration 격리 패턴과 동일). 자체 람다는 삭제하지 않아 롤백 경로 보존.
 - **Cost**: 두 게이트 모두 default-off = $0. stdio는 추가 인프라 없음(런타임 컨테이너 내 실행).
