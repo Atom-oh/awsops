@@ -73,10 +73,21 @@ def _ctrl_with_targets(targets_by_gw=None):
     return ctrl
 
 
-class TestEnsureMcpServerTargets(unittest.TestCase):
+class _IsolatedProvisionTest(unittest.TestCase):
+    """Base for tests that patch MCP_SERVER_TARGETS to a single synthetic preset. The REAL
+    RETIRED_MCP_SERVER_TARGETS tombstones fire on every ensure_mcp_server_targets() call, so without
+    neutralizing them here their 5 provider deletes leak into every `assert_called_once_with` in this
+    file. Tombstone behaviour itself is covered by TestRetiredCatalogEntries, which patches the list
+    to the entry it is actually testing."""
+
     def setUp(self):
         provision.report.clear()
+        patcher = mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS", ())
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
+
+class TestEnsureMcpServerTargets(_IsolatedProvisionTest):
     def test_no_endpoints_configured_is_skip_not_err(self):
         ctrl = _ctrl_with_targets()
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET):
@@ -392,13 +403,10 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         self.assertIn(("target:datadog-mcp-server-target:sync", "OK"), [(r[0], r[1]) for r in provision.report])
 
 
-class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
+class TestEnsureTargetsSkipsCutoverLegacy(_IsolatedProvisionTest):
     """MAJOR (kiro review, 2026-07-31): ensure_targets must not recreate a legacy lambda target
     that ensure_mcp_server_targets owns this run, or the two functions flap it into existence and
     back out on every single provisioner run."""
-
-    def setUp(self):
-        provision.report.clear()
 
     def test_skip_names_prevents_recreating_an_active_presets_legacy_target(self):
         ctrl = mock.Mock()
@@ -432,14 +440,11 @@ class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
         self.assertEqual(active, set())
 
 
-class TestLegacyRetireCrossesGateways(unittest.TestCase):
+class TestLegacyRetireCrossesGateways(_IsolatedProvisionTest):
     """MAJOR (kiro review, 2026-07-31): a legacy lambda target can live on a DIFFERENT gateway than
     the new mcpServer target for the same preset (e.g. tempo-mcp-target on 'monitoring' vs
     tempo-mcp-server-target on 'external-obs') — retire must search the legacy target's OWN
     gateway, not just the new target's gateway."""
-
-    def setUp(self):
-        provision.report.clear()
 
     def test_legacy_target_on_a_different_gateway_is_still_retired(self):
         _TEMPO_PRESET = {
@@ -508,37 +513,32 @@ class TestRetiredCatalogEntries(unittest.TestCase):
                                (("clickhouse-mcp-server-target", "clickhouse"),)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
 
-    def test_failed_provider_delete_keeps_the_target_so_the_next_run_retries(self):
-        # The target's presence is the ONLY retry trigger (the pass is gated on it, so it doesn't
-        # churn the control plane every run forever). So retiring the target while the provider
-        # delete failed would orphan the vendor token permanently: the next run sees no target and
-        # skips. The provider delete must therefore gate the target delete.
-        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
-        ctrl.delete_api_key_credential_provider.side_effect = _client_error("ThrottlingException")
+    def test_provider_only_state_is_still_cleaned_up(self):
+        # The two objects fail INDEPENDENTLY, and provision creates the provider BEFORE the target —
+        # so "provider exists, target doesn't" is reachable (failed target create, or a half-done
+        # retirement). Gating the pass on the target being present would skip this forever and orphan
+        # the vendor token, so the provider delete must run even with no target in sight.
+        ctrl = _ctrl_with_targets({"gw-1": []})
         self._run_tombstone(ctrl)
         ctrl.delete_gateway_target.assert_not_called()
-        self.assertIn(("mcp-server-provider:awsops-v2-clickhouse-mcp", "ERR"),
+        ctrl.delete_api_key_credential_provider.assert_any_call(name="awsops-v2-clickhouse-mcp")
+
+    def test_failed_target_delete_does_not_stop_the_provider_cleanup(self):
+        # Neither delete may be conditioned on the other: a transient failure on one must not strand
+        # the other. Both are idempotent, so every run re-attempts until the pair converges.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
+        ctrl.delete_gateway_target.side_effect = _client_error("ThrottlingException")
+        self._run_tombstone(ctrl)
+        ctrl.delete_api_key_credential_provider.assert_any_call(name="awsops-v2-clickhouse-mcp")
+        self.assertIn(("target:clickhouse-mcp-server-target", "ERR"),
                       [(r[0], r[1]) for r in provision.report])
 
-    def test_already_absent_provider_does_not_block_the_target_delete(self):
-        # The retry above only converges because "already gone" counts as success — otherwise a run
-        # that deleted the provider and then failed on the target would deadlock: every later run
-        # would get NotFound on the provider and never retire the target.
-        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
+    def test_fully_converged_state_is_not_an_error(self):
+        # The steady state, forever after every deployment converged: both objects already gone.
+        # Must be silent (no ERR) — the deletes tolerate "already gone".
+        ctrl = _ctrl_with_targets({"gw-1": []})
         ctrl.delete_api_key_credential_provider.side_effect = _raise_not_found
         self._run_tombstone(ctrl)
-        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-old")
-
-    def test_absent_retired_target_is_not_an_error(self):
-        # The tombstone list stays in the catalog long after every deployment converged, so the
-        # common case is "nothing to delete" — it must not ERR or churn the control plane.
-        ctrl = _ctrl_with_targets({"gw-1": []})
-        ac = {"official_mcp_endpoints": {}, "lambda_arns": {}, "region": "ap-northeast-2",
-              "integrations_secret_name": None}
-        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
-             mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS",
-                               (("clickhouse-mcp-server-target", "clickhouse"),)):
-            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.delete_gateway_target.assert_not_called()
         self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
 
@@ -550,11 +550,8 @@ class TestRetiredCatalogEntries(unittest.TestCase):
             self.assertNotIn(preset_key, live, f"{tname} is tombstoned but still declared")
 
 
-class TestRound4Findings(unittest.TestCase):
+class TestRound4Findings(_IsolatedProvisionTest):
     """Round-4 PR #194 review (2026-07-31)."""
-
-    def setUp(self):
-        provision.report.clear()
 
     def test_blocked_endpoint_is_not_a_cutover_so_legacy_target_survives(self):
         # MAJOR L2-1: _cutover_preset_keys used to check only "endpoint present + ack matches", so a
