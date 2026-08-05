@@ -53,12 +53,13 @@ class FakeConn:
     schema-version hashes and independent skip-on-unchanged behavior."""
     def __init__(self, *, kind="prometheus", metrics=PROM_METRICS, schema_present=True,
                  schema=None, existing_version=None, existing_graph_version=None,
-                 existing_rows=None):
+                 existing_rows=None, fail_list_read=False):
         self.kind, self.metrics, self.schema_present = kind, metrics, schema_present
         self._schema_override = schema
         self.existing_version = existing_version
         self.existing_graph_version = existing_graph_version
         self.existing_rows = existing_rows or []
+        self.fail_list_read = fail_list_read
         self.inserts, self.deletes = [], []
         self.graph_inserts, self.graph_deletes = [], []
         self.schema_writes = []
@@ -75,6 +76,8 @@ class FakeConn:
         if "COUNT(DISTINCT schema_version)" in sql and "datasource_graph_queries" in sql:
             return [[1, self.existing_graph_version]] if self.existing_graph_version is not None else [[0, None]]
         if "FROM datasource_diag_signals" in sql and "SELECT" in sql and "COUNT" not in sql:
+            if self.fail_list_read:
+                raise RuntimeError("transient read error")
             return [[r["signal_key"], r.get("title"), r["status"], json.dumps(r.get("query")),
                      None, json.dumps(r.get("meta"))] for r in self.existing_rows]
         if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
@@ -304,6 +307,24 @@ class TestGeneratedFallback:
                      existing_rows=[self.GENERATED_ROW])
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
+
+    def test_a_transient_read_failure_does_not_let_the_sweep_delete_a_good_chip(self, monkeypatch):
+        """The carry-over exists so a connector blip doesn't destroy a verified chip (MAJOR-2). But the read
+        that FINDS the chip to carry can itself fail transiently — and silently falling back to `rows`
+        unchanged meant the caller still wrote and swept, deleting the exact row this function exists to
+        protect, based on nothing but our own read error (review, this round: the same deletion, reached
+        through a different door)."""
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        schema = {"labels": ["custom_only"]}
+        c = FakeConn(kind="loki", schema=schema, existing_rows=[self.GENERATED_ROW], fail_list_read=True)
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert out.get("diag_signal_read_failed") is True
+        assert c.inserts == [] and c.deletes == []          # nothing written, nothing swept
 
     def test_a_genuine_schema_change_unparks_a_streak_capped_instance(self, monkeypatch):
         """The comment says a streak-capped instance 'stays settled until its schema changes' — but the

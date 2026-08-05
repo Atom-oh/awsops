@@ -188,11 +188,11 @@ def _marker_state(existing, version):
     else, attempts/streak are read regardless of which hash prefixes the marker — that's what makes the
     budget survive ordinary schema churn WITHIN a week (a Prometheus whose metric set shifts on every run
     must not get a fresh 3-try budget every run just because the hash moved — review MAJOR-3, three rounds
-    ago). But "stops until the SCHEMA changes" (the streak-cap comment below) is a promise this function has
-    to keep too: forcing attempts=MAX unconditionally in that branch meant a genuinely NEW schema, arriving
-    in a new week after the streak cap, stayed parked forever — the comment's own recovery path didn't exist
-    (review MAJOR, this round). So only the streak-capped branch compares the hash; ordinary within-budget
-    retries are untouched.
+    ago; a churn test pins this — resetting on every hash mismatch, tried once, reintroduced it). "Stops
+    until the SCHEMA changes" therefore applies ONLY at the multi-week streak cap, the one state that can
+    otherwise never resolve on its own — a same-week exhaustion or an ordinary weekly reset both already
+    self-resolve (next week / next run) regardless of the hash, so comparing there would only re-break
+    MAJOR-3 for no benefit.
     """
     m = _MARKER_RE.search(existing or "")
     if not m:
@@ -225,12 +225,19 @@ def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
     transient outage permanently removing verified content (review MAJOR-2). It is only carried over if its
     expression STILL matches the current schema's vocabulary and still measures something, which is the same
     pure check the generator gates on; a stored query whose table has since disappeared is not resurrected.
+
+    Returns None on a READ failure — never `rows` unchanged. Silently falling back to `rows` here looked
+    safe (never break the rebuild) but wasn't: with nothing carried and generation also having failed, the
+    caller would still write and SWEEP, and the sweep deletes any key not in what got written — including
+    the actual, still-good generated row in the table, based on nothing but a transient read error on OUR
+    side (review, this round: the same MAJOR-2 deletion, reached through a different door). The caller must
+    treat None as "cannot verify this run — write nothing" rather than "nothing to carry."
     """
     try:
         existing = [r for r in wdb.list_diag_signals(conn, iid)
                     if (r.get("meta") or {}).get("provenance") == "generated" and r.get("status") == "ready"]
-    except Exception:                      # noqa: BLE001 — read failure must not break the rebuild
-        return rows
+    except Exception:                      # noqa: BLE001 — signals "cannot verify", not "nothing to carry"
+        return None
     kept = []
     for r in existing:
         exprs = [q.get("expr") for q in ((r.get("query") or {}).get("queries") or [])]
@@ -270,7 +277,14 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         # chip away, which is the same deletion MAJOR-2 was about.
         if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" \
                 and not any(r["status"] == "ready" for r in rows):
-            rows = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
+            carried = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
+            if carried is None:
+                # Could not read the table to check for a carry-over candidate. Writing now — even the
+                # UNCHANGED catalog rows — would still run the sweep and delete a real generated row this
+                # call never saw. Do nothing this run rather than risk destroying verified content; the
+                # existing schema_version is untouched, so the next run retries normally.
+                return {"diag_signal_read_failed": True, "schema_version": existing_version}
+            rows = carried
     # WHICH OUTCOMES ARE WORTH REMEMBERING. A build with no ready signal is remembered (plus a sentinel row
     # when there is nothing at all) so the daily job stops rebuilding — but only when the outcome is
     # conclusive, and "conclusive" cost three review rounds to pin down:
