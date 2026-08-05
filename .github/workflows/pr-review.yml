@@ -314,7 +314,10 @@ jobs:
             # (kills quotes/backticks/$/backslash/control bytes), cap line length and list size —
             # and fence the block as untrusted path DATA below. Charset can't stop natural-language
             # injection in a filename; the fence + the prompts' standing SECURITY rule handle that.
-            sed 's|[^A-Za-z0-9 ()./:;_-]|?|g' /tmp/diff-files-unseen.txt | cut -c1-200 | head -100 \
+            # head FIRST (reading the file, not a pipe): with `head` last, a >100-line list makes
+            # head close the pipe early → sed dies with SIGPIPE(141) → `set -euo pipefail` aborts
+            # the step BEFORE any review runs — on exactly the large truncated PRs this exists for.
+            head -100 /tmp/diff-files-unseen.txt | sed 's|[^A-Za-z0-9 ()./:;_-]|?|g' | cut -c1-200 \
               > /tmp/diff-files-unseen.san && mv /tmp/diff-files-unseen.san /tmp/diff-files-unseen.txt
             for f in /tmp/pr-review/lenses/*.txt; do
               echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed (code files are ordered before docs prose)." >> "$f"
