@@ -287,13 +287,21 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             # into a cap that was never really about it (Codex stop-gate, third pass).
             #
             # So the bootstrap does not claim "capped" at all. Only the STREAK (how many consecutive weeks
-            # this instance has been failing) carries over, as a fresh PEND0 for the CURRENT week — this
-            # deploy costs each previously-capped instance up to one week's worth of real, bounded
-            # attempts (never unbounded — still capped by _MAX_GENERATION_ATTEMPTS this week), which is a
+            # this instance has been failing) carries over unconditionally — this deploy costs each
+            # previously-capped instance up to one week's worth of real, bounded attempts, which is a
             # one-time, honestly-scoped price for never mis-attributing a schema across an algorithm change
             # that makes the two hashes fundamentally incomparable.
+            #
+            # ATTEMPTS carry over too, but only when the legacy marker's week IS the current one: a deploy
+            # landing MID-WEEK means the OLD system already spent some of THIS SAME ISO week's budget
+            # before this transition. Resetting to 0 regardless let one instance spend its pre-deploy v4
+            # attempts AND a fresh v5 _MAX_GENERATION_ATTEMPTS in the same week — more than the hard weekly
+            # cap this whole mechanism exists to enforce (Codex stop-gate, fourth pass). A legacy marker
+            # from a genuinely PAST week resets attempts to 0 as normal — that is just the week rolling
+            # over, exactly like any other hash-blind week transition in this system.
             _streak = int(_legacy.group(4) or 0)
-            existing_budget = _marker(version, 0, done=False, streak=_streak)
+            _same_week_attempts = int(_legacy.group(2)) if _legacy.group(3) == _iso_week() else 0
+            existing_budget = _marker(version, _same_week_attempts, done=False, streak=_streak)
     base, attempts, done, streak = _marker_state(existing_budget, version)
     # Skip only when BOTH agree there is nothing to do: the CONTENT is fresh (this exact schema was the
     # last one actually built, so `rows` would come out the same) AND the BUDGET says settled for this

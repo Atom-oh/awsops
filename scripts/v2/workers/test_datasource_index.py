@@ -352,6 +352,28 @@ class TestGeneratedFallback:
         dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
         assert calls == [1]     # a real attempt happened — not silently absorbed into the old cap
 
+    def test_a_mid_week_deploy_does_not_exceed_the_hard_weekly_cap(self, monkeypatch):
+        """A deploy landing MID-WEEK means the OLD v4 system already spent some of THIS SAME ISO week's
+        budget before the transition. Resetting attempts to 0 regardless of the legacy marker's own week
+        let one instance spend its pre-deploy attempts AND a fresh _MAX_GENERATION_ATTEMPTS after — more
+        than the hard weekly cap this whole mechanism exists to enforce (Codex stop-gate, fourth pass)."""
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        # v4 already spent 2 of this SAME week's 3 tries before the v5 deploy landed.
+        legacy_mid_week = f"legacy-v4-hash:pend2w{dsi._iso_week()}"
+        budget = None
+        for i in range(5):    # far more calls than a fresh budget would allow, to prove the cap holds
+            c = FakeConn(kind="clickhouse", schema=schema,
+                        existing_version=legacy_mid_week if i == 0 else None, existing_budget=budget)
+            dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+            budget = c.budget()
+        assert len(calls) == 1    # only ONE more attempt this week — 2 (pre-deploy) + 1 (this) == the cap
+
     GENERATED_ROW = {"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                      "query": {"tool": "loki_query_range",
                                "queries": [{"label": "generated",
