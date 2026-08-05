@@ -114,6 +114,36 @@ class TestTouchGeneratedSignalVersion:
         assert "signal_key='generated_signal'" in sql
         assert p == {"iid": 7, "sv": "newversion"}
 
+
+class TestDiagSignalBudget:
+    """The weekly-retry marker used to share a column with the content rows' schema_version. Every fix
+    that protected the budget's own identity (a preserved stale marker, an excluded key) ended up tagging
+    fresh CONTENT with a version that didn't describe it — so a schema that later rolled back to whatever
+    that stale tag actually named made the agreement check see a false match and skip, serving newer,
+    mistagged content as the old schema's real signals (review, this round). Storing the marker in a
+    dedicated row's `meta` field, never in any row's `schema_version`, means content is always free to
+    carry the truth; read_diag_signal_budget() reads it back independent of schema_version entirely."""
+
+    def test_read_returns_none_when_the_row_is_absent(self):
+        c = FakeConn(returns=[[]])
+        assert db.read_diag_signal_budget(c, 7) is None
+
+    def test_read_extracts_the_budget_field_from_meta(self):
+        c = FakeConn(returns=[[[json.dumps({"budget": "hash:pend1w202601"})]]])
+        assert db.read_diag_signal_budget(c, 7) == "hash:pend1w202601"
+
+    def test_read_queries_the_fixed_bookkeeping_key_only(self):
+        c = FakeConn(returns=[[]])
+        db.read_diag_signal_budget(c, 7)
+        sql, p = c.calls[0]
+        assert "signal_key" in sql and p == {"iid": 7, "sk": db.BUDGET_KEY}
+
+    def test_the_budget_key_is_not_a_real_schema_hash(self):
+        # It must never collide with an actual content row's key, and must be excluded from the BFF read
+        # path the same way __schema_version__ is (it is bookkeeping, not a signal).
+        assert db.BUDGET_KEY != db.SCHEMA_VERSION_SENTINEL_KEY
+        assert db.BUDGET_KEY.startswith("__") and db.BUDGET_KEY.endswith("__")
+
     def test_returns_none_when_absent(self):
         c = FakeConn(returns=[[[0, None]]])
         assert db.read_signal_schema_version(c, 7) is None

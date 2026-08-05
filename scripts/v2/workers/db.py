@@ -197,6 +197,35 @@ def list_diag_signals(conn, integration_id):
     return out
 
 
+BUDGET_KEY = "__diag_signal_budget__"   # bookkeeping row: NOT a signal, filtered from the BFF read
+
+
+def read_diag_signal_budget(conn, integration_id):
+    """The weekly-retry marker (`<hash>:<pend|done>N w<week>[s<streak>]`), stored in a DEDICATED row's
+    `meta.budget` field — deliberately NOT in that row's own `schema_version` column, and deliberately NOT
+    sharing a column with the content rows' schema_version at all.
+
+    Two rounds of trying to reuse the CONTENT rows' schema_version column for this both broke something:
+    excluding the budget/generated keys from read_signal_schema_version()'s agreement check left a
+    clickhouse-only (deterministic catalog always empty) build with zero rows to check, reading as
+    permanently version-less; and PRESERVING a stale marker string as the row's schema_version to protect
+    the budget's identity meant the CONTENT rows written alongside it were ALSO tagged with that stale
+    version — so if the schema later rolled back to the one the stale tag actually named, the agreement
+    check saw a match and skipped, serving the WRONG (newer, mistagged) content as if it were current
+    (review, this round). Storing the marker in `meta` instead of `schema_version` means content rows are
+    free to always carry the CURRENT schema's real version (content freshness stays correct in every case)
+    while the budget tracks its own, completely independent state in its own column.
+    """
+    rows = conn.run(
+        f"SELECT meta FROM datasource_diag_signals WHERE account_id='self' AND integration_id=:iid "
+        f"AND signal_key=:sk",
+        iid=integration_id, sk=BUDGET_KEY)
+    if not rows:
+        return None
+    meta = _maybe_json(rows[0][0]) or {}
+    return meta.get("budget")
+
+
 def touch_generated_signal_version(conn, integration_id, schema_version):
     """Bump the generated row's OWN schema_version column to match this call's, without touching its
     content — a no-op if the row doesn't exist (0 rows affected).

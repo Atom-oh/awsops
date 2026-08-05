@@ -262,12 +262,18 @@ def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
 
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     version = _schema_version(schema)
-    existing_version = wdb.read_signal_schema_version(conn, iid)
-    base, attempts, done, streak = _marker_state(existing_version, version)
-    # Skip only when the schema is unchanged AND this week is settled — either the last outcome was
-    # conclusive or the budget is spent. A `pend` marker means a retry is owed, so it must NOT skip.
-    if base == version and done:
-        return {"skipped": True, "schema_version": existing_version}
+    existing_content_version = wdb.read_signal_schema_version(conn, iid)
+    existing_budget = wdb.read_diag_signal_budget(conn, iid)
+    base, attempts, done, streak = _marker_state(existing_budget, version)
+    # Skip only when BOTH agree there is nothing to do: the CONTENT is fresh (this exact schema was the
+    # last one actually built, so `rows` would come out the same) AND the BUDGET says settled for this
+    # exact schema (no marker at all means the last outcome was ready and no marker was kept; a marker
+    # means check `done` AND that its own hash still matches — a preserved marker from a DIFFERENT schema
+    # must not skip a rebuild for the current one). A `pend` marker means a retry is owed, so it must NOT
+    # skip either.
+    settled = existing_budget is None or (base == version and done)
+    if existing_content_version == version and settled:
+        return {"skipped": True, "schema_version": existing_content_version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
     exhausted = attempts >= _MAX_GENERATION_ATTEMPTS
     gen_status = None
@@ -349,43 +355,56 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # schema, which also directly contradicted ADR-018 §A-4/Sustainability ("cached, not regenerated").
     needs_marker = not ready_now and (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED) or exhausted)
     if not needs_marker:
-        stored_version = version
+        stored_budget = None
     elif gen_status is None and base and base != version:
         # Exhausted already (no attempt made THIS call) and the schema genuinely differs from the one the
         # cap applies to. Writing a marker under the CURRENT schema's hash here would silently claim we'd
-        # tried IT too — the mark-and-sweep write always tags rows with `version`, so a schema that was
-        # NEVER evaluated would look, from the very next read, exactly like "tried 3 times and failed" for
-        # THAT schema. At the next week boundary the streak-cap's hash check would then compare against a
-        # hash that never got a real try, so a genuinely new schema arriving mid-week while capped stayed
-        # parked indefinitely — it was absorbed into the old capped identity without ever being tried
-        # (review, this round). The marker is left byte-for-byte unchanged; only the deterministic rows
-        # (freshly built from the CURRENT schema, correct content) get re-upserted under the OLD marker,
-        # so the capped-schema identity cannot drift until an attempt is actually spent against it.
-        stored_version = existing_version
+        # tried IT too — a schema that was NEVER evaluated would look, from the very next read, exactly
+        # like "tried 3 times and failed" for THAT schema. At the next week boundary the streak-cap's hash
+        # check would then compare against a hash that never got a real try, so a genuinely new schema
+        # arriving mid-week while capped stayed parked indefinitely (review, an earlier round). The budget
+        # marker is left byte-for-byte unchanged; the capped-schema identity cannot drift until an attempt
+        # is actually spent against it.
+        stored_budget = existing_budget
     else:
-        stored_version = _marker(version, spent, done=not retry_needed, streak=new_streak)
+        stored_budget = _marker(version, spent, done=not retry_needed, streak=new_streak)
+    # CONTENT rows always carry the CURRENT schema's real version — never a preserved/stale one. Content
+    # freshness and budget tracking used to share one column, and every fix to protect the budget's
+    # identity (preserving a stale marker, excluding a key from the agreement check) ended up tagging
+    # fresh content with a version that didn't describe it — so if the schema later rolled BACK to
+    # whatever that stale tag actually named, the agreement check saw a false match and skipped, serving
+    # the wrong (newer, mistagged) content as current (review, this round). The budget's own state now
+    # lives in a dedicated row's `meta` field (db.read/write_diag_signal_budget), decoupled from
+    # schema_version entirely, so content can always be tagged truthfully.
+    write_rows = list(rows)
+    if stored_budget is not None:
+        write_rows.append({"signal_key": wdb.BUDGET_KEY, "title": "(diag-signal retry budget)",
+                           "status": "disabled", "query": None, "missing_metrics": None,
+                           "meta": {"budget": stored_budget}})
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
     conn.run("BEGIN")
     try:
-        written = wdb.upsert_diag_signals(conn, iid, rows, stored_version)
+        written = wdb.upsert_diag_signals(conn, iid, write_rows, version)
         # Sweep against what was WRITTEN, not against `rows`: an empty build writes a version sentinel
-        # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back. GENERATED_SIGNAL_KEY
-        # is ALSO always spared when it was unverifiable this call — see generated_key_unverified above.
+        # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back. Not including
+        # the budget row in `write_rows` (stored_budget is None) naturally lets the sweep delete any STALE
+        # prior budget row — a settled outcome should leave none behind. GENERATED_SIGNAL_KEY is ALSO
+        # always spared when it was unverifiable this call — see generated_key_unverified above.
         sweep_keep = written + [_signal_gen.GENERATED_SIGNAL_KEY] if generated_key_unverified else written
         wdb.sweep_diag_signals(conn, iid, sweep_keep)
         if generated_key_unverified:
-            # The spared row's version is now stale relative to `stored_version` — bump ONLY that column
+            # The spared row's CONTENT-version is now stale relative to `version` — bump ONLY that column
             # (never its content, which we never read) so read_signal_schema_version()'s agreement check
             # stays meaningful. A no-op if the row doesn't exist.
-            wdb.touch_generated_signal_version(conn, iid, stored_version)
+            wdb.touch_generated_signal_version(conn, iid, version)
         conn.run("COMMIT")
     except Exception:
         conn.run("ROLLBACK")
         raise
     return {"built": len(rows), "ready": sum(1 for r in rows if r["status"] == "ready"),
-            "schema_version": stored_version,
+            "schema_version": version,
             **({"retry": "generation failed transiently"} if retry_needed else {})}
 
 

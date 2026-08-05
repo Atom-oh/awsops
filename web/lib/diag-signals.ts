@@ -37,7 +37,9 @@ export async function getDiagSignals(integrationId: number): Promise<DiagSignals
         -- '__schema_version__' is the worker's bookkeeping row (db.py SCHEMA_VERSION_SENTINEL_KEY):
         -- it exists so a schema that yields no signals is remembered rather than rebuilt every run,
         -- and it is not a signal, so it must never reach the UI as a chip.
-        AND signal_key <> '__schema_version__'
+        -- '__diag_signal_budget__' (db.py BUDGET_KEY) is the weekly-retry marker, kept in its own row's
+        -- meta field precisely so it never shares a version column with real content — also not a signal.
+        AND signal_key NOT IN ('__schema_version__', '__diag_signal_budget__')
         AND ($2::boolean OR (meta->>'provenance') IS DISTINCT FROM 'generated')
       ORDER BY signal_key`,
     [integrationId, generatedAllowed],

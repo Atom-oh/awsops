@@ -48,6 +48,16 @@ describe('getDiagSignals', () => {
     expect(query.mock.calls[1][1]).toEqual([7, true]);
   });
 
+  it('excludes the weekly-retry budget bookkeeping row alongside the schema-version sentinel', () => {
+    // '__diag_signal_budget__' (db.py BUDGET_KEY) holds the marker in its own row's meta field, precisely
+    // so it never shares a version column with real content (a prior design that did caused a schema
+    // rollback to serve stale, mistagged content — see datasource_index.py). Neither bookkeeping key is
+    // a signal, so neither may reach the UI as a chip.
+    getDiagSignals(7);
+    expect(query.mock.calls[0][0]).toMatch(/__schema_version__/);
+    expect(query.mock.calls[0][0]).toMatch(/__diag_signal_budget__/);
+  });
+
   it('tolerates jsonb returned as strings', async () => {
     query.mockResolvedValueOnce({ rows: [
       { signal_key: 'k', title: 't', status: 'ready',
