@@ -65,9 +65,13 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
    (`_MAX_SPENT_WEEKS`). 마커(`:<pend|done>N w<주차>[s<연속소진주차수>]`)는 **콘텐츠 행의 `schema_version`
    컬럼과 완전히 분리된 전용 북키핑 행**(`__diag_signal_budget__`, `meta.budget` 필드)에만 저장한다 — 콘텐츠
    행은 항상 **현재** 스키마의 진짜 버전만 가지므로, 스키마 롤백이 일치검사를 거짓으로 통과시켜 잘못 태깅된
-   콘텐츠를 서빙하는 경로가 없다. 아직 해소되지 않은(active retry 또는 이번 주 소진) 경우에만 이 북키핑 행을
-   남기고, ready 로 정산됐거나 플래그가 꺼진(DISABLED) 경우는 아예 남기지 않아 다음 실행이 재생성을 시도하지
-   않는다. 마커는 주 안에서는 스키마 해시와 무관하게 읽어 churn 이 예산을 리셋하지 못하게 한다. **연속 3주
+   콘텐츠를 서빙하는 경로가 없다. 마커는 `pend`(재시도 미결)/`done`(이번 주 소진, 연속-소진 아님)/`conc`
+   (이 스키마에 대해 결론적으로 정산 — 주 경계가 지나도 유효, `attempts`/연속소진주차수를 계속 보존) **3-state**
+   다. 이번 주에 아무것도 쓰지 않았고 연속소진주차수도 0인 **conclusive** 결과(ready 정산 또는 플래그
+   꺼짐/DISABLED)만 북키핑 행을 남기지 않는다 — 그 외의 모든 conclusive 결과(이번 주에 attempts를 썼거나
+   연속소진주차수가 있는 경우)는 `conc` 마커로 그 상태를 보존해, 다음 실행이 "정산됐다"는 사실과 "이번 주
+   이미 얼마를 썼다"는 사실을 둘 다 잃지 않게 한다. 마커는 주 안에서는 스키마 해시와 무관하게 읽어 churn 이
+   예산을 리셋하지 못하게 한다. **연속 3주
    park**(스키마 무관) 해제는 **주 경계에서만** 일어나며, 그 시점에 스키마가 실제로 바뀌었으면 해제한다 — 같은
    주 안의 스키마 변경은 주간 상한 자체를 갱신하지 않는다(인스턴스당 주 3회는 스키마별이 아니라 인스턴스당
    하드 상한). 플래그가 꺼진 기간은 과금하지 않는다. **v4→v5 전환**: 이 북키핑 행은 v5 부터 존재하므로,
@@ -112,8 +116,10 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 ## 6 Pillars
 - **Operational Excellence** — 폴백은 결정론 카탈로그를 대체하지 않고 보완한다. 실패는 항상 카탈로그 결과로
   되돌아가며(never raises), diag-signal 경로의 주간 예산·마커가 운영 로그에 남는다.
-- **Security** — 공통: 정적 read-only/denylist + read-only 커넥터 + SSRF 호스트 검사, 모델은 실행 권한이 없다.
-  diag-signal 경로에 식별자 정화가 추가된다(graph 경로에는 없음 — §C-3).
+- **Security** — 공통: read-only 커넥터 + SSRF 호스트 검사, 모델은 실행 권한이 없다. 정적 SQL denylist
+  (`_TABLE_FN`/`SETTINGS` 사전차단)는 ClickHouse(diag-signal `signal_catalog_gen`) 전용이다(§A-3) — graph
+  경로는 다른 커넥터라 이 정적 가드가 없다. diag-signal 경로에는 식별자 정화도 추가된다(graph 경로에는 없음
+  — §C-3).
 - **Reliability** — diag-signal 경로: 일시 실패는 주 3회 상한으로 재시도, 소진은 주 경계에서 해제, 검증된 칩은
   재검증 실패로 삭제되지 않는다. graph 경로: schema_version 캐시가 재생성 시점을 정한다.
 - **Performance** — diag-signal dry-run은 커넥터가 지원하는 최소 상한으로 실행된다(§B-3). graph dry-run은

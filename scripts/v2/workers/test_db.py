@@ -204,6 +204,30 @@ class TestDiagSignalAttemptReservation:
         assert "'{attempts}'" not in sql and "'{week}'" not in sql
         assert p["bg"] == "v1:pend1w202632" and p["sv"] == "v1" and p["st"] == "unavailable"
 
+    def test_live_attempts_re_derives_the_embedded_count_at_write_time(self):
+        # review MAJOR-1: the caller reads its attempt count BEFORE the multi-second Bedrock call, so a
+        # second worker's reservation landing in that window used to be silently overwritten by this
+        # call's now-stale number. live_attempts moves the count into the UPDATE itself so it is read
+        # live, never from the caller's local snapshot.
+        c = FakeConn()
+        db.write_diag_signal_budget(c, 7, "v1:pend1w202632", "v1",
+                                     live_attempts=("v1:pend", "w202632", "202632", 1))
+        sql, p = c.calls[0]
+        assert "GREATEST" in sql and "meta->>'week' = :wk" in sql
+        assert p["pre"] == "v1:pend" and p["suf"] == "w202632" and p["wk"] == "202632" and p["floor"] == 1
+        # the marker string passed in is NOT what gets stored verbatim on this path — the live
+        # expression is what's embedded, so the byte-for-byte `marker` arg is not asserted here.
+
+    def test_omitting_live_attempts_stores_the_marker_byte_for_byte(self):
+        # The one caller that must NOT re-derive: a marker preserved for a DIFFERENT schema than the
+        # current live counter describes (a capped-schema identity that must not drift — see
+        # datasource_index.py's byte-for-byte preservation branch).
+        c = FakeConn()
+        db.write_diag_signal_budget(c, 7, "otherhash:done3w202601", "v1")
+        sql, p = c.calls[0]
+        assert "GREATEST" not in sql
+        assert p["bg"] == "otherhash:done3w202601"
+
 
 class TestList:
     def test_list_returns_parsed_rows(self):

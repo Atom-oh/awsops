@@ -54,7 +54,8 @@ class FakeConn:
     schema-version hashes and independent skip-on-unchanged behavior."""
     def __init__(self, *, kind="prometheus", metrics=PROM_METRICS, schema_present=True,
                  schema=None, existing_version=None, existing_graph_version=None,
-                 existing_rows=None, fail_list_read=False, existing_budget=None):
+                 existing_rows=None, fail_list_read=False, existing_budget=None,
+                 existing_reservation=None):
         self.kind, self.metrics, self.schema_present = kind, metrics, schema_present
         self._schema_override = schema
         self.existing_version = existing_version
@@ -62,6 +63,10 @@ class FakeConn:
         self.existing_rows = existing_rows or []
         self.fail_list_read = fail_list_read
         self.existing_budget = existing_budget
+        # A crashed reservation (review CRITICAL): reserve_diag_signal_attempt durably wrote
+        # meta.week/meta.attempts but the worker died before write_diag_signal_budget ever ran, so
+        # the bookkeeping row has NO `budget` key at all — (week, attempts) simulates that row shape.
+        self.existing_reservation = existing_reservation
         self.inserts, self.deletes = [], []
         self.graph_inserts, self.graph_deletes = [], []
         self.schema_writes = []
@@ -70,9 +75,14 @@ class FakeConn:
         # The real budget row carries a NUMERIC mirror of the week's attempt count next to the marker
         # (db.reserve_diag_signal_attempt increments it in SQL, since a packed marker string cannot be
         # bumped atomically). Seed it the way Postgres would see it: same week → the marker's own count,
-        # any other week → 0.
+        # any other week → 0. A crashed reservation with no marker seeds it from its own numeric fields.
         _m = dsi._MARKER_RE.search(existing_budget or "")
-        self._attempts = int(_m.group(2)) if _m and _m.group(3) == dsi._iso_week() else 0
+        if _m and _m.group(3) == dsi._iso_week():
+            self._attempts = int(_m.group(2))
+        elif existing_reservation and existing_reservation[0] == dsi._iso_week():
+            self._attempts = existing_reservation[1]
+        else:
+            self._attempts = 0
 
     def run(self, sql, **p):
         if "FROM datasource_schemas" in sql:
@@ -87,7 +97,12 @@ class FakeConn:
             return [[1, self.existing_graph_version]] if self.existing_graph_version is not None else [[0, None]]
         if "SELECT meta FROM datasource_diag_signals" in sql:
             if p.get("sk") == wdb.BUDGET_KEY:
-                return [[json.dumps({"budget": self.existing_budget})]] if self.existing_budget else []
+                if self.existing_budget:
+                    return [[json.dumps({"budget": self.existing_budget})]]
+                if self.existing_reservation:
+                    wk, att = self.existing_reservation
+                    return [[json.dumps({"week": wk, "attempts": att})]]
+                return []
             return []
         if "FROM datasource_diag_signals" in sql and "SELECT" in sql and "COUNT" not in sql:
             if self.fail_list_read:
@@ -964,6 +979,30 @@ class TestGeneratedFallback:
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}},
                      existing_budget=f"{base}:pend1w{dsi._iso_week()}")
         dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert c.budget() == f"{base}:pend2w{dsi._iso_week()}"
+
+    def test_a_crashed_reservation_does_not_skip_forever(self, monkeypatch):
+        """review CRITICAL: reserve_diag_signal_attempt() durably charges meta.week/meta.attempts before
+        the Bedrock call, but the marker string is only written at the very end of the rebuild. A crash
+        in between (Lambda timeout/OOM/uncaught raise) leaves a reservation with NO marker at all —
+        read_diag_signal_budget() used to see that as None, `settled` came out True unconditionally, and
+        an unchanged schema then skipped every future run FOREVER, with the spent reservation invisible
+        and write_diag_signal_budget never reached again."""
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        base = dsi._schema_version({"tables": {"t": ["c"]}})
+        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}},
+                     existing_version=base,  # content already matches — the schema has NOT changed
+                     existing_reservation=(dsi._iso_week(), 1))  # crashed after reserve, before marker
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert out.get("skipped") is not True          # must NOT skip — the fixed bug always skipped here
+        assert calls == [1]                            # the rebuild actually ran (called Bedrock again)
+        # The reservation's cost still counts: known_attempts=1 rides in, so this call charges 1->2, not
+        # a bonus fresh 0->1 — the marker records BOTH attempts, not just this call's.
         assert c.budget() == f"{base}:pend2w{dsi._iso_week()}"
 
     def test_conclusive_empty_build_records_the_sentinel(self, monkeypatch):
