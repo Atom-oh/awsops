@@ -135,6 +135,14 @@ resource "aws_iam_role_policy" "task_metrics" {
         "ec2:SearchTransitGatewayRoutes",
         # /vpc-endpoints: 엔드포인트 리스트+분석 (PrivateLink 메트릭 미사용 감지)
         "ec2:DescribeVpcEndpoints",
+        # /direct-connect: DX 커넥션/VIF/게이트웨이 리스트+상태 (read-only)
+        "directconnect:DescribeConnections",
+        "directconnect:DescribeVirtualInterfaces",
+        "directconnect:DescribeDirectConnectGateways",
+        "directconnect:DescribeDirectConnectGatewayAssociations",
+        # LAG 위 VIF 사용률 분모(대역폭) + BGP 라우트 가시성 (2026-07 ListVirtualInterfaceRoutes)
+        "directconnect:DescribeLags",
+        "directconnect:ListVirtualInterfaceRoutes",
       ]
       Resource = "*"
       }, {
