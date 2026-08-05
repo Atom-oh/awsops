@@ -96,8 +96,12 @@
 -- NOTE on re-running: migrate.mjs enforces checksum immutability for APPLIED migrations, so on a
 -- cluster where an earlier version of THIS file already ran, `make migrate` will refuse with
 -- "checksum drift" and the REVOKEs below will not execute. That is intended (migrations are
--- immutable); this file is still editable because it has never shipped on `main`. The REVOKEs are
--- kept so the file is self-converging on a fresh apply and for a cluster where the row was cleared.
+-- immutable). This file DID ship on `main` (PR #197), but it has never successfully APPLIED on the
+-- one live cluster (account 180294183052) — the original ALTER ROLE below failed and rolled back
+-- (see the NOREPLICATION/NOBYPASSRLS note further down), so migrate.mjs never wrote its
+-- schema_migrations row and the checksum lock never engaged. Still safe to edit in place. The
+-- REVOKEs are kept so the file is self-converging on a fresh apply and for a cluster where the row
+-- was cleared.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'awsops_sql_reader') THEN
@@ -105,10 +109,21 @@ BEGIN
   END IF;
 END $$;
 
--- Idempotent + explicit: state every attribute rather than relying on CREATE ROLE defaults, so
--- re-running against a pre-existing role converges to the same least-privilege shape.
-ALTER ROLE awsops_sql_reader WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
-  NOREPLICATION NOBYPASSRLS;
+-- Idempotent + explicit for every attribute EXCEPT the three below: state CREATEDB/CREATEROLE/
+-- INHERIT explicitly rather than relying on CREATE ROLE defaults, so re-running against a
+-- pre-existing role converges to the same least-privilege shape.
+-- SUPERUSER/REPLICATION/BYPASSRLS are deliberately NOT restated here (unlike CREATEDB/CREATEROLE/
+-- INHERIT): PostgreSQL requires the CALLER to itself hold one of these three specific attributes to
+-- set or clear it on another role (only a true superuser is exempt from all three) — and the
+-- Aurora master user (awsops_admin, a member of rds_superuser but not a real superuser — see the
+-- rdsadmin note below) holds none of them, so restating any of NOSUPERUSER/NOREPLICATION/
+-- NOBYPASSRLS failed with "permission denied to alter role" on the live cluster (missed locally
+-- because the runbook's postgres:17-alpine test connects as an actual superuser). CREATE ROLE's own
+-- defaults already give NOSUPERUSER/NOREPLICATION/NOBYPASSRLS — omitting them here drops nothing
+-- from the security boundary, which is the view-only grants below, not these attributes (see the
+-- hardening note near the end of this file). Matches the sibling role migrations
+-- (steampipe_reader/awsops_web/awsops_worker), none of which state any of the three either.
+ALTER ROLE awsops_sql_reader WITH LOGIN NOCREATEDB NOCREATEROLE NOINHERIT;
 
 -- Session-level read-only for this principal specifically: every connection starts read-only even
 -- if a future code path forgets the explicit `SET TRANSACTION READ ONLY` wrapper. (A USERSET GUC —
