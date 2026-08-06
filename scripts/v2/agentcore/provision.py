@@ -428,7 +428,7 @@ _TARGET_TERMINAL_FAILURE_STATUSES = {"FAILED", "UPDATE_UNSUCCESSFUL", "SYNCHRONI
 _RUNTIME_TERMINAL_FAILURE_STATUSES = ("CREATE_FAILED", "UPDATE_FAILED")
 
 
-def _wait_runtime_ready(ctrl, runtime_id, timeout_s=60, interval_s=3):
+def _wait_runtime_ready(ctrl, runtime_id, timeout_s=300, interval_s=5):
     """Poll GetAgentRuntime until status=READY (True), a terminal failure status (False, logged),
     or timeout_s elapses (False, logged).
 
@@ -439,7 +439,11 @@ def _wait_runtime_ready(ctrl, runtime_id, timeout_s=60, interval_s=3):
     image (potentially predating OFFICIAL_MCP_TOOL_ALLOWLIST_JSON entirely) was still what actually
     answered gateway calls — reordering ensure_runtime before ensure_mcp_server_targets closes the
     ordering half of this gap, but not the propagation-delay half. Mirrors _wait_target_ready's
-    shape."""
+    shape. timeout_s=300 (review MINOR): a container-runtime rollout includes an image pull — 60s
+    was routinely exceedable, and every timeout defers provisioning for the WHOLE run, so a
+    chronically-short timeout meant hosted presets could never activate. Override via the
+    AGENTCORE_RUNTIME_READY_TIMEOUT env if a deployment needs more."""
+    timeout_s = int(os.environ.get("AGENTCORE_RUNTIME_READY_TIMEOUT", timeout_s))
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -451,7 +455,7 @@ def _wait_runtime_ready(ctrl, runtime_id, timeout_s=60, interval_s=3):
         if status == "READY":
             return True
         if status in _RUNTIME_TERMINAL_FAILURE_STATUSES:
-            log("runtime:ready", "ERR", f"reached terminal status {status}: {resp.get('failureReason', '')[:120]}")
+            log("runtime:ready", "ERR", f"reached terminal status {status}: {(resp.get('failureReason') or '')[:120]}")  # `or ''`: an explicit null must not TypeError outside the try
             return False
         if time.monotonic() >= deadline:
             log("runtime:ready", "ERR", f"timed out after {timeout_s}s waiting for READY (last status: {status})")
@@ -504,10 +508,12 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
     carrying OFFICIAL_MCP_TOOL_ALLOWLIST_JSON is NOT live this run (ensure_runtime failed or never
     reached READY). Every TEARDOWN path below (blocked endpoint, no endpoint, stale/missing ack,
     missing credential, the RETIRED_MCP_SERVER_TARGETS tombstone pass) still runs unconditionally —
-    those only ever REDUCE exposure and don't depend on the runtime allowlist existing. Only the
-    CREATE/UPDATE/SYNC path for an otherwise-eligible preset is skipped: creating or refreshing a
-    target now would expose it to whatever runtime IS currently serving, which may predate the
-    allowlist entirely. An earlier revision of this function had the caller skip the WHOLE call on
+    those only ever REDUCE exposure and don't depend on the runtime allowlist existing. The
+    CREATE/UPDATE/SYNC path for an otherwise-eligible preset is skipped, and — same principle,
+    other direction (review MAJOR on this round's first cut) — an otherwise-eligible preset's
+    ALREADY-LIVE target is RETIRED, because a target serving through a runtime that may predate
+    the allowlist is the exact unfiltered-vendor-write-tool exposure this gate exists to close.
+    An earlier revision of this function had the caller skip the WHOLE call on
     runtime failure, which also blocked teardown — an operator revoking an ack or removing an
     endpoint specifically to shut a live vendor target off would have been unable to, for as long
     as the runtime stayed unready (review MAJOR, this round).
@@ -653,8 +659,24 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # ── Runtime-allowlist gate (provisioning only — every teardown branch above already ran
         # regardless) ────────────────────────────────────────────────────────────────────────────
         if not allow_provision:
-            log(f"target:{tname}", "SKIP", "runtime allowlist not confirmed live this run — "
-                "deferring create/update/sync (any existing target is left untouched, not retired)")
+            # An ELIGIBLE preset with a LIVE target is retired here, not skipped (PR #207 review
+            # MAJOR, 3 cells independent): "left untouched" meant a target created by a PRE-allowlist
+            # revision kept serving 100% of the vendor's tools — write tools included — through
+            # whatever runtime IS live, which is exactly the exposure this PR closes. The PR's own
+            # principle ("a target must not be exposed to a runtime that predates the allowlist")
+            # applies to retaining one as much as to creating one. Retirement is teardown, so it
+            # doesn't conflict with this gate's teardown-always contract; the next successful run
+            # recreates the target idempotently (flapping only across failed rollouts — acceptable:
+            # fail-closed beats serving unfiltered vendor write tools).
+            if existing.get(tname):
+                log(f"target:{tname}", "ERR", "runtime allowlist not confirmed live this run — "
+                    "retiring the live target rather than letting it serve through a possibly "
+                    "pre-allowlist runtime (recreated on the next successful run)")
+                _retire_gateway_target(ctrl, gw_id, existing, tname, "runtime allowlist unconfirmed — retiring live target")
+                _delete_api_key_provider(ctrl, provider_name)
+            else:
+                log(f"target:{tname}", "SKIP", "runtime allowlist not confirmed live this run — "
+                    "deferring create/update/sync")
             continue
 
         # ── Credential gate (provisioning only — everything that tears down already ran) ──────

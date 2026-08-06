@@ -779,6 +779,37 @@ class TestEnsureMcpServerTargetsAllowProvisionGate(_IsolatedProvisionTest):
         ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
         ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
 
+    def test_eligible_live_target_is_retired_when_provisioning_disallowed(self):
+        # PR #207 review MAJOR (3 cells independent): a fully-eligible preset (endpoint + matching
+        # ack + credential) with an ALREADY-LIVE target must be RETIRED when the runtime allowlist
+        # is unconfirmed — leaving it "untouched" kept a possibly pre-allowlist runtime serving
+        # 100% of the vendor's tools, write tools included.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
+        ctrl.create_gateway_target.assert_not_called()
+        self.assertIn(("target:datadog-mcp-server-target", "ERR"), [(r[0], r[1]) for r in provision.report])
+
+    def test_eligible_absent_target_still_skips_when_provisioning_disallowed(self):
+        # No live target → nothing to retire; the create/update/sync deferral stays a quiet SKIP.
+        ctrl = _ctrl_with_targets({"gw-1": []})
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.delete_gateway_target.assert_not_called()
+        ctrl.create_gateway_target.assert_not_called()
+        self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
 
 class TestWaitRuntimeReady(unittest.TestCase):
     def test_ready_returns_true(self):

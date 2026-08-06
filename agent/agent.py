@@ -710,6 +710,12 @@ def _clickhouse_stdio_env(creds):
     u = urllib.parse.urlparse(creds.get("endpoint") or "")
     if u.scheme not in ("http", "https") or not u.hostname:
         raise ValueError("clickhouse endpoint must be http(s)://host[:port]")
+    # mcp-clickhouse's env contract has no URL-path slot (host/port only). A path-prefixed
+    # endpoint (e.g. https://proxy.internal/clickhouse — valid in Datasources; the lambda path
+    # preserves it) would silently connect to the proxy ROOT here — fail closed instead, same
+    # policy as the authType check below (review MINOR, PR #207).
+    if (u.path or "").strip("/"):
+        raise ValueError("clickhouse endpoint has a URL path — mcp-clickhouse env supports host[:port] only; the in-house lambda path keeps serving this datasource")
     secure = u.scheme == "https"
     # (MAJOR-A) mcp-clickhouse's env contract expresses HTTP basic ONLY (user/password). The
     # Datasources blob may carry an authType the in-house lambda path handles correctly
@@ -1159,7 +1165,7 @@ async def handler(payload):
             # Dedup first (gateway precedence) so a name collision never hands Agent two same-named tools.
             tools = _filter_tools(_dedup_by_tool_name(gateway_tools + clickhouse_stdio_tools + integration_tools), tool_allowlist)
             tool_names = [t.tool_name for t in tools]
-            logging.info(f"Gateway [{gateway_role}] tools ({len(tools)} = {len(gateway_tools)} gw + {len(integration_tools)} integ, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
+            logging.info(f"Gateway [{gateway_role}] tools ({len(tools)} = {len(gateway_tools)} gw + {len(clickhouse_stdio_tools)} stdio + {len(integration_tools)} integ, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
 
             # ADR-031: resolver override (custom agent) OR built-in SKILL_BASE; + dynamic tools + account directive
             if system_prompt_override:
