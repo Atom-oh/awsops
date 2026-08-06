@@ -990,7 +990,15 @@ def ensure_runtime(ctrl, ac, gw_ids):
            # Where agent.py reads the datasource kind-mirror credentials for the stdio path (same
            # single integrations secret the connector lambdas use).
            "INTEGRATIONS_SECRET_NAME": f"ops/{ac.get('project', 'awsops-v2')}/integrations/credentials"}
-    existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
+    # Same fail-closed contract as the readiness poll below (review MINOR, codex/L3): this listing
+    # used to sit outside the try (which only catches ClientError), so any exception here crashed
+    # main() BEFORE ensure_mcp_server_targets ran — blocking the teardown pass for the run.
+    # ensure_runtime must never raise; "" (unconfirmed) always lets teardown proceed.
+    try:
+        existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
+    except Exception as e:  # noqa: BLE001 — anything here means runtime state is unknowable
+        log("runtime", "ERR", f"list_agent_runtimes failed ({type(e).__name__}: {str(e)[:120]}) — treating runtime as unconfirmed")
+        return ""
     try:
         if RUNTIME_NAME in existing:
             rid = existing[RUNTIME_NAME].get("agentRuntimeId")
