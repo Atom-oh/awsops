@@ -71,6 +71,18 @@ for lk in lambda_keys:
 MCP_SERVER_TARGETS = catalog.MCP_SERVER_TARGETS
 seen_preset_keys = set()
 for target_name, entry in MCP_SERVER_TARGETS.items():
+    # review MAJOR L3-2: agent.py's fail-closed allowlist gate (_MCP_SERVER_TARGET_MARKER =
+    # "-mcp-server-target___") is a substring match on the target NAME, not on catalog membership —
+    # it's the ONLY thing that stops a vendor's raw gateway tools from reaching the model unfiltered.
+    # A future preset added under a differently-suffixed key would still get a tool_allowlist entry
+    # written to OFFICIAL_MCP_TOOL_ALLOWLIST_JSON, but agent.py's runtime filter would never even
+    # look at its tools — reopening exactly the CRITICAL this PR closed, via a naming typo instead of
+    # a missing allowlist. Enforce the convention the runtime gate depends on.
+    if not target_name.endswith("-mcp-server-target"):
+        errors.append(f"{target_name}: MCP_SERVER_TARGETS key must end with '-mcp-server-target' — "
+                       "agent.py's runtime allowlist gate matches gateway tool names on that exact "
+                       "suffix (+ '___<tool>'); any other naming silently escapes the filter")
+
     gw = entry.get("gateway")
     if gw not in GATEWAYS:
         errors.append(f"{target_name}: gateway '{gw}' not in GATEWAYS {sorted(GATEWAYS)}")
@@ -93,6 +105,13 @@ for target_name, entry in MCP_SERVER_TARGETS.items():
         for field in ("credential_location", "credential_parameter_name"):
             if not auth.get(field):
                 errors.append(f"{target_name}: auth.mode=api_key requires '{field}'")
+
+    # ADR-017 amendment 2026-08-05: every preset MUST declare tool_allowlist (tuple/list of str;
+    # empty = provision the target but expose zero tools). Absence would silently fail-closed at
+    # the runtime anyway, but here it's a catalog bug — the field is the documented contract.
+    ta = entry.get("tool_allowlist")
+    if not isinstance(ta, (tuple, list)) or any(not isinstance(x, str) or not x for x in ta):
+        errors.append(f"{target_name}: tool_allowlist must be a tuple/list of non-empty strings (empty tuple allowed)")
 
 if errors:
     print("FAIL")

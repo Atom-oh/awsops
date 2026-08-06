@@ -23,13 +23,20 @@ describe('pickGateway', () => {
   it('ignores a pin that is not a known section', () => {
     expect(pickGateway('이번 달 비용', 'bogus')).toBe('cost');
   });
-  // Regression (2026-07-31 kiro review MAJOR finding): Grafana has NO legacy lambda target on
-  // any gateway — its only tools are the ADR-017 external-obs mcpServer preset. Before this fix
-  // 'grafana' routed to 'monitoring', which has no Grafana tools at all (dead-end route).
-  it('routes grafana (and other legacy-target-less ADR-017 presets) to observability/external-obs', () => {
-    expect(pickGateway('grafana 대시보드 좀 보여줘')).toBe('observability');
+  // ADR-017 amendment 2026-08-05: the observability vendor rule carries EXACTLY the kinds with a
+  // live external-obs path — the 3 vendor-hosted presets (datadog/dynatrace/newrelic) + the
+  // prometheus/clickhouse lambda targets. Grafana/Splunk are unsupported and Jaeger has no
+  // gateway target (lambda deployed, never a TARGETS entry) — their NAMES stop being a routing
+  // signal. EXACT expectations (not just "not observability" — that masked the real routes,
+  // codex round-5): remaining domain keywords still route by domain ('트레이스' → monitoring,
+  // tempo's home), and keyword-less vendor queries land on the ops catch-all.
+  it('routes only kinds with a live external-obs path to observability; dropped names are no longer a signal', () => {
     expect(pickGateway('check the datadog dashboard')).toBe('observability');
     expect(pickGateway('dynatrace 확인해줘')).toBe('observability'); // avoid Korean '지표' which is monitoring's own keyword
+    expect(pickGateway('newrelic 상태 봐줘')).toBe('observability');
+    expect(pickGateway('grafana 대시보드 좀 보여줘')).toBe('ops');       // no signal left → catch-all
+    expect(pickGateway('splunk 로그 검색')).toBe('ops');                // no signal left → catch-all
+    expect(pickGateway('jaeger 트레이스 이상한지 봐줘')).toBe('monitoring'); // 트레이스 routes by domain
   });
   // Regression (2026-07-31 round-3 review MAJOR): round-2 moved tempo/trace to observability to
   // avoid a POST-cutover dead-end, but official_mcp_enabled defaults to false, so that just made
@@ -46,7 +53,7 @@ describe('pickGateway', () => {
   // got a chance. Vendor names must win regardless of RULES array position of generic keywords.
   it('routes vendor-named queries to observability, not generic monitoring', () => {
     expect(pickGateway('Datadog metric 확인')).toBe('observability');
-    expect(pickGateway('Grafana 지표 좀 보여줘')).toBe('observability');
+    expect(pickGateway('New Relic 지표 좀 보여줘')).toBe('observability');
   });
   // Regression (2026-07-31 round-4 review MAJOR): the round-2 fix only moved the vendor rule above
   // 'monitoring'; the generic 'data' rule (쿼리|database|...) still sat ABOVE it and kept stealing

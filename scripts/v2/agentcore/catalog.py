@@ -429,20 +429,28 @@ TARGETS = {
     },
 }
 
-# ADR-017 — curated official-vendor MCP servers, registered as remote `mcpServer` gateway targets
-# (NOT `mcp.lambda` — no Lambda, no hand-written handler; the vendor's own MCP server is the tool
-# provider). Endpoint is deployment-specific (terraform var.official_mcp_endpoints, injected via the
-# `agentcore` tf output as ac["official_mcp_endpoints"]); provision.py SKIPs any preset whose key is
-# absent there, same convention as a missing lambda_arn in TARGETS.
+# ADR-017 (amended 2026-08-05) — curated official-vendor MCP servers, registered as remote
+# `mcpServer` gateway targets (NOT `mcp.lambda` — the vendor's own hosted MCP server is the tool
+# provider). VENDOR-HOSTED ONLY: a preset exists here only when the vendor runs the remote endpoint
+# themselves AND supports single-header token auth. Self-hosted official MCP servers
+# (clickhouse/tempo/jaeger/grafana/splunk) were removed from this model — no vendor-side token
+# issuance existed for them and AgentCore-managed egress can't be verified to reach in-VPC hosts;
+# ClickHouse's official MCP is instead stdio-embedded in the agent runtime (agent.py,
+# CLICKHOUSE_OFFICIAL_MCP); tempo keeps its in-house lambda target; jaeger has NO chat path (its lambda is deployed but was never a TARGETS entry); grafana/splunk are unsupported.
+# Endpoint stays deployment-specific data (terraform var.official_mcp_endpoints — Datadog varies by
+# site, Dynatrace by environment); provision.py SKIPs any preset whose key is absent there.
 #
 # auth.mode:
 #   "api_key"  -> AgentCore Identity API-key credential provider. credential_location/parameter_name/
 #                 prefix describe WHERE the secret is injected (a single header or query param — the
 #                 API only supports one slot, see the datadog note below).
-#   "none"     -> credentialProviderType GATEWAY_IAM_ROLE with no secret (self-hosted server behind
-#                 network-level auth only, e.g. an internal Tempo/Jaeger already gated by the VPC).
 #
-# capability is always read (ADR-017 Decision) — no write preset exists.
+# capability is always read (ADR-017 Decision) — no write preset exists. Enforcement is TWO-fold:
+# the operator's per-preset read_only_ack (vendor-side control attestation) PLUS the runtime
+# fail-closed `tool_allowlist` below — provision.py writes it to the runtime as
+# OFFICIAL_MCP_TOOL_ALLOWLIST_JSON and agent.py intersects `<target>___<tool>` names against it.
+# tool_allowlist entries must be TRANSCRIBED from vendor docs (URL + date in the comment), never
+# guessed; an empty tuple is valid and means "provision the target but expose zero tools yet".
 MCP_SERVER_TARGETS = {
     "datadog-mcp-server-target": {
         "gateway": "external-obs",
@@ -456,52 +464,25 @@ MCP_SERVER_TARGETS = {
         # apiKeyCredentialProvider), or a single bearer PAT/service token. Use the single-bearer form.
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
         "read_only_note": "RBAC-scoped (mcp_read); no local flag",
+        # Transcribed 2026-08-05 from https://docs.datadoghq.com/mcp_server/tools/ — the read-only
+        # core/alerting subset useful for diagnosis. Write tools (create_datadog_monitor,
+        # upsert_datadog_dashboard, notebook create/edit, case/security mutations, ...) are
+        # deliberately absent; anything not listed here is dropped by the runtime (fail-closed).
+        "tool_allowlist": (
+            "search_datadog_events", "search_datadog_incidents", "get_datadog_incident",
+            "get_datadog_metric", "get_datadog_metric_context", "search_datadog_metrics",
+            "search_datadog_monitors", "get_datadog_trace", "search_datadog_spans",
+            "search_datadog_logs", "analyze_datadog_logs",
+            "search_datadog_dashboards", "get_datadog_dashboard",
+            "search_datadog_hosts", "search_datadog_services", "search_datadog_service_dependencies",
+            "search_datadog_slos",
+        ),
     },
-    "clickhouse-mcp-server-target": {
-        "gateway": "external-obs",
-        "preset_key": "clickhouse",
-        # Self-hosted by design (cloud is OAuth-3LO-only, unusable headless) — no vendor domain
-        # exists to pin against, so the host is operator-asserted. This is NOT "unknown": it is a
-        # deliberate, distinct state from a missing pin.
-        "host_is_operator_asserted": True,
-        "description": "ClickHouse official MCP (ClickHouse/mcp-clickhouse), self-hosted streamable-HTTP — read-only by default",
-        # Cloud-hosted mcp.clickhouse.cloud is OAuth-3LO-only (browser consent) — not usable for a
-        # headless diagnosis agent. This preset targets a SELF-HOSTED instance (CLICKHOUSE_MCP_SERVER_TRANSPORT=http),
-        # replacing agent/lambda/clickhouse_mcp.py. Mutually exclusive with clickhouse-mcp-target (see ASSERT below).
-        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
-        "read_only_note": "read-only by default (CLICKHOUSE_ALLOW_WRITE_ACCESS unset)",
-    },
-    "tempo-mcp-server-target": {
-        "gateway": "external-obs",
-        "preset_key": "tempo",
-        # Self-hosted (in-binary query-frontend endpoint) — operator-asserted host.
-        "host_is_operator_asserted": True,
-        "description": "Tempo built-in MCP (query-frontend /api/mcp) — official, in-binary, read (query-only tools)",
-        # Ships in the Tempo binary itself (query_frontend.mcp_server.enabled); inherits whatever auth
-        # already fronts the query-frontend. Mutually exclusive with tempo-mcp-target.
-        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
-        "read_only_note": "query-only tools; no documented read-only flag",
-    },
-    "jaeger-mcp-server-target": {
-        "gateway": "external-obs",
-        "preset_key": "jaeger",
-        # Self-hosted (in-binary) — operator-asserted host.
-        "host_is_operator_asserted": True,
-        "description": "Jaeger v2 built-in MCP (/api/ai/mcp/) — official, in-binary, gated by ai.enable_mcp (default off on the Jaeger side), read",
-        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
-        "read_only_note": "9 read-only tools, tenancy-aware",
-    },
-    "grafana-mcp-server-target": {
-        "gateway": "external-obs",
-        "preset_key": "grafana",
-        # Self-hosted (grafana/mcp-grafana) — operator-asserted host.
-        "host_is_operator_asserted": True,
-        "description": "Grafana official MCP (grafana/mcp-grafana), self-hosted streamable-HTTP — dashboards + Loki datasource tools, read with --disable-write",
-        # Self-host only — Grafana Cloud's hosted MCP is OAuth-browser-consent. Loki has no standalone
-        # official MCP; its tools are surfaced here via mcp-grafana's Loki datasource support.
-        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
-        "read_only_note": "server started with --disable-write",
-    },
+    # clickhouse/tempo/jaeger/grafana/splunk presets removed (ADR-017 amendment 2026-08-05):
+    # self-hosted / in-binary official MCP servers don't fit the remote-target + token model.
+    # ClickHouse official MCP is stdio-embedded in the agent runtime instead (CLICKHOUSE_OFFICIAL_MCP);
+    # tempo keeps its in-house lambda target; jaeger has NO chat path (lambda deployed, never a
+    # TARGETS entry); grafana/splunk are unsupported.
     "dynatrace-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "dynatrace",
@@ -512,15 +493,10 @@ MCP_SERVER_TARGETS = {
         "description": "Dynatrace official hosted MCP gateway (per-environment) — read, scope-based",
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
         "read_only_note": "no local flag; least-privilege via Platform Token scopes",
-    },
-    "splunk-mcp-server-target": {
-        "gateway": "external-obs",
-        "preset_key": "splunk",
-        # Self-hosted (Splunkbase app on :8089) — operator-asserted host.
-        "host_is_operator_asserted": True,
-        "description": "Splunk official MCP (Splunkbase app 7931), self-hosted (:8089/services/mcp) — RBAC-scoped, read",
-        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
-        "read_only_note": "grant only mcp_tool_execute, never mcp_tool_admin",
+        # EMPTY on purpose (fail-closed ⇒ zero tools): docs.dynatrace.com does not publish the hosted
+        # mcp-gateway tool names (checked 2026-08-05). Transcribe from a live listing / vendor docs
+        # before adding entries — never guess (ADR-017 §Decision 2).
+        "tool_allowlist": (),
     },
     "newrelic-mcp-server-target": {
         "gateway": "external-obs",
@@ -530,12 +506,47 @@ MCP_SERVER_TARGETS = {
         "description": "New Relic official MCP (mcp.newrelic.com) — PREVIEW (enable under Previews & Trials), read",
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Api-Key", "credential_prefix": ""},
         "read_only_note": "preview — no documented read-only flag; use a read-scoped User API key",
+        # Transcribed 2026-08-05 from https://docs.newrelic.com/docs/agentic-ai/mcp/tool-reference/
+        # (all documented tools are read-only; still enumerated explicitly so a future vendor write
+        # tool is NOT absorbed — fail-closed). Preview: names may change; re-transcribe on breakage.
+        "tool_allowlist": (
+            "execute_nrql_query", "natural_language_to_nrql_query",
+            "get_entity", "list_related_entities", "search_entity_with_tag",
+            "list_available_new_relic_accounts", "get_dashboard", "list_dashboards",
+            "convert_time_period_to_epoch_ms",
+            "list_alert_conditions", "list_alert_policies", "search_incident",
+            "list_recent_issues", "list_synthetic_monitors",
+            "analyze_deployment_impact", "generate_alert_insights_report",
+            "generate_user_impact_report", "list_entity_error_groups", "list_change_events",
+            "analyze_entity_logs", "analyze_golden_metrics", "analyze_kafka_metrics",
+            "analyze_threads", "analyze_transactions", "list_garbage_collection_metrics",
+            "list_recent_logs", "list_entity_performance_risk_groups",
+        ),
     },
 }
 
+# ADR-017 (amended 2026-08-05) tombstones: mcpServer targets this catalog USED to declare and no
+# longer does. `MCP_SERVER_TARGETS` alone can't retire them — provision.py's "no endpoint → retire"
+# kill-switch only iterates the CURRENT catalog, and prune_moved_targets() deliberately KEEPs any
+# target it doesn't recognize ("manual?"). Without this list a deployment that once provisioned the
+# self-hosted presets keeps their remote targets AND their vendor-token credential providers
+# forever, so the control plane never converges on the declared catalog (review MAJOR, PR #207).
+# Entries are (target_name, preset_key); preset_key derives the provider name exactly as the live
+# path does. Delete an entry only once no deployment can still be carrying it.
+RETIRED_MCP_SERVER_TARGETS = (
+    ("clickhouse-mcp-server-target", "clickhouse"),  # → embedded stdio instead (ADR-017 §Decision 3)
+    ("tempo-mcp-server-target", "tempo"),            # self-hosted: no vendor token issuance exists
+    ("jaeger-mcp-server-target", "jaeger"),
+    ("grafana-mcp-server-target", "grafana"),
+    ("splunk-mcp-server-target", "splunk"),
+)
+
 # ADR-017 mutual-exclusion guard: a preset_key's kind must not be live as BOTH a lambda TARGETS
-# entry and an MCP_SERVER_TARGETS entry at once — the gateway would otherwise expose the same tool
-# name from two targets and agent.py's _dedup_by_tool_name pick is non-deterministic (agent.py:599).
+# entry and an MCP_SERVER_TARGETS entry at once — the gateway exposes tools as
+# '<target>___<tool>' (qualified per target, so names never literally collide), but two live
+# targets for the same KIND would still surface near-duplicate tools whose selection by the
+# model is arbitrary (review 2026-08-06: the earlier 'non-deterministic _dedup_by_tool_name'
+# wording was imprecise under qualified naming and misled a review cell).
 # Enabling a preset's endpoint is treated as the operator's cutover signal: provision.py DELETES the
 # live legacy lambda target (found via legacy_target_name, below) before creating the mcp-server
 # target, so the two can never coexist after a run completes — checking `lambda_arns` (whether the
@@ -544,12 +555,10 @@ MCP_SERVER_TARGETS = {
 # (ensure_targets only SKIPs creating/updating when the lambda is gone; it never deletes the
 # leftover target) — that gap is exactly what the live-target check + delete-before-create closes.
 _LAMBDA_KEY_BY_PRESET = {
-    "clickhouse": "clickhouse-mcp",
-    "tempo": "tempo-mcp",
-    "jaeger": "jaeger-mcp",
     "dynatrace": "dynatrace-mcp",
     "datadog": "datadog-mcp",
-    # prometheus/mimir/notion/loki have no official-MCP preset (ADR-017 Context) — no entry here.
+    # clickhouse/tempo/jaeger presets were removed (ADR-017 amendment 2026-08-05 — their lambdas are
+    # the CURRENT path, not legacy); prometheus/mimir/notion/loki never had a preset.
 }
 
 

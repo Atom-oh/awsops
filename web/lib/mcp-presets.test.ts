@@ -30,4 +30,10 @@ describe('MCP_PRESETS lockstep', () => {
       if (p.slug !== 'notion') expect(p.official).toBe(true);
     }
   });
+
+  it('cards exist ONLY for vendor-hosted MCPs + notion (ADR-017 amendment 2026-08-05)', () => {
+    // Self-hosted/in-binary kinds must never regain a token card: clickhouse is stdio-embedded in
+    // the agent runtime, tempo/jaeger run via Datasources lambdas, grafana/splunk are unsupported.
+    expect(MCP_PRESETS.map((p) => p.slug).sort()).toEqual(['datadog', 'dynatrace', 'newrelic', 'notion']);
+  });
 });

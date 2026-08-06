@@ -73,10 +73,21 @@ def _ctrl_with_targets(targets_by_gw=None):
     return ctrl
 
 
-class TestEnsureMcpServerTargets(unittest.TestCase):
+class _IsolatedProvisionTest(unittest.TestCase):
+    """Base for tests that patch MCP_SERVER_TARGETS to a single synthetic preset. The REAL
+    RETIRED_MCP_SERVER_TARGETS tombstones fire on every ensure_mcp_server_targets() call, so without
+    neutralizing them here their 5 provider deletes leak into every `assert_called_once_with` in this
+    file. Tombstone behaviour itself is covered by TestRetiredCatalogEntries, which patches the list
+    to the entry it is actually testing."""
+
     def setUp(self):
         provision.report.clear()
+        patcher = mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS", ())
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
+
+class TestEnsureMcpServerTargets(_IsolatedProvisionTest):
     def test_no_endpoints_configured_is_skip_not_err(self):
         ctrl = _ctrl_with_targets()
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET):
@@ -141,6 +152,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-legacy")
@@ -252,6 +264,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         # The new target creation failed — the legacy target must NOT have been deleted, or the
@@ -296,6 +309,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.delete_gateway_target.assert_not_called()  # legacy target untouched
@@ -389,13 +403,10 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         self.assertIn(("target:datadog-mcp-server-target:sync", "OK"), [(r[0], r[1]) for r in provision.report])
 
 
-class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
+class TestEnsureTargetsSkipsCutoverLegacy(_IsolatedProvisionTest):
     """MAJOR (kiro review, 2026-07-31): ensure_targets must not recreate a legacy lambda target
     that ensure_mcp_server_targets owns this run, or the two functions flap it into existence and
     back out on every single provisioner run."""
-
-    def setUp(self):
-        provision.report.clear()
 
     def test_skip_names_prevents_recreating_an_active_presets_legacy_target(self):
         ctrl = mock.Mock()
@@ -429,14 +440,11 @@ class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
         self.assertEqual(active, set())
 
 
-class TestLegacyRetireCrossesGateways(unittest.TestCase):
+class TestLegacyRetireCrossesGateways(_IsolatedProvisionTest):
     """MAJOR (kiro review, 2026-07-31): a legacy lambda target can live on a DIFFERENT gateway than
     the new mcpServer target for the same preset (e.g. tempo-mcp-target on 'monitoring' vs
     tempo-mcp-server-target on 'external-obs') — retire must search the legacy target's OWN
     gateway, not just the new target's gateway."""
-
-    def setUp(self):
-        provision.report.clear()
 
     def test_legacy_target_on_a_different_gateway_is_still_retired(self):
         _TEMPO_PRESET = {
@@ -468,17 +476,82 @@ class TestLegacyRetireCrossesGateways(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _TEMPO_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _TEMPO_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"tempo": "tempo-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:tempo": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-obs", "monitoring": "gw-mon"})
         ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-mon", targetId="t-legacy")
         self.assertIn(("target:tempo-mcp-target", "RETIRED"), [(r[0], r[1]) for r in provision.report])
 
 
-class TestRound4Findings(unittest.TestCase):
-    """Round-4 PR #194 review (2026-07-31)."""
+class TestRetiredCatalogEntries(unittest.TestCase):
+    """MAJOR-2 (PR #207 review): a preset REMOVED from the catalog leaves its remote target and
+    vendor-token credential provider live forever — the per-preset loop only reaches names still in
+    MCP_SERVER_TARGETS, and prune_moved_targets() KEEPs unknown names on purpose. The tombstone list
+    is what closes that, so assert the deletion, not just the absence from the catalog."""
 
     def setUp(self):
         provision.report.clear()
+
+    def test_retired_catalog_entry_is_deleted_with_its_credential_provider(self):
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
+        ac = {"official_mcp_endpoints": {}, "lambda_arns": {}, "region": "ap-northeast-2",
+              "integrations_secret_name": None}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS",
+                               (("clickhouse-mcp-server-target", "clickhouse"),)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-old")
+        ctrl.delete_api_key_credential_provider.assert_any_call(name="awsops-v2-clickhouse-mcp")
+        self.assertIn(("target:clickhouse-mcp-server-target", "RETIRED"),
+                      [(r[0], r[1]) for r in provision.report])
+
+    def _run_tombstone(self, ctrl):
+        ac = {"official_mcp_endpoints": {}, "lambda_arns": {}, "region": "ap-northeast-2",
+              "integrations_secret_name": None}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision.catalog, "RETIRED_MCP_SERVER_TARGETS",
+                               (("clickhouse-mcp-server-target", "clickhouse"),)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+
+    def test_provider_only_state_is_still_cleaned_up(self):
+        # The two objects fail INDEPENDENTLY, and provision creates the provider BEFORE the target —
+        # so "provider exists, target doesn't" is reachable (failed target create, or a half-done
+        # retirement). Gating the pass on the target being present would skip this forever and orphan
+        # the vendor token, so the provider delete must run even with no target in sight.
+        ctrl = _ctrl_with_targets({"gw-1": []})
+        self._run_tombstone(ctrl)
+        ctrl.delete_gateway_target.assert_not_called()
+        ctrl.delete_api_key_credential_provider.assert_any_call(name="awsops-v2-clickhouse-mcp")
+
+    def test_failed_target_delete_does_not_stop_the_provider_cleanup(self):
+        # Neither delete may be conditioned on the other: a transient failure on one must not strand
+        # the other. Both are idempotent, so every run re-attempts until the pair converges.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-server-target", "targetId": "t-old"}]})
+        ctrl.delete_gateway_target.side_effect = _client_error("ThrottlingException")
+        self._run_tombstone(ctrl)
+        ctrl.delete_api_key_credential_provider.assert_any_call(name="awsops-v2-clickhouse-mcp")
+        self.assertIn(("target:clickhouse-mcp-server-target", "ERR"),
+                      [(r[0], r[1]) for r in provision.report])
+
+    def test_fully_converged_state_is_not_an_error(self):
+        # The steady state, forever after every deployment converged: both objects already gone.
+        # Must be silent (no ERR) — the deletes tolerate "already gone".
+        ctrl = _ctrl_with_targets({"gw-1": []})
+        ctrl.delete_api_key_credential_provider.side_effect = _raise_not_found
+        self._run_tombstone(ctrl)
+        ctrl.delete_gateway_target.assert_not_called()
+        self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
+    def test_every_real_tombstone_names_a_preset_no_longer_in_the_catalog(self):
+        # Guards the tombstone list itself: an entry that is STILL declared would make the
+        # provisioner delete the target it is about to create, every run.
+        live = {s["preset_key"] for s in provision.catalog.MCP_SERVER_TARGETS.values()}
+        for tname, preset_key in provision.catalog.RETIRED_MCP_SERVER_TARGETS:
+            self.assertNotIn(preset_key, live, f"{tname} is tombstoned but still declared")
+
+
+class TestRound4Findings(_IsolatedProvisionTest):
+    """Round-4 PR #194 review (2026-07-31)."""
 
     def test_blocked_endpoint_is_not_a_cutover_so_legacy_target_survives(self):
         # MAJOR L2-1: _cutover_preset_keys used to check only "endpoint present + ack matches", so a
@@ -506,6 +579,7 @@ class TestRound4Findings(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision.catalog, "_LAMBDA_KEY_BY_PRESET", {"clickhouse": "clickhouse-mcp"}), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.create_gateway_target.assert_not_called()
@@ -627,6 +701,162 @@ class TestEndpointBlocked(unittest.TestCase):
 
     def test_localhost_hostname_rejected(self):
         self.assertIsNotNone(provision._endpoint_blocked("https://localhost/mcp"))
+
+
+class TestMainGatesProvisioningNotTeardownWhenRuntimeFails(unittest.TestCase):
+    """review MAJOR (follow-up to the ensure_runtime-before-ensure_mcp_server_targets reorder):
+    ensure_runtime can still fail (or, before the readiness-poll fix, return an ARN before the new
+    revision was actually live). main() must always CALL ensure_mcp_server_targets — skipping the
+    whole call also skips its teardown/retire paths, which an operator may need specifically to shut
+    a live vendor target off — but pass allow_provision=False so create/update/sync (the only paths
+    that expose something NEW to a possibly-stale runtime) are withheld."""
+
+    def _run_main_with(self, runtime_arn):
+        with mock.patch.object(provision, "tf_outputs", return_value={
+                "region": "us-east-1", "role_arn": "arn:aws:iam::123456789012:role/x",
+                "project": "awsops-v2"}), \
+             mock.patch.object(provision, "boto3") as m_boto3, \
+             mock.patch.object(provision, "ensure_gateways", return_value={"external-obs": "gw-1"}), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({}, True)), \
+             mock.patch.object(provision, "_cutover_preset_keys", return_value=set()), \
+             mock.patch.object(provision, "ensure_targets") as m_ensure_targets, \
+             mock.patch.object(provision, "ensure_runtime", return_value=runtime_arn) as m_ensure_runtime, \
+             mock.patch.object(provision, "ensure_mcp_server_targets") as m_ensure_mcp, \
+             mock.patch.object(provision, "prune_moved_targets"), \
+             mock.patch.object(provision, "ensure_memory", return_value="mem-1"), \
+             mock.patch.object(provision, "ensure_interpreter", return_value="interp-1"), \
+             mock.patch.object(provision, "write_ssm"), \
+             mock.patch.object(provision.sys, "argv", ["provision.py"]), \
+             mock.patch.object(provision, "report", []):
+            m_boto3.client.return_value = mock.MagicMock()
+            with self.assertRaises(SystemExit):
+                provision.main()
+        return m_ensure_targets, m_ensure_runtime, m_ensure_mcp
+
+    def test_runtime_failure_still_calls_ensure_mcp_server_targets_but_gates_provisioning(self):
+        _, m_ensure_runtime, m_ensure_mcp = self._run_main_with("")
+        m_ensure_runtime.assert_called_once()
+        m_ensure_mcp.assert_called_once()  # teardown paths must still run
+        self.assertFalse(m_ensure_mcp.call_args.kwargs["allow_provision"])
+
+    def test_runtime_success_allows_provisioning(self):
+        _, m_ensure_runtime, m_ensure_mcp = self._run_main_with(
+            "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/x")
+        m_ensure_runtime.assert_called_once()
+        m_ensure_mcp.assert_called_once()
+        self.assertTrue(m_ensure_mcp.call_args.kwargs["allow_provision"])
+
+
+class TestEnsureMcpServerTargetsAllowProvisionGate(_IsolatedProvisionTest):
+    """allow_provision=False must skip ONLY create/update/sync for an otherwise-eligible preset —
+    every teardown branch (blocked endpoint, no endpoint, stale ack, missing credential, tombstone)
+    must still run regardless, since those only reduce exposure."""
+
+    def test_eligible_preset_is_skipped_not_created_when_provisioning_disallowed(self):
+        ctrl = _ctrl_with_targets()
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.create_gateway_target.assert_not_called()
+        self.assertIn("SKIP", {r[1] for r in provision.report})
+        self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
+    def test_teardown_still_runs_when_provisioning_disallowed(self):
+        # ack revoked (endpoint set, ack absent) — this preset must still be torn down even though
+        # provisioning is globally disallowed this run; teardown never depends on allow_provision.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        # official_mcp_read_only_ack deliberately absent.
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
+        ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
+
+    def test_eligible_live_target_is_retired_when_provisioning_disallowed(self):
+        # PR #207 review MAJOR (3 cells independent): a fully-eligible preset (endpoint + matching
+        # ack + credential) with an ALREADY-LIVE target must be RETIRED when the runtime allowlist
+        # is unconfirmed — leaving it "untouched" kept a possibly pre-allowlist runtime serving
+        # 100% of the vendor's tools, write tools included.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
+        ctrl.create_gateway_target.assert_not_called()
+        self.assertIn(("target:datadog-mcp-server-target", "ERR"), [(r[0], r[1]) for r in provision.report])
+
+    def test_eligible_absent_target_still_skips_when_provisioning_disallowed(self):
+        # No live target → nothing to retire; the create/update/sync deferral stays a quiet SKIP.
+        # The PROVIDER delete still runs (codex stop-gate P2): if a prior run's target deletion
+        # blocked the provider delete (async ordering), the next run — which sees no target — must
+        # retry it, or the orphaned provider is never retired. Idempotent (missing = no-op).
+        ctrl = _ctrl_with_targets({"gw-1": []})
+        ctrl.delete_api_key_credential_provider.side_effect = _raise_not_found
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.delete_gateway_target.assert_not_called()
+        ctrl.create_gateway_target.assert_not_called()
+        ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
+        self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
+
+class TestEnsureRuntimeFailClosed(unittest.TestCase):
+    def setUp(self):
+        provision.report.clear()
+
+    def test_wait_crash_returns_empty_not_raise(self):
+        # codex stop-gate P1 on 569105be: an exception escaping the readiness poll (e.g. a
+        # malformed AGENTCORE_RUNTIME_READY_TIMEOUT) propagated out of ensure_runtime and crashed
+        # main() BEFORE ensure_mcp_server_targets ran — so the unconfirmed-runtime retirement
+        # branch was unreachable. Any wait failure must mean "" (fail-closed), never a raise.
+        ctrl = mock.MagicMock()
+        ctrl.list_agent_runtimes.return_value = {"agentRuntimes": [{"agentRuntimeName": provision.RUNTIME_NAME, "agentRuntimeId": "rid-1"}]}
+        ctrl.update_agent_runtime.return_value = {"agentRuntimeArn": "arn:rt"}
+        ac = {"region": "ap-northeast-2", "role_arn": "arn:aws:iam::1:role/r", "ecr_uri": "e"}
+        with mock.patch.object(provision, "_wait_runtime_ready", side_effect=ValueError("boom")):
+            self.assertEqual(provision.ensure_runtime(ctrl, ac, {}), "")
+        self.assertIn(("runtime:ready", "ERR"), [(r[0], r[1]) for r in provision.report])
+
+
+class TestWaitRuntimeReady(unittest.TestCase):
+    def test_ready_returns_true(self):
+        ctrl = mock.MagicMock()
+        ctrl.get_agent_runtime.return_value = {"status": "READY"}
+        self.assertTrue(provision._wait_runtime_ready(ctrl, "rid-1", timeout_s=5, interval_s=0))
+
+    def test_terminal_failure_returns_false(self):
+        ctrl = mock.MagicMock()
+        ctrl.get_agent_runtime.return_value = {"status": "UPDATE_FAILED", "failureReason": "nope"}
+        self.assertFalse(provision._wait_runtime_ready(ctrl, "rid-1", timeout_s=5, interval_s=0))
+
+    def test_timeout_returns_false(self):
+        ctrl = mock.MagicMock()
+        ctrl.get_agent_runtime.return_value = {"status": "UPDATING"}
+        self.assertFalse(provision._wait_runtime_ready(ctrl, "rid-1", timeout_s=0, interval_s=0))
+
+
+def _client_error(code):
+    """side_effect factory for an arbitrary (non-NotFound) control-plane failure."""
+    def _raise(*_a, **_kw):
+        from botocore.exceptions import ClientError
+        raise ClientError({"Error": {"Code": code, "Message": "nope"}}, "DeleteGatewayTarget")
+    return _raise
 
 
 def _raise_not_found(*_a, **_kw):

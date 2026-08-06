@@ -57,13 +57,16 @@ variable "istio_vpc_enabled" {
   default     = false
 }
 
-# ADR-017 — curated official-vendor MCP presets registered as external-obs `mcpServer` gateway
-# targets (scripts/v2/agentcore/provision.py), replacing the hand-written Lambda for kinds that
-# ship a vendor-official MCP server (Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk/...).
+# ADR-017 (amended 2026-08-05) — curated official-vendor MCP presets registered as external-obs
+# `mcpServer` gateway targets (scripts/v2/agentcore/provision.py). VENDOR-HOSTED ONLY:
+# Datadog / Dynatrace / New Relic. Self-hosted official MCP servers (clickhouse/tempo/jaeger/
+# grafana/splunk) do NOT use this path — ClickHouse's is stdio-embedded in the agent runtime
+# (CLICKHOUSE_OFFICIAL_MCP env, `make agentcore`); tempo keeps its in-house lambda target;
+# jaeger has NO chat path (its lambda below is deployed but was never a gateway TARGETS entry).
 # Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0, plan = No changes).
 variable "official_mcp_enabled" {
   type        = bool
-  description = "Register curated official-vendor MCP servers (ADR-017) as external-obs gateway mcpServer targets. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0)."
+  description = "Register curated vendor-HOSTED official MCP servers (ADR-017: Datadog/Dynatrace/New Relic) as external-obs gateway mcpServer targets. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0)."
   default     = false
 }
 
@@ -84,9 +87,12 @@ variable "official_mcp_endpoints" {
   }
 }
 
-# ADR-017 CRITICAL gate (kiro review, 2026-07-31): provision.py has no server-side tool allowlist
-# for mcpServer targets (unlike the Lambda targets' toolSchema.inlinePayload) — it exposes 100% of
-# whatever the vendor's remote MCP server advertises. Each preset's read_only_note
+# ADR-017 gate (kiro review 2026-07-31; amended 2026-08-05): the GATEWAY still has no server-side
+# tool allowlist for mcpServer targets (unlike the Lambda targets' toolSchema.inlinePayload) — it
+# advertises 100% of the vendor's tools. Since the 2026-08-05 amendment the RUNTIME enforces a
+# fail-closed per-preset allowlist (catalog tool_allowlist → OFFICIAL_MCP_TOOL_ALLOWLIST_JSON →
+# agent.py intersection), so vendor-added tools are dropped there; this ack remains the second,
+# vendor-side layer. Each preset's read_only_note
 # (scripts/v2/agentcore/catalog.py MCP_SERVER_TARGETS) describes a VENDOR-SIDE control (RBAC scope,
 # --disable-write, etc) that provision.py cannot verify from the control plane. This var is the
 # explicit, per-preset, dated operator acknowledgment that the vendor-side control was actually

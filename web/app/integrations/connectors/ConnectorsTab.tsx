@@ -67,7 +67,8 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
     <div className="space-y-3">
       <p className="text-[13px] text-ink-500">
         {tt('외부 서비스 커넥터 (Notion 등). 자격증명은 Secrets Manager에 암호화 저장되며 다시 표시되지 않습니다.')}{' '}
-        {tt('쓰기(노트/티켓 생성)는 거버넌스 하에 제안 전용 · 기본 비활성입니다.')}
+        {tt('쓰기(노트/티켓 생성)는 거버넌스 하에 제안 전용 · 기본 비활성입니다.')}{' '}
+        {tt('ClickHouse·Prometheus·Loki·Tempo·Mimir·Jaeger 등 관측성 데이터소스는 Datasources 탭에서 등록합니다(엔드포인트+자격증명).')}
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         {CONNECTORS.map((c) => (
@@ -85,7 +86,8 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
               </span>
             </div>
             <div className="flex flex-wrap gap-1">
-              {c.official && <span className="inline-block text-[11px] text-sky-700 bg-sky-50 border border-sky-200 rounded px-1.5 py-0.5">{tt('공식 MCP')}</span>}
+              {c.official && <span className="inline-block text-[11px] text-sky-700 bg-sky-50 border border-sky-200 rounded px-1.5 py-0.5">{tt('공식 MCP (hosted)')}</span>}
+              {c.official && <span className="inline-block text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">{tt('게이트됨 — 토큰 사전 등록만')}</span>}
               {c.preview && <span className="inline-block text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">{tt('벤더 preview')}</span>}
             </div>
             <p className="text-[12px] text-ink-400">

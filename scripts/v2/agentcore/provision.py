@@ -190,8 +190,9 @@ def _endpoint_blocked(endpoint, spec=None):
     tfvars edit can be applied without ever re-running that validation against code that already
     changed — this is the second, runtime check. Mirrors the ALWAYS-BLOCKED subset of
     web/lib/ssrf-guard.ts isAlwaysBlockedHost (metadata/loopback/link-local/multicast/unspecified) —
-    RFC1918 private is deliberately ALLOWED (several ADR-017 presets are explicitly self-hosted
-    in-VPC per catalog.py's own comments, e.g. ClickHouse/Grafana/Splunk). Returns a reason string
+    RFC1918 private is deliberately ALLOWED (the operator-asserted/self-hosted preset class is
+    in-VPC by design — zero such presets exist after the 2026-08-05 amendment, but the rule is
+    kept for any future one). Returns a reason string
     if blocked, else None. A non-literal hostname (the common case) is not resolved here — same
     deferral to connect time as the TS guard.
 
@@ -202,7 +203,8 @@ def _endpoint_blocked(endpoint, spec=None):
     _ensure_api_key_provider would hand that host the preset's real vendor credential — effectively
     the BYO-MCP connection BASELINE §2 pins as do-not-revive. Two states, deliberately distinct:
     `allowed_host_suffixes` = vendor-hosted, pinned here; `host_is_operator_asserted` = genuinely
-    self-hosted (ClickHouse/Grafana/Splunk/Tempo/Jaeger), where no vendor domain exists to pin.
+    self-hosted, where no vendor domain exists to pin (zero such presets in the catalog since the
+    2026-08-05 amendment — the enforcement path stays, test-pinned, for any future one).
     A spec with NEITHER is a catalog bug and fails closed rather than defaulting to permissive."""
     try:
         parsed = urlparse(endpoint)
@@ -261,8 +263,9 @@ def _host_pin_violation(endpoint, spec):
     """Per-preset host pin — the control that actually keeps this inside ADR-007's curated boundary.
 
     Vendor-hosted presets pin to `allowed_host_suffixes` from the catalog — a name is fine there,
-    because the pin is the vendor's own domain. Self-hosted ones (ClickHouse/Grafana/Splunk/Tempo/
-    Jaeger) have no vendor domain to pin, and letting them take any host left the BYO-MCP path open:
+    because the pin is the vendor's own domain. Operator-asserted (self-hosted) ones — none in the
+    catalog since the 2026-08-05 amendment; rule preserved for any future preset — have no vendor
+    domain to pin, and letting them take any host left the BYO-MCP path open:
     the preset's real credential would be handed to whatever URL was configured, which is exactly what
     BASELINE §2 pins as do-not-revive. They must therefore give the PRIVATE IP LITERAL of their
     in-VPC endpoint. The literal is the point — a NAME resolves privately at provision time and can
@@ -422,6 +425,47 @@ def _delete_api_key_provider(ctrl, provider_name):
 _TARGET_TERMINAL_FAILURE_STATUSES = {"FAILED", "UPDATE_UNSUCCESSFUL", "SYNCHRONIZE_UNSUCCESSFUL"}
 
 
+_RUNTIME_TERMINAL_FAILURE_STATUSES = ("CREATE_FAILED", "UPDATE_FAILED")
+
+
+def _wait_runtime_ready(ctrl, runtime_id, timeout_s=300, interval_s=5):
+    """Poll GetAgentRuntime until status=READY (True), a terminal failure status (False, logged),
+    or timeout_s elapses (False, logged).
+
+    review MAJOR (follow-up): create_agent_runtime/update_agent_runtime return as soon as the
+    request is ACCEPTED (status CREATING/UPDATING), not once the new revision is actually serving
+    — the base smoke path's own `time.sleep(10)` comment already says as much. Without this wait,
+    ensure_runtime returning a non-empty ARN told main() "safe to proceed" while the OLD runtime
+    image (potentially predating OFFICIAL_MCP_TOOL_ALLOWLIST_JSON entirely) was still what actually
+    answered gateway calls — reordering ensure_runtime before ensure_mcp_server_targets closes the
+    ordering half of this gap, but not the propagation-delay half. Mirrors _wait_target_ready's
+    shape. timeout_s=300 (review MINOR): a container-runtime rollout includes an image pull — 60s
+    was routinely exceedable, and every timeout defers provisioning for the WHOLE run, so a
+    chronically-short timeout meant hosted presets could never activate. Override via the
+    AGENTCORE_RUNTIME_READY_TIMEOUT env if a deployment needs more."""
+    try:
+        timeout_s = int(os.environ.get("AGENTCORE_RUNTIME_READY_TIMEOUT", timeout_s))
+    except (TypeError, ValueError):
+        log("runtime:ready", "ERR", "AGENTCORE_RUNTIME_READY_TIMEOUT is not an integer — using the default")
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            resp = ctrl.get_agent_runtime(agentRuntimeId=runtime_id)
+        except ClientError as e:
+            log("runtime:ready", "ERR", str(e)[:140])
+            return False
+        status = resp.get("status")
+        if status == "READY":
+            return True
+        if status in _RUNTIME_TERMINAL_FAILURE_STATUSES:
+            log("runtime:ready", "ERR", f"reached terminal status {status}: {(resp.get('failureReason') or '')[:120]}")  # `or ''`: an explicit null must not TypeError outside the try
+            return False
+        if time.monotonic() >= deadline:
+            log("runtime:ready", "ERR", f"timed out after {timeout_s}s waiting for READY (last status: {status})")
+            return False
+        time.sleep(interval_s)
+
+
 def _wait_target_ready(ctrl, gw_id, target_id, tname, timeout_s=30, interval_s=2):
     """Poll GetGatewayTarget until status=READY (True), a terminal failure status (False, logged),
     or timeout_s elapses (False, logged). create/update_gateway_target return as soon as the
@@ -460,8 +504,22 @@ def _retire_gateway_target(ctrl, gw_id, existing, tname, reason):
         log(f"target:{tname}", "ERR", str(e)[:140])
 
 
-def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=None):
+def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=None, allow_provision=True):
     """ADR-017: register curated official-vendor MCP servers as remote `mcpServer` gateway targets.
+
+    allow_provision=False (review MAJOR, follow-up): the caller confirmed the runtime revision
+    carrying OFFICIAL_MCP_TOOL_ALLOWLIST_JSON is NOT live this run (ensure_runtime failed or never
+    reached READY). Every TEARDOWN path below (blocked endpoint, no endpoint, stale/missing ack,
+    missing credential, the RETIRED_MCP_SERVER_TARGETS tombstone pass) still runs unconditionally —
+    those only ever REDUCE exposure and don't depend on the runtime allowlist existing. The
+    CREATE/UPDATE/SYNC path for an otherwise-eligible preset is skipped, and — same principle,
+    other direction (review MAJOR on this round's first cut) — an otherwise-eligible preset's
+    ALREADY-LIVE target is RETIRED, because a target serving through a runtime that may predate
+    the allowlist is the exact unfiltered-vendor-write-tool exposure this gate exists to close.
+    An earlier revision of this function had the caller skip the WHOLE call on
+    runtime failure, which also blocked teardown — an operator revoking an ack or removing an
+    endpoint specifically to shut a live vendor target off would have been unable to, for as long
+    as the runtime stayed unready (review MAJOR, this round).
 
     Ordering is deliberate and safety-critical (2026-07-31 kiro review, findings #1/#2 on the first
     cut of this function, plus round-4 L2-2):
@@ -518,6 +576,23 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         if gw_key not in existing_by_gw:
             existing_by_gw[gw_key] = {t.get("name"): t for t in _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)}
         return gw_id, existing_by_gw[gw_key]
+
+    # Converge on the DECLARED catalog: retire targets (and their vendor-token credential providers)
+    # that this catalog no longer declares. The per-preset loop below only reaches names that are
+    # still IN the catalog, and prune_moved_targets() KEEPs unknown names on purpose — so without
+    # this pass a removed preset's remote target lives on forever (review MAJOR, PR #207).
+    # BOTH deletes run UNCONDITIONALLY — same idiom as the inactive-preset SKIP path below, and for
+    # the same reason. The two objects fail independently, so any attempt to use one as the other's
+    # retry trigger strands the survivor: provision creates the provider BEFORE the target, so a
+    # failed target create (or a half-done retirement) leaves provider-only state that a
+    # target-present gate would skip forever, orphaning the vendor token. Both calls tolerate
+    # "already gone", so re-attempting every run is cheap, idempotent, and self-healing.
+    for tname, preset_key in getattr(catalog, "RETIRED_MCP_SERVER_TARGETS", ()):
+        gw_id, existing = gw_existing("external-obs")
+        if not gw_id:
+            continue
+        _retire_gateway_target(ctrl, gw_id, existing, tname, "removed from the catalog — retiring (ADR-017 amended)")
+        _delete_api_key_provider(ctrl, f"awsops-v2-{preset_key}-mcp")
 
     for tname, spec in catalog.MCP_SERVER_TARGETS.items():
         preset_key = spec["preset_key"]
@@ -584,6 +659,34 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
             _delete_api_key_provider(ctrl, provider_name)
             continue
 
+        # ── Runtime-allowlist gate (provisioning only — every teardown branch above already ran
+        # regardless) ────────────────────────────────────────────────────────────────────────────
+        if not allow_provision:
+            # An ELIGIBLE preset with a LIVE target is retired here, not skipped (PR #207 review
+            # MAJOR, 3 cells independent): "left untouched" meant a target created by a PRE-allowlist
+            # revision kept serving 100% of the vendor's tools — write tools included — through
+            # whatever runtime IS live, which is exactly the exposure this PR closes. The PR's own
+            # principle ("a target must not be exposed to a runtime that predates the allowlist")
+            # applies to retaining one as much as to creating one. Retirement is teardown, so it
+            # doesn't conflict with this gate's teardown-always contract; the next successful run
+            # recreates the target idempotently (flapping only across failed rollouts — acceptable:
+            # fail-closed beats serving unfiltered vendor write tools).
+            if existing.get(tname):
+                log(f"target:{tname}", "ERR", "runtime allowlist not confirmed live this run — "
+                    "retiring the live target rather than letting it serve through a possibly "
+                    "pre-allowlist runtime (recreated on the next successful run)")
+                _retire_gateway_target(ctrl, gw_id, existing, tname, "runtime allowlist unconfirmed — retiring live target")
+            else:
+                log(f"target:{tname}", "SKIP", "runtime allowlist not confirmed live this run — "
+                    "deferring create/update/sync")
+            # Provider deletion runs in BOTH branches (codex stop-gate P2 on 569105be): AWS can
+            # reject deleting a provider while the just-issued target deletion is still async, and
+            # the NEXT run sees no target → the quiet branch → the provider was never retried.
+            # Same self-healing convention as the no-endpoint SKIP branch; the delete is idempotent
+            # and a successful next run recreates the provider alongside the target anyway.
+            _delete_api_key_provider(ctrl, provider_name)
+            continue
+
         # ── Credential gate (provisioning only — everything that tears down already ran) ──────
         token = _preset_token(secrets, preset_key) if auth["mode"] == "api_key" else None
 
@@ -644,34 +747,33 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # listingMode DEFAULT = the control plane caches the tool list it discovered, i.e. THE VENDOR
         # DECIDES WHICH TOOLS THIS GATEWAY EXPOSES.
         #
-        # ACTIVATION BLOCKER — not an accepted risk. ADR-017 §Status keeps official_mcp_enabled
-        # do-not-enable until a runtime per-preset tool allowlist exists (agent.py:get_all_tools,
-        # same fail-closed shape as select_integration_tools). An earlier revision of this
-        # comment called it "knowingly accepted", which contradicted BASELINE §1's governance
-        # requirement and the ADR's own §Trade-offs (PR #194 review MAJOR, L5).
-        # ADR-017's `capability = read` is a DECLARATIVE LABEL, NOT SERVER-SIDE ENFORCEMENT on this
-        # path. A `mcp.lambda` target caps its tool set with toolSchema.inlinePayload; an mcpServer
-        # target on an API_KEY credential has NO equivalent cap available:
-        #   - bedrock-agentcore-control has no tool-listing operation at all (target ops are only
-        #     Create/Get/List/Update/DeleteGatewayTarget + SynchronizeGatewayTargets, and no response
-        #     carries tool names — verified against the botocore 2023-06-05 model), so provision.py
-        #     cannot even read, let alone diff, the vendor's advertised tools; and
-        #   - the one field that WOULD cap them, McpServerTargetConfiguration.mcpToolSchema, is
-        #     documented as "Supported only when the credential provider is configured with an
-        #     authorization code grant type" — these presets are API_KEY, and setting it disables
-        #     tool synchronization entirely.
-        # Consequence, stated plainly: if a vendor adds a WRITE tool (mute monitor, create incident,
-        # delete dashboard) to an ALREADY-ACKED preset, the sync-on-EXISTS above absorbs it into the
-        # agent's tool surface on the next `make agentcore` — no re-ack, no PR, no review. The
-        # `read_only_note` and the operator ack attest to a VENDOR-SIDE control (RBAC scope /
-        # --disable-write / read-scoped token), which does keep applying to later-added tools; they
-        # do NOT and cannot attest to a tool list.
-        # This risk is knowingly accepted because AgentCore offers no tool-schema cap on the API_KEY
-        # path. The compensating controls are: `official_mcp_enabled` + `integrations_enabled`
-        # default-off; the curated catalog (only vendors WE list get a preset_key at all — see
-        # MCP_SERVER_TARGETS); the fail-closed per-preset `official_mcp_read_only_ack` bound to the
-        # exact endpoint; and `integrations_write_enabled` staying off so no external write tier is
-        # live. Recorded in ADR-017 §Decision/§Trade-offs and the ADR-004/ADR-007 amendments.
+        # RESOLVED (2026-08-05, ADR-017 re-amendment) — this used to be an ACTIVATION BLOCKER, not
+        # an accepted risk: bedrock-agentcore-control has no tool-listing operation at all (target
+        # ops are only Create/Get/List/Update/DeleteGatewayTarget + SynchronizeGatewayTargets, no
+        # response carries tool names — verified against the botocore 2023-06-05 model), so
+        # provision.py cannot read, let alone diff, the vendor's advertised tools; and the one field
+        # that WOULD cap them, McpServerTargetConfiguration.mcpToolSchema, requires an
+        # authorization-code-grant credential unavailable to these API_KEY presets. A vendor adding
+        # a WRITE tool to an already-acked preset used to be absorbed into the agent's tool surface
+        # on the next `make agentcore` with no re-ack, no PR, no review.
+        # That gap is now closed a layer up, at the RUNTIME, not the control plane: each catalog
+        # entry below declares `tool_allowlist` (read-only tool names TRANSCRIBED from vendor docs —
+        # see catalog.py's per-entry provenance comments), written here to
+        # OFFICIAL_MCP_TOOL_ALLOWLIST_JSON (below) and intersected in agent.py against every
+        # `<target>___<tool>` name coming back from the gateway — empty/untranscribed allowlist or a
+        # missing env var both mean zero tools for that preset (fail-closed), and this same gate is
+        # shared (not duplicated) between the Strands handler and the anthropic_loop dark-path
+        # handler (PR #207 CRITICAL fix — a prior revision only gated the Strands path). A vendor
+        # adding a write tool no longer reaches the model: it's simply not in the allowlist.
+        # `listingMode=DEFAULT` above still means the control plane itself imposes no cap — the
+        # allowlist is enforced entirely in agent.py, not here — so this file still cannot verify
+        # what the vendor's server advertises; it only bounds what's let through downstream.
+        # Compensating controls, unchanged: `official_mcp_enabled` + `integrations_enabled`
+        # default-off; the curated catalog (only vendors WE list get a preset_key — see
+        # MCP_SERVER_TARGETS, now vendor-hosted-only per ADR-017); the fail-closed per-preset
+        # `official_mcp_read_only_ack` bound to the exact endpoint; `integrations_write_enabled`
+        # staying off. Recorded in ADR-017 §Decision/§Trade-offs and the ADR-004/ADR-007 amendments
+        # (both carry a 2026-08-05 follow-up noting this resolution).
         cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
         tid_final = None
         tid_to_sync = None
@@ -874,8 +976,29 @@ def ensure_runtime(ctrl, ac, gw_ids):
            # Dark-path chat loop (ADR-008 amended / BASELINE §2) — default OFF. Set explicitly on the
            # runtime so it survives re-provisioning and is toggleable via the normal deploy path:
            # `ANTHROPIC_AGENT_LOOP_ENABLED=true make agentcore`.
-           "ANTHROPIC_AGENT_LOOP_ENABLED": os.environ.get("ANTHROPIC_AGENT_LOOP_ENABLED", "false")}
-    existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
+           "ANTHROPIC_AGENT_LOOP_ENABLED": os.environ.get("ANTHROPIC_AGENT_LOOP_ENABLED", "false"),
+           # ADR-017 (amended 2026-08-05) — runtime fail-closed tool allowlist for the vendor-hosted
+           # official-MCP presets. Written on EVERY run (not just when official_mcp_enabled) so a
+           # stale/absent map can never fail-open: agent.py drops all `*-mcp-server-target___*`
+           # tools that aren't in this map.
+           "OFFICIAL_MCP_TOOL_ALLOWLIST_JSON": json.dumps(
+               {tname: sorted(spec.get("tool_allowlist") or ())
+                for tname, spec in catalog.MCP_SERVER_TARGETS.items()}),
+           # ADR-017 (amended) — official mcp-clickhouse stdio embedding, default OFF. Toggle via
+           # `CLICKHOUSE_OFFICIAL_MCP=true make agentcore` (same pattern as the loop flag above).
+           "CLICKHOUSE_OFFICIAL_MCP": os.environ.get("CLICKHOUSE_OFFICIAL_MCP", "false"),
+           # Where agent.py reads the datasource kind-mirror credentials for the stdio path (same
+           # single integrations secret the connector lambdas use).
+           "INTEGRATIONS_SECRET_NAME": f"ops/{ac.get('project', 'awsops-v2')}/integrations/credentials"}
+    # Same fail-closed contract as the readiness poll below (review MINOR, codex/L3): this listing
+    # used to sit outside the try (which only catches ClientError), so any exception here crashed
+    # main() BEFORE ensure_mcp_server_targets ran — blocking the teardown pass for the run.
+    # ensure_runtime must never raise; "" (unconfirmed) always lets teardown proceed.
+    try:
+        existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
+    except Exception as e:  # noqa: BLE001 — anything here means runtime state is unknowable
+        log("runtime", "ERR", f"list_agent_runtimes failed ({type(e).__name__}: {str(e)[:120]}) — treating runtime as unconfirmed")
+        return ""
     try:
         if RUNTIME_NAME in existing:
             rid = existing[RUNTIME_NAME].get("agentRuntimeId")
@@ -885,16 +1008,37 @@ def ensure_runtime(ctrl, ac, gw_ids):
                                              environmentVariables=env)
             arn = resp.get("agentRuntimeArn") or existing[RUNTIME_NAME].get("agentRuntimeArn")
             log("runtime", "UPDATED", arn)
-            return arn
-        resp = ctrl.create_agent_runtime(agentRuntimeName=RUNTIME_NAME, roleArn=ac["role_arn"],
-                                         agentRuntimeArtifact=artifact, networkConfiguration=netcfg,
-                                         environmentVariables=env)
-        arn = resp.get("agentRuntimeArn")
-        log("runtime", "CREATED", arn)
-        return arn
-    except ClientError as e:
-        log("runtime", "ERR", str(e)[:160])
+        else:
+            resp = ctrl.create_agent_runtime(agentRuntimeName=RUNTIME_NAME, roleArn=ac["role_arn"],
+                                             agentRuntimeArtifact=artifact, networkConfiguration=netcfg,
+                                             environmentVariables=env)
+            rid = resp.get("agentRuntimeId")
+            arn = resp.get("agentRuntimeArn")
+            log("runtime", "CREATED", arn)
+    except Exception as e:  # noqa: BLE001 — never-raise contract (see the listing/poll blocks)
+        # ClientError-only here left BotoCoreError (EndpointConnectionError/ReadTimeout/
+        # ParamValidation) escaping to crash main() BEFORE ensure_mcp_server_targets — blocking the
+        # teardown pass, e.g. an ack revocation, until a re-run (review MAJOR: this function states
+        # its never-raise contract twice and hardened BOTH adjacent blocks with catch-alls for
+        # exactly this reason; this middle block was the remaining gap).
+        log("runtime", "ERR", f"{type(e).__name__}: {str(e)[:150]}")
         return ""
+    # review MAJOR (follow-up): the request above is only ACCEPTED, not live — a caller treating a
+    # non-empty ARN as "safe to expose new gateway targets" (main() does, via the ensure_runtime ->
+    # ensure_mcp_server_targets ordering) would otherwise race the new revision's actual rollout.
+    # FAIL-CLOSED on ANY wait failure, not just a clean False (codex stop-gate on 569105be): an
+    # exception escaping here — e.g. a malformed AGENTCORE_RUNTIME_READY_TIMEOUT env — used to
+    # propagate out of ensure_runtime and crash main() BEFORE ensure_mcp_server_targets ran, so
+    # the very retirement branch this gate feeds was never reached and a stale live target kept
+    # serving. Readiness-unconfirmed must always mean "return '' and let the teardown pass run".
+    try:
+        ready = _wait_runtime_ready(ctrl, rid)
+    except Exception as e:  # noqa: BLE001 — anything here means readiness is unconfirmed
+        log("runtime:ready", "ERR", f"readiness poll crashed ({type(e).__name__}: {str(e)[:120]}) — treating as not ready")
+        ready = False
+    if not ready:
+        return ""
+    return arn
 
 
 def write_ssm(ac, runtime_arn, interpreter_id, memory_id):
@@ -944,11 +1088,28 @@ def main():
     legacy_skip = {catalog.legacy_target_name(pk) for pk in _cutover_preset_keys(ac, secrets, secrets_read_ok)}
     legacy_skip.discard(None)
     ensure_targets(ctrl, ac, gw_ids, skip_names=legacy_skip)
-    ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok)  # ADR-017 curated official-vendor MCP presets
+    # ensure_runtime BEFORE ensure_mcp_server_targets (review MAJOR L3-1): a gateway mcpServer target
+    # is exposed to whatever runtime revision is currently serving the instant it's created. Creating
+    # the target first meant the FIRST activation of a preset could hit an old runtime image that
+    # predates OFFICIAL_MCP_TOOL_ALLOWLIST_JSON entirely — every vendor tool (including write tools)
+    # reaching the model unfiltered for as long as that window lasted, and permanently if ensure_runtime
+    # then failed. ensure_runtime only needs ctrl/ac/gw_ids (its allowlist env comes from
+    # catalog.MCP_SERVER_TARGETS directly, not from anything ensure_mcp_server_targets produces), so
+    # reordering is a pure reorder — the new runtime revision (allowlist included) is live before any
+    # mcpServer target that depends on it can exist.
+    runtime_arn = ensure_runtime(ctrl, ac, gw_ids)
+    # review MAJOR (follow-up): the reorder above closes the WINDOW between target-creation and
+    # allowlist-deployment, but ensure_runtime can still fail outright, or accept the request
+    # without the new revision actually reaching READY (both now covered — ensure_runtime itself
+    # polls for READY and returns "" on failure/timeout). A caller-side skip of the WHOLE
+    # ensure_mcp_server_targets call on runtime_arn being falsy would ALSO block its teardown paths
+    # (an operator revoking an ack specifically to shut a live target off) — so the call always
+    # runs; only its internal create/update/sync path is gated on allow_provision.
+    ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok,
+                               allow_provision=bool(runtime_arn))  # ADR-017 curated official-vendor MCP presets
     prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)
-    runtime_arn = ensure_runtime(ctrl, ac, gw_ids)
     write_ssm(ac, runtime_arn, interpreter_id, memory_id)
 
     if args.smoke:

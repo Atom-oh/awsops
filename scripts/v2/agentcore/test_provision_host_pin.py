@@ -68,6 +68,12 @@ class TestHostPin(unittest.TestCase):
             provision._host_pin_violation("https://attacker.example/mcp", _spec("datadog"))
         )
 
+# SYNTHETIC operator-asserted spec: the ADR-017 amendment (2026-08-05) removed every self-hosted
+# preset from the live catalog, but the private-literal enforcement path in _host_pin_violation
+# stays (fail-closed classifier for any future operator-asserted preset) — keep it covered.
+_SELF_HOSTED_SPEC = {"preset_key": "synthetic-self-hosted", "host_is_operator_asserted": True}
+
+
 class TestSelfHostedRequiresAPrivateLiteral(unittest.TestCase):
     """Marking a preset host_is_operator_asserted, or confining it to a declared internal suffix, both
     still left it exfiltratable: a NAME resolves privately at provision time and can be repointed at a
@@ -77,17 +83,17 @@ class TestSelfHostedRequiresAPrivateLiteral(unittest.TestCase):
 
     def test_private_literal_is_accepted(self):
         for url in ("https://10.0.3.7:8123/mcp", "https://192.168.4.4/mcp", "https://[fd00::1]/mcp"):
-            self.assertIsNone(provision._host_pin_violation(url, _spec("clickhouse")), url)
+            self.assertIsNone(provision._host_pin_violation(url, _SELF_HOSTED_SPEC), url)
 
     def test_a_name_is_rejected_even_if_it_looks_internal(self):
         for url in ("https://ch.internal:8123/mcp", "https://ch.svc.cluster.local/mcp"):
-            v = provision._host_pin_violation(url, _spec("clickhouse"))
+            v = provision._host_pin_violation(url, _SELF_HOSTED_SPEC)
             self.assertIsNotNone(v, url)
             self.assertIn("NAME", v)
 
     def test_public_literal_is_rejected(self):
         self.assertIsNotNone(
-            provision._host_pin_violation("https://93.184.216.34/mcp", _spec("clickhouse"))
+            provision._host_pin_violation("https://93.184.216.34/mcp", _SELF_HOSTED_SPEC)
         )
 
     def test_publicly_routed_ipv6_transition_forms_are_rejected(self):
@@ -102,7 +108,7 @@ class TestSelfHostedRequiresAPrivateLiteral(unittest.TestCase):
             "https://[64:ff9b::5db8:d822]/mcp",     # NAT64
             "https://[2600:1f00::1]/mcp",           # AWS-style GUA (routable)
         ):
-            self.assertIsNotNone(provision._host_pin_violation(url, _spec("clickhouse")), url)
+            self.assertIsNotNone(provision._host_pin_violation(url, _SELF_HOSTED_SPEC), url)
 
     def test_vendor_hosted_preset_still_uses_its_name_pin(self):
         # Vendor-hosted presets are unaffected — they pin on the vendor domain, by name.
