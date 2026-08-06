@@ -361,7 +361,11 @@ export default function DirectConnectPage() {
     {
       key: 'assoc', label: tt('연결 대상'),
       value: (r) => (r.associations.length ? r.associations.map((a) => a.id).join(' ') : null),
-      render: (r) => r.associations.length === 0
+      // 조회 실패(associationsAvailable=false)는 "미할당"이 아니라 "판정 불가" — 붉은 배지로
+      // 위험을 발명하지 않는다 (PR #210 리뷰 MAJOR #2와 같은 결함의 렌더 레이어).
+      render: (r) => !r.associationsAvailable
+        ? <Badge variant="soft">{tt('조회 실패 — 확인 불가')}</Badge>
+        : r.associations.length === 0
         ? <Badge tone="negative" variant="soft">{tt('미할당')}</Badge>
         : (
           <span className="inline-flex flex-wrap gap-1">
