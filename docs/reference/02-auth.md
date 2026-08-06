@@ -2,9 +2,9 @@
 
 ## Purpose / 목적
 
-v2 puts **Cognito Hosted-UI authentication in front of the CloudFront edge** so unauthenticated requests never reach the ECS Fargate web tier (or consume ALB capacity). Authentication terminates at the edge and a verified Cognito ID token cookie (`awsops_token`) flows downstream. v2 hardens the v1 model from an expiry-only check to **cryptographic RS256 signature verification** at the edge — only then is the downstream "decode-only, trust the edge" model genuinely sound.
+v2 puts **Cognito authentication in front of the CloudFront edge** so unauthenticated requests never reach the ECS Fargate web tier (or consume ALB capacity). The **primary login is the self-hosted `/login` form** (ADR-002): the BFF `POST /api/auth/login` calls the unsigned public `InitiateAuth(USER_PASSWORD_AUTH)` and mints the `awsops_token` cookie; the **Hosted-UI PKCE flow (`/_callback`) is retained only as a dark fallback**. Authentication terminates at the edge and the verified Cognito ID token cookie flows downstream. v2 hardens the v1 model from an expiry-only check to **cryptographic RS256 signature verification** at the edge — only then is the downstream "decode-only, trust the edge" model genuinely sound.
 
-v2는 **Cognito Hosted-UI 인증을 CloudFront 엣지 앞단에 배치**하여 인증되지 않은 요청이 ECS Fargate 웹 티어에 도달하지 않게 한다(ALB 용량도 소비하지 않음). 인증은 엣지에서 종료되고, 검증된 Cognito ID 토큰 쿠키(`awsops_token`)가 하위로 전파된다. v2는 v1의 만료(exp) 전용 검사를 **RS256 서명 검증**으로 강화했다 — 이로써 하위 앱의 "디코드만 하고 엣지를 신뢰" 모델이 비로소 타당해진다.
+v2는 **Cognito 인증을 CloudFront 엣지 앞단에 배치**하여 인증되지 않은 요청이 ECS Fargate 웹 티어에 도달하지 않게 한다(ALB 용량도 소비하지 않음). **주 로그인은 자체 `/login` 폼**(ADR-002) — BFF `POST /api/auth/login`이 무서명 공개 `InitiateAuth(USER_PASSWORD_AUTH)`를 호출해 `awsops_token` 쿠키를 발급하고, **Hosted UI PKCE 플로우(`/_callback`)는 다크 폴백으로만 보존**된다. 인증은 엣지에서 종료되고, 검증된 Cognito ID 토큰 쿠키가 하위로 전파된다. v2는 v1의 만료(exp) 전용 검사를 **RS256 서명 검증**으로 강화했다 — 이로써 하위 앱의 "디코드만 하고 엣지를 신뢰" 모델이 비로소 타당해진다.
 
 ## Current design / 현행 설계
 
