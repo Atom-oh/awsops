@@ -703,11 +703,13 @@ class TestEndpointBlocked(unittest.TestCase):
         self.assertIsNotNone(provision._endpoint_blocked("https://localhost/mcp"))
 
 
-class TestMainSkipsTargetsWhenRuntimeFails(unittest.TestCase):
+class TestMainGatesProvisioningNotTeardownWhenRuntimeFails(unittest.TestCase):
     """review MAJOR (follow-up to the ensure_runtime-before-ensure_mcp_server_targets reorder):
-    reordering alone doesn't help if ensure_runtime fails outright (ClientError -> ""). main() must
-    refuse to create/sync mcpServer targets in that case — a target exposed to a runtime whose
-    allowlist update never landed reopens the exact fail-open this PR closes."""
+    ensure_runtime can still fail (or, before the readiness-poll fix, return an ARN before the new
+    revision was actually live). main() must always CALL ensure_mcp_server_targets — skipping the
+    whole call also skips its teardown/retire paths, which an operator may need specifically to shut
+    a live vendor target off — but pass allow_provision=False so create/update/sync (the only paths
+    that expose something NEW to a possibly-stale runtime) are withheld."""
 
     def _run_main_with(self, runtime_arn):
         with mock.patch.object(provision, "tf_outputs", return_value={
@@ -731,16 +733,68 @@ class TestMainSkipsTargetsWhenRuntimeFails(unittest.TestCase):
                 provision.main()
         return m_ensure_targets, m_ensure_runtime, m_ensure_mcp
 
-    def test_runtime_failure_skips_mcp_server_target_creation(self):
+    def test_runtime_failure_still_calls_ensure_mcp_server_targets_but_gates_provisioning(self):
         _, m_ensure_runtime, m_ensure_mcp = self._run_main_with("")
         m_ensure_runtime.assert_called_once()
-        m_ensure_mcp.assert_not_called()
+        m_ensure_mcp.assert_called_once()  # teardown paths must still run
+        self.assertFalse(m_ensure_mcp.call_args.kwargs["allow_provision"])
 
-    def test_runtime_success_still_creates_mcp_server_targets(self):
+    def test_runtime_success_allows_provisioning(self):
         _, m_ensure_runtime, m_ensure_mcp = self._run_main_with(
             "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/x")
         m_ensure_runtime.assert_called_once()
         m_ensure_mcp.assert_called_once()
+        self.assertTrue(m_ensure_mcp.call_args.kwargs["allow_provision"])
+
+
+class TestEnsureMcpServerTargetsAllowProvisionGate(_IsolatedProvisionTest):
+    """allow_provision=False must skip ONLY create/update/sync for an otherwise-eligible preset —
+    every teardown branch (blocked endpoint, no endpoint, stale ack, missing credential, tombstone)
+    must still run regardless, since those only reduce exposure."""
+
+    def test_eligible_preset_is_skipped_not_created_when_provisioning_disallowed(self):
+        ctrl = _ctrl_with_targets()
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.create_gateway_target.assert_not_called()
+        self.assertIn("SKIP", {r[1] for r in provision.report})
+        self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
+    def test_teardown_still_runs_when_provisioning_disallowed(self):
+        # ack revoked (endpoint set, ack absent) — this preset must still be torn down even though
+        # provisioning is globally disallowed this run; teardown never depends on allow_provision.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        # official_mcp_read_only_ack deliberately absent.
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret",
+                                return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
+        ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
+
+
+class TestWaitRuntimeReady(unittest.TestCase):
+    def test_ready_returns_true(self):
+        ctrl = mock.MagicMock()
+        ctrl.get_agent_runtime.return_value = {"status": "READY"}
+        self.assertTrue(provision._wait_runtime_ready(ctrl, "rid-1", timeout_s=5, interval_s=0))
+
+    def test_terminal_failure_returns_false(self):
+        ctrl = mock.MagicMock()
+        ctrl.get_agent_runtime.return_value = {"status": "UPDATE_FAILED", "failureReason": "nope"}
+        self.assertFalse(provision._wait_runtime_ready(ctrl, "rid-1", timeout_s=5, interval_s=0))
+
+    def test_timeout_returns_false(self):
+        ctrl = mock.MagicMock()
+        ctrl.get_agent_runtime.return_value = {"status": "UPDATING"}
+        self.assertFalse(provision._wait_runtime_ready(ctrl, "rid-1", timeout_s=0, interval_s=0))
 
 
 def _client_error(code):

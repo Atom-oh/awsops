@@ -422,6 +422,40 @@ def _delete_api_key_provider(ctrl, provider_name):
 _TARGET_TERMINAL_FAILURE_STATUSES = {"FAILED", "UPDATE_UNSUCCESSFUL", "SYNCHRONIZE_UNSUCCESSFUL"}
 
 
+_RUNTIME_TERMINAL_FAILURE_STATUSES = ("CREATE_FAILED", "UPDATE_FAILED")
+
+
+def _wait_runtime_ready(ctrl, runtime_id, timeout_s=60, interval_s=3):
+    """Poll GetAgentRuntime until status=READY (True), a terminal failure status (False, logged),
+    or timeout_s elapses (False, logged).
+
+    review MAJOR (follow-up): create_agent_runtime/update_agent_runtime return as soon as the
+    request is ACCEPTED (status CREATING/UPDATING), not once the new revision is actually serving
+    — the base smoke path's own `time.sleep(10)` comment already says as much. Without this wait,
+    ensure_runtime returning a non-empty ARN told main() "safe to proceed" while the OLD runtime
+    image (potentially predating OFFICIAL_MCP_TOOL_ALLOWLIST_JSON entirely) was still what actually
+    answered gateway calls — reordering ensure_runtime before ensure_mcp_server_targets closes the
+    ordering half of this gap, but not the propagation-delay half. Mirrors _wait_target_ready's
+    shape."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            resp = ctrl.get_agent_runtime(agentRuntimeId=runtime_id)
+        except ClientError as e:
+            log("runtime:ready", "ERR", str(e)[:140])
+            return False
+        status = resp.get("status")
+        if status == "READY":
+            return True
+        if status in _RUNTIME_TERMINAL_FAILURE_STATUSES:
+            log("runtime:ready", "ERR", f"reached terminal status {status}: {resp.get('failureReason', '')[:120]}")
+            return False
+        if time.monotonic() >= deadline:
+            log("runtime:ready", "ERR", f"timed out after {timeout_s}s waiting for READY (last status: {status})")
+            return False
+        time.sleep(interval_s)
+
+
 def _wait_target_ready(ctrl, gw_id, target_id, tname, timeout_s=30, interval_s=2):
     """Poll GetGatewayTarget until status=READY (True), a terminal failure status (False, logged),
     or timeout_s elapses (False, logged). create/update_gateway_target return as soon as the
@@ -460,8 +494,20 @@ def _retire_gateway_target(ctrl, gw_id, existing, tname, reason):
         log(f"target:{tname}", "ERR", str(e)[:140])
 
 
-def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=None):
+def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=None, allow_provision=True):
     """ADR-017: register curated official-vendor MCP servers as remote `mcpServer` gateway targets.
+
+    allow_provision=False (review MAJOR, follow-up): the caller confirmed the runtime revision
+    carrying OFFICIAL_MCP_TOOL_ALLOWLIST_JSON is NOT live this run (ensure_runtime failed or never
+    reached READY). Every TEARDOWN path below (blocked endpoint, no endpoint, stale/missing ack,
+    missing credential, the RETIRED_MCP_SERVER_TARGETS tombstone pass) still runs unconditionally —
+    those only ever REDUCE exposure and don't depend on the runtime allowlist existing. Only the
+    CREATE/UPDATE/SYNC path for an otherwise-eligible preset is skipped: creating or refreshing a
+    target now would expose it to whatever runtime IS currently serving, which may predate the
+    allowlist entirely. An earlier revision of this function had the caller skip the WHOLE call on
+    runtime failure, which also blocked teardown — an operator revoking an ack or removing an
+    endpoint specifically to shut a live vendor target off would have been unable to, for as long
+    as the runtime stayed unready (review MAJOR, this round).
 
     Ordering is deliberate and safety-critical (2026-07-31 kiro review, findings #1/#2 on the first
     cut of this function, plus round-4 L2-2):
@@ -599,6 +645,13 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
                 "control, and re-ack whenever the endpoint changes")
             _retire_gateway_target(ctrl, gw_id, existing, tname, "read-only ack missing or stale (endpoint changed since ack) — retiring")
             _delete_api_key_provider(ctrl, provider_name)
+            continue
+
+        # ── Runtime-allowlist gate (provisioning only — every teardown branch above already ran
+        # regardless) ────────────────────────────────────────────────────────────────────────────
+        if not allow_provision:
+            log(f"target:{tname}", "SKIP", "runtime allowlist not confirmed live this run — "
+                "deferring create/update/sync (any existing target is left untouched, not retired)")
             continue
 
         # ── Credential gate (provisioning only — everything that tears down already ran) ──────
@@ -914,16 +967,22 @@ def ensure_runtime(ctrl, ac, gw_ids):
                                              environmentVariables=env)
             arn = resp.get("agentRuntimeArn") or existing[RUNTIME_NAME].get("agentRuntimeArn")
             log("runtime", "UPDATED", arn)
-            return arn
-        resp = ctrl.create_agent_runtime(agentRuntimeName=RUNTIME_NAME, roleArn=ac["role_arn"],
-                                         agentRuntimeArtifact=artifact, networkConfiguration=netcfg,
-                                         environmentVariables=env)
-        arn = resp.get("agentRuntimeArn")
-        log("runtime", "CREATED", arn)
-        return arn
+        else:
+            resp = ctrl.create_agent_runtime(agentRuntimeName=RUNTIME_NAME, roleArn=ac["role_arn"],
+                                             agentRuntimeArtifact=artifact, networkConfiguration=netcfg,
+                                             environmentVariables=env)
+            rid = resp.get("agentRuntimeId")
+            arn = resp.get("agentRuntimeArn")
+            log("runtime", "CREATED", arn)
     except ClientError as e:
         log("runtime", "ERR", str(e)[:160])
         return ""
+    # review MAJOR (follow-up): the request above is only ACCEPTED, not live — a caller treating a
+    # non-empty ARN as "safe to expose new gateway targets" (main() does, via the ensure_runtime ->
+    # ensure_mcp_server_targets ordering) would otherwise race the new revision's actual rollout.
+    if not _wait_runtime_ready(ctrl, rid):
+        return ""
+    return arn
 
 
 def write_ssm(ac, runtime_arn, interpreter_id, memory_id):
@@ -984,18 +1043,14 @@ def main():
     # mcpServer target that depends on it can exist.
     runtime_arn = ensure_runtime(ctrl, ac, gw_ids)
     # review MAJOR (follow-up): the reorder above closes the WINDOW between target-creation and
-    # allowlist-deployment, but ensure_runtime can still fail outright (ClientError -> "", logged ERR)
-    # — reordering alone doesn't help if the runtime update never lands at all. Without this guard,
-    # main() would fall straight through into creating/syncing mcpServer targets against whatever
-    # runtime revision is STILL live (which, on a first activation, may predate
-    # OFFICIAL_MCP_TOOL_ALLOWLIST_JSON entirely) — the exact fail-open this PR exists to close,
-    # reached via the one failure path reordering can't cover. `errs` below already makes this exit
-    # 1, but that's a POST-HOC signal; it doesn't undo a target this call already created.
-    if runtime_arn:
-        ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok)  # ADR-017 curated official-vendor MCP presets
-    else:
-        log("mcp_server_targets", "SKIP", "ensure_runtime failed — refusing to create/sync mcpServer "
-            "targets against a runtime whose allowlist env may not have deployed")
+    # allowlist-deployment, but ensure_runtime can still fail outright, or accept the request
+    # without the new revision actually reaching READY (both now covered — ensure_runtime itself
+    # polls for READY and returns "" on failure/timeout). A caller-side skip of the WHOLE
+    # ensure_mcp_server_targets call on runtime_arn being falsy would ALSO block its teardown paths
+    # (an operator revoking an ack specifically to shut a live target off) — so the call always
+    # runs; only its internal create/update/sync path is gated on allow_provision.
+    ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok,
+                               allow_provision=bool(runtime_arn))  # ADR-017 curated official-vendor MCP presets
     prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)
