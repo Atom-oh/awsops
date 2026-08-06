@@ -1129,6 +1129,20 @@ export const TERMS: Record<string, Pair> = {
   'VIF당 200건까지만 표시': { en: 'Showing up to 200 routes per VIF', zh: '每个 VIF 最多显示 200 条', ja: 'VIF あたり最大 200 件まで表示' },
   'BGP 라우트 없음': { en: 'No BGP routes', zh: '无 BGP 路由', ja: 'BGP ルートなし' },
   '필터': { en: 'filter', zh: '筛选', ja: 'フィルター' },
+  '일부 리전 조회 실패': { en: 'Some regions failed to load', zh: '部分区域获取失败', ja: '一部リージョンの取得に失敗' },
+  '해당 리전의 커넥션·VIF가 누락되어 이중화·다운·대역폭 집계가 실제보다 낙관적일 수 있습니다.': { en: 'Connections/VIFs in that region are missing, so redundancy, down-detection, and bandwidth totals may look better than reality.', zh: '该区域的连接·VIF 缺失，冗余·宕机·带宽统计可能比实际情况更乐观。', ja: '当該リージョンの接続・VIF が欠落しており、冗長性・ダウン検知・帯域幅の集計が実際より楽観的になっている可能性があります。' },
+  '일부 리전 메트릭 조회 실패': { en: 'Metrics failed to load for some regions', zh: '部分区域指标获取失败', ja: '一部リージョンのメトリクス取得に失敗' },
+  '해당 리전은 API 현재 상태로만 판정되어 기간 내 과거 다운이 누락될 수 있습니다.': { en: 'That region is judged only by the current API state, so a past down in the range may be missed.', zh: '该区域仅依据 API 当前状态判定，时段内过去发生的宕机可能被漏检。', ja: '当該リージョンは API の現在状態のみで判定されるため、期間内の過去のダウンを見逃す可能性があります。' },
+  'DX Gateway 조회 실패 — 미연결 게이트웨이 집계를 신뢰할 수 없습니다.': { en: 'Failed to load DX Gateways — the unassociated-gateway count cannot be trusted.', zh: '获取 DX Gateway 失败 — 未关联网关统计不可信。', ja: 'DX Gateway の取得に失敗 — 未関連付けゲートウェイの集計は信頼できません。' },
+  '일부 리전 조회 실패 — 실제보다 적게 집계될 수 있음': { en: 'Some regions failed to load — the count may be lower than reality', zh: '部分区域获取失败 — 统计可能低于实际值', ja: '一部リージョンの取得に失敗 — 実際より少なく集計されている可能性' },
+  'DX Gateway 조회 실패 — 확인 불가': { en: 'Failed to load DX Gateways — unable to verify', zh: '获取 DX Gateway 失败 — 无法确认', ja: 'DX Gateway の取得に失敗 — 確認不可' },
+  '조회 실패 — 확인 불가': { en: 'Fetch failed — unable to verify', zh: '查询失败 — 无法确认', ja: '取得失敗 — 確認不可' },
+  '일부 DX Gateway의 연결(association) 조회 실패': { en: 'Association lookup failed for some DX Gateways', zh: '部分 DX Gateway 的关联查询失败', ja: '一部 DX Gateway の関連付け照会に失敗' },
+  '미할당 집계가 실제보다 적을 수 있습니다.': { en: 'The unassociated count may be lower than reality.', zh: '未关联统计可能低于实际值。', ja: '未関連付けの集計は実際より少ない可能性があります。' },
+  '판정 불가': { en: 'undetermined', zh: '无法判定', ja: '判定不可' },
+  '일부 리전 조회 실패 — 실제보다 적을 수 있음': { en: 'Some regions failed to load — may be lower than reality', zh: '部分区域获取失败 — 可能低于实际值', ja: '一部リージョンの取得に失敗 — 実際より少ない可能性' },
+  '일부 리전 조회 실패 — 확인 불가': { en: 'Some regions failed to load — unable to verify', zh: '部分区域获取失败 — 无法确认', ja: '一部リージョンの取得に失敗 — 確認不可' },
+  '일부 리전 조회 실패로 로케이션 이중화 여부를 판단할 수 없습니다': { en: 'Cannot determine location redundancy because some regions failed to load', zh: '部分区域获取失败，无法判断位置冗余情况', ja: '一部リージョンの取得に失敗したため、ロケーション冗長性を判断できません' },
 
 };
 
