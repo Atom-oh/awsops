@@ -798,7 +798,11 @@ class TestEnsureMcpServerTargetsAllowProvisionGate(_IsolatedProvisionTest):
 
     def test_eligible_absent_target_still_skips_when_provisioning_disallowed(self):
         # No live target → nothing to retire; the create/update/sync deferral stays a quiet SKIP.
+        # The PROVIDER delete still runs (codex stop-gate P2): if a prior run's target deletion
+        # blocked the provider delete (async ordering), the next run — which sees no target — must
+        # retry it, or the orphaned provider is never retired. Idempotent (missing = no-op).
         ctrl = _ctrl_with_targets({"gw-1": []})
+        ctrl.delete_api_key_credential_provider.side_effect = _raise_not_found
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
@@ -808,7 +812,26 @@ class TestEnsureMcpServerTargetsAllowProvisionGate(_IsolatedProvisionTest):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"}, allow_provision=False)
         ctrl.delete_gateway_target.assert_not_called()
         ctrl.create_gateway_target.assert_not_called()
+        ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
         self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
+
+class TestEnsureRuntimeFailClosed(unittest.TestCase):
+    def setUp(self):
+        provision.report.clear()
+
+    def test_wait_crash_returns_empty_not_raise(self):
+        # codex stop-gate P1 on 569105be: an exception escaping the readiness poll (e.g. a
+        # malformed AGENTCORE_RUNTIME_READY_TIMEOUT) propagated out of ensure_runtime and crashed
+        # main() BEFORE ensure_mcp_server_targets ran — so the unconfirmed-runtime retirement
+        # branch was unreachable. Any wait failure must mean "" (fail-closed), never a raise.
+        ctrl = mock.MagicMock()
+        ctrl.list_agent_runtimes.return_value = {"agentRuntimes": [{"agentRuntimeName": provision.RUNTIME_NAME, "agentRuntimeId": "rid-1"}]}
+        ctrl.update_agent_runtime.return_value = {"agentRuntimeArn": "arn:rt"}
+        ac = {"region": "ap-northeast-2", "role_arn": "arn:aws:iam::1:role/r", "ecr_uri": "e"}
+        with mock.patch.object(provision, "_wait_runtime_ready", side_effect=ValueError("boom")):
+            self.assertEqual(provision.ensure_runtime(ctrl, ac, {}), "")
+        self.assertIn(("runtime:ready", "ERR"), [(r[0], r[1]) for r in provision.report])
 
 
 class TestWaitRuntimeReady(unittest.TestCase):

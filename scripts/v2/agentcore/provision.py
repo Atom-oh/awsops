@@ -443,7 +443,10 @@ def _wait_runtime_ready(ctrl, runtime_id, timeout_s=300, interval_s=5):
     was routinely exceedable, and every timeout defers provisioning for the WHOLE run, so a
     chronically-short timeout meant hosted presets could never activate. Override via the
     AGENTCORE_RUNTIME_READY_TIMEOUT env if a deployment needs more."""
-    timeout_s = int(os.environ.get("AGENTCORE_RUNTIME_READY_TIMEOUT", timeout_s))
+    try:
+        timeout_s = int(os.environ.get("AGENTCORE_RUNTIME_READY_TIMEOUT", timeout_s))
+    except (TypeError, ValueError):
+        log("runtime:ready", "ERR", "AGENTCORE_RUNTIME_READY_TIMEOUT is not an integer — using the default")
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -673,10 +676,15 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
                     "retiring the live target rather than letting it serve through a possibly "
                     "pre-allowlist runtime (recreated on the next successful run)")
                 _retire_gateway_target(ctrl, gw_id, existing, tname, "runtime allowlist unconfirmed — retiring live target")
-                _delete_api_key_provider(ctrl, provider_name)
             else:
                 log(f"target:{tname}", "SKIP", "runtime allowlist not confirmed live this run — "
                     "deferring create/update/sync")
+            # Provider deletion runs in BOTH branches (codex stop-gate P2 on 569105be): AWS can
+            # reject deleting a provider while the just-issued target deletion is still async, and
+            # the NEXT run sees no target → the quiet branch → the provider was never retried.
+            # Same self-healing convention as the no-endpoint SKIP branch; the delete is idempotent
+            # and a successful next run recreates the provider alongside the target anyway.
+            _delete_api_key_provider(ctrl, provider_name)
             continue
 
         # ── Credential gate (provisioning only — everything that tears down already ran) ──────
@@ -1005,7 +1013,17 @@ def ensure_runtime(ctrl, ac, gw_ids):
     # review MAJOR (follow-up): the request above is only ACCEPTED, not live — a caller treating a
     # non-empty ARN as "safe to expose new gateway targets" (main() does, via the ensure_runtime ->
     # ensure_mcp_server_targets ordering) would otherwise race the new revision's actual rollout.
-    if not _wait_runtime_ready(ctrl, rid):
+    # FAIL-CLOSED on ANY wait failure, not just a clean False (codex stop-gate on 569105be): an
+    # exception escaping here — e.g. a malformed AGENTCORE_RUNTIME_READY_TIMEOUT env — used to
+    # propagate out of ensure_runtime and crash main() BEFORE ensure_mcp_server_targets ran, so
+    # the very retirement branch this gate feeds was never reached and a stale live target kept
+    # serving. Readiness-unconfirmed must always mean "return '' and let the teardown pass run".
+    try:
+        ready = _wait_runtime_ready(ctrl, rid)
+    except Exception as e:  # noqa: BLE001 — anything here means readiness is unconfirmed
+        log("runtime:ready", "ERR", f"readiness poll crashed ({type(e).__name__}: {str(e)[:120]}) — treating as not ready")
+        ready = False
+    if not ready:
         return ""
     return arn
 
