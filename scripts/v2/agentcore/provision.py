@@ -1015,8 +1015,13 @@ def ensure_runtime(ctrl, ac, gw_ids):
             rid = resp.get("agentRuntimeId")
             arn = resp.get("agentRuntimeArn")
             log("runtime", "CREATED", arn)
-    except ClientError as e:
-        log("runtime", "ERR", str(e)[:160])
+    except Exception as e:  # noqa: BLE001 — never-raise contract (see the listing/poll blocks)
+        # ClientError-only here left BotoCoreError (EndpointConnectionError/ReadTimeout/
+        # ParamValidation) escaping to crash main() BEFORE ensure_mcp_server_targets — blocking the
+        # teardown pass, e.g. an ack revocation, until a re-run (review MAJOR: this function states
+        # its never-raise contract twice and hardened BOTH adjacent blocks with catch-alls for
+        # exactly this reason; this middle block was the remaining gap).
+        log("runtime", "ERR", f"{type(e).__name__}: {str(e)[:150]}")
         return ""
     # review MAJOR (follow-up): the request above is only ACCEPTED, not live — a caller treating a
     # non-empty ARN as "safe to expose new gateway targets" (main() does, via the ensure_runtime ->

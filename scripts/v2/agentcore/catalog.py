@@ -542,8 +542,11 @@ RETIRED_MCP_SERVER_TARGETS = (
 )
 
 # ADR-017 mutual-exclusion guard: a preset_key's kind must not be live as BOTH a lambda TARGETS
-# entry and an MCP_SERVER_TARGETS entry at once — the gateway would otherwise expose the same tool
-# name from two targets and agent.py's _dedup_by_tool_name pick is non-deterministic (agent.py:599).
+# entry and an MCP_SERVER_TARGETS entry at once — the gateway exposes tools as
+# '<target>___<tool>' (qualified per target, so names never literally collide), but two live
+# targets for the same KIND would still surface near-duplicate tools whose selection by the
+# model is arbitrary (review 2026-08-06: the earlier 'non-deterministic _dedup_by_tool_name'
+# wording was imprecise under qualified naming and misled a review cell).
 # Enabling a preset's endpoint is treated as the operator's cutover signal: provision.py DELETES the
 # live legacy lambda target (found via legacy_target_name, below) before creating the mcp-server
 # target, so the two can never coexist after a run completes — checking `lambda_arns` (whether the
