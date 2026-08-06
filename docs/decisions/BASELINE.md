@@ -56,6 +56,7 @@
 | **GATED** | 자율 인시던트 라이프사이클 | `incident_lifecycle_enabled` | analysis-only(read-only triage/RCA, 권고전용, mutation 라우팅 금지). 활성화해도 자율 조치 없음 | ADR-006 |
 | **GATED** | RCA write-back (OpsCenter/Incident Manager 관측메타 write) | `rca_writeback_enabled` | `incident_lifecycle_enabled` + **자족 role 분리 선행**(현재 frozen remediation role 상속 → 분리 전 do-not-enable) | ADR-006 |
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |
+| **LIVE** (외부 write 중 유일) | 진단 완료 SNS 이메일 통지 | `diagnosis_notify_enabled` | **이미 켜져 있음** — IAM 단일 토픽 스코프, AWS-리소스 변경 아님(거버넌스 충족 — 아래 "주의" blockquote 참조) | ADR-013 |
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
 | **GATED** | 그래프 쿼리 LLM 폴백 (ClickHouse trace_spans 1건) | `graph_querygen_enabled` | `datasource_diagnosis_enabled` 선행. ClickHouse 스키마가 표준 OTel shape 과 다를 때 Bedrock(Haiku)이 **그래프 쿼리 1건**을 생성하고, static read-only 검사 + (선택) Code Interpreter + LIMIT 1 dry-run 을 모두 통과한 것만 캐시. 실행 경로는 read-only 커넥터 | ADR-018 |
