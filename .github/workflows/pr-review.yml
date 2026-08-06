@@ -335,7 +335,11 @@ jobs:
             # Headers of newline-bearing filenames are C-quoted by git (core.quotePath) — one line
             # each — so counting them is alignment-safe even when raw paths are not.
             N_SEEN=$(grep -c '^diff --git ' /tmp/pr-diff-truncated.txt || true)
-            tail -n +"$((N_SEEN + 1))" /tmp/pr-diff-newpaths.san | head -100 > /tmp/diff-files-unseen.txt
+            # Single-process sed range slice (rows N_SEEN+1 .. N_SEEN+100) — NOT `tail | head`:
+            # head exiting after 100 lines sends tail SIGPIPE(141), and `set -euo pipefail` then
+            # kills the step before any review runs — the same class this file already fixed once
+            # for the sanitizer pipeline (codex round-5 regression catch).
+            sed -n "$((N_SEEN + 1)),$((N_SEEN + 100))p" /tmp/pr-diff-newpaths.san > /tmp/diff-files-unseen.txt
             BOUNDARY_SAN=$([ "$N_SEEN" -gt 0 ] && sed -n "${N_SEEN}p" /tmp/pr-diff-newpaths.san || true)
             # The boundary file goes on the SAME sanitized list (chair reads this file too), but
             # tagged so the scope rule below can treat it precisely: only its truncated TAIL is
