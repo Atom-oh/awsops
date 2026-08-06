@@ -301,27 +301,42 @@ jobs:
             # files' additions as absent (4 recurring CRITICAL artifacts across rounds). Enumerate the
             # changed files whose hunks did NOT make the cut and forbid absence-claims about them.
             #
-            # The list is derived from the NUL-parsed pathmap (same source the classifier trusts),
-            # NOT by text-parsing `diff --git` headers: a legitimate filename containing ' b/'
-            # (e.g. 'web/lib/auth.ts b/padding.ts') splits header parsing and misattributes the
-            # suppression to an unrelated real file (PR #210 round-4 L3 MAJOR — same PR #170 lesson
-            # the name-status path already encodes). pathmap rows are in diff emission order, so
-            # rows past the number of headers inside the cap are exactly the truncated-out files;
-            # the row AT that count is the boundary file (cut mid-hunk).
+            # The list is derived from the NUL-delimited name-status records (same source the
+            # classifier trusts), NOT by text-parsing `diff --git` headers: a legitimate filename
+            # containing ' b/' (e.g. 'web/lib/auth.ts b/padding.ts') splits header parsing and
+            # misattributes the suppression to an unrelated real file (PR #210 round-4 L3 MAJOR —
+            # same PR #170 lesson the name-status path already encodes).
+            #
+            # Line-number indexing is only safe over a list whose rows CANNOT be broken by hostile
+            # filenames — pathmap.tsv writes raw paths, so a filename containing a newline would
+            # shift every row after it (codex round-5: 'truncation path indexing is still unsafe').
+            # So the index list is built here straight from the NUL records, with the charset
+            # whitelist applied AT GENERATION (kills \n/\t before any line-oriented tool sees them;
+            # round-4: no space/()/:; so a fluent natural-language instruction can't survive) and a
+            # 200-char cap per path. One sanitized row per changed file, in diff emission order.
+            python3 - <<'PYEOF'
+            import re
+            data = open('/tmp/pr-diff-namestatus.nul', 'rb').read().decode('utf-8', 'surrogateescape')
+            parts = data.split('\0')
+            if parts and parts[-1] == '':
+                parts.pop()
+            rows = []
+            i = 0
+            while i < len(parts):
+                status = parts[i]; i += 1
+                if status[:1] in ('R', 'C'):
+                    old, new = parts[i], parts[i + 1]; i += 2
+                else:
+                    old = new = parts[i]; i += 1
+                rows.append(re.sub(r'[^A-Za-z0-9._/-]', '?', new)[:200])
+            with open('/tmp/pr-diff-newpaths.san', 'w') as out:
+                out.write('\n'.join(rows) + ('\n' if rows else ''))
+            PYEOF
+            # Headers of newline-bearing filenames are C-quoted by git (core.quotePath) — one line
+            # each — so counting them is alignment-safe even when raw paths are not.
             N_SEEN=$(grep -c '^diff --git ' /tmp/pr-diff-truncated.txt || true)
-            tail -n +"$((N_SEEN + 1))" /tmp/pr-diff-pathmap.tsv | cut -f2 > /tmp/diff-files-unseen.txt
-            BOUNDARY_FILE=$([ "$N_SEEN" -gt 0 ] && sed -n "${N_SEEN}p" /tmp/pr-diff-pathmap.tsv | cut -f2 || true)
-            # PR #208 review L3 MAJOR + round-4 hardening: these are AUTHOR-CONTROLLED strings about
-            # to be embedded in the INSTRUCTION area of the lens + chair prompts (the diff body, by
-            # contrast, is explicitly fenced as data). Whitelist charset — round-4 dropped
-            # space/()/:;/ so a fluent natural-language instruction can't survive in a filename —
-            # plus line-length and list-size caps, and the block is fenced as untrusted path DATA.
-            # head FIRST (reading the file, not a pipe): with `head` last, a >100-line list makes
-            # head close the pipe early → sed dies with SIGPIPE(141) → `set -euo pipefail` aborts
-            # the step BEFORE any review runs — on exactly the large truncated PRs this exists for.
-            head -100 /tmp/diff-files-unseen.txt | sed 's|[^A-Za-z0-9._/-]|?|g' | cut -c1-200 \
-              > /tmp/diff-files-unseen.san && mv /tmp/diff-files-unseen.san /tmp/diff-files-unseen.txt
-            BOUNDARY_SAN=$(printf '%s' "$BOUNDARY_FILE" | sed 's|[^A-Za-z0-9._/-]|?|g' | cut -c1-200)
+            tail -n +"$((N_SEEN + 1))" /tmp/pr-diff-newpaths.san | head -100 > /tmp/diff-files-unseen.txt
+            BOUNDARY_SAN=$([ "$N_SEEN" -gt 0 ] && sed -n "${N_SEEN}p" /tmp/pr-diff-newpaths.san || true)
             # The boundary file goes on the SAME sanitized list (chair reads this file too), but
             # tagged so the scope rule below can treat it precisely: only its truncated TAIL is
             # unverifiable — findings citing its visible hunks are never affected (round-4 finding
