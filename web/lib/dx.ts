@@ -117,7 +117,10 @@ export interface DxGatewayRow {
   /** 연결(association) 대상 — TGW/VGW id + 상태 + 허용 프리픽스. */
   associations: { id: string; type: string; state: string; region: string | null; cidrs: string[] }[];
   vifCount: number;
-  /** association 0건 — 어느 게이트웨이에도 연결 안 된 DXGW. */
+  /** association 조회 실패 시 false — routesAvailable 패턴 미러링. false 면 unassociated 는
+   *  판정 불가라 false 로 남고(위험 발명 금지), 집계에서도 제외된다. */
+  associationsAvailable: boolean;
+  /** association 0건 — 어느 게이트웨이에도 연결 안 된 DXGW. associationsAvailable 전제. */
   unassociated: boolean;
 }
 
@@ -280,7 +283,13 @@ async function dxMetrics(
           bgpTuples.push({ vifId: vif.id, dims: (m.Dimensions ?? []).map((d) => ({ Name: d.Name ?? '', Value: d.Value ?? '' })) });
         }
       }
-    } catch { /* 발견 실패 시 BGP 메트릭만 생략 */ }
+    } catch {
+      // BGP 튜플 발견(ListMetrics)만 실패 — GetMetricData 가 성공해도 이 리전 전체 VIF 의
+      // bgpMin/pfx* 가 null 로 강등된다. ok JSDoc 이 문서화한 바로 그 상황(기간 내 과거 다운
+      // 누락)이므로 무신호로 두지 않고 리전을 metricsDegraded 로 표시한다 (PR #210 리뷰 MAJOR:
+      // outer catch 만 ok=false 였음 — ListMetrics-only 실패(throttling 이 전형)가 무신호였다).
+      out.ok = false;
+    }
     // 프리픽스 수는 "현재 값"이 의미 — 별도 1h 윈도우 호출 (range 전체를 Period 300으로
     // 훑으면 7d × 다수 튜플에서 MaxDatapoints 100,800 초과로 결과가 잘릴 수 있음).
     // Period 300 + 기본 내림차순 스캔에서 Values[0]=최신.
@@ -404,6 +413,7 @@ async function fetchGateways(vifs: DxVifRow[]): Promise<{ gateways: DxGatewayRow
   const gateways = await Promise.all(raw.map(async (g): Promise<DxGatewayRow> => {
     const id = g.directConnectGatewayId ?? '';
     let associations: DxGatewayRow['associations'] = [];
+    let associationsAvailable = true;
     try {
       const assocs: RawAssoc[] = [];
       let nextToken: string | undefined;
@@ -420,13 +430,17 @@ async function fetchGateways(vifs: DxVifRow[]): Promise<{ gateways: DxGatewayRow
         region: a.associatedGateway?.region ?? null,
         cidrs: (a.allowedPrefixesToDirectConnectGateway ?? []).map((p) => p.cidr ?? '').filter(Boolean),
       }));
-    } catch { /* association 조회 실패 시 목록만 */ }
+    } catch {
+      // association-only 실패는 "미할당"이 아니라 "판정 불가" — [] 그대로 두면
+      // unassociated=true 가 위험을 발명한다(PR #210 리뷰 MAJOR). 행 단위로 정직 강등.
+      associationsAvailable = false;
+    }
     return {
       id, name: g.directConnectGatewayName ?? id, state: g.directConnectGatewayState ?? '?',
       amazonSideAsn: g.amazonSideAsn ?? null, ownerAccount: g.ownerAccount ?? null,
-      associations,
+      associations, associationsAvailable,
       vifCount: vifs.filter((v) => v.attachedTo === id).length,
-      unassociated: associations.length === 0,
+      unassociated: associationsAvailable && associations.length === 0,
     };
   }));
   return { gateways, ok: true };

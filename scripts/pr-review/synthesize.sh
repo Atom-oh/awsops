@@ -203,8 +203,8 @@ PROMPT_EOF
 # wasn't enough on a large PR — on PR #205 (2026-08-05, chair input ~300KB: diff 200KB + panel
 # 96KB), the Fable 5 primary hit the 600s cap on three consecutive runs the same day (empty
 # stderr isn't an error — it's the timeout killing a process that was still generating; the
-# same chair completes normally on a small diff). 900s x2 (two chair attempts) + panel ~10min
-# ~= 40min — still within the job's timeout-minutes 45.
+# same chair completes normally on a small diff). Worst normal path: (120s fast-fail + 900s
+# retry) x2 chair attempts + panel ~15min ~= 49min — the job's timeout-minutes is 60 to match.
 PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
 CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-900}"
