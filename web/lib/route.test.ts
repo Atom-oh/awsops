@@ -26,15 +26,17 @@ describe('pickGateway', () => {
   // ADR-017 amendment 2026-08-05: the observability vendor rule carries EXACTLY the kinds with a
   // live external-obs path — the 3 vendor-hosted presets (datadog/dynatrace/newrelic) + the
   // prometheus/clickhouse lambda targets. Grafana/Splunk are unsupported and Jaeger has no
-  // gateway target (lambda deployed, never a TARGETS entry) — routing their keywords to
-  // external-obs was a dead end by construction, so they fall through (general fallback).
-  it('routes only kinds with a live external-obs path to observability; dropped kinds fall through', () => {
+  // gateway target (lambda deployed, never a TARGETS entry) — their NAMES stop being a routing
+  // signal. EXACT expectations (not just "not observability" — that masked the real routes,
+  // codex round-5): remaining domain keywords still route by domain ('트레이스' → monitoring,
+  // tempo's home), and keyword-less vendor queries land on the ops catch-all.
+  it('routes only kinds with a live external-obs path to observability; dropped names are no longer a signal', () => {
     expect(pickGateway('check the datadog dashboard')).toBe('observability');
     expect(pickGateway('dynatrace 확인해줘')).toBe('observability'); // avoid Korean '지표' which is monitoring's own keyword
     expect(pickGateway('newrelic 상태 봐줘')).toBe('observability');
-    expect(pickGateway('grafana 대시보드 좀 보여줘')).not.toBe('observability');
-    expect(pickGateway('splunk 로그 검색')).not.toBe('observability');
-    expect(pickGateway('jaeger 트레이스 이상한지 봐줘')).not.toBe('observability');
+    expect(pickGateway('grafana 대시보드 좀 보여줘')).toBe('ops');       // no signal left → catch-all
+    expect(pickGateway('splunk 로그 검색')).toBe('ops');                // no signal left → catch-all
+    expect(pickGateway('jaeger 트레이스 이상한지 봐줘')).toBe('monitoring'); // 트레이스 routes by domain
   });
   // Regression (2026-07-31 round-3 review MAJOR): round-2 moved tempo/trace to observability to
   // avoid a POST-cutover dead-end, but official_mcp_enabled defaults to false, so that just made

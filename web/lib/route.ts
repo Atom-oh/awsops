@@ -13,10 +13,13 @@ const RULES: { key: string; re: RegExp }[] = [
   // (amended 2026-08-05) vendor-hosted official-MCP presets (catalog.py MCP_SERVER_TARGETS —
   // datadog/dynatrace/newrelic, all 'external-obs'): those three have no lambda target anywhere,
   // so this is their ONLY chat path. Grafana/Splunk keywords were REMOVED by the amendment (the
-  // kinds are unsupported — no preset, no lambda: routing them anywhere is a dead end by
-  // definition, so they fall through to general). Jaeger likewise has no chat path today (its
-  // lambda is deployed but was never a gateway TARGETS entry) — keyword removed with it; add it
-  // back only when a jaeger target actually exists.
+  // kinds are unsupported — no preset, no lambda: FORCING a vendor route for them is a dead end by
+  // definition). Jaeger likewise has no chat path today (its lambda is deployed but was never a
+  // gateway TARGETS entry) — keyword removed with it; add it back only when a jaeger target
+  // actually exists. What removal means precisely: the vendor NAME stops being a routing signal —
+  // it does NOT force 'general'. Remaining domain keywords still route by domain (e.g. 'jaeger
+  // 트레이스…' hits monitoring's 트레이스 rule, where the tempo tools live), and a query with no
+  // matching keyword lands on the ops catch-all (or the LLM classifier on the hybrid path).
   // Tempo/트레이스/trace are DELIBERATELY EXCLUDED here (round-3 review MAJOR, 2026-07-31): round-2
   // put them on this rule to fix the POST-cutover dead-end (tempo-mcp-target retired, tools only
   // live on external-obs), but official_mcp_enabled defaults to false — that made the dead-end the
