@@ -1136,6 +1136,7 @@ export const TERMS: Record<string, Pair> = {
   'DX Gateway 조회 실패 — 미연결 게이트웨이 집계를 신뢰할 수 없습니다.': { en: 'Failed to load DX Gateways — the unassociated-gateway count cannot be trusted.', zh: '获取 DX Gateway 失败 — 未关联网关统计不可信。', ja: 'DX Gateway の取得に失敗 — 未関連付けゲートウェイの集計は信頼できません。' },
   '일부 리전 조회 실패 — 실제보다 적게 집계될 수 있음': { en: 'Some regions failed to load — the count may be lower than reality', zh: '部分区域获取失败 — 统计可能低于实际值', ja: '一部リージョンの取得に失敗 — 実際より少なく集計されている可能性' },
   'DX Gateway 조회 실패 — 확인 불가': { en: 'Failed to load DX Gateways — unable to verify', zh: '获取 DX Gateway 失败 — 无法确认', ja: 'DX Gateway の取得に失敗 — 確認不可' },
+  '조회 실패 — 확인 불가': { en: 'Fetch failed — unable to verify', zh: '查询失败 — 无法确认', ja: '取得失敗 — 確認不可' },
   '일부 리전 조회 실패 — 실제보다 적을 수 있음': { en: 'Some regions failed to load — may be lower than reality', zh: '部分区域获取失败 — 可能低于实际值', ja: '一部リージョンの取得に失敗 — 実際より少ない可能性' },
   '일부 리전 조회 실패 — 확인 불가': { en: 'Some regions failed to load — unable to verify', zh: '部分区域获取失败 — 无法确认', ja: '一部リージョンの取得に失敗 — 確認不可' },
   '일부 리전 조회 실패로 로케이션 이중화 여부를 판단할 수 없습니다': { en: 'Cannot determine location redundancy because some regions failed to load', zh: '部分区域获取失败，无法判断位置冗余情况', ja: '一部リージョンの取得に失敗したため、ロケーション冗長性を判断できません' },
