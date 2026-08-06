@@ -703,6 +703,46 @@ class TestEndpointBlocked(unittest.TestCase):
         self.assertIsNotNone(provision._endpoint_blocked("https://localhost/mcp"))
 
 
+class TestMainSkipsTargetsWhenRuntimeFails(unittest.TestCase):
+    """review MAJOR (follow-up to the ensure_runtime-before-ensure_mcp_server_targets reorder):
+    reordering alone doesn't help if ensure_runtime fails outright (ClientError -> ""). main() must
+    refuse to create/sync mcpServer targets in that case — a target exposed to a runtime whose
+    allowlist update never landed reopens the exact fail-open this PR closes."""
+
+    def _run_main_with(self, runtime_arn):
+        with mock.patch.object(provision, "tf_outputs", return_value={
+                "region": "us-east-1", "role_arn": "arn:aws:iam::123456789012:role/x",
+                "project": "awsops-v2"}), \
+             mock.patch.object(provision, "boto3") as m_boto3, \
+             mock.patch.object(provision, "ensure_gateways", return_value={"external-obs": "gw-1"}), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({}, True)), \
+             mock.patch.object(provision, "_cutover_preset_keys", return_value=set()), \
+             mock.patch.object(provision, "ensure_targets") as m_ensure_targets, \
+             mock.patch.object(provision, "ensure_runtime", return_value=runtime_arn) as m_ensure_runtime, \
+             mock.patch.object(provision, "ensure_mcp_server_targets") as m_ensure_mcp, \
+             mock.patch.object(provision, "prune_moved_targets"), \
+             mock.patch.object(provision, "ensure_memory", return_value="mem-1"), \
+             mock.patch.object(provision, "ensure_interpreter", return_value="interp-1"), \
+             mock.patch.object(provision, "write_ssm"), \
+             mock.patch.object(provision.sys, "argv", ["provision.py"]), \
+             mock.patch.object(provision, "report", []):
+            m_boto3.client.return_value = mock.MagicMock()
+            with self.assertRaises(SystemExit):
+                provision.main()
+        return m_ensure_targets, m_ensure_runtime, m_ensure_mcp
+
+    def test_runtime_failure_skips_mcp_server_target_creation(self):
+        _, m_ensure_runtime, m_ensure_mcp = self._run_main_with("")
+        m_ensure_runtime.assert_called_once()
+        m_ensure_mcp.assert_not_called()
+
+    def test_runtime_success_still_creates_mcp_server_targets(self):
+        _, m_ensure_runtime, m_ensure_mcp = self._run_main_with(
+            "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/x")
+        m_ensure_runtime.assert_called_once()
+        m_ensure_mcp.assert_called_once()
+
+
 def _client_error(code):
     """side_effect factory for an arbitrary (non-NotFound) control-plane failure."""
     def _raise(*_a, **_kw):

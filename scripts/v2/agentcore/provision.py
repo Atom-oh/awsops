@@ -983,7 +983,19 @@ def main():
     # reordering is a pure reorder — the new runtime revision (allowlist included) is live before any
     # mcpServer target that depends on it can exist.
     runtime_arn = ensure_runtime(ctrl, ac, gw_ids)
-    ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok)  # ADR-017 curated official-vendor MCP presets
+    # review MAJOR (follow-up): the reorder above closes the WINDOW between target-creation and
+    # allowlist-deployment, but ensure_runtime can still fail outright (ClientError -> "", logged ERR)
+    # — reordering alone doesn't help if the runtime update never lands at all. Without this guard,
+    # main() would fall straight through into creating/syncing mcpServer targets against whatever
+    # runtime revision is STILL live (which, on a first activation, may predate
+    # OFFICIAL_MCP_TOOL_ALLOWLIST_JSON entirely) — the exact fail-open this PR exists to close,
+    # reached via the one failure path reordering can't cover. `errs` below already makes this exit
+    # 1, but that's a POST-HOC signal; it doesn't undo a target this call already created.
+    if runtime_arn:
+        ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok)  # ADR-017 curated official-vendor MCP presets
+    else:
+        log("mcp_server_targets", "SKIP", "ensure_runtime failed — refusing to create/sync mcpServer "
+            "targets against a runtime whose allowlist env may not have deployed")
     prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)
