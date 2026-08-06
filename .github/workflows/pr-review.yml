@@ -315,23 +315,23 @@ jobs:
             # round-4: no space/()/:; so a fluent natural-language instruction can't survive) and a
             # 200-char cap per path. One sanitized row per changed file, in diff emission order.
             python3 - <<'PYEOF'
-            import re
-            data = open('/tmp/pr-diff-namestatus.nul', 'rb').read().decode('utf-8', 'surrogateescape')
-            parts = data.split('\0')
-            if parts and parts[-1] == '':
-                parts.pop()
-            rows = []
-            i = 0
-            while i < len(parts):
-                status = parts[i]; i += 1
-                if status[:1] in ('R', 'C'):
-                    old, new = parts[i], parts[i + 1]; i += 2
-                else:
-                    old = new = parts[i]; i += 1
-                rows.append(re.sub(r'[^A-Za-z0-9._/-]', '?', new)[:200])
-            with open('/tmp/pr-diff-newpaths.san', 'w') as out:
-                out.write('\n'.join(rows) + ('\n' if rows else ''))
-            PYEOF
+          import re
+          data = open('/tmp/pr-diff-namestatus.nul', 'rb').read().decode('utf-8', 'surrogateescape')
+          parts = data.split('\0')
+          if parts and parts[-1] == '':
+              parts.pop()
+          rows = []
+          i = 0
+          while i < len(parts):
+              status = parts[i]; i += 1
+              if status[:1] in ('R', 'C'):
+                  old, new = parts[i], parts[i + 1]; i += 2
+              else:
+                  old = new = parts[i]; i += 1
+              rows.append(re.sub(r'[^A-Za-z0-9._/-]', '?', new)[:200])
+          with open('/tmp/pr-diff-newpaths.san', 'w') as out:
+              out.write('\n'.join(rows) + ('\n' if rows else ''))
+          PYEOF
             # Headers of newline-bearing filenames are C-quoted by git (core.quotePath) — one line
             # each — so counting them is alignment-safe even when raw paths are not.
             N_SEEN=$(grep -c '^diff --git ' /tmp/pr-diff-truncated.txt || true)
