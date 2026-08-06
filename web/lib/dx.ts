@@ -246,6 +246,10 @@ async function dxMetrics(
   const out: RegionMetrics = { connState: {}, vif: {}, bgpMin: {}, pfxAcc: {}, pfxAdv: {}, ok: true };
   const connIds = conns.map((c) => c.id).slice(0, 100);
   const vifList = vifs.slice(0, 100);
+  // 캡이 실제로 물면 잘린 커넥션/VIF 의 connState/bgpMin/pfx* 가 조용히 null 강등된다 —
+  // 새 degrade 계약(metricsDegradedRegions)이 정상이라고 보증한 채로. 무신호 금지 (리뷰 MAJOR:
+  // 캡은 API 제약이 아니라 우리 상한이므로, 무는 순간만 degrade 로 표기).
+  if (conns.length > connIds.length || vifs.length > vifList.length) out.ok = false;
   try {
     const queries: { Id: string; ReturnData: boolean; MetricStat: { Metric: { Namespace: string; MetricName: string; Dimensions: { Name: string; Value: string }[] }; Period: number; Stat: string } }[] = [];
     connIds.forEach((id, i) => {
@@ -277,15 +281,21 @@ async function dxMetrics(
     // 메트릭이 상시 0으로 발행되어(실측) 무차별 최소값이면 영구 다운 오탐이 된다.
     const bgpTuples: { vifId: string; dims: { Name: string; Value: string }[] }[] = [];
     try {
-      const lm = await cw(region).send(new ListMetricsCommand({ Namespace: 'AWS/DX', MetricName: 'VirtualInterfaceBgpStatus' }));
-      for (const m of lm.Metrics ?? []) {
-        const vifId = m.Dimensions?.find((d) => d.Name === 'VirtualInterfaceId')?.Value;
-        const fam = (m.Dimensions?.find((d) => d.Name === 'IpAddressFamily')?.Value ?? '').toLowerCase();
-        const vif = vifId ? vifList.find((v) => v.id === vifId) : undefined;
-        if (vif && (vif.families.size === 0 || vif.families.has(fam))) {
-          bgpTuples.push({ vifId: vif.id, dims: (m.Dimensions ?? []).map((d) => ({ Name: d.Name ?? '', Value: d.Value ?? '' })) });
+      // NextToken 순회 — 응답은 페이지당 500 metric 캡이라 미순회면 튜플이 조용히 누락돼
+      // ok=true 인 채 bgpMin null 강등 (리뷰 MAJOR L2-1과 같은 클래스).
+      let nextToken: string | undefined;
+      do {
+        const lm = await cw(region).send(new ListMetricsCommand({ Namespace: 'AWS/DX', MetricName: 'VirtualInterfaceBgpStatus', NextToken: nextToken }));
+        for (const m of lm.Metrics ?? []) {
+          const vifId = m.Dimensions?.find((d) => d.Name === 'VirtualInterfaceId')?.Value;
+          const fam = (m.Dimensions?.find((d) => d.Name === 'IpAddressFamily')?.Value ?? '').toLowerCase();
+          const vif = vifId ? vifList.find((v) => v.id === vifId) : undefined;
+          if (vif && (vif.families.size === 0 || vif.families.has(fam))) {
+            bgpTuples.push({ vifId: vif.id, dims: (m.Dimensions ?? []).map((d) => ({ Name: d.Name ?? '', Value: d.Value ?? '' })) });
+          }
         }
-      }
+        nextToken = lm.NextToken;
+      } while (nextToken);
     } catch {
       // BGP 튜플 발견(ListMetrics)만 실패 — GetMetricData 가 성공해도 이 리전 전체 VIF 의
       // bgpMin/pfx* 가 null 로 강등된다. ok JSDoc 이 문서화한 바로 그 상황(기간 내 과거 다운
@@ -297,6 +307,7 @@ async function dxMetrics(
     // 훑으면 7d × 다수 튜플에서 MaxDatapoints 100,800 초과로 결과가 잘릴 수 있음).
     // Period 300 + 기본 내림차순 스캔에서 Values[0]=최신.
     const latestQueries: typeof queries = [];
+    if (bgpTuples.length > 100) out.ok = false; // 캡이 물면 잘린 튜플의 bgpMin/pfx* 무신호 금지 (위와 동일)
     bgpTuples.slice(0, 100).forEach((t, i) => {
       queries.push({
         Id: `bgp_i${i}`, ReturnData: true,

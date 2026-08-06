@@ -420,7 +420,8 @@ export default function DirectConnectPage() {
           const downTileVariant = kpiVariant(t.connectionsDown + t.vifsDown > 0, anyMetricsDegraded);
           const downHint = downTileVariant !== 'danger' && anyMetricsDegraded
             ? tt('일부 리전 조회 실패 — 실제보다 적게 집계될 수 있음')
-            : `${tt('커넥션')} ${t.connectionsDown} · VIF ${t.vifsDown}`;
+            // danger 라도 degraded 면 확정 수치가 아니라 하한 — 커넥션/VIF 타일의 `+` 관행 일치 (리뷰 L2-3)
+            : `${tt('커넥션')} ${t.connectionsDown}${anyMetricsDegraded ? '+' : ''} · VIF ${t.vifsDown}${anyMetricsDegraded ? '+' : ''}`;
           const gwTileVariant = kpiVariant(false, data.gatewaysDegraded || t.gatewaysUnassociated > 0 || t.gatewaysAssociationsUnknown > 0);
           const gwHint = data.gatewaysDegraded
             ? tt('DX Gateway 조회 실패 — 확인 불가')

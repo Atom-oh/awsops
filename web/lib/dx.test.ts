@@ -466,6 +466,19 @@ describe('dxAnalysis', () => {
     expect(a.connections).toHaveLength(1); // 리소스 목록은 정상 유지
   });
 
+  it('커넥션 100건 캡 초과 → 잘린 리소스 무신호 금지, metricsDegradedRegions 표기', async () => {
+    // 리뷰 라운드3 MAJOR L2-1: slice(0,100) 캡이 물면 잘린 커넥션의 connState가 조용히
+    // null 강등되는데 ok=true로 남아 새 degrade 계약을 우회했다.
+    mockDb([]);
+    const many = Array.from({ length: 101 }, (_, i) => ({ ...CONNS[0], connectionId: `dxcon-${i}` }));
+    mockDc({ conns: { 'ap-northeast-2': many }, vifs: { 'ap-northeast-2': [] }, gws: [] });
+    mockCw([], {});
+    const { dxAnalysis } = await import('./dx');
+    const a = await dxAnalysis(3600);
+    expect(a.metricsDegradedRegions).toContain('ap-northeast-2');
+    expect(a.connections).toHaveLength(101); // 리소스 목록 자체는 전량 유지 (메트릭만 캡)
+  });
+
   it('association 조회만 실패 → associationsAvailable false, unassociated 오탐/집계 없음', async () => {
     // PR #210 리뷰 MAJOR: inner catch가 associations:[]를 남겨 unassociated=true가
     // "위험을 발명"했다 — 판정 불가는 미할당이 아니다.
