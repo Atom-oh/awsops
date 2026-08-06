@@ -973,11 +973,20 @@ def main():
     legacy_skip = {catalog.legacy_target_name(pk) for pk in _cutover_preset_keys(ac, secrets, secrets_read_ok)}
     legacy_skip.discard(None)
     ensure_targets(ctrl, ac, gw_ids, skip_names=legacy_skip)
+    # ensure_runtime BEFORE ensure_mcp_server_targets (review MAJOR L3-1): a gateway mcpServer target
+    # is exposed to whatever runtime revision is currently serving the instant it's created. Creating
+    # the target first meant the FIRST activation of a preset could hit an old runtime image that
+    # predates OFFICIAL_MCP_TOOL_ALLOWLIST_JSON entirely — every vendor tool (including write tools)
+    # reaching the model unfiltered for as long as that window lasted, and permanently if ensure_runtime
+    # then failed. ensure_runtime only needs ctrl/ac/gw_ids (its allowlist env comes from
+    # catalog.MCP_SERVER_TARGETS directly, not from anything ensure_mcp_server_targets produces), so
+    # reordering is a pure reorder — the new runtime revision (allowlist included) is live before any
+    # mcpServer target that depends on it can exist.
+    runtime_arn = ensure_runtime(ctrl, ac, gw_ids)
     ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok)  # ADR-017 curated official-vendor MCP presets
     prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)
-    runtime_arn = ensure_runtime(ctrl, ac, gw_ids)
     write_ssm(ac, runtime_arn, interpreter_id, memory_id)
 
     if args.smoke:
