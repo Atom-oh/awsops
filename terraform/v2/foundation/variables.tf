@@ -157,9 +157,19 @@ variable "datasource_diagnosis_enabled" {
   }
 }
 
+variable "diag_signal_querygen_enabled" {
+  type        = bool
+  description = "Hybrid LLM fallback for Explore's diag-signal chips (signal_catalog_gen.py, 2026-08-04): when signal_catalog.py's deterministic matchers produce no ready signal for a datasource kind, ask Bedrock (Haiku) for ONE query, then reject it unless it (a) passes a kind-appropriate static read-only check, (b) mentions at least one name from that instance's own schema vocabulary, and (c) returns a non-empty payload on a live dry run. Only a query surviving all three is cached (provenance='generated'). SEPARATE from graph_querygen_enabled on purpose: that flag means 'one ClickHouse graph query', and an operator who consented to that did not consent to LLM generation plus live dry runs across every fallback-eligible kind on every daily run. Requires datasource_diagnosis_enabled (same datasource_index job); bedrock:InvokeModel is already granted via worker_lambda_diagnosis, so this flag adds only the env var. false (default) = no LLM calls, no dry runs, $0 — kinds with no deterministic match simply show no chips."
+  default     = false
+  validation {
+    condition     = !var.diag_signal_querygen_enabled || var.datasource_diagnosis_enabled
+    error_message = "diag_signal_querygen_enabled requires datasource_diagnosis_enabled (it runs inside the same datasource_index job)."
+  }
+}
+
 variable "graph_querygen_enabled" {
   type        = bool
-  description = "Hybrid LLM fallback for the registry-driven graph-sources design (2026-07-08): when a ClickHouse datasource's schema doesn't match graph_catalog.py's standard OTel-exporter shape, ask Bedrock (Haiku) to generate a candidate query, validated by a static read-only check, a best-effort AgentCore Code Interpreter sandbox check (skipped if no interpreter is provisioned), and a live LIMIT-1 dry run — only a query that survives all checks is cached (provenance='generated'). Requires datasource_diagnosis_enabled (runs inside the same datasource_index job). bedrock:InvokeModel is already granted via worker_lambda_diagnosis; this flag adds only the GRAPH_QUERYGEN_ENABLED env + the Code Interpreter session IAM (requires agentcore_enabled). false (default) = 0 resources/IAM, $0, the catalog's deterministic 'unavailable' row stands."
+  description = "Hybrid LLM fallback for the registry-driven graph-sources design (2026-07-08): when a ClickHouse datasource's schema doesn't match graph_catalog.py's standard OTel-exporter shape, ask Bedrock (Haiku) to generate a candidate query, validated by a static read-only check, a best-effort AgentCore Code Interpreter sandbox check (skipped if no interpreter is provisioned), and a live LIMIT-1 dry run — only a query that survives all checks is cached (provenance='generated'). Requires datasource_diagnosis_enabled (runs inside the same datasource_index job). bedrock:InvokeModel is already granted via worker_lambda_diagnosis; this flag adds only the GRAPH_QUERYGEN_ENABLED env + the Code Interpreter session IAM (requires agentcore_enabled). false (default) = 0 resources/IAM, $0, the catalog's deterministic 'unavailable' row stands. Scope is exactly the ClickHouse graph query described above — diag-signal generation has its own flag (diag_signal_querygen_enabled)."
   default     = false
   validation {
     condition     = !var.graph_querygen_enabled || var.datasource_diagnosis_enabled

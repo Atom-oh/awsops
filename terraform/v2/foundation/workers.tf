@@ -40,6 +40,10 @@ locals {
   # Default false → 0 resources/IAM, $0.
   gqg         = local.dsd == 1 && var.graph_querygen_enabled ? 1 : 0
   gqg_env_map = local.gqg == 1 ? { GRAPH_QUERYGEN_ENABLED = "true" } : {}
+  # diag-signal LLM fallback — its OWN gate, not graph_querygen_enabled: same job, different blast
+  # radius (every fallback-eligible kind, daily, with live dry runs). Default false → 0 resources, $0.
+  dsqg         = local.dsd == 1 && var.diag_signal_querygen_enabled ? 1 : 0
+  dsqg_env_map = local.dsqg == 1 ? { DIAG_SIGNAL_QUERYGEN_ENABLED = "true" } : {}
   # scheduled auto-diagnosis dispatcher gate — reuses the worker role/pg8000 layer/VPC + the jobs queue,
   # so it REQUIRES workers_enabled. Default false → 0 resources, $0, no scheduled runs.
   sched = var.workers_enabled && var.diagnosis_schedule_enabled ? 1 : 0
@@ -136,6 +140,10 @@ data "archive_file" "workers_src" {
   source {
     content  = file("${local.workers_src}/diagnosis/signal_catalog.py")
     filename = "signal_catalog.py"
+  }
+  source {
+    content  = file("${local.workers_src}/diagnosis/signal_catalog_gen.py")
+    filename = "signal_catalog_gen.py"
   }
   source {
     content  = file("${local.workers_src}/graph_catalog.py")
@@ -576,7 +584,8 @@ resource "aws_lambda_function" "worker" {
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
       BEDROCK_REGION  = var.region
       # + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN (notify) — empty map when diagnosis_notify_enabled=false → no env diff.
-    }, local.notify_worker_env_map, local.ds_env_map, local.insight_env_map, local.gqg_env_map)
+    }, local.notify_worker_env_map, local.ds_env_map, local.insight_env_map, local.gqg_env_map,
+    local.dsqg_env_map)
     # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled;
     # + GRAPH_QUERYGEN_ENABLED when graph_querygen_enabled
   }

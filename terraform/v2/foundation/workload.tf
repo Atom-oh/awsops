@@ -400,6 +400,9 @@ resource "aws_ecs_task_definition" "web" {
         # `make deploy` only force-new-deployments the EXISTING task def — a flag that is not in this
         # block cannot be turned off through the standard deploy path at all (PR #195 review MAJOR).
         { name = "LEGACY_EMAIL_OWNER_MATCH", value = tostring(var.legacy_email_owner_match) },
+        # Read-side half of the diag-signal querygen gate: the worker sweeps generated rows when the flag
+        # goes off, but only if it runs, so the BFF must not serve them either (ADR-018 §4).
+        { name = "DIAG_SIGNAL_QUERYGEN_ENABLED", value = tostring(var.diag_signal_querygen_enabled) },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
         # IAM DB auth (rds-db:connect above) — a fixed username, not a secret, since the "password"
