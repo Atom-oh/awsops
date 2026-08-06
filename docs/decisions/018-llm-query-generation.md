@@ -116,10 +116,13 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 ## 6 Pillars
 - **Operational Excellence** — 폴백은 결정론 카탈로그를 대체하지 않고 보완한다. 실패는 항상 카탈로그 결과로
   되돌아가며(never raises), diag-signal 경로의 주간 예산·마커가 운영 로그에 남는다.
-- **Security** — 공통: read-only 커넥터 + SSRF 호스트 검사, 모델은 실행 권한이 없다. 정적 SQL denylist
-  (`_TABLE_FN`/`SETTINGS` 사전차단)는 ClickHouse(diag-signal `signal_catalog_gen`) 전용이다(§A-3) — graph
-  경로는 다른 커넥터라 이 정적 가드가 없다. diag-signal 경로에는 식별자 정화도 추가된다(graph 경로에는 없음
-  — §C-3).
+- **Security** — 공통: read-only 커넥터 + SSRF 호스트 검사, 모델은 실행 권한이 없다. **정정(리뷰
+  2026-08-06, PR #205): graph 경로도 diag-signal과 같은 ClickHouse 커넥터를 거치므로 "다른 커넥터라 가드가
+  없다"는 서술은 틀렸다 — §A-3이 정확한 서술이다.** 두 경로 모두 실행 시 동일 커넥터의
+  `assert_read_only(extra_forbidden_re=_TABLE_FN)`이 table-function(SSRF 표면) + mutating SQL을 막는다.
+  차이는 *어느 층에서* 막느냐뿐이다: diag-signal(`signal_catalog_gen`)은 생성기 단계에서도 `_TABLE_FN`/
+  `SETTINGS`를 사전차단하지만(§A-3), graph(`graph_querygen`)는 생성기 단계 사전차단이 없고 실행 시 커넥터
+  가드에만 의존한다. diag-signal 경로에는 식별자 정화도 추가된다(graph 경로에는 없음 — §C-3).
 - **Reliability** — diag-signal 경로: 일시 실패는 주 3회 상한으로 재시도, 소진은 주 경계에서 해제, 검증된 칩은
   재검증 실패로 삭제되지 않는다. graph 경로: schema_version 캐시가 재생성 시점을 정한다.
 - **Performance** — diag-signal dry-run은 커넥터가 지원하는 최소 상한으로 실행된다(§B-3). graph dry-run은
