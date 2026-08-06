@@ -481,6 +481,7 @@ describe('dxAnalysis', () => {
     expect(a.gateways[0].associationsAvailable).toBe(false);
     expect(a.gateways[0].unassociated).toBe(false);
     expect(a.totals.gatewaysUnassociated).toBe(0);
+    expect(a.totals.gatewaysAssociationsUnknown).toBe(1); // 집계·배너 신호 (리뷰 MAJOR: 행에서만 멈추면 안 됨)
     expect(a.gatewaysDegraded).toBe(false); // 게이트웨이 목록 자체는 성공
   });
 

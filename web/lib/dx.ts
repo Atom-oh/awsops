@@ -143,6 +143,9 @@ export interface DxAnalysis {
     connections: number; connectionsDown: number;
     vifs: number; vifsDown: number; bgpPeersDown: number;
     gateways: number; gatewaysUnassociated: number;
+    /** association 조회 실패로 미할당 여부를 판정할 수 없는 게이트웨이 수 — >0 이면
+     *  gatewaysUnassociated 는 하한(실제보다 적을 수 있음)이다. UI 타일/배너가 노출. */
+    gatewaysAssociationsUnknown: number;
     totalBandwidthBps: number; locations: number;
     /** VIF 피크 사용률 최댓값 (%). */
     maxUtilizationPct: number | null;
@@ -310,14 +313,20 @@ async function dxMetrics(
 
     // GetMetricData 한도: 호출당 500 MetricDataQueries — 청크 분할 (Id에 계열·인덱스가
     // 인코딩되어 있어 청크 간 병합에 추가 로직 불필요).
-    const results: { Id?: string; Values?: number[] }[] = [];
+    const results: { Id?: string; Values?: number[]; StatusCode?: string }[] = [];
     const runChunked = async (qs: typeof queries, windowSec: number) => {
       for (let i = 0; i < qs.length; i += 500) {
         const r = await cw(region).send(new GetMetricDataCommand({
           StartTime: new Date(Date.now() - windowSec * 1000), EndTime: new Date(),
           MetricDataQueries: qs.slice(i, i + 500),
         }));
-        results.push(...(r.MetricDataResults ?? []));
+        for (const res of r.MetricDataResults ?? []) {
+          // CloudWatch 는 HTTP 성공 응답에 쿼리 단위 실패(PartialData/InternalError/Forbidden)를
+          // 실을 수 있다 — 예외가 없으므로 무검사면 그 쿼리만 조용히 null 강등되면서 ok=true 로
+          // 남는다(리뷰 MAJOR: metricsDegradedRegions 계약을 신설 지점에서 우회). Complete 외는 degrade.
+          if (res.StatusCode && res.StatusCode !== 'Complete') out.ok = false;
+          results.push(res);
+        }
       }
     };
     await runChunked(queries, rangeSec);
@@ -572,6 +581,7 @@ export async function dxAnalysis(rangeSec: number): Promise<DxAnalysis> {
       bgpPeersDown: vifs.reduce((s, v) => s + (v.bgpPeersTotal - v.bgpPeersUp), 0),
       gateways: gateways.length,
       gatewaysUnassociated: gateways.filter((g) => g.unassociated).length,
+      gatewaysAssociationsUnknown: gateways.filter((g) => !g.associationsAvailable).length,
       totalBandwidthBps: connections.reduce((s, c) => s + c.bandwidthBps, 0),
       locations: locations.length,
       maxUtilizationPct: utils.length ? Math.max(...utils) : null,

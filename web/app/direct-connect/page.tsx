@@ -394,7 +394,7 @@ export default function DirectConnectPage() {
         )}
         {!data && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
 
-        {data && (data.degradedRegions.length > 0 || data.metricsDegradedRegions.length > 0 || data.gatewaysDegraded) && (
+        {data && (data.degradedRegions.length > 0 || data.metricsDegradedRegions.length > 0 || data.gatewaysDegraded || data.totals.gatewaysAssociationsUnknown > 0) && (
           <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-[12px] text-warning-text">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span>
@@ -405,6 +405,9 @@ export default function DirectConnectPage() {
                 <>{tt('일부 리전 메트릭 조회 실패')} ({data.metricsDegradedRegions.join(', ')}) — {tt('해당 리전은 API 현재 상태로만 판정되어 기간 내 과거 다운이 누락될 수 있습니다.')} </>
               )}
               {data.gatewaysDegraded && tt('DX Gateway 조회 실패 — 미연결 게이트웨이 집계를 신뢰할 수 없습니다.')}
+              {!data.gatewaysDegraded && data.totals.gatewaysAssociationsUnknown > 0 && (
+                <>{tt('일부 DX Gateway의 연결(association) 조회 실패')} ({data.totals.gatewaysAssociationsUnknown}) — {tt('미할당 집계가 실제보다 적을 수 있습니다.')}</>
+              )}
             </span>
           </div>
         )}
@@ -418,9 +421,11 @@ export default function DirectConnectPage() {
           const downHint = downTileVariant !== 'danger' && anyMetricsDegraded
             ? tt('일부 리전 조회 실패 — 실제보다 적게 집계될 수 있음')
             : `${tt('커넥션')} ${t.connectionsDown} · VIF ${t.vifsDown}`;
-          const gwTileVariant = kpiVariant(false, data.gatewaysDegraded || t.gatewaysUnassociated > 0);
+          const gwTileVariant = kpiVariant(false, data.gatewaysDegraded || t.gatewaysUnassociated > 0 || t.gatewaysAssociationsUnknown > 0);
           const gwHint = data.gatewaysDegraded
             ? tt('DX Gateway 조회 실패 — 확인 불가')
+            : t.gatewaysAssociationsUnknown > 0
+            ? `${tt('미할당')} ${t.gatewaysUnassociated}+ · ${tt('판정 불가')} ${t.gatewaysAssociationsUnknown}`
             : `${tt('미할당')} ${t.gatewaysUnassociated}`;
           const utilTileVariant = kpiVariant((t.maxUtilizationPct ?? 0) >= 80, anyMetricsDegraded);
           return (

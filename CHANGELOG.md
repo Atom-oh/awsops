@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Direct Connect: partial AWS failures now degrade honestly instead of rendering confident wrong numbers — `/api/dx` gained `degradedRegions` / `metricsDegradedRegions` / `gatewaysDegraded` / per-gateway `associationsAvailable` / `totals.gatewaysAssociationsUnknown`; the UI shows a warning banner, `+`/`≥` lower-bound markers on affected KPI tiles, an "undetermined" (not red "unassociated") badge when the association lookup itself failed, and per-query CloudWatch `StatusCode` failures (PartialData/InternalError) now count as metric degradation.
+- PR review pipeline: chair timeout 600→900s with a one-shot fast-fail retry, code-first three-pass diff ordering (code → decisions/runbooks → docs prose), and a sanitized, narrowly-scoped truncated-file guard that downgrades unverifiable absence-claims to MINOR instead of dropping them.
+
 ## [0.7.0] - 2026-08-05
 
 ### Added
@@ -542,6 +547,11 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+### Fixed
+
+- Direct Connect: AWS 부분 실패를 확신 있는 오답 대신 정직하게 강등 — `/api/dx`에 `degradedRegions` / `metricsDegradedRegions` / `gatewaysDegraded` / 게이트웨이 행 단위 `associationsAvailable` / `totals.gatewaysAssociationsUnknown` 추가. UI는 경고 배너, 영향받는 KPI 타일의 `+`/`≥` 하한 표기, association 조회 실패 시 빨간 "미할당" 대신 "판정 불가" 배지를 표시하고, CloudWatch 쿼리 단위 `StatusCode` 실패(PartialData/InternalError)도 메트릭 강등으로 집계.
+- PR 리뷰 파이프라인: chair 타임아웃 600→900s + fast-fail 1회 재시도, 코드 우선 3-pass diff 정렬(코드 → decisions/runbooks → docs 산문), 새니타이즈된 좁은 범위의 절단 파일 가드(검증 불가 부재 주장을 삭제 대신 MINOR로 하향).
 
 ## [0.7.0] - 2026-08-05
 

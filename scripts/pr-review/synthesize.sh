@@ -59,7 +59,7 @@ strip_controls() {
 }
 
 # run_chair scrubs its stderr file in place once the call returns — but that call is the chair
-# model, bounded at CHAIR_TIMEOUT (600s), which makes it by far the likeliest moment for the job to
+# model, bounded at CHAIR_TIMEOUT, which makes it by far the likeliest moment for the job to
 # be cancelled. A cancel there skips the scrub and leaves raw stderr in $WORK, which persists to
 # the next run on a non-ephemeral runner. So cover every exit path with a trap: scrub if we can,
 # and if scrubbing itself fails, DELETE rather than leave it — losing a diagnostic is strictly
@@ -223,7 +223,7 @@ run_chair() {  # $1=model $2=err-file -> writes "$OUT". Continues via `|| true` 
   # Root cause is MCP: a global (user-scope) MCP config gets loaded/connected at session init,
   # and when github MCP auth is broken (observed: "HTTP 400: Authorization header is badly
   # formatted"), `claude -p` waits for that tool with no error and hangs unresponsive until
-  # CHAIR_TIMEOUT (600s). Primary/fallback use the same call shape, so one hit kills both chairs
+  # CHAIR_TIMEOUT. Primary/fallback use the same call shape, so one hit kills both chairs
   # and the fail-closed gate FAILs regardless of the actual diff (observed: PR #194, #197, #202,
   # and 7 times across #203).
   #
@@ -246,13 +246,13 @@ run_chair() {  # $1=model $2=err-file -> writes "$OUT". Continues via `|| true` 
   #
   # stderr is received via process substitution — writing the raw output to a file and scrubbing
   # it later was fragile against cancellation: bash defers a trap until a blocking foreground
-  # child exits, and this child can live until CHAIR_TIMEOUT (600s), so if GitHub's grace period
+  # child exits, and this child can live until CHAIR_TIMEOUT, so if GitHub's grace period
   # ends first and SIGKILL arrives, the scrub never runs. Instead of racing to close that window,
   # it's removed: piping through `>(...)` means only scrubbed bytes ever reach the file, so no
   # matter when the process dies (including SIGKILL), the runner never retains the raw original.
   # The two files are still kept separate so primary/fallback diagnostics stay distinct.
   # Run in background + `wait` — since bash defers the trap until a blocking foreground child
-  # exits, and this child can live until CHAIR_TIMEOUT (600s), a SIGTERM wouldn't kill the script
+  # exits, and this child can live until CHAIR_TIMEOUT, a SIGTERM wouldn't kill the script
   # immediately (GitHub's grace period would end first, escalating to SIGKILL). `wait` is
   # interruptible by signals, so the trap runs promptly and the handler cleans up this PID first.
   # Launched as a single command, not a pipeline — in `a | b &`, `$!` refers to the *last*
