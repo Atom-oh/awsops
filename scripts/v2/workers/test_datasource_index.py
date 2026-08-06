@@ -55,7 +55,7 @@ class FakeConn:
     def __init__(self, *, kind="prometheus", metrics=PROM_METRICS, schema_present=True,
                  schema=None, existing_version=None, existing_graph_version=None,
                  existing_rows=None, fail_list_read=False, existing_budget=None,
-                 existing_reservation=None):
+                 existing_reservation=None, live_budget_at_write=None):
         self.kind, self.metrics, self.schema_present = kind, metrics, schema_present
         self._schema_override = schema
         self.existing_version = existing_version
@@ -67,6 +67,12 @@ class FakeConn:
         # meta.week/meta.attempts but the worker died before write_diag_signal_budget ever ran, so
         # the bookkeeping row has NO `budget` key at all — (week, attempts) simulates that row shape.
         self.existing_reservation = existing_reservation
+        # The row's marker AT WRITE TIME, when a concurrent worker committed one after our own read —
+        # which is the whole shape of review MAJOR-1: `existing_budget` is what THIS worker read (before
+        # its multi-second Bedrock call), `live_budget_at_write` is what is actually in the row by the
+        # time it writes. Defaults to `existing_budget`, i.e. nobody raced us.
+        self.live_budget_at_write = live_budget_at_write if live_budget_at_write is not None \
+            else existing_budget
         self.inserts, self.deletes = [], []
         self.graph_inserts, self.graph_deletes = [], []
         self.schema_writes = []
@@ -124,7 +130,9 @@ class FakeConn:
             self._attempts = max(self._attempts - 1, 0)
             return []
         if "'{budget}'" in sql:                                       # marker write (not a content row)
-            self.inserts.append(p); return []
+            self.inserts.append(p)
+            self._merge_budget(p)
+            return []
         if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
             self.inserts.append(p); return []
         if sql.strip().startswith("DELETE FROM datasource_diag_signals"):
@@ -139,14 +147,57 @@ class FakeConn:
             self.generated_version_touches.append(p); return []
         return []
 
+    def _merge_budget(self, p):
+        """Emulate the monotonic merge db.write_diag_signal_budget performs IN SQL, so `stored_budget()`
+        reports what Postgres would end up with rather than what the caller proposed.
+
+        Same deal as the `GREATEST(stored, known)` emulation in the reservation branch above: the real
+        expression cannot run against this by-substring fake, so the RULE is mirrored here and the SQL
+        itself is verified against a real Postgres out of band. Rule (see that function's docstring): the
+        more-advanced (state, streak) PAIR by db._MARKER_STATE_RANK wins, ties take the higher streak;
+        the live state counts only for the SAME schema hash, and only within the same ISO week unless it
+        is `conc` (which is week-independent by design). Attempts are the live counter floored by the
+        caller's own count. With no `ver` param the caller asked for a byte-for-byte store.
+        """
+        if "ver" not in p:                       # live_marker omitted → verbatim, no merge
+            self.live_budget_at_write = p["bg"]
+            return
+        live = self.live_budget_at_write or ""
+        m = dsi._MARKER_RE.search(live)
+        live_rank, live_streak = -1, 0
+        if m:
+            live_state, live_week, live_streak = m.group(1), m.group(3), int(m.group(4) or 0)
+            if live[:m.start()] == p["ver"] and (live_state == dsi._CONC or live_week == p["wk"]):
+                live_rank = wdb._MARKER_STATE_RANK[live_state]
+        rank = max(p["rank"], live_rank)
+        state = [k for k, v in wdb._MARKER_STATE_RANK.items() if v == rank][0]
+        if live_rank > p["rank"]:
+            streak = live_streak
+        elif live_rank < p["rank"]:
+            streak = p["strk"]
+        else:
+            streak = max(live_streak, p["strk"])
+        attempts = max(self._attempts if m and m.group(3) == p["wk"] else 0, p["floor"])
+        tail = f"s{streak}" if streak else ""
+        self.live_budget_at_write = f"{p['ver']}:{state}{attempts}w{p['wk']}{tail}"
+
     def budget(self):
-        """The `meta.budget` marker this call actually wrote for the dedicated budget row, or None if the
-        call didn't write one (only a conclusive outcome in a week that spent nothing and carries no
-        streak keeps none — see _rebuild_diag_signals)."""
+        """The `meta.budget` marker this call PROPOSED for the dedicated budget row, or None if the call
+        didn't write one (only a conclusive outcome in a week that spent nothing and carries no streak
+        keeps none — see _rebuild_diag_signals).
+
+        The proposal, not necessarily the stored value: db.write_diag_signal_budget re-derives all of
+        attempts/state/streak from the row's own live values on the write path (review MAJOR-1). Use
+        stored_budget() when the merge itself is what a test is about."""
         for p in self.inserts:
             if p.get("sk") == wdb.BUDGET_KEY:
                 return p.get("bg")
         return None
+
+    def stored_budget(self):
+        """What the row's `meta.budget` holds after this call — the caller's proposal merged
+        monotonically against whatever was live at write time (review MAJOR-1). See _merge_budget."""
+        return self.live_budget_at_write
 
     def budget_row_status(self):
         for p in self.inserts:
@@ -426,6 +477,8 @@ class TestGeneratedFallback:
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         schema = {"labels": ["custom_only"]}        # loki catalog matches nothing → fallback-only
@@ -439,6 +492,7 @@ class TestGeneratedFallback:
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
             "still_relevant": staticmethod(lambda *a: False),
+            "still_relevant_live": staticmethod(lambda *a: (False, False)),
         }))
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         c = FakeConn(kind="loki", schema={"labels": ["custom_only"]}, existing_rows=[self.GENERATED_ROW])
@@ -453,6 +507,8 @@ class TestGeneratedFallback:
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "disabled")),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         c = FakeConn(kind="loki", schema={"labels": ["custom_only"]}, existing_rows=[self.GENERATED_ROW])
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
@@ -467,6 +523,8 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: pytest.fail("must not generate while parked")),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         schema = {"labels": ["custom_only"]}
         base = dsi._schema_version(schema)
@@ -515,6 +573,8 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: pytest.fail("must not generate while parked")),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         schema = {"labels": ["custom_only"]}
         base = dsi._schema_version(schema)
@@ -538,6 +598,8 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         schema = {"labels": ["custom_only"]}
         base = dsi._schema_version(schema)
@@ -562,6 +624,8 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         old_schema = {"labels": ["custom_only"]}
         old_base = dsi._schema_version(old_schema)
@@ -832,6 +896,8 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         no_match, match = {"labels": ["custom_only"]}, {"labels": ["job"]}
         budget = None
@@ -852,11 +918,15 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         })
         gen_off = type("M", (), {
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "disabled")),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         })
         schema = {"labels": ["custom_only"]}
         budget = None
@@ -918,6 +988,8 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         schema = {"labels": ["custom_only"]}
         budget = None
@@ -936,6 +1008,8 @@ class TestGeneratedFallback:
             "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
             "still_relevant": staticmethod(lambda *a: True),
+            # MAJOR-4: the carry-over now dry-runs too. Mirror the lexical verdict — (ok, transient).
+            "still_relevant_live": staticmethod(lambda *a: (True, False)),
         }))
         schema = {"labels": ["job"]}                  # the loki catalog DOES match this
         base = dsi._schema_version(schema)
@@ -1419,3 +1493,221 @@ class TestGraphQuerygenHybridFallback:
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
         assert not out.get("error")  # the outer job must not fail
         assert len(c.graph_inserts) == 1 and c.graph_inserts[0]["st"] == "unavailable"
+
+
+# ── MAJOR-5 regression: both schema-version hashes must ignore list ORDER ───────────────────────────
+class TestSchemaVersionCanonicalization:
+    """`sort_keys=True` sorts dict KEYS but not list ELEMENTS, so two live introspections with
+    identical content in a different order hashed differently, read as "the schema changed", and
+    cost a full rebuild plus a weekly-budget Bedrock call for nothing (review MAJOR-5)."""
+
+    def test_flat_list_order_does_not_change_the_hash(self):
+        a = {"metrics": ["up", "http_requests_total"], "labels": ["job", "instance"]}
+        b = {"metrics": ["http_requests_total", "up"], "labels": ["instance", "job"]}
+        # Same content, both flat lists reordered — must hash identically (review MAJOR-5).
+        assert dsi._schema_version(a) == dsi._schema_version(b)
+        # The bug was identical in both functions, so both are asserted.
+        assert dsi._graph_schema_version(a) == dsi._graph_schema_version(b)
+
+    def test_nested_list_order_does_not_change_the_hash(self):
+        # The clickhouse shape: list elements are DICTS (not orderable by themselves), so the
+        # canonicalization must sort by each element's own canonical JSON (review MAJOR-5).
+        a = {"tables": [
+            {"name": "otel.spans", "columns": [{"name": "TraceId", "type": "String"},
+                                               {"name": "Duration", "type": "UInt64"}]},
+            {"name": "otel.logs", "columns": [{"name": "Body", "type": "String"}]},
+        ]}
+        b = {"tables": [
+            {"name": "otel.logs", "columns": [{"name": "Body", "type": "String"}]},
+            {"name": "otel.spans", "columns": [{"name": "Duration", "type": "UInt64"},
+                                               {"name": "TraceId", "type": "String"}]},
+        ]}
+        assert dsi._schema_version(a) == dsi._schema_version(b)
+        assert dsi._graph_schema_version(a) == dsi._graph_schema_version(b)
+
+    def test_real_content_change_still_changes_the_hash(self):
+        # This is what keeps the fix from turning every schema into the same hash: real content
+        # change (element removed / element replaced) must still change it.
+        assert dsi._schema_version({"metrics": ["up", "down"]}) != \
+            dsi._schema_version({"metrics": ["up"]})
+        assert dsi._schema_version({"metrics": ["up", "down"]}) != \
+            dsi._schema_version({"metrics": ["up", "sideways"]})
+        assert dsi._graph_schema_version({"metrics": ["up", "down"]}) != \
+            dsi._graph_schema_version({"metrics": ["up"]})
+        assert dsi._graph_schema_version({"metrics": ["up", "down"]}) != \
+            dsi._graph_schema_version({"metrics": ["up", "sideways"]})
+
+
+# ── MAJOR-1 regression: the marker's STATE and STREAK must be monotonic, not last-writer-wins ───────
+class TestBudgetMarkerIsMonotonic:
+    """Round 2 made only the embedded attempts DIGIT race-safe by re-deriving it live at write time.
+    The `<version>:<state>` and `w<week>[s<streak>]` halves were still built entirely from each
+    worker's own pre-Bedrock local decision, so the worker that finished SECOND overwrote the whole
+    marker with ITS state/streak — undoing a `conc` settlement the first worker had already reached, or
+    regressing a streak below what was already durably recorded (which can keep _MAX_SPENT_WEEKS from
+    ever parking a permanently-failing instance). Round 3 makes the whole marker monotonic.
+
+    `live_budget_at_write` is the race: `existing_budget` is what this worker READ, before its
+    multi-second Bedrock call; `live_budget_at_write` is what the row actually holds by the time it
+    writes, because a concurrent worker committed in that window.
+    """
+    def _schema(self):
+        return {"tables": {"t": ["c"]}}     # clickhouse: the deterministic catalog matches nothing
+
+    def _transient(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "GENERATED_SIGNAL_KEY": "generated_signal",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+
+    def test_a_stale_pend_cannot_undo_a_conc_settlement(self, monkeypatch):
+        # Worker A got a ready outcome and settled the marker to `conc`. Worker B is still mid-retry
+        # from a stale read and proposes `pend`. B writes second and must NOT un-settle A's outcome.
+        self._transient(monkeypatch)
+        schema = self._schema()
+        base = dsi._schema_version(schema)
+        week = dsi._iso_week()
+        c = FakeConn(kind="clickhouse", schema=schema,
+                     existing_budget=f"{base}:pend1w{week}",          # what B read
+                     live_budget_at_write=f"{base}:conc2w{week}")     # what A committed meanwhile
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert c.budget() == f"{base}:pend2w{week}"          # B's own (stale) proposal
+        assert c.stored_budget() == f"{base}:conc2w{week}"   # …but conc survives it
+
+    def test_a_stale_streak_cannot_regress_below_what_is_recorded(self, monkeypatch):
+        # Both workers land on `done`, but B's streak count is one behind A's. A lower streak must not
+        # overwrite a higher one, or the _MAX_SPENT_WEEKS park is never reached for this instance.
+        self._transient(monkeypatch)
+        schema = self._schema()
+        base = dsi._schema_version(schema)
+        week = dsi._iso_week()
+        # B read streak 1, so its own bookkeeping advances it to 2; A meanwhile committed 3.
+        c = FakeConn(kind="clickhouse", schema=schema,
+                     existing_budget=f"{base}:pend{dsi._MAX_GENERATION_ATTEMPTS - 1}w{week}s1",
+                     live_budget_at_write=f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{week}s3")
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert c.budget().endswith("s2")                     # B proposed the lower streak
+        assert c.stored_budget().endswith("s3")              # …and the higher one is kept
+
+    def test_monotonicity_does_not_block_the_ready_streak_reset(self, monkeypatch):
+        # The counterpart the fix must NOT break: a ready outcome legitimately resets the streak to 0.
+        # Merging state and streak as a PAIR (rather than GREATEST-ing each field independently) is what
+        # lets `conc`+streak-0 outrank a live `done`+streak-2 and actually clear the tail — a per-field
+        # GREATEST would pin the streak high forever and eventually park a succeeding instance.
+        schema = self._schema()
+        base = dsi._schema_version(schema)
+        week = dsi._iso_week()
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "GENERATED_SIGNAL_KEY": "generated_signal",
+            "try_generate_signal_with_status": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: ({
+                "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
+                "query": {"tool": "clickhouse_query", "queries": [{"label": "g", "expr": "SELECT count() FROM t"}]},
+                "missing_metrics": None, "meta": {"kind": "clickhouse", "provenance": "generated"},
+            }, "generated")),
+        }))
+        c = FakeConn(kind="clickhouse", schema=schema,
+                     existing_budget=f"{base}:pend1w{week}s2",
+                     live_budget_at_write=f"{base}:done{dsi._MAX_GENERATION_ATTEMPTS}w{week}s2")
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert c.stored_budget().startswith(f"{base}:conc")   # ready wins over the live `done`
+        assert "s" not in c.stored_budget().split("w", 1)[1]  # …and the streak tail is gone
+
+    def test_another_schemas_conc_is_not_adopted_as_this_schemas_settlement(self, monkeypatch):
+        # Hash-scoped: adopting a DIFFERENT schema's `conc` would claim we had evaluated THIS schema when
+        # we never did — the same mis-attribution the byte-for-byte preservation branch exists to avoid.
+        self._transient(monkeypatch)
+        schema = self._schema()
+        base = dsi._schema_version(schema)
+        week = dsi._iso_week()
+        c = FakeConn(kind="clickhouse", schema=schema,
+                     existing_budget=f"{base}:pend1w{week}",
+                     live_budget_at_write=f"{prev_base(dsi)}:conc3w{week}")
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert c.stored_budget().startswith(f"{base}:pend")
+
+    def test_last_weeks_done_does_not_park_this_week(self, monkeypatch):
+        # Week-scoped for pend/done: the week rolling over is exactly what returns the budget, so a past
+        # week's park must not be adopted into this week's marker. (`conc` is week-independent by design.)
+        self._transient(monkeypatch)
+        schema = self._schema()
+        base = dsi._schema_version(schema)
+        week = dsi._iso_week()
+        c = FakeConn(kind="clickhouse", schema=schema,
+                     existing_budget=f"{base}:pend1w{week}",
+                     live_budget_at_write=f"{base}:done3w202601")
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert c.stored_budget().startswith(f"{base}:pend")
+
+
+# ── MAJOR-4 regression: a carried-over row must be LIVE dry-run verified before it counts as ready ──
+class TestCarriedGeneratedRowIsLiveVerified:
+    """`_keep_last_good_generated` used to carry a row forward on `still_relevant()` alone — a LEXICAL
+    check that its identifiers are still in the schema's vocabulary. The caller marks the result
+    `status: "ready"`, which settles the budget marker to `conc` and stops the row ever being re-checked.
+    But the carry-over only runs BECAUSE the schema changed, and a schema can change in ways the
+    vocabulary cannot see (a column's type, a renamed table that still exists but means something else, a
+    revoked grant), so a lexically-valid expression can still fail at real query time (review MAJOR-4).
+
+    The three outcomes are distinct on purpose: a conclusive dry-run rejection DROPS the row, while a
+    TRANSIENT one must not — deleting verified content because the connector was down is precisely the
+    MAJOR-2 deletion the carry-over exists to prevent — and must not settle `conc` either.
+    """
+    GENERATED_ROW = {"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
+                     "query": {"tool": "loki_query_range",
+                               "queries": [{"label": "generated",
+                                            "expr": 'count_over_time({job="a"} |= "error" [5m])'}]},
+                     "meta": {"kind": "loki", "provenance": "generated"}}
+
+    def _gen(self, monkeypatch, live):
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "GENERATED_SIGNAL_KEY": "generated_signal",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+            "still_relevant": staticmethod(lambda *a: True),      # LEXICALLY fine in every case here
+            "still_relevant_live": staticmethod(lambda *a: live),
+        }))
+
+    def test_a_dry_run_that_passes_keeps_the_row_ready_and_settles_conc(self, monkeypatch):
+        self._gen(monkeypatch, (True, False))
+        schema = {"labels": ["custom_only"]}
+        c = FakeConn(kind="loki", schema=schema, existing_rows=[self.GENERATED_ROW])
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
+        # A ready row is conclusive for this schema, exactly as before the dry run was added.
+        assert c.budget() is None or ":conc" in c.budget()
+
+    def test_a_conclusive_dry_run_failure_drops_the_row(self, monkeypatch):
+        # THE FIX: lexically valid, but it does not actually run against the CURRENT schema. Before this,
+        # such a row was carried, marked ready, and settled to `conc` — never re-checked again.
+        self._gen(monkeypatch, (False, False))
+        c = FakeConn(kind="loki", schema={"labels": ["custom_only"]},
+                     existing_rows=[self.GENERATED_ROW])
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert not any(p["sk"] == "generated_signal" for p in c.inserts)
+
+    def test_a_transient_dry_run_failure_spares_the_row_without_settling_it(self, monkeypatch):
+        # The MAJOR-2 side of the contract: "the connector is down" is not "the row is bad". The row must
+        # survive the sweep, must NOT be written as ready, and the marker must NOT go conclusive.
+        self._gen(monkeypatch, (False, True))
+        c = FakeConn(kind="loki", schema={"labels": ["custom_only"]},
+                     existing_rows=[self.GENERATED_ROW])
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert not any(p["sk"] == "generated_signal" for p in c.inserts)   # not re-written as ready
+        # …but spared from the mark-sweep, via the same generated_key_unverified path a read error uses.
+        assert c.deletes and "generated_signal" in c.deletes[0]["keep"]
+        assert c.generated_version_touches                                # its version is kept meaningful
+        assert ":conc" not in (c.budget() or "")                          # and nothing was settled
+
+    def test_the_live_check_reuses_the_fresh_paths_dry_run_gate(self):
+        # Reusing _dry_run_check is what keeps the execution BOUNDS (max_rows / max_execution_time /
+        # timeout / limit — review MAJOR L3-M2, L4-M4) instead of opening an unbounded query, so assert the
+        # reuse rather than re-testing the bounds. It is a connector call, not a Bedrock call, which is why
+        # it is correctly outside the weekly generation budget.
+        import inspect
+
+        import diagnosis.signal_catalog_gen as gen
+        src = inspect.getsource(gen.still_relevant_live)
+        assert "_dry_run_check(" in src and "still_relevant(" in src

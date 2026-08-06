@@ -572,3 +572,52 @@ class TestAliasesCannotImpersonateSchemaNames:
         sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
         assert scg._is_constant_expr("clickhouse", sch,
                                      "SELECT avg(s.duration) AS avg_ms FROM spans s") is False
+
+
+class TestStillRelevantLive:
+    """MAJOR-4: still_relevant() is LEXICAL, but datasource_index used its verdict to mark a carried-over
+    row `ready` — which settles the budget marker to `conc` and stops it ever being re-checked. A schema
+    can change in ways the vocabulary cannot see, so the carry-over now runs the SAME live dry run the
+    fresh-generation path gates on. Every outcome is distinct: pass, conclusive reject, cannot-verify.
+    """
+    EXPR = "rate(custom_app_requests_total[5m])"
+
+    def test_a_lexical_mismatch_is_conclusive_and_never_reaches_the_connector(self):
+        # A vocabulary miss is already a verdict, so it must not spend a connector call to confirm it.
+        def boom(_args):
+            raise AssertionError("must not dry-run an expression that already failed the lexical check")
+        ok, transient = scg.still_relevant_live("prometheus", {"metrics": ["something_else"]},
+                                                self.EXPR, 7, boom)
+        assert (ok, transient) == (False, False)
+
+    def test_a_passing_dry_run_is_ok(self):
+        ok, transient = scg.still_relevant_live(
+            "prometheus", SCHEMA, self.EXPR, 7,
+            lambda args: {"result": [{"value": [0, "1"]}]})
+        assert (ok, transient) == (True, False)
+
+    def test_an_error_envelope_is_a_conclusive_rejection(self):
+        # THE FIX: lexically valid, but the datasource itself judges the query — drop it.
+        ok, transient = scg.still_relevant_live(
+            "prometheus", SCHEMA, self.EXPR, 7, lambda args: {"error": "bad_data"})
+        assert (ok, transient) == (False, False)
+
+    def test_a_throwing_connector_is_cannot_verify_not_a_rejection(self):
+        # The MAJOR-2 side: a blip must never read as "the row is bad", or re-verifying deletes verified
+        # content — the exact deletion the carry-over exists to prevent.
+        def boom(_args):
+            raise RuntimeError("connector down")
+        assert scg.still_relevant_live("prometheus", SCHEMA, self.EXPR, 7, boom) == (False, True)
+
+    def test_an_empty_but_successful_result_is_cannot_verify(self):
+        # A quiet window (night, low traffic) legitimately returns no samples.
+        ok, transient = scg.still_relevant_live(
+            "prometheus", SCHEMA, self.EXPR, 7, lambda args: {"result": []})
+        assert (ok, transient) == (False, True)
+
+    def test_it_bounds_the_dry_run_like_the_fresh_path(self):
+        # Reuse, not reimplementation: the bounds (review MAJOR L3-M2 / L4-M4) come along for free.
+        seen = {}
+        scg.still_relevant_live("prometheus", SCHEMA, self.EXPR, 7,
+                                lambda args: seen.update(args) or {"result": [{"value": [0, "1"]}]})
+        assert seen.get("timeout") == "5s" and seen.get("instance_id") == 7

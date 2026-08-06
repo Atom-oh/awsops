@@ -121,6 +121,31 @@ def _reintrospect(kind, integration_id):
         return None
 
 
+def _canon(v):
+    """Order-insensitive canonical form of a schema value, for HASHING ONLY (never stored, never
+    handed downstream).
+
+    json.dumps(..., sort_keys=True) sorts dict KEYS but not list ELEMENTS, and every list the
+    connectors' `{kind}_schema` tools return is an unordered SET in practice — prometheus/mimir
+    `metrics`/`labels`, loki `labels`, tempo `tags`, clickhouse `tables` and their `columns` are all
+    consumed as set comprehensions or name lookups (signal_catalog._missing_for, graph_catalog,
+    signal_catalog_gen._vocab_names), never positionally. So two live introspections returning the
+    SAME content in a different order hashed differently, read as "the schema changed", and bought a
+    full rebuild plus — for the LLM-fallback kinds — a fresh weekly-budget Bedrock call for zero
+    actual change (review MAJOR-5).
+
+    Recursive and shape-blind on purpose: sorting a hand-listed set of known list fields would let
+    the next list-valued field a connector adds reintroduce this silently. Sorted by each element's
+    OWN canonical JSON, because clickhouse `tables` elements are dicts and dicts are not orderable.
+    """
+    if isinstance(v, dict):
+        return {k: _canon(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return sorted((_canon(x) for x in v),
+                      key=lambda e: json.dumps(e, sort_keys=True, separators=(",", ":")))
+    return v
+
+
 def _schema_version(schema):
     """Stable cross-process hash of the FULL schema (all kinds' catalog entries key off different
     parts of it — labels/tables/tags, not just metric names) + signal_catalog.CATALOG_VERSION + the
@@ -136,7 +161,7 @@ def _schema_version(schema):
     # whenever a graph-only feature was toggled (review MINOR) — dropping the graph flag is safe because
     # CATALOG_VERSION v4 already invalidates every stored hash once.
     flag = "1" if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" else "0"
-    basis = (json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _cat.CATALOG_VERSION
+    basis = (json.dumps(_canon(schema), sort_keys=True, separators=(",", ":")) + "|" + _cat.CATALOG_VERSION
              + "|dsquerygen=" + flag)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
@@ -149,7 +174,7 @@ def _graph_schema_version(schema):
     flag was off (catalog 'unavailable', hybrid fallback skipped) stays permanently skipped after the
     flag turns on, since nothing about the schema itself would ever drift again."""
     flag = "1" if os.environ.get("GRAPH_QUERYGEN_ENABLED") == "true" else "0"
-    basis = (json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _graph_cat.CATALOG_VERSION
+    basis = (json.dumps(_canon(schema), sort_keys=True, separators=(",", ":")) + "|" + _graph_cat.CATALOG_VERSION
              + "|querygen=" + flag)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
@@ -235,22 +260,20 @@ def _marker_state(existing, version):
     return base, 0, False, streak
 
 
-def _marker_parts(version, state, streak):
-    """(prefix, suffix) of the marker grammar with the attempt COUNT left out, so the count can be
-    spliced in by either side: here (_marker) or inside db.write_diag_signal_budget's UPDATE, which
-    re-derives it from the LIVE counter because the caller's own number is read before a
-    multi-second Bedrock call and a concurrent reservation must not be lost from it (review
-    MAJOR-1). One source of truth for the grammar _MARKER_RE parses."""
-    tail = f"s{streak}" if streak else ""
-    return f"{version}:{state}", f"w{_iso_week()}{tail}"
-
-
 def _marker(version, attempts, state, streak):
-    pre, suf = _marker_parts(version, state, streak)
-    return f"{pre}{attempts}{suf}"
+    """The marker string for the grammar _MARKER_RE parses — one source of truth for it.
+
+    This is the CALLER's proposal, not necessarily what ends up stored: on the write path
+    db.write_diag_signal_budget re-derives all three of attempts/state/streak from the row's own live
+    values, because every one of them is decided before a multi-second Bedrock call and must not be
+    regressed by whichever worker happens to finish second (review MAJOR-1, rounds 2 and 3). This
+    function still produces the marker verbatim for the byte-for-byte preservation path and for the
+    INSERT case, where there is no live row to be monotonic against."""
+    tail = f"s{streak}" if streak else ""
+    return f"{version}:{state}{attempts}w{_iso_week()}{tail}"
 
 
-def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
+def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows, invoke_connector=None):
     """Carry a previously VERIFIED generated row through a failed re-generation.
 
     The rebuild is mark-and-sweep: sweep_diag_signals deletes every key not written this time, so a chip
@@ -259,12 +282,27 @@ def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
     expression STILL matches the current schema's vocabulary and still measures something, which is the same
     pure check the generator gates on; a stored query whose table has since disappeared is not resurrected.
 
+    With `invoke_connector`, that lexical check is followed by the SAME live dry run the fresh-generation
+    path gates on (_signal_gen.still_relevant_live). The lexical check alone was not enough to justify what
+    the caller does with the result: it marks the row `status: "ready"`, which settles the budget marker to
+    `conc` and stops the row ever being re-checked — yet this whole path only runs BECAUSE the schema
+    changed, and a schema can change in ways the vocabulary cannot see (a column's type, a renamed table
+    that still exists but means something else, a revoked grant), so a lexically-valid expression can still
+    fail at real query time (review MAJOR-4). Omit `invoke_connector` for a lexical-only pass — the one
+    caller that does is the in-transaction late-spare below, which only spares keys from the sweep and
+    never marks anything ready or conclusive, so it needs no live verification (and must not make connector
+    calls inside an open transaction).
+
     Returns None on a READ failure — never `rows` unchanged. Silently falling back to `rows` here looked
     safe (never break the rebuild) but wasn't: with nothing carried and generation also having failed, the
     caller would still write and SWEEP, and the sweep deletes any key not in what got written — including
     the actual, still-good generated row in the table, based on nothing but a transient read error on OUR
     side (review, this round: the same MAJOR-2 deletion, reached through a different door). The caller must
     treat None as "cannot verify this run — write nothing" rather than "nothing to carry."
+
+    A TRANSIENT dry-run outcome returns None for that same reason, and it is the reason the dry run can be
+    added here at all: "the connector is down" must not be read as "the row is bad", or re-verifying the
+    row would itself become the MAJOR-2 deletion. Only a CONCLUSIVE dry-run rejection drops the row.
     """
     try:
         existing = [r for r in wdb.list_diag_signals(conn, iid)
@@ -276,12 +314,28 @@ def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
         exprs = [q.get("expr") for q in ((r.get("query") or {}).get("queries") or [])]
         if not exprs or not all(exprs):
             continue
-        if all(_signal_gen.still_relevant(kind, schema, e) for e in exprs):
+        if invoke_connector is None:
+            ok = all(_signal_gen.still_relevant(kind, schema, e) for e in exprs)
+            transient = False
+        else:
+            ok, transient = True, False
+            for e in exprs:
+                ok, transient = _signal_gen.still_relevant_live(kind, schema, e, iid, invoke_connector)
+                if not ok:
+                    break
+        if transient:
+            # Cannot verify this run. Same contract as the read failure above: the caller must spare the
+            # row rather than delete it on the strength of a connector blip, and must NOT settle `conc`.
+            logging.info("[datasource_index] integration %s: cannot verify generated row %s this run — its "
+                         "dry run failed transiently; sparing it without marking it ready", iid,
+                         r["signal_key"])
+            return None
+        if ok:
             kept.append({"signal_key": r["signal_key"], "title": r.get("title"), "status": "ready",
                          "query": r["query"], "missing_metrics": None, "meta": r.get("meta")})
         else:
             logging.info("[datasource_index] integration %s: dropping generated row %s — its expression no "
-                         "longer matches the schema", iid, r["signal_key"])
+                         "longer matches the schema, or no longer runs against it", iid, r["signal_key"])
     return list(rows) + kept
 
 
@@ -358,6 +412,10 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     if existing_content_version == version and settled:
         return {"skipped": True, "schema_version": existing_content_version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
+    # ONE connector-invoke callable for both users of it: the fresh generation's dry run and the
+    # carry-over's live re-verification. Building it once is what makes them provably the same gate.
+    def _invoke_query(args):
+        return _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args)
     exhausted = attempts >= _MAX_GENERATION_ATTEMPTS
     gen_status = None
     generated_key_unverified = False
@@ -384,8 +442,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
                 attempts, exhausted = _MAX_GENERATION_ATTEMPTS, True
             else:
                 generated, gen_status = _signal_gen.try_generate_signal_with_status(
-                    kind, schema, iid,
-                    lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
+                    kind, schema, iid, _invoke_query)
                 if generated:
                     rows = list(rows) + [generated]
                 if gen_status == _signal_gen.DISABLED:
@@ -402,10 +459,16 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" \
                 and not any(r["status"] == "ready" for r in rows):
             carry_attempted = True
-            carried = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
+            # WITH the live dry run (review MAJOR-4): the row this returns is marked `ready`, and a ready
+            # row settles the marker to `conc` — conclusive for this schema, never re-checked. A lexical
+            # vocabulary match is not enough to claim that, because this path only runs BECAUSE the schema
+            # changed and it can have changed in ways the vocabulary cannot see. Same gate, same callable,
+            # as the fresh generation above.
+            carried = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows,
+                                               invoke_connector=_invoke_query)
             if carried is None:
-                # Could not verify whether a previously-good generated row still exists or is still
-                # relevant. Two things must BOTH hold, and one fix at a time broke the other (two prior
+                # Could not verify whether a previously-good generated row still exists, is still relevant,
+                # or still RUNS. Two things must BOTH hold, and one fix at a time broke the other (two prior
                 # review rounds): a charged attempt's cost must still be recorded (spend the budget as
                 # normal below — aborting the whole write let a persistent read failure retry for free
                 # forever), AND the row itself must not be deleted on the strength of nothing but our own
@@ -487,12 +550,14 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         # stored byte-for-byte, never re-derived from this week's live counter.
         stored_budget, budget_live = existing_budget, None
     else:
-        # `spent` is a FLOOR, not the final word: db.write_diag_signal_budget re-derives the
-        # embedded count from the row's live meta.attempts, so a worker that reserved during our
-        # Bedrock call is not erased from the marker (review MAJOR-1).
-        _pre, _suf = _marker_parts(version, state, new_streak)
-        stored_budget = f"{_pre}{spent}{_suf}"
-        budget_live = (_pre, _suf, _iso_week(), spent)
+        # Every field here is a PROPOSAL, not the final word: db.write_diag_signal_budget re-derives the
+        # whole marker from the row's own live values and keeps the MORE advanced outcome. `spent` is a
+        # floor under the live meta.attempts, so a worker that reserved during our Bedrock call is not
+        # erased from the marker (review MAJOR-1, round 2); `state`/`new_streak` are floors in the
+        # _MARKER_STATE_RANK ordering, so a worker finishing second cannot undo a settlement the first
+        # already reached or regress its streak below what is already recorded (review MAJOR-1, round 3).
+        stored_budget = _marker(version, spent, state, new_streak)
+        budget_live = (version, state, new_streak, _iso_week(), spent)
     # CONTENT rows always carry the CURRENT schema's real version — never a preserved/stale one. Content
     # freshness and budget tracking used to share one column, and every fix to protect the budget's
     # identity (preserving a stale marker, excluding a key from the agreement check) ended up tagging
@@ -516,7 +581,7 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     try:
         written = wdb.upsert_diag_signals(conn, iid, rows, version)
         if stored_budget is not None:
-            wdb.write_diag_signal_budget(conn, iid, stored_budget, version, live_attempts=budget_live)
+            wdb.write_diag_signal_budget(conn, iid, stored_budget, version, live_marker=budget_live)
             written = written + [wdb.BUDGET_KEY]
         # Sweep against what was WRITTEN, not against `rows`: an empty build writes a version sentinel
         # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back. Not including
@@ -540,6 +605,11 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             # non-racing path. Under READ COMMITTED this narrows the window to the gap between two
             # adjacent statements rather than closing it; closing it fully would need an advisory
             # lock over the whole rebuild, which is out of scope here.
+            # LEXICAL-ONLY here, deliberately (no invoke_connector): this call's result is used for
+            # nothing but SPARING keys from the DELETE — it never marks a row ready and so can never
+            # settle the marker to `conc`, which is the only thing MAJOR-4's live dry run is needed to
+            # justify. It also runs inside the open transaction, where a multi-second connector call
+            # would hold the sweep's locks for the duration.
             late = [r["signal_key"]
                     for r in (_keep_last_good_generated(conn, wdb, iid, kind, schema, []) or [])
                     if r["signal_key"] not in sweep_keep]

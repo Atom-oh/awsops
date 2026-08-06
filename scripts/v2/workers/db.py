@@ -320,7 +320,35 @@ def release_diag_signal_attempt(conn, integration_id, week):
         iid=integration_id, sk=BUDGET_KEY, wk=week)
 
 
-def write_diag_signal_budget(conn, integration_id, marker, schema_version, live_attempts=None):
+# pend < done < conc, matching datasource_index._marker_state's own reading of settledness: `pend` owes a
+# retry this week, `done` has spent this week's budget and is parked until it rolls, `conc` is settled for
+# this SCHEMA regardless of the week. The ORDER is what makes the marker write monotonic (review MAJOR-1,
+# round 3) — see write_diag_signal_budget's `live_marker`.
+_MARKER_STATE_RANK = {"pend": 0, "done": 1, "conc": 2}
+
+# The live marker, parsed back out of the row inside the UPDATE. Deliberately COLON-FREE regexes: a `:`
+# inside a SQL string literal is ambiguous with pg8000's own `:name` parameter markers, so `:(pend|…)`
+# and a non-capturing `(?:s[0-9]+)` are both avoided. Dropping the leading colon is safe because the
+# marker's prefix is a sha256 hex digest — 'pend'/'done'/'conc' each need a non-hex letter (p, o, n), so
+# none of them can ever match inside it. substring() returns the FIRST capture group.
+_LIVE_BUDGET = "datasource_diag_signals.meta->>'budget'"
+_LIVE_STATE = "substring(" + _LIVE_BUDGET + " from '(pend|done|conc)[0-9]+w')"
+_LIVE_WEEK = "substring(" + _LIVE_BUDGET + " from 'w([0-9]{5,8})(s[0-9]+)?$')"
+_LIVE_STREAK = "coalesce(substring(" + _LIVE_BUDGET + " from 's([0-9]+)$')::int, 0)"
+# The live state's RANK, or -1 for "nothing comparable is stored". Scoping is deliberately asymmetric and
+# mirrors _marker_state: a live `conc` counts regardless of week (settled-ness does not expire when the
+# week rolls — that is the whole reason the third state exists), while `pend`/`done` count only within
+# THIS ISO week, because a past week's park is exactly what the week rolling over is supposed to release.
+# Hash-scoped in every case: carrying a DIFFERENT schema's state onto this version's marker would claim
+# we had evaluated THIS schema when we never did — the trap datasource_index.py's byte-for-byte
+# preservation branch documents.
+_LIVE_RANK = ("CASE WHEN split_part(" + _LIVE_BUDGET + ", ':', 1) = :ver::text "
+              "AND (" + _LIVE_STATE + " = 'conc' OR " + _LIVE_WEEK + " = :wk::text) "
+              "THEN CASE " + _LIVE_STATE + " WHEN 'conc' THEN 2 WHEN 'done' THEN 1 "
+              "WHEN 'pend' THEN 0 ELSE -1 END ELSE -1 END")
+
+
+def write_diag_signal_budget(conn, integration_id, marker, schema_version, live_marker=None):
     """Upsert the bookkeeping row's marker string + schema_version, WITHOUT touching the numeric
     `meta.attempts`/`meta.week` counter that reserve/release own.
 
@@ -330,28 +358,51 @@ def write_diag_signal_budget(conn, integration_id, marker, schema_version, live_
     stays 'unavailable' because the table has CHECK (status IN ('ready','unavailable')) and this row is
     bookkeeping, not a signal.
 
-    `live_attempts=(prefix, suffix, week, floor)` re-derives the attempt COUNT embedded in the
-    stored marker from the row's own LIVE `meta.attempts`, inside the UPDATE itself, as
-    `prefix || GREATEST(live, floor) || suffix`. The caller builds its marker from a count read
-    BEFORE the multi-second Bedrock call, so a second worker that reserved in that window had its
-    increment silently overwritten by this call's older number: the numeric counter stayed
-    correctly capped, but the marker `_marker_state()` parses under-counted, so marker-driven
-    parking logic under-counted with it (review MAJOR). `floor` keeps it monotonic in the other
-    direction too (the caller's own count is never regressed), and the week guard is the same
-    `CASE WHEN meta->>'week' = :wk` reserve() uses, so a previous week's count cannot leak in.
-    The INSERT path keeps the caller's marker verbatim: with no row there is no live counter, and
-    GREATEST(0, floor) would produce that same string anyway. Omit `live_attempts` to store
-    `marker` byte-for-byte — the one caller that must, because its marker deliberately belongs to
-    a DIFFERENT schema whose embedded count describes that schema, not this week's live number.
+    `live_marker=(version, state, streak, week, floor)` re-derives the WHOLE marker inside the UPDATE
+    itself, monotonically, rather than storing the caller's string. The caller decides its state/streak
+    BEFORE a multi-second Bedrock call, so last-writer-wins let the worker that finished SECOND overwrite
+    a MORE advanced outcome with its own stale one: a `conc` settlement undone back to `pend`, or a
+    streak regressed below what was already durably recorded (which can keep _MAX_SPENT_WEEKS from ever
+    being reached). An earlier round fixed only the embedded attempts DIGIT this way; state and streak
+    stayed last-writer-wins (review MAJOR-1, round 3).
+
+    The merge picks the more-advanced (state, streak) PAIR by _MARKER_STATE_RANK — not each field
+    independently. Choosing per-field would make the streak un-resettable: `ready_now` legitimately
+    resets it to 0, and a plain GREATEST would pin it high forever, eventually parking an instance that
+    is actually succeeding. With pair-selection, a proposed `conc`+streak-0 outranks a live `done`+streak-2
+    and the reset lands. On a RANK TIE the higher streak wins, which is the anti-regression rule itself.
+    (A tie at `conc` therefore keeps a stale streak; harmless, because a `conc` marker already parks an
+    unchanged schema on its own, and a changed schema resets the streak via _marker_state's hash check.)
+
+    The attempts digit keeps its own independent `GREATEST(live counter, floor)` — it is the number the DB
+    itself enforced the cap against, orthogonal to which state won, and its week guard is the same
+    `CASE WHEN meta->>'week' = :wk` reserve() uses so a previous week's count cannot leak in.
+
+    The INSERT path keeps the caller's `marker` verbatim: with no row there is no live marker to be
+    monotonic against, and the expression would reproduce that same string anyway. Omit `live_marker` to
+    store `marker` byte-for-byte — the one caller that must, because its marker deliberately belongs to a
+    DIFFERENT schema whose embedded count and state describe that schema, not this week's live numbers.
     """
     bg_expr = ":bg::text"
     extra = {}
-    if live_attempts is not None:
-        pre, suf, week, floor = live_attempts
-        bg_expr = (":pre::text || GREATEST(CASE WHEN datasource_diag_signals.meta->>'week' = :wk::text "
-                   "THEN coalesce((datasource_diag_signals.meta->>'attempts')::int, 0) ELSE 0 END, "
-                   ":floor)::text || :suf::text")
-        extra = dict(pre=pre, suf=suf, wk=week, floor=floor)
+    if live_marker is not None:
+        version, state, streak, week, floor = live_marker
+        attempts = ("GREATEST(CASE WHEN datasource_diag_signals.meta->>'week' = :wk::text "
+                    "THEN coalesce((datasource_diag_signals.meta->>'attempts')::int, 0) ELSE 0 END, "
+                    ":floor)")
+        # Pair-selection, not per-field: the winning rank decides whose streak is used, and only a tie
+        # falls back to GREATEST. See the docstring for why per-field would break the ready-reset.
+        merged_streak = ("CASE WHEN (" + _LIVE_RANK + ") > :rank THEN " + _LIVE_STREAK + " "
+                         "WHEN (" + _LIVE_RANK + ") < :rank THEN :strk "
+                         "ELSE GREATEST(" + _LIVE_STREAK + ", :strk) END")
+        bg_expr = (":ver::text || ':' || "
+                   "CASE GREATEST(:rank, " + _LIVE_RANK + ") "
+                   "WHEN 2 THEN 'conc' WHEN 1 THEN 'done' ELSE 'pend' END || "
+                   + attempts + "::text || 'w' || :wk::text || "
+                   "CASE WHEN (" + merged_streak + ") > 0 "
+                   "THEN 's' || (" + merged_streak + ")::text ELSE '' END")
+        extra = dict(ver=version, wk=week, floor=floor, strk=streak,
+                     rank=_MARKER_STATE_RANK.get(state, 0))
     conn.run(
         "INSERT INTO datasource_diag_signals "
         "(account_id, integration_id, signal_key, title, status, meta, schema_version, built_at) "

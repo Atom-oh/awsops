@@ -4,6 +4,7 @@ A FakeConn records (sql, params) and returns canned rows so the helpers are exer
 """
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -204,21 +205,38 @@ class TestDiagSignalAttemptReservation:
         assert "'{attempts}'" not in sql and "'{week}'" not in sql
         assert p["bg"] == "v1:pend1w202632" and p["sv"] == "v1" and p["st"] == "unavailable"
 
-    def test_live_attempts_re_derives_the_embedded_count_at_write_time(self):
-        # review MAJOR-1: the caller reads its attempt count BEFORE the multi-second Bedrock call, so a
-        # second worker's reservation landing in that window used to be silently overwritten by this
-        # call's now-stale number. live_attempts moves the count into the UPDATE itself so it is read
-        # live, never from the caller's local snapshot.
+    def test_live_marker_re_derives_the_whole_marker_at_write_time(self):
+        # review MAJOR-1: the caller decides attempts AND state AND streak BEFORE the multi-second
+        # Bedrock call, so everything it proposes can be stale by the time it writes. live_marker moves
+        # all three into the UPDATE itself, read live from the row, never from the caller's snapshot.
         c = FakeConn()
         db.write_diag_signal_budget(c, 7, "v1:pend1w202632", "v1",
-                                     live_attempts=("v1:pend", "w202632", "202632", 1))
+                                     live_marker=("v1", "pend", 0, "202632", 1))
         sql, p = c.calls[0]
         assert "GREATEST" in sql and "meta->>'week' = :wk" in sql
-        assert p["pre"] == "v1:pend" and p["suf"] == "w202632" and p["wk"] == "202632" and p["floor"] == 1
+        assert p["ver"] == "v1" and p["wk"] == "202632" and p["floor"] == 1 and p["strk"] == 0
+        assert p["rank"] == db._MARKER_STATE_RANK["pend"]
+        # Round 3: the STATE and STREAK are re-derived too, not just the attempts digit — the marker is
+        # composed in SQL from the more advanced of (proposed, live), so all three pieces are present.
+        assert "'conc'" in sql and "'done'" in sql and "'pend'" in sql   # the rank→state mapping
+        assert "s([0-9]+)$" in sql                                      # the live streak is parsed back
         # the marker string passed in is NOT what gets stored verbatim on this path — the live
         # expression is what's embedded, so the byte-for-byte `marker` arg is not asserted here.
 
-    def test_omitting_live_attempts_stores_the_marker_byte_for_byte(self):
+    def test_the_live_marker_sql_never_looks_like_a_param_inside_a_string_literal(self):
+        # pg8000's named paramstyle scans the SQL for `:name`, so a colon FOLLOWED BY AN IDENTIFIER
+        # inside a string literal would be eaten as a bogus parameter. That is why the marker-parsing
+        # regexes are written colon-free — no `:(pend|done|conc)`, no non-capturing `(?:s[0-9]+)` — even
+        # though a bare `':'` separator (colon then a quote) is harmless and is used deliberately.
+        c = FakeConn()
+        db.write_diag_signal_budget(c, 7, "v1:pend1w202632", "v1",
+                                     live_marker=("v1", "conc", 2, "202632", 3))
+        sql, _p = c.calls[0]
+        for literal in re.findall(r"'([^']*)'", sql):
+            assert not re.search(r":[A-Za-z_]", literal), \
+                f"{literal!r} looks like a bound parameter to pg8000 — rewrite it colon-free"
+
+    def test_omitting_live_marker_stores_the_marker_byte_for_byte(self):
         # The one caller that must NOT re-derive: a marker preserved for a DIFFERENT schema than the
         # current live counter describes (a capped-schema identity that must not drift — see
         # datasource_index.py's byte-for-byte preservation branch).

@@ -564,6 +564,33 @@ def still_relevant(kind, schema, expr):
         and _mentions_schema_vocabulary(kind, schema, expr)
 
 
+def still_relevant_live(kind, schema, expr, integration_id, invoke_connector):
+    """(ok, transient) — still_relevant() PLUS the same live `_dry_run_check` the fresh-generation path
+    gates on, so a carried-over row is never called conclusively ready without being executed once.
+
+    still_relevant() is LEXICAL: it asks whether the expression's identifiers are still in the schema's
+    vocabulary. But the carry-over only runs BECAUSE the schema changed, and a schema can change in ways
+    the vocabulary cannot see — a column's type, a renamed table that still exists but means something
+    else, a revoked grant. A lexically-valid expression then still fails at real query time, while the
+    caller had already marked the row ready and settled the budget marker to `conc`, which stops it ever
+    being re-checked (review MAJOR-4).
+
+    Reuses _dry_run_check verbatim rather than reimplementing it, which is also what keeps the execution
+    BOUNDS that path already carries (max_rows=1 / max_execution_time=5 / timeout=5s / limit=1 — review
+    MAJOR L3-M2 and L4-M4) instead of opening an unbounded query. It is a connector call, NOT a Bedrock
+    call, so it is correctly outside the weekly generation budget reserve_diag_signal_attempt enforces.
+
+    (False, False) is a CONCLUSIVE rejection — the row should be dropped like a lexical mismatch.
+    (False, True) means the check itself could not be completed (the call threw, or the datasource
+    returned an empty-but-successful payload during a quiet window); the caller must treat that as
+    "cannot verify", never as "the row is bad", or a connector blip deletes verified content — which is
+    exactly the MAJOR-2 deletion the carry-over exists to prevent.
+    """
+    if not still_relevant(kind, schema, expr):
+        return False, False
+    return _dry_run_check(kind, expr, integration_id, invoke_connector)
+
+
 def try_generate_signal(kind, schema, integration_id, invoke_connector, invoke_llm=None):
     """Back-compat wrapper: the row or None. Prefer try_generate_signal_with_status()."""
     return try_generate_signal_with_status(
