@@ -1,8 +1,8 @@
 # API 레퍼런스 / API Reference
 
 ## 역할 / Role
-`web/app/api/**/route.ts` 전수(83개 라우트) 인덱스 — 경로·메서드·역할·인증.
-(Full index of all 83 `route.ts` files under `web/app/api` — path, methods, role, auth.)
+`web/app/api/**/route.ts` 전수(84개 라우트) 인덱스 — 경로·메서드·역할·인증.
+(Full index of all 84 `route.ts` files under `web/app/api` — path, methods, role, auth.)
 - 인증 컬럼: `verifyUser` = Cognito `awsops_token` 쿠키 검증(`@/lib/auth`). `없음` = 라우트 자체 비게이트(엣지 Lambda@Edge 게이트는 별도). 역할에 "admin"이 있으면 `isAdmin` 추가 게이트.
 - 모든 라우트는 루트 경로(`/api/*`) — basePath 없음. web은 thin-BFF: 무거운 작업은 `POST /api/jobs`로 enqueue.
 
@@ -56,6 +56,11 @@
 | `/api/dns-logs` | GET | Resolver query-log 설정 상태(메뉴 게이트) — 미설정/무권한도 200 + 빈 configs | verifyUser |
 | `/api/dns-logs/analytics` | GET | Resolver 로그 집계 분석 (Logs Insights 병렬 폴링, `maxDuration` 60s, group은 라이브 allowlist 검증) | verifyUser |
 
+## dx (1)
+| 경로 | 메서드 | 역할 | 인증 |
+|------|--------|------|------|
+| `/api/dx` | GET | Direct Connect 커넥션/VIF/게이트웨이 목록+분석 — AWS/DX 메트릭 다운 감지·피크 사용률·BGP 라우트 가시성 (호스티드 <1G는 커넥션 레벨 Bps 미발행 → VIF 레벨). 부분 실패는 정직 강등: `degradedRegions`·`metricsDegradedRegions`·`gatewaysDegraded`·행 단위 `associationsAvailable`·`totals.gatewaysAssociationsUnknown` | verifyUser |
+
 ## ip-inventory (1)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
@@ -97,7 +102,7 @@
 | `/api/datasources/test` | POST | 저장 전 연결 probe — SSRF 가드 (admin) | verifyUser |
 | `/api/datasources/[id]` | DELETE | 인스턴스 삭제 — 스키마 캐시/크리덴셜 cascade, 기본값 재선정 (admin) | verifyUser |
 | `/api/datasources/[id]/default` | POST | kind별 기본 인스턴스 지정 — 트랜잭션으로 기존 기본 해제 (admin) | verifyUser |
-| `/api/datasources/[id]/diag-signals` | GET | 사전 정의 진단 시그널 (DB read only, egress 없음) | verifyUser |
+| `/api/datasources/[id]/diag-signals` | GET | 사전 정의 진단 시그널 — Explore 칩 (DB read only, egress 없음). kind 범위: prometheus/mimir/loki 는 결정론 카탈로그, clickhouse 는 결정론 엔트리가 없어 폴백 전용. tempo 는 `tags_or_services` matcher 가 introspect 된 어떤 스키마에도 매칭되어 항상 ready 이므로 폴백에 도달하지 않는다. **LLM 폴백(`diag_signal_querygen_enabled`)은 clickhouse 전용이 아니다** — ready 0행인 *모든* 배선 kind 에서 발동하므로 라벨 미탐지로 0행이 된 loki 인스턴스의 칩에도 `provenance='generated'` 가 섞일 수 있다(리뷰 MAJOR-9). 생성 행은 칩 전용 — 리포트 경로 제외, 플래그 OFF 면 read 에서도 제외. jaeger/dynatrace/datadog 는 아직 배선 없음(빈 응답) | verifyUser |
 | `/api/db` | GET | Aurora ping — public 테이블 카운트, `AURORA_ENDPOINT` 미설정 시 503 | 없음 |
 | `/api/diagnosis` | GET, POST | AI 종합진단 리포트 목록/생성 — worker enqueue + 멱등키 | verifyUser |
 | `/api/diagnosis/intent` | GET, POST | Plan-2 Intent Engine — `architecture_intent` 조회(auth) + 쓰기(admin) | verifyUser |

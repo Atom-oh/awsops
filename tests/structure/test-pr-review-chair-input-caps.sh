@@ -297,7 +297,7 @@ else
   pass "no unscrubbed credential is left in \$WORK after the run"
 fi
 
-# Cancellation mid-chair-call is the realistic case: the call is bounded at CHAIR_TIMEOUT (600s),
+# Cancellation mid-chair-call is the realistic case: the call is bounded at CHAIR_TIMEOUT,
 # so it is by far the likeliest moment for GitHub to cancel the job. The in-place scrub runs only
 # after the call returns, so without a trap a cancel leaves raw stderr in the runner-global $WORK.
 WORK6=$(mktemp -d); mkdir -p "$WORK6/slot"; : > "$WORK6/responded.txt"

@@ -135,6 +135,14 @@ resource "aws_iam_role_policy" "task_metrics" {
         "ec2:SearchTransitGatewayRoutes",
         # /vpc-endpoints: 엔드포인트 리스트+분석 (PrivateLink 메트릭 미사용 감지)
         "ec2:DescribeVpcEndpoints",
+        # /direct-connect: DX 커넥션/VIF/게이트웨이 리스트+상태 (read-only)
+        "directconnect:DescribeConnections",
+        "directconnect:DescribeVirtualInterfaces",
+        "directconnect:DescribeDirectConnectGateways",
+        "directconnect:DescribeDirectConnectGatewayAssociations",
+        # LAG 위 VIF 사용률 분모(대역폭) + BGP 라우트 가시성 (2026-07 ListVirtualInterfaceRoutes)
+        "directconnect:DescribeLags",
+        "directconnect:ListVirtualInterfaceRoutes",
       ]
       Resource = "*"
     }]
@@ -392,6 +400,9 @@ resource "aws_ecs_task_definition" "web" {
         # `make deploy` only force-new-deployments the EXISTING task def — a flag that is not in this
         # block cannot be turned off through the standard deploy path at all (PR #195 review MAJOR).
         { name = "LEGACY_EMAIL_OWNER_MATCH", value = tostring(var.legacy_email_owner_match) },
+        # Read-side half of the diag-signal querygen gate: the worker sweeps generated rows when the flag
+        # goes off, but only if it runs, so the BFF must not serve them either (ADR-018 §4).
+        { name = "DIAG_SIGNAL_QUERYGEN_ENABLED", value = tostring(var.diag_signal_querygen_enabled) },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
         # IAM DB auth (rds-db:connect above) — a fixed username, not a secret, since the "password"

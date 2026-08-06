@@ -86,6 +86,15 @@ async function syncSqlReaderPassword(client) {
   if (!arn) return; // agentcore_enabled=false → no secret, nothing to sync
   const { rowCount } = await client.query(`SELECT 1 FROM pg_roles WHERE rolname='awsops_sql_reader'`);
   if (!rowCount) { console.log('sql-reader: role not present yet — skipping password sync'); return; }
+  const { rows: [role] } = await client.query(
+    `SELECT rolsuper, rolreplication, rolbypassrls FROM pg_roles WHERE rolname='awsops_sql_reader'`,
+  );
+  if (role.rolsuper || role.rolreplication || role.rolbypassrls) {
+    die(`sql-reader: awsops_sql_reader has an elevated attribute this project's migrations cannot revoke `
+      + `(rolsuper=${role.rolsuper}, rolreplication=${role.rolreplication}, rolbypassrls=${role.rolbypassrls}); `
+      + `the Aurora master user is not a real superuser and cannot clear SUPERUSER/REPLICATION/BYPASSRLS. `
+      + `See docs/runbooks/agent-sql-reader.md for the repair-migration procedure.`);
+  }
   const secret = JSON.parse(execSync(
     `aws secretsmanager get-secret-value --region ${REGION} --secret-id ${arn} --query SecretString --output text`,
     { cwd: ROOT, encoding: 'utf8' },

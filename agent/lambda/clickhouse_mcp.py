@@ -78,7 +78,19 @@ def _clamp_rows(v):
     return max(1, min(MAX_ROWS_CAP, n))
 
 
-def _run_sql(sql, max_rows, trusted=False):
+def _clamp_seconds(v):
+    """Optional server-side execution bound (1..60s). `max_result_rows` caps the RETURNED rows only, so
+    `SELECT count() FROM huge` still scans the whole table — a generated dry-run query could do that on
+    every rebuild (review MAJOR). A time bound is the one knob that stops a runaway scan without guessing
+    a row budget for legitimate aggregations."""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(60, n))
+
+
+def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     # user-supplied SQL MUST pass the read-only guard. `trusted=True` is ONLY for the connector's own
     # hardcoded introspection SQL (e.g. SELECT database,name FROM system.tables) — never user input —
     # so the shared guard can keep blocking ALL system.* for the general clickhouse_query tool.
@@ -88,6 +100,8 @@ def _run_sql(sql, max_rows, trusted=False):
     assert_host_allowed(ds["endpoint"])
     base = ds["endpoint"].rstrip("/")
     url = f"{base}/?readonly=1&max_result_rows={max_rows}&default_format=JSON"
+    if max_execution_time:
+        url += f"&max_execution_time={max_execution_time}&timeout_overflow_mode=throw"
     headers = dict(auth_headers(ds))
     headers["Content-Type"] = "text/plain; charset=utf-8"
     body = f"{sql}\nFORMAT JSON"
@@ -104,7 +118,8 @@ def clickhouse_query(args):
     sql = (args.get("sql") or "").strip()
     if not sql:
         return err("sql required")
-    return _run_sql(sql, _clamp_rows(args.get("max_rows")))
+    return _run_sql(sql, _clamp_rows(args.get("max_rows")),
+                    max_execution_time=_clamp_seconds(args.get("max_execution_time")))
 
 
 def clickhouse_tables(args):

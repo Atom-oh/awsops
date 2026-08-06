@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Direct Connect: partial AWS failures now degrade honestly instead of rendering confident wrong numbers — `/api/dx` gained `degradedRegions` / `metricsDegradedRegions` / `gatewaysDegraded` / per-gateway `associationsAvailable` / `totals.gatewaysAssociationsUnknown`; the UI shows a warning banner, `+`/`≥` lower-bound markers on affected KPI tiles, an "undetermined" (not red "unassociated") badge when the association lookup itself failed, and per-query CloudWatch `StatusCode` failures (PartialData/InternalError) now count as metric degradation.
+- PR review pipeline: chair timeout 600→900s with a one-shot fast-fail retry, code-first three-pass diff ordering (code → decisions/runbooks → docs prose), and a sanitized, narrowly-scoped truncated-file guard that downgrades unverifiable absence-claims to MINOR instead of dropping them.
+
+## [0.7.0] - 2026-08-05
+
+### Added
+
+- Add a Direct Connect page (`/direct-connect`, Network group): connection / VIF / DX gateway inventory with per-region fan-out (gateways are global, fetched once) and `AWS/DX` CloudWatch analysis — down detection over the selected range (`ConnectionState`/`VirtualInterfaceBgpStatus` minimums), per-VIF monitoring numbers (average/peak Bps, average Pps, peak utilization from the percent-published `VirtualInterfaceUtilization*` metrics with a peak-bps ÷ bandwidth fallback covering LAG bandwidth, and latest `BgpPrefixesAccepted`/`Advertised` counts — hosted sub-1G connections only publish VIF-level Bps), BGP route visibility via the 2026-07 `ListVirtualInterfaceRoutes` API (accepted/advertised routes with AS path, communities, installed time; 200-route cap per VIF, honest degrade where unsupported), and a location-redundancy lens that flags a single-location single point of failure (Resiliency Toolkit recommends 2+ locations); KPI tiles, VIF type/traffic charts, four tables with sectioned detail panels; BGP secrets (`authKey`, `customerRouterConfig`) are stripped and never leave the server; read-only `directconnect:Describe*`+`ListVirtualInterfaceRoutes` IAM grant (applied, terraform in lockstep); 4-language i18n.
+
 ## [0.6.0] - 2026-08-03
 
 ### Added
@@ -509,7 +520,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1
@@ -535,6 +547,17 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+### Fixed
+
+- Direct Connect: AWS 부분 실패를 확신 있는 오답 대신 정직하게 강등 — `/api/dx`에 `degradedRegions` / `metricsDegradedRegions` / `gatewaysDegraded` / 게이트웨이 행 단위 `associationsAvailable` / `totals.gatewaysAssociationsUnknown` 추가. UI는 경고 배너, 영향받는 KPI 타일의 `+`/`≥` 하한 표기, association 조회 실패 시 빨간 "미할당" 대신 "판정 불가" 배지를 표시하고, CloudWatch 쿼리 단위 `StatusCode` 실패(PartialData/InternalError)도 메트릭 강등으로 집계.
+- PR 리뷰 파이프라인: chair 타임아웃 600→900s + fast-fail 1회 재시도, 코드 우선 3-pass diff 정렬(코드 → decisions/runbooks → docs 산문), 새니타이즈된 좁은 범위의 절단 파일 가드(검증 불가 부재 주장을 삭제 대신 MINOR로 하향).
+
+## [0.7.0] - 2026-08-05
+
+### Added
+
+- Direct Connect 페이지(`/direct-connect`, Network 그룹) 추가: 커넥션/VIF/DX Gateway 인벤토리(리전 fan-out, 게이트웨이는 글로벌 1회 조회) + `AWS/DX` CloudWatch 분석 — 선택 기간 내 다운 감지(`ConnectionState`/`VirtualInterfaceBgpStatus` 최소값), VIF별 모니터링 수치(평균/피크 Bps, 평균 Pps, 퍼센트로 발행되는 `VirtualInterfaceUtilization*` 메트릭 기반 피크 사용률 — 없으면 피크 bps ÷ 대역폭 폴백(LAG 대역폭 포함), `BgpPrefixesAccepted`/`Advertised` 최신값 — 1G 미만 호스티드 커넥션은 VIF 레벨 Bps만 발행), 2026-07 신규 `ListVirtualInterfaceRoutes` API 기반 BGP 라우트 가시성(수신/광고 라우트의 AS 경로·커뮤니티·설치 시각, VIF당 200건 캡, 미지원 시 정직 강등), 단일 로케이션 단일 장애점을 표시하는 로케이션 이중화 렌즈(Resiliency Toolkit은 2개 이상 로케이션 권장); KPI 타일·VIF 타입/트래픽 차트·섹션형 상세 패널이 있는 테이블 4종; BGP 시크릿(`authKey`, `customerRouterConfig`)은 서버에서 제거되어 절대 응답에 실리지 않음; read-only `directconnect:Describe*`+`ListVirtualInterfaceRoutes` IAM 권한(적용됨, terraform lockstep); 4개 언어 i18n.
 
 ## [0.6.0] - 2026-08-03
 
@@ -1021,7 +1044,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1

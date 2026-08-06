@@ -4,7 +4,7 @@
 [![GitHub forks](https://img.shields.io/github/forks/Atom-oh/awsops?style=flat&logo=github)](https://github.com/Atom-oh/awsops/network/members)
 [![GitHub issues](https://img.shields.io/github/issues/Atom-oh/awsops)](https://github.com/Atom-oh/awsops/issues)
 [![License](https://img.shields.io/github/license/Atom-oh/awsops)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.6.0-green.svg)](https://github.com/Atom-oh/awsops/releases)
+[![Version](https://img.shields.io/badge/version-v0.7.0-green.svg)](https://github.com/Atom-oh/awsops/releases)
 [![Last commit](https://img.shields.io/github/last-commit/Atom-oh/awsops)](https://github.com/Atom-oh/awsops/commits/main)
 [![PR Review](https://github.com/Atom-oh/awsops/actions/workflows/pr-review.yml/badge.svg)](https://github.com/Atom-oh/awsops/actions/workflows/pr-review.yml)
 
@@ -32,7 +32,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito auth) -> VPC Origin (https-only
   -> async workers: POST /api/jobs -> SQS -> Step Functions -> Lambda or Fargate worker
 ```
 
-Stats: 21 pages, 65 API routes, 72 components (`web/`), 17 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
+Stats: 21 pages, 83 API routes, 72 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
 
 > **No public ALB.** The edge is fully private — CloudFront reaches the ALB only through a VPC Origin, and the ALB only accepts traffic from CloudFront's managed security group. v2's posture is a **read-only ops dashboard + AI diagnosis**: AWS-resource mutation and autonomous remediation are FROZEN by design (ADR-005) — infra changes stay with the operator's own IaC/Change Manager, with one narrowly-scoped exception for self-healing service restarts (ADR-015).
 
@@ -125,6 +125,8 @@ Runtime configuration is **flag-gated in Terraform** (`variables.tf`). The featu
 | `workers_enabled` | the async worker tier (SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | the Steampipe inventory-sync data layer |
 | `official_mcp_enabled` | ADR-017 curated official-vendor MCP presets — the **3 vendor-hosted** ones (Datadog·Dynatrace·New Relic) as external-obs `mcpServer` targets, plus the runtime fail-closed tool allowlist |
+| `graph_querygen_enabled` | LLM fallback for the ONE ClickHouse `trace_spans` graph query (ADR-018). Note it does NOT carry the diag-signal path's identifier sanitising, relevance gate, weekly budget or read-side gate — ADR-018 §C |
+| `diag_signal_querygen_enabled` | LLM fallback for ONE Explore diag-signal chip, only when a kind's deterministic catalog yields **zero ready rows** (a partial match is not topped up), and only for the chips — the diagnosis report never uses generated rows, and a flag-off read excludes them too. Separate from `graph_querygen_enabled`; both need `datasource_diagnosis_enabled`; `graph_querygen_enabled` ALSO requires `agentcore_enabled` (it provisions the Code Interpreter session IAM) |
 
 One more ADR-017 gate is **not** a terraform flag: **`CLICKHOUSE_OFFICIAL_MCP`** is an AgentCore runtime env recorded by the provisioner (`CLICKHOUSE_OFFICIAL_MCP=true make agentcore`) that embeds the official `mcp-clickhouse` as a stdio subprocess in the runtime container. It is **FROZEN / do-not-enable**: the stdio path has no replacement for the in-house lambda's table-function SSRF guard, so unfreezing requires both the technical precondition and a new ADR + multi-AI panel + dated owner-override (ADR-017 §Status, BASELINE §2).
 
@@ -141,12 +143,12 @@ AgentCore's own config (runtime ARN, Memory ID, Code Interpreter ID) is written 
 
 ```
 awsops/
-  web/                    # Next.js 14 thin-BFF: 21 pages, 65 API routes, 72 components
+  web/                    # Next.js 14 thin-BFF: 21 pages, 83 API routes, 72 components
   agent/                  # Strands Agent (Runtime source) + MCP Lambda tool sources
   terraform/v2/foundation/  # single Terraform root: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/             # configure/deploy/migrate/agentcore/workers tooling (all Node.js/Python)
   tests/                  # repo-wide hook/structure tests + PR-review/Steampipe/ExternalId wiring checks
-  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 17 consolidated ADRs)
+  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 18 consolidated ADRs)
   docs-site/              # Docusaurus user guide (deployed separately)
 ```
 
@@ -160,7 +162,7 @@ cd web && npx vitest run          # web unit tests only
 
 ## API Documentation
 
-The 65 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
+The 83 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
 
 ## Contributing
 
@@ -198,7 +200,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
   -> 비동기 워커: POST /api/jobs -> SQS -> Step Functions -> Lambda 또는 Fargate 워커
 ```
 
-현황: 21 페이지, 65 API 라우트, 72 컴포넌트(`web/`), 17개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
+현황: 21 페이지, 83 API 라우트, 72 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
 
 > **공개 ALB 없음.** 엣지는 완전히 비공개입니다 — CloudFront는 VPC Origin을 통해서만 ALB에 도달하고, ALB는 CloudFront 관리형 보안 그룹의 트래픽만 허용합니다. v2의 자세는 **read-only 운영 대시보드 + AI 진단**입니다: AWS 리소스 변경·자율 조치는 설계상 FROZEN(ADR-005) — 인프라 변경은 운영자 자신의 IaC/Change Manager가 담당하며, 자가치유 서비스 재시작 하나만 좁게 예외 허용됩니다(ADR-015).
 
@@ -291,6 +293,8 @@ make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 ->
 | `workers_enabled` | 비동기 워커 계층(SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | Steampipe 인벤토리 sync 데이터 계층 |
 | `official_mcp_enabled` | ADR-017 큐레이션 공식 벤더 MCP 프리셋 — **벤더 호스팅 3종**(Datadog·Dynatrace·New Relic)을 external-obs `mcpServer` target으로 등록 + 런타임 fail-closed 툴 allowlist |
+| `graph_querygen_enabled` | ClickHouse `trace_spans` 그래프 쿼리 **1건**에 대한 LLM 폴백 (ADR-018). diag-signal 경로의 식별자 정화·관련성 게이트·주간 예산·읽기 게이트는 **없다** — ADR-018 §C |
+| `diag_signal_querygen_enabled` | Explore diag-signal 칩 **1개**의 LLM 폴백 — 그 kind의 결정론 카탈로그가 **ready 0행**일 때만 발동(부분 매칭은 보충하지 않음), 생성 행은 칩 전용(진단 리포트 미사용, 플래그 OFF 면 읽기에서도 제외). `graph_querygen_enabled`와 **별개**, 둘 다 `datasource_diagnosis_enabled` 선행. `graph_querygen_enabled`는 **추가로** `agentcore_enabled`도 선행(Code Interpreter 세션 IAM 프로비저닝 때문) |
 
 ADR-017에는 terraform flag가 **아닌** 게이트가 하나 더 있습니다: **`CLICKHOUSE_OFFICIAL_MCP`** — provisioner가 기록하는 AgentCore 런타임 env(`CLICKHOUSE_OFFICIAL_MCP=true make agentcore`)로, 공식 `mcp-clickhouse`를 런타임 컨테이너에 stdio 서브프로세스로 내장합니다. **FROZEN / do-not-enable**입니다: 자체 람다의 테이블 함수 SSRF 가드에 대응하는 방어가 stdio 경로에 없어, 해제에는 기술 선결조건과 새 ADR + 멀티-AI 패널 + 날짜박힌 owner-override가 모두 필요합니다(ADR-017 §Status, BASELINE §2).
 
@@ -307,12 +311,12 @@ AgentCore 자체 설정(runtime ARN, Memory ID, Code Interpreter ID)은 provisio
 
 ```
 awsops/
-  web/                      # Next.js 14 thin-BFF: 21 페이지, 65 API 라우트, 72 컴포넌트
+  web/                      # Next.js 14 thin-BFF: 21 페이지, 83 API 라우트, 72 컴포넌트
   agent/                    # Strands Agent(Runtime 소스) + MCP Lambda 도구 소스
   terraform/v2/foundation/  # 단일 Terraform 루트: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/               # configure/deploy/migrate/agentcore/workers 도구(전부 Node.js/Python)
   tests/                    # repo 전반의 hook/structure 테스트 + PR-review/Steampipe/ExternalId 배선 체크
-  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 17개)
+  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 18개)
   docs-site/                # Docusaurus 사용자 가이드(별도 배포)
 ```
 
@@ -326,7 +330,7 @@ cd web && npx vitest run          # web 유닛 테스트만
 
 ## API 문서
 
-65개 API 라우트가 `web/app/api/`에 있습니다. 주요 라우트: `health`(공개), `stream`(SSE 채팅), `db`(Aurora ping), `jobs`(+`/[id]`, 비동기 작업 제출/상태), `security`, `compliance`, `auth/login`. 사용자 가이드는 docs site를, 아키텍처 결정은 [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md)를 참고하세요.
+83개 API 라우트가 `web/app/api/`에 있습니다. 주요 라우트: `health`(공개), `stream`(SSE 채팅), `db`(Aurora ping), `jobs`(+`/[id]`, 비동기 작업 제출/상태), `security`, `compliance`, `auth/login`. 사용자 가이드는 docs site를, 아키텍처 결정은 [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md)를 참고하세요.
 
 ## 기여 방법
 

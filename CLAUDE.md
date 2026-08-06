@@ -89,7 +89,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF 라우트
 - `app/security/page.tsx` + `app/api/security/{route,refresh}` — 보안 findings(Public S3·Open SG·Unencrypted EBS·IAM MFA), `inventory_resources`에서 BFF 파생(read-only). `s3_public_access`는 sync_lambda SDK sync로 추가
 - `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS 벤치마크(Powerpipe Fargate 워커 `compliance` job → `compliance_runs`/`compliance_results` 이력). 둘 다 `steampipe_enabled` 게이트
-- `app/{network-flow,dns-query,ip-addresses,vpc-endpoints}/` + `lib/{nfm,dns-logs,ip-inventory,vpce}.ts` — 네트워크 메뉴 4종: 라이브 NFM top-contributor 쿼리 + E2E 홉 경로 · Resolver/CoreDNS 쿼리로그 Logs Insights 집계 · ENI 기반 IP 인벤토리(미사용 EIP/available ENI 감지) · VPC 엔드포인트 유휴/정책/Gateway 커버리지 분석
+- `app/{network-flow,dns-query,ip-addresses,vpc-endpoints,direct-connect}/` + `lib/{nfm,dns-logs,ip-inventory,vpce,dx}.ts` — 네트워크 메뉴 5종: 라이브 NFM top-contributor 쿼리 + E2E 홉 경로 · Resolver/CoreDNS 쿼리로그 Logs Insights 집계 · ENI 기반 IP 인벤토리(미사용 EIP/available ENI 감지) · VPC 엔드포인트 유휴/정책/Gateway 커버리지 분석 · Direct Connect 다운 감지/피크 사용률/BGP 라우트 가시성
 - `app/eks/` — EKS 드릴다운: 클러스터 목록 → `[cluster]` 탭(OpenCost 비용 패널 포함) + nodes/pods/deployments/services/explorer/cost 플릿 페이지
 - `lib/aws-data.ts` + `lib/collectors/` — 챗 BFF-로컬 핸들러(AgentCore 미경유): aws-data(LLM Steampipe SQL 라이브 실행) + auto-collect 콜렉터 6종 레지스트리 — `app/api/chat/route.ts`가 로컬 분기
 - `lib/db.ts` — Aurora node-pg 공유 풀(`getPool`)
@@ -133,11 +133,11 @@ make workers     # arm64 worker 이미지 push (workers_enabled=true로 apply �
 - **에이전트 cross-account self-assume 함정**: v2는 단일계정인데 챗에서 호스트 계정(`180294183052`)을 고르면 `agent.py`가 `target_account_id=<host>`를 강제 → 도구가 `arn:...:role/AWSopsReadOnlyRole`(v1 *타깃 계정* 전용, 호스트엔 부재)을 self-assume → AccessDenied(에이전트가 "cross-account 차단"으로 **오진**). 수정: `cross_account.get_role_arn()`이 대상=호스트면 `None` 반환(exec 역할 직접 사용) + `agent.py effective_account_id()`가 호스트를 `__all__`처럼 blank(defense-in-depth). 호스트 판별 = `AWSOPS_HOST_ACCOUNT_ID` env → STS `GetCallerIdentity` 폴백(캐시). 진짜 *다른* 계정 assume 경로는 그대로. v1 무영향(별개 함수 `awsops-*-mcp` py3.12 vs v2 `awsops-v2-agent-*` py3.11).
 
 ## ADR / 결정
-**결정의 현행 진실 = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — 북극성(WA 6기둥 목표) + 불변식 + 게이트/동결 register + **15개 통합 ADR**(`docs/decisions/0NN-*.md`) 인덱스. 여기부터 읽는다.
+**결정의 현행 진실 = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — 북극성(WA 6기둥 목표) + 불변식 + 게이트/동결 register + **18개 통합 ADR**(`docs/decisions/0NN-*.md`) 인덱스. 여기부터 읽는다.
 - 옛 ADR 001~046 본문은 **트리에 없음** — git tag `adr-legacy-2026-06-22` 보존, 매핑 `docs/decisions/ADR-MAPPING.md`. **명시 요청 없이는 옛 본문(tag)을 읽지 않는다.**
 - **AWS 리소스 변경·자율 = FROZEN (ADR-005, do-not-enable).** 완화는 *문서 정리가 아니라* 새 ADR + 멀티-AI 패널 + 날짜박힌 owner-override가 필요한 별도 제품 결정. 외부 DATA read/write는 거버넌스 하 별개(ADR-007).
   - **첫 예외: ADR-015**(운영 자가치유) — 오준석 owner-override(2026-07-01)로 **딱 하나만** 허용: 자기 web 서비스의 `ecs:UpdateService force-new-deployment`(재시작. 이미지/task def 불변, 코드 배포 아님), Aurora secret 회전 이벤트 한정, IAM 1 ARN, secret-id fail-closed, default-off. ADR-005의 나머지(코드 배포, remediation, mutating tools)는 그대로 FROZEN.
-- 새 ADR = 최고번호+1(현재 **015**), single Status, **같은 PR에서 BASELINE 갱신 필수**(anti-drift). 규칙은 `docs/decisions/CLAUDE.md`.
+- 새 ADR = 최고번호+1(현재 **018**), single Status, **같은 PR에서 BASELINE 갱신 필수**(anti-drift). 규칙은 `docs/decisions/CLAUDE.md`.
 
 ---
 
@@ -232,7 +232,7 @@ Live env: account `180294183052`, domain `awsops-v2.atomai.click`, reused mgmt-v
 - `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF routes
 - `app/security/page.tsx` + `app/api/security/{route,refresh}` — security findings (Public S3 · Open SG · Unencrypted EBS · IAM MFA), derived in the BFF from `inventory_resources` (read-only); `s3_public_access` added as a sync_lambda SDK sync
 - `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS benchmark (Powerpipe Fargate worker `compliance` job → `compliance_runs`/`compliance_results` history). Both gated on `steampipe_enabled`
-- `app/{network-flow,dns-query,ip-addresses,vpc-endpoints}/` + `lib/{nfm,dns-logs,ip-inventory,vpce}.ts` — the 4 Network menus: live NFM top-contributor queries + E2E hop path · Resolver/CoreDNS query-log Logs Insights aggregation · ENI-based IP inventory (unused-EIP/available-ENI detection) · VPC endpoint idle/policy/Gateway-coverage analysis
+- `app/{network-flow,dns-query,ip-addresses,vpc-endpoints,direct-connect}/` + `lib/{nfm,dns-logs,ip-inventory,vpce,dx}.ts` — the 5 Network menus: live NFM top-contributor queries + E2E hop path · Resolver/CoreDNS query-log Logs Insights aggregation · ENI-based IP inventory (unused-EIP/available-ENI detection) · VPC endpoint idle/policy/Gateway-coverage analysis · Direct Connect down-detection/peak-utilization/BGP-route visibility
 - `app/eks/` — EKS drill-down: cluster list → `[cluster]` tabs (incl. OpenCost cost panel) + nodes/pods/deployments/services/explorer/cost fleet pages
 - `lib/aws-data.ts` + `lib/collectors/` — chat BFF-local handlers (not via AgentCore): aws-data (LLM Steampipe SQL, live-executed) + the 6-collector auto-collect registry — `app/api/chat/route.ts` branches locally
 - `lib/db.ts` — shared Aurora node-pg pool (`getPool`)
@@ -276,11 +276,11 @@ make workers     # arm64 worker image push (after apply with workers_enabled=tru
 - **Agent cross-account self-assume trap**: v2 is single-account, but selecting the host account (`180294183052`) in chat made `agent.py` force `target_account_id=<host>` → tools self-assumed `arn:...:role/AWSopsReadOnlyRole` (v1 *target-account*-only, absent on the host) → AccessDenied (agent **mis-reported** it as "cross-account blocked"). Fix: `cross_account.get_role_arn()` returns `None` when target==host (use the exec role directly) + `agent.py effective_account_id()` blanks the host like `__all__` (defense-in-depth). Host resolved via `AWSOPS_HOST_ACCOUNT_ID` env → STS `GetCallerIdentity` fallback (cached). The real *other*-account assume path is unchanged. v1 unaffected (separate functions `awsops-*-mcp` py3.12 vs v2 `awsops-v2-agent-*` py3.11).
 
 ## ADR / Decisions
-**Current truth for decisions = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — north star (WA 6-pillar goal) + invariants + gated/frozen register + index of the **15 consolidated ADRs** (`docs/decisions/0NN-*.md`). Read this first.
+**Current truth for decisions = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — north star (WA 6-pillar goal) + invariants + gated/frozen register + index of the **18 consolidated ADRs** (`docs/decisions/0NN-*.md`). Read this first.
 - Old ADRs 001–046 bodies are **not in the tree** — preserved in git tag `adr-legacy-2026-06-22`, mapped in `docs/decisions/ADR-MAPPING.md`. **Do not read the old bodies (from the tag) unless explicitly asked.**
 - **AWS-resource mutation + autonomy = FROZEN (ADR-005, do-not-enable).** Unfreezing is a separate product decision requiring a new ADR + multi-AI panel + dated owner-override — never a doc-cleanup reinterpretation. External DATA read/write is governed and separate (ADR-007).
   - **First exception: ADR-015** (operational self-healing) — owner-override by 오준석 (2026-07-01), scoped to exactly one thing: `ecs:UpdateService force-new-deployment` (a restart — same image/task-def, not a code deploy) on the host's own web service, only on its own Aurora secret-rotation event, IAM scoped to one ARN, secret-id fail-closed, default-off. The rest of ADR-005 (code deploys, remediation, mutating tools) stays FROZEN.
-- New ADR = highest + 1 (currently **015**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules: `docs/decisions/CLAUDE.md`.
+- New ADR = highest + 1 (currently **018**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules: `docs/decisions/CLAUDE.md`.
 
 ## Implementation References
 <!-- AUTO-MANAGED:references — /project-init sync가 이 블록을 관리. 수동 편집은 마커 밖에. -->
