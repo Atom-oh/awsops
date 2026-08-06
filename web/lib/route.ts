@@ -9,10 +9,14 @@ const RULES: { key: string; re: RegExp }[] = [
   // 쿼리/database keywords, since that rule sat above this one). Only a real vendor identifier is
   // listed here; ambiguous generic terms (metric/latency/p99/쿼리) stay on their domain rules so
   // this rule can sit at the top without hijacking anything.
-  // Covers the connectors that moved here (Prometheus/ClickHouse) PLUS every ADR-017 curated
-  // official-vendor MCP preset (catalog.py MCP_SERVER_TARGETS 'gateway' — all 'external-obs').
-  // Grafana/Datadog/Dynatrace/Splunk/New Relic/Jaeger have NO legacy lambda target anywhere, so
-  // this is their ONLY chat path.
+  // Covers the connectors that live here (Prometheus/ClickHouse lambda targets) PLUS the ADR-017
+  // (amended 2026-08-05) vendor-hosted official-MCP presets (catalog.py MCP_SERVER_TARGETS —
+  // datadog/dynatrace/newrelic, all 'external-obs'): those three have no lambda target anywhere,
+  // so this is their ONLY chat path. Grafana/Splunk keywords were REMOVED by the amendment (the
+  // kinds are unsupported — no preset, no lambda: routing them anywhere is a dead end by
+  // definition, so they fall through to general). Jaeger likewise has no chat path today (its
+  // lambda is deployed but was never a gateway TARGETS entry) — keyword removed with it; add it
+  // back only when a jaeger target actually exists.
   // Tempo/트레이스/trace are DELIBERATELY EXCLUDED here (round-3 review MAJOR, 2026-07-31): round-2
   // put them on this rule to fix the POST-cutover dead-end (tempo-mcp-target retired, tools only
   // live on external-obs), but official_mcp_enabled defaults to false — that made the dead-end the
@@ -23,7 +27,7 @@ const RULES: { key: string; re: RegExp }[] = [
   // answer that matches the DEFAULT/most-common state: legacy tempo-mcp-target on 'monitoring'.
   // REQUIRED cutover step: when actually flipping official_mcp_enabled=true for the tempo preset,
   // move `tempo|트레이스|\btrace\b` from the monitoring rule below to this rule (see ADR-017 §Trade-offs).
-  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|grafana|그라파나|datadog|데이터독|dynatrace|다이나트레이스|splunk|스플렁크|newrelic|new relic|뉴렐릭|jaeger|예거/i },
+  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|datadog|데이터독|dynatrace|다이나트레이스|newrelic|new relic|뉴렐릭/i },
   { key: 'cost', re: /비용|요금|예산|절감|billing|cost|budget|forecast|spend/i },
   { key: 'security', re: /보안|권한|역할|정책|iam|policy|role|denied|permission|public|노출/i },
   { key: 'network', re: /통신|연결|네트워크|포트|라우트|reachab|network|connectivity|security ?group|\bsg\b|nacl|tgw|vpn|peering|flow ?log/i },

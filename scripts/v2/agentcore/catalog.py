@@ -436,7 +436,7 @@ TARGETS = {
 # (clickhouse/tempo/jaeger/grafana/splunk) were removed from this model — no vendor-side token
 # issuance existed for them and AgentCore-managed egress can't be verified to reach in-VPC hosts;
 # ClickHouse's official MCP is instead stdio-embedded in the agent runtime (agent.py,
-# CLICKHOUSE_OFFICIAL_MCP), tempo/jaeger stay on the in-house lambdas, grafana/splunk are unsupported.
+# CLICKHOUSE_OFFICIAL_MCP); tempo keeps its in-house lambda target; jaeger has NO chat path (its lambda is deployed but was never a TARGETS entry); grafana/splunk are unsupported.
 # Endpoint stays deployment-specific data (terraform var.official_mcp_endpoints — Datadog varies by
 # site, Dynatrace by environment); provision.py SKIPs any preset whose key is absent there.
 #
@@ -481,7 +481,8 @@ MCP_SERVER_TARGETS = {
     # clickhouse/tempo/jaeger/grafana/splunk presets removed (ADR-017 amendment 2026-08-05):
     # self-hosted / in-binary official MCP servers don't fit the remote-target + token model.
     # ClickHouse official MCP is stdio-embedded in the agent runtime instead (CLICKHOUSE_OFFICIAL_MCP);
-    # tempo/jaeger stay on the in-house lambda targets; grafana/splunk are unsupported.
+    # tempo keeps its in-house lambda target; jaeger has NO chat path (lambda deployed, never a
+    # TARGETS entry); grafana/splunk are unsupported.
     "dynatrace-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "dynatrace",

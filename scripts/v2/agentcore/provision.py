@@ -190,8 +190,9 @@ def _endpoint_blocked(endpoint, spec=None):
     tfvars edit can be applied without ever re-running that validation against code that already
     changed — this is the second, runtime check. Mirrors the ALWAYS-BLOCKED subset of
     web/lib/ssrf-guard.ts isAlwaysBlockedHost (metadata/loopback/link-local/multicast/unspecified) —
-    RFC1918 private is deliberately ALLOWED (several ADR-017 presets are explicitly self-hosted
-    in-VPC per catalog.py's own comments, e.g. ClickHouse/Grafana/Splunk). Returns a reason string
+    RFC1918 private is deliberately ALLOWED (the operator-asserted/self-hosted preset class is
+    in-VPC by design — zero such presets exist after the 2026-08-05 amendment, but the rule is
+    kept for any future one). Returns a reason string
     if blocked, else None. A non-literal hostname (the common case) is not resolved here — same
     deferral to connect time as the TS guard.
 
@@ -202,7 +203,8 @@ def _endpoint_blocked(endpoint, spec=None):
     _ensure_api_key_provider would hand that host the preset's real vendor credential — effectively
     the BYO-MCP connection BASELINE §2 pins as do-not-revive. Two states, deliberately distinct:
     `allowed_host_suffixes` = vendor-hosted, pinned here; `host_is_operator_asserted` = genuinely
-    self-hosted (ClickHouse/Grafana/Splunk/Tempo/Jaeger), where no vendor domain exists to pin.
+    self-hosted, where no vendor domain exists to pin (zero such presets in the catalog since the
+    2026-08-05 amendment — the enforcement path stays, test-pinned, for any future one).
     A spec with NEITHER is a catalog bug and fails closed rather than defaulting to permissive."""
     try:
         parsed = urlparse(endpoint)
@@ -261,8 +263,9 @@ def _host_pin_violation(endpoint, spec):
     """Per-preset host pin — the control that actually keeps this inside ADR-007's curated boundary.
 
     Vendor-hosted presets pin to `allowed_host_suffixes` from the catalog — a name is fine there,
-    because the pin is the vendor's own domain. Self-hosted ones (ClickHouse/Grafana/Splunk/Tempo/
-    Jaeger) have no vendor domain to pin, and letting them take any host left the BYO-MCP path open:
+    because the pin is the vendor's own domain. Operator-asserted (self-hosted) ones — none in the
+    catalog since the 2026-08-05 amendment; rule preserved for any future preset — have no vendor
+    domain to pin, and letting them take any host left the BYO-MCP path open:
     the preset's real credential would be handed to whatever URL was configured, which is exactly what
     BASELINE §2 pins as do-not-revive. They must therefore give the PRIVATE IP LITERAL of their
     in-VPC endpoint. The literal is the point — a NAME resolves privately at provision time and can
