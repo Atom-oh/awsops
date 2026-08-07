@@ -19,14 +19,13 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 - **AgentCore Runtime** — Strands; reuses `agent/agent.py` as-is. Gateway URLs are
   injected via a `GATEWAYS_JSON` env var (agent.py's documented discovery fallback —
   no awscli-in-image dependency). Runtime name `awsops_v2_agent` (underscores only).
-- **8 section gateways** — `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`
-  (ADR-004 canonical count = **8 section gateways**; the provisioner/`catalog.py` still creates a
-  9th `external-obs` gateway slot, so the deployed skeleton is **9 provisioned / 8 section-agent
-  routes**). **External observability is NOT a doctrinal section gateway** — per
-  **ADR-004** it is the **Integrations axis** (the egress MCP substrate), re-homing what an
-  earlier draft listed as an `external-obs` gateway. `monitoring` covers AWS-native monitoring;
-  the external-obs plugin datasource registry / OTLP / datasource-diag re-home is the Integrations
-  axis (P3).
+- **9 section gateways** — 8 AWS-domain `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`
+  + `awsops-v2-external-obs-gateway` (ADR-004 as amended **2026-06-24**: **9 provisioned / 9
+  routed** — external-obs was promoted to a routed section hosting the external-observability
+  connectors [Prometheus·ClickHouse]; the chat key `observability` aliases to it, see
+  `agent/agent.py` `_GATEWAY_ALIAS`). `monitoring` covers AWS-native monitoring
+  (Loki/Tempo/Mimir stay there); the wider Integrations egress substrate remains governed by
+  ADR-007.
 - **Memory** — `awsops_v2_memory-*`, `eventExpiryDuration = 365` days.
 - **Code Interpreter** — `awsops_v2_code_interpreter-*` (underscores only).
 
@@ -63,7 +62,8 @@ Terraform; `provision.py` overwrites with real values.
 - **ADR-004** — AgentCore gateways & runtime, incl. runtime-customizable agents & skills
   (Aurora catalog + resolver + registry-agnostic `agent.py`; built-in vs custom tiers;
   per-account Agent Spaces; BYO-MCP). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
-- **ADR-004** — gateway role split (note the **2026-06-03 correction: 7 → 8 gateways**).
+- **ADR-004** — gateway role split (corrections: **2026-06-03 7 → 8 gateways**, then the
+  **2026-06-24 amendment 8 → 9 routed** — external-obs promoted to a routed section).
   [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
 - **ADR-003** — AI agent routing (hybrid routing & multi-route parallel synthesis; the
   classifier picks built-in routes + enabled custom agents).
