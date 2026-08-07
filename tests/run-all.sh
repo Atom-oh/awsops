@@ -17,15 +17,22 @@ echo "# AWSops Project Structure Tests"
 echo ""
 
 # ── Hook Tests ──
+# Child scripts that exit non-zero count as a runner-level failure (their own
+# "not ok" lines are display-only). Scripts without exit-code propagation keep
+# their historical advisory behavior.
 echo "# Hook tests"
 for f in tests/hooks/test-*.sh; do
-  [ -f "$f" ] && bash "$f"
+  [ -f "$f" ] || continue
+  bash "$f" && pass "$(basename "$f") clean" || fail "$(basename "$f") reported failures"
 done
 
 # ── Structure Tests ──
+# Advisory (historical behavior): two pr-review structure tests fail on main
+# (pre-existing drift vs scripts/pr-review) — enforcing exit codes here would
+# gate every branch on that unrelated workstream. Tighten once those are fixed.
 echo "# Structure tests"
 for f in tests/structure/test-*.sh; do
-  [ -f "$f" ] && bash "$f"
+  [ -f "$f" ] && bash "$f" || true
 done
 
 # ── Core Structure Assertions ──

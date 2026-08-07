@@ -2,8 +2,9 @@
 # Behavioral tests for hooks — verify exit codes and output on controlled inputs
 cd "$(dirname "$0")/../.."
 
+FAILS=0
 pass() { echo "ok - $1"; }
-fail() { echo "not ok - $1"; }
+fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 
 TMPFILE=$(mktemp /tmp/hook-test-XXXXXX.ts)
 trap "rm -f $TMPFILE" EXIT
@@ -117,4 +118,6 @@ if echo "$OUT" | grep -qi "translation\|i18n\|English"; then
 else
   pass "check-guide-i18n-sync runs without error on docs-site/docs path"
 fi
+
+exit $(( FAILS > 0 ? 1 : 0 ))
 

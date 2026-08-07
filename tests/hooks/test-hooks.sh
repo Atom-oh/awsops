@@ -2,8 +2,9 @@
 # Test hook existence, permissions, and registration
 cd "$(dirname "$0")/../.."
 
+FAILS=0
 pass() { echo "ok - $1"; }
-fail() { echo "not ok - $1"; }
+fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 
 echo "# Hook existence and permissions"
 
@@ -48,3 +49,5 @@ if [ -f ".claude/settings.json" ]; then
 else
   fail ".claude/settings.json missing"
 fi
+
+exit $(( FAILS > 0 ? 1 : 0 ))
