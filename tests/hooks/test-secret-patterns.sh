@@ -14,21 +14,20 @@ if [ ! -f "$HOOK" ]; then
   exit 1
 fi
 
-# Vacuous-pass guard: empty/missing fixtures would run zero assertions and "pass".
-for fx in tests/fixtures/secret-samples.txt tests/fixtures/false-positives.txt; do
-  if ! grep -q '[^[:space:]]' "$fx" 2>/dev/null; then
-    fail "fixture $fx exists and is non-empty"
-    exit 1
-  fi
-done
 
 TMPFILE=$(mktemp /tmp/secret-test-XXXXXX.ts)
 trap "rm -f $TMPFILE" EXIT
+
+# Vacuous-pass guard: each fixture loop must run at least one real assertion —
+# a missing/empty/comments-only fixture is a failure, not a silent pass.
+TP_RAN=0
+FP_RAN=0
 
 echo "# Secret pattern true positives"
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   [[ "$line" == \#* ]] && continue
+  TP_RAN=$((TP_RAN+1))
   echo "$line" > "$TMPFILE"
   if bash "$HOOK" "$TMPFILE" >/dev/null 2>&1; then
     fail "Should detect: $line"
@@ -41,6 +40,7 @@ echo "# Secret pattern false positives"
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   [[ "$line" == \#* ]] && continue
+  FP_RAN=$((FP_RAN+1))
   echo "$line" > "$TMPFILE"
   if bash "$HOOK" "$TMPFILE" >/dev/null 2>&1; then
     pass "Allowed: ${line:0:30}..."
@@ -48,5 +48,11 @@ while IFS= read -r line; do
     fail "False positive: $line"
   fi
 done < tests/fixtures/false-positives.txt
+
+if [ "$TP_RAN" -ge 1 ] && [ "$FP_RAN" -ge 1 ]; then
+  pass "fixtures exercised ($TP_RAN true-positive, $FP_RAN false-positive cases)"
+else
+  fail "fixtures exercised zero assertions (tp=$TP_RAN fp=$FP_RAN — missing/empty/comments-only fixture)"
+fi
 
 exit $(( FAILS > 0 ? 1 : 0 ))
