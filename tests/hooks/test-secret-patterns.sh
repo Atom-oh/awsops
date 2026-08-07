@@ -4,7 +4,8 @@
 cd "$(dirname "$0")/../.."
 
 pass() { echo "ok - $1"; }
-fail() { echo "not ok - $1"; }
+FAILS=0
+fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 
 HOOK=".claude/hooks/secret-scan.sh"
 
@@ -39,3 +40,5 @@ while IFS= read -r line; do
     fail "False positive: $line"
   fi
 done < tests/fixtures/false-positives.txt
+
+exit $(( FAILS > 0 ? 1 : 0 ))

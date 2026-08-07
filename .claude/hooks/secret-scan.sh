@@ -31,6 +31,12 @@ if [ -f "$FILE_PATH" ]; then
     exit 1
   fi
 
+  # AWS session token (unquoted env-style assignment; long base64 value)
+  if grep -qP 'AWS_SESSION_TOKEN\s*[:=]\s*["\x27]?[A-Za-z0-9/+=]{16,}' "$FILE_PATH" 2>/dev/null; then
+    echo "[secret-scan] Potential AWS session token detected in $FILE_PATH"
+    exit 1
+  fi
+
   # Generic password assignment with actual value
   if grep -qP '(password|secret|token)\s*[:=]\s*["\x27][^"\x27]{8,}["\x27]' "$FILE_PATH" 2>/dev/null; then
     # Exclude known safe patterns

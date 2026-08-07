@@ -27,12 +27,10 @@ for f in tests/hooks/test-*.sh; do
 done
 
 # ── Structure Tests ──
-# Advisory (historical behavior): two pr-review structure tests fail on main
-# (pre-existing drift vs scripts/pr-review) — enforcing exit codes here would
-# gate every branch on that unrelated workstream. Tighten once those are fixed.
 echo "# Structure tests"
 for f in tests/structure/test-*.sh; do
-  [ -f "$f" ] && bash "$f" || true
+  [ -f "$f" ] || continue
+  bash "$f" && pass "$(basename "$f") clean" || fail "$(basename "$f") reported failures"
 done
 
 # ── Core Structure Assertions ──
