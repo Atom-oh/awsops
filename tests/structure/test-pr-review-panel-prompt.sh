@@ -38,7 +38,13 @@ fi
 # Every lens prompt file the workflow writes must include $COMMON (else that lens's
 # panelists run unguarded).
 LENS_HEREDOCS=$(grep -c "cat <<PROMPT_EOF > /tmp/pr-review/lenses/" "$WORKFLOW")
-LENS_WITH_COMMON=$(awk '/cat <<PROMPT_EOF > \/tmp\/pr-review\/lenses\//{f=1} f && /\$COMMON/{c++; f=0} END{print c+0}' "$WORKFLOW")
+# Flag resets at each heredoc terminator, so a lens missing $COMMON cannot borrow
+# credit from the next heredoc's $COMMON line.
+LENS_WITH_COMMON=$(awk '
+  /cat <<PROMPT_EOF > \/tmp\/pr-review\/lenses\//{f=1; next}
+  /^[[:space:]]*PROMPT_EOF[[:space:]]*$/{f=0}
+  f && /\$COMMON/{c++; f=0}
+  END{print c+0}' "$WORKFLOW")
 if [ "$LENS_HEREDOCS" -ge 1 ] && [ "$LENS_HEREDOCS" -eq "$LENS_WITH_COMMON" ]; then
   pass "every lens prompt heredoc ($LENS_HEREDOCS) embeds \$COMMON"
 else

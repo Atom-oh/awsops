@@ -10,9 +10,17 @@ fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 HOOK=".claude/hooks/secret-scan.sh"
 
 if [ ! -f "$HOOK" ]; then
-  echo "# Skipping secret pattern tests — $HOOK not found"
-  exit 0
+  fail "$HOOK exists (removing the hook must not silently pass the secret contract)"
+  exit 1
 fi
+
+# Vacuous-pass guard: empty/missing fixtures would run zero assertions and "pass".
+for fx in tests/fixtures/secret-samples.txt tests/fixtures/false-positives.txt; do
+  if ! grep -q '[^[:space:]]' "$fx" 2>/dev/null; then
+    fail "fixture $fx exists and is non-empty"
+    exit 1
+  fi
+done
 
 TMPFILE=$(mktemp /tmp/secret-test-XXXXXX.ts)
 trap "rm -f $TMPFILE" EXIT
