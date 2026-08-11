@@ -85,7 +85,7 @@ Infrastructure as Code 関連のツールを提供します。
 | **iac-mcp** | `validate_cloudformation_template`, `check_cloudformation_template_compliance`, `troubleshoot_cloudformation_deployment`, `search_cdk_documentation`, `search_cloudformation_documentation`, `cdk_best_practices`, `read_iac_documentation_page` |
 | **terraform-mcp** | `SearchAwsProviderDocs`, `SearchAwsccProviderDocs`, `SearchSpecificAwsIaModules`, `SearchUserProvidedModule`, `terraform_best_practices` |
 
-### Data Gateway (28 tools)
+### Data Gateway (24 tools)
 
 AWS のデータベースおよびストリーミングサービスのツールを提供します。
 
@@ -112,7 +112,7 @@ IAM およびセキュリティ分析のツールを提供します。（P1f で
 | `simulate_principal_policy` | ポリシーシミュレーション |
 | `get_account_security_summary` | アカウントセキュリティ要約 |
 
-### Monitoring Gateway (40 tools)
+### Monitoring Gateway (36 tools)
 
 CloudWatch、CloudTrail（AWS ネイティブ）に加え、OpenSearch、Prometheus/Loki/Tempo/Mimir（オブザーバビリティスタック）のツールを提供します。
 
@@ -121,7 +121,7 @@ CloudWatch、CloudTrail（AWS ネイティブ）に加え、OpenSearch、Prometh
 | **cloudwatch-mcp** (11) | メトリクス/アラーム/Logs Insights の照会 |
 | **cloudtrail-mcp** (5) | `lookup_events`, `list_event_data_stores`, `lake_query`, `get_query_status`, `get_query_results` |
 | **opensearch-mcp** (4) | OpenSearch のドメイン/インデックス照会 |
-| **loki-mcp / tempo-mcp / mimir-mcp**（各 5、`integrations_enabled`） | LogQL/TraceQL の照会 — Loki/Tempo/Mimir はこの Gateway に残留（ADR-004；Prometheus·ClickHouse は External-Obs へ移動） |
+| **loki-mcp / tempo-mcp / mimir-mcp**（loki 5・tempo 5・mimir 6、`integrations_enabled`） | LogQL/TraceQL の照会 — Loki/Tempo/Mimir はこの Gateway に残留（ADR-004；Prometheus·ClickHouse は External-Obs へ移動） |
 
 ### Cost Gateway (14 tools)
 

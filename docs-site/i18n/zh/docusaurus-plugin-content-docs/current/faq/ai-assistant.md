@@ -22,6 +22,7 @@ AI 助手回答横跨 **9 个分区领域**（另有本地专项分区）的 AWS
 | **Monitoring** | "如何设置 CloudWatch 告警"、"在 CloudTrail 中查找特定事件"、"分析 EC2 CPU 趋势" |
 | **Cost** | "分析本月成本"、"成本激增的原因是什么？"、"成本优化建议" |
 | **IaC** | "帮我审查这段 Terraform"、"CloudFormation 堆栈创建失败的原因是什么？" |
+| **Observability** | "显示服务 p99 延迟（Prometheus）"、"在 ClickHouse 追踪中查找慢调用" |
 | **Ops** | 不完全符合上述分类的一般 AWS 运维问题 |
 
 如果已连接数据源（外部可观测性），还可以将自然语言直接转换为 PromQL/LogQL 等进行查询——详情请参阅下文"外部可观测性"以及[数据源开发 FAQ](./datasource-development)。

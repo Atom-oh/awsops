@@ -85,7 +85,7 @@ Infrastructure as Code 관련 도구를 제공합니다.
 | **iac-mcp** | `validate_cloudformation_template`, `check_cloudformation_template_compliance`, `troubleshoot_cloudformation_deployment`, `search_cdk_documentation`, `search_cloudformation_documentation`, `cdk_best_practices`, `read_iac_documentation_page` |
 | **terraform-mcp** | `SearchAwsProviderDocs`, `SearchAwsccProviderDocs`, `SearchSpecificAwsIaModules`, `SearchUserProvidedModule`, `terraform_best_practices` |
 
-### Data Gateway (28 tools)
+### Data Gateway (24 tools)
 
 AWS 데이터베이스 및 스트리밍 서비스 도구를 제공합니다.
 
@@ -112,7 +112,7 @@ IAM 및 보안 분석 도구를 제공합니다. (P1f에 배포된 슬라이스)
 | `simulate_principal_policy` | 정책 시뮬레이션 |
 | `get_account_security_summary` | 계정 보안 요약 |
 
-### Monitoring Gateway (40 tools)
+### Monitoring Gateway (36 tools)
 
 CloudWatch, CloudTrail(AWS 네이티브)에 더해 OpenSearch, Prometheus/Loki/Tempo/Mimir(관측성 스택) 도구를 제공합니다.
 
@@ -121,7 +121,7 @@ CloudWatch, CloudTrail(AWS 네이티브)에 더해 OpenSearch, Prometheus/Loki/T
 | **cloudwatch-mcp** (11) | 메트릭/알람/로그 인사이트 조회 |
 | **cloudtrail-mcp** (5) | `lookup_events`, `list_event_data_stores`, `lake_query`, `get_query_status`, `get_query_results` |
 | **opensearch-mcp** (4) | OpenSearch 도메인/인덱스 조회 |
-| **loki-mcp / tempo-mcp / mimir-mcp** (각 5, `integrations_enabled`) | LogQL/TraceQL 조회 — Loki/Tempo/Mimir는 이 Gateway에 잔류(ADR-004; Prometheus·ClickHouse는 External-Obs로 이동) |
+| **loki-mcp / tempo-mcp / mimir-mcp** (loki 5 · tempo 5 · mimir 6, `integrations_enabled`) | LogQL/TraceQL 조회 — Loki/Tempo/Mimir는 이 Gateway에 잔류(ADR-004; Prometheus·ClickHouse는 External-Obs로 이동) |
 
 ### Cost Gateway (14 tools)
 

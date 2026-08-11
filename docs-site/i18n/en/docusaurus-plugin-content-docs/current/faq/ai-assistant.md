@@ -22,6 +22,7 @@ The AI assistant answers AWS/Kubernetes operations questions across **9 section 
 | **Monitoring** | "How to set up CloudWatch alarms", "Find a specific event in CloudTrail", "Analyze EC2 CPU trends" |
 | **Cost** | "Analyze this month's costs", "What caused the cost spike?", "Recommend cost optimizations" |
 | **IaC** | "Review this Terraform", "Why did the CloudFormation stack creation fail?" |
+| **Observability** | "Show service p99 latency (Prometheus)", "Find slow calls in ClickHouse traces" |
 | **Ops** | General AWS operations questions that don't fit the above |
 
 If you've connected datasources (external observability), you can also query them by translating natural language directly into PromQL/LogQL and the like — see "external observability" below and the [Datasource Development FAQ](./datasource-development).

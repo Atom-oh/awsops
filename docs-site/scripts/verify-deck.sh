@@ -29,7 +29,7 @@ set -euo pipefail
 
 DECK="${1:?usage: verify-deck.sh <path-to-deck.pptx>}"
 
-PATTERN='\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b'
+PATTERN='\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|hooks\.slack\.com|\.internal\b|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b'
 
 fail() { echo "::error::$1"; exit 1; }
 
@@ -97,11 +97,11 @@ diff <(sort <<<"$PARTS") <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) \
 unzip -q "$DECK" -d "$WORK/committed"
 unzip -q "$WORK/rebuilt-deck.pptx" -d "$WORK/rebuilt"
 # core.xml stays in the diff; strip only its volatile creation/modified stamps
-sed -i -E 's#<dcterms:(created|modified)[^<]*</dcterms:(created|modified)>##g' \
+sed -i -E 's#(<dcterms:(created|modified)[^>]*>)[^<]*(</dcterms:(created|modified)>)#\1\3#g' \
   "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
 # the normalization must have actually removed the stamps — a pptxgenjs format
 # change that dodges the pattern should fail loudly, not silently degrade
-if grep -q 'dcterms:created' "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"; then
+if grep -qE '<dcterms:(created|modified)[^>]*>[^<]' "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"; then
   fail "dcterms timestamp normalization did not apply — core.xml format changed"
 fi
 diff -r --no-dereference "$WORK/committed" "$WORK/rebuilt" \

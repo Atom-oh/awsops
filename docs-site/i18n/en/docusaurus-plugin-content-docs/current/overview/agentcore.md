@@ -85,7 +85,7 @@ Provides Infrastructure as Code tools.
 | **iac-mcp** | `validate_cloudformation_template`, `check_cloudformation_template_compliance`, `troubleshoot_cloudformation_deployment`, `search_cdk_documentation`, `search_cloudformation_documentation`, `cdk_best_practices`, `read_iac_documentation_page` |
 | **terraform-mcp** | `SearchAwsProviderDocs`, `SearchAwsccProviderDocs`, `SearchSpecificAwsIaModules`, `SearchUserProvidedModule`, `terraform_best_practices` |
 
-### Data Gateway (28 tools)
+### Data Gateway (24 tools)
 
 Provides AWS database and streaming service tools.
 
@@ -112,7 +112,7 @@ Provides IAM and security analysis tools. (Deployed in P1f.)
 | `simulate_principal_policy` | Policy simulation |
 | `get_account_security_summary` | Account security summary |
 
-### Monitoring Gateway (40 tools)
+### Monitoring Gateway (36 tools)
 
 Provides CloudWatch and CloudTrail (AWS-native), plus OpenSearch and the Prometheus/Loki/Tempo/Mimir observability stack.
 
@@ -121,7 +121,7 @@ Provides CloudWatch and CloudTrail (AWS-native), plus OpenSearch and the Prometh
 | **cloudwatch-mcp** (11) | Metrics/alarms/log-insights queries |
 | **cloudtrail-mcp** (5) | `lookup_events`, `list_event_data_stores`, `lake_query`, `get_query_status`, `get_query_results` |
 | **opensearch-mcp** (4) | OpenSearch domain/index queries |
-| **loki-mcp / tempo-mcp / mimir-mcp** (5 each, `integrations_enabled`) | LogQL/TraceQL queries — Loki/Tempo/Mimir stay on this Gateway (ADR-004; Prometheus·ClickHouse moved to External-Obs) |
+| **loki-mcp / tempo-mcp / mimir-mcp** (loki 5 · tempo 5 · mimir 6, `integrations_enabled`) | LogQL/TraceQL queries — Loki/Tempo/Mimir stay on this Gateway (ADR-004; Prometheus·ClickHouse moved to External-Obs) |
 
 ### Cost Gateway (14 tools)
 

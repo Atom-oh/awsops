@@ -22,6 +22,7 @@ AI 어시스턴트는 **9개 섹션 도메인**(+로컬 전문 섹션)에 걸쳐
 | **Monitoring** | "CloudWatch 경보 설정 방법", "CloudTrail에서 특정 이벤트 찾기", "EC2 CPU 추세 분석" |
 | **Cost** | "이번 달 비용 분석", "비용 급증 원인은?", "비용 최적화 추천" |
 | **IaC** | "이 Terraform 검토해줘", "CloudFormation 스택 생성 실패 원인은?" |
+| **Observability** | "서비스 p99 지연시간 보여줘 (Prometheus)", "ClickHouse 트레이스에서 느린 호출 찾아줘" |
 | **Ops** | 위 분류에 딱 맞지 않는 일반 AWS 운영 질문 |
 
 데이터소스(외부 관측성)를 연결해 두었다면, 자연어를 그대로 PromQL/LogQL 등으로 변환해 질의할 수도 있습니다 — 자세한 내용은 아래 "외부 관측성"과 [데이터소스 개발 FAQ](./datasource-development)를 참고하세요.

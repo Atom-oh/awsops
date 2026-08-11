@@ -52,7 +52,7 @@ flowchart TD
   ECR -->|"镜像引用"| RT
 
   AGENT -->|"MCP + SigV4"| GW["9 个分区网关<br/>（约 120 个只读工具）"]
-  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
+  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 5 / Opus 4.8 / Haiku 4.5"]
 ```
 
 ### AgentCore Runtime

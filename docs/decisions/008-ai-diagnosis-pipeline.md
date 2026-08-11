@@ -68,7 +68,7 @@ Long-running AI flows (chat) use SSE (`text/event-stream` + `ReadableStream`) to
 
 ### 5. LLM 비용 통제 — 프롬프트 캐싱 + 비용 귀속 (구 ADR-033) / LLM cost control — prompt caching + cost attribution
 
-- **프롬프트 캐싱은 AWSops가 통제하는 직접 호출 경로**(분류·합성·15+1섹션 진단의 `callBedrock`/`invoke_model`)에만 적용된다. 1~3개 AgentCore **게이트웨이** 호출은 Strands 런타임 내부에서 프롬프트가 구성(MCP/SigV4)되어 **불투명**하므로 AWSops 계층의 캐싱 대상이 아니다. / Prompt caching applies only to AWSops-controlled direct-invoke paths; gateway-call tokens are opaque inside the Strands runtime.
+- **프롬프트 캐싱의 현재 구현 위치는 게이트웨이/Strands 경로다** — `agent/agent.py`의 `BedrockModel(CacheConfig)`가 시스템 프롬프트·도구 정의를 캐시한다(CacheConfig 미지원 strands 버전은 그레이스풀 폴백). 분류·합성·15+1섹션 진단의 직접 호출 경로(`callBedrock`/`invoke_model`)에는 아직 캐시포인트가 없다 — 캐싱 이득이 반복 시스템 프롬프트가 가장 큰 곳(에이전트 루프)에 먼저 착륙했고, 직접 호출 경로 캐싱은 후속 과제. (2026-08-11 정정: 종전 서술이 구현과 반대로 기록되어 있었음) / Prompt caching currently lives on the gateway/Strands path (`agent.py` `BedrockModel(CacheConfig)`); the direct-invoke classification/synthesis/diagnosis paths carry no cache points yet — corrected 2026-08-11 (the prior text recorded the inverse of the implementation).
 - **비용 귀속**: `global.*` 프로파일 + Bedrock invocation-log → `ai_usage_daily` 집계로 awsops-only Bedrock 지출을 귀속한다. / Cost attribution via `global.*` + invocation logs → `ai_usage_daily`.
 - 의미(semantic) 응답 캐시(Aurora pgvector)는 **연기**된 후속이다(현행은 정확 일치 캐시까지). / Semantic answer cache (Aurora pgvector) is a **deferred** follow-up.
 

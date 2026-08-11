@@ -85,7 +85,7 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 | **iac-mcp** | `validate_cloudformation_template`、`check_cloudformation_template_compliance`、`troubleshoot_cloudformation_deployment`、`search_cdk_documentation`、`search_cloudformation_documentation`、`cdk_best_practices`、`read_iac_documentation_page` |
 | **terraform-mcp** | `SearchAwsProviderDocs`、`SearchAwsccProviderDocs`、`SearchSpecificAwsIaModules`、`SearchUserProvidedModule`、`terraform_best_practices` |
 
-### Data Gateway (28 tools)
+### Data Gateway (24 tools)
 
 提供 AWS 数据库及流式服务工具。
 
@@ -112,7 +112,7 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 | `simulate_principal_policy` | 策略模拟 |
 | `get_account_security_summary` | 账户安全摘要 |
 
-### Monitoring Gateway (40 tools)
+### Monitoring Gateway (36 tools)
 
 除 CloudWatch、CloudTrail（AWS 原生）外，还提供 OpenSearch、Prometheus/Loki/Tempo/Mimir（可观测性栈）工具。
 
@@ -121,7 +121,7 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 | **cloudwatch-mcp** (11) | 指标/告警/日志洞察查询 |
 | **cloudtrail-mcp** (5) | `lookup_events`、`list_event_data_stores`、`lake_query`、`get_query_status`、`get_query_results` |
 | **opensearch-mcp** (4) | OpenSearch 域/索引查询 |
-| **loki-mcp / tempo-mcp / mimir-mcp**（各 5，`integrations_enabled`） | LogQL/TraceQL 查询 — Loki/Tempo/Mimir 保留在此 Gateway（ADR-004；Prometheus·ClickHouse 已迁移至 External-Obs） |
+| **loki-mcp / tempo-mcp / mimir-mcp**（loki 5·tempo 5·mimir 6，`integrations_enabled`） | LogQL/TraceQL 查询 — Loki/Tempo/Mimir 保留在此 Gateway（ADR-004；Prometheus·ClickHouse 已迁移至 External-Obs） |
 
 ### Cost Gateway (14 tools)
 

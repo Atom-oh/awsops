@@ -17,6 +17,9 @@ node scripts/pptx/build-awsops-intro-pptx.js
 ```
 
 - 슬라이드 구성·문구·스피커 노트는 전부 생성 스크립트가 단일 소스다. 내용을 고치려면 스크립트를 수정하고 다시 빌드한다.
+- 배경 자산 2종은 합성 그라디언트(스크린샷 아님)이며, 리뷰 편의를 위해 SHA-256을 고정 기록한다 — 변경 시 이 값도 갱신할 것:
+  - `scripts/pptx/assets/title_bg.png` — `3fd59525f442c4485e77dfd7d7e7c41932db14a8c1113e4a6258ae58d982ba87`
+  - `scripts/pptx/assets/section_bg_33.png` — `7c8ae2692023aa54cbca261b06e9128eecd7feac64897002b4c93867551bbe22`
 - `export-utils.js` 의 "Export PPTX" 버튼(웹 슬라이드 스크린샷 기반)과는 무관하다.
 - 웹 슬라이드 내용이 크게 바뀌면 이 덱도 함께 갱신할 것 — 두 덱은 자동으로 동기화되지 않는다.
 
