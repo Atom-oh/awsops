@@ -139,7 +139,7 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 
 ### External-Obs (3 tools, 路由键: `observability`)
 
-托管外部可观测性·集成连接器的第 9 个路由分区（ADR-004 修订 2026-06-24）。目录中定义了 `notion-mcp`（3 tools）（由 `integrations_enabled` 门控，默认 off）。Prometheus/ClickHouse 不在此分区，而是分别部署在 Monitoring/Data Gateway（参见上方 Gateway 详解）。
+托管外部可观测性·集成连接器的第 9 个路由分区（ADR-004 修订 2026-06-24）。目录中定义了 `notion-mcp`（3 tools）（由 `integrations_enabled` 门控，默认 off）。Prometheus（6 tools）·ClickHouse（3 tools）连接器目标同样部署在此分区（`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` 的 gateway=external-obs）。
 
 ## Code Interpreter
 

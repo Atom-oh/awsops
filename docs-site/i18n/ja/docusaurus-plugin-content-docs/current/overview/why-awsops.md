@@ -8,6 +8,13 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # なぜ AWSops なのか
 
+:::note 一部の内容は v1 基準です
+このページの記述の一部（組み込み Steampipe データエンジン、診断 PPTX エクスポートなど）は
+v1 時点のもので、段階的に更新中です。現行 v2 アーキテクチャは
+[AgentCore 概要](./agentcore.md)と[FAQ](../faq/general.md)を参照してください。
+:::
+
+
 > **一言で言うと** — AWSops は**完全オープンソースであり、AWS マネージドサービスのみで実装された** AWS + Kubernetes 運用ダッシュボードです。Steampipe で AWS API を高速に取得してローカルにキャッシュし、Amazon Bedrock AgentCore による **Well-Architected 観点の AI 診断**まで 1 つの画面で提供します。
 
 <Screenshot src="/screenshots/overview/dashboard.png" alt="AWSops ダッシュボード — 単一画面の運用状況" />

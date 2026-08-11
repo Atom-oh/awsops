@@ -31,9 +31,9 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 - **Code Interpreter** — `awsops_v2_code_interpreter-*` (underscores only).
 
 **Design target:** **9 section agents + 1 incident orchestrator** (the orchestrator is
-P4). **Currently deployed: 2 read-only target slices** that exercise every provisioner
-code path — `iam-mcp` (14 tools → security gateway) and `flow-monitor` (1 tool → network
-gateway). The **full Lambda fleet is P3.**
+P4). **Currently deployed: the full fleet** — all 9 gateways carry READY MCP targets and all
+16 chat section keys are active (fleet completed 2026-08-02; 30 slices defined in `ai.tf`
+`local.agent_lambdas` — 21 gated on `agentcore_enabled`, 9 on `integrations_enabled`).
 
 **Provisioner:** `scripts/v2/agentcore/{catalog.py, provision.py}` — `catalog.py` holds
 the 9 gateway names + the target tool schemas; `provision.py` does boto3 `list →

@@ -10,13 +10,16 @@
 #                    no macros/embedded objects, no symlink entries,
 #                    entry-count (500) and uncompressed-size (50MB) caps
 #   2. content     — sensitive-identifier scan over all XML/rels (theme excluded
-#                    for panose false positives): two passes, tags→space and
+#                    for panose false positives): two passes, raw XML and
 #                    tags→empty (the latter concatenates split OOXML <a:t> runs);
 #                    grep exit codes handled fail-closed (only exit 1 passes)
 #   3. provenance  — rebuild from the reviewed generator (pptxgenjs, lockfile-
-#                    pinned, deterministic) and require part-list + full-archive
-#                    byte equality (only docProps/core.xml dcterms timestamps
-#                    are stripped before diffing)
+#                    pinned, deterministic) and require part-list equality +
+#                    byte equality of every extracted part (only docProps/core.xml
+#                    dcterms timestamps are stripped). ZIP entry timestamps are
+#                    not comparable across builds, so container metadata is
+#                    covered separately: archive comment and per-entry
+#                    extra/comment fields must be empty (side-channel ban)
 #   4. rel targets — no TargetMode="External" relationships
 #
 # Known limits (documented in static/presentation/awsops-intro/README.md):
@@ -51,6 +54,16 @@ if grep -q '^l' <<<"$MODES"; then fail "deck zip contains symlink entries"; fi
 [ "$(wc -l <<<"$PARTS")" -le 500 ] || fail "deck zip has an implausible number of entries"
 TOTAL=$(unzip -l "$DECK" | tail -1 | awk '{print $1}')
 [ "$TOTAL" -le 52428800 ] || fail "deck uncompressed size exceeds 50MB cap"
+# ZIP container metadata is a payload side-channel the extracted-tree diff cannot
+# see — require the archive comment and every entry's extra/comment to be empty
+python3 - "$DECK" <<'PY' || fail "deck zip carries container metadata (archive comment or entry extra/comment fields)"
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+assert z.comment == b"", "archive comment present"
+for i in z.infolist():
+    assert not i.comment, f"entry comment: {i.filename}"
+    assert not i.extra, f"entry extra field: {i.filename}"
+PY
 
 # ── 2. content scan ──────────────────────────────────────────────────────────
 # NOTE: the theme/non-XML exclusions here are backstopped by gate 3 (provenance

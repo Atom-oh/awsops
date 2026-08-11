@@ -24,7 +24,7 @@ The chat must route operator queries to the right section agent among 9 section 
 
 `classifyRoute(prompt, pinned)`(`web/lib/route.ts` + `web/lib/classifier.ts`)는 단일 섹션이 아니라 **신뢰도가 포함된 랭크된 라우트 집합**을 반환한다.
 
-- **명확 단일-도메인 질의**(신뢰도 임계 위 단일 우세 라우트): 정규식 fast-path → Haiku 분류기 fallback으로 **단일 게이트웨이** 라우팅. 명확 질의(~70%)는 정규식이 즉시·무료 처리하고, 모호/무매칭만 Haiku가 8섹션 top-3 랭킹.
+- **명확 단일-도메인 질의**(신뢰도 임계 위 단일 우세 라우트): 정규식 fast-path → Haiku 분류기 fallback으로 **단일 게이트웨이** 라우팅. 명확 질의(~70%)는 정규식이 즉시·무료 처리하고, 모호/무매칭만 Haiku가 9섹션 top-3 랭킹.
 - **교차도메인 질의 감지**(임계 위 라우트 ≥2, 최대 3개로 절단): `Promise.allSettled`로 부채꼴 호출 후 `synthesizeResponsesStreaming()`로 **자동 합성**하여 하나의 병합 답변을 스트리밍한다. **사용자 개입 없이 자동·투명하게 핸드오프**된다.
 - **전환칩(switch chips)은 잔존하되 보조 수단으로 강등**: 합성이 다루지 못한 도메인을 끌어오거나 특정 단일 에이전트로 재질의할 때만 쓴다. 교차도메인 답변의 주 경로가 아니다.
 

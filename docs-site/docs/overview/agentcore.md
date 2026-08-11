@@ -139,7 +139,7 @@ AWS 문서·일반 운영 도구를 제공합니다(`aws-knowledge`).
 
 ### External-Obs (3 tools, 라우팅 키: `observability`)
 
-외부 관측성·연동 커넥터를 호스팅하는 9번째 라우팅 섹션(ADR-004 개정 2026-06-24). 카탈로그에는 `notion-mcp`(3 tools)가 정의되어 있습니다(`integrations_enabled` 게이트, 기본 off). Prometheus/ClickHouse는 이 섹션이 아니라 각각 Monitoring/Data Gateway에 배치되어 있습니다(위 Gateway 상세 참고).
+외부 관측성·연동 커넥터를 호스팅하는 9번째 라우팅 섹션(ADR-004 개정 2026-06-24). 카탈로그에는 `notion-mcp`(3 tools)가 정의되어 있습니다(`integrations_enabled` 게이트, 기본 off). Prometheus(6 tools)·ClickHouse(3 tools) 커넥터 타깃도 이 섹션에 배치됩니다(`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target`의 gateway=external-obs).
 
 ## Code Interpreter
 

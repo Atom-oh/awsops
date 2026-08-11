@@ -8,6 +8,13 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # Why AWSops
 
+:::note Parts of this page are v1-era
+Some descriptions here (embedded Steampipe data engine, diagnosis PPTX export, etc.) date from
+v1 and are being updated incrementally. For the current v2 architecture, refer to the
+[AgentCore overview](./agentcore.md) and the [FAQ](../faq/general.md).
+:::
+
+
 > **In one line** — AWSops is a **fully open-source AWS + Kubernetes operations dashboard built entirely on AWS managed services**. It pulls AWS APIs fast through Steampipe and caches them locally, and adds **Well-Architected AI diagnosis** through Amazon Bedrock AgentCore — all in a single pane.
 
 <Screenshot src="/screenshots/overview/dashboard.png" alt="AWSops dashboard — single-pane operations view" />
