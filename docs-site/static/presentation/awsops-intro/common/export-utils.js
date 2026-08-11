@@ -56,8 +56,8 @@ const ExportUtils = {
    *  for offline ZIP export — the binary is not bundled, so the link would be dead. */
   _stripDeckBadge: function(html) {
     return html
-      .replace(/<a class="pptx-download-badge"[\s\S]*?<\/a>\s*/g, '')
-      .replace(/<style>[^<]*\.pptx-download-badge[\s\S]*?<\/style>\s*/g, '');
+      .replace(/<a[^>]*class="[^"]*pptx-download-badge[^"]*"[^>]*>[\s\S]*?<\/a>\s*/g, '')
+      .replace(/<style[^>]*>(?:(?!<\/style>)[\s\S])*?\.pptx-download-badge[\s\S]*?<\/style>\s*/g, '');
   },
 
   getBlockFiles: function() {
