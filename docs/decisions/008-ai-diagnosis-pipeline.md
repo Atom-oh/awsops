@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22; amended 2026-06-24, 2026-08-11 — 섹션 수 표기 15+1(총 16) 정정) — consolidated / 채택 (2026-06-22; 2026-06-24, 2026-08-11 개정) — 통합
+Accepted (2026-06-22; amended 2026-06-24, 2026-08-11) — consolidated / 채택 (2026-06-22; 2026-06-24, 2026-08-11 개정) — 통합
 
 > **Consolidates / 통합 대상**: ADR-013 (자동 수집 조사 에이전트), ADR-016 (Bedrock 모델 선택 전략), ADR-019 (진단 리포트 포맷 매트릭스), ADR-021 (AI 응답 SSE 스트리밍), ADR-033 (AIOps LLM 비용 최적화), ADR-045 (AI 진단 지연 — 병렬 렌더 + 스트리밍).
 >
@@ -83,7 +83,7 @@ The diagnosis worker (single-shot per-section calls) keeps the **boto3 `bedrock-
 For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtime, `agent/agent.py`), a custom **`AsyncAnthropicBedrock` (Bedrock-client) loop** is permitted as an experiment behind `ANTHROPIC_AGENT_LOOP_ENABLED` (default OFF, dark): the lever is **tool-loop debuggability** (removing the opacity of the Strands agent loop), not latency, and going **through Bedrock preserves IAM/VPC/residency/cost-attribution + invocation-log attribution** (no API key, same `global.*` profile + home region). Read-only, additive, flag-gated; it reuses the existing gateway MCP (not a new BYO-MCP). Routing/runtime governance stays in scope of ADR-003/004.
 
 우선순위순 지연 최적화:
-1. **섹션 렌더 병렬화 — 구현됨.** 동시성 제한 풀(Bedrock TPM/RPM 아래 유지)로 벽시계를 15콜의 합 → 최장 섹션 수준으로 단축. 섹션별 타임아웃 격리·`partial` degrade 계약 보존. / **Parallel per-section rendering — implemented.** Bounded-concurrency pool; wall-clock from sum → ~max; per-section timeout isolation and `partial` degrade preserved.
+1. **섹션 렌더 병렬화 — 구현됨.** 동시성 제한 풀(Bedrock TPM/RPM 아래 유지)로 벽시계를 16콜(15+1)의 합 → 최장 섹션 수준으로 단축. 섹션별 타임아웃 격리·`partial` degrade 계약 보존. / **Parallel per-section rendering — implemented.** Bounded-concurrency pool; wall-clock from sum → ~max; per-section timeout isolation and `partial` degrade preserved.
 2. **섹션 출력 스트리밍 — 미구현 = 후속.** `invoke_model_with_response_stream` 적용은 현재 0건(`report.py` non-stream)이며, 체감 first-token 지연을 낮추기 위한 **계획된 후속 작업**으로 남는다(감사 ai-10). / **Section-output streaming — not implemented, a follow-up** (zero `invoke_model_with_response_stream` today; audit ai-10).
 3. `global.*` 프로파일 유지 — 측정상 정당화될 때만 특정 티어에 리전 프로파일 고려. / Keep `global.*`; consider a regional profile only with a measured case.
 

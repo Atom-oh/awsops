@@ -27,7 +27,7 @@ The `/ai-diagnosis` page generates a 15-section infrastructure analysis report u
 ## Page Layout
 
 ### 1. Top Action Bar
-- **Run Diagnosis** — start a full run (avg. 6–10 min for 15 sections)
+- **Run Diagnosis** — start a full run (avg. 6–10 min for 15+1 sections)
 - **Schedule** icon — open the auto-schedule panel (admin only)
 - **Notification** icon — manage email recipients (admin only)
 - **DOCX Download** — download the latest completed report immediately
@@ -117,7 +117,7 @@ Recipients are stored alongside the schedule in `data/report-schedule.json` (`no
 | Format | Generation path | Notes |
 |--------|----------------|-------|
 | **DOCX** | `lib/report-docx.ts` → API `download-docx` | A4 light theme, TOC, header/footer/page numbers, markdown → paragraph/table/bullet conversion |
-| **Markdown** | API `download-md` | Raw source (all 15 sections concatenated) |
+| **Markdown** | API `download-md` | Raw source (all 15+1 sections concatenated) |
 | **PDF** | `/ai-diagnosis/report` page + browser Print | White background, A4 page breaks, no extra PDF library (bundle-size hygiene) |
 
 :::tip Why no dedicated PDF library

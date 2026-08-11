@@ -108,7 +108,7 @@ A mutation request like "assistant, restart this instance" will not be executed.
 | Tier | Sections | Default model |
 |------|----------|---------------|
 | **Base** | 8 sections | Sonnet |
-| **Deep** | 15 sections (base 8 + 6 deep-only + synthesis) | Sonnet by default, **Opus selectable** (deep-only, behind a cost gate) |
+| **Deep** | 15+1 sections (base 8 + 7 deep-only + intended-vs-actual) | Sonnet by default, **Opus selectable** (deep-only, behind a cost gate) |
 
 **Features**
 

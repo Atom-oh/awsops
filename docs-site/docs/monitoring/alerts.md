@@ -96,7 +96,7 @@ description: CloudWatch / Alertmanager / Grafana 웹훅 수신, 알림 상관 �
 
 1. **AlertContext 빌드**: 영향받은 서비스, 리소스, 네임스페이스, 발화 시각(since)을 추출
 2. **스코프 제한 수집**: CloudWatch 메트릭 쿼리를 `since` 기준 ±10분, 해당 리소스로만 필터링
-3. **관련 섹션 선택**: 15섹션 중 Compute / Network / Container 등 3~5개만 실행
+3. **관련 섹션 선택**: 15+1섹션 중 Compute / Network / Container 등 3~5개만 실행
 4. **변경 감지**: Terraform state / CloudTrail 최근 변경과 비교
 5. **Bedrock 분석**: Claude Sonnet으로 근본 원인 추정 + Next Steps 제안
 
@@ -175,7 +175,7 @@ curl -X POST https://awsops.example.com/awsops/api/alert-webhook \
 
 ## 관련 페이지
 
-- [AI 종합 진단](./ai-diagnosis.md) — 15섹션 전체 진단
+- [AI 종합 진단](./ai-diagnosis.md) — 15+1섹션 전체 진단
 - [CloudWatch](./cloudwatch) — 알람 원본
 - [외부 데이터소스](./datasources) — Alertmanager/Grafana 쿼리 원천
 

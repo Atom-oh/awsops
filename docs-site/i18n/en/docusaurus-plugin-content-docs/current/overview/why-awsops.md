@@ -61,7 +61,7 @@ The data engine is [Steampipe](https://steampipe.io/) (embedded PostgreSQL, port
 `/ai-diagnosis` is a tool where Amazon Bedrock **Claude Opus 4.8** automatically analyzes the whole infrastructure into a formal report.
 
 - **6-pillar Well-Architected scorecard** — the Executive Summary scores all of Operational Excellence, Security, Reliability, Performance Efficiency, Cost Optimization, and Sustainability.
-- **3-pillar deep dive (15 sections)** — Cost Optimization, Security, and Reliability are analyzed in depth (cost overview/compute/network/storage, idle resources, security posture, network/compute/EKS/DB/MSK/storage analysis, etc.).
+- **3-pillar deep dive (15+1 sections)** — Cost Optimization, Security, and Reliability are analyzed in depth (cost overview/compute/network/storage, idle resources, security posture, network/compute/EKS/DB/MSK/storage analysis, etc.).
 - **DOCX / Markdown / PDF / PPTX** export + **weekly/biweekly/monthly** schedule + email on completion.
 
 :::note Honest scope

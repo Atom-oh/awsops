@@ -96,12 +96,12 @@ Lists active incidents. The 🚨 badge in the dashboard header and the "Recent I
 
 1. **Build AlertContext** — extract affected services, resources, namespaces, earliest `since`
 2. **Scoped collection** — filter CloudWatch queries to ±10 min around `since` and the affected resources
-3. **Select sections** — run only 3–5 of the 15 sections (Compute / Network / Container as applicable)
+3. **Select sections** — run only 3–5 of the 15+1 sections (Compute / Network / Container as applicable)
 4. **Change detection** — diff against recent Terraform state / CloudTrail events
 5. **Bedrock analysis** — Claude Sonnet proposes probable root causes and next steps
 
 :::tip Difference from full diagnosis
-[AI Comprehensive Diagnosis](./ai-diagnosis.md) runs all 15 sections across all resources. Alert-Triggered Diagnosis is limited to the **alert's scope** and finishes in 1–2 minutes.
+[AI Comprehensive Diagnosis](./ai-diagnosis.md) runs all 15+1 sections across all resources. Alert-Triggered Diagnosis is limited to the **alert's scope** and finishes in 1–2 minutes.
 :::
 
 ## Slack Notifications
