@@ -73,6 +73,19 @@ jobs:
           fi
           echo "Build verified: awsops-intro.pptx present, well-formed, and content-scanned."
 
+      # The served .pptx is a committed binary; prove it is exactly what the
+      # reviewed generator script produces (build is deterministic for the
+      # slide/notes parts), so the script stays the enforced source of truth
+      # and a hand-swapped or drifted binary cannot ship.
+      - name: Verify deck matches generator
+        run: |
+          node scripts/pptx/build-awsops-intro-pptx.js /tmp/rebuilt-deck.pptx
+          rm -rf /tmp/deck-committed /tmp/deck-rebuilt
+          unzip -q static/presentation/awsops-intro/awsops-intro.pptx 'ppt/slides/*' 'ppt/notesSlides/*' -d /tmp/deck-committed
+          unzip -q /tmp/rebuilt-deck.pptx 'ppt/slides/*' 'ppt/notesSlides/*' -d /tmp/deck-rebuilt
+          diff -r /tmp/deck-committed /tmp/deck-rebuilt || { echo "::error::committed awsops-intro.pptx does not match the generator output — run 'node scripts/pptx/build-awsops-intro-pptx.js' and re-commit"; exit 1; }
+          echo "Deck verified: committed pptx matches generator output."
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs-site/build

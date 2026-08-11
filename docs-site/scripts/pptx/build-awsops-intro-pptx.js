@@ -445,7 +445,7 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
     { value: "0", label: "퍼블릭 로드밸런서 (진입은 CloudFront만)" },
     { value: "9", label: "AI 도메인 게이트웨이 (MCP 도구)" },
     { value: "2-tier", label: "워커 런타임 — Lambda + Fargate" },
-    { value: "IaC 100%", label: "Terraform 단일 루트 · 플래그 게이트" },
+    { value: "IaC", label: "Terraform 단일 루트 + 멱등 프로비저너 · 플래그 게이트" },
   ]);
   addFooter(s, ++pageNum);
   s.addNotes(`[요약]
@@ -514,7 +514,7 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
 • CMK(Customer Managed Key): 고객 관리형 KMS 암호화 키
 
 [출처]
-• AWSops 인증 레퍼런스 — 리포지토리 docs/reference/02-auth.md
+• AWSops 결정 기준선 — 리포지토리 docs/decisions/BASELINE.md
 
 [변경 이력]
 • 2026-08-11: 초기 작성`);
@@ -566,7 +566,7 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
 • MSK(Managed Streaming for Apache Kafka): AWS 관리형 Kafka 서비스
 
 [출처]
-• AWSops AgentCore 레퍼런스 — 리포지토리 docs/reference/05-agentcore.md
+• AWSops 결정 기준선 — 리포지토리 docs/decisions/BASELINE.md
 
 [변경 이력]
 • 2026-08-11: 초기 작성`);
@@ -655,7 +655,7 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
   ]);
   addFooter(s, ++pageNum);
   s.addNotes(`[요약]
-• 변경 기능은 거버넌스(ADR)로 동결 — 실수로 켤 수 없음
+• 변경 기능은 거버넌스(ADR)로 동결 — 해제는 별도 승인 절차
 • K8s 읽기 verb 한정 · 계정 연결은 ReadOnly 역할 1개 + 검증
 • AI 오답의 최악 = 틀린 조언 (틀린 변경이 아님)
 
