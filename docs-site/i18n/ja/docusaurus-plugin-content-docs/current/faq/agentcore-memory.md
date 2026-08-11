@@ -90,15 +90,15 @@ flowchart LR
   GW -->|"mcp.lambda"| L3["Lambda 3<br/>TGW ルート照会"]
 ```
 
-### セクションゲートウェイは 8 つです（ADR-004）
+### セクションゲートウェイは 9 個です（ADR-004 改訂）
 
-`network · container · data · security · cost · monitoring · iac · ops` — 合計 **8 つ**です。
+`network · container · data · security · cost · monitoring · iac · ops` — 合計 **9 個**です（9 プロビジョニング / 9 ルーティング、external-obs 昇格 2026-06-24）。
 
 | 項目 | 内容 |
 |------|------|
-| **ゲートウェイ数** | ADR-004 に従い **8 つに固定** |
+| **ゲートウェイ数** | ADR-004 改訂（2026-06-24）に従い **9 個** |
 | **ツール数** | 約 **120 個**、すべて読み取り専用 — フリートが拡張されれば変動（固定値ではない） |
-| **外部オブザーバビリティ** | 9 番目のゲートウェイでは**ない** — 独立した **Integrations 軸**（ADR-039）として分離 |
+| **外部オブザーバビリティ** | Prometheus·ClickHouse コネクタは **external-obs ゲートウェイ**（9 番目）としてルーティング（ADR-004 改訂）— その他の外部連携は独立した **Integrations 軸**（ADR-007/017） |
 | **プロトコル** | MCP（Model Context Protocol）標準 |
 
 - Agent が `list_tools` で利用可能なツール一覧を照会

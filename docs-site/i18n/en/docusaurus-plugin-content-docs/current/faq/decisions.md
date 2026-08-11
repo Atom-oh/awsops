@@ -116,7 +116,7 @@ The gate score was validated at hybrid 69.2% → **96.9% (+27.7pp) PASSED**. Rat
 **It's optimized with prompt caching and model-by-depth selection** (ADR-038, ADR-033).
 
 - **Prompt caching** — about a 59% hit rate, reducing recomputation of repeated context (ADR-038).
-- **Model by task depth** — AI Diagnosis uses Sonnet by default for base (8+1 sections), and Sonnet default / Opus selectable (cost-gate) for deep (15+1 sections). Classification and routing use the cheaper Haiku 4.5 (ADR-033).
+- **Model by task depth** — AI Diagnosis uses Sonnet by default for Light·Mid (8+1 sections), and Sonnet default / Opus selectable (cost-gate) for Deep (15+1 sections). Classification and routing use the cheaper Haiku 4.5 (ADR-033).
 - ADR-033 defined an Aurora durable token budget (implemented in v1; wiring it into the current web chat path is a pending follow-up).
 
 ### Did the gateways grow to 9?

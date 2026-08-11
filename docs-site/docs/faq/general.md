@@ -17,7 +17,7 @@ AWSops는 AWS와 Kubernetes 환경을 위한 **실시간 읽기 전용(read-only
 - **보안 분석**: IAM 권한 분석, 컴플라이언스, 취약점 점검
 - **비용 관리**: Cost Explorer 기반 비용 분석 및 대시보드
 - **AI 어시스턴트**: 자연어 질의로 AWS 리소스 분석 및 문제 해결 (스트리밍 + 도메인 라우팅 + 대화 영속화)
-- **AI 진단(Diagnosis)**: 워커가 생성하는 읽기 전용 진단 리포트 (base 8+1섹션(총 9) / deep 15+1섹션(총 16), DOCX·PDF 내보내기)
+- **AI 진단(Diagnosis)**: 워커가 생성하는 읽기 전용 진단 리포트 (Light·Mid 8+1섹션(총 9) / Deep 15+1섹션(총 16), DOCX·PDF 내보내기)
 
 플랫폼은 **Terraform 기반 MSA**입니다 — 라이브 AWS 조회는 **Amazon Bedrock AgentCore MCP 도구**가 담당하고, 앱 상태는 **Aurora Serverless v2(PostgreSQL 17)**에 영속화됩니다.
 

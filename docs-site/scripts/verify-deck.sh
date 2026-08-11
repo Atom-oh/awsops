@@ -53,6 +53,9 @@ TOTAL=$(unzip -l "$DECK" | tail -1 | awk '{print $1}')
 [ "$TOTAL" -le 52428800 ] || fail "deck uncompressed size exceeds 50MB cap"
 
 # ── 2. content scan ──────────────────────────────────────────────────────────
+# NOTE: the theme/non-XML exclusions here are backstopped by gate 3 (provenance
+# pins every part byte-for-byte to generator output) — do not relax gate 3
+# independently of widening this scan.
 XML=$(unzip -p "$DECK" '*.xml' '*.rels' -x 'ppt/theme/*') || fail "deck XML parts unreadable"
 test -n "$XML" || fail "deck content scan extracted zero bytes"
 scan_text "$XML" "raw XML"

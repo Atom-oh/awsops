@@ -80,7 +80,7 @@ Agent Space에서 비활성인 에이전트를 picker로 선택하면 정직한 
 
 ### 9. AgentCore Gateway 시맨틱 툴 검색 — P4 연기
 
-플랫폼-네이티브 시맨틱 툴 검색(`searchType=SEMANTIC`, "300툴 → ~4 주입")은 명시적으로 **P4로 연기**한다. 페이오프가 전 게이트웨이 함대에 묶여 있고(현재 8섹션 중 read-only 슬라이스만 라이브), 빈 게이트웨이 시맨틱 검색은 유령매칭을 낳으며, 단일 통합 에이전트는 섹션별 `SKILL_BASE` 페르소나를 희석한다. 본 ADR의 하이브리드가 적재하는 오라우팅 로그가 P4 시맨틱 설계의 학습 입력이 된다.
+플랫폼-네이티브 시맨틱 툴 검색(`searchType=SEMANTIC`, "300툴 → ~4 주입")은 명시적으로 **P4로 연기**한다. 페이오프가 전 게이트웨이 함대에 묶여 있고(2026-08-02 함대 완성 — 9섹션 전부 라우팅), 빈 게이트웨이 시맨틱 검색은 유령매칭을 낳으며, 단일 통합 에이전트는 섹션별 `SKILL_BASE` 페르소나를 희석한다. 본 ADR의 하이브리드가 적재하는 오라우팅 로그가 P4 시맨틱 설계의 학습 입력이 된다.
 
 ## Consequences
 
@@ -102,7 +102,7 @@ Agent Space에서 비활성인 에이전트를 picker로 선택하면 정직한 
 - **멀티-라우트 fan-out + 자동합성 재활성화**는 sub-flag 뒤에서 출하되며 다중도메인 골든셋(집합-중첩 채점) 통과가 전제. 통과 전에는 현행 단일-라우트 + 칩 동작으로 graceful degrade(회귀 없음). 합성은 Sonnet을 쓰므로 활성화 전 web task role IAM 확대가 선행 필요.
 
 ### ⚠️ Load-bearing invariant (P3 활성화 전제)
-`agent.py`의 `SKILL_BASE`에는 `observability` 키가 없고(`network/container/ops/data/security/monitoring/cost/diagnostics/iac`만 존재), `build_skill_prompt`는 미지 키를 DEFAULT로 무음 폴백한다. 오늘은 `observability`가 `active:false`라 안전하나, **P3에서 어떤 섹션이든 `active:true`로 전환하기 전에 해당 키의 `SKILL_BASE` 엔트리 존재를 확인**해야 한다(또는 active-section↔SKILL_BASE 패리티 기동 체크 추가). 위반 시 잘못된 전문가 프롬프트로 무음 오라우팅된다.
+`build_skill_prompt`는 미지 키를 DEFAULT로 무음 폴백한다 — **어떤 섹션이든 `active:true`로 전환하기 전에 해당 키의 `SKILL_BASE` 엔트리 존재를 확인**해야 한다(또는 active-section↔SKILL_BASE 패리티 기동 체크 추가). 위반 시 잘못된 전문가 프롬프트로 무음 오라우팅된다. (이 전제조건은 충족됨: `agent.py` `SKILL_BASE`에 `observability` 전용 페르소나가 존재하고 `observability`→`external-obs` 별칭으로 라우팅 — 16키 활성화 2026-08-02.)
 
 ## 6 Pillars
 

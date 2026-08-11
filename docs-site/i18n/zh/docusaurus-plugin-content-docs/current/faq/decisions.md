@@ -116,7 +116,7 @@ ADR-032 最初定义了事件触发的自主事故生命周期（多 Agent Lead/
 **通过提示词缓存与按任务深度选择模型进行优化**（ADR-038、ADR-033）。
 
 - **提示词缓存** — 以约 59% 命中率减少重复上下文的重新计算（ADR-038）。
-- **按任务深度选择模型** — AI 诊断的 base（8 章节）默认 Sonnet，deep（15 章节）默认 Sonnet·可选 Opus（cost-gate）。分类·路由使用低成本的 Haiku 4.5（ADR-033）。
+- **按任务深度选择模型** — AI 诊断的 Light·Mid（8+1 章节，共 9）默认 Sonnet，Deep（15+1 章节，共 16）默认 Sonnet·可选 Opus（cost-gate）。分类·路由使用低成本的 Haiku 4.5（ADR-033）。
 - ADR-033 定义了 Aurora durable token budget（预算持久化）——已在 v1 实现，与当前 web 聊天路径的对接是后续课题。
 
 ### 网关增加到 9 个了吗？

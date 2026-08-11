@@ -100,11 +100,11 @@ ECS `secrets` valueFrom (such as the Aurora secret) needs **execution-role** per
 
 ## AI comprehensive diagnosis fails or stalls
 
-AI diagnosis is not run inline by the web app — it's a read-only report generated in the background by the **async worker tier** (base = 8+1 sections (9 total) / deep = 15+1 sections (16 total)). So "no response yet" does not necessarily mean "failed."
+AI diagnosis is not run inline by the web app — it's a read-only report generated in the background by the **async worker tier** (Light·Mid = 8+1 sections (9 total) / Deep = 15+1 sections (16 total)). So "no response yet" does not necessarily mean "failed."
 
 1. **Check the job status first** — Requesting a diagnosis enqueues a job that the worker processes. Watch the job status on the report screen (queued → running → succeeded/failed). `running` means it's progressing normally.
 2. **If it ended as `failed`** — When the worker fails, the status is recorded as failed. Re-requesting the same diagnosis retries it (jobs are idempotent on `job_id`).
-3. **deep + Opus model** — Selecting the Opus model for a deep diagnosis (15+1 sections) applies a cost gate and takes longer. For a faster result, use base diagnosis with the default Sonnet.
+3. **deep + Opus model** — Selecting the Opus model for a deep diagnosis (15+1 sections) applies a cost gate and takes longer. For a faster result, use a Light/Mid diagnosis with the default Sonnet.
 4. **Data permissions** — Diagnosis reads live AWS data, so sections backed by a blocked API (Cost/CloudWatch, etc.) may render empty (see "SCP blocking" above). That is a data-availability issue, not a diagnosis failure.
 
 :::info

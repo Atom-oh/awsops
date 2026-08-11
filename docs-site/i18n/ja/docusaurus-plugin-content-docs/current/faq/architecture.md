@@ -109,15 +109,15 @@ AWSops は（v1 の）Steampipe pg Pool（ポート 9193、node-cache、cache-wa
 
 ## ライブ AWS 照会はどのように行いますか？（AgentCore vs Steampipe）
 
-AWSops のライブ AWS データは **AgentCore MCP Lambda ツール**が担当します。約 **120 個の読み取り専用ツール**が **8 つのセクションゲートウェイ**（network / container / data / security / cost / monitoring / iac / ops）にわたってデプロイされます。
+AWSops のライブ AWS データは **AgentCore MCP Lambda ツール**が担当します。約 **120 個の読み取り専用ツール**が **9 つのセクションゲートウェイ**（network / container / data / security / cost / monitoring / iac / ops / external-obs）にわたってデプロイされます。
 
 | 区分 | 役割 |
 |------|------|
 | **AgentCore MCP ツール（ライブ）** | リアルタイム AWS API 照会 — チャット・診断・ページのライブデータソース |
 | **Steampipe（flag-gated）** | `steampipe_enabled`（デフォルト OFF）のインベントリ sync **専用**。ライブクエリエンジンではなく、ローカル 9193 サービスでもありません |
 
-:::info ゲートウェイ数は 8 つです（ADR-004）
-外部オブザーバビリティ（Observability）は独立した **Integrations 軸**（ADR-039）であり、9 番目のゲートウェイではありません。ADR-004 に従い、ゲートウェイ数は **8** に維持されます。
+:::info ゲートウェイ数は 9 つです（ADR-004 改訂、2026-06-24）
+外部オブザーバビリティコネクタ（Prometheus·ClickHouse）は **external-obs ゲートウェイ**に昇格し、9 番目としてプロビジョニング・ルーティングされます（ADR-004 改訂 — 9 プロビジョニング / 9 ルーティング）。その他の外部連携は独立した **Integrations 軸**（ADR-007/017）です。
 :::
 
 ## AI ルーティングはどのように動作しますか？（ADR-038 ハイブリッド）

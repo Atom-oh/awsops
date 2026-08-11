@@ -98,7 +98,7 @@ flowchart LR
 |------|------|
 | **网关数量** | 依 ADR-004 修订（2026-06-24）为 **9 个** |
 | **工具数量** | 约 **120 个**，全部只读 — 随工具集扩展而变动（不是固定数字） |
-| **外部可观测性** | **不是**第 9 个网关 — 分离为独立的 **Integrations 轴**（ADR-039） |
+| **外部可观测性** | Prometheus·ClickHouse 连接器经由 **external-obs 网关**（第九个）参与路由（ADR-004 修订）— 其余外部集成属于独立的 **Integrations 轴**（ADR-007/017） |
 | **协议** | MCP（Model Context Protocol）标准 |
 
 - Agent 通过 `list_tools` 查询可用工具列表

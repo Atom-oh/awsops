@@ -100,11 +100,11 @@ ECS `secrets` valueFrom（Aurora 密钥等）需要**执行角色（execution ro
 
 ## AI 综合诊断失败或卡住
 
-AI 诊断不是由 Web 直接执行的，而是由**异步 Worker 层**在后台生成的只读报告（base 8+1 个分区（共 9） / deep 15+1 个分区（共 16））。因此"没有响应"并不等于"失败"。
+AI 诊断不是由 Web 直接执行的，而是由**异步 Worker 层**在后台生成的只读报告（Light·Mid 8+1 个分区（共 9） / Deep 15+1 个分区（共 16））。因此"没有响应"并不等于"失败"。
 
 1. **先检查作业状态** — 请求诊断后，作业会注册到队列并由 Worker 处理。请在报告页面确认作业状态（queued → running → succeeded/failed）。如果是 running，说明正在正常进行中。
 2. **以 failed 结束的情况** — Worker 失败时状态会记录为 failed。再次请求相同的诊断即可重试（作业以 job_id 为基准幂等）。
-3. **deep + Opus 模型** — 在 deep 诊断（15+1 个分区）中选择 Opus 模型时，会应用成本门禁且耗时更长。想要快速查看，请使用默认 Sonnet 的 base 诊断。
+3. **deep + Opus 模型** — 在 deep 诊断（15+1 个分区）中选择 Opus 模型时，会应用成本门禁且耗时更长。想要快速查看，请使用默认 Sonnet 的 Light/Mid 诊断。
 4. **数据权限** — 诊断需要读取实时 AWS 数据，因此被拦截 API（Cost/CloudWatch 等）对应的分区可能显示为空（参阅上面的"SCP 拦截"）。这不是诊断本身的失败，而是数据可用性问题。
 
 :::info

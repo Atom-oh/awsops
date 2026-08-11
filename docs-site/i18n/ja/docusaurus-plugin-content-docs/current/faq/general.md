@@ -17,7 +17,7 @@ AWSops は、AWS と Kubernetes 環境のための**リアルタイム読み取�
 - **セキュリティ分析**: IAM 権限分析、コンプライアンス、脆弱性チェック
 - **コスト管理**: Cost Explorer ベースのコスト分析とダッシュボード
 - **AI アシスタント**: 自然言語クエリによる AWS リソース分析と問題解決(ストリーミング + ドメインルーティング + 会話の永続化)
-- **AI 診断(Diagnosis)**: ワーカーが生成する読み取り専用の診断レポート(base 8+1 セクション（計 9） / deep 15+1 セクション（計 16）、DOCX・PDF エクスポート)
+- **AI 診断(Diagnosis)**: ワーカーが生成する読み取り専用の診断レポート(Light·Mid 8+1 セクション（計 9） / Deep 15+1 セクション（計 16）、DOCX・PDF エクスポート)
 
 プラットフォームは **Terraform ベースの MSA** です — ライブ AWS クエリは **Amazon Bedrock AgentCore MCP ツール**が担当し、アプリの状態は **Aurora Serverless v2(PostgreSQL 17)**に永続化されます。
 

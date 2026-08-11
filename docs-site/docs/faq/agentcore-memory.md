@@ -98,7 +98,7 @@ flowchart LR
 |------|------|
 | **게이트웨이 수** | ADR-004에 따라 **9개(ADR-004 개정)** |
 | **도구 수** | 약 **120개**, 전부 읽기 전용 — 함대가 확장되면 변동(고정 수치 아님) |
-| **외부 관측성** | 9번째 게이트웨이가 **아님** — 별도의 **Integrations 축**(ADR-039)으로 분리 |
+| **외부 관측성** | Prometheus·ClickHouse 커넥터가 **external-obs 게이트웨이**(아홉 번째)로 라우팅됨(ADR-004 개정) — 그 외 외부 연동은 별도의 **Integrations 축**(ADR-007/017) |
 | **프로토콜** | MCP(Model Context Protocol) 표준 |
 
 - Agent가 `list_tools`로 사용 가능한 도구 목록을 조회

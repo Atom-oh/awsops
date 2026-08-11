@@ -17,7 +17,7 @@ AWSops is a **real-time, read-only operations dashboard + AI diagnosis** tool fo
 - **Security analysis**: IAM permission analysis, compliance, vulnerability checks
 - **Cost management**: Cost Explorer-based cost analysis and dashboards
 - **AI assistant**: natural-language queries for AWS resource analysis and troubleshooting (streaming + domain routing + persistent conversations)
-- **AI Diagnosis**: worker-generated, read-only diagnosis reports (base 8+1 sections (9 total) / deep 15+1 sections (16 total), with DOCX/PDF export)
+- **AI Diagnosis**: worker-generated, read-only diagnosis reports (Light·Mid 8+1 sections (9 total) / Deep 15+1 sections (16 total), with DOCX/PDF export)
 
 The platform is a **Terraform-based MSA** — live AWS queries go through **Amazon Bedrock AgentCore MCP tools**, and app state is persisted in **Aurora Serverless v2 (PostgreSQL 17)**.
 

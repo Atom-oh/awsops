@@ -17,7 +17,7 @@ AWSops 是面向 AWS 与 Kubernetes 环境的**实时只读（read-only）运维
 - **安全分析**：IAM 权限分析、合规、漏洞检查
 - **成本管理**：基于 Cost Explorer 的成本分析与仪表板
 - **AI 助手**：通过自然语言查询进行 AWS 资源分析与问题排查（流式输出 + 领域路由 + 对话持久化）
-- **AI 诊断（Diagnosis）**：由 worker 生成的只读诊断报告（base 8+1 个章节（共 9） / deep 15+1 个章节（共 16），支持 DOCX·PDF 导出）
+- **AI 诊断（Diagnosis）**：由 worker 生成的只读诊断报告（Light·Mid 8+1 个章节（共 9） / Deep 15+1 个章节（共 16），支持 DOCX·PDF 导出）
 
 平台是**基于 Terraform 的 MSA**——实时 AWS 查询由 **Amazon Bedrock AgentCore MCP 工具**负责，应用状态持久化在 **Aurora Serverless v2（PostgreSQL 17）**中。
 
