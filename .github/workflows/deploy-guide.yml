@@ -60,6 +60,7 @@ jobs:
           DECK=build/presentation/awsops-intro/awsops-intro.pptx
           test -s "$DECK" || { echo "::error::awsops-intro.pptx missing or empty in build"; exit 1; }
           [ "$(head -c 4 "$DECK" | od -An -tx1 | tr -d ' \n')" = "504b0304" ] || { echo "::error::awsops-intro.pptx is not a valid zip/pptx container"; exit 1; }
+          ! unzip -Z1 "$DECK" | grep -qE 'vbaProject\.bin|^ppt/embeddings/.' || { echo "::error::deck contains macros or embedded objects"; exit 1; }
           unzip -l "$DECK" | grep -q 'ppt/presentation.xml' || { echo "::error::awsops-intro.pptx lacks ppt/presentation.xml — not a real pptx"; exit 1; }
           # Content scan — the deck ships to an unauthenticated public site. Fail CLOSED:
           # capture the extraction, assert it succeeded and is non-empty, then grep.
@@ -79,8 +80,10 @@ jobs:
             echo "::error::deck content scan failed to run (grep exit $RC)"
             exit 1
           fi
-          # second pass on tag-stripped text — catches identifiers split across OOXML <a:t> runs
-          grep -aqE '\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' <<<"$(sed -E 's/<[^>]*>/ /g' <<<"$XML")" && RC2=0 || RC2=$?
+          # second pass with tags stripped to EMPTY (not space) so text split across
+          # OOXML <a:t> runs concatenates — the spaced first pass would miss e.g. an
+          # account ID emitted as two adjacent runs
+          grep -aqE '\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' <<<"$(sed -E 's/<[^>]*>//g' <<<"$XML")" && RC2=0 || RC2=$?
           if [ "$RC2" -eq 0 ]; then echo "::error::sensitive identifier found in tag-stripped deck text (split-run)"; exit 1;
           elif [ "$RC2" -ne 1 ]; then echo "::error::stripped-text scan failed (grep exit $RC2)"; exit 1; fi
           echo "Build verified: awsops-intro.pptx present, well-formed, and content-scanned."

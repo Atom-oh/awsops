@@ -51,7 +51,7 @@ Want to pick a domain explicitly? Type a slash (`/`) in the input box. See the "
 Live AWS queries go through **AgentCore MCP (Model Context Protocol) Lambda tools**. The assistant queries exactly the data it needs to answer, then analyzes it.
 
 - **~120 read-only tools** are spread across **9 section gateways** (Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — per amended ADR-004). The tool count is approximate and evolving.
-- External observability is the separate **Integrations axis** (ADR-039), not a 9th gateway — the gateway count stays at 8 (ADR-004).
+- The external-observability connectors (Prometheus·ClickHouse) are promoted to the **external-obs gateway**, routed as the ninth (ADR-004 as amended 2026-06-24, 9 provisioned / 9 routed). Other external integrations (vendor-hosted, etc.) remain the separate **Integrations axis** (ADR-007/017).
 - Steampipe exists only as a **flag-gated inventory sync** (`steampipe_enabled`, default OFF). It is not the live query engine, and not an always-on local service.
 
 :::info Technical Details
@@ -107,7 +107,8 @@ A mutation request like "assistant, restart this instance" will not be executed.
 
 | Tier | Sections | Default model |
 |------|----------|---------------|
-| **Base** | 8+1 sections (9 rendered) | Sonnet |
+| **Light** | 8+1 sections (9 rendered · summary-oriented token cap) | Sonnet |
+| **Mid** | 8+1 sections (9 rendered) | Sonnet |
 | **Deep** | 15+1 sections (base 8 + 7 deep-only + intended-vs-actual) | Sonnet by default, **Opus selectable** (deep-only, behind a cost gate) |
 
 **Features**

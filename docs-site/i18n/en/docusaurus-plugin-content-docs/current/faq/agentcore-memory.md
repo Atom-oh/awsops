@@ -51,7 +51,7 @@ flowchart TD
 
   ECR -->|"Image reference"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["8 section gateways<br/>(~120 read-only tools)"]
+  AGENT -->|"MCP + SigV4"| GW["9 section gateways<br/>(~120 read-only tools)"]
   AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
 ```
 
@@ -90,13 +90,13 @@ flowchart LR
   GW -->|"mcp.lambda"| L3["Lambda 3<br/>TGW route queries"]
 ```
 
-### There are 8 section gateways (ADR-004)
+### There are 9 section gateways (ADR-004 as amended)
 
-`network · container · data · security · cost · monitoring · iac · ops` — **8 total**.
+`network · container · data · security · cost · monitoring · iac · ops · external-obs` — **9 total** (9 provisioned / 9 routed; external-obs promoted 2026-06-24).
 
 | Item | Detail |
 |------|--------|
-| **Gateway count** | **Fixed at 8** per ADR-004 |
+| **Gateway count** | **9** per ADR-004 as amended (2026-06-24) |
 | **Tool count** | About **120**, all read-only — evolves as the fleet grows (not a fixed number) |
 | **External observability** | **Not** a 9th gateway — split out as the separate **Integrations axis** (ADR-039) |
 | **Protocol** | MCP (Model Context Protocol) standard |

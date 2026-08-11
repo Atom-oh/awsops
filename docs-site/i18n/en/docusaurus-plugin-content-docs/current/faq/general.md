@@ -35,7 +35,7 @@ AWSops is a microservice architecture provisioned with **Terraform** (`terraform
 | **Edge** | CloudFront (TLS) → VPC Origin (`https-only:443`) → internal ALB HTTPS:443 (regional ACM) → Fargate. **No public ALB** |
 | **Compute** | ECS Fargate (arm64). web is a Next.js 14 thin-BFF served at the **root path (`/`)** |
 | **Data** | Aurora Serverless v2 (PostgreSQL 17), accessed via node-pg |
-| **AI** | AgentCore Runtime + MCP Lambda tools across 8 section gateways (live query) |
+| **AI** | AgentCore Runtime + MCP Lambda tools across 9 section gateways (live query) |
 | **Async workers** | SQS → ESM (kill-switch) → dispatcher Lambda → Step Functions → Lambda or Fargate |
 
 Heavy, long, or OOM-risk work is never run inline by web — it is sent to the **async worker tier**: `POST /api/jobs` → enqueue into `worker_jobs` → SQS → idempotent dispatcher Lambda → Step Functions routes short jobs to RunLambda and long/OOM-risk jobs to `ecs:runTask.sync` Fargate. Failures are recorded by a status_updater Lambda, and a reaper (EventBridge, every 5 min) reconciles stale jobs.
@@ -93,10 +93,10 @@ The app accesses Aurora via **node-pg** (the shared pool in `web/lib/db.ts`). Th
 
 ## How does AWSops query live AWS data?
 
-Live AWS / Kubernetes data is queried through **AgentCore MCP Lambda tools**. About 120 read-only tools are distributed across **8 section gateways** (network · container · data · security · cost · monitoring · iac · ops).
+Live AWS / Kubernetes data is queried through **AgentCore MCP Lambda tools**. About 120 read-only tools are distributed across **9 section gateways** (network · container · data · security · cost · monitoring · iac · ops · external-obs).
 
 - All tools are read-only.
-- The gateway count stays at **8** (ADR-004). External observability is a separate "Integrations axis," not a 9th gateway.
+- The gateway count is **9** (ADR-004 as amended 2026-06-24) — external-obs, hosting the Prometheus·ClickHouse connectors, is provisioned and routed as the ninth.
 - It no longer relies on a local Steampipe service (127.0.0.1:9193) or direct access to 380 tables.
 
 ## Can it query external observability data (Prometheus / Loki / Tempo / ClickHouse / Datadog)?

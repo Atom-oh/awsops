@@ -35,7 +35,7 @@ AWSops는 **Terraform**(`terraform/v2/foundation/`, 부분 S3 backend)으로 프
 | **엣지** | CloudFront(TLS) → VPC Origin(`https-only:443`) → 내부 ALB HTTPS:443(리전 ACM) → Fargate. **공개 ALB 없음** |
 | **컴퓨트** | ECS Fargate(arm64). web은 Next.js 14 thin-BFF, **루트 경로(`/`)** 서빙 |
 | **데이터** | Aurora Serverless v2 (PostgreSQL 17), node-pg로 접근 |
-| **AI** | AgentCore Runtime + 8개 섹션 게이트웨이의 MCP Lambda 도구(라이브 조회) |
+| **AI** | AgentCore Runtime + 9개 섹션 게이트웨이의 MCP Lambda 도구(라이브 조회) |
 | **비동기 워커** | SQS → ESM(킬스위치) → dispatcher Lambda → Step Functions → Lambda 또는 Fargate |
 
 무겁거나 길거나 메모리(OOM) 위험이 있는 작업은 web이 직접 처리하지 않고 **비동기 워커 티어**로 보냅니다: `POST /api/jobs` → `worker_jobs` 큐 적재 → SQS → 멱등 dispatcher Lambda → Step Functions가 작업 길이에 따라 짧은 작업은 RunLambda, 긴/OOM 위험 작업은 `ecs:runTask.sync` Fargate로 라우팅합니다. 실패는 status_updater Lambda가 기록하고, reaper(EventBridge 5분)가 stale 작업을 정합화합니다.
@@ -93,10 +93,10 @@ AWSops는 EC2 인스턴스 내 JSON 파일이 아니라 **관리형 AWS 서비�
 
 ## 라이브 AWS 데이터는 어떻게 조회하나요?
 
-라이브 AWS / Kubernetes 데이터는 **AgentCore MCP Lambda 도구**를 통해 조회합니다. 약 120개의 읽기 전용 도구가 **8개 섹션 게이트웨이**(network · container · data · security · cost · monitoring · iac · ops)에 걸쳐 배치되어 있습니다.
+라이브 AWS / Kubernetes 데이터는 **AgentCore MCP Lambda 도구**를 통해 조회합니다. 약 120개의 읽기 전용 도구가 **9개 섹션 게이트웨이**(network · container · data · security · cost · monitoring · iac · ops · external-obs)에 걸쳐 배치되어 있습니다.
 
 - 모든 도구는 read-only입니다.
-- 게이트웨이 수는 **8개**로 유지됩니다 (ADR-004). 외부 관측성은 별도의 "Integrations 축"이며 9번째 게이트웨이가 아닙니다.
+- 게이트웨이 수는 **9개**입니다 (ADR-004 개정 2026-06-24) — 외부 관측성 커넥터(Prometheus·ClickHouse)를 호스팅하는 external-obs가 아홉 번째로 프로비저닝·라우팅됩니다.
 - 더 이상 로컬 Steampipe(127.0.0.1:9193) 서비스나 380개 테이블 직접 접근에 의존하지 않습니다.
 
 ## 외부 관측성 데이터(Prometheus / Loki / Tempo / ClickHouse / Datadog)도 조회할 수 있나요?

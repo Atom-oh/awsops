@@ -9,7 +9,7 @@ This ADR records only the current net state, consolidating the prior routing ADR
 
 ## Context
 
-AWSops 챗은 운영자 질의를 8개 섹션 게이트웨이(network/container/data/security/cost/monitoring/iac/ops) 중 적합한 에이전트로 라우팅해야 한다. 두 가지 라우팅 결함이 누적되어 있었다:
+AWSops 챗은 운영자 질의를 9개 섹션 게이트웨이(network/container/data/security/cost/monitoring/iac/ops/external-obs — ADR-004 개정) 중 적합한 에이전트로 라우팅해야 한다. 두 가지 라우팅 결함이 누적되어 있었다:
 
 1. **단일-매칭 정규식의 한계.** `web/lib/route.ts`의 first-match 키워드 정규식은 다중 도메인 질의("EKS 파드가 RDS 연결 안 돼")를 첫 매칭(container)으로 강등해 실제 원인(network/data)을 놓쳤고, 무매칭 질의는 비활성 `ops` 섹션으로 떨어졌다.
 2. **교차도메인 UX 미결.** 운영자 질의의 상당수가 도메인 경계를 가로지르지만, 사용자가 한 번에 통합 답변을 받을 경로가 정의되지 않았다 — 사용자에게 N개 질문을 따로 하게 하거나 한 게이트웨이의 부분 답변만 주었다.

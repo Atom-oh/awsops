@@ -19,12 +19,12 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 - **AgentCore Runtime** — Strands; reuses `agent/agent.py` as-is. Gateway URLs are
   injected via a `GATEWAYS_JSON` env var (agent.py's documented discovery fallback —
   no awscli-in-image dependency). Runtime name `awsops_v2_agent` (underscores only).
-- **8 section gateways** — `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`
-  (ADR-004 canonical count = **8 section gateways**; the provisioner/`catalog.py` still creates a
-  9th `external-obs` gateway slot, so the deployed skeleton is **9 provisioned / 8 section-agent
-  routes**). **External observability is NOT a doctrinal section gateway** — per
-  **ADR-004** it is the **Integrations axis** (the egress MCP substrate), re-homing what an
-  earlier draft listed as an `external-obs` gateway. `monitoring` covers AWS-native monitoring;
+- **9 section gateways** — `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops,external-obs}-gateway`
+  (**ADR-004 as amended 2026-06-24: 9 provisioned / 9 routed** — external-obs, hosting the
+  Prometheus·ClickHouse connectors, was promoted from a provisioned-only slot into the routing
+  set; the chat key `observability` aliases to it). Other external integrations (vendor-hosted
+  MCP presets, etc.) remain the **Integrations axis** (ADR-007/017), distinct from the
+  external-obs section gateway. `monitoring` covers AWS-native monitoring;
   the external-obs plugin datasource registry / OTLP / datasource-diag re-home is the Integrations
   axis (P3).
 - **Memory** — `awsops_v2_memory-*`, `eventExpiryDuration = 365` days.
