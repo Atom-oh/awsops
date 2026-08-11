@@ -72,8 +72,8 @@ routes. 무거운 작업은 워커 큐로 enqueue하는 thin-BFF.
 **AgentCore Agents — [`05-agentcore.md`](05-agentcore.md).** Strands agent on **AgentCore Runtime**
 fronted by domain gateways exposing **read-only MCP tools**, plus Memory + Code Interpreter, all
 provisioned by an idempotent boto3 provisioner with config delivered through SSM. **9 gateways are
-provisioned; `agent.py` routes across the 8 section gateways** (external observability is the
-ADR-039 Integrations axis, not a routed section). 9개 프로비저닝 / 8 섹션 에이전트 라우트.
+provisioned and all 9 are routed** (external-obs, hosting the Prometheus·ClickHouse connectors,
+was promoted into the routing set per amended ADR-004, 2026-06-24). 9개 프로비저닝 / 9 라우트.
 
 **Async Worker Backbone — [`06-workers.md`](06-workers.md).** an enqueue (generic `POST /api/jobs`
 for `noop`; ownership-scoped `/api/diagnosis` · `/api/compliance/run` for domain work) → `worker_jobs` +

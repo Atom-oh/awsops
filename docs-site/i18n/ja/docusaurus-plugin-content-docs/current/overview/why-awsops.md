@@ -61,7 +61,7 @@ EC2・Lambda・ECS/ECR・EKS（Pod/Node/Deployment/Service/Explorer）・VPC・C
 `/ai-diagnosis` は、Amazon Bedrock **Claude Opus 4.8** がインフラ全体を自動分析して正式なレポートを作成するツールです。
 
 - **6 つの Well-Architected ピラーのスコアカード** — Executive Summary が Operational Excellence・Security・Reliability・Performance Efficiency・Cost Optimization・Sustainability の全体にスコアを付けます。
-- **3 ピラーの詳細分析（15 セクション）** — Cost Optimization・Security・Reliability を深く掘り下げます（コスト概要/コンピューティング/ネットワーク/ストレージ、アイドルリソース、セキュリティ状況、ネットワーク・コンピューティング・EKS・DB・MSK・ストレージ分析など）。
+- **3 ピラーの詳細分析（15+1 セクション）** — Cost Optimization・Security・Reliability を深く掘り下げます（コスト概要/コンピューティング/ネットワーク/ストレージ、アイドルリソース、セキュリティ状況、ネットワーク・コンピューティング・EKS・DB・MSK・ストレージ分析など）。
 - **DOCX / Markdown / PDF / PPTX** エクスポート + **週次/隔週/月次スケジュール** + 完了時のメール通知。
 
 :::note 正直なスコープ

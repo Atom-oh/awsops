@@ -98,7 +98,7 @@ flowchart LR
 |------|--------|
 | **Gateway count** | **9** per ADR-004 as amended (2026-06-24) |
 | **Tool count** | About **120**, all read-only — evolves as the fleet grows (not a fixed number) |
-| **External observability** | **Not** a 9th gateway — split out as the separate **Integrations axis** (ADR-039) |
+| **External observability** | The Prometheus·ClickHouse connectors ride the **external-obs gateway** (the ninth, per amended ADR-004); other external integrations are the separate **Integrations axis** (ADR-007/017) |
 | **Protocol** | MCP (Model Context Protocol) standard |
 
 - The Agent calls `list_tools` to discover available tools

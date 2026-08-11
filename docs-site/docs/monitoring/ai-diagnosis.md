@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: AI 종합 진단
-description: 15섹션 Bedrock Opus 진단 리포트, DOCX/MD/PDF 내보내기, 스케줄링, 이메일 알림
+description: (v1 레거시 문서) 15섹션 진단 리포트 — 현행 v2는 Light/Mid/Deep(15+1) 티어, FAQ 참조
 ---
 
 import Screenshot from '@site/src/components/Screenshot';

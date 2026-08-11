@@ -16,7 +16,7 @@ AWSops 챗은 운영자 질의를 9개 섹션 게이트웨이(network/container/
 
 또한 챗 thread와 에이전트의 바인딩, 그리고 picker 핀 ↔ 전환칩 사이의 우선순위가 정의되지 않아 데드락 위험이 있었다.
 
-The chat must route operator queries to the right section agent among 8 section gateways. First-match regex demoted multi-domain queries to a single (often wrong) section and dropped no-match queries to the inactive `ops` section; cross-domain queries had no single-answer path; and thread↔agent binding plus picker-pin vs switch-chip precedence were undefined.
+The chat must route operator queries to the right section agent among 9 section gateways (per amended ADR-004; external-obs included). First-match regex demoted multi-domain queries to a single (often wrong) section and dropped no-match queries to the inactive `ops` section; cross-domain queries had no single-answer path; and thread↔agent binding plus picker-pin vs switch-chip precedence were undefined.
 
 ## Decision
 

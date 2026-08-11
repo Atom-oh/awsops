@@ -82,11 +82,16 @@ jobs:
           WORK=$(mktemp -d)
           trap 'rm -rf "$WORK"' EXIT
           [ "$(unzip -Z1 "$DECK" | wc -l)" -le 500 ] || { echo "::error::deck zip has an implausible number of entries"; exit 1; }
+          # reject symlink entries (a link named e.g. docProps/core.xml would make the
+          # later sed/diff read through it) and cap total uncompressed size (zip bomb)
+          ! unzip -Z "$DECK" | grep -q '^l' || { echo "::error::deck zip contains symlink entries"; exit 1; }
+          TOTAL=$(unzip -l "$DECK" | tail -1 | awk '{print $1}')
+          [ "$TOTAL" -le 52428800 ] || { echo "::error::deck uncompressed size exceeds 50MB cap"; exit 1; }
           node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx"
           diff <(unzip -Z1 "$DECK" | sort) <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) || { echo "::error::pptx part list differs from generator output"; exit 1; }
           unzip -q "$DECK" -d "$WORK/committed"
           unzip -q "$WORK/rebuilt-deck.pptx" -d "$WORK/rebuilt"
           sed -i -E 's#<dcterms:(created|modified)[^<]*</dcterms:(created|modified)>##g' "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
-          diff -r "$WORK/committed" "$WORK/rebuilt" || { echo "::error::committed pptx does not match generator output"; exit 1; }
+          diff -r --no-dereference "$WORK/committed" "$WORK/rebuilt" || { echo "::error::committed pptx does not match generator output"; exit 1; }
           if grep -rl 'TargetMode="External"' "$WORK/committed" --include='*.rels'; then echo "::error::external relationship target in deck"; exit 1; fi
           echo "Deck verified pre-merge: structure, content scan, generator parity, no external targets."

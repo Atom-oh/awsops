@@ -70,7 +70,7 @@ In scope (stands):
 
 External observability integration is a typed catalog/UX/governance over **one hardened MCP egress substrate** (`agent.py`): `direction=egress`, `capability=READ`. Global catalog + per-account enablement/credential isolation. Re-derives ADR-011 SSRF defense for v2: https-only + DNS pre-resolve/recheck + metadata/private-CIDR block (private opt-in) + `redirect:manual` + per-account/per-integration credential scoping (Secrets Manager). Immutable `SAFEGUARD_LINE` (read-only boundary) + server-side tool allowlist (`exposed_tools` ceiling).
 
-**게이트웨이 수와의 관계:** 외부 관측성 = Integrations egress READ(9번째 프로비저닝 게이트웨이 external-obs로 표면화), 내부 CloudWatch = `monitoring` 섹션 게이트웨이. 정식 섹션 게이트웨이 수는 8 유지(§1).
+**게이트웨이 수와의 관계:** 외부 관측성 = Integrations egress READ(9번째 프로비저닝 게이트웨이 external-obs로 표면화), 내부 CloudWatch = `monitoring` 섹션 게이트웨이. 정식 섹션 게이트웨이 수는 §1 개정(2026-06-24)에 따라 9(external-obs 포함).
 
 Relation to gateway count: external observability = Integrations egress READ (surfaced as the 9th provisioned gateway external-obs), internal CloudWatch = the `monitoring` section gateway. Section-gateway count stays 8 (§1).
 

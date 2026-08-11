@@ -8,6 +8,13 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # AI 综合诊断
 
+:::caution 旧版页面（基于 v1）
+本页面基于 v1 时期的 AI 诊断界面（15 个分区的固定目录、`src/` 路径）编写。
+当前 v2 采用 **Light / Mid / Deep（15+1 个分区，共 16 渲染）** 的层级结构 — 最新行为请参见
+[FAQ · AI 助手](../faq/ai-assistant.md)。
+:::
+
+
 `/ai-diagnosis` 页面是由 Amazon Bedrock **Claude Opus 4.8** 按 15 个分区对整个 AWS 基础设施进行自动分析的综合报告工具。
 
 <Screenshot src="/screenshots/monitoring/ai-diagnosis.png" alt="AI 综合诊断页面" />

@@ -1,12 +1,19 @@
 ---
 sidebar_position: 8
 title: AI 総合診断
-description: 15 セクションの Bedrock Opus 診断レポート、DOCX/MD/PDF エクスポート、スケジューリング、メール通知
+description: （v1 レガシーページ）15 セクション診断レポート — 現行 v2 は Light/Mid/Deep（15+1）ティア、FAQ 参照
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
 
 # AI 総合診断
+
+:::caution レガシーページ（v1 基準）
+このページは v1 時代の AI 診断画面（15 セクション固定カタログ・`src/` パス）を基準に書かれています。
+現行 v2 は **Light / Mid / Deep（15+1 セクション、計 16 レンダー）** のティア構造です — 最新の動作は
+[FAQ · AI アシスタント](../faq/ai-assistant.md)を参照してください。
+:::
+
 
 `/ai-diagnosis` ページは、Amazon Bedrock **Claude Opus 4.8** が 15 セクションで AWS インフラ全体を自動分析する総合レポートツールです。
 

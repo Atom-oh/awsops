@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: AI Comprehensive Diagnosis
-description: 15-section Bedrock Opus diagnosis report, DOCX/MD/PDF export, scheduling, email notifications
+description: (v1 legacy page) 15-section diagnosis report — current v2 uses Light/Mid/Deep (15+1) tiers, see FAQ
 ---
 
 import Screenshot from '@site/src/components/Screenshot';

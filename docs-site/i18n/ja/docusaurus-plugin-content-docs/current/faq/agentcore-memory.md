@@ -51,7 +51,7 @@ flowchart TD
 
   ECR -->|"イメージ参照"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["8 セクションゲートウェイ<br/>(~120 読み取り専用ツール)"]
+  AGENT -->|"MCP + SigV4"| GW["9 セクションゲートウェイ<br/>(~120 読み取り専用ツール)"]
   AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
 ```
 

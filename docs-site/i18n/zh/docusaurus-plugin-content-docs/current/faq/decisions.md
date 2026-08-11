@@ -121,9 +121,9 @@ ADR-032 最初定义了事件触发的自主事故生命周期（多 Agent Lead/
 
 ### 网关增加到 9 个了吗？
 
-**没有——保持 8 个**（ADR-004）。
+**是的——共 9 个**（ADR-004 修订，2026-06-24）。
 
-network · container · data · security · cost · monitoring · iac · ops 的 **8 个分区网关**得以维持，外部可观测性是独立的 **"Integrations 轴"**（ADR-039），不是第 9 个网关。
+在 network · container · data · security · cost · monitoring · iac · ops 这 8 个 AWS 领域网关之外，承载外部可观测性连接器（Prometheus·ClickHouse）的 **external-obs 网关**作为第九个被配置并参与路由（9 配置 / 9 路由）。其余外部集成属于独立的 **Integrations 轴**（ADR-007/017）。
 
 ### 我可以自行追加配置 Agent 或工具吗？
 

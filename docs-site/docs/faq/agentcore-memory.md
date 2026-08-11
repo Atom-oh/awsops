@@ -51,7 +51,7 @@ flowchart TD
 
   ECR -->|"이미지 참조"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["8 섹션 게이트웨이<br/>(~120 읽기 전용 도구)"]
+  AGENT -->|"MCP + SigV4"| GW["9 섹션 게이트웨이<br/>(~120 읽기 전용 도구)"]
   AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
 ```
 
@@ -90,13 +90,13 @@ flowchart LR
   GW -->|"mcp.lambda"| L3["Lambda 3<br/>TGW 라우트 조회"]
 ```
 
-### 섹션 게이트웨이는 8개입니다 (ADR-004)
+### 섹션 게이트웨이는 9개입니다 (ADR-004 개정)
 
-`network · container · data · security · cost · monitoring · iac · ops` — 총 **8개**입니다.
+`network · container · data · security · cost · monitoring · iac · ops · external-obs` — 총 **9개**입니다(9 프로비저닝 / 9 라우트, external-obs 승격 2026-06-24).
 
 | 항목 | 내용 |
 |------|------|
-| **게이트웨이 수** | ADR-004에 따라 **8개로 고정** |
+| **게이트웨이 수** | ADR-004에 따라 **9개(ADR-004 개정)** |
 | **도구 수** | 약 **120개**, 전부 읽기 전용 — 함대가 확장되면 변동(고정 수치 아님) |
 | **외부 관측성** | 9번째 게이트웨이가 **아님** — 별도의 **Integrations 축**(ADR-039)으로 분리 |
 | **프로토콜** | MCP(Model Context Protocol) 표준 |

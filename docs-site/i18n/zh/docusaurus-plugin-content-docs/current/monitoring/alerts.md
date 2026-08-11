@@ -6,6 +6,13 @@ description: 接收 CloudWatch / Alertmanager / Grafana Webhook、告警关联�
 
 # 告警管道
 
+:::caution 旧版页面（基于 v1）
+本页面基于 v1 时期的告警管道（告警联动诊断从 15 个分区的固定目录中选择分区、`src/` 路径）编写。
+当前 v2 的诊断采用 **Light / Mid / Deep（15+1 个分区，共 16 渲染）** 的层级结构 — 最新行为请参见
+[FAQ · AI 助手](../faq/ai-assistant.md)。
+:::
+
+
 这是一条将外部告警系统的事件接收到 AWSops 中，一次性完成**关联分析 → 自动 AI 诊断 → Slack 通知**的管道。
 
 ## 支持的来源

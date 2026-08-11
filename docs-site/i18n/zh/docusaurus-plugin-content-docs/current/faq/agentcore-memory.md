@@ -51,7 +51,7 @@ flowchart TD
 
   ECR -->|"镜像引用"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["8 个分区网关<br/>（约 120 个只读工具）"]
+  AGENT -->|"MCP + SigV4"| GW["9 个分区网关<br/>（约 120 个只读工具）"]
   AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
 ```
 
@@ -90,13 +90,13 @@ flowchart LR
   GW -->|"mcp.lambda"| L3["Lambda 3<br/>TGW 路由查询"]
 ```
 
-### 分区网关有 8 个（ADR-004）
+### 分区网关有 9 个（ADR-004 修订）
 
-`network · container · data · security · cost · monitoring · iac · ops` — 共 **8 个**。
+`network · container · data · security · cost · monitoring · iac · ops · external-obs` — 共 **9 个**（9 配置 / 9 路由，external-obs 于 2026-06-24 提升）。
 
 | 项目 | 内容 |
 |------|------|
-| **网关数量** | 按照 ADR-004 **固定为 8 个** |
+| **网关数量** | 依 ADR-004 修订（2026-06-24）为 **9 个** |
 | **工具数量** | 约 **120 个**，全部只读 — 随工具集扩展而变动（不是固定数字） |
 | **外部可观测性** | **不是**第 9 个网关 — 分离为独立的 **Integrations 轴**（ADR-039） |
 | **协议** | MCP（Model Context Protocol）标准 |

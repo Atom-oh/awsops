@@ -11,7 +11,7 @@ description: AWSops AI 助手——关于混合路由、AgentCore MCP 工具、A
 <details>
 <summary>可以提出哪些问题？</summary>
 
-AI 助手回答横跨 **8 个分区领域**的 AWS/Kubernetes 运维问题。需要哪个领域会被自动判别（参见下文"路由"），用自然语言提问即可。
+AI 助手回答横跨 **9 个分区领域**（另有本地专项分区）的 AWS/Kubernetes 运维问题。需要哪个领域会被自动判别（参见下文"路由"），用自然语言提问即可。
 
 | 领域 | 示例问题 |
 |--------|-----------|
@@ -50,8 +50,8 @@ AI 助手使用**混合路由**（ADR-038，LIVE）。不再是把所有问题�
 
 实时 AWS 查询通过 **AgentCore MCP（Model Context Protocol）Lambda 工具**完成。助手直接用工具查询回答问题所需的数据，然后进行分析。
 
-- **约 120 个只读工具**分布在 **8 个分区网关**（Network / Container / Data / Security / Monitoring / Cost / IaC / Ops）中。工具数量为约数，仍在持续演进。
-- 外部可观测性是独立的 **Integrations 轴**（ADR-039），不是第 9 个网关——网关数量保持为 8 个（ADR-004）。
+- **约 120 个只读工具**分布在 **9 个分区网关**（Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — 依 ADR-004 修订）中。工具数量为约数，仍在持续演进。
+- 外部可观测性连接器（Prometheus·ClickHouse）已提升为 **external-obs 网关**，作为第九个网关参与路由（ADR-004 修订 2026-06-24，9 配置 / 9 路由）。其余外部集成属于独立的 **Integrations 轴**（ADR-007/017）。
 - Steampipe 仅作为**由 flag 门控的库存同步**（`steampipe_enabled`，默认 OFF）用途存在。它不是实时查询引擎，也不是常驻的本地服务。
 
 :::info 技术细节
@@ -107,8 +107,9 @@ AI 助手使用**混合路由**（ADR-038，LIVE）。不再是把所有问题�
 
 | Tier | 章节数 | 默认模型 |
 |------|---------|-----------|
-| **Base** | 8 个章节 | Sonnet |
-| **Deep** | 15 个章节（base 8 + deep 专属 6 + 综合） | 默认 Sonnet，**可选 Opus**（deep 专属，应用 cost-gate） |
+| **Light** | 8+1 个章节（共 9 渲染 — 目前与 Mid 相同） | Sonnet |
+| **Mid** | 8+1 个章节（共 9 渲染） | Sonnet |
+| **Deep** | 15+1 个章节（base 8 + deep 专用 7 + intended-vs-actual，共 16 渲染） | Sonnet 默认，**Opus 可选**（仅 deep，受 cost-gate 约束） |
 
 **功能**
 

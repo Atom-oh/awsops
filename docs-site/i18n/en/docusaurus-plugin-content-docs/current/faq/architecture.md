@@ -116,7 +116,7 @@ Live AWS data is served by **AgentCore MCP Lambda tools** — roughly **120 read
 | **AgentCore MCP tools (live)** | Real-time AWS API queries — the live data source for chat, diagnosis, and pages |
 | **Steampipe (flag-gated)** | The `steampipe_enabled` (default OFF) inventory **sync only**. Not a live query engine, not a local 9193 service |
 
-:::info The gateway count is 8 (ADR-004)
+:::info The gateway count is 9 (ADR-004 as amended, 2026-06-24)
 The external-observability connectors (Prometheus·ClickHouse) are promoted to the **external-obs gateway**, provisioned and routed as the ninth (ADR-004 as amended 2026-06-24 — 9 provisioned / 9 routed). Other external integrations remain the separate **Integrations axis** (ADR-007/017).
 :::
 

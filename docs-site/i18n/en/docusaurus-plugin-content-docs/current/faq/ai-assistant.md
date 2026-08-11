@@ -107,7 +107,7 @@ A mutation request like "assistant, restart this instance" will not be executed.
 
 | Tier | Sections | Default model |
 |------|----------|---------------|
-| **Light** | 8+1 sections (9 rendered · summary-oriented token cap) | Sonnet |
+| **Light** | 8+1 sections (9 rendered — currently identical catalog/token budget to Mid) | Sonnet |
 | **Mid** | 8+1 sections (9 rendered) | Sonnet |
 | **Deep** | 15+1 sections (base 8 + 7 deep-only + intended-vs-actual) | Sonnet by default, **Opus selectable** (deep-only, behind a cost gate) |
 

@@ -17,7 +17,7 @@ AWSops は、AWS と Kubernetes 環境のための**リアルタイム読み取�
 - **セキュリティ分析**: IAM 権限分析、コンプライアンス、脆弱性チェック
 - **コスト管理**: Cost Explorer ベースのコスト分析とダッシュボード
 - **AI アシスタント**: 自然言語クエリによる AWS リソース分析と問題解決(ストリーミング + ドメインルーティング + 会話の永続化)
-- **AI 診断(Diagnosis)**: ワーカーが生成する読み取り専用の診断レポート(base 8 セクション / deep 15 セクション、DOCX・PDF エクスポート)
+- **AI 診断(Diagnosis)**: ワーカーが生成する読み取り専用の診断レポート(base 8+1 セクション（計 9） / deep 15+1 セクション（計 16）、DOCX・PDF エクスポート)
 
 プラットフォームは **Terraform ベースの MSA** です — ライブ AWS クエリは **Amazon Bedrock AgentCore MCP ツール**が担当し、アプリの状態は **Aurora Serverless v2(PostgreSQL 17)**に永続化されます。
 
@@ -35,7 +35,7 @@ AWSops は **Terraform**(`terraform/v2/foundation/`、部分 S3 backend)でプ�
 | **エッジ** | CloudFront(TLS) → VPC Origin(`https-only:443`) → 内部 ALB HTTPS:443(リージョン ACM) → Fargate。**公開 ALB なし** |
 | **コンピュート** | ECS Fargate(arm64)。web は Next.js 14 thin-BFF、**ルートパス(`/`)**で配信 |
 | **データ** | Aurora Serverless v2 (PostgreSQL 17)、node-pg でアクセス |
-| **AI** | AgentCore Runtime + 8 個のセクションゲートウェイの MCP Lambda ツール(ライブクエリ) |
+| **AI** | AgentCore Runtime + 9 個のセクションゲートウェイの MCP Lambda ツール(ライブクエリ) |
 | **非同期ワーカー** | SQS → ESM(キルスイッチ) → dispatcher Lambda → Step Functions → Lambda または Fargate |
 
 重い・長い・メモリ(OOM)リスクのある作業は web が直接処理せず、**非同期ワーカーティア**に送ります: `POST /api/jobs` → `worker_jobs` へキュー登録 → SQS → 冪等な dispatcher Lambda → Step Functions が作業の長さに応じて、短い作業は RunLambda、長い/OOM リスクのある作業は `ecs:runTask.sync` Fargate にルーティングします。失敗は status_updater Lambda が記録し、reaper(EventBridge 5 分)が stale な作業を整合化します。
@@ -93,10 +93,10 @@ AWSops は EC2 インスタンス内の JSON ファイルではなく、**マネ
 
 ## ライブ AWS データはどのように照会しますか?
 
-ライブ AWS / Kubernetes データは **AgentCore MCP Lambda ツール**を通じて照会します。約 120 個の読み取り専用ツールが **8 個のセクションゲートウェイ**(network · container · data · security · cost · monitoring · iac · ops)にわたって配置されています。
+ライブ AWS / Kubernetes データは **AgentCore MCP Lambda ツール**を通じて照会します。約 120 個の読み取り専用ツールが **9 個のセクションゲートウェイ**(network · container · data · security · cost · monitoring · iac · ops · external-obs)にわたって配置されています。
 
 - すべてのツールは read-only です。
-- ゲートウェイ数は **8 個**で維持されます (ADR-004)。外部オブザーバビリティは別の「Integrations 軸」であり、9 番目のゲートウェイではありません。
+- ゲートウェイ数は **9 個**です (ADR-004 改訂 2026-06-24) — Prometheus·ClickHouse コネクタをホストする external-obs が 9 番目としてプロビジョニング・ルーティングされます。
 - ローカル Steampipe(127.0.0.1:9193)サービスや 380 テーブルへの直接アクセスにはもう依存しません。
 
 ## 外部オブザーバビリティデータ(Prometheus / Loki / Tempo / ClickHouse / Datadog)も照会できますか?
