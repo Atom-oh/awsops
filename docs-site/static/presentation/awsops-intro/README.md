@@ -17,7 +17,7 @@ node scripts/pptx/build-awsops-intro-pptx.js
 ```
 
 - 슬라이드 구성·문구·스피커 노트는 전부 생성 스크립트가 단일 소스다. 내용을 고치려면 스크립트를 수정하고 다시 빌드한다.
-- 배경 자산 2종은 합성 그라디언트(스크린샷 아님)이며, 리뷰 편의를 위해 SHA-256을 고정 기록한다 — 변경 시 이 값도 갱신할 것:
+- 배경 자산 2종은 합성 그라디언트(스크린샷 아님)이며, SHA-256을 고정 기록한다. **이 해시는 CI(`scripts/verify-deck.sh` 프로비넌스 pre-flight)가 강제한다** — 자산 변경 시 여기와 `verify-deck.sh` 의 해시를 같은 커밋에서 갱신할 것:
   - `scripts/pptx/assets/title_bg.png` — `3fd59525f442c4485e77dfd7d7e7c41932db14a8c1113e4a6258ae58d982ba87`
   - `scripts/pptx/assets/section_bg_33.png` — `7c8ae2692023aa54cbca261b06e9128eecd7feac64897002b4c93867551bbe22`
 - `export-utils.js` 의 "Export PPTX" 버튼(웹 슬라이드 스크린샷 기반)과는 무관하다.
@@ -34,7 +34,7 @@ node scripts/pptx/build-awsops-intro-pptx.js
 
 - 이 파일은 인증 없는 공개 docs-site 로 배포된다. **덱에 계정 ID·ARN·내부 호스트명·시크릿을 넣지 말 것** (스피커 노트 포함).
 - `deploy-guide.yml` 의 build 검증이 **4중 게이트**로 막는다 (누락·위반 시 배포 실패):
-  1. 존재 + zip 매직 + `ppt/presentation.xml` 구조 확인
+  1. 존재 + zip 매직 + `ppt/presentation.xml` 구조 확인 + ZIP 컨테이너 사이드채널 차단(아카이브 코멘트·central/local extra 필드·data descriptor·레코드 사이 gap 바이트·EOCD 뒤 trailing 바이트 전부 금지)
   2. 콘텐츠 XML 민감정보 스캔 — 계정 ID·ARN·액세스 키·내부 호스트명·리소스 ID·사설 CIDR (theme 제외 전 XML/rels)
   3. **생성기 일치(프로비넌스)** — CI가 스크립트로 재빌드해 파트 목록 + 전체 아카이브(media 포함)를 diff. 손으로 바꾼 바이너리는 배포 불가
   4. 외부 관계 타깃(`TargetMode="External"`) 금지

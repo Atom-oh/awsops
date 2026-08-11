@@ -14,7 +14,7 @@ AgentCore は Amazon Bedrock AgentCore Runtime と Gateway をベースに、AI 
 <Screenshot src="/screenshots/overview/agentcore-routing.png" alt="AI アシスタントのルーティングバッジ" />
 
 :::tip 顧客セッションポイント
-**8 つの AWS ドメイン Gateway + external-obs（外部オブザーバビリティ）= 9 つのルーティングセクション** · 全カタログ基準で **144 個の MCP ツール** · **23 個の Lambda スライス**（17 個は `agentcore_enabled`、6 個は `integrations_enabled` でゲート、いずれもデフォルト off）をサーバーレスで運用し、分類器が質問を 1〜3 個のルートに分類して**並列呼び出し後に合成**します。→ [なぜ AWSops なのか](./why-awsops)
+**8 つの AWS ドメイン Gateway + external-obs（外部オブザーバビリティ）= 9 つのルーティングセクション** · 全カタログ基準で **160 個の MCP ツール**（Lambda ターゲット 27 個の定義分 — ベンダーホスティングの mcpServer ターゲットは除く） · **30 個の Lambda スライス**（21 個は `agentcore_enabled`、9 個は `integrations_enabled` でゲート、いずれもデフォルト off）をサーバーレスで運用し、分類器が質問を 1〜3 個のルートに分類して**並列呼び出し後に合成**します。→ [なぜ AWSops なのか](./why-awsops)
 :::
 
 ## アーキテクチャ
@@ -56,23 +56,25 @@ AgentCore は Amazon Bedrock AgentCore Runtime と Gateway をベースに、AI 
 
 ## Gateway 詳細
 
-v2 は 8 つの AWS ドメイン Gateway（`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`）+ **external-obs**（外部オブザーバビリティ・連携コネクタをホスティングするルーティングセクション、チャットルーティングキーは `observability` としてエイリアス）で構成されます。ツール数は全カタログ（`scripts/v2/agentcore/catalog.py`）基準であり、実際の有効化は `agentcore_enabled`/`integrations_enabled` フラグに従って段階的に進みます（P3、現在は一部のみ read-only でデプロイ）。
+v2 は 8 つの AWS ドメイン Gateway（`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`）+ **external-obs**（外部オブザーバビリティ・連携コネクタをホスティングするルーティングセクション、チャットルーティングキーは `observability` としてエイリアス）で構成されます。ツール数は全カタログ（`scripts/v2/agentcore/catalog.py`）基準であり、有効化は `agentcore_enabled`/`integrations_enabled` フラグでゲートされます（新規インストールのデフォルトは off）。ライブ環境ではフリートのデプロイが完了しており、9 つの Gateway すべてが READY な MCP ターゲットを保有し、チャットセクション 16 キーがすべて有効です（2026-08-02）。
 
-### Network Gateway (16 tools)
+### Network Gateway (17 tools)
 
 VPC、ENI、Reachability、Flow Logs、TGW、VPN、Network Firewall のツールを提供します。
 
 | カテゴリ | ツール |
 |---------|------|
 | **flow-monitor** | `query_flow_logs` |
+| **reachability-read** | `check_reachability` |
 | **network-mcp** | `get_path_trace_methodology`, `find_ip_address`, `get_eni_details`, `list_vpcs`, `get_vpc_network_details`, `get_vpc_flow_logs`, `describe_network`, `list_transit_gateways`, `get_tgw_details`, `get_tgw_routes`, `get_all_tgw_routes`, `list_tgw_peerings`, `list_vpn_connections`, `list_network_firewalls`, `get_firewall_rules` |
 
-### Container Gateway (12 tools)
+### Container Gateway (19 tools)
 
-EKS、ECS 関連のツールを提供します。
+EKS、ECS、Istio サービスメッシュ関連のツールを提供します。
 
 | カテゴリ | ツール |
 |---------|------|
+| **istio-read** | `mesh_overview`, `list_virtual_services`, `list_destination_rules`, `list_istio_gateways`, `list_service_entries`, `list_authorization_policies`, `list_peer_authentications` |
 | **eks-mcp** | `list_eks_clusters`, `get_eks_vpc_config`, `get_eks_insights`, `get_cloudwatch_logs`, `get_cloudwatch_metrics`, `get_eks_metrics_guidance`, `get_policies_for_role`, `search_eks_troubleshoot_guide`, `generate_app_manifest` |
 | **ecs-mcp** | `ecs_resource_management`, `ecs_troubleshooting_tool`, `wait_for_service_ready` |
 
@@ -114,7 +116,7 @@ IAM およびセキュリティ分析のツールを提供します。（P1f で
 
 ### Monitoring Gateway (36 tools)
 
-CloudWatch、CloudTrail（AWS ネイティブ）に加え、OpenSearch、Prometheus/Loki/Tempo/Mimir（オブザーバビリティスタック）のツールを提供します。
+CloudWatch、CloudTrail（AWS ネイティブ）に加え、OpenSearch、Loki/Tempo/Mimir（オブザーバビリティスタック）のツールを提供します（Prometheus・ClickHouse は External-Obs が担当 — ADR-004）。
 
 | カテゴリ | ツール |
 |---------|------|
@@ -132,9 +134,15 @@ CloudWatch、CloudTrail（AWS ネイティブ）に加え、OpenSearch、Prometh
 | **cost-mcp** (9) | `get_today_date`, `get_cost_and_usage`, `get_cost_and_usage_comparisons`, `get_cost_comparison_drivers`, `get_cost_forecast`, `get_dimension_values`, `get_tag_values`, `get_pricing`, `list_budgets` |
 | **finops-mcp** (5) | Compute Optimizer のリサイジング、RI/SP 推奨、Cost Optimization Hub、Trusted Advisor |
 
-### Ops Gateway (5 tools)
+### Ops Gateway (11 tools)
 
-AWS ドキュメント・一般運用ツールを提供します（`aws-knowledge`）。
+AWS ドキュメント検索・運用ヘルパー・インベントリ照会ツールを提供します。
+
+| カテゴリ | ツール |
+|---------|------|
+| **core-helpers** | `prompt_understanding`, `suggest_aws_commands` |
+| **inventory-read** | `find_unused_resources`, `get_topology`, `query_inventory`, `inventory_summary` |
+| **aws-knowledge** | `search_documentation`, `read_documentation`, `recommend`, `list_regions`, `get_regional_availability` |
 
 ### External-Obs (13 tools, ルーティングキー: `observability`)
 
@@ -177,7 +185,8 @@ AgentCore Runtime ARN・Memory ID などの設定値は **SSM のみ**に存在�
 | **Code Interpreter / Memory の名前** | ハイフン不可、アンダースコアのみ |
 | **会話履歴の保持** | 最大 365 日 |
 | **AgentCore の応答** | 最終テキストのみ返却（ツール推論はタイピング効果でストリーミング） |
-| **全フリート未デプロイ** | カタログの 23 スライスのうち一部のみ P1f で read-only デプロイ済み（全体の有効化は P3） |
+| **ツール有効化フラグ** | 30 スライスは `agentcore_enabled`（21）・`integrations_enabled`（9）でゲート — ライブ環境はフリートのデプロイ完了（2026-08-02）、新規インストールのデフォルトは off |
+| **ベンダー mcpServer ターゲット** | external-obs のベンダーホスティング mcpServer ターゲット（Datadog・Dynatrace・New Relic）は `capability=read` がプロトコルレベルで強制されません（ADR-017）— read-only 保証は Lambda ターゲットが対象で、エンドポイント未設定時は SKIP |
 
 ## 次のステップ
 

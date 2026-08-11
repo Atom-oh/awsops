@@ -14,7 +14,7 @@ AgentCore 基于 Amazon Bedrock AgentCore Runtime 和 Gateway，负责 AI 助手
 <Screenshot src="/screenshots/overview/agentcore-routing.png" alt="AI 助手的路由徽章" />
 
 :::tip 客户会话要点
-**8 个 AWS 领域 Gateway + external-obs（外部可观测性）= 9 个路由分区** · 按完整目录计 **144 个 MCP 工具** · 以无服务器方式运营 **23 个 Lambda 切片**（17 个由 `agentcore_enabled` 门控，6 个由 `integrations_enabled` 门控，两者默认均为 off），分类器将问题分类到 1~3 个路由，**并行调用后合成**。→ [为什么选择 AWSops](./why-awsops)
+**8 个 AWS 领域 Gateway + external-obs（外部可观测性）= 9 个路由分区** · 按完整目录计 **160 个 MCP 工具**（27 个 Lambda 目标的定义 — 不含厂商托管的 mcpServer 目标） · 以无服务器方式运营 **30 个 Lambda 切片**（21 个由 `agentcore_enabled` 门控，9 个由 `integrations_enabled` 门控，两者默认均为 off），分类器将问题分类到 1~3 个路由，**并行调用后合成**。→ [为什么选择 AWSops](./why-awsops)
 :::
 
 ## 架构
@@ -56,23 +56,25 @@ AgentCore 基于 Amazon Bedrock AgentCore Runtime 和 Gateway，负责 AI 助手
 
 ## Gateway 详解
 
-v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`）+ **external-obs**（托管外部可观测性·集成连接器的路由分区，聊天路由键别名为 `observability`）构成。工具数量以完整目录（`scripts/v2/agentcore/catalog.py`）为准，实际启用根据 `agentcore_enabled`/`integrations_enabled` 标志分阶段进行（P3，目前仅部分以 read-only 部署）。
+v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`）+ **external-obs**（托管外部可观测性·集成连接器的路由分区，聊天路由键别名为 `observability`）构成。工具数量以完整目录（`scripts/v2/agentcore/catalog.py`）为准，启用由 `agentcore_enabled`/`integrations_enabled` 标志门控（新装环境默认 off）。当前线上环境编队已部署完毕 — 9 个 Gateway 均持有 READY 的 MCP 目标，聊天分区 16 个键全部激活（2026-08-02）。
 
-### Network Gateway (16 tools)
+### Network Gateway (17 tools)
 
 提供 VPC、ENI、Reachability、Flow Logs、TGW、VPN、Network Firewall 工具。
 
 | 类别 | 工具 |
 |---------|------|
 | **flow-monitor** | `query_flow_logs` |
+| **reachability-read** | `check_reachability` |
 | **network-mcp** | `get_path_trace_methodology`、`find_ip_address`、`get_eni_details`、`list_vpcs`、`get_vpc_network_details`、`get_vpc_flow_logs`、`describe_network`、`list_transit_gateways`、`get_tgw_details`、`get_tgw_routes`、`get_all_tgw_routes`、`list_tgw_peerings`、`list_vpn_connections`、`list_network_firewalls`、`get_firewall_rules` |
 
-### Container Gateway (12 tools)
+### Container Gateway (19 tools)
 
-提供 EKS、ECS 相关工具。
+提供 EKS、ECS、Istio 服务网格相关工具。
 
 | 类别 | 工具 |
 |---------|------|
+| **istio-read** | `mesh_overview`、`list_virtual_services`、`list_destination_rules`、`list_istio_gateways`、`list_service_entries`、`list_authorization_policies`、`list_peer_authentications` |
 | **eks-mcp** | `list_eks_clusters`、`get_eks_vpc_config`、`get_eks_insights`、`get_cloudwatch_logs`、`get_cloudwatch_metrics`、`get_eks_metrics_guidance`、`get_policies_for_role`、`search_eks_troubleshoot_guide`、`generate_app_manifest` |
 | **ecs-mcp** | `ecs_resource_management`、`ecs_troubleshooting_tool`、`wait_for_service_ready` |
 
@@ -114,7 +116,7 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 
 ### Monitoring Gateway (36 tools)
 
-除 CloudWatch、CloudTrail（AWS 原生）外，还提供 OpenSearch、Prometheus/Loki/Tempo/Mimir（可观测性栈）工具。
+除 CloudWatch、CloudTrail（AWS 原生）外，还提供 OpenSearch、Loki/Tempo/Mimir（可观测性栈）工具（Prometheus·ClickHouse 由 External-Obs 负责 — ADR-004）。
 
 | 类别 | 工具 |
 |---------|------|
@@ -132,9 +134,15 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 | **cost-mcp** (9) | `get_today_date`、`get_cost_and_usage`、`get_cost_and_usage_comparisons`、`get_cost_comparison_drivers`、`get_cost_forecast`、`get_dimension_values`、`get_tag_values`、`get_pricing`、`list_budgets` |
 | **finops-mcp** (5) | Compute Optimizer 规格调整、RI/SP 推荐、Cost Optimization Hub、Trusted Advisor |
 
-### Ops Gateway (5 tools)
+### Ops Gateway (11 tools)
 
-提供 AWS 文档·通用运维工具（`aws-knowledge`）。
+提供 AWS 文档检索·运维辅助·清单查询工具。
+
+| 类别 | 工具 |
+|---------|------|
+| **core-helpers** | `prompt_understanding`、`suggest_aws_commands` |
+| **inventory-read** | `find_unused_resources`、`get_topology`、`query_inventory`、`inventory_summary` |
+| **aws-knowledge** | `search_documentation`、`read_documentation`、`recommend`、`list_regions`、`get_regional_availability` |
 
 ### External-Obs (13 tools, 路由键: `observability`)
 
@@ -177,7 +185,8 @@ AgentCore Runtime ARN·Memory ID 等配置值**仅存在于 SSM**，不在 UI �
 | **Code Interpreter / Memory 名称** | 不可使用连字符，仅限下划线 |
 | **对话历史保留** | 最长 365 天 |
 | **AgentCore 响应** | 仅返回最终文本（工具推理以打字效果流式呈现） |
-| **未部署完整编队** | 目录中的 23 个切片仅有部分在 P1f 以 read-only 部署（完整启用在 P3） |
+| **工具启用标志** | 30 个切片由 `agentcore_enabled`（21）·`integrations_enabled`（9）门控 — 线上环境编队已部署完毕（2026-08-02），新装环境默认 off |
+| **厂商 mcpServer 目标** | external-obs 的厂商托管 mcpServer 目标（Datadog·Dynatrace·New Relic）的 `capability=read` 不在协议层强制（ADR-017）— read-only 保证以 Lambda 目标为准；未配置端点时 SKIP |
 
 ## 下一步
 

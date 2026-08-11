@@ -18,8 +18,9 @@
 #                    byte equality of every extracted part (only docProps/core.xml
 #                    dcterms timestamps are stripped). ZIP entry timestamps are
 #                    not comparable across builds, so container metadata is
-#                    covered separately: archive comment and per-entry
-#                    extra/comment fields must be empty (side-channel ban)
+#                    covered separately in gate 1: archive comment, central AND
+#                    local extra/comment fields empty, no data descriptors, and
+#                    local records must tile the file with zero gap bytes
 #   4. rel targets — no TargetMode="External" relationships
 #
 # Known limits (documented in static/presentation/awsops-intro/README.md):
@@ -55,18 +56,36 @@ if grep -q '^l' <<<"$MODES"; then fail "deck zip contains symlink entries"; fi
 TOTAL=$(unzip -l "$DECK" | tail -1 | awk '{print $1}')
 [ "$TOTAL" -le 52428800 ] || fail "deck uncompressed size exceeds 50MB cap"
 # ZIP container metadata is a payload side-channel the extracted-tree diff cannot
-# see — require the archive comment and every entry's extra/comment to be empty
-python3 - "$DECK" <<'PY' || fail "deck zip carries container metadata (comment/extra fields or trailing bytes)"
-import sys, zipfile
+# see — require the archive comment and every entry's extra/comment to be empty.
+# ZipInfo.extra reflects only the CENTRAL directory, so the LOCAL file headers are
+# re-parsed raw: local extra fields must be empty, data descriptors are banned
+# (pptxgenjs never emits them), and the local records must tile the file
+# contiguously up to the central directory (no inter-record gap bytes).
+python3 - "$DECK" <<'PY' || fail "deck zip carries container metadata (comment/extra/gap/descriptor side-channel)"
+import struct, sys, zipfile
 raw = open(sys.argv[1], "rb").read()
 z = zipfile.ZipFile(sys.argv[1])
 assert z.comment == b"", "archive comment present"
-for i in z.infolist():
+infos = sorted(z.infolist(), key=lambda i: i.header_offset)
+pos = 0
+for i in infos:
     assert not i.comment, f"entry comment: {i.filename}"
-    assert not i.extra, f"entry extra field: {i.filename}"
-# ban bytes appended after the End-of-Central-Directory record (overlay side-channel)
+    assert not i.extra, f"central-directory extra field: {i.filename}"
+    assert i.header_offset == pos, f"gap bytes before local record: {i.filename}"
+    hdr = raw[pos:pos + 30]
+    assert hdr[:4] == b"PK\x03\x04", f"bad local header magic: {i.filename}"
+    (flags,) = struct.unpack("<H", hdr[6:8])
+    assert not flags & 0x08, f"data descriptor (streamed entry): {i.filename}"
+    nlen, elen = struct.unpack("<HH", hdr[26:30])
+    assert elen == 0, f"local-header extra field: {i.filename}"
+    pos += 30 + nlen + i.compress_size
 eocd = raw.rfind(b"PK\x05\x06")
 assert eocd != -1, "no EOCD record"
+cd_size, cd_off = struct.unpack("<II", raw[eocd + 12:eocd + 20])
+assert cd_off != 0xFFFFFFFF, "zip64 EOCD indirection"
+assert pos == cd_off, "gap bytes between local records and central directory"
+assert cd_off + cd_size == eocd, "gap bytes between central directory and EOCD"
+# ban bytes appended after the End-of-Central-Directory record (overlay side-channel)
 assert eocd + 22 + len(z.comment) == len(raw), "trailing bytes after EOCD"
 PY
 
@@ -91,6 +110,13 @@ node -e 'require("pptxgenjs")' 2>/dev/null || fail "pptxgenjs not installed — 
 for a in scripts/pptx/assets/title_bg.png scripts/pptx/assets/section_bg_33.png; do
   test -f "$a" || fail "generator asset missing: $a — cannot rebuild for provenance check"
 done
+# pin the two background PNGs to their reviewed hashes (also recorded in
+# static/presentation/awsops-intro/README.md) — an asset swap must not be able
+# to launder itself through the rebuild-parity check
+sha256sum -c --quiet <<'SUM' || fail "generator asset hash mismatch — update README.md SHA-256s only via reviewed asset commits"
+3fd59525f442c4485e77dfd7d7e7c41932db14a8c1113e4a6258ae58d982ba87  scripts/pptx/assets/title_bg.png
+7c8ae2692023aa54cbca261b06e9128eecd7feac64897002b4c93867551bbe22  scripts/pptx/assets/section_bg_33.png
+SUM
 node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx" || fail "generator failed to rebuild the deck (not a provenance mismatch)"
 diff <(sort <<<"$PARTS") <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) \
   || fail "pptx part list differs from generator output — extra or missing package parts"

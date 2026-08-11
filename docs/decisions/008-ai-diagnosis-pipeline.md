@@ -23,7 +23,7 @@ AWSops AI Diagnosis is a read-only feature that gathers infrastructure evidence 
 - **스트리밍(ADR-045 우선순위 #2)은 미구현 = 후속.** `invoke_model_with_response_stream` 호출은 코드에 0건이며(`report.py` non-stream), 본 통합 ADR도 이를 **미완·후속 작업**으로 정직하게 기술한다(감사 ai-10 DRIFT). / Streaming (ADR-045 priority #2) is **not implemented — a follow-up**; zero `invoke_model_with_response_stream` calls exist (audit ai-10 DRIFT).
 - **모델 배정은 `global.*` 크로스리전 추론 프로파일을 유지**한다 — 비용 귀속(`ai_usage_daily`, Bedrock invocation-log) 때문. / Model assignment keeps `global.*` cross-region inference profiles for cost attribution.
 - **리포트 포맷은 DOCX/PDF/MD**가 v2 워커 경로에서 산출된다. / Report formats DOCX/PDF/MD are produced by the v2 worker path.
-- **비용 통제는 프롬프트 캐싱**(직접 `callBedrock`/`invoke_model` 경로 한정 — 게이트웨이 호출 토큰은 Strands 런타임 내부라 불투명)으로 이뤄진다. / Cost control is prompt caching, scoped to direct-invoke paths only (gateway-call tokens are opaque inside the Strands runtime).
+- **비용 통제는 프롬프트 캐싱**(현행 구현 위치는 게이트웨이/Strands 경로 — `agent/agent.py` `BedrockModel(CacheConfig)`; 직접 `callBedrock`/`invoke_model` 경로는 아직 캐시포인트 없음 — §5 참조)으로 이뤄진다. / Cost control is prompt caching — currently implemented on the gateway/Strands path (`agent.py` `BedrockModel(CacheConfig)`); the direct `callBedrock`/`invoke_model` paths carry no cache points yet (see §5).
 - **환각 방지**: 진단은 read-only이고, 수집된 증거 위에서만 추론하며, 누락/비가용 데이터소스는 치명적이지 않게 스킵하고 coverage note를 남겨 모델이 없는 데이터를 지어내지 않도록 한다. / Hallucination guard: read-only, reasons only over collected evidence, skips missing datasources gracefully, leaves a coverage note so the model does not invent absent data.
 
 ## Decision / 결정
@@ -94,13 +94,13 @@ For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtim
 - 소스별 분해 + 우아한 축퇴로 부분 구성 환경에서도 도달 가능한 증거로 진단이 완료된다. / Per-source decomposition + graceful degradation completes diagnosis on reachable evidence.
 - 깊이/지연 축 모델 배정으로 비용·지연을 경로 특성에 맞게 통제하며, `global.*`로 비용 귀속을 보존한다. / Depth/latency model assignment controls cost/latency per flow; `global.*` preserves attribution.
 - deep 리포트가 순차 합 → 최장 섹션 시간으로 대폭 단축(병렬 렌더 구현). / Deep reports cut from sequential sum to slowest-section time.
-- 프롬프트 캐싱이 직접 호출 경로의 비용·첫 토큰 지연을 모두 낮춘다. / Prompt caching lowers both cost and first-token latency on direct paths.
+- 프롬프트 캐싱이 에이전트(게이트웨이/Strands) 경로의 비용·첫 토큰 지연을 낮춘다 — 반복 시스템 프롬프트·도구 정의가 가장 큰 곳. / Prompt caching lowers cost and first-token latency on the agent (gateway/Strands) path — where the repeated system prompt and tool definitions are largest.
 - read-only 불변 — AWS 리소스 변경·자율 없음. / Read-only invariant — no AWS-resource mutation/autonomy.
 
 ### Negative / 부정적
 - **스트리밍 미완**: 진단 섹션 출력 스트리밍(#6-2)은 후속이라 deep 티어의 체감 first-token 지연 이득은 아직 미실현. / Streaming unshipped: the perceived first-token win for deep tier is not yet realized.
 - 병렬 렌더는 동시성 제한·백오프 필수 — 무차별 fan-out은 `ThrottlingException` 위험. / Parallel render needs bounded concurrency + backoff; naive fan-out risks throttling.
-- 프롬프트 캐싱은 직접 호출 경로에만 유효 — 게이트웨이 토큰(종종 최대 소비자)은 불투명해 비용 절감 사각이 남는다. / Caching only covers direct paths; gateway tokens (often the largest) stay opaque.
+- 프롬프트 캐싱은 아직 게이트웨이/Strands 경로에만 구현 — 분류·합성·15+1섹션 진단의 직접 호출 경로는 캐시포인트가 없어 비용 절감 사각으로 남는다(후속 과제, §5). / Caching is implemented only on the gateway/Strands path so far; the direct-invoke classification/synthesis/diagnosis paths carry no cache points and remain an uncovered cost gap (follow-up, §5).
 - 다수 포맷 제너레이터 유지 비용 + 포맷 간 패리티 자동 테스트 부재(섹션 드리프트는 리뷰로만 포착). / Multi-format maintenance cost + no automated parity test (section drift caught only by review).
 - 모델 ID는 신규 Claude 버전 출시 시 함께 회전해야 함. / Model IDs must rotate together on new Claude releases.
 
@@ -112,7 +112,7 @@ For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtim
 | 2 | Bedrock 모델 선택 (깊이-지연 축, `global.*`) | LIVE |
 | 3 | 리포트 포맷 (DOCX/PDF/MD) | LIVE |
 | 4 | SSE 진행 스트리밍 (챗 등 장시간 플로우) | LIVE |
-| 5 | LLM 비용 통제 (프롬프트 캐싱 직접경로 한정 + `global.*` 비용귀속) | LIVE |
+| 5 | LLM 비용 통제 (프롬프트 캐싱 — 게이트웨이/Strands 경로 구현, 직접경로는 후속 + `global.*` 비용귀속) | PARTIAL |
 | 6 | deep 티어 지연 (병렬 렌더 = LIVE / 섹션 스트리밍 = **후속·미구현**) | PARTIAL |
 
 ## References / 참고 자료
