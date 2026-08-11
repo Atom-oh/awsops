@@ -6,7 +6,7 @@
  * 바뀌면 이 스크립트를 갱신해 다시 빌드하고 pptx를 교체 커밋한다.
  *
  * 사용법:
- *   npm i pptxgenjs   # docs-site 의존성에 포함되어 있지 않음 (일회성 설치)
+ *   npm ci            # pptxgenjs는 docs-site devDependency로 고정
  *   node scripts/pptx/build-awsops-intro-pptx.js [출력경로]
  *   # 기본 출력: static/presentation/awsops-intro/awsops-intro.pptx
  *
@@ -300,7 +300,7 @@ addSectionSlide("02. AWSops 개요", "읽기 전용 통합 대시보드",
   const cols = [
     ["통합", "INTEGRATION", "멀티계정 인벤토리·비용·보안·EKS를 계정/리전 스코프 셀렉터 하나로. Prometheus·ClickHouse 등 외부 관측 도구는 커넥터로 흡수 — 갈아엎지 않고 얹는다", C.metaBlue],
     ["AI 진단", "DIAGNOSIS", "도메인별 전문 에이전트가 라이브 AWS 데이터를 직접 조회해 분석. 장애 RCA·비용 원인·Well-Architected 6기둥 리포트를 대화와 자동 리포트로", C.subtitleOrange],
-    ["읽기 전용", "TRUST", "리소스 변경·자동 조치 기능은 코드 레벨에서 동결. K8s는 GET만, 계정 연결은 ReadOnly 역할 하나 — 안심하고 전 계정을 연결하는 근거", C.openaiGreen],
+    ["읽기 전용", "TRUST", "모니터링 대상 계정은 읽기 전용으로만 조회. 변경·자동 조치는 거버넌스로 동결(단일 문서화 예외: 자기 웹 재시작, 기본 꺼짐). K8s는 GET만 — 안심하고 전 계정을 연결하는 근거", C.openaiGreen],
   ];
   const cw = (9.16 - 0.20) / 3, cy = 2.46, chh = 1.96;
   cols.forEach((c, i) => {
@@ -315,7 +315,7 @@ addSectionSlide("02. AWSops 개요", "읽기 전용 통합 대시보드",
     { value: "16", label: "AI 챗 섹션 키 (전부 활성)" },
     { value: "9", label: "도메인 전문 에이전트 게이트웨이" },
     { value: "8종", label: "외부 관측 데이터소스 커넥터" },
-    { value: "100%", label: "읽기 전용 — 쓰기 API 0건" },
+    { value: "read-only", label: "모니터링 대상 계정 조회 원칙" },
   ]);
   addFooter(s, ++pageNum);
   s.addNotes(`[요약]
@@ -407,7 +407,7 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
     s.addText(n[0], { x, y: ray, w: raw, h: 0.52, fontFace: FONT, fontSize: 7.5, bold: true, color: C.ink, align: "center", valign: "middle", margin: 0 });
     if (i < ra.length - 1) flowArrow(s, x + raw + 0.015, ray + 0.20, rag - 0.03);
   });
-  s.addText("프라이빗 엣지 — 퍼블릭 진입점 없음 (VPC Origin 전용)", {
+  s.addText("프라이빗 엣지 — 퍼블릭 ALB 없음 (VPC Origin 전용)", {
     x: PAD_X + 0.12, y: 2.10, w: 4.86, h: 0.20, fontFace: FONT, fontSize: 7.5, color: C.slate, margin: 0,
   });
   // row B: three subsystems
@@ -424,11 +424,11 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
     s.addText(n[0], { x: x + 0.06, y: rby + 0.10, w: rbw - 0.12, h: 0.24, fontFace: FONT, fontSize: 8.5, bold: true, color: C.ink, align: "center", margin: 0 });
     s.addText(n[1], { x: x + 0.06, y: rby + 0.38, w: rbw - 0.12, h: 0.66, fontFace: FONT, fontSize: 7.5, color: C.slate, align: "center", valign: "top", margin: 0, lineSpacingMultiple: 1.2 });
   });
-  s.addText("모든 조회는 읽기 전용 API — 리소스 변경 기능 없음", {
+  s.addText("모니터링 대상 계정 조회는 읽기 전용 API — 변경 기능은 거버넌스 동결", {
     x: PAD_X + 0.12, y: 3.94, w: 4.86, h: 0.22, fontFace: FONT, fontSize: 7.5, bold: true, color: C.charcoal, margin: 0,
   });
   const layers = [
-    ["엣지", "CloudFront VPC Origin → 내부 ALB → Fargate. 퍼블릭 진입점 없음", C.metaBlue],
+    ["엣지", "CloudFront VPC Origin → 내부 ALB → Fargate. 퍼블릭 ALB 없음", C.metaBlue],
     ["웹 · 데이터", "Next.js thin-BFF + Aurora Serverless v2. 무거운 일은 큐로", C.openaiGreen],
     ["AI", "Bedrock AgentCore — 게이트웨이 9종이 라이브 AWS 조회", C.subtitleOrange],
     ["워커", "SQS + Step Functions — Lambda/Fargate 비동기 분석", C.anthropicCoral],
@@ -442,7 +442,7 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
     s.addText(l[1], { x: lx + 0.14, y: y + 0.36, w: lw - 0.28, h: 0.32, fontFace: FONT, fontSize: 8.5, color: C.charcoal, margin: 0, valign: "top" });
   });
   addStatBand(s, [
-    { value: "0", label: "퍼블릭 로드밸런서 · 공개 진입점" },
+    { value: "0", label: "퍼블릭 로드밸런서 (진입은 CloudFront만)" },
     { value: "9", label: "AI 도메인 게이트웨이 (MCP 도구)" },
     { value: "2-tier", label: "워커 런타임 — Lambda + Fargate" },
     { value: "IaC 100%", label: "Terraform 단일 루트 · 플래그 게이트" },
@@ -536,8 +536,8 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
   });
   const cols = [
     ["대화형 어시스턴트", "자연어 질문을 자동 라우팅하거나 슬래시(/)로 섹션을 지정. \"두 리소스 간 통신이 안 되는 원인\", \"이 IAM 역할 과다권한 점검\" 같은 운영 질문에 라이브 근거로 답변", C.metaBlue],
-    ["aws-data — 자연어 → SQL", "\"리전별 EC2 몇 개야?\" 한 줄이면 AI가 인벤토리 SQL을 생성해 라이브 실행(SELECT-only 가드 + 200행 캡). 분석까지 스트리밍", C.openaiGreen],
-    ["자동 수집 콜렉터 6종", "유휴 리소스 스캔 · EKS/DB/MSK 최적화 · 지연 분석 · 인시던트 — 근거 데이터를 자동 수집한 뒤 분석. 총 16개 챗 섹션 전부 활성", C.anthropicCoral],
+    ["aws-data — 리소스 질의 섹션", "\"리전별 EC2 몇 개야?\" 같은 수량·목록 질문을 받는 generic 섹션. 라이브 AWS 조회는 AgentCore 게이트웨이 경유가 원칙(ADR-001/010) — 별도 SQL 라이브 실행 경로는 설계상 차단", C.openaiGreen],
+    ["자동 수집 콜렉터 6종", "유휴 리소스 스캔 · EKS/DB/MSK 최적화 · 지연 분석 · 인시던트 — 근거 데이터를 자동 수집한 뒤 분석. 총 16개 챗 섹션 구성", C.anthropicCoral],
   ];
   const cw = (9.16 - 0.20) / 3, cy = 2.34, chh = 2.10;
   cols.forEach((c, i) => {
@@ -549,9 +549,9 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
   });
   addStatBand(s, [
     { value: "9", label: "AgentCore 게이트웨이 (MCP 도구)" },
-    { value: "16/16", label: "활성 챗 섹션 키" },
+    { value: "16", label: "챗 섹션 키 (게이트웨이 9 + 로컬 7)" },
     { value: "3", label: "Bedrock 모델 티어 (상위·표준·경량)" },
-    { value: "SELECT-only", label: "aws-data SQL 실행 가드" },
+    { value: "in-account", label: "Bedrock 계정 내 AI 호출 — 외부 AI SaaS 없음" },
   ]);
   addFooter(s, ++pageNum);
   s.addNotes(`[요약]
@@ -559,7 +559,7 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
 • 챗 16섹션 = 게이트웨이 9 + aws-data + 콜렉터 6
 • 자연어→SQL은 SELECT-only 가드로 안전하게 실행
 
-AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질문을 받는 게 아니라, 네트워크·컨테이너·데이터·보안·비용·모니터링·IaC·운영·외부관측 아홉 개 도메인 게이트웨이가 각자 전문 도구를 들고 있습니다. 질문이 오면 해당 도메인 에이전트가 라이브 AWS 데이터를 직접 조회해서 답합니다. 여기에 두 가지가 더 있습니다. aws-data는 자연어를 SQL로 바꿔 인벤토리에 직접 실행하는데, SELECT만 허용되는 가드가 걸려 있습니다. 그리고 유휴 리소스 스캔이나 인시던트 분석 같은 여섯 개 콜렉터는 근거 데이터를 자동으로 수집한 뒤 분석을 시작합니다. 합쳐서 16개 섹션이 전부 활성 상태입니다. 모델은 Bedrock의 Claude 계열을 용도별로 혼용합니다.
+AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질문을 받는 게 아니라, 네트워크·컨테이너·데이터·보안·비용·모니터링·IaC·운영·외부관측 아홉 개 도메인 게이트웨이가 각자 전문 도구를 들고 있습니다. 질문이 오면 해당 도메인 에이전트가 라이브 AWS 데이터를 직접 조회해서 답합니다. 여기에 두 가지가 더 있습니다. aws-data는 리소스 수량·목록 질문을 받는 generic 섹션이고 — 라이브 AWS 조회는 어디까지나 AgentCore 게이트웨이 경유가 원칙입니다. 그리고 유휴 리소스 스캔이나 인시던트 분석 같은 여섯 개 콜렉터는 근거 데이터를 자동으로 수집한 뒤 분석을 시작합니다. 합쳐서 16개 섹션 구성입니다. 모델은 Bedrock의 Claude 계열을 용도별로 혼용합니다.
 
 [약어]
 • MCP(Model Context Protocol): AI 에이전트가 도구를 호출하는 표준 프로토콜
@@ -590,7 +590,7 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
     if (i < nodes.length - 1) flowArrow(s, x + nw + 0.04, y0 + 0.40, gap - 0.08);
   });
   const pts = [
-    ["장애 격리", "15섹션 심층 진단·CIS 벤치마크처럼 무겁고 긴 작업이 워커에서 실패해도 대시보드 가용성에는 영향 없음 — 웹은 접수만 하고 즉시 응답"],
+    ["장애 격리", "15+1섹션 심층 진단·CIS 벤치마크처럼 무겁고 긴 작업이 워커에서 실패해도 대시보드 가용성에는 영향 없음 — 웹은 접수만 하고 즉시 응답"],
     ["끝까지 정합", "모든 작업은 상태 원장에 기록되고, 5분 주기 reaper가 유실·고아 작업을 정리. 실패는 실패로 정확히 남음"],
     ["이중 런타임", "짧은 작업은 Lambda, 메모리를 크게 쓰는 작업은 Fargate — 작업 성격에 따라 Step Functions가 자동 선택"],
   ];
@@ -604,7 +604,7 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
   addStatBand(s, [
     { value: "2", label: "워커 런타임 — Lambda + Fargate" },
     { value: "5분", label: "reaper 상태 정합화 주기" },
-    { value: "15", label: "Deep 진단 리포트 섹션 수" },
+    { value: "15+1", label: "Deep 진단 리포트 섹션 수 (의도 대비 실제 포함)" },
     { value: "0", label: "워커 장애의 웹 가용성 영향" },
   ]);
   addFooter(s, ++pageNum);
@@ -613,7 +613,7 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
 • 워커가 죽어도 대시보드는 무영향 (장애 격리)
 • 작업 상태 원장 + 5분 reaper로 끝까지 정합
 
-운영 도구가 흔히 겪는 함정이 있습니다 — 진단 기능을 붙였더니 진단이 무거워서 도구 자체가 죽는 경우입니다. AWSops는 처음부터 이를 구조로 풀었습니다. 웹 대시보드는 작업을 접수만 하고 즉시 응답합니다. 실제 분석은 SQS 큐를 지나 Step Functions가 작업 성격에 따라 Lambda 또는 Fargate 워커를 골라 실행합니다. 15개 섹션짜리 심층 진단이나 CIS 벤치마크처럼 몇 분씩 걸리는 작업이 워커에서 메모리 부족으로 죽어도, 여러분이 보고 있는 화면에는 아무 일도 일어나지 않습니다. 모든 작업은 상태 원장에 기록되고 5분마다 reaper가 유실된 작업을 정리해서, 성공은 성공으로 실패는 실패로 정확히 남습니다.
+운영 도구가 흔히 겪는 함정이 있습니다 — 진단 기능을 붙였더니 진단이 무거워서 도구 자체가 죽는 경우입니다. AWSops는 처음부터 이를 구조로 풀었습니다. 웹 대시보드는 작업을 접수만 하고 즉시 응답합니다. 실제 분석은 SQS 큐를 지나 Step Functions가 작업 성격에 따라 Lambda 또는 Fargate 워커를 골라 실행합니다. 15+1섹션짜리 심층 진단이나 CIS 벤치마크처럼 몇 분씩 걸리는 작업이 워커에서 메모리 부족으로 죽어도, 여러분이 보고 있는 화면에는 아무 일도 일어나지 않습니다. 모든 작업은 상태 원장에 기록되고 5분마다 reaper가 유실된 작업을 정리해서, 성공은 성공으로 실패는 실패로 정확히 남습니다.
 
 [약어]
 • OOM(Out Of Memory): 메모리 고갈로 인한 프로세스 강제 종료
@@ -631,9 +631,9 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
   const s = newContent();
   addContentHeader(s, "읽기 전용은 제약이 아니라 신뢰다", "변경 기능 코드 동결 + K8s GET-only + 계정당 ReadOnly 역할 1개의 안전 설계");
   const cols = [
-    ["거버넌스로 동결", "리소스 변경·자동 조치·코드 배포 기능은 아키텍처 결정 기록(ADR)으로 동결. 해제는 문서 수정이 아니라 별도 승인 절차가 필요한 제품 결정 — '실수로 켜지는' 경로 자체가 없음", C.subtitleOrange],
+    ["거버넌스로 동결", "변경·자동 조치·코드 배포 기능은 아키텍처 결정 기록(ADR)으로 동결 — 해제는 별도 승인 절차가 필요한 제품 결정. 단일 문서화 예외(ADR-015): 시크릿 회전 시 자기 웹 서비스 재시작(기본 꺼짐, IAM 1개 ARN 한정)", C.subtitleOrange],
     ["K8s는 GET만", "EKS 클러스터 조회는 읽기 verb만 발행. 조회 등록도 클러스터 쪽 변경 없이 Access Entry 기반 — 운영 클러스터에 손대지 않음", C.openaiGreen],
-    ["계정 연결 = 역할 1개", "모니터링 대상 계정에는 ReadOnly 역할 하나만 요구. ExternalId로 혼동 대리인 차단, 등록 시점에 실제 assume 검증 통과해야 연결", C.metaBlue],
+    ["계정 연결 = 역할 1개", "모니터링 대상 계정에는 ReadOnly 역할 하나만 요구. 3rd-party 연결은 ExternalId 필수로 혼동 대리인 차단(1st-party는 역할 ARN 고정 시 선택), 등록 시점에 실제 assume 검증 통과해야 연결", C.metaBlue],
   ];
   const cw = (9.16 - 0.20) / 3, cy = 1.42, chh = 2.02;
   cols.forEach((c, i) => {
@@ -650,7 +650,7 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
   addStatBand(s, [
     { value: "1개", label: "계정당 요구 IAM 역할 (ReadOnly)" },
     { value: "GET", label: "K8s에 발행하는 유일한 verb" },
-    { value: "0", label: "리소스 변경 API 호출" },
+    { value: "1", label: "문서화된 예외 — 자기 웹 재시작 (ADR-015 · 기본 off)" },
     { value: "100%", label: "AI 발견 항목의 근거(소스) 첨부율" },
   ]);
   addFooter(s, ++pageNum);
@@ -659,7 +659,7 @@ AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질�
 • K8s GET-only · 계정 연결은 ReadOnly 역할 1개 + 검증
 • AI 오답의 최악 = 틀린 조언 (틀린 변경이 아님)
 
-실무자 여러분께 가장 중요한 슬라이드입니다. AWSops에 변경 기능이 '없는' 것은 미완성이 아니라 설계 결정입니다. 자동 변경은 두 번째 장애의 가장 흔한 원인이고, 운영자가 도구를 신뢰하지 못하면 결국 쓰지 않게 됩니다. 그래서 변경·자동 조치 기능은 아키텍처 결정 기록으로 동결되어 있고, 해제하려면 별도 승인 절차가 필요합니다. 쿠버네티스에는 GET만 발행하고, 계정 연결에 요구하는 것도 읽기 전용 역할 하나뿐입니다. 등록 시점에 실제로 역할을 assume해 봐서 성공해야만 연결됩니다. 이 원칙 덕분에 AI가 틀려도 최악의 경우가 '틀린 조언'입니다 — 인프라에는 아무 일도 일어나지 않습니다. 변경은 사람과 기존 IaC 파이프라인의 몫으로 남기고, AWSops는 판단 근거를 극단적으로 잘 만드는 데 집중합니다.
+실무자 여러분께 가장 중요한 슬라이드입니다. AWSops에 변경 기능이 '없는' 것은 미완성이 아니라 설계 결정입니다. 자동 변경은 두 번째 장애의 가장 흔한 원인이고, 운영자가 도구를 신뢰하지 못하면 결국 쓰지 않게 됩니다. 그래서 변경·자동 조치 기능은 아키텍처 결정 기록으로 동결되어 있고, 해제하려면 별도 승인 절차가 필요합니다. 쿠버네티스에는 GET만 발행하고, 계정 연결에 요구하는 것도 읽기 전용 역할 하나뿐입니다. 유일한 문서화된 예외는 ADR-015 — 데이터베이스 시크릿 회전 때 자기 자신의 웹 서비스를 재시작하는 것 하나이며, 기본 꺼짐에 IAM도 해당 서비스 ARN 하나로 한정됩니다. 등록 시점에 실제로 역할을 assume해 봐서 성공해야만 연결됩니다. 이 원칙 덕분에 AI가 틀려도 최악의 경우가 '틀린 조언'입니다 — 인프라에는 아무 일도 일어나지 않습니다. 변경은 사람과 기존 IaC 파이프라인의 몫으로 남기고, AWSops는 판단 근거를 극단적으로 잘 만드는 데 집중합니다.
 
 [약어]
 • ADR(Architecture Decision Record): 아키텍처 결정과 근거를 남기는 공식 기록
@@ -806,7 +806,7 @@ addSectionSlide("04. 핵심 가치 4", "페인과 1:1 대응",
 // ═════════════════════════ 19. VALUE 4: WA DIAGNOSIS ═════════════════════════
 {
   const s = newContent();
-  addContentHeader(s, "Well-Architected 리뷰를, 매주 자동으로", "6기둥 건강 점수·심각도·공수·절감액을 담은 15섹션 AI 진단 리포트");
+  addContentHeader(s, "Well-Architected 리뷰를, 매주 자동으로", "6기둥 건강 점수·심각도·공수·절감액을 담은 15+1섹션 AI 진단 리포트");
   const cw = (9.16 - 0.10) / 2;
   addAccentBar(s, PAD_X, 1.42, cw, C.subtitleOrange);
   addCardBg(s, PAD_X, 1.48, cw, 2.90);
@@ -815,14 +815,14 @@ addSectionSlide("04. 핵심 가치 4", "페인과 1:1 대응",
     "• 인프라 건강 점수(0~100) — WA 6기둥 가중 합산, 신호 없는 기둥은 점수를 지어내지 않고 '데이터 부족' 명시\n" +
     "• 발견마다 [Critical/Warning/Info] + 우선순위 P1~P3 + 공수 + 근거 — 그대로 백로그에 넣는 형식\n" +
     "• 비용 발견에는 절감액 추정 첨부\n" +
-    "• 이전 리포트 대비 ▲악화 / ▼해소 추적",
+    "• 이전 리포트 대비 변화 추적 — 의도 대비 실제(intended-vs-actual) 위반 중심",
     { x: PAD_X + 0.16, y: 1.94, w: cw - 0.32, h: 2.34, fontFace: FONT, fontSize: 10, color: C.charcoal, margin: 0, valign: "top", lineSpacingMultiple: 1.3 });
   const x2 = PAD_X + cw + 0.10;
   addAccentBar(s, x2, 1.42, cw, C.openaiGreen);
   addCardBg(s, x2, 1.48, cw, 2.90);
   s.addText("운영에 녹아드는 방식", { x: x2 + 0.16, y: 1.62, w: cw - 0.32, h: 0.28, fontFace: FONT, fontSize: 13, bold: true, color: C.ink, margin: 0 });
   s.addText(
-    "• 티어 선택: Light / Mid / Deep(15섹션) + 모델 선택(표준·상위)\n" +
+    "• 티어 선택: Light / Mid / Deep(15+1섹션) + 모델 선택(표준·상위)\n" +
     "• 매주·격주·매월 자동 예약 + 완료 시 이메일 딥링크\n" +
     "• MD · DOCX · PDF 원클릭 내보내기 — 경영 보고서로 바로\n" +
     "• 비동기 워커 실행이라 진단이 돌아도 대시보드는 그대로\n" +
@@ -830,17 +830,17 @@ addSectionSlide("04. 핵심 가치 4", "페인과 1:1 대응",
     { x: x2 + 0.16, y: 1.94, w: cw - 0.32, h: 2.34, fontFace: FONT, fontSize: 10, color: C.charcoal, margin: 0, valign: "top", lineSpacingMultiple: 1.3 });
   addStatBand(s, [
     { value: "0~100", label: "인프라 건강 점수 (6기둥 가중)" },
-    { value: "15", label: "Deep 티어 분석 섹션 수" },
-    { value: "▲ / ▼", label: "이전 리포트 대비 악화·해소 추적" },
+    { value: "15+1", label: "Deep 분석 섹션 (의도 대비 실제 포함)" },
+    { value: "diff", label: "리포트 간 변화 추적 (위반 중심)" },
     { value: "3형식", label: "MD · DOCX · PDF 내보내기" },
   ]);
   addFooter(s, ++pageNum);
   s.addNotes(`[요약]
 • 페인 4개의 총결산 — WA 6기둥 자동 채점 리포트
 • 발견 = 심각도 + 우선순위 + 공수 + 근거 + 절감액
-• 매주 자동 실행 + 악화/해소 추세 추적
+• 매주 자동 실행 + 리포트 간 변화 추적
 
-네 번째 가치는 Well-Architected 자동 진단입니다. 파트너 리뷰의 문제는 리뷰가 끝난 지 석 달이면 문서가 낡는다는 것입니다. AWSops는 같은 6기둥 채점을 매주 자동으로 돌립니다. 리포트 첫 장에는 0에서 100 사이의 인프라 건강 점수가 나오는데, 신호가 없는 기둥은 점수를 지어내지 않고 '데이터 부족'으로 명시합니다 — 날조하지 않는 것이 원칙입니다. 모든 발견에는 심각도, 우선순위, 공수, 근거가 붙어서 그대로 백로그에 넣을 수 있고, 비용 관련 발견에는 절감액 추정이 첨부됩니다. 이전 리포트 대비 무엇이 악화되고 해소됐는지 추적되므로, 일회성 컨설팅이 아니라 상시 건강 관리가 됩니다. PDF로 내보내면 그대로 경영 보고서입니다. 데모 마지막에 실제 리포트를 보여드리겠습니다.
+네 번째 가치는 Well-Architected 자동 진단입니다. 파트너 리뷰의 문제는 리뷰가 끝난 지 석 달이면 문서가 낡는다는 것입니다. AWSops는 같은 6기둥 채점을 매주 자동으로 돌립니다. 리포트 첫 장에는 0에서 100 사이의 인프라 건강 점수가 나오는데, 신호가 없는 기둥은 점수를 지어내지 않고 '데이터 부족'으로 명시합니다 — 날조하지 않는 것이 원칙입니다. 모든 발견에는 심각도, 우선순위, 공수, 근거가 붙어서 그대로 백로그에 넣을 수 있고, 비용 관련 발견에는 절감액 추정이 첨부됩니다. 이전 리포트 대비 변화 — 특히 의도 대비 실제 위반 — 가 추적되므로, 일회성 컨설팅이 아니라 상시 건강 관리가 됩니다. PDF로 내보내면 그대로 경영 보고서입니다. 데모 마지막에 실제 리포트를 보여드리겠습니다.
 
 [약어]
 • WA(Well-Architected): AWS 6기둥 아키텍처 모범사례 프레임워크
@@ -868,7 +868,7 @@ addSectionSlide("05. Live Demo & Q&A", "실제 운영 환경",
     ["⓪", "통합 대시보드 투어", "4′", "개요 → 스코프 셀렉터(멀티계정) → 활성 경고 클릭 → 보안 조치 방법까지 3클릭", C.metaBlue],
     ["①", "장애 원인 추적", "8′", "토폴로지 포커스 모드 → NFM E2E 홉 경로 → AI 인시던트 분석", C.subtitleOrange],
     ["②", "비용 급증 원인 분석", "6′", "MoM 감지 → 서비스 변화율 → usage-type 드릴다운 → Idle Scan 절감 목록", C.openaiGreen],
-    ["③", "WA 6기둥 AI 리포트", "5′", "건강 점수 + 악화/해소 diff + PDF 내보내기 + 라이브 실행(진행 패널)", C.anthropicCoral],
+    ["③", "WA 6기둥 AI 리포트", "5′", "건강 점수 + 리포트 간 변화 + PDF 내보내기 + 라이브 실행(진행 패널)", C.anthropicCoral],
     ["＋", "연동 · 계정 관리 클로징", "2′", "데이터소스 8종 등록 화면 + '추가 + 검증' — 읽기 전용 신뢰로 마무리", C.azurePurple],
   ];
   rows.forEach((r, i) => {
@@ -903,7 +903,7 @@ addSectionSlide("05. Live Demo & Q&A", "실제 운영 환경",
   const s = newContent();
   addContentHeader(s, "가장 많이 받는 질문, 셋", "권한 · AI 신뢰 · 기존 도구 — 도입 검토에서 반드시 나오는 질문 선답변");
   const cols = [
-    ["\"권한을 얼마나 줘야 하죠?\"", "읽기 전용 역할 하나입니다. ExternalId로 혼동 대리인을 차단하고, 등록 시점에 실제 assume 검증을 통과해야 연결됩니다. 쓰기 권한은 요구하지도, 받지도 않습니다.", C.metaBlue],
+    ["\"권한을 얼마나 줘야 하죠?\"", "읽기 전용 역할 하나입니다. 3rd-party 연결에는 ExternalId로 혼동 대리인을 차단하고, 등록 시점에 실제 assume 검증을 통과해야 연결됩니다. 쓰기 권한은 요구하지도, 받지도 않습니다.", C.metaBlue],
     ["\"AI가 틀리면요?\"", "에이전트는 수집된 라이브 데이터에만 근거하고, 신호가 없으면 '데이터 불가'로 답하도록 강제됩니다. 모든 발견에 근거가 첨부되고 — 읽기 전용이라 최악의 경우가 '틀린 조언'입니다. Bedrock은 고객 데이터를 모델 학습에 쓰지 않습니다.", C.subtitleOrange],
     ["\"기존 도구는 버리나요?\"", "아니요, 연동입니다. Prometheus·ClickHouse 등 8종을 읽기 전용으로 등록하면 그 데이터가 서비스 맵과 AI 진단의 근거로 흡수됩니다. 기존 대시보드는 그대로 두고 '조합하는 층'을 얹습니다.", C.openaiGreen],
   ];

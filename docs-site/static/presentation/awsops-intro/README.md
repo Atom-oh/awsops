@@ -11,7 +11,7 @@
 
 ```bash
 cd docs-site
-npm i pptxgenjs   # docs-site 의존성에 포함되어 있지 않음 (일회성)
+npm ci            # pptxgenjs는 devDependency로 고정되어 있음
 node scripts/pptx/build-awsops-intro-pptx.js
 # → static/presentation/awsops-intro/awsops-intro.pptx 를 덮어씀 → 교체 커밋
 ```

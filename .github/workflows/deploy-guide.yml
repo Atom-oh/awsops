@@ -60,7 +60,15 @@ jobs:
           DECK=build/presentation/awsops-intro/awsops-intro.pptx
           test -s "$DECK" || { echo "::error::awsops-intro.pptx missing or empty in build"; exit 1; }
           [ "$(head -c 4 "$DECK" | od -An -tx1 | tr -d ' \n')" = "504b0304" ] || { echo "::error::awsops-intro.pptx is not a valid zip/pptx container"; exit 1; }
-          echo "Build verified: awsops-intro.pptx present and well-formed."
+          # Content scan — the deck ships to an unauthenticated public site; fail if the
+          # slide/notes XML carries account IDs, ARNs, or internal identifiers.
+          # (scan slide/notes/docProps content only — theme XML carries panose font
+          #  metadata whose 12-digit runs false-positive the account-ID pattern)
+          if unzip -p "$DECK" 'ppt/slides/*' 'ppt/notesSlides/*' 'docProps/*' | grep -aqE '[0-9]{12}|arn:aws:|atomai\.click|vpc-[0-9a-f]{8}'; then
+            echo "::error::awsops-intro.pptx XML contains a sensitive identifier (account ID / ARN / internal hostname)"
+            exit 1
+          fi
+          echo "Build verified: awsops-intro.pptx present, well-formed, and content-scanned."
 
       - uses: actions/upload-pages-artifact@v3
         with:
