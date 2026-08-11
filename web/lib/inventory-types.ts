@@ -509,6 +509,8 @@ const GROUPS: Record<string, GroupMeta> = {
       { key: 'vpc-endpoints', href: '/vpc-endpoints', labelKey: 'nav.vpcEndpoints' },
       // Direct Connect 리스트+분석 (AWS/DX 메트릭 다운 감지·피크 사용률, 로케이션 이중화)
       { key: 'direct-connect', href: '/direct-connect', labelKey: 'nav.directConnect' },
+      // Network Firewall 리스트+분석 (보호/로깅/전량 통과 기본 액션/룰 용량, 트래픽·드롭)
+      { key: 'network-firewall', href: '/network-firewall', labelKey: 'nav.networkFirewall' },
     ],
     subgroups: [
       { key: 'loadBalancing', labelKey: 'group.network.loadBalancing', types: ['alb', 'nlb', 'target_group', 'alb_listener_rule'] },

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a Network Firewall page (`/network-firewall`, Network group): firewall / policy / rule group inventory with per-region fan-out and `AWS/NetworkFirewall` traffic aggregation over the selected range (received / passed / dropped / rejected packets and drop rate; only the 3-dimension `(AZ, Engine, FirewallName)` metric variant is summed — the `EndpointName` variant is published in parallel and would double-count), plus five analysis lenses — protection settings off (delete / subnet change / policy change), ALERT-logging gaps (no threat visibility; a denied describe call renders as “unknown”, distinct from “off” — observed with an SCP-style deny that hits only the task role), `aws:pass` stateless default actions (traffic bypasses the stateful engine), rule group capacity (immutable after creation, flagged at 80%+) and unassociated rule groups (cleanup candidates), and per-AZ endpoint / config-sync health; KPI tiles, type/capacity charts, a firewall-checks card, three tables with sectioned detail panels; rule bodies (`RulesSource`) are deliberately excluded from responses; read-only `network-firewall:List*`/`Describe*` IAM grant (applied, terraform in lockstep); 4-language i18n.
+
 ## [0.7.0] - 2026-08-05
 
 ### Added
@@ -489,6 +493,10 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+### Added
+
+- Network Firewall 페이지(`/network-firewall`, Network 그룹) 추가: 방화벽/정책/룰 그룹 인벤토리(리전 fan-out) + 선택 기간의 `AWS/NetworkFirewall` 트래픽 집계(수신/통과/드롭/거부 패킷·드롭율 — `(AZ, Engine, FirewallName)` 3차원 메트릭만 합산, `EndpointName` 포함 변형은 동시 발행되어 이중 집계됨), 분석 렌즈 5종 — 보호 설정 off(삭제/서브넷 변경/정책 변경), ALERT 로깅 갭(위협 가시성 없음; 로깅 구성 조회가 거부되면 “확인 불가”로 표시 — “미설정”과 구분, 태스크 롤만 거부되는 SCP류 환경 실측), stateless 기본 액션 `aws:pass`(스테이트풀 엔진 우회), 룰 그룹 용량(생성 후 변경 불가, 80% 이상 플래그)·미연결 룰 그룹(정리 후보), AZ별 엔드포인트/구성 동기화 상태; KPI 타일·타입/용량 차트·방화벽 점검 카드·섹션형 상세 패널이 있는 테이블 3종; 룰 본문(`RulesSource`)은 의도적으로 응답에서 제외; read-only `network-firewall:List*`/`Describe*` IAM 권한(적용됨, terraform lockstep); 4개 언어 i18n.
 
 ## [0.7.0] - 2026-08-05
 
