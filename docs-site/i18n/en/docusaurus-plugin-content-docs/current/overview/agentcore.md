@@ -139,7 +139,7 @@ Provides AWS documentation / general operations tools (`aws-knowledge`).
 
 ### External-Obs (3 tools, routing key: `observability`)
 
-The 9th routed section, hosting external-observability/integration connectors (ADR-004, amended 2026-06-24). The catalog defines `notion-mcp` (3 tools) here, gated on `integrations_enabled` (off by default). The Prometheus (6 tools) and ClickHouse (3 tools) connector targets also live on this section (`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` with gateway=external-obs).
+The 9th routed section, hosting external-observability/integration connectors (ADR-004, amended 2026-06-24). The catalog defines `notion-mcp` (3 tools) here, gated on `integrations_enabled` (off by default). The Prometheus (6 tools) and ClickHouse (4 tools) connector targets also live on this section (`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` with gateway=external-obs).
 
 ## Code Interpreter
 

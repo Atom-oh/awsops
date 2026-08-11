@@ -56,13 +56,18 @@ TOTAL=$(unzip -l "$DECK" | tail -1 | awk '{print $1}')
 [ "$TOTAL" -le 52428800 ] || fail "deck uncompressed size exceeds 50MB cap"
 # ZIP container metadata is a payload side-channel the extracted-tree diff cannot
 # see — require the archive comment and every entry's extra/comment to be empty
-python3 - "$DECK" <<'PY' || fail "deck zip carries container metadata (archive comment or entry extra/comment fields)"
+python3 - "$DECK" <<'PY' || fail "deck zip carries container metadata (comment/extra fields or trailing bytes)"
 import sys, zipfile
+raw = open(sys.argv[1], "rb").read()
 z = zipfile.ZipFile(sys.argv[1])
 assert z.comment == b"", "archive comment present"
 for i in z.infolist():
     assert not i.comment, f"entry comment: {i.filename}"
     assert not i.extra, f"entry extra field: {i.filename}"
+# ban bytes appended after the End-of-Central-Directory record (overlay side-channel)
+eocd = raw.rfind(b"PK\x05\x06")
+assert eocd != -1, "no EOCD record"
+assert eocd + 22 + len(z.comment) == len(raw), "trailing bytes after EOCD"
 PY
 
 # ── 2. content scan ──────────────────────────────────────────────────────────
@@ -74,11 +79,19 @@ test -n "$XML" || fail "deck content scan extracted zero bytes"
 scan_text "$XML" "raw XML"
 # tags stripped to EMPTY so text split across OOXML <a:t> runs concatenates
 scan_text "$(sed -E 's/<[^>]*>//g' <<<"$XML")" "tag-stripped / split-run"
+# third pass on entity-decoded text — closes &#NN; / named-entity encodings that
+# render correctly in PowerPoint but do not match the raw patterns
+scan_text "$(python3 -c 'import sys,html; sys.stdout.write(html.unescape(sys.stdin.read()))' <<<"$XML" | sed -E 's/<[^>]*>//g')" "entity-decoded"
 
 # ── 3+4. provenance parity + external targets ────────────────────────────────
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx"
+# pre-flight: a missing dependency/asset must not masquerade as a tampered deck
+node -e 'require("pptxgenjs")' 2>/dev/null || fail "pptxgenjs not installed — run npm ci in docs-site/ (lockfile-pinned)"
+for a in scripts/pptx/assets/title_bg.png scripts/pptx/assets/section_bg_33.png; do
+  test -f "$a" || fail "generator asset missing: $a — cannot rebuild for provenance check"
+done
+node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx" || fail "generator failed to rebuild the deck (not a provenance mismatch)"
 diff <(sort <<<"$PARTS") <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) \
   || fail "pptx part list differs from generator output — extra or missing package parts"
 unzip -q "$DECK" -d "$WORK/committed"
@@ -86,6 +99,11 @@ unzip -q "$WORK/rebuilt-deck.pptx" -d "$WORK/rebuilt"
 # core.xml stays in the diff; strip only its volatile creation/modified stamps
 sed -i -E 's#<dcterms:(created|modified)[^<]*</dcterms:(created|modified)>##g' \
   "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
+# the normalization must have actually removed the stamps — a pptxgenjs format
+# change that dodges the pattern should fail loudly, not silently degrade
+if grep -q 'dcterms:created' "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"; then
+  fail "dcterms timestamp normalization did not apply — core.xml format changed"
+fi
 diff -r --no-dereference "$WORK/committed" "$WORK/rebuilt" \
   || fail "committed pptx does not match generator output — run 'node scripts/pptx/build-awsops-intro-pptx.js' and re-commit"
 RELS_COUNT=$(find "$WORK/committed" -name '*.rels' | wc -l)
@@ -95,4 +113,4 @@ grep -rql 'TargetMode="External"' "$WORK/committed" --include='*.rels' && RC4=0 
 if [ "$RC4" -eq 0 ]; then fail "deck contains external relationship targets"; fi
 if [ "$RC4" -ne 1 ]; then fail "external-target scan failed to run (grep exit $RC4)"; fi
 
-echo "Deck verified: structure, content scan (2-pass), generator parity (full archive), no external targets — $DECK"
+echo "Deck verified: structure, content scan (3-pass), generator parity (full archive), no external targets — $DECK"

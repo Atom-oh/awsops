@@ -363,7 +363,7 @@ TARGETS = {
     "clickhouse-mcp-target": {
         "gateway": "external-obs",
         "lambda_key": "clickhouse-mcp",
-        "description": "ClickHouse read-only — SQL query, list tables, describe (3 tools)",
+        "description": "ClickHouse read-only — schema introspect, SQL query, list tables, describe (4 tools)",
         "tools": [
             {"name": "clickhouse_schema", "description": "Introspect tables + columns (cached for query generation)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "clickhouse_query", "description": "Run a read-only SQL query (SELECT/SHOW/DESCRIBE) against the connected ClickHouse", "inputSchema": {"type": "object", "properties": {"sql": _p("string", "Read-only SQL"), "max_rows": _p("string", "Max rows (<=1000)")}, "required": ["sql"]}},

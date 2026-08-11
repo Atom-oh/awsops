@@ -31,9 +31,10 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 - **Code Interpreter** — `awsops_v2_code_interpreter-*` (underscores only).
 
 **Design target:** **9 section agents + 1 incident orchestrator** (the orchestrator is
-P4). **Currently deployed: the full fleet** — all 9 gateways carry READY MCP targets and all
-16 chat section keys are active (fleet completed 2026-08-02; 30 slices defined in `ai.tf`
-`local.agent_lambdas` — 21 gated on `agentcore_enabled`, 9 on `integrations_enabled`).
+P4). **Fleet state: complete** — 30 Lambda slices are defined in `ai.tf` `local.agent_lambdas`
+(21 gated on `agentcore_enabled`, 9 on `integrations_enabled`; both flags default `false`,
+so a fresh `plan` is a no-op). In the **live environment** (flags enabled) all 9 gateways
+carry READY MCP targets and all 16 chat section keys are active — fleet completed 2026-08-02.
 
 **Provisioner:** `scripts/v2/agentcore/{catalog.py, provision.py}` — `catalog.py` holds
 the 9 gateway names + the target tool schemas; `provision.py` does boto3 `list →
@@ -49,7 +50,7 @@ also invokes the runtime end-to-end. **Everything is gated by `agentcore_enabled
 
 **Terraform-owned parts** (`terraform/v2/foundation/ai.tf`): dual-tier ECR
 (`awsops-v2-agentcore`), the AgentCore IAM role (Runtime + gateways), the agent Lambda
-role + the 2-Lambda slice (`for_each` + `archive_file` + permission), 3 SSM placeholder
+role + the Lambda slices (`for_each` over `local.agent_lambdas` + `archive_file` + permission), 3 SSM placeholder
 params (`ignore_changes = [value]`), and the web task-role SSM read grant. Control-plane
 resources are **not** Terraform-native, so they live in `provision.py`.
 
@@ -78,7 +79,7 @@ Terraform; `provision.py` overwrites with real values.
 | `scripts/v2/agentcore/catalog.py` | 9 gateway names + GW descriptions + target tool schemas |
 | `scripts/v2/agentcore/provision.py` | Idempotent boto3 provisioner (Runtime/Gateways/Targets/Memory/Interpreter), SSM write, diff report, `--smoke` |
 | `agent/agent.py` | Strands agent (reused as-is; receives `GATEWAYS_JSON`) |
-| `agent/lambda/` | Agent tool Lambda sources (slice `aws_iam_mcp.py`, `flowmonitor.py`, `cross_account.py`; full fleet = P3) |
+| `agent/lambda/` | Agent tool Lambda sources — full fleet (30 slices; e.g. `aws_iam_mcp.py`, `flowmonitor.py`, connector lambdas, `cross_account.py`) |
 
 ## Status / 상태
 
@@ -91,8 +92,9 @@ Terraform; `provision.py` overwrites with real values.
 - Intentional schema drift re-run: `update_gateway_target` (`UPDATED ... (schema drift)`)
   — a reconciliation path v1 never had.
 
-Skeleton verified: 9 gateways incl. `awsops-v2-external-obs-gateway`, runtime ARN +
-memory id in SSM (not `PENDING`), `lambda_arns = [iam-mcp, flow-monitor]`.
+Skeleton first verified (P1f) with 9 gateways incl. `awsops-v2-external-obs-gateway`,
+runtime ARN + memory id in SSM (not `PENDING`) and an initial 2-slice `lambda_arns =
+[iam-mcp, flow-monitor]`; the fleet has since grown to the full 30 slices (2026-08-02).
 
 ## Learnings & gotchas / 학습·함정
 
@@ -108,8 +110,8 @@ memory id in SSM (not `PENDING`), `lambda_arns = [iam-mcp, flow-monitor]`.
 - **Name collision avoidance** — gateways were renamed from v1's `awsops-{key}` to
   `awsops-v2-{key}-gateway` to isolate from v1 in the shared account.
 
-**P3 backlog (DO NOT implement — list only):**
-- Full Lambda tool fleet
+**P3 backlog (DO NOT implement — list only; struck items shipped since):**
+- ~~Full Lambda tool fleet~~ (shipped 2026-08-02)
 - `section = routing`
 - Right-docking chat UI
 - OpenCost setup = a **read-only out-of-band install bundle** the operator runs (AWS-resource mutation stays FROZEN, ADR-005) — NOT an in-app mutating action

@@ -139,7 +139,7 @@ AWS ドキュメント・一般運用ツールを提供します（`aws-knowledg
 
 ### External-Obs (3 tools, ルーティングキー: `observability`)
 
-外部オブザーバビリティ・連携コネクタをホスティングする 9 番目のルーティングセクションです（ADR-004 改訂 2026-06-24）。カタログには `notion-mcp`（3 tools）が定義されています（`integrations_enabled` ゲート、デフォルト off）。Prometheus（6 tools）・ClickHouse（3 tools）のコネクタターゲットもこのセクションに配置されます（`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` の gateway=external-obs）。
+外部オブザーバビリティ・連携コネクタをホスティングする 9 番目のルーティングセクションです（ADR-004 改訂 2026-06-24）。カタログには `notion-mcp`（3 tools）が定義されています（`integrations_enabled` ゲート、デフォルト off）。Prometheus（6 tools）・ClickHouse（4 tools）のコネクタターゲットもこのセクションに配置されます（`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` の gateway=external-obs）。
 
 ## Code Interpreter
 
