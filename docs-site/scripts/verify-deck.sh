@@ -75,8 +75,11 @@ sed -i -E 's#<dcterms:(created|modified)[^<]*</dcterms:(created|modified)>##g' \
   "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
 diff -r --no-dereference "$WORK/committed" "$WORK/rebuilt" \
   || fail "committed pptx does not match generator output — run 'node scripts/pptx/build-awsops-intro-pptx.js' and re-commit"
-if grep -rl 'TargetMode="External"' "$WORK/committed" --include='*.rels' >/dev/null; then
-  fail "deck contains external relationship targets"
-fi
+RELS_COUNT=$(find "$WORK/committed" -name '*.rels' | wc -l)
+[ "$RELS_COUNT" -ge 1 ] || fail "no .rels parts found to scan — malformed pptx"
+RC4=0
+grep -rql 'TargetMode="External"' "$WORK/committed" --include='*.rels' && RC4=0 || RC4=$?
+if [ "$RC4" -eq 0 ]; then fail "deck contains external relationship targets"; fi
+if [ "$RC4" -ne 1 ]; then fail "external-target scan failed to run (grep exit $RC4)"; fi
 
 echo "Deck verified: structure, content scan (2-pass), generator parity (full archive), no external targets — $DECK"

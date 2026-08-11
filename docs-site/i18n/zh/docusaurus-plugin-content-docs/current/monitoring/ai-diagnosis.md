@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: AI 综合诊断
-description: 15 分区 Bedrock Opus 诊断报告、DOCX/MD/PDF 导出、定时调度、邮件通知
+description: （v1 旧版页面）15 分区诊断报告 — 当前 v2 采用 Light/Mid/Deep（15+1）层级，参见 FAQ
 ---
 
 import Screenshot from '@site/src/components/Screenshot';

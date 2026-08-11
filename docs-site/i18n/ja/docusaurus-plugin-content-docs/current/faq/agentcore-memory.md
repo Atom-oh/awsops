@@ -92,7 +92,7 @@ flowchart LR
 
 ### セクションゲートウェイは 9 個です（ADR-004 改訂）
 
-`network · container · data · security · cost · monitoring · iac · ops` — 合計 **9 個**です（9 プロビジョニング / 9 ルーティング、external-obs 昇格 2026-06-24）。
+`network · container · data · security · cost · monitoring · iac · ops · external-obs` — 合計 **9 個**です（9 プロビジョニング / 9 ルーティング、external-obs 昇格 2026-06-24）。
 
 | 項目 | 内容 |
 |------|------|
