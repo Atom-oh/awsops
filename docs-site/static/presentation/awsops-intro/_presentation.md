@@ -26,5 +26,3 @@ blocks:
     title: "Demo & Diagnosis Report"
     duration: 25
 ---
-
-> **정식 PPTX 덱 (`awsops-intro.pptx`) 출처/갱신** — 이 파일은 위 remarp 웹 블록에서 자동 생성된 것이 **아니라**, pptxgenjs로 별도 제작한 23장 고객 발표용 덱이다(AWS 표준 템플릿 · 16:9 · Pretendard · 한국어 스피커 노트). `export-utils.js`의 Export PPTX(웹 슬라이드 스크린샷 기반)와도 무관하다. 웹 슬라이드 내용이 크게 바뀌면 덱을 다시 빌드해 이 파일을 교체 커밋할 것 — 두 덱은 자동으로 동기화되지 않는다.

@@ -56,8 +56,11 @@ jobs:
           echo "Build verified: overview/why-awsops present in sitemap."
           # Presentation deck download asset — a missing binary would ship as a
           # 404 that the <a download> attribute silently saves as a corrupt file.
-          test -f build/presentation/awsops-intro/awsops-intro.pptx || { echo "::error::awsops-intro.pptx missing from build"; exit 1; }
-          echo "Build verified: awsops-intro.pptx present."
+          # Check non-empty AND zip magic (PK\x03\x04), not just existence.
+          DECK=build/presentation/awsops-intro/awsops-intro.pptx
+          test -s "$DECK" || { echo "::error::awsops-intro.pptx missing or empty in build"; exit 1; }
+          [ "$(head -c 4 "$DECK" | od -An -tx1 | tr -d ' \n')" = "504b0304" ] || { echo "::error::awsops-intro.pptx is not a valid zip/pptx container"; exit 1; }
+          echo "Build verified: awsops-intro.pptx present and well-formed."
 
       - uses: actions/upload-pages-artifact@v3
         with:
