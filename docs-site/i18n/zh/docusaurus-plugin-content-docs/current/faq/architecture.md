@@ -109,7 +109,7 @@ AWSops 不使用（v1 的）Steampipe pg Pool（端口 9193、node-cache、cache
 
 ## 实时 AWS 查询如何进行？（AgentCore vs Steampipe）
 
-AWSops 的实时 AWS 数据由 **AgentCore MCP Lambda 工具**负责。约 **120 个只读工具**部署在 **9 个分区网关**（network / container / data / security / cost / monitoring / iac / ops / external-obs）中。
+AWSops 的实时 AWS 数据由 **AgentCore MCP Lambda 工具**负责。约 **160 个只读工具**部署在 **9 个分区网关**（network / container / data / security / cost / monitoring / iac / ops / external-obs）中。
 
 | 类别 | 角色 |
 |------|------|

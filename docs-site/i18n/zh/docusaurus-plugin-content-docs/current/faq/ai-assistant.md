@@ -51,7 +51,7 @@ AI 助手使用**混合路由**（ADR-038，LIVE）。不再是把所有问题�
 
 实时 AWS 查询通过 **AgentCore MCP（Model Context Protocol）Lambda 工具**完成。助手直接用工具查询回答问题所需的数据，然后进行分析。
 
-- **约 120 个只读工具**分布在 **9 个分区网关**（Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — 依 ADR-004 修订）中。工具数量为约数，仍在持续演进。
+- **约 160 个只读工具**分布在 **9 个分区网关**（Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — 依 ADR-004 修订）中。工具数量为约数，仍在持续演进。
 - 外部可观测性连接器（Prometheus·ClickHouse）已提升为 **external-obs 网关**，作为第九个网关参与路由（ADR-004 修订 2026-06-24，9 配置 / 9 路由）。其余外部集成属于独立的 **Integrations 轴**（ADR-007/017）。
 - Steampipe 仅作为**由 flag 门控的库存同步**（`steampipe_enabled`，默认 OFF）用途存在。它不是实时查询引擎，也不是常驻的本地服务。
 

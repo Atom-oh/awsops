@@ -48,7 +48,7 @@ AWSops 是由 **Terraform**（`terraform/v2/foundation/`，部分 S3 backend）�
 
 **不会。** AWSops 是**只读运维仪表板 + AI 诊断**工具。**AWS 资源变更与自主执行（autonomy）已永久冻结（do-not-enable）**。任何页面或 AI 功能都不会终止 EC2、修改 SG 或变更基础设施。
 
-AI 助手与诊断只是**查询**实时数据进行分析·诊断，不执行变更（mutation）。约 120 个 AgentCore MCP 工具全部为 read-only。
+AI 助手与诊断只是**查询**实时数据进行分析·诊断，不执行变更（mutation）。约 160 个 AgentCore MCP Lambda 工具全部为 read-only。
 
 在治理下唯一被允许的"写入"是**外部数据记录**——例如在外部系统中留下报告·工单·消息。该功能仅在以下防护下运行：
 
@@ -93,7 +93,7 @@ AWSops 不使用 EC2 实例内的 JSON 文件，而是将状态存储在**托管
 
 ## 如何查询实时 AWS 数据？
 
-实时 AWS / Kubernetes 数据通过 **AgentCore MCP Lambda 工具**查询。约 120 个只读工具分布在 **9 个分区网关**（network · container · data · security · cost · monitoring · iac · ops · external-obs）中。
+实时 AWS / Kubernetes 数据通过 **AgentCore MCP Lambda 工具**查询。约 160 个只读工具分布在 **9 个分区网关**（network · container · data · security · cost · monitoring · iac · ops · external-obs）中。
 
 - 所有工具均为 read-only。
 - 网关数量为 **9 个**（ADR-004 修订 2026-06-24）— 承载 Prometheus·ClickHouse 连接器的 external-obs 作为第九个网关被配置并参与路由。

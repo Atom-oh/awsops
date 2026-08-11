@@ -109,7 +109,7 @@ AWSops does not use the v1 Steampipe pg Pool (port 9193, node-cache, cache-warme
 
 ## How are live AWS queries served? (AgentCore vs Steampipe)
 
-Live AWS data is served by **AgentCore MCP Lambda tools** — roughly **120 read-only tools** spread across **9 section gateways** (network / container / data / security / cost / monitoring / iac / ops / external-obs).
+Live AWS data is served by **AgentCore MCP Lambda tools** — roughly **160 read-only tools** spread across **9 section gateways** (network / container / data / security / cost / monitoring / iac / ops / external-obs).
 
 | Component | Role |
 |-----------|------|

@@ -48,7 +48,7 @@ AWSops는 **Terraform**(`terraform/v2/foundation/`, 부분 S3 backend)으로 프
 
 **아니요.** AWSops는 **읽기 전용 운영 대시보드 + AI 진단** 도구입니다. **AWS 리소스 변경과 자율 실행(autonomy)은 영구적으로 동결(do-not-enable)**되어 있습니다. 어떤 화면이나 AI 기능도 EC2를 종료하거나, SG를 수정하거나, 인프라를 변경하지 않습니다.
 
-AI 어시스턴트와 진단은 라이브 데이터를 **조회**하여 분석·진단할 뿐, 변경(mutation)을 수행하지 않습니다. 약 120개의 AgentCore MCP 도구는 모두 read-only입니다.
+AI 어시스턴트와 진단은 라이브 데이터를 **조회**하여 분석·진단할 뿐, 변경(mutation)을 수행하지 않습니다. 약 160개의 AgentCore MCP Lambda 도구는 모두 read-only입니다.
 
 거버넌스 하에 허용되는 유일한 "쓰기"는 **외부 데이터 기록**입니다 — 예를 들어 외부 시스템에 리포트·티켓·메시지를 남기는 것입니다. 이는 다음 가드 하에서만 동작합니다:
 
@@ -93,7 +93,7 @@ AWSops는 EC2 인스턴스 내 JSON 파일이 아니라 **관리형 AWS 서비�
 
 ## 라이브 AWS 데이터는 어떻게 조회하나요?
 
-라이브 AWS / Kubernetes 데이터는 **AgentCore MCP Lambda 도구**를 통해 조회합니다. 약 120개의 읽기 전용 도구가 **9개 섹션 게이트웨이**(network · container · data · security · cost · monitoring · iac · ops · external-obs)에 걸쳐 배치되어 있습니다.
+라이브 AWS / Kubernetes 데이터는 **AgentCore MCP Lambda 도구**를 통해 조회합니다. 약 160개의 읽기 전용 도구가 **9개 섹션 게이트웨이**(network · container · data · security · cost · monitoring · iac · ops · external-obs)에 걸쳐 배치되어 있습니다.
 
 - 모든 도구는 read-only입니다.
 - 게이트웨이 수는 **9개**입니다 (ADR-004 개정 2026-06-24) — 외부 관측성 커넥터(Prometheus·ClickHouse)를 호스팅하는 external-obs가 아홉 번째로 프로비저닝·라우팅됩니다.

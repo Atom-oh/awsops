@@ -186,7 +186,7 @@ AgentCore Runtime ARN·Memory ID 등 설정 값은 **SSM에만** 존재하며 UI
 | **대화 이력 보관** | 최대 365일 |
 | **AgentCore 응답** | 최종 텍스트만 반환(도구 추론은 타이핑 효과로 스트리밍) |
 | **도구 활성화 플래그** | 30개 슬라이스는 `agentcore_enabled`(21)·`integrations_enabled`(9) 게이트 — 라이브 환경은 함대 배포 완료(2026-08-02), 신규 설치 기본값은 off |
-| **벤더 mcpServer 타깃** | external-obs의 벤더 호스팅 mcpServer 타깃(Datadog·Dynatrace·New Relic)은 `capability=read`가 프로토콜 수준에서 강제되지 않음(ADR-017) — read-only 보장은 Lambda 타깃 기준이며, 엔드포인트 미설정 시 SKIP |
+| **벤더 mcpServer 타깃** | external-obs의 벤더 호스팅 mcpServer 타깃(Datadog·Dynatrace·New Relic)은 `capability=read`가 프로토콜 수준에서 강제되지 않음(ADR-017) — read-only 보장은 Lambda 타깃 기준이며, 엔드포인트 미설정 시 SKIP. 런타임에서는 fail-closed 도구 allowlist(`OFFICIAL_MCP_TOOL_ALLOWLIST_JSON` — 카탈로그에 전사된 read 도구만 통과, `agent/agent.py`)가 보완 |
 
 ## 다음 단계
 

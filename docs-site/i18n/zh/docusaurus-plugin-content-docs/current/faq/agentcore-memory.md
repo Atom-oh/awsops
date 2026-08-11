@@ -24,7 +24,7 @@ flowchart LR
 
 | 项目 | 内容 |
 |------|------|
-| **实时查询** | AgentCore MCP Lambda 工具（约 120 个，只读）用 boto3 直接调用 AWS API |
+| **实时查询** | AgentCore MCP Lambda 工具（约 160 个，只读）用 boto3 直接调用 AWS API |
 | **Steampipe 的角色** | **不是**实时查询引擎。仅是通过 `steampipe_enabled` 标志开启的**清单同步**（默认 OFF）— 没有本地 9193 服务/pg Pool |
 | **门禁** | AgentCore 整体由 `agentcore_enabled` Terraform 标志控制（默认 OFF → `plan` = No changes，$0） |
 | **只读** | 所有工具都是 read-only（ADR-041 / 2026-06-11 撤销：AWS 资源变更+自主执行永久冻结） |
@@ -51,7 +51,7 @@ flowchart TD
 
   ECR -->|"镜像引用"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["9 个分区网关<br/>（约 120 个只读工具）"]
+  AGENT -->|"MCP + SigV4"| GW["9 个分区网关<br/>（约 160 个只读工具）"]
   AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 5 / Opus 4.8 / Haiku 4.5"]
 ```
 
@@ -97,7 +97,7 @@ flowchart LR
 | 项目 | 内容 |
 |------|------|
 | **网关数量** | 依 ADR-004 修订（2026-06-24）为 **9 个** |
-| **工具数量** | 约 **120 个**，全部只读 — 随工具集扩展而变动（不是固定数字） |
+| **工具数量** | 约 **160 个**，全部只读 — 随工具集扩展而变动（不是固定数字） |
 | **外部可观测性** | Prometheus·ClickHouse 连接器经由 **external-obs 网关**（第九个）参与路由（ADR-004 修订）— 其余外部集成属于独立的 **Integrations 轴**（ADR-007/017） |
 | **协议** | MCP（Model Context Protocol）标准 |
 

@@ -24,7 +24,7 @@ flowchart LR
 
 | 항목 | 내용 |
 |------|------|
-| **라이브 조회** | AgentCore MCP Lambda 도구(약 120개, 읽기 전용)가 boto3로 AWS API를 직접 호출 |
+| **라이브 조회** | AgentCore MCP Lambda 도구(약 160개, 읽기 전용)가 boto3로 AWS API를 직접 호출 |
 | **Steampipe의 역할** | 라이브 쿼리 엔진이 **아님**. `steampipe_enabled` 플래그로만 켜지는 **인벤토리 sync**(기본 OFF)일 뿐 — 로컬 9193 서비스/pg Pool 없음 |
 | **게이트** | AgentCore 전체는 `agentcore_enabled` Terraform 플래그로 게이트(기본 OFF → `plan` = No changes, $0) |
 | **읽기 전용** | 모든 도구는 read-only (ADR-041 / 2026-06-11 번복: AWS-리소스 변경+자율은 영구 동결) |
@@ -51,7 +51,7 @@ flowchart TD
 
   ECR -->|"이미지 참조"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["9 섹션 게이트웨이<br/>(~120 읽기 전용 도구)"]
+  AGENT -->|"MCP + SigV4"| GW["9 섹션 게이트웨이<br/>(~160 읽기 전용 도구)"]
   AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 5 / Opus 4.8 / Haiku 4.5"]
 ```
 
@@ -97,7 +97,7 @@ flowchart LR
 | 항목 | 내용 |
 |------|------|
 | **게이트웨이 수** | ADR-004에 따라 **9개(ADR-004 개정)** |
-| **도구 수** | 약 **120개**, 전부 읽기 전용 — 함대가 확장되면 변동(고정 수치 아님) |
+| **도구 수** | 약 **160개**, 전부 읽기 전용 — 함대가 확장되면 변동(고정 수치 아님) |
 | **외부 관측성** | Prometheus·ClickHouse 커넥터가 **external-obs 게이트웨이**(아홉 번째)로 라우팅됨(ADR-004 개정) — 그 외 외부 연동은 별도의 **Integrations 축**(ADR-007/017) |
 | **프로토콜** | MCP(Model Context Protocol) 표준 |
 

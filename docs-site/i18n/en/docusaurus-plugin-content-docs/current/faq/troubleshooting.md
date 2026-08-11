@@ -113,7 +113,7 @@ Stale jobs are reconciled automatically by the reaper (every 5 minutes). A job w
 
 ## The AI assistant gives odd answers or permission errors
 
-The AI assistant reads live AWS data with read-only tools (about 120) and persists conversations in Aurora.
+The AI assistant reads live AWS data with read-only tools (about 160) and persists conversations in Aurora.
 
 1. **Read-only by design** — AWSops never changes AWS resources. A request to "modify/delete a resource" being refused — or answered only as diagnosis/guidance — is expected behavior (permanent read-only posture).
 2. **Permission errors** — If a particular query fails with AccessDenied, read permission for that service is blocked. The blocked scope is excluded from the answer and the assistant responds with whatever data it can read.

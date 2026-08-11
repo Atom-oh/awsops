@@ -109,7 +109,7 @@ AWSops は（v1 の）Steampipe pg Pool（ポート 9193、node-cache、cache-wa
 
 ## ライブ AWS 照会はどのように行いますか？（AgentCore vs Steampipe）
 
-AWSops のライブ AWS データは **AgentCore MCP Lambda ツール**が担当します。約 **120 個の読み取り専用ツール**が **9 つのセクションゲートウェイ**（network / container / data / security / cost / monitoring / iac / ops / external-obs）にわたってデプロイされます。
+AWSops のライブ AWS データは **AgentCore MCP Lambda ツール**が担当します。約 **160 個の読み取り専用ツール**が **9 つのセクションゲートウェイ**（network / container / data / security / cost / monitoring / iac / ops / external-obs）にわたってデプロイされます。
 
 | 区分 | 役割 |
 |------|------|

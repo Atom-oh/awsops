@@ -51,7 +51,7 @@ Want to pick a domain explicitly? Type a slash (`/`) in the input box. See the "
 
 Live AWS queries go through **AgentCore MCP (Model Context Protocol) Lambda tools**. The assistant queries exactly the data it needs to answer, then analyzes it.
 
-- **~120 read-only tools** are spread across **9 section gateways** (Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — per amended ADR-004). The tool count is approximate and evolving.
+- **~160 read-only tools** are spread across **9 section gateways** (Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — per amended ADR-004). The tool count is approximate and evolving.
 - The external-observability connectors (Prometheus·ClickHouse) are promoted to the **external-obs gateway**, routed as the ninth (ADR-004 as amended 2026-06-24, 9 provisioned / 9 routed). Other external integrations (vendor-hosted, etc.) remain the separate **Integrations axis** (ADR-007/017).
 - Steampipe exists only as a **flag-gated inventory sync** (`steampipe_enabled`, default OFF). It is not the live query engine, and not an always-on local service.
 

@@ -23,7 +23,7 @@ AWSops 最重要的原则是**只读（read-only）**。不过，该约束精确
 最初设计了变更操作框架（ADR-029）与执行 substrate（SSM Automation + Change Manager × P2 worker 混合，ADR-036），但 **2026-06-11 的 3-AI 共识将两者一并撤销（REVERSED）**。代码以暗（dark）状态保留，但 flag 永久 OFF，不会启用。
 
 - 终止 EC2、修改 SG、扩缩容、部署等 **AWS 资源变更不会通过任何页面·AI 功能执行。**
-- 约 120 个 AgentCore MCP 工具全部为 read-only。
+- 约 160 个 AgentCore MCP Lambda 工具全部为 read-only。
 
 :::info
 "冻结"的范围**仅限 AWS 资源**（ADR-029/036 2026-06-16 范围更正，ADR-041 keystone）。管控层与 worker 执行分支可复用于非 AWS 的外部数据写入，但 AWS 资源自动化 substrate 本身维持冻结。

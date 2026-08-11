@@ -24,7 +24,7 @@ flowchart LR
 
 | Item | Detail |
 |------|--------|
-| **Live queries** | AgentCore MCP Lambda tools (~120, read-only) call AWS APIs directly via boto3 |
+| **Live queries** | AgentCore MCP Lambda tools (~160, read-only) call AWS APIs directly via boto3 |
 | **Steampipe's role** | **Not** the live query engine. It is only a flag-gated **inventory sync** (`steampipe_enabled`, default OFF) — no local 9193 service, no pg Pool |
 | **Gating** | All of AgentCore is gated by the `agentcore_enabled` Terraform flag (default OFF → `plan` = No changes, $0) |
 | **Read-only** | All tools are read-only (ADR-041 / 2026-06-11 reversal: AWS-resource mutation + autonomy are permanently frozen) |
@@ -51,7 +51,7 @@ flowchart TD
 
   ECR -->|"Image reference"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["9 section gateways<br/>(~120 read-only tools)"]
+  AGENT -->|"MCP + SigV4"| GW["9 section gateways<br/>(~160 read-only tools)"]
   AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 5 / Opus 4.8 / Haiku 4.5"]
 ```
 
@@ -97,7 +97,7 @@ flowchart LR
 | Item | Detail |
 |------|--------|
 | **Gateway count** | **9** per ADR-004 as amended (2026-06-24) |
-| **Tool count** | About **120**, all read-only — evolves as the fleet grows (not a fixed number) |
+| **Tool count** | About **160**, all read-only — evolves as the fleet grows (not a fixed number) |
 | **External observability** | The Prometheus·ClickHouse connectors ride the **external-obs gateway** (the ninth, per amended ADR-004); other external integrations are the separate **Integrations axis** (ADR-007/017) |
 | **Protocol** | MCP (Model Context Protocol) standard |
 

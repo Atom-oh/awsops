@@ -186,7 +186,7 @@ The AgentCore Runtime ARN, Memory ID, and similar config values live **only in S
 | **Conversation history retention** | Maximum 365 days |
 | **AgentCore response** | Returns final text only (tool inference streamed with a typing effect) |
 | **Tool activation flags** | The 30 slices are gated on `agentcore_enabled` (21) / `integrations_enabled` (9) — the live environment has the fleet fully deployed (2026-08-02); new installs default to off |
-| **Vendor mcpServer targets** | For external-obs's vendor-hosted mcpServer targets (Datadog · Dynatrace · New Relic), `capability=read` is not enforced at the protocol level (ADR-017) — the read-only guarantee applies to Lambda targets; unset endpoints SKIP |
+| **Vendor mcpServer targets** | For external-obs's vendor-hosted mcpServer targets (Datadog · Dynatrace · New Relic), `capability=read` is not enforced at the protocol level (ADR-017) — the read-only guarantee applies to Lambda targets; unset endpoints SKIP. At runtime a fail-closed tool allowlist (`OFFICIAL_MCP_TOOL_ALLOWLIST_JSON` — only catalog-transcribed read tools pass, `agent/agent.py`) compensates |
 
 ## Next Steps
 

@@ -48,7 +48,7 @@ The edge is **end-to-end TLS**. CloudFront connects to the internal ALB over TLS
 
 **No.** AWSops is a **read-only operations dashboard + AI diagnosis** tool. **AWS-resource mutation and autonomy are permanently frozen (do-not-enable).** No screen and no AI feature will stop an EC2 instance, modify a security group, or alter your infrastructure.
 
-The AI assistant and diagnosis **query** live data to analyze and diagnose it — they perform no mutation. All ~120 AgentCore MCP tools are read-only.
+The AI assistant and diagnosis **query** live data to analyze and diagnose it — they perform no mutation. All ~160 AgentCore MCP Lambda tools are read-only.
 
 The only "write" permitted, under governance, is **external data records** — for example, leaving a report, ticket, or message in an external system. This works only under the following guards:
 
@@ -93,7 +93,7 @@ The app accesses Aurora via **node-pg** (the shared pool in `web/lib/db.ts`). Th
 
 ## How does AWSops query live AWS data?
 
-Live AWS / Kubernetes data is queried through **AgentCore MCP Lambda tools**. About 120 read-only tools are distributed across **9 section gateways** (network · container · data · security · cost · monitoring · iac · ops · external-obs).
+Live AWS / Kubernetes data is queried through **AgentCore MCP Lambda tools**. About 160 read-only tools are distributed across **9 section gateways** (network · container · data · security · cost · monitoring · iac · ops · external-obs).
 
 - All tools are read-only.
 - The gateway count is **9** (ADR-004 as amended 2026-06-24) — external-obs, hosting the Prometheus·ClickHouse connectors, is provisioned and routed as the ninth.

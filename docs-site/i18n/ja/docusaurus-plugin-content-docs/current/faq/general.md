@@ -48,7 +48,7 @@ AWSops は **Terraform**(`terraform/v2/foundation/`、部分 S3 backend)でプ�
 
 **いいえ。** AWSops は**読み取り専用の運用ダッシュボード + AI 診断**ツールです。**AWS リソースの変更と自律実行(autonomy)は恒久的に凍結(do-not-enable)**されています。どの画面や AI 機能も EC2 を終了したり、SG を修正したり、インフラを変更したりしません。
 
-AI アシスタントと診断はライブデータを**照会**して分析・診断するのみで、変更(mutation)を実行しません。約 120 個の AgentCore MCP ツールはすべて read-only です。
+AI アシスタントと診断はライブデータを**照会**して分析・診断するのみで、変更(mutation)を実行しません。約 160 個の AgentCore MCP Lambda ツールはすべて read-only です。
 
 ガバナンスの下で許可される唯一の「書き込み」は**外部データ記録**です — たとえば外部システムにレポート・チケット・メッセージを残すことです。これは次のガードの下でのみ動作します:
 
@@ -93,7 +93,7 @@ AWSops は EC2 インスタンス内の JSON ファイルではなく、**マネ
 
 ## ライブ AWS データはどのように照会しますか?
 
-ライブ AWS / Kubernetes データは **AgentCore MCP Lambda ツール**を通じて照会します。約 120 個の読み取り専用ツールが **9 個のセクションゲートウェイ**(network · container · data · security · cost · monitoring · iac · ops · external-obs)にわたって配置されています。
+ライブ AWS / Kubernetes データは **AgentCore MCP Lambda ツール**を通じて照会します。約 160 個の読み取り専用ツールが **9 個のセクションゲートウェイ**(network · container · data · security · cost · monitoring · iac · ops · external-obs)にわたって配置されています。
 
 - すべてのツールは read-only です。
 - ゲートウェイ数は **9 個**です (ADR-004 改訂 2026-06-24) — Prometheus·ClickHouse コネクタをホストする external-obs が 9 番目としてプロビジョニング・ルーティングされます。

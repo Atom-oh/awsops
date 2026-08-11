@@ -109,7 +109,7 @@ AWSops는 (v1의) Steampipe pg Pool(포트 9193, node-cache, cache-warmer, batch
 
 ## 라이브 AWS 조회는 어떻게 하나요? (AgentCore vs Steampipe)
 
-AWSops의 라이브 AWS 데이터는 **AgentCore MCP Lambda 도구**가 담당합니다. 약 **120개의 읽기 전용 도구**가 **9개 섹션 게이트웨이**(network / container / data / security / cost / monitoring / iac / ops / external-obs)에 걸쳐 배포됩니다.
+AWSops의 라이브 AWS 데이터는 **AgentCore MCP Lambda 도구**가 담당합니다. 약 **160개의 읽기 전용 도구**가 **9개 섹션 게이트웨이**(network / container / data / security / cost / monitoring / iac / ops / external-obs)에 걸쳐 배포됩니다.
 
 | 구분 | 역할 |
 |------|------|

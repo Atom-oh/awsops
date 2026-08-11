@@ -23,7 +23,7 @@ AWSops's most important principle is **read-only**. But that constraint is bound
 A mutating-action framework (ADR-029) and an execution substrate (SSM Automation + Change Manager × P2-worker hybrid, ADR-036) were designed, but **both were REVERSED by 3-AI consensus on 2026-06-11**. The code is retained in a dark state, but the flags are permanently OFF — it is never enabled.
 
 - **AWS-resource changes** — stopping an EC2 instance, modifying an SG, scaling, deploying — are performed by no screen and no AI feature.
-- All ~120 AgentCore MCP tools are read-only.
+- All ~160 AgentCore MCP Lambda tools are read-only.
 
 :::info
 The scope of the "freeze" is **AWS-resources only** (ADR-029/036 scope clarification 2026-06-16; ADR-041 keystone). The controls layer and the worker execution branch may be reused for non-AWS external data writes, but the AWS-resource automation substrate itself stays frozen.

@@ -51,7 +51,7 @@ AI アシスタントは**ハイブリッドルーティング**(ADR-038、LIVE)
 
 リアルタイム AWS クエリは **AgentCore MCP(Model Context Protocol) Lambda ツール**を通じて行われます。アシスタントが質問に答えるために必要なデータをツールで直接照会したうえで分析します。
 
-- **約 120 個の読み取り専用ツール**が **9 個のセクションゲートウェイ**(Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — ADR-004 改訂)に分かれています。ツール数は概算で、継続的に進化しています。
+- **約 160 個の読み取り専用ツール**が **9 個のセクションゲートウェイ**(Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — ADR-004 改訂)に分かれています。ツール数は概算で、継続的に進化しています。
 - 外部オブザーバビリティコネクタ（Prometheus·ClickHouse）は **external-obs ゲートウェイ**に昇格し、9 番目としてルーティングされます（ADR-004 改訂 2026-06-24、9 プロビジョニング / 9 ルーティング）。その他の外部連携は別の **Integrations 軸**（ADR-007/017）です。
 - Steampipe は**フラグでゲートされたインベントリ同期**(`steampipe_enabled`、デフォルト OFF)の用途としてのみ存在します。リアルタイムクエリエンジンではなく、常駐のローカルサービスでもありません。
 

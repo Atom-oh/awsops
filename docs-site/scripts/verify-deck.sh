@@ -122,7 +122,8 @@ diff <(sort <<<"$PARTS") <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) \
   || fail "pptx part list differs from generator output — extra or missing package parts"
 unzip -q "$DECK" -d "$WORK/committed"
 unzip -q "$WORK/rebuilt-deck.pptx" -d "$WORK/rebuilt"
-# core.xml stays in the diff; strip only its volatile creation/modified stamps
+# core.xml stays in the diff; strip only its volatile creation/modified stamps.
+# NOTE: GNU `sed -i` — this script targets the ubuntu CI runners; run under gsed on macOS.
 sed -i -E 's#(<dcterms:(created|modified)[^>]*>)[^<]*(</dcterms:(created|modified)>)#\1\3#g' \
   "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
 # the normalization must have actually removed the stamps — a pptxgenjs format
