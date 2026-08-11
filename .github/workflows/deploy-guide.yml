@@ -69,7 +69,7 @@ jobs:
           test -n "$XML" || { echo "::error::deck content scan extracted zero bytes"; exit 1; }
           # herestring (not printf|grep) so the check stays correct even if a
           # future `shell: bash` override enables pipefail on this step.
-          if grep -aqE '\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' <<<"$XML"; then
+          if grep -aqE '\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' <<<"$XML"; then
             echo "::error::awsops-intro.pptx content contains a sensitive identifier (account ID / ARN / access key / internal hostname / resource ID)"
             exit 1
           fi
@@ -90,14 +90,18 @@ jobs:
       # runner where predictable world-writable paths invite symlink games.
       - name: Verify deck matches generator
         run: |
-          DECK=static/presentation/awsops-intro/awsops-intro.pptx
+          # Gate the same artifact that ships: build/ (what upload-pages-artifact
+          # publishes), not the static/ source it was copied from.
+          DECK=build/presentation/awsops-intro/awsops-intro.pptx
           WORK=$(mktemp -d)
           trap 'rm -rf "$WORK"' EXIT
           node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx"
           diff <(unzip -Z1 "$DECK" | sort) <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) || { echo "::error::pptx part list differs from generator output — extra or missing package parts"; exit 1; }
           unzip -q "$DECK" -d "$WORK/committed"
           unzip -q "$WORK/rebuilt-deck.pptx" -d "$WORK/rebuilt"
-          rm -f "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
+          # docProps/core.xml stays in the diff; strip only its volatile
+          # dcterms:created/modified timestamps so title/creator drift is caught.
+          sed -i -E 's#<dcterms:(created|modified)[^<]*</dcterms:(created|modified)>##g' "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
           diff -r "$WORK/committed" "$WORK/rebuilt" || { echo "::error::committed awsops-intro.pptx does not match the generator output — run 'node scripts/pptx/build-awsops-intro-pptx.js' and re-commit"; exit 1; }
           if grep -rl 'TargetMode="External"' "$WORK/committed" --include='*.rels'; then
             echo "::error::deck contains external relationship targets — not allowed for the published deck"
