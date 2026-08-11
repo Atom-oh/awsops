@@ -121,9 +121,9 @@ OpsCenter / Incident Manager 양방향 라이트백으로 기록하도록 설계
 
 ### 게이트웨이가 9개로 늘었나요?
 
-**아니요 — 8개로 유지됩니다** (ADR-004).
+**예 — 9개입니다** (ADR-004 개정, 2026-06-24).
 
-network · container · data · security · cost · monitoring · iac · ops의 **8개 섹션 게이트웨이**가 유지되며, 외부 관측성은 별도의 **"Integrations 축"**(ADR-039)이지 9번째 게이트웨이가 아닙니다.
+network · container · data · security · cost · monitoring · iac · ops의 8개 AWS 도메인 게이트웨이에 더해, 외부 관측성 커넥터(Prometheus·ClickHouse)를 호스팅하는 **external-obs 게이트웨이**가 아홉 번째로 프로비저닝·라우팅됩니다(9 프로비저닝 / 9 라우트). 챗 키 `observability`는 external-obs로 별칭됩니다.
 
 ### 내가 직접 에이전트나 도구를 추가 구성할 수 있나요?
 

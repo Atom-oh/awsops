@@ -121,9 +121,9 @@ The gate score was validated at hybrid 69.2% → **96.9% (+27.7pp) PASSED**. Rat
 
 ### Did the gateways grow to 9?
 
-**No — it stays at 8** (ADR-004).
+**Yes — it is 9** (ADR-004 as amended, 2026-06-24).
 
-The **8 section gateways** — network · container · data · security · cost · monitoring · iac · ops — are maintained, and external observability is a separate **"Integrations axis"** (ADR-039), not a 9th gateway.
+In addition to the 8 AWS-domain gateways — network · container · data · security · cost · monitoring · iac · ops — an **external-obs gateway** hosting the external-observability connectors (Prometheus·ClickHouse) is provisioned and routed as the ninth (9 provisioned / 9 routed). The chat key `observability` aliases to external-obs.
 
 ### Can I add my own agents or tools?
 

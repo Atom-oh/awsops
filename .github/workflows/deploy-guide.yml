@@ -79,6 +79,10 @@ jobs:
             echo "::error::deck content scan failed to run (grep exit $RC)"
             exit 1
           fi
+          # second pass on tag-stripped text — catches identifiers split across OOXML <a:t> runs
+          grep -aqE '\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' <<<"$(sed -E 's/<[^>]*>/ /g' <<<"$XML")" && RC2=0 || RC2=$?
+          if [ "$RC2" -eq 0 ]; then echo "::error::sensitive identifier found in tag-stripped deck text (split-run)"; exit 1;
+          elif [ "$RC2" -ne 1 ]; then echo "::error::stripped-text scan failed (grep exit $RC2)"; exit 1; fi
           echo "Build verified: awsops-intro.pptx present, well-formed, and content-scanned."
 
       # The served .pptx is a committed binary; prove it is exactly what the
@@ -101,6 +105,7 @@ jobs:
           DECK=build/presentation/awsops-intro/awsops-intro.pptx
           WORK=$(mktemp -d)
           trap 'rm -rf "$WORK"' EXIT
+          [ "$(unzip -Z1 "$DECK" | wc -l)" -le 500 ] || { echo "::error::deck zip has an implausible number of entries"; exit 1; }
           node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx"
           diff <(unzip -Z1 "$DECK" | sort) <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) || { echo "::error::pptx part list differs from generator output — extra or missing package parts"; exit 1; }
           unzip -q "$DECK" -d "$WORK/committed"

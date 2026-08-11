@@ -11,7 +11,7 @@ Questions and answers about the AWSops AI assistant.
 <details>
 <summary>What questions can I ask?</summary>
 
-The AI assistant answers AWS/Kubernetes operations questions across **8 section domains**. Which domain it needs is determined automatically (see "routing" below) — just ask in natural language.
+The AI assistant answers AWS/Kubernetes operations questions across **9 section domains** (plus local specialist sections). Which domain it needs is determined automatically (see "routing" below) — just ask in natural language.
 
 | Domain | Example questions |
 |--------|-------------------|
@@ -50,7 +50,7 @@ Want to pick a domain explicitly? Type a slash (`/`) in the input box. See the "
 
 Live AWS queries go through **AgentCore MCP (Model Context Protocol) Lambda tools**. The assistant queries exactly the data it needs to answer, then analyzes it.
 
-- **~120 read-only tools** are spread across **8 section gateways** (Network / Container / Data / Security / Monitoring / Cost / IaC / Ops). The tool count is approximate and evolving.
+- **~120 read-only tools** are spread across **9 section gateways** (Network / Container / Data / Security / Monitoring / Cost / IaC / Ops / External-Obs — per amended ADR-004). The tool count is approximate and evolving.
 - External observability is the separate **Integrations axis** (ADR-039), not a 9th gateway — the gateway count stays at 8 (ADR-004).
 - Steampipe exists only as a **flag-gated inventory sync** (`steampipe_enabled`, default OFF). It is not the live query engine, and not an always-on local service.
 

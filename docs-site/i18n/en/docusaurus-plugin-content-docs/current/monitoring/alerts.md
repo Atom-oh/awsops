@@ -7,8 +7,9 @@ description: CloudWatch / Alertmanager / Grafana webhook ingestion, correlation,
 # Alert Pipeline
 
 :::caution Legacy page (v1-era)
-This page was written for the v1 diagnosis screen (fixed 15-section catalog, `src/` paths).
-Current v2 uses the **Light / Mid / Deep (15+1 sections, 16 rendered)** tier structure — see
+This page was written for the v1 alerting pipeline (alert-triggered diagnosis selecting from
+the fixed 15-section catalog, `src/` paths). Current v2 diagnosis uses the **Light / Mid /
+Deep (15+1 sections, 16 rendered)** tier structure — see
 [FAQ · AI Assistant](../faq/ai-assistant.md) for current behavior.
 :::
 
