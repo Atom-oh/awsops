@@ -1,7 +1,7 @@
 # sample files
 *.pptx
-# docs-site 배포 자산은 예외 (발표 덱 다운로드 제공)
-!docs-site/static/presentation/**/*.pptx
+# exception: docs-site presentation deck served as a download asset
+!docs-site/static/presentation/awsops-intro/awsops-intro.pptx
 
 # dependencies
 node_modules/
