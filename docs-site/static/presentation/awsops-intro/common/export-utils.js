@@ -61,9 +61,12 @@ const ExportUtils = {
   },
 
   getBlockFiles: function() {
-    return Array.from(document.querySelectorAll('a.block-card, .block-card a.block-link'))
-      .map(function(a) { return a.getAttribute('href'); })
-      .filter(Boolean);
+    // Set-dedupe: a page using both markup forms must not double-count a block
+    return Array.from(new Set(
+      Array.from(document.querySelectorAll('a.block-card, .block-card a.block-link'))
+        .map(function(a) { return a.getAttribute('href'); })
+        .filter(Boolean)
+    ));
   },
 
   /** Get presentation slug from current URL path */

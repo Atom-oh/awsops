@@ -72,7 +72,7 @@ External observability integration is a typed catalog/UX/governance over **one h
 
 **게이트웨이 수와의 관계:** 외부 관측성 = Integrations egress READ(9번째 프로비저닝 게이트웨이 external-obs로 표면화), 내부 CloudWatch = `monitoring` 섹션 게이트웨이. 정식 섹션 게이트웨이 수는 §1 개정(2026-06-24)에 따라 9(external-obs 포함).
 
-Relation to gateway count: external observability = Integrations egress READ (surfaced as the 9th provisioned gateway external-obs), internal CloudWatch = the `monitoring` section gateway. Section-gateway count stays 8 (§1).
+Relation to gateway count: external observability = Integrations egress READ (surfaced as the 9th provisioned gateway external-obs), internal CloudWatch = the `monitoring` section gateway. Section-gateway count is 9 per the §1 amendment (2026-06-24, external-obs included).
 
 > **개정 (2026-07-31, ADR-017):** 위 "서버측 도구 allowlist(`exposed_tools` 상한)" 불변식은 `mcp.lambda` target에 한정된 것으로 명확히 한다 — `toolSchema.inlinePayload`가 노출 툴 집합을 하드 리밋한다. ADR-017이 도입한 `mcpServer`-type target(원격 벤더 MCP 프리셋)에는 **동일한 서버측 강제가 없으며, `capability=read`는 이 경로에서 선언적 라벨일 뿐 강제되지 않는다**: `listingMode=DEFAULT`로 벤더 서버가 광고하는 툴 전부(write 툴 포함)를 노출하고, control-plane API에 `tools/list` 동등 기능이 없어 provision.py는 벤더의 툴 목록을 읽을 수조차 없다. 툴 집합을 고정할 수 있는 유일한 필드 `McpServerTargetConfiguration.mcpToolSchema`는 authorization code grant 자격증명 전용이라 API_KEY 프리셋에는 쓸 수 없다. 따라서 **이미 ack된 프리셋에 벤더가 write 툴을 추가하면 다음 `make agentcore`에서 재-ack 없이 흡수된다 — 알고서 수용한 잔여 리스크다.** 실제로 존재하는 보상 컨트롤은 `official_mcp_enabled`/`integrations_enabled` 기본 false + 큐레이션 카탈로그 + 프리셋별 fail-closed `official_mcp_read_only_ack` + `integrations_write_enabled` 기본 false 유지뿐이다.
 >
