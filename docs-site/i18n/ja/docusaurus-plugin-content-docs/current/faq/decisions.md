@@ -23,7 +23,7 @@ AWSops の最も重要な原則は**読み取り専用(read-only)**です。た�
 もともと変更作業フレームワーク(ADR-029)と実行 substrate(SSM Automation + Change Manager × P2 ワーカーのハイブリッド、ADR-036)が設計されましたが、**2026-06-11 の 3-AI 合意で両方とも撤回(REVERSED)**されました。コードはダーク(dark)状態で保存されますが、フラグは恒久 OFF であり、有効化しません。
 
 - EC2 の終了、SG の修正、スケーリング、デプロイのような **AWS リソースの変更は、どの画面・AI 機能でも実行されません。**
-- 約 120 個の AgentCore MCP ツールはすべて read-only です。
+- 約 160 個の AgentCore MCP Lambda ツールはすべて read-only です。
 
 :::info
 「凍結」の範囲は **AWS リソース限定**です (ADR-029/036 2026-06-16 スコープ訂正、ADR-041 keystone)。統制層とワーカー実行分岐は非 AWS の外部データ書き込みに再利用され得ますが、AWS リソース自動化 substrate 自体は凍結を維持します。
@@ -116,14 +116,14 @@ OpsCenter / Incident Manager への双方向ライトバックで記録するよ
 **プロンプトキャッシングと作業深度別のモデル選択で最適化**されます (ADR-038、ADR-033)。
 
 - **プロンプトキャッシング** — 約 59% のヒット率で、繰り返しコンテキストの再計算を削減します (ADR-038)。
-- **作業深度別モデル** — AI 診断は base(8 セクション)は Sonnet デフォルト、deep(15 セクション)は Sonnet デフォルト・Opus 選択(cost-gate)。分類・ルーティングには低コストの Haiku 4.5 を使用します (ADR-033)。
+- **作業深度別モデル** — AI 診断は Light·Mid(8+1 セクション)は Sonnet デフォルト、Deep(15+1 セクション)は Sonnet デフォルト・Opus 選択(cost-gate)。分類・ルーティングには低コストの Haiku 4.5 を使用します (ADR-033)。
 - ADR-033 は Aurora durable token budget(予算永続化)を定義しました — v1 に実装済みで、現在のウェブチャット経路への連携は今後の課題です。
 
 ### ゲートウェイは 9 個に増えたのですか?
 
-**いいえ — 8 個で維持されます** (ADR-004)。
+**はい — 9 個です** (ADR-004 改訂、2026-06-24)。
 
-network · container · data · security · cost · monitoring · iac · ops の **8 個のセクションゲートウェイ**が維持され、外部オブザーバビリティは別の **「Integrations 軸」**(ADR-039)であって、9 番目のゲートウェイではありません。
+network · container · data · security · cost · monitoring · iac · ops の 8 個の AWS ドメインゲートウェイに加え、外部オブザーバビリティコネクタ（Prometheus·ClickHouse）をホストする **external-obs ゲートウェイ**が 9 番目としてプロビジョニング・ルーティングされます（9 プロビジョニング / 9 ルーティング）。その他の外部連携は別の **Integrations 軸**（ADR-007/017）です。
 
 ### 自分でエージェントやツールを追加構成できますか?
 

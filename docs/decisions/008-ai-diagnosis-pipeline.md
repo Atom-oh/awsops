@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22; amended 2026-06-24) — consolidated / 채택 (2026-06-22; 2026-06-24 개정) — 통합
+Accepted (2026-06-22; amended 2026-06-24, 2026-08-11) — consolidated / 채택 (2026-06-22; 2026-06-24, 2026-08-11 개정) — 통합
 
 > **Consolidates / 통합 대상**: ADR-013 (자동 수집 조사 에이전트), ADR-016 (Bedrock 모델 선택 전략), ADR-019 (진단 리포트 포맷 매트릭스), ADR-021 (AI 응답 SSE 스트리밍), ADR-033 (AIOps LLM 비용 최적화), ADR-045 (AI 진단 지연 — 병렬 렌더 + 스트리밍).
 >
@@ -19,11 +19,11 @@ AWSops AI Diagnosis is a read-only feature that gathers infrastructure evidence 
 ### 현행 사실 (감사 §B8, ai-09~14 기준) / Current facts (per audit §B8)
 
 - **진단 워커는 raw boto3 직접 Bedrock 호출이다.** `scripts/v2/workers/diagnosis/report.py`가 `bedrock-runtime.invoke_model`(Anthropic Messages 프로토콜)을 직접 호출한다 — **Strands가 아니다**. Strands는 도구 루프가 실제로 필요한 대화형 챗 에이전트(`agent/agent.py`, AgentCore)에만 쓰인다. / The diagnosis worker is a raw boto3 direct Bedrock call (`invoke_model`), **not** Strands; Strands is chat-only.
-- **deep 15섹션 병렬 렌더는 구현됨**(동시성 제한 풀, 섹션별 타임아웃 격리, `partial` degrade 보존). / Deep 15-section parallel rendering is implemented (bounded concurrency, per-section timeout isolation, `partial` degrade).
+- **deep 15+1섹션(총 16 — 의도 대비 실제 포함) 병렬 렌더는 구현됨**(동시성 제한 풀, 섹션별 타임아웃 격리, `partial` degrade 보존). / Deep 15+1-section (16 total, incl. intended-vs-actual) parallel rendering is implemented (bounded concurrency, per-section timeout isolation, `partial` degrade).
 - **스트리밍(ADR-045 우선순위 #2)은 미구현 = 후속.** `invoke_model_with_response_stream` 호출은 코드에 0건이며(`report.py` non-stream), 본 통합 ADR도 이를 **미완·후속 작업**으로 정직하게 기술한다(감사 ai-10 DRIFT). / Streaming (ADR-045 priority #2) is **not implemented — a follow-up**; zero `invoke_model_with_response_stream` calls exist (audit ai-10 DRIFT).
 - **모델 배정은 `global.*` 크로스리전 추론 프로파일을 유지**한다 — 비용 귀속(`ai_usage_daily`, Bedrock invocation-log) 때문. / Model assignment keeps `global.*` cross-region inference profiles for cost attribution.
 - **리포트 포맷은 DOCX/PDF/MD**가 v2 워커 경로에서 산출된다. / Report formats DOCX/PDF/MD are produced by the v2 worker path.
-- **비용 통제는 프롬프트 캐싱**(직접 `callBedrock`/`invoke_model` 경로 한정 — 게이트웨이 호출 토큰은 Strands 런타임 내부라 불투명)으로 이뤄진다. / Cost control is prompt caching, scoped to direct-invoke paths only (gateway-call tokens are opaque inside the Strands runtime).
+- **비용 통제는 프롬프트 캐싱**(현행 구현 위치는 게이트웨이/Strands 경로 — `agent/agent.py` `BedrockModel(CacheConfig)`; 직접 `callBedrock`/`invoke_model` 경로는 아직 캐시포인트 없음 — §5 참조)으로 이뤄진다. / Cost control is prompt caching — currently implemented on the gateway/Strands path (`agent.py` `BedrockModel(CacheConfig)`); the direct `callBedrock`/`invoke_model` paths carry no cache points yet (see §5).
 - **환각 방지**: 진단은 read-only이고, 수집된 증거 위에서만 추론하며, 누락/비가용 데이터소스는 치명적이지 않게 스킵하고 coverage note를 남겨 모델이 없는 데이터를 지어내지 않도록 한다. / Hallucination guard: read-only, reasons only over collected evidence, skips missing datasources gracefully, leaves a coverage note so the model does not invent absent data.
 
 ## Decision / 결정
@@ -68,7 +68,7 @@ Long-running AI flows (chat) use SSE (`text/event-stream` + `ReadableStream`) to
 
 ### 5. LLM 비용 통제 — 프롬프트 캐싱 + 비용 귀속 (구 ADR-033) / LLM cost control — prompt caching + cost attribution
 
-- **프롬프트 캐싱은 AWSops가 통제하는 직접 호출 경로**(분류·합성·15섹션 진단의 `callBedrock`/`invoke_model`)에만 적용된다. 1~3개 AgentCore **게이트웨이** 호출은 Strands 런타임 내부에서 프롬프트가 구성(MCP/SigV4)되어 **불투명**하므로 AWSops 계층의 캐싱 대상이 아니다. / Prompt caching applies only to AWSops-controlled direct-invoke paths; gateway-call tokens are opaque inside the Strands runtime.
+- **프롬프트 캐싱의 현재 구현 위치는 게이트웨이/Strands 경로다** — `agent/agent.py`의 `BedrockModel(CacheConfig)`가 시스템 프롬프트·도구 정의를 캐시한다(CacheConfig 미지원 strands 버전은 그레이스풀 폴백). 분류·합성·15+1섹션 진단의 직접 호출 경로(`callBedrock`/`invoke_model`)에는 아직 캐시포인트가 없다 — 캐싱 이득이 반복 시스템 프롬프트가 가장 큰 곳(에이전트 루프)에 먼저 착륙했고, 직접 호출 경로 캐싱은 후속 과제. (2026-08-11 정정: 종전 서술이 구현과 반대로 기록되어 있었음) / Prompt caching currently lives on the gateway/Strands path (`agent.py` `BedrockModel(CacheConfig)`); the direct-invoke classification/synthesis/diagnosis paths carry no cache points yet — corrected 2026-08-11 (the prior text recorded the inverse of the implementation).
 - **비용 귀속**: `global.*` 프로파일 + Bedrock invocation-log → `ai_usage_daily` 집계로 awsops-only Bedrock 지출을 귀속한다. / Cost attribution via `global.*` + invocation logs → `ai_usage_daily`.
 - 의미(semantic) 응답 캐시(Aurora pgvector)는 **연기**된 후속이다(현행은 정확 일치 캐시까지). / Semantic answer cache (Aurora pgvector) is a **deferred** follow-up.
 
@@ -83,7 +83,7 @@ The diagnosis worker (single-shot per-section calls) keeps the **boto3 `bedrock-
 For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtime, `agent/agent.py`), a custom **`AsyncAnthropicBedrock` (Bedrock-client) loop** is permitted as an experiment behind `ANTHROPIC_AGENT_LOOP_ENABLED` (default OFF, dark): the lever is **tool-loop debuggability** (removing the opacity of the Strands agent loop), not latency, and going **through Bedrock preserves IAM/VPC/residency/cost-attribution + invocation-log attribution** (no API key, same `global.*` profile + home region). Read-only, additive, flag-gated; it reuses the existing gateway MCP (not a new BYO-MCP). Routing/runtime governance stays in scope of ADR-003/004.
 
 우선순위순 지연 최적화:
-1. **섹션 렌더 병렬화 — 구현됨.** 동시성 제한 풀(Bedrock TPM/RPM 아래 유지)로 벽시계를 15콜의 합 → 최장 섹션 수준으로 단축. 섹션별 타임아웃 격리·`partial` degrade 계약 보존. / **Parallel per-section rendering — implemented.** Bounded-concurrency pool; wall-clock from sum → ~max; per-section timeout isolation and `partial` degrade preserved.
+1. **섹션 렌더 병렬화 — 구현됨.** 동시성 제한 풀(Bedrock TPM/RPM 아래 유지)로 벽시계를 16콜(15+1)의 합 → 최장 섹션 수준으로 단축. 섹션별 타임아웃 격리·`partial` degrade 계약 보존. / **Parallel per-section rendering — implemented.** Bounded-concurrency pool; wall-clock from sum → ~max; per-section timeout isolation and `partial` degrade preserved.
 2. **섹션 출력 스트리밍 — 미구현 = 후속.** `invoke_model_with_response_stream` 적용은 현재 0건(`report.py` non-stream)이며, 체감 first-token 지연을 낮추기 위한 **계획된 후속 작업**으로 남는다(감사 ai-10). / **Section-output streaming — not implemented, a follow-up** (zero `invoke_model_with_response_stream` today; audit ai-10).
 3. `global.*` 프로파일 유지 — 측정상 정당화될 때만 특정 티어에 리전 프로파일 고려. / Keep `global.*`; consider a regional profile only with a measured case.
 
@@ -94,13 +94,13 @@ For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtim
 - 소스별 분해 + 우아한 축퇴로 부분 구성 환경에서도 도달 가능한 증거로 진단이 완료된다. / Per-source decomposition + graceful degradation completes diagnosis on reachable evidence.
 - 깊이/지연 축 모델 배정으로 비용·지연을 경로 특성에 맞게 통제하며, `global.*`로 비용 귀속을 보존한다. / Depth/latency model assignment controls cost/latency per flow; `global.*` preserves attribution.
 - deep 리포트가 순차 합 → 최장 섹션 시간으로 대폭 단축(병렬 렌더 구현). / Deep reports cut from sequential sum to slowest-section time.
-- 프롬프트 캐싱이 직접 호출 경로의 비용·첫 토큰 지연을 모두 낮춘다. / Prompt caching lowers both cost and first-token latency on direct paths.
+- 프롬프트 캐싱이 에이전트(게이트웨이/Strands) 경로의 비용·첫 토큰 지연을 낮춘다 — 반복 시스템 프롬프트·도구 정의가 가장 큰 곳. / Prompt caching lowers cost and first-token latency on the agent (gateway/Strands) path — where the repeated system prompt and tool definitions are largest.
 - read-only 불변 — AWS 리소스 변경·자율 없음. / Read-only invariant — no AWS-resource mutation/autonomy.
 
 ### Negative / 부정적
 - **스트리밍 미완**: 진단 섹션 출력 스트리밍(#6-2)은 후속이라 deep 티어의 체감 first-token 지연 이득은 아직 미실현. / Streaming unshipped: the perceived first-token win for deep tier is not yet realized.
 - 병렬 렌더는 동시성 제한·백오프 필수 — 무차별 fan-out은 `ThrottlingException` 위험. / Parallel render needs bounded concurrency + backoff; naive fan-out risks throttling.
-- 프롬프트 캐싱은 직접 호출 경로에만 유효 — 게이트웨이 토큰(종종 최대 소비자)은 불투명해 비용 절감 사각이 남는다. / Caching only covers direct paths; gateway tokens (often the largest) stay opaque.
+- 프롬프트 캐싱은 아직 게이트웨이/Strands 경로에만 구현 — 분류·합성·15+1섹션 진단의 직접 호출 경로는 캐시포인트가 없어 비용 절감 사각으로 남는다(후속 과제, §5). / Caching is implemented only on the gateway/Strands path so far; the direct-invoke classification/synthesis/diagnosis paths carry no cache points and remain an uncovered cost gap (follow-up, §5).
 - 다수 포맷 제너레이터 유지 비용 + 포맷 간 패리티 자동 테스트 부재(섹션 드리프트는 리뷰로만 포착). / Multi-format maintenance cost + no automated parity test (section drift caught only by review).
 - 모델 ID는 신규 Claude 버전 출시 시 함께 회전해야 함. / Model IDs must rotate together on new Claude releases.
 
@@ -112,7 +112,7 @@ For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtim
 | 2 | Bedrock 모델 선택 (깊이-지연 축, `global.*`) | LIVE |
 | 3 | 리포트 포맷 (DOCX/PDF/MD) | LIVE |
 | 4 | SSE 진행 스트리밍 (챗 등 장시간 플로우) | LIVE |
-| 5 | LLM 비용 통제 (프롬프트 캐싱 직접경로 한정 + `global.*` 비용귀속) | LIVE |
+| 5 | LLM 비용 통제 (프롬프트 캐싱 — 게이트웨이/Strands 경로 구현, 직접경로는 후속 + `global.*` 비용귀속) | PARTIAL |
 | 6 | deep 티어 지연 (병렬 렌더 = LIVE / 섹션 스트리밍 = **후속·미구현**) | PARTIAL |
 
 ## References / 참고 자료

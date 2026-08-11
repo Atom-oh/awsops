@@ -8,6 +8,12 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # 为什么选择 AWSops
 
+:::note 本页部分内容基于 v1
+本页的部分描述（内嵌 Steampipe 数据引擎、诊断 PPTX 导出等）源自 v1，正在逐步更新。
+当前 v2 架构请以[AgentCore 概览](./agentcore.md)与 [FAQ](../faq/general.md) 为准。
+:::
+
+
 > **一句话总结** — AWSops 是**完全开源、仅用 AWS 托管服务实现的** AWS + Kubernetes 运维仪表板。通过 Steampipe 快速拉取 AWS API 并缓存在本地，再通过 Amazon Bedrock AgentCore 在同一个界面中提供 **Well-Architected 视角的 AI 诊断**。
 
 <Screenshot src="/screenshots/overview/dashboard.png" alt="AWSops 仪表板 — 单一界面运维状况" />
@@ -61,7 +67,7 @@ EC2·Lambda·ECS/ECR·EKS（Pod/Node/Deployment/Service/Explorer）·VPC·CloudF
 `/ai-diagnosis` 是由 Amazon Bedrock **Claude Opus 4.8** 自动分析整体基础设施并生成正式报告的工具。
 
 - **6 个 Well-Architected 支柱记分卡** — Executive Summary 为 Operational Excellence·Security·Reliability·Performance Efficiency·Cost Optimization·Sustainability 全部打分。
-- **3 个支柱深度分析（15 个章节）** — 深入剖析 Cost Optimization·Security·Reliability（成本概览/计算/网络/存储、闲置资源、安全状况、网络·计算·EKS·数据库·MSK·存储分析等）。
+- **3 个支柱深度分析（15+1 个章节）** — 深入剖析 Cost Optimization·Security·Reliability（成本概览/计算/网络/存储、闲置资源、安全状况、网络·计算·EKS·数据库·MSK·存储分析等）。
 - **DOCX / Markdown / PDF / PPTX** 导出 + **每周/双周/每月调度** + 完成时邮件通知。
 
 :::note 诚实的范围

@@ -40,3 +40,28 @@ jobs:
 
       - name: Run merge verification
         run: bash scripts/v2/merge-verify.sh
+
+  # Pre-merge mirror of deploy-guide.yml's deck gates, so a sensitive-content
+  # leak or generator drift in the committed pptx is caught BEFORE the binary
+  # enters public git history (deploy-guide runs post-merge and can only block
+  # serving). Runs on a hosted runner — no credentials involved.
+  deck-verify:
+    name: Deck Verify (docs-site pptx gates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # gates only read the tree — no git credentials needed after checkout
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+
+      - name: Install docs-site dependencies
+        run: cd docs-site && npm ci
+
+      - name: Deck gates (shared script — mirrors deploy-guide pre-deploy run)
+        working-directory: docs-site
+        run: bash scripts/verify-deck.sh static/presentation/awsops-intro/awsops-intro.pptx

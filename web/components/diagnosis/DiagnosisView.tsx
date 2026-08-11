@@ -207,7 +207,7 @@ export default function DiagnosisView() {
           >
             <option value="light">Light</option>
             <option value="mid">Mid</option>
-            <option value="deep">{tt('Deep (15섹션)')}</option>
+            <option value="deep">{tt('Deep (15+1섹션)')}</option>
           </select>
           <button
             onClick={run}
