@@ -314,7 +314,7 @@ addSectionSlide("02. AWSops 개요", "읽기 전용 통합 대시보드",
   addStatBand(s, [
     { value: "16", label: "AI 챗 섹션 키 (정의 기준 — 게이트/플래그 의존)" },
     { value: "9", label: "도메인 전문 에이전트 게이트웨이" },
-    { value: "8종", label: "외부 관측 데이터소스 커넥터" },
+    { value: "8종", label: "외부 관측 데이터소스 (등록 기준)" },
     { value: "read-only", label: "모니터링 대상 계정 조회 원칙" },
   ]);
   addFooter(s, ++pageNum);
@@ -537,7 +537,7 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
   const cols = [
     ["대화형 어시스턴트", "자연어 질문을 자동 라우팅하거나 슬래시(/)로 섹션을 지정. \"두 리소스 간 통신이 안 되는 원인\", \"이 IAM 역할 과다권한 점검\" 같은 운영 질문에 라이브 근거로 답변", C.metaBlue],
     ["aws-data — 리소스 질의 섹션", "\"리전별 EC2 몇 개야?\" 같은 수량·목록 질문을 받는 generic 섹션. 라이브 AWS 조회는 AgentCore 게이트웨이 경유가 원칙(ADR-001/010) — 별도 SQL 라이브 실행 경로는 설계상 차단", C.openaiGreen],
-    ["전문 섹션 6종 (자동 수집형 설계)", "유휴 리소스 스캔 · EKS/DB/MSK 최적화 · 지연 분석 · 인시던트 — 근거 데이터를 먼저 모으고 분석하는 설계. 활성화는 인벤토리 게이트 의존, 총 16개 챗 섹션 구성", C.anthropicCoral],
+    ["전문 섹션 6종 (자동 수집형 설계)", "유휴 리소스 스캔 · EKS/DB/MSK 최적화 · 지연 분석 · 인시던트 — 근거 데이터를 먼저 모으고 분석하는 설계 — 현재는 설계 원칙(ADR-001/010)에 따라 비활성, 표준 라우팅으로 대응. 총 16개 챗 섹션 구성", C.anthropicCoral],
   ];
   const cw = (9.16 - 0.20) / 3, cy = 2.34, chh = 2.10;
   cols.forEach((c, i) => {
@@ -556,10 +556,10 @@ addSectionSlide("03. Architecture Deep Dive", "프라이빗 엣지 · AgentCore 
   addFooter(s, ++pageNum);
   s.addNotes(`[요약]
 • 도메인별 게이트웨이 9종이 각자 전문 도구로 라이브 조회
-• 챗 16섹션 정의 = 게이트웨이 9 + aws-data + 전문 섹션 6 (활성화는 게이트 의존)
+• 챗 16섹션 정의 = 게이트웨이 9 + aws-data + 전문 섹션 6 (로컬 7종은 현재 비활성 — 표준 라우팅 대응)
 • 라이브 AWS 조회는 AgentCore 게이트웨이 경유 원칙
 
-AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질문을 받는 게 아니라, 네트워크·컨테이너·데이터·보안·비용·모니터링·IaC·운영·외부관측 아홉 개 도메인 게이트웨이가 각자 전문 도구를 들고 있습니다. 질문이 오면 해당 도메인 에이전트가 라이브 AWS 데이터를 직접 조회해서 답합니다. 여기에 두 가지가 더 있습니다. aws-data는 리소스 수량·목록 질문을 받는 generic 섹션이고 — 라이브 AWS 조회는 어디까지나 AgentCore 게이트웨이 경유가 원칙입니다. 그리고 유휴 리소스 스캔이나 인시던트 분석 같은 여섯 개 전문 섹션은 근거 데이터를 먼저 모으고 분석하는 자동 수집형 설계입니다 — 이들의 활성화는 인벤토리 게이트 설정에 의존합니다. 합쳐서 16개 섹션 정의입니다. 모델은 Bedrock의 Claude 계열을 용도별로 혼용합니다.
+AI 레이어의 핵심은 '분업'입니다. 범용 챗봇 하나가 모든 질문을 받는 게 아니라, 네트워크·컨테이너·데이터·보안·비용·모니터링·IaC·운영·외부관측 아홉 개 도메인 게이트웨이가 각자 전문 도구를 들고 있습니다. 질문이 오면 해당 도메인 에이전트가 라이브 AWS 데이터를 직접 조회해서 답합니다. 여기에 두 가지가 더 있습니다. aws-data는 리소스 수량·목록 질문을 받는 generic 섹션이고 — 라이브 AWS 조회는 어디까지나 AgentCore 게이트웨이 경유가 원칙입니다. 그리고 유휴 리소스 스캔이나 인시던트 분석 같은 여섯 개 전문 섹션은 근거 데이터를 먼저 모으고 분석하는 자동 수집형 설계입니다 — 이 경로는 현재 설계 원칙(ADR-001/010)에 따라 비활성이며 해당 질문은 표준 라우팅이 대응합니다. 합쳐서 16개 섹션 정의입니다. 모델은 Bedrock의 Claude 계열을 용도별로 혼용합니다.
 
 [약어]
 • MCP(Model Context Protocol): AI 에이전트가 도구를 호출하는 표준 프로토콜
@@ -698,14 +698,14 @@ addSectionSlide("04. 핵심 가치 4", "페인과 1:1 대응",
   addCardBg(s, x2, 1.48, cw, 2.90);
   s.addText("외부 관측 자산 연동 — 대체가 아니라 승격", { x: x2 + 0.16, y: 1.62, w: cw - 0.32, h: 0.30, fontFace: FONT, fontSize: 13, bold: true, color: C.ink, margin: 0 });
   s.addText(
-    "• Prometheus · Mimir · Loki · Tempo · ClickHouse · Jaeger · Datadog · Dynatrace — 8종 read-only 데이터소스\n" +
+    "• Prometheus · Mimir · Loki · Tempo · ClickHouse · Jaeger · Datadog · Dynatrace — 8종 read-only 등록 지원(라이브 라우팅은 Prometheus·ClickHouse 중심, 단계적 확대)\n" +
     "• ClickHouse 트레이스가 서비스 맵(호출 그래프)을 채우고, Prometheus 메트릭이 AI 심층 진단의 근거로 흡수(진단 연동 활성화 시)\n" +
     "• 네이티브 쿼리 콘솔(PromQL·LogQL·SQL)로 등록 즉시 탐색 가능\n" +
     "• 기존 대시보드는 그대로 — 그 위에 '조합하는 층'을 얹는 개념",
     { x: x2 + 0.16, y: 1.96, w: cw - 0.32, h: 2.30, fontFace: FONT, fontSize: 10, color: C.charcoal, margin: 0, valign: "top", lineSpacingMultiple: 1.3 });
   addStatBand(s, [
     { value: "수십 개", label: "동시 조회 가능한 계정 스코프" },
-    { value: "8종", label: "외부 관측 데이터소스 커넥터" },
+    { value: "8종", label: "외부 관측 데이터소스 (등록 기준)" },
     { value: "1클릭", label: "계정·리전 스코프 전환" },
     { value: "4개 언어", label: "UI 지원 — KO · EN · JA · ZH" },
   ]);
