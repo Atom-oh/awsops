@@ -108,7 +108,7 @@ AI 어시스턴트는 **하이브리드 라우팅**(ADR-038, LIVE)을 사용합�
 | Tier | 섹션 수 | 기본 모델 |
 |------|---------|-----------|
 | **Base** | 8개 섹션 | Sonnet |
-| **Deep** | 15개 섹션(base 8 + deep 전용 6 + 종합) | Sonnet 기본, **Opus 선택 가능**(deep 전용, cost-gate 적용) |
+| **Deep** | 15+1개 섹션(base 8 + deep 전용 7 + 의도 대비 실제) | Sonnet 기본, **Opus 선택 가능**(deep 전용, cost-gate 적용) |
 
 **기능**
 

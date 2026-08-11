@@ -6,6 +6,13 @@ description: CloudWatch / Alertmanager / Grafana 웹훅 수신, 알림 상관 �
 
 # 알림 파이프라인
 
+:::caution 레거시 문서 (v1 기준)
+이 문서는 v1 시절 AI 진단 화면 기준으로 작성되었습니다(15섹션 고정 카탈로그 · `src/` 경로).
+현행 v2는 **Light / Mid / Deep(15+1섹션, 총 16 렌더)** 티어 구조입니다 — 최신 동작은
+[FAQ · AI 어시스턴트](../faq/ai-assistant.md)를 참조하세요.
+:::
+
+
 외부 알림 시스템의 이벤트를 AWSops로 수신하여 **상관 분석 → 자동 AI 진단 → Slack 알림**까지 한 번에 처리하는 파이프라인입니다.
 
 ## 지원 소스
@@ -96,7 +103,7 @@ description: CloudWatch / Alertmanager / Grafana 웹훅 수신, 알림 상관 �
 
 1. **AlertContext 빌드**: 영향받은 서비스, 리소스, 네임스페이스, 발화 시각(since)을 추출
 2. **스코프 제한 수집**: CloudWatch 메트릭 쿼리를 `since` 기준 ±10분, 해당 리소스로만 필터링
-3. **관련 섹션 선택**: 15+1섹션 중 Compute / Network / Container 등 3~5개만 실행
+3. **관련 섹션 선택**: 15섹션 중 Compute / Network / Container 등 3~5개만 실행
 4. **변경 감지**: Terraform state / CloudTrail 최근 변경과 비교
 5. **Bedrock 분석**: Claude Sonnet으로 근본 원인 추정 + Next Steps 제안
 
@@ -175,7 +182,7 @@ curl -X POST https://awsops.example.com/awsops/api/alert-webhook \
 
 ## 관련 페이지
 
-- [AI 종합 진단](./ai-diagnosis.md) — 15+1섹션 전체 진단
+- [AI 종합 진단](./ai-diagnosis.md) — 15섹션 전체 진단
 - [CloudWatch](./cloudwatch) — 알람 원본
 - [외부 데이터소스](./datasources) — Alertmanager/Grafana 쿼리 원천
 

@@ -1,14 +1,21 @@
 ---
 sidebar_position: 8
 title: AI 종합 진단
-description: 15+1섹션 Bedrock Opus 진단 리포트, DOCX/MD/PDF 내보내기, 스케줄링, 이메일 알림
+description: 15섹션 Bedrock Opus 진단 리포트, DOCX/MD/PDF 내보내기, 스케줄링, 이메일 알림
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
 
 # AI 종합 진단
 
-`/ai-diagnosis` 페이지는 Amazon Bedrock **Claude Opus 4.8**가 15+1섹션으로 AWS 인프라 전반을 자동 분석하는 종합 리포트 도구입니다.
+:::caution 레거시 문서 (v1 기준)
+이 문서는 v1 시절 AI 진단 화면 기준으로 작성되었습니다(15섹션 고정 카탈로그 · `src/` 경로).
+현행 v2는 **Light / Mid / Deep(15+1섹션, 총 16 렌더)** 티어 구조입니다 — 최신 동작은
+[FAQ · AI 어시스턴트](../faq/ai-assistant.md)를 참조하세요.
+:::
+
+
+`/ai-diagnosis` 페이지는 Amazon Bedrock **Claude Opus 4.8**가 15섹션으로 AWS 인프라 전반을 자동 분석하는 종합 리포트 도구입니다.
 
 <Screenshot src="/screenshots/monitoring/ai-diagnosis.png" alt="AI 종합 진단 페이지" />
 
@@ -27,13 +34,13 @@ import Screenshot from '@site/src/components/Screenshot';
 ## 페이지 구성
 
 ### 1. 상단 액션 바
-- **Run Diagnosis** 버튼 — 즉시 진단 시작 (전체 15+1섹션 평균 6~10분)
+- **Run Diagnosis** 버튼 — 즉시 진단 시작 (전체 15섹션 평균 6~10분)
 - **Schedule** 아이콘 — 자동 스케줄 패널 토글 (admin only)
 - **Notification** 아이콘 — 이메일 알림 수신자 관리 (admin only)
 - **DOCX 다운로드** — 가장 최근 완료 리포트를 즉시 다운로드
 
 ### 2. 좌측 TOC 사이드바
-완료된 리포트를 펼치면 15+1섹션이 TOC로 표시되고, 클릭 시 해당 섹션으로 스크롤합니다. 다중 확장이 가능해 여러 섹션을 동시에 비교할 수 있습니다.
+완료된 리포트를 펼치면 15섹션이 TOC로 표시되고, 클릭 시 해당 섹션으로 스크롤합니다. 다중 확장이 가능해 여러 섹션을 동시에 비교할 수 있습니다.
 
 ### 3. 리포트 이력 테이블
 | 컬럼 | 설명 |
@@ -117,7 +124,7 @@ import Screenshot from '@site/src/components/Screenshot';
 | 포맷 | 생성 경로 | 특징 |
 |------|----------|------|
 | **DOCX** | `lib/report-docx.ts` → API `download-docx` | A4 라이트 테마, TOC, 헤더/푸터/페이지 번호, 마크다운→문단/표/블릿 변환 |
-| **Markdown** | API `download-md` | 원본 텍스트 (15+1섹션 모두 연결) |
+| **Markdown** | API `download-md` | 원본 텍스트 (15섹션 모두 연결) |
 | **PDF** | `/ai-diagnosis/report` 페이지 + 브라우저 Print | 화이트 배경, A4 페이지 브레이크, 별도 PDF 라이브러리 없음 (bundle size 보호) |
 
 :::tip PDF 라이브러리를 추가하지 않는 이유
@@ -175,5 +182,5 @@ curl -X POST /awsops/api/report \
 - ADR-019: 진단 리포트 포맷 매트릭스
 - ADR-014: 리포트 프록시 다운로드 URL
 - ADR-016: Bedrock 모델 선택 전략 (Opus 4.8 고정)
-- `src/lib/report-prompts.ts` — 15+1섹션 프롬프트 정의 (정확한 출력 구조)
+- `src/lib/report-prompts.ts` — 15섹션 프롬프트 정의 (정확한 출력 구조)
 - `src/lib/report-scheduler.ts` — 스케줄 계산 로직 (KST 기준)
