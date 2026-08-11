@@ -5,7 +5,7 @@
 | 자산 | 무엇인가 | 소스 / 재생성 경로 |
 |---|---|---|
 | `index.html` + `0N-*.html` (웹 슬라이드) | remarp 블록 기반 웹 프레젠테이션 (42장) | `_presentation.md` 매니페스트 + `0N-*.md` 블록에서 생성 |
-| `awsops-intro.pptx` (정식 PPTX 덱) | 고객 발표용으로 별도 제작한 PowerPoint 덱 — 16:9, Pretendard 폰트(미설치 시 대체 폰트), 슬라이드마다 한국어 스피커 노트 포함 | `docs-site/scripts/pptx/build-awsops-intro-pptx.js` (pptxgenjs) — 아래 참조 |
+| `awsops-intro.pptx` (정식 PPTX 덱) | 고객 발표용으로 별도 제작한 PowerPoint 덱 — **AWS Light 테마**(화이트 캔버스 · 퍼플→블루→그린 시그니처 그라디언트), 16:9, Pretendard 폰트(미설치 시 대체 폰트), 슬라이드마다 한국어 스피커 노트 포함 | `docs-site/scripts/pptx/build-awsops-intro-pptx.js` + `deck_kit.js` (pptxgenjs) — 아래 참조 |
 
 ## 정식 PPTX 덱 재생성
 
@@ -16,10 +16,8 @@ node scripts/pptx/build-awsops-intro-pptx.js
 # → static/presentation/awsops-intro/awsops-intro.pptx 를 덮어씀 → 교체 커밋
 ```
 
-- 슬라이드 구성·문구·스피커 노트는 전부 생성 스크립트가 단일 소스다. 내용을 고치려면 스크립트를 수정하고 다시 빌드한다.
-- 배경 자산 2종은 합성 그라디언트(스크린샷 아님)이며, SHA-256을 고정 기록한다. **이 해시는 CI(`scripts/verify-deck.sh` 프로비넌스 pre-flight)가 강제한다** — 자산 변경 시 여기와 `verify-deck.sh` 의 해시를 같은 커밋에서 갱신할 것:
-  - `scripts/pptx/assets/title_bg.png` — `3fd59525f442c4485e77dfd7d7e7c41932db14a8c1113e4a6258ae58d982ba87`
-  - `scripts/pptx/assets/section_bg_33.png` — `7c8ae2692023aa54cbca261b06e9128eecd7feac64897002b4c93867551bbe22`
+- 슬라이드 구성·문구·스피커 노트는 전부 생성 스크립트가 단일 소스다. 내용을 고치려면 스크립트를 수정하고 다시 빌드한다. 디자인 시스템(토큰·커버/아젠다/디바이더/클로징 빌더)은 `scripts/pptx/deck_kit.js`(AWS Korea V-team 라이트 킷 벤더링본).
+- PNG 자산 13종(배경 그라디언트 4 · AWS 로고 2 · 아이콘 7 — 전부 킷 번들, 스크린샷 아님)은 SHA-256을 고정한다. **해시 목록은 CI(`scripts/verify-deck.sh` 프로비넌스 pre-flight의 `sha256sum -c`)가 강제한다** — 자산 변경 시 `verify-deck.sh` 의 SUM 목록을 같은 커밋에서 갱신할 것 (`cd docs-site/scripts/pptx && sha256sum assets/*.png`).
 - `export-utils.js` 의 "Export PPTX" 버튼(웹 슬라이드 스크린샷 기반)과는 무관하다.
 - 웹 슬라이드 내용이 크게 바뀌면 이 덱도 함께 갱신할 것 — 두 덱은 자동으로 동기화되지 않는다.
 

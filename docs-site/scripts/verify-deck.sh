@@ -107,15 +107,24 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 # pre-flight: a missing dependency/asset must not masquerade as a tampered deck
 node -e 'require("pptxgenjs")' 2>/dev/null || fail "pptxgenjs not installed — run npm ci in docs-site/ (lockfile-pinned)"
-for a in scripts/pptx/assets/title_bg.png scripts/pptx/assets/section_bg_33.png; do
-  test -f "$a" || fail "generator asset missing: $a — cannot rebuild for provenance check"
-done
-# pin the two background PNGs to their reviewed hashes (also recorded in
-# static/presentation/awsops-intro/README.md) — an asset swap must not be able
-# to launder itself through the rebuild-parity check
-sha256sum -c --quiet <<'SUM' || fail "generator asset hash mismatch — update README.md SHA-256s only via reviewed asset commits"
-3fd59525f442c4485e77dfd7d7e7c41932db14a8c1113e4a6258ae58d982ba87  scripts/pptx/assets/title_bg.png
-7c8ae2692023aa54cbca261b06e9128eecd7feac64897002b4c93867551bbe22  scripts/pptx/assets/section_bg_33.png
+# pin every generator PNG asset (backgrounds · logos · icons, vendored from the
+# AWS light template kit) to its reviewed hash — an asset swap must not be able
+# to launder itself through the rebuild-parity check. Hash list is also
+# recorded in static/presentation/awsops-intro/README.md.
+sha256sum -c --quiet <<'SUM' || fail "generator asset missing or hash mismatch — update the SUM list (here + README.md) only via reviewed asset commits"
+e915f9afeca6dc0e07b16469be7c9e2c67bd6956d1c63635db3719e8a07b08d6  scripts/pptx/assets/ai_agent.png
+5aa903c2e4e347bc37e572fd773868c76906e6e452f716a417fe4f99a010eef0  scripts/pptx/assets/aws_cloud.png
+00af7a668f834da597dd5bd49f41b6642e644882abe9c6d7bde9c0e08395ebff  scripts/pptx/assets/aws_logo.png
+c2f256e8757493520536ed9371af587399d8ab7dd1d1615b5ad435afd281906f  scripts/pptx/assets/aws_logo_white.png
+00521bdb306a5a0361167bbbdb9e6b79384648a894a09adcdc7595d320fa6011  scripts/pptx/assets/browser_tool.png
+294d1b2c54ad335f8c70e03299a9afc1f8d8a8fcd944a4f9ab7d99d78c63e446  scripts/pptx/assets/cloudwatch.png
+ae2744540b2f437e7f5c85c308f396ed8a3b68f6a2fa66792e6d98d8782845e4  scripts/pptx/assets/content_glow.png
+69ddf68c59e5b3d8da62d3b2338088f26643efc4d630b538a00564f4b6e81716  scripts/pptx/assets/cover_glow.png
+a8669b51d63cb5266f3896073959347fd2d0af2699728bb6918f98149f0ab4f3  scripts/pptx/assets/evaluations.png
+8323ab12688d855c98b28d9ddfba3b2a2cf489456ae9bdc461a04c6fc0a89c54  scripts/pptx/assets/gateway.png
+95d014ef6666df37a70b8bee68392fd0658f71b4f95255148ab2ac871475c053  scripts/pptx/assets/grad_pill.png
+0808d61fa4b9758c937a6256df1461317f13af54f9ae87a76055500747d10b12  scripts/pptx/assets/memory.png
+c412a29cd9d063f6e30c31d43483c5718ec4fbb87c525a64600d1cab5bbb7c26  scripts/pptx/assets/section_grad.png
 SUM
 node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx" || fail "generator failed to rebuild the deck (not a provenance mismatch)"
 diff <(sort <<<"$PARTS") <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) \
