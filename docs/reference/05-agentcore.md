@@ -34,7 +34,11 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 P4). **Fleet state: complete** — 30 Lambda slices are defined in `ai.tf` `local.agent_lambdas`
 (21 gated on `agentcore_enabled`, 9 on `integrations_enabled`; both flags default `false`,
 so a fresh `plan` is a no-op). In the **live environment** (flags enabled) all 9 gateways
-carry READY MCP targets and all 16 chat section keys are active — fleet completed 2026-08-02.
+carry READY MCP targets and all 16 chat section keys are **registered and routable** — fleet
+completed 2026-08-02. Note the runtime nuance (matches the customer deck's slide 12):
+`aws-data` and the 6 collector keys currently fall back to standard `ops` routing because
+the BFF-local live-Steampipe path is closed by design (ADR-001/010, `steampipeAvailable()`
+hard-`false`); the 9 gateway-routed keys answer via their own agents.
 
 **Provisioner:** `scripts/v2/agentcore/{catalog.py, provision.py}` — `catalog.py` holds
 the 9 gateway names + the target tool schemas; `provision.py` does boto3 `list →

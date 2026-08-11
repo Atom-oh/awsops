@@ -95,7 +95,6 @@ AWS のデータベースおよびストリーミングサービスのツール�
 | **dynamodb-mcp** | `list_tables`, `describe_table`, `query_table`, `get_item`, `dynamodb_data_modeling`, `compute_performances_and_costs` |
 | **msk-mcp** | `list_clusters`, `get_cluster_info`, `get_configuration_info`, `get_bootstrap_brokers`, `list_nodes`, `msk_best_practices` |
 | **valkey-mcp** | `list_cache_clusters`, `describe_cache_cluster`, `list_replication_groups`, `describe_replication_group`, `list_serverless_caches`, `elasticache_best_practices` |
-| **clickhouse-mcp**（`integrations_enabled`） | ClickHouse 照会ツール 4 種 |
 
 ### Security Gateway (14 tools)
 
@@ -122,7 +121,7 @@ CloudWatch、CloudTrail（AWS ネイティブ）に加え、OpenSearch、Prometh
 | **cloudwatch-mcp** (11) | メトリクス/アラーム/Logs Insights の照会 |
 | **cloudtrail-mcp** (5) | `lookup_events`, `list_event_data_stores`, `lake_query`, `get_query_status`, `get_query_results` |
 | **opensearch-mcp** (4) | OpenSearch のドメイン/インデックス照会 |
-| **prometheus-mcp / loki-mcp / tempo-mcp / mimir-mcp**（各 5、`integrations_enabled`） | PromQL/LogQL/TraceQL の照会 — Loki/Tempo/Mimir はこの Gateway に残留（ADR-004） |
+| **loki-mcp / tempo-mcp / mimir-mcp**（各 5、`integrations_enabled`） | LogQL/TraceQL の照会 — Loki/Tempo/Mimir はこの Gateway に残留（ADR-004；Prometheus·ClickHouse は External-Obs へ移動） |
 
 ### Cost Gateway (14 tools)
 
@@ -137,7 +136,7 @@ CloudWatch、CloudTrail（AWS ネイティブ）に加え、OpenSearch、Prometh
 
 AWS ドキュメント・一般運用ツールを提供します（`aws-knowledge`）。
 
-### External-Obs (3 tools, ルーティングキー: `observability`)
+### External-Obs (13 tools, ルーティングキー: `observability`)
 
 外部オブザーバビリティ・連携コネクタをホスティングする 9 番目のルーティングセクションです（ADR-004 改訂 2026-06-24）。カタログには `notion-mcp`（3 tools）が定義されています（`integrations_enabled` ゲート、デフォルト off）。Prometheus（6 tools）・ClickHouse（4 tools）のコネクタターゲットもこのセクションに配置されます（`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` の gateway=external-obs）。
 

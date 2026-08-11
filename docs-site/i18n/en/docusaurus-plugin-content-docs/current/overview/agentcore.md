@@ -95,7 +95,6 @@ Provides AWS database and streaming service tools.
 | **dynamodb-mcp** | `list_tables`, `describe_table`, `query_table`, `get_item`, `dynamodb_data_modeling`, `compute_performances_and_costs` |
 | **msk-mcp** | `list_clusters`, `get_cluster_info`, `get_configuration_info`, `get_bootstrap_brokers`, `list_nodes`, `msk_best_practices` |
 | **valkey-mcp** | `list_cache_clusters`, `describe_cache_cluster`, `list_replication_groups`, `describe_replication_group`, `list_serverless_caches`, `elasticache_best_practices` |
-| **clickhouse-mcp** (`integrations_enabled`) | 4 ClickHouse query tools |
 
 ### Security Gateway (14 tools)
 
@@ -122,7 +121,7 @@ Provides CloudWatch and CloudTrail (AWS-native), plus OpenSearch and the Prometh
 | **cloudwatch-mcp** (11) | Metrics/alarms/log-insights queries |
 | **cloudtrail-mcp** (5) | `lookup_events`, `list_event_data_stores`, `lake_query`, `get_query_status`, `get_query_results` |
 | **opensearch-mcp** (4) | OpenSearch domain/index queries |
-| **prometheus-mcp / loki-mcp / tempo-mcp / mimir-mcp** (5 each, `integrations_enabled`) | PromQL/LogQL/TraceQL queries — Loki/Tempo/Mimir stay on this Gateway (ADR-004) |
+| **loki-mcp / tempo-mcp / mimir-mcp** (5 each, `integrations_enabled`) | LogQL/TraceQL queries — Loki/Tempo/Mimir stay on this Gateway (ADR-004; Prometheus·ClickHouse moved to External-Obs) |
 
 ### Cost Gateway (14 tools)
 
@@ -137,7 +136,7 @@ Provides cost analysis, forecasting, and FinOps tools.
 
 Provides AWS documentation / general operations tools (`aws-knowledge`).
 
-### External-Obs (3 tools, routing key: `observability`)
+### External-Obs (13 tools, routing key: `observability`)
 
 The 9th routed section, hosting external-observability/integration connectors (ADR-004, amended 2026-06-24). The catalog defines `notion-mcp` (3 tools) here, gated on `integrations_enabled` (off by default). The Prometheus (6 tools) and ClickHouse (4 tools) connector targets also live on this section (`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` with gateway=external-obs).
 

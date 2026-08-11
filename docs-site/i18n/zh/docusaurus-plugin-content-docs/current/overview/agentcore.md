@@ -95,7 +95,6 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 | **dynamodb-mcp** | `list_tables`、`describe_table`、`query_table`、`get_item`、`dynamodb_data_modeling`、`compute_performances_and_costs` |
 | **msk-mcp** | `list_clusters`、`get_cluster_info`、`get_configuration_info`、`get_bootstrap_brokers`、`list_nodes`、`msk_best_practices` |
 | **valkey-mcp** | `list_cache_clusters`、`describe_cache_cluster`、`list_replication_groups`、`describe_replication_group`、`list_serverless_caches`、`elasticache_best_practices` |
-| **clickhouse-mcp**（`integrations_enabled`） | ClickHouse 查询工具 4 种 |
 
 ### Security Gateway (14 tools)
 
@@ -122,7 +121,7 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 | **cloudwatch-mcp** (11) | 指标/告警/日志洞察查询 |
 | **cloudtrail-mcp** (5) | `lookup_events`、`list_event_data_stores`、`lake_query`、`get_query_status`、`get_query_results` |
 | **opensearch-mcp** (4) | OpenSearch 域/索引查询 |
-| **prometheus-mcp / loki-mcp / tempo-mcp / mimir-mcp**（各 5，`integrations_enabled`） | PromQL/LogQL/TraceQL 查询 — Loki/Tempo/Mimir 保留在此 Gateway（ADR-004） |
+| **loki-mcp / tempo-mcp / mimir-mcp**（各 5，`integrations_enabled`） | LogQL/TraceQL 查询 — Loki/Tempo/Mimir 保留在此 Gateway（ADR-004；Prometheus·ClickHouse 已迁移至 External-Obs） |
 
 ### Cost Gateway (14 tools)
 
@@ -137,7 +136,7 @@ v2 由 8 个 AWS 领域 Gateway（`awsops-v2-{network,container,data,security,co
 
 提供 AWS 文档·通用运维工具（`aws-knowledge`）。
 
-### External-Obs (3 tools, 路由键: `observability`)
+### External-Obs (13 tools, 路由键: `observability`)
 
 托管外部可观测性·集成连接器的第 9 个路由分区（ADR-004 修订 2026-06-24）。目录中定义了 `notion-mcp`（3 tools）（由 `integrations_enabled` 门控，默认 off）。Prometheus（6 tools）·ClickHouse（4 tools）连接器目标同样部署在此分区（`catalog.py` — `prometheus-mcp-target`/`clickhouse-mcp-target` 的 gateway=external-obs）。
 
