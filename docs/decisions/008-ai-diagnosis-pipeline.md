@@ -19,7 +19,7 @@ AWSops AI Diagnosis is a read-only feature that gathers infrastructure evidence 
 ### 현행 사실 (감사 §B8, ai-09~14 기준) / Current facts (per audit §B8)
 
 - **진단 워커는 raw boto3 직접 Bedrock 호출이다.** `scripts/v2/workers/diagnosis/report.py`가 `bedrock-runtime.invoke_model`(Anthropic Messages 프로토콜)을 직접 호출한다 — **Strands가 아니다**. Strands는 도구 루프가 실제로 필요한 대화형 챗 에이전트(`agent/agent.py`, AgentCore)에만 쓰인다. / The diagnosis worker is a raw boto3 direct Bedrock call (`invoke_model`), **not** Strands; Strands is chat-only.
-- **deep 15섹션 병렬 렌더는 구현됨**(동시성 제한 풀, 섹션별 타임아웃 격리, `partial` degrade 보존). / Deep 15-section parallel rendering is implemented (bounded concurrency, per-section timeout isolation, `partial` degrade).
+- **deep 15+1섹션(총 16 — 의도 대비 실제 포함) 병렬 렌더는 구현됨**(동시성 제한 풀, 섹션별 타임아웃 격리, `partial` degrade 보존). / Deep 15+1-section (16 total, incl. intended-vs-actual) parallel rendering is implemented (bounded concurrency, per-section timeout isolation, `partial` degrade).
 - **스트리밍(ADR-045 우선순위 #2)은 미구현 = 후속.** `invoke_model_with_response_stream` 호출은 코드에 0건이며(`report.py` non-stream), 본 통합 ADR도 이를 **미완·후속 작업**으로 정직하게 기술한다(감사 ai-10 DRIFT). / Streaming (ADR-045 priority #2) is **not implemented — a follow-up**; zero `invoke_model_with_response_stream` calls exist (audit ai-10 DRIFT).
 - **모델 배정은 `global.*` 크로스리전 추론 프로파일을 유지**한다 — 비용 귀속(`ai_usage_daily`, Bedrock invocation-log) 때문. / Model assignment keeps `global.*` cross-region inference profiles for cost attribution.
 - **리포트 포맷은 DOCX/PDF/MD**가 v2 워커 경로에서 산출된다. / Report formats DOCX/PDF/MD are produced by the v2 worker path.
@@ -68,7 +68,7 @@ Long-running AI flows (chat) use SSE (`text/event-stream` + `ReadableStream`) to
 
 ### 5. LLM 비용 통제 — 프롬프트 캐싱 + 비용 귀속 (구 ADR-033) / LLM cost control — prompt caching + cost attribution
 
-- **프롬프트 캐싱은 AWSops가 통제하는 직접 호출 경로**(분류·합성·15섹션 진단의 `callBedrock`/`invoke_model`)에만 적용된다. 1~3개 AgentCore **게이트웨이** 호출은 Strands 런타임 내부에서 프롬프트가 구성(MCP/SigV4)되어 **불투명**하므로 AWSops 계층의 캐싱 대상이 아니다. / Prompt caching applies only to AWSops-controlled direct-invoke paths; gateway-call tokens are opaque inside the Strands runtime.
+- **프롬프트 캐싱은 AWSops가 통제하는 직접 호출 경로**(분류·합성·15+1섹션 진단의 `callBedrock`/`invoke_model`)에만 적용된다. 1~3개 AgentCore **게이트웨이** 호출은 Strands 런타임 내부에서 프롬프트가 구성(MCP/SigV4)되어 **불투명**하므로 AWSops 계층의 캐싱 대상이 아니다. / Prompt caching applies only to AWSops-controlled direct-invoke paths; gateway-call tokens are opaque inside the Strands runtime.
 - **비용 귀속**: `global.*` 프로파일 + Bedrock invocation-log → `ai_usage_daily` 집계로 awsops-only Bedrock 지출을 귀속한다. / Cost attribution via `global.*` + invocation logs → `ai_usage_daily`.
 - 의미(semantic) 응답 캐시(Aurora pgvector)는 **연기**된 후속이다(현행은 정확 일치 캐시까지). / Semantic answer cache (Aurora pgvector) is a **deferred** follow-up.
 

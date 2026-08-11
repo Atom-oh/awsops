@@ -23,5 +23,10 @@ node scripts/pptx/build-awsops-intro-pptx.js
 ## 배포/보안 유의
 
 - 이 파일은 인증 없는 공개 docs-site 로 배포된다. **덱에 계정 ID·ARN·내부 호스트명·시크릿을 넣지 말 것** (스피커 노트 포함).
-- `deploy-guide.yml` 의 build 검증 단계가 pptx 존재 + zip 컨테이너 무결성을 게이트한다 (누락 시 배포 실패).
+- `deploy-guide.yml` 의 build 검증이 **4중 게이트**로 막는다 (누락·위반 시 배포 실패):
+  1. 존재 + zip 매직 + `ppt/presentation.xml` 구조 확인
+  2. 콘텐츠 XML 민감정보 스캔 — 계정 ID·ARN·액세스 키·내부 호스트명·리소스 ID·사설 CIDR (theme 제외 전 XML/rels)
+  3. **생성기 일치(프로비넌스)** — CI가 스크립트로 재빌드해 파트 목록 + 전체 아카이브(media 포함)를 diff. 손으로 바꾼 바이너리는 배포 불가
+  4. 외부 관계 타깃(`TargetMode="External"`) 금지
+- **한계**: 임베드 이미지의 픽셀 내용은 스캔 불가 — 다만 프로비넌스 게이트가 media를 생성기 산출물로 고정하므로, 이미지 교체는 스크립트/자산 커밋 리뷰를 거쳐야만 가능하다. 배경 PNG 2종은 합성 그라디언트(스크린샷 아님).
 - `.gitignore` 는 전역 `*.pptx` 를 무시하되 이 파일 하나만 예외 처리되어 있다.

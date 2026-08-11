@@ -67,7 +67,9 @@ jobs:
           # pattern); embedded images need manual review — grep cannot see pixels.
           XML=$(unzip -p "$DECK" '*.xml' '*.rels' -x 'ppt/theme/*') || { echo "::error::deck XML parts unreadable"; exit 1; }
           test -n "$XML" || { echo "::error::deck content scan extracted zero bytes"; exit 1; }
-          if printf '%s' "$XML" | grep -aqE '\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|atomai\.click|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b'; then
+          # herestring (not printf|grep) so the check stays correct even if a
+          # future `shell: bash` override enables pipefail on this step.
+          if grep -aqE '\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' <<<"$XML"; then
             echo "::error::awsops-intro.pptx content contains a sensitive identifier (account ID / ARN / access key / internal hostname / resource ID)"
             exit 1
           fi
@@ -80,17 +82,24 @@ jobs:
       # ppt/media/* and *_rels; only docProps/core.xml is excluded — it carries
       # the volatile creation timestamp) + no external relationship targets.
       # The generator build is deterministic across runs for all compared parts.
+      # Determinism assumption: diff -r needs byte-identical parts from every
+      # rebuild, which holds because pptxgenjs is lockfile-pinned (4.0.1) and
+      # the generator takes no time/random input; a transitive bump that broke
+      # this would surface here as a parity failure, pointing at the lockfile.
+      # mktemp -d (not fixed /tmp names): this runs on a persistent self-hosted
+      # runner where predictable world-writable paths invite symlink games.
       - name: Verify deck matches generator
         run: |
           DECK=static/presentation/awsops-intro/awsops-intro.pptx
-          node scripts/pptx/build-awsops-intro-pptx.js /tmp/rebuilt-deck.pptx
-          diff <(unzip -Z1 "$DECK" | sort) <(unzip -Z1 /tmp/rebuilt-deck.pptx | sort) || { echo "::error::pptx part list differs from generator output — extra or missing package parts"; exit 1; }
-          rm -rf /tmp/deck-committed /tmp/deck-rebuilt
-          unzip -q "$DECK" -d /tmp/deck-committed
-          unzip -q /tmp/rebuilt-deck.pptx -d /tmp/deck-rebuilt
-          rm -f /tmp/deck-committed/docProps/core.xml /tmp/deck-rebuilt/docProps/core.xml
-          diff -r /tmp/deck-committed /tmp/deck-rebuilt || { echo "::error::committed awsops-intro.pptx does not match the generator output — run 'node scripts/pptx/build-awsops-intro-pptx.js' and re-commit"; exit 1; }
-          if grep -rl 'TargetMode="External"' /tmp/deck-committed --include='*.rels'; then
+          WORK=$(mktemp -d)
+          trap 'rm -rf "$WORK"' EXIT
+          node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx"
+          diff <(unzip -Z1 "$DECK" | sort) <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) || { echo "::error::pptx part list differs from generator output — extra or missing package parts"; exit 1; }
+          unzip -q "$DECK" -d "$WORK/committed"
+          unzip -q "$WORK/rebuilt-deck.pptx" -d "$WORK/rebuilt"
+          rm -f "$WORK/committed/docProps/core.xml" "$WORK/rebuilt/docProps/core.xml"
+          diff -r "$WORK/committed" "$WORK/rebuilt" || { echo "::error::committed awsops-intro.pptx does not match the generator output — run 'node scripts/pptx/build-awsops-intro-pptx.js' and re-commit"; exit 1; }
+          if grep -rl 'TargetMode="External"' "$WORK/committed" --include='*.rels'; then
             echo "::error::deck contains external relationship targets — not allowed for the published deck"
             exit 1
           fi
