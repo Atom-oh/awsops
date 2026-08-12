@@ -325,11 +325,11 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
             const r: { RuleGroups?: { Name?: string; Arn?: string }[]; NextToken?: string } =
               await nfw(region).send(new ListRuleGroupsCommand({ NextToken: nextToken }));
             return {
-              items: (r.RuleGroups ?? []).map((g) => ({
-                name: g.Name ?? '',
-                // 타입은 ARN 세그먼트에서 (stateful-rulegroup/ | stateless-rulegroup/)
-                type: ((g.Arn ?? '').includes(':stateless-rulegroup/') ? 'STATELESS' : 'STATEFUL') as 'STATELESS' | 'STATEFUL',
-              })).filter((g) => g.name),
+              // 리뷰 MAJOR: 타입을 ARN 세그먼트로 이분(stateless-rulegroup/ vs 그 외=STATEFUL)
+              // 추정하면 STATEFUL_DOMAIN 타입(도메인 리스트 룰 그룹)이 STATEFUL로 오분류되고,
+              // 그 잘못된 Type으로 DescribeRuleGroup을 호출하면 실패해 행이 통째로 드롭된다.
+              // ARN으로 describe하면 Type 파라미터 자체가 불필요해 이 클래스의 오분류가 사라진다.
+              items: (r.RuleGroups ?? []).map((g) => ({ name: g.Name ?? '', arn: g.Arn ?? '' })).filter((g) => g.name && g.arn),
               nextToken: r.NextToken,
             };
           }),
@@ -439,14 +439,14 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
 
         const ruleGroups = await Promise.all(rgList.map(async (g): Promise<AnfwRuleGroupRow | null> => {
           try {
-            const d = await nfw(region).send(new DescribeRuleGroupCommand({ RuleGroupName: g.name, Type: g.type })) as RawRgResp;
+            const d = await nfw(region).send(new DescribeRuleGroupCommand({ RuleGroupArn: g.arn })) as RawRgResp;
             const resp = d.RuleGroupResponse ?? {};
             const capacity = resp.Capacity ?? null;
             const consumed = resp.ConsumedCapacity ?? null;
             const associations = resp.NumberOfAssociations ?? 0;
             return {
               name: resp.RuleGroupName ?? g.name, region,
-              type: resp.Type ?? g.type,
+              type: resp.Type ?? '?',
               status: resp.RuleGroupStatus ?? '?',
               capacity, consumedCapacity: consumed,
               capacityPct: capacity != null && capacity > 0 && consumed != null

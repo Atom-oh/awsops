@@ -121,7 +121,10 @@ function mockNfw(overrides: {
       case 'DescribeFirewallPolicyCommand': return overrides.policyDescribe ?? POLICY_DESCRIBE;
       case 'ListRuleGroupsCommand': return { RuleGroups: overrides.rgs ?? RG_LIST };
       case 'DescribeRuleGroupCommand': {
-        const name = (cmd.input as { RuleGroupName: string }).RuleGroupName;
+        // 실제 코드처럼 ARN 세그먼트에서 이름을 뽑는다 — RuleGroupName+Type이 아니라
+        // RuleGroupArn만으로 describe하는 회귀 검증(STATEFUL_DOMAIN 오분류 방지 수정).
+        const arn = (cmd.input as { RuleGroupArn: string }).RuleGroupArn;
+        const name = arn.split('/').pop() ?? '';
         return RG_DESCRIBE[name] ?? { RuleGroupResponse: { RuleGroupName: name, Type: 'STATEFUL' } };
       }
       default: throw new Error(`unexpected ${cmd.constructor.name}`);
@@ -442,5 +445,36 @@ describe('anfwAnalysis', () => {
     const a = await anfwAnalysis(86400);
     // Values[0]만 썼다면(구 코드) 700만 반영됐을 것 — 진짜 기간 합계는 1000.
     expect(a.firewalls[0].receivedPackets).toBe(1000);
+  });
+
+  it('STATEFUL_DOMAIN 룰 그룹: ARN 이분 추정이었다면 STATEFUL로 오분류돼 describe 실패로 드롭됐을 것', async () => {
+    mockDb([]);
+    mockNfw({
+      rgs: [{ Name: 'domain-allowlist', Arn: 'arn:aws:network-firewall:r:1:stateful-rulegroup/domain-allowlist' }],
+      policies: [],
+    });
+    // ARN 세그먼트만 보면 stateless-rulegroup/이 아니므로 구 코드는 STATEFUL로 단정했을 것 —
+    // 실제로는 STATEFUL_DOMAIN(도메인 리스트)이라 Type을 잘못 넘긴 DescribeRuleGroup이 실패한다.
+    // 새 코드는 RuleGroupArn만으로 describe해 Type 파라미터 자체가 필요 없다.
+    nfwSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'ListFirewallsCommand': return { Firewalls: [] };
+        case 'ListFirewallPoliciesCommand': return { FirewallPolicies: [] };
+        case 'ListRuleGroupsCommand': return { RuleGroups: [{ Name: 'domain-allowlist', Arn: 'arn:aws:network-firewall:r:1:stateful-rulegroup/domain-allowlist' }] };
+        case 'DescribeRuleGroupCommand': {
+          const { RuleGroupArn, RuleGroupName, Type } = cmd.input as { RuleGroupArn?: string; RuleGroupName?: string; Type?: string };
+          // RuleGroupName+Type으로 호출했다면(구 코드) Type='STATEFUL'이 실제 STATEFUL_DOMAIN과
+          // 안 맞아 AWS가 거부한다는 실측을 흉내 — RuleGroupArn 단독 호출만 허용.
+          if (!RuleGroupArn || RuleGroupName || Type) throw new Error(`ResourceNotFoundException: no such STATEFUL rule group`);
+          return { RuleGroupResponse: { RuleGroupName: 'domain-allowlist', Type: 'STATEFUL_DOMAIN', RuleGroupStatus: 'ACTIVE', Capacity: 50, ConsumedCapacity: 10, NumberOfAssociations: 1 } };
+        }
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    mockCw({});
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    expect(a.ruleGroups).toHaveLength(1);
+    expect(a.ruleGroups[0].type).toBe('STATEFUL_DOMAIN');
   });
 });
