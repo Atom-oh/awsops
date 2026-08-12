@@ -47,7 +47,7 @@ aws cognito-idp list-users --user-pool-id "$V1_POOL" --query 'Users[].Username' 
 aws cognito-idp list-users --user-pool-id "$V2_POOL" --query 'Users[].Username' --output text
 ```
 
-v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-042 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내).
+v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-002[legacy 042] 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내).
 
 **Offboarding 에서 Cognito 사용자를 반드시 삭제/비활성화한다** (PR #203). 복구를 통한 인수는 `account_recovery_setting = admin_only`(ADR-002)로 닫혀 있지만, 계정을 남겨두면 **떠난 사람이 이미 아는 비밀번호로 계속 로그인**할 수 있고 그 사람 명의의 스케줄도 계속 돈다. 절차(순서 함정 포함 — 계정만 지우고 `report_schedules` 를 끄지 않으면 진단이 계속 돈다)는 `docs/runbooks/user-offboarding.md` 에 있다. 계정을 없애는 것이 '이미 아는 비밀번호'로 남는 접근을 끝내는 유일한 방법이다(ADR-002).
 
@@ -325,7 +325,7 @@ aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-'
 
 ## Phase 5 — repo 코드 정리 (별도 PR) / Code cleanup (separate PR)
 
-Phase 4 완료 후에만 진행. 삭제 대상: `src/`, `infra-cdk/`, `scripts/0N-*.sh` + setup류, `tests/`(v1 vitest/shell), 루트 `next.config.mjs`/`tailwind.config.ts`/`postcss.config.mjs`/`.eslintrc.json`/`vitest.config.ts`/루트 `Dockerfile`, `powerpipe/`. `agent/`는 부분 유지(`agent.py`, `agent/lambda/*.py`는 v2 `ai.tf`가 계속 참조 — 삭제 금지). 루트 `package.json`은 `pg`+`@inquirer/prompts`+`@aws-sdk/client-secrets-manager`(명시 추가)로 축소.
+~~Phase 4 완료 후에만 진행.~~ → **✅ 완료(2026-07-12) — Phase 4보다 먼저 실행됨** (오준석 owner-override, ADR-016 §결정 이력 참조: 코드 삭제는 git tag `v1-pre-code-removal-20260712`로 복원 가능하고 AWS 인프라와 독립적이라 유예기간과 무관하게 선행). 삭제 대상: `src/`, `infra-cdk/`, `scripts/0N-*.sh` + setup류, `tests/`(v1 vitest/shell), 루트 `next.config.mjs`/`tailwind.config.ts`/`postcss.config.mjs`/`.eslintrc.json`/`vitest.config.ts`/루트 `Dockerfile`, `powerpipe/`. `agent/`는 부분 유지(`agent.py`, `agent/lambda/*.py`는 v2 `ai.tf`가 계속 참조 — 삭제 금지). 루트 `package.json`은 `pg`+`@inquirer/prompts`+`@aws-sdk/client-secrets-manager`(명시 추가)로 축소.
 **Follow-up (PR #159)**: 이후 루트 `package.json`/`package-lock.json`은 그 유일한 소비자 `scripts/v2/`로 완전히 이동 — 루트에는 더 이상 존재하지 않으며, `make deps`는 `npm ci --prefix scripts/v2`를 실행한다.
 
 ```bash

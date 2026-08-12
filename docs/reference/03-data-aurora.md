@@ -109,7 +109,7 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 
 ## Source / 출처
 
-- `docs/superpowers/archive/2026-05-31-awsops-v2-p1c-aurora.md` (archived P1c plan).
+- `docs/history/archive/2026-05-31-awsops-v2-p1c-aurora.md` (archived P1c plan).
 - Verified against `terraform/v2/foundation/data.tf`,
   `terraform/v2/foundation/data/schema.sql`, and the root `CLAUDE.md` Aurora-upgrade
   gotcha ("알려진 이슈" / known issues).

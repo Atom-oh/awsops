@@ -155,5 +155,5 @@ These are reuse-critical — re-read before extending the backbone.
 
 Consolidated from the archived P2 design + plan (cite the future `archive/` paths):
 
-- `docs/superpowers/archive/2026-06-02-awsops-v2-p2-async-worker-backbone-design.md`
-- `docs/superpowers/archive/2026-06-02-awsops-v2-p2-async-worker-backbone.md`
+- `docs/history/archive/2026-06-02-awsops-v2-p2-async-worker-backbone-design.md`
+- `docs/history/archive/2026-06-02-awsops-v2-p2-async-worker-backbone.md`

@@ -32,7 +32,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito auth) -> VPC Origin (https-only
   -> async workers: POST /api/jobs -> SQS -> Step Functions -> Lambda or Fargate worker
 ```
 
-Stats: 21 pages, 83 API routes, 72 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
+Stats: 35 pages, 84 API routes, 86 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
 
 > **No public ALB.** The edge is fully private — CloudFront reaches the ALB only through a VPC Origin, and the ALB only accepts traffic from CloudFront's managed security group. v2's posture is a **read-only ops dashboard + AI diagnosis**: AWS-resource mutation and autonomous remediation are FROZEN by design (ADR-005) — infra changes stay with the operator's own IaC/Change Manager, with one narrowly-scoped exception for self-healing service restarts (ADR-015).
 
@@ -47,19 +47,21 @@ Stats: 21 pages, 83 API routes, 72 components (`web/`), 18 consolidated ADRs, Te
 
 ### AI Gateways (Amazon Bedrock AgentCore)
 
-9 section gateways are defined in Terraform (`ai.tf`); each is provisioned idempotently and routes to Lambda-backed MCP tools. **Only 2 of the 9 are live today** (the rest are flag-gated behind `agentcore_enabled`/`integrations_enabled`, default off) — the table below is the target shape, not the current deployed state.
+9 section gateways are defined in Terraform (`ai.tf`); each is provisioned idempotently and routes to Lambda-backed MCP tools. **All 9 gateways hold READY MCP targets** — the fleet (`local.agent_lambdas`, 30 slices: 21 gated on `agentcore_enabled`, 9 on `integrations_enabled`) is deployed; the table below reflects the live shape.
 
 | Gateway | Capabilities | Status |
 |---------|--------------|--------|
-| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live (flow-monitor slice) |
-| security | IAM, policy simulation, CIS/benchmark | ✅ live (iam-mcp slice, 14 tools) |
-| container | EKS, ECS, Istio, Kubernetes | flag-gated |
-| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | flag-gated |
-| cost | Cost Explorer, forecast, budgets, container cost | flag-gated |
-| monitoring | CloudWatch, CloudTrail | flag-gated |
-| iac | CloudFormation, CDK, Terraform | flag-gated |
-| ops | Steampipe SQL listing/status/docs/inventory | flag-gated |
-| external-obs | External observability & integrations (Prometheus, ClickHouse, Notion) | flag-gated |
+| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live |
+| security | IAM users/roles/policies + policy simulation (14 tools, iam-mcp) | ✅ live |
+| container | EKS, ECS, Istio, Kubernetes | ✅ live |
+| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | ✅ live |
+| cost | Cost Explorer, forecast, budgets, container cost | ✅ live |
+| monitoring | CloudWatch, CloudTrail | ✅ live |
+| iac | CloudFormation, CDK, Terraform | ✅ live |
+| ops | Aurora-backed inventory/topology reads + AWS docs/CLI suggestions (no live Steampipe) | ✅ live |
+| external-obs | External observability & integrations (Prometheus, ClickHouse, Notion) | ✅ live |
+
+All 9 rows are gated behind `agentcore_enabled`/`integrations_enabled` (default `false` in a fresh clone/deploy — `plan` = No changes, $0); "live" here describes this project's actual running deployment, which has both flags on.
 
 Models: Claude Sonnet 5 (default), Opus 4.8 (deep analysis), Haiku 4.5 (fast/low-cost).
 
@@ -143,7 +145,7 @@ AgentCore's own config (runtime ARN, Memory ID, Code Interpreter ID) is written 
 
 ```
 awsops/
-  web/                    # Next.js 14 thin-BFF: 21 pages, 83 API routes, 72 components
+  web/                    # Next.js 14 thin-BFF: 35 pages, 84 API routes, 86 components
   agent/                  # Strands Agent (Runtime source) + MCP Lambda tool sources
   terraform/v2/foundation/  # single Terraform root: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/             # configure/deploy/migrate/agentcore/workers tooling (all Node.js/Python)
@@ -162,7 +164,7 @@ cd web && npx vitest run          # web unit tests only
 
 ## API Documentation
 
-The 83 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
+The 84 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
 
 ## Contributing
 
@@ -200,7 +202,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
   -> 비동기 워커: POST /api/jobs -> SQS -> Step Functions -> Lambda 또는 Fargate 워커
 ```
 
-현황: 21 페이지, 83 API 라우트, 72 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
+현황: 35 페이지, 84 API 라우트, 86 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
 
 > **공개 ALB 없음.** 엣지는 완전히 비공개입니다 — CloudFront는 VPC Origin을 통해서만 ALB에 도달하고, ALB는 CloudFront 관리형 보안 그룹의 트래픽만 허용합니다. v2의 자세는 **read-only 운영 대시보드 + AI 진단**입니다: AWS 리소스 변경·자율 조치는 설계상 FROZEN(ADR-005) — 인프라 변경은 운영자 자신의 IaC/Change Manager가 담당하며, 자가치유 서비스 재시작 하나만 좁게 예외 허용됩니다(ADR-015).
 
@@ -215,19 +217,21 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
 
 ### AI 게이트웨이 (Amazon Bedrock AgentCore)
 
-Terraform(`ai.tf`)에 9개 섹션 게이트웨이가 정의되어 있으며, 각각 멱등하게 프로비저닝되어 Lambda 기반 MCP 도구로 라우팅됩니다. **현재 9개 중 2개만 live**입니다(나머지는 `agentcore_enabled`/`integrations_enabled` 플래그 뒤에 게이트, 기본 비활성) — 아래 표는 목표 형태이며 현재 배포 상태가 아닙니다.
+Terraform(`ai.tf`)에 9개 섹션 게이트웨이가 정의되어 있으며, 각각 멱등하게 프로비저닝되어 Lambda 기반 MCP 도구로 라우팅됩니다. **9개 게이트웨이 전부 READY MCP 타깃을 보유**합니다 — 함대(`local.agent_lambdas`, 슬라이스 30개: 21개 `agentcore_enabled` + 9개 `integrations_enabled` 게이트)가 배포되어 있으며, 아래 표는 실제 live 상태를 반영합니다.
 
 | Gateway | 주요 기능 | 상태 |
 |---------|-----------|------|
-| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live (flow-monitor 슬라이스) |
-| security | IAM, 정책 시뮬레이션, CIS/benchmark | ✅ live (iam-mcp 슬라이스, 14 도구) |
-| container | EKS, ECS, Istio, Kubernetes | flag-gated |
-| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | flag-gated |
-| cost | Cost Explorer, forecast, budgets, 컨테이너 비용 | flag-gated |
-| monitoring | CloudWatch, CloudTrail | flag-gated |
-| iac | CloudFormation, CDK, Terraform | flag-gated |
-| ops | Steampipe SQL listing/status/docs/inventory | flag-gated |
-| external-obs | 외부 옵저버빌리티 & 연동(Prometheus, ClickHouse, Notion) | flag-gated |
+| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live |
+| security | IAM 사용자/역할/정책 + 정책 시뮬레이션 (14개 도구, iam-mcp) | ✅ live |
+| container | EKS, ECS, Istio, Kubernetes | ✅ live |
+| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | ✅ live |
+| cost | Cost Explorer, forecast, budgets, 컨테이너 비용 | ✅ live |
+| monitoring | CloudWatch, CloudTrail | ✅ live |
+| iac | CloudFormation, CDK, Terraform | ✅ live |
+| ops | Aurora 기반 인벤토리/토폴로지 조회 + AWS 문서/CLI 제안(라이브 Steampipe 없음) | ✅ live |
+| external-obs | 외부 옵저버빌리티 & 연동(Prometheus, ClickHouse, Notion) | ✅ live |
+
+9개 행 모두 `agentcore_enabled`/`integrations_enabled` 뒤에 게이트되어 있습니다(새로 클론·배포 시 기본값은 `false` — `plan` = No changes, $0). 여기서 "live"는 이 프로젝트의 실제 운영 배포 기준이며, 그 배포는 두 플래그 모두 켜져 있습니다.
 
 모델: Claude Sonnet 5(기본), Opus 4.8(심층 분석), Haiku 4.5(빠르고 저렴).
 
@@ -311,7 +315,7 @@ AgentCore 자체 설정(runtime ARN, Memory ID, Code Interpreter ID)은 provisio
 
 ```
 awsops/
-  web/                      # Next.js 14 thin-BFF: 21 페이지, 83 API 라우트, 72 컴포넌트
+  web/                      # Next.js 14 thin-BFF: 35 페이지, 84 API 라우트, 86 컴포넌트
   agent/                    # Strands Agent(Runtime 소스) + MCP Lambda 도구 소스
   terraform/v2/foundation/  # 단일 Terraform 루트: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/               # configure/deploy/migrate/agentcore/workers 도구(전부 Node.js/Python)

@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 066f344501f0 · generated-at: 2026-07-08 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b635c5a68b4b · generated-at: 2026-08-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -6,7 +6,7 @@
 
 **Source of truth = `BASELINE.md`** (north star §0, invariants §1, gate/freeze register §2, decision index §3) + this directory's consolidated ADRs (`0NN-*.md`, single Status each). Start here.
 
-Old ADR bodies (001–046) are **not in the tree** — preserved in git tag `adr-legacy-2026-06-22`, mapped in `../history/ADR-MAPPING.md`. **Do not read old bodies unless explicitly asked.**
+Old ADR bodies (001–046) are **not in the tree** — preserved in git tag `adr-legacy-2026-06-22`, mapped in `ADR-MAPPING.md` (canonical, same directory; the copy under `../history/` is a link-compat pointer stub, not the source). **Do not read old bodies unless explicitly asked.**
 
 ## Conventions a reviewer must enforce
 - New ADR number = current highest + 1 (currently 018).

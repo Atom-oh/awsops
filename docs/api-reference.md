@@ -39,7 +39,7 @@
 | `/api/eks/summary` | GET | v1 K8s-Overview 패리티 — 연결 클러스터 라이브 카운트 (실패는 0으로 degrade, 500 금지) | verifyUser |
 | `/api/eks/[cluster]/incluster` | GET | in-cluster 리소스 목록 (`?kind=`, 클러스터 allowlist) | verifyUser |
 | `/api/eks/[cluster]/incluster/describe` | GET | 단일 오브젝트 describe (K9s 패리티, secrets는 Kind 불가) | verifyUser |
-| `/api/eks/[cluster]/k8sgpt` | GET | K8sGPT read-only 진단 (ADR-035) — admin + 클러스터 allowlist | verifyUser |
+| `/api/eks/[cluster]/k8sgpt` | GET | K8sGPT read-only 진단 (ADR-006[legacy 035]) — admin + 클러스터 allowlist | verifyUser |
 | `/api/eks/[cluster]/metrics` | GET | 컨트롤플레인 + ContainerInsights CloudWatch 메트릭 | verifyUser |
 | `/api/eks/[cluster]/pod-transfer` | GET | NFM 파드 전송 쿼리 (최대 1h 윈도우) | verifyUser |
 | `/api/eks/[cluster]/register` | POST, DELETE | 클러스터 등록/해제 (admin, EKS 공식 이름 패턴 검증) | verifyUser |
@@ -81,7 +81,7 @@
 |------|--------|------|------|
 | `/api/accounts` | GET, POST, PATCH, DELETE | 등록 계정 CRUD (admin) — POST는 role assume + `GetCallerIdentity` anti-spoof 검증 후 insert | verifyUser |
 | `/api/accounts/regions` | GET, POST, DELETE | 계정별 리전 활성/비활성 (`'self'` → 호스트 실제 id 해석) — 조회 auth / 변경 admin | verifyUser |
-| `/api/actions` | GET, POST | 액션 목록/생성 (ADR-040/041, admin) | verifyUser |
+| `/api/actions` | GET, POST | 액션 목록/생성 (ADR-007[legacy 040/041], admin) | verifyUser |
 | `/api/actions/[id]` | GET, POST | 액션 상세/실행 (admin) — kill-switch 분기(integrations-write vs mutating-actions), 빈 이름 fail-closed | verifyUser |
 | `/api/agentcore` | GET | AgentCore 컨트롤플레인 상태 (runtime/gateway/memory/interpreter, `?action=stats`) | verifyUser |
 | `/api/ai-usage` | GET | 앱 Bedrock 토큰 비용 — `ai_usage_daily` SUM (스케줄 집계 산출물, 라이브 AWS 호출 없음) | verifyUser |
@@ -94,7 +94,7 @@
 | `/api/cost` | GET | 비용 요약 — 기간 필터 `1m/3m/6m/12m` (미지정/오류 → 6개월) | verifyUser |
 | `/api/cost/availability` | GET | Cost Explorer 가용성 probe (1h 캐시, `?force=1` 재확인) | verifyUser |
 | `/api/cost/detail` | GET | 서비스별 비용 상세 (`?service=` 필수, ≤100자) | verifyUser |
-| `/api/customization` | GET, POST, PUT | 스킬/에이전트 카탈로그 CRUD (ADR-031, admin) | verifyUser |
+| `/api/customization` | GET, POST, PUT | 스킬/에이전트 카탈로그 CRUD (ADR-004[legacy 031], admin) | verifyUser |
 | `/api/datasources` | GET | 데이터소스 인스턴스 목록 — 크리덴셜 미노출 | verifyUser |
 | `/api/datasources/generate` | POST | 자연어 → 쿼리 초안 생성 (리뷰용 — 절대 실행 안 함) | verifyUser |
 | `/api/datasources/manage` | POST, PATCH | 인스턴스 생성/수정 + 크리덴셜 저장 (admin) | verifyUser |
@@ -110,15 +110,15 @@
 | `/api/diagnosis/subscribers` | GET, POST, DELETE | 진단 완료 메일링 리스트 (SNS) — 조회 auth / 변경 admin | verifyUser |
 | `/api/diagnosis/[id]` | GET, PATCH, DELETE | 리포트 단건 조회/수정/삭제 | verifyUser |
 | `/api/diagnosis/[id]/download` | GET | 산출물(md/docx/pdf) S3 프록시 다운로드 (presign 아님) | verifyUser |
-| `/api/graph` | GET | 토폴로지 그래프 (ADR-043 read-only) — class `flow\|infra`, `?from=`으로 서브그래프 | verifyUser |
+| `/api/graph` | GET | 토폴로지 그래프 (legacy 043 — BASELINE §2 deferred 옵션, read-only) — class `flow\|infra`, `?from=`으로 서브그래프 | verifyUser |
 | `/api/health` | GET | 헬스체크 — 컨테이너/타깃그룹 health 경로와 일치 필수 | 없음 (공개) |
-| `/api/incidents` | GET, POST | 인시던트 목록 + 수동 트리거 (ADR-032, admin) | verifyUser |
+| `/api/incidents` | GET, POST | 인시던트 목록 + 수동 트리거 (ADR-006[legacy 032], admin) | verifyUser |
 | `/api/incidents/prevention` | GET | 교차 인시던트 예방 인사이트 (admin, read-only) — Aurora 미설정/실패도 200 + 빈 목록 | verifyUser |
 | `/api/incidents/webhook` | POST | 인시던트 ingress — HMAC 서명 웹훅 (ADR-022 active/standby 로테이션) | 없음 (HMAC 검증) |
 | `/api/incidents/[id]` | GET | 인시던트 상세 (admin, read-only, UUID 가드) | verifyUser |
 | `/api/insights` | GET | Overview용 최신 캐시 AI 인사이트 (DB read only) | verifyUser |
 | `/api/insights/refresh` | POST | AI 인사이트 재생성 enqueue (admin) — 플래그 off 시 fail-closed, 중복 job dedup | verifyUser |
-| `/api/integrations` | GET, POST, PUT | 통합 등록 — egress 커넥터 + ingress 웹훅 소스 (ADR-039, admin, SSRF 가드) | verifyUser |
+| `/api/integrations` | GET, POST, PUT | 통합 등록 — egress 커넥터 + ingress 웹훅 소스 (ADR-007[legacy 039], admin, SSRF 가드) | verifyUser |
 | `/api/integrations/credential` | GET, PUT | 통합 크리덴셜 저장 — 단일 Secrets Manager secret에 slug(kind) 키 (admin) | verifyUser |
 | `/api/integrations/schema` | GET, POST | 인스턴스 스키마 introspect/캐시 (admin) | verifyUser |
 | `/api/jobs` | GET, POST | 비동기 작업 enqueue/목록 (P2 — `worker_jobs` + SQS) | verifyUser |
