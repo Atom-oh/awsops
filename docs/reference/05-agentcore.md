@@ -51,9 +51,10 @@ also invokes the runtime end-to-end. **Everything is gated by `agentcore_enabled
 
 **Terraform-owned parts** (`terraform/v2/foundation/ai.tf`): dual-tier ECR
 (`awsops-v2-agentcore`), the AgentCore IAM role (Runtime + gateways), the agent Lambda
-role + the 2-Lambda slice (`for_each` + `archive_file` + permission), 3 SSM placeholder
-params (`ignore_changes = [value]`), and the web task-role SSM read grant. Control-plane
-resources are **not** Terraform-native, so they live in `provision.py`.
+role + the full `local.agent_lambdas` slice (`for_each` + `archive_file` + permission —
+30 entries today, not a fixed count), 3 SSM placeholder params (`ignore_changes =
+[value]`), and the web task-role SSM read grant. Control-plane resources are **not**
+Terraform-native, so they live in `provision.py`.
 
 **Config source of truth = SSM**, at `/ops/awsops-v2/agentcore/{runtime_arn,
 interpreter_id, memory_id}`. The web BFF reads these at **runtime** via the task role —
@@ -85,7 +86,9 @@ Terraform; `provision.py` overwrites with real values.
 
 ## Status / 상태
 
-**P1f ✅ — A7 GREEN.**
+**P1f ✅ — A7 GREEN** (historical milestone record — the provisioner's *first* verified
+run, back when only the 2 bootstrap slices existed; see Current design above for the
+fleet's present size).
 - `provision` first run: 0 errors; smoke OK (runtime → security gateway → `list_roles` →
   real IAM data).
 - Idempotent re-run: every resource `EXISTS`, Runtime `UPDATED` (the update path
@@ -94,8 +97,9 @@ Terraform; `provision.py` overwrites with real values.
 - Intentional schema drift re-run: `update_gateway_target` (`UPDATED ... (schema drift)`)
   — a reconciliation path v1 never had.
 
-Skeleton verified: 9 gateways incl. `awsops-v2-external-obs-gateway`, runtime ARN +
-memory id in SSM (not `PENDING`), `lambda_arns = [iam-mcp, flow-monitor]`.
+Skeleton verified at the time: 9 gateways incl. `awsops-v2-external-obs-gateway`, runtime
+ARN + memory id in SSM (not `PENDING`), `lambda_arns = [iam-mcp, flow-monitor]` — the
+fleet has since grown to 30 slices (Current design above).
 
 ## Learnings & gotchas / 학습·함정
 
