@@ -1203,7 +1203,6 @@ export const TERMS: Record<string, Pair> = {
   '소비 용량 ÷ 총 용량 — 생성 후 변경 불가라 80% 이상이면 재생성 계획 필요': { en: 'Consumed ÷ total capacity — capacity is immutable after creation, so plan a rebuild at 80%+', zh: '已消耗 ÷ 总容量 — 创建后不可更改，达 80% 以上需计划重建', ja: '消費 ÷ 総容量 — 作成後は変更不可のため 80% 以上で再作成を計画' },
   '소비/총': { en: 'Used / total', zh: '已用/总量', ja: '消費/合計' },
   '이 룰 그룹을 참조하는 정책 수 — 0이면 정리 후보': { en: 'Policies referencing this rule group — 0 means a cleanup candidate', zh: '引用此规则组的策略数 — 为 0 表示可清理', ja: 'このルールグループを参照するポリシー数 — 0 は整理候補' },
-  '확인 불가': { en: 'Unknown', zh: '无法确认', ja: '確認不可' },
   '로깅 구성 조회가 거부되어 설정 여부를 알 수 없음 (미설정과 다름)': { en: 'The logging configuration describe call was denied, so the setting is unknown (not the same as "off")', zh: '日志配置查询被拒绝，无法得知设置状态（与"未配置"不同）', ja: 'ログ設定の照会が拒否されたため設定状態は不明（「未設定」とは異なります）' },
 
 };
