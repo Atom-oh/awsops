@@ -143,6 +143,14 @@ resource "aws_iam_role_policy" "task_metrics" {
         # LAG 위 VIF 사용률 분모(대역폭) + BGP 라우트 가시성 (2026-07 ListVirtualInterfaceRoutes)
         "directconnect:DescribeLags",
         "directconnect:ListVirtualInterfaceRoutes",
+        # /network-firewall: 방화벽/정책/룰그룹 리스트+상태+로깅 구성 (read-only)
+        "network-firewall:ListFirewalls",
+        "network-firewall:DescribeFirewall",
+        "network-firewall:ListFirewallPolicies",
+        "network-firewall:DescribeFirewallPolicy",
+        "network-firewall:ListRuleGroups",
+        "network-firewall:DescribeRuleGroup",
+        "network-firewall:DescribeLoggingConfiguration",
       ]
       Resource = "*"
       }, {
