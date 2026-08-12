@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Flame, Layers, Scroll, Shield, ShieldAlert, Unplug } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
@@ -19,6 +19,11 @@ import type { InvType } from '@/lib/inventory-types';
 // 분석 렌즈: 보호 설정 off(변경·삭제 사고 노출) · ALERT 로깅 갭(위협 가시성 없음) ·
 // stateless 기본 aws:pass(스테이트풀 엔진 우회) · 룰 그룹 용량(≥80%)·미연결(정리 후보) ·
 // 엔드포인트/동기화 이상. 데이터 계층은 lib/anfw.ts(4분 TTL 캐시).
+
+// 정적 셀 마크 — props/state에 의존하지 않으므로 모듈 스코프 상수(참조 안정성 → 아래
+// useMemo/useCallback deps에 안전하게 넣을 수 있음).
+const offBadge = <Badge tone="negative" variant="soft">off</Badge>;
+const onMark = <span className="text-emerald-700">on</span>;
 
 /** 사람 단위 수치 포맷 (패킷 카운트). null=메트릭 없음. */
 function fmtCount(v: number | null): string | null {
@@ -181,6 +186,11 @@ export default function NetworkFirewallPage() {
 
   useEffect(() => {
     let alive = true;
+    // 리뷰 MINOR: range 변경 시 이전 range의 data/열린 DetailPanel이 새 응답이 올 때까지(또는
+    // 실패 시 영원히) 그대로 남아있었다 — 로딩 표시 없이 이전 기간 수치를 보여주는 오정보.
+    setData(null);
+    setSelected(null);
+    setErr('');
     fetch(`/api/anfw?range=${range}`)
       .then(async (r) => {
         const d = await r.json().catch(() => null);
@@ -215,12 +225,12 @@ export default function NetworkFirewallPage() {
   // 점검 카드: 보호 off 또는 (조회 성공했는데) ALERT 미설정 방화벽만 나열 — "확인 불가"는 경고 아님.
   const issueFws = useMemo(() => fws.filter((f) => f.protectionsOff > 0 || (f.loggingKnown && f.alertLogging == null)), [fws]);
 
-  const offBadge = <Badge tone="negative" variant="soft">off</Badge>;
-  const onMark = <span className="text-emerald-700">on</span>;
   // 로깅 셀 3상태: on / off / 확인 불가(조회 거부 — 미설정과 구분).
-  const logCell = (f: AnfwFirewallRow, dest: string | null) => !f.loggingKnown
+  // 리뷰 MINOR: offBadge/onMark/logCell가 렌더마다 새 참조로 재생성돼 fwColumns의 useMemo가
+  // 매번 깨졌다 — offBadge/onMark는 모듈 스코프 상수로, logCell은 useCallback(deps=[tt])으로 고정.
+  const logCell = useCallback((f: AnfwFirewallRow, dest: string | null) => !f.loggingKnown
     ? <span className="text-ink-400" title={tt('로깅 구성 조회가 거부되어 설정 여부를 알 수 없음 (미설정과 다름)')}>{tt('확인 불가')}</span>
-    : dest ? onMark : offBadge;
+    : dest ? onMark : offBadge, [tt]);
 
   const fwColumns = useMemo<MetricCol<AnfwFirewallRow>[]>(() => [
     {
@@ -250,7 +260,7 @@ export default function NetworkFirewallPage() {
     },
     {
       key: 'recv', label: tt('수신 패킷'), type: 'num',
-      title: tt('기간 내 ReceivedPackets 합계 (AZ·엔진 합산)'),
+      title: tt('기간 내 ReceivedPackets 합계 (AZ 합산, Engine=Stateless만 — 와이어 패킷)'),
       value: (r) => r.receivedPackets,
       render: (r) => fmtCount(r.receivedPackets) ?? dash,
     },
@@ -288,7 +298,7 @@ export default function NetworkFirewallPage() {
       render: (r) => logCell(r, r.alertLogging),
       danger: (r) => r.loggingKnown && r.alertLogging == null,
     },
-  ], [tt, offBadge, onMark, logCell]);
+  ], [tt, logCell]);
 
   const policyColumns = useMemo<MetricCol<AnfwPolicyRow>[]>(() => [
     {
@@ -393,11 +403,16 @@ export default function NetworkFirewallPage() {
         )}
         {!data && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
 
-        {data && data.degradedRegions.length > 0 && (
+        {data && (data.degradedRegions.length > 0 || data.metricsDegradedRegions.length > 0) && (
           <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-[12px] text-warning-text">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span>
-              {tt('일부 리전 조회 실패')} ({data.degradedRegions.join(', ')}) — {tt('해당 리전의 방화벽·정책·룰 그룹이 누락되거나 실제보다 적게 집계되어 보호·로깅·트래픽·용량 분석이 실제보다 낙관적일 수 있습니다.')}
+              {data.degradedRegions.length > 0 && (
+                <>{tt('일부 리전 조회 실패')} ({data.degradedRegions.join(', ')}) — {tt('해당 리전의 방화벽·정책·룰 그룹이 누락되거나 실제보다 적게 집계되어 보호·로깅·트래픽·용량 분석이 실제보다 낙관적일 수 있습니다.')} </>
+              )}
+              {data.metricsDegradedRegions.length > 0 && (
+                <>{tt('일부 리전 메트릭 조회 실패')} ({data.metricsDegradedRegions.join(', ')}) — {tt('해당 리전은 CloudWatch 미순회·용량 캡·쿼리 실패로 트래픽·드롭 수치가 실제보다 적을 수 있습니다.')}</>
+              )}
             </span>
           </div>
         )}
@@ -406,11 +421,24 @@ export default function NetworkFirewallPage() {
           // 리전 통째 누락(degradedRegions)이 있으면 모든 카운트/합계가 하한이다 —
           // "0건"·"이상 없음"을 확정값처럼 보여주면 실제보다 낙관적인 오탐이 된다.
           const resourcesDegraded = data.degradedRegions.length > 0;
+          const metricsDegraded = data.metricsDegradedRegions.length > 0;
+          // 트래픽/드롭 수치는 방화벽 자체가 누락됐을 때(resourcesDegraded)뿐 아니라
+          // CloudWatch만 저하됐을 때(metricsDegraded)도 실제보다 적게 나올 수 있다.
+          const trafficDegraded = resourcesDegraded || metricsDegraded;
+          // loggingKnown===false(로깅 구성 조회 자체가 거부됨)인 방화벽이 하나라도 있으면
+          // "모든 방화벽 이상 없음"을 주장할 수 없다 — 그 방화벽의 실제 로깅 상태를 모른다
+          // (리뷰 MAJOR: per-row는 "확인 불가"를 정직하게 표시하면서 요약 카드만 초록 단정).
+          const loggingUnverifiable = t.loggingUnknownFirewalls > 0;
           const lb = (n: number) => (resourcesDegraded ? `${n}+` : String(n));
           const degradedHint = tt('일부 리전 조회 실패 — 실제보다 적을 수 있음');
+          const metricsDegradedHint = tt('일부 리전 메트릭 조회 실패 — 실제보다 적을 수 있음');
           // 원래 힌트를 지우지 않고 뒤에 붙인다 — 저하됐다고 실측 카운트를 숨기면
           // 그 자체가 또 다른 형태의 오정보가 된다.
           const withDegradedNote = (hint: string) => (resourcesDegraded ? `${hint} · ${degradedHint}` : hint);
+          const withTrafficDegradedNote = (hint: string) => {
+            const notes = [resourcesDegraded && degradedHint, metricsDegraded && metricsDegradedHint].filter(Boolean);
+            return notes.length ? `${hint} · ${notes.join(' · ')}` : hint;
+          };
           const droppedStr = fmtCount(t.droppedPackets);
           return (
           <>
@@ -453,9 +481,9 @@ export default function NetworkFirewallPage() {
               />
               <StatTile
                 label="드롭 패킷"
-                value={droppedStr == null ? '—' : resourcesDegraded ? `≥ ${droppedStr}` : droppedStr}
-                variant={droppedStr != null && resourcesDegraded ? 'warn' : 'default'}
-                hint={withDegradedNote(`${tt('거부')} ${fmtCount(t.rejectedPackets) ?? '—'} · ${tt('통과')} ${fmtCount(t.passedPackets) ?? '—'}`)}
+                value={droppedStr == null ? '—' : trafficDegraded ? `≥ ${droppedStr}` : droppedStr}
+                variant={droppedStr != null && trafficDegraded ? 'warn' : 'default'}
+                hint={withTrafficDegradedNote(`${tt('거부')} ${fmtCount(t.rejectedPackets) ?? '—'} · ${tt('통과')} ${fmtCount(t.passedPackets) ?? '—'}`)}
                 icon={<Shield size={16} />}
               />
             </div>
@@ -475,12 +503,20 @@ export default function NetworkFirewallPage() {
               {fws.length === 0 && !resourcesDegraded ? (
                 <div className="px-4 py-3 text-[13px] text-ink-400">{tt('방화벽 없음')}</div>
               ) : issueFws.length === 0 ? (
-                resourcesDegraded ? (
-                  // 리전이 통째로 빠진 상태에서는 점검한 방화벽이 전부 정상이라도
-                  // "이상 없음"이라고 확정할 수 없다 — 누락된 리전에 문제가 있을 수 있다.
+                resourcesDegraded || loggingUnverifiable ? (
+                  // 리전이 통째로 빠졌거나(resourcesDegraded), 점검한 방화벽은 전부 정상이지만
+                  // 일부 방화벽의 로깅 구성 조회 자체가 거부돼(loggingUnverifiable) 그 방화벽들의
+                  // 실제 로깅 상태를 모르는 상태다 — 어느 쪽이든 "이상 없음"을 확정할 수 없다.
                   <div className="flex items-start gap-2 px-4 py-3 text-[13px] text-warning-text">
                     <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                    <span>{tt('일부 리전 조회 실패로 점검 결과를 신뢰할 수 없습니다')} ({data.degradedRegions.join(', ')})</span>
+                    <span>
+                      {resourcesDegraded && (
+                        <>{tt('일부 리전 조회 실패로 점검 결과를 신뢰할 수 없습니다')} ({data.degradedRegions.join(', ')}) </>
+                      )}
+                      {loggingUnverifiable && (
+                        <>{tt('일부 방화벽의 로깅 구성 조회가 거부되어 점검 결과를 신뢰할 수 없습니다')} ({t.loggingUnknownFirewalls})</>
+                      )}
+                    </span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-emerald-700">
@@ -494,6 +530,9 @@ export default function NetworkFirewallPage() {
                     {tt('보호 설정이 꺼진 방화벽은 실수로 삭제·변경될 수 있고, ALERT 로그가 없으면 룰이 잡은 위협을 볼 수 없습니다')}
                     {resourcesDegraded && (
                       <> · {tt('일부 리전 조회 실패로 이 목록은 실제보다 짧을 수 있습니다')} ({data.degradedRegions.join(', ')})</>
+                    )}
+                    {loggingUnverifiable && (
+                      <> · {tt('일부 방화벽의 로깅 구성 조회가 거부되어 점검 결과를 신뢰할 수 없습니다')} ({t.loggingUnknownFirewalls})</>
                     )}
                   </div>
                   <div className="overflow-x-auto pb-2">
