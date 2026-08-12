@@ -101,7 +101,7 @@ function flowArrow(s, x, y, w) {
 /** 그라디언트 필 헤더를 얹은 필러 카드 제목 */
 function pillTitle(s, x, y, w, text) {
   // altText 필수 — pptxgenjs가 descr=altText||절대경로 를 기록(경로는 CI 파리티 파괴)
-  s.addImage({ path: GRAD_PILL, x, y, w, h: 0.52, altText: "gradient pill: " + text });
+  s.addImage({ path: GRAD_PILL, x, y, w, h: 0.52, altText: "decorative gradient band" });
   s.addText(text, safeText({
     x, y, w, h: 0.52,
     fontFace: FONT, fontSize: 14, bold: true, color: "FFFFFF", align: "center", valign: "middle", charSpacing: 0.3, margin: 0,

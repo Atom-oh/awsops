@@ -37,7 +37,7 @@ set -euo pipefail
 
 DECK="${1:?usage: verify-deck.sh <path-to-deck.pptx>}"
 
-PATTERN='\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|hooks\.slack\.com|\.internal\b|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b'
+PATTERN='\b[0-9]{12}\b|arn:aws[a-z-]*:|(AKIA|ASIA)[0-9A-Z]{16}|PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}|[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}|atomai\.click|\.amazonaws\.com|[a-z0-9]{13,14}\.cloudfront\.net|AWSops[A-Za-z]*Role|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|hooks\.slack\.com|\.internal\b|\b(vpc|sg|subnet|eni|i|vol|ami|snap)-[0-9a-f]{8,17}\b|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|/home/[a-z]|/root/|/runner/work/|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b'
 
 fail() { echo "::error::$1"; exit 1; }
 
@@ -127,9 +127,7 @@ EMPTY_ALT=$(grep -nE "altText: *(\"\"|'')" scripts/pptx/*.js || true)
 # AWS light template kit) to its reviewed hash — an asset swap must not be able
 # to launder itself through the rebuild-parity check. This SUM list is the
 # single source of truth (the deck README points here, not the other way).
-ASSET_COUNT=$(find scripts/pptx/assets -type f | wc -l)
-[ "$ASSET_COUNT" -eq 12 ] || fail "assets/ has $ASSET_COUNT files, SUM pins exactly 12 — unpinned/missing asset (pin is set equality over ALL files, any type/depth)"
-sha256sum -c --quiet <<'SUM' || fail "generator asset missing or hash mismatch — update the SUM list below only via reviewed asset commits"
+SUM_LIST=$(cat <<'SUM'
 e915f9afeca6dc0e07b16469be7c9e2c67bd6956d1c63635db3719e8a07b08d6  scripts/pptx/assets/ai_agent.png
 5aa903c2e4e347bc37e572fd773868c76906e6e452f716a417fe4f99a010eef0  scripts/pptx/assets/aws_cloud.png
 00af7a668f834da597dd5bd49f41b6642e644882abe9c6d7bde9c0e08395ebff  scripts/pptx/assets/aws_logo.png
@@ -140,9 +138,15 @@ c2f256e8757493520536ed9371af587399d8ab7dd1d1615b5ad435afd281906f  scripts/pptx/a
 a8669b51d63cb5266f3896073959347fd2d0af2699728bb6918f98149f0ab4f3  scripts/pptx/assets/evaluations.png
 8323ab12688d855c98b28d9ddfba3b2a2cf489456ae9bdc461a04c6fc0a89c54  scripts/pptx/assets/gateway.png
 95d014ef6666df37a70b8bee68392fd0658f71b4f95255148ab2ac871475c053  scripts/pptx/assets/grad_pill.png
-0808d61fa4b9758c937a6256df1461317f13af54f9ae87a76055500747d10b12  scripts/pptx/assets/memory.png
 c412a29cd9d063f6e30c31d43483c5718ec4fbb87c525a64600d1cab5bbb7c26  scripts/pptx/assets/section_grad.png
 SUM
+)
+# set equality, expected count derived from the SUM list itself (single source):
+# every pinned file must match, and assets/ must contain nothing else (any type/depth)
+PIN_COUNT=$(printf '%s\n' "$SUM_LIST" | wc -l)
+ASSET_COUNT=$(find scripts/pptx/assets -type f | wc -l)
+[ "$ASSET_COUNT" -eq "$PIN_COUNT" ] || fail "assets/ has $ASSET_COUNT files, SUM pins $PIN_COUNT — unpinned/missing asset (pin is set equality over ALL files, any type/depth)"
+printf '%s\n' "$SUM_LIST" | sha256sum -c --quiet || fail "generator asset missing or hash mismatch — update the SUM list above only via reviewed asset commits"
 node scripts/pptx/build-awsops-intro-pptx.js "$WORK/rebuilt-deck.pptx" || fail "generator failed to rebuild the deck (not a provenance mismatch)"
 diff <(sort <<<"$PARTS") <(unzip -Z1 "$WORK/rebuilt-deck.pptx" | sort) \
   || fail "pptx part list differs from generator output — extra or missing package parts"
