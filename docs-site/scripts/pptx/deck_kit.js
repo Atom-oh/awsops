@@ -79,7 +79,9 @@ function addFooter(pres, s, pageNum, withLogo = true, variant = "dark") {
   });
   if (withLogo) {
     const lh = 0.26, lw = lh * LOGO_AR;
-    s.addImage({ path: white ? LOGO_WHITE : LOGO, x: 11.55, y: 6.96, w: lw, h: lh });
+    // altText REQUIRED on every addImage: pptxgenjs writes `descr=altText||<abs path>`,
+    // and an absolute build path would break CI rebuild parity (and leak the build host path)
+    s.addImage({ path: white ? LOGO_WHITE : LOGO, x: 11.55, y: 6.96, w: lw, h: lh, altText: "AWS logo" });
   }
   if (pageNum != null) {
     s.addText(String(pageNum), {
@@ -140,7 +142,7 @@ function cover(pres, opts) {
     ], { x: PAD, y: 5.5, w: 6, h: 1.0, fontFace: FONT, align: "left", valign: "top", lineSpacingMultiple: 1.18 });
   }
   const h = 0.52, w = h * LOGO_AR;
-  s.addImage({ path: LOGO, x: W - PAD - w, y: H - 0.95, w, h });
+  s.addImage({ path: LOGO, x: W - PAD - w, y: H - 0.95, w, h, altText: "AWS logo" });
   addFooter(pres, s, null, false);
   if (opts.notes) s.addNotes(opts.notes);
   return s;
@@ -167,7 +169,7 @@ function agenda(pres, opts) {
     s.addShape(pres.shapes.ROUNDED_RECTANGLE, {
       x, y: y - 0.04, w: 0.66, h: 0.66, rectRadius: 0.12, fill: { color: C.blueTint }, line: { type: "none" },
     });
-    if (it.iconPath) s.addImage({ path: it.iconPath, x: x + 0.14, y: y + 0.1, w: 0.38, h: 0.38 });
+    if (it.iconPath) s.addImage({ path: it.iconPath, x: x + 0.14, y: y + 0.1, w: 0.38, h: 0.38, altText: "chapter " + it.num + " icon" });
     s.addText(it.num, safeText({ x: x + 0.86, y: y - 0.06, w: colW - 0.86, h: 0.3, fontFace: FONT, fontSize: 11, bold: true, color: C.blue, align: "left", valign: "top", margin: 0, charSpacing: 0.5 }));
     s.addText(it.title, safeText({ x: x + 0.86, y: y + 0.2, w: colW - 0.86, h: 0.4, fontFace: FONT, fontSize: 16, bold: true, color: C.ink, align: "left", valign: "top", margin: 0, charSpacing: -0.3 }));
     if (it.desc) {

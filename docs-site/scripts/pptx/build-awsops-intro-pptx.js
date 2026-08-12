@@ -100,7 +100,8 @@ function flowArrow(s, x, y, w) {
 
 /** 그라디언트 필 헤더를 얹은 필러 카드 제목 */
 function pillTitle(s, x, y, w, text) {
-  s.addImage({ path: GRAD_PILL, x, y, w, h: 0.52 });
+  // altText 필수 — pptxgenjs가 descr=altText||절대경로 를 기록(경로는 CI 파리티 파괴)
+  s.addImage({ path: GRAD_PILL, x, y, w, h: 0.52, altText: "gradient pill: " + text });
   s.addText(text, safeText({
     x, y, w, h: 0.52,
     fontFace: FONT, fontSize: 14, bold: true, color: "FFFFFF", align: "center", valign: "middle", charSpacing: 0.3, margin: 0,
@@ -490,7 +491,7 @@ kit.sectionDivider(pres, {
     const x = PAD + i * (cw + gw5);
     card(s, x, cy, cw, chh, { shadow: true });
     notch(s, x + 0.10, cy, chh, c[3]);
-    s.addImage({ path: icon(c[1]), x: x + 0.30, y: cy + 0.24, w: 0.48, h: 0.48 });
+    s.addImage({ path: icon(c[1]), x: x + 0.30, y: cy + 0.24, w: 0.48, h: 0.48, altText: c[1] + " icon" });
     s.addText(c[0], safeText({ x: x + 0.92, y: cy + 0.22, w: cw - 1.14, h: 0.60, fontFace: FONT, fontSize: 12.5, bold: true, color: C.ink, charSpacing: -0.3, margin: 0, valign: "middle", lineSpacingMultiple: 1.1 }));
     s.addText(c[2], safeText({ x: x + 0.30, y: cy + 0.94, w: cw - 0.56, h: 1.78, fontFace: FONT, fontSize: 10, color: C.body, margin: 0, valign: "top", lineSpacingMultiple: 1.25 }));
   });
