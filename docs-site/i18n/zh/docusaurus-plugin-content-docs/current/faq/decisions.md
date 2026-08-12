@@ -23,7 +23,7 @@ AWSops 最重要的原则是**只读（read-only）**。不过，该约束精确
 最初设计了变更操作框架（ADR-029）与执行 substrate（SSM Automation + Change Manager × P2 worker 混合，ADR-036），但 **2026-06-11 的 3-AI 共识将两者一并撤销（REVERSED）**。代码以暗（dark）状态保留，但 flag 永久 OFF，不会启用。
 
 - 终止 EC2、修改 SG、扩缩容、部署等 **AWS 资源变更不会通过任何页面·AI 功能执行。**
-- 约 120 个 AgentCore MCP 工具全部为 read-only。
+- 约 160 个 AgentCore MCP Lambda 工具全部为 read-only。
 
 :::info
 "冻结"的范围**仅限 AWS 资源**（ADR-029/036 2026-06-16 范围更正，ADR-041 keystone）。管控层与 worker 执行分支可复用于非 AWS 的外部数据写入，但 AWS 资源自动化 substrate 本身维持冻结。
@@ -116,14 +116,14 @@ ADR-032 最初定义了事件触发的自主事故生命周期（多 Agent Lead/
 **通过提示词缓存与按任务深度选择模型进行优化**（ADR-038、ADR-033）。
 
 - **提示词缓存** — 以约 59% 命中率减少重复上下文的重新计算（ADR-038）。
-- **按任务深度选择模型** — AI 诊断的 base（8 章节）默认 Sonnet，deep（15 章节）默认 Sonnet·可选 Opus（cost-gate）。分类·路由使用低成本的 Haiku 4.5（ADR-033）。
+- **按任务深度选择模型** — AI 诊断的 Light·Mid（8+1 章节，共 9）默认 Sonnet，Deep（15+1 章节，共 16）默认 Sonnet·可选 Opus（cost-gate）。分类·路由使用低成本的 Haiku 4.5（ADR-033）。
 - ADR-033 定义了 Aurora durable token budget（预算持久化）——已在 v1 实现，与当前 web 聊天路径的对接是后续课题。
 
 ### 网关增加到 9 个了吗？
 
-**没有——保持 8 个**（ADR-004）。
+**是的——共 9 个**（ADR-004 修订，2026-06-24）。
 
-network · container · data · security · cost · monitoring · iac · ops 的 **8 个分区网关**得以维持，外部可观测性是独立的 **"Integrations 轴"**（ADR-039），不是第 9 个网关。
+在 network · container · data · security · cost · monitoring · iac · ops 这 8 个 AWS 领域网关之外，承载外部可观测性连接器（Prometheus·ClickHouse）的 **external-obs 网关**作为第九个被配置并参与路由（9 配置 / 9 路由）。其余外部集成属于独立的 **Integrations 轴**（ADR-007/017）。
 
 ### 我可以自行追加配置 Agent 或工具吗？
 

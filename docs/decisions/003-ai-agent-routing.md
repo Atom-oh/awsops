@@ -9,14 +9,14 @@ This ADR records only the current net state, consolidating the prior routing ADR
 
 ## Context
 
-AWSops 챗은 운영자 질의를 8개 섹션 게이트웨이(network/container/data/security/cost/monitoring/iac/ops) 중 적합한 에이전트로 라우팅해야 한다. 두 가지 라우팅 결함이 누적되어 있었다:
+AWSops 챗은 운영자 질의를 9개 섹션 게이트웨이(network/container/data/security/cost/monitoring/iac/ops/external-obs — ADR-004 개정) 중 적합한 에이전트로 라우팅해야 한다. 두 가지 라우팅 결함이 누적되어 있었다:
 
 1. **단일-매칭 정규식의 한계.** `web/lib/route.ts`의 first-match 키워드 정규식은 다중 도메인 질의("EKS 파드가 RDS 연결 안 돼")를 첫 매칭(container)으로 강등해 실제 원인(network/data)을 놓쳤고, 무매칭 질의는 비활성 `ops` 섹션으로 떨어졌다.
 2. **교차도메인 UX 미결.** 운영자 질의의 상당수가 도메인 경계를 가로지르지만, 사용자가 한 번에 통합 답변을 받을 경로가 정의되지 않았다 — 사용자에게 N개 질문을 따로 하게 하거나 한 게이트웨이의 부분 답변만 주었다.
 
 또한 챗 thread와 에이전트의 바인딩, 그리고 picker 핀 ↔ 전환칩 사이의 우선순위가 정의되지 않아 데드락 위험이 있었다.
 
-The chat must route operator queries to the right section agent among 8 section gateways. First-match regex demoted multi-domain queries to a single (often wrong) section and dropped no-match queries to the inactive `ops` section; cross-domain queries had no single-answer path; and thread↔agent binding plus picker-pin vs switch-chip precedence were undefined.
+The chat must route operator queries to the right section agent among 9 section gateways (per amended ADR-004; external-obs included). First-match regex demoted multi-domain queries to a single (often wrong) section and dropped no-match queries to the inactive `ops` section; cross-domain queries had no single-answer path; and thread↔agent binding plus picker-pin vs switch-chip precedence were undefined.
 
 ## Decision
 
@@ -24,7 +24,7 @@ The chat must route operator queries to the right section agent among 8 section 
 
 `classifyRoute(prompt, pinned)`(`web/lib/route.ts` + `web/lib/classifier.ts`)는 단일 섹션이 아니라 **신뢰도가 포함된 랭크된 라우트 집합**을 반환한다.
 
-- **명확 단일-도메인 질의**(신뢰도 임계 위 단일 우세 라우트): 정규식 fast-path → Haiku 분류기 fallback으로 **단일 게이트웨이** 라우팅. 명확 질의(~70%)는 정규식이 즉시·무료 처리하고, 모호/무매칭만 Haiku가 8섹션 top-3 랭킹.
+- **명확 단일-도메인 질의**(신뢰도 임계 위 단일 우세 라우트): 정규식 fast-path → Haiku 분류기 fallback으로 **단일 게이트웨이** 라우팅. 명확 질의(~70%)는 정규식이 즉시·무료 처리하고, 모호/무매칭만 Haiku가 9 게이트웨이 섹션 top-3 랭킹(분류기 후보 자체는 16 챗 키 전체 — `classifier.ts`).
 - **교차도메인 질의 감지**(임계 위 라우트 ≥2, 최대 3개로 절단): `Promise.allSettled`로 부채꼴 호출 후 `synthesizeResponsesStreaming()`로 **자동 합성**하여 하나의 병합 답변을 스트리밍한다. **사용자 개입 없이 자동·투명하게 핸드오프**된다.
 - **전환칩(switch chips)은 잔존하되 보조 수단으로 강등**: 합성이 다루지 못한 도메인을 끌어오거나 특정 단일 에이전트로 재질의할 때만 쓴다. 교차도메인 답변의 주 경로가 아니다.
 
@@ -80,7 +80,7 @@ Agent Space에서 비활성인 에이전트를 picker로 선택하면 정직한 
 
 ### 9. AgentCore Gateway 시맨틱 툴 검색 — P4 연기
 
-플랫폼-네이티브 시맨틱 툴 검색(`searchType=SEMANTIC`, "300툴 → ~4 주입")은 명시적으로 **P4로 연기**한다. 페이오프가 전 게이트웨이 함대에 묶여 있고(현재 8섹션 중 read-only 슬라이스만 라이브), 빈 게이트웨이 시맨틱 검색은 유령매칭을 낳으며, 단일 통합 에이전트는 섹션별 `SKILL_BASE` 페르소나를 희석한다. 본 ADR의 하이브리드가 적재하는 오라우팅 로그가 P4 시맨틱 설계의 학습 입력이 된다.
+플랫폼-네이티브 시맨틱 툴 검색(`searchType=SEMANTIC`, "300툴 → ~4 주입")은 명시적으로 **P4로 연기**한다. 페이오프가 전 게이트웨이 함대에 묶여 있고(2026-08-02 함대 완성 — 9섹션 전부 라우팅), 빈 게이트웨이 시맨틱 검색은 유령매칭을 낳으며, 단일 통합 에이전트는 섹션별 `SKILL_BASE` 페르소나를 희석한다. 본 ADR의 하이브리드가 적재하는 오라우팅 로그가 P4 시맨틱 설계의 학습 입력이 된다.
 
 ## Consequences
 
@@ -102,7 +102,7 @@ Agent Space에서 비활성인 에이전트를 picker로 선택하면 정직한 
 - **멀티-라우트 fan-out + 자동합성 재활성화**는 sub-flag 뒤에서 출하되며 다중도메인 골든셋(집합-중첩 채점) 통과가 전제. 통과 전에는 현행 단일-라우트 + 칩 동작으로 graceful degrade(회귀 없음). 합성은 Sonnet을 쓰므로 활성화 전 web task role IAM 확대가 선행 필요.
 
 ### ⚠️ Load-bearing invariant (P3 활성화 전제)
-`agent.py`의 `SKILL_BASE`에는 `observability` 키가 없고(`network/container/ops/data/security/monitoring/cost/diagnostics/iac`만 존재), `build_skill_prompt`는 미지 키를 DEFAULT로 무음 폴백한다. 오늘은 `observability`가 `active:false`라 안전하나, **P3에서 어떤 섹션이든 `active:true`로 전환하기 전에 해당 키의 `SKILL_BASE` 엔트리 존재를 확인**해야 한다(또는 active-section↔SKILL_BASE 패리티 기동 체크 추가). 위반 시 잘못된 전문가 프롬프트로 무음 오라우팅된다.
+`build_skill_prompt`는 미지 키를 DEFAULT로 무음 폴백한다 — **어떤 섹션이든 `active:true`로 전환하기 전에 해당 키의 `SKILL_BASE` 엔트리 존재를 확인**해야 한다(또는 active-section↔SKILL_BASE 패리티 기동 체크 추가). 위반 시 잘못된 전문가 프롬프트로 무음 오라우팅된다. (이 전제조건은 충족됨: `agent.py` `SKILL_BASE`에 `observability` 전용 페르소나가 존재하고 `observability`→`external-obs` 별칭으로 라우팅 — 16키 활성화 2026-08-02.)
 
 ## 6 Pillars
 

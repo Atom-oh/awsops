@@ -1,5 +1,7 @@
 # sample files
 *.pptx
+# exception: docs-site presentation deck served as a download asset
+!docs-site/static/presentation/awsops-intro/awsops-intro.pptx
 
 # dependencies
 node_modules/

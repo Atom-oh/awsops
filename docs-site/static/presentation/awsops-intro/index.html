@@ -10,6 +10,16 @@
   <meta name="remarp-block" content="merged">
   <link rel="stylesheet" href="./common/theme.css">
   <link rel="stylesheet" href="./common/pptx-theme/theme-override.css">
+  <style>
+    .pptx-download-badge {
+      position: fixed; right: 14px; bottom: 52px; z-index: 9999;
+      padding: 0.45rem 0.9rem; font-size: 0.8rem; font-weight: 700;
+      background: rgba(255,153,0,0.92); color: #0e101c;
+      border-radius: 0.3rem; text-decoration: none;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+    }
+    @media print { .pptx-download-badge { display: none; } }
+  </style>
   <style>:root { --slide-ratio-w: 16; --slide-ratio-h: 9; } :root { --slide-width: 960px; --slide-height: 540px; }</style>
   
   <script>window.__remarpTheme = {"colors": {}, "footer": "\u00a9 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved. Amazon Confidential and Trademark.", "pagination": true, "fonts": {}};</script>
@@ -1451,5 +1461,6 @@
     onSlideChange: (index, slide) => {}
   });
 </script>
+<a class="pptx-download-badge" href="./awsops-intro.pptx" download title="발표용 PPTX 다운로드 (별도 제작 정식 덱 · 한국어 스피커 노트 포함)">📥 PPTX</a>
 </body>
 </html>

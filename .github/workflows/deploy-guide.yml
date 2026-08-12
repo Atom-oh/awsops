@@ -55,6 +55,12 @@ jobs:
           fi
           echo "Build verified: overview/why-awsops present in sitemap."
 
+      # All pptx gates (structure / content scan / generator parity / rel targets)
+      # live in ONE shared script so this pre-deploy run and merge-verify's
+      # pre-merge run can never drift. Gate the artifact that ships: build/.
+      - name: Verify deck (shared gates)
+        run: bash scripts/verify-deck.sh build/presentation/awsops-intro/awsops-intro.pptx
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs-site/build

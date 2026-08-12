@@ -109,15 +109,15 @@ AWSops 不使用（v1 的）Steampipe pg Pool（端口 9193、node-cache、cache
 
 ## 实时 AWS 查询如何进行？（AgentCore vs Steampipe）
 
-AWSops 的实时 AWS 数据由 **AgentCore MCP Lambda 工具**负责。约 **120 个只读工具**部署在 **8 个分区网关**（network / container / data / security / cost / monitoring / iac / ops）中。
+AWSops 的实时 AWS 数据由 **AgentCore MCP Lambda 工具**负责。约 **160 个只读工具**部署在 **9 个分区网关**（network / container / data / security / cost / monitoring / iac / ops / external-obs）中。
 
 | 类别 | 角色 |
 |------|------|
 | **AgentCore MCP 工具（实时）** | 实时 AWS API 查询 — 聊天、诊断、页面的实时数据来源 |
 | **Steampipe（flag-gated）** | 仅用于 `steampipe_enabled`（默认 OFF）的清单同步。既不是实时查询引擎，也不是本地 9193 服务 |
 
-:::info 网关数量是 8 个（ADR-004）
-外部可观测性（Observability）是独立的 **Integrations 轴**（ADR-039），不是第 9 个网关。按照 ADR-004，网关数量保持为 **8**。
+:::info 网关数量是 9 个（ADR-004 修订，2026-06-24）
+外部可观测性连接器（Prometheus·ClickHouse）已提升为 **external-obs 网关**，作为第九个被配置并参与路由（ADR-004 修订 — 9 配置 / 9 路由）。其余外部集成属于独立的 **Integrations 轴**（ADR-007/017）。
 :::
 
 ## AI 路由是如何工作的？（ADR-038 混合方式）

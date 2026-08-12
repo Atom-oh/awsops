@@ -86,7 +86,7 @@ export const TERMS: Record<string, Pair> = {
   '용량은 초당 소비율 · 값은 선택 기간 전체 집계': { en: 'Capacity is the per-second consumption rate · values are aggregated over the selected range', zh: '容量为每秒消耗率 · 数值为所选时间段的汇总值', ja: '容量は秒間消費率 · 値は選択期間全体の集計' },
   '이 리포트를 삭제할까요? (목록에서 숨겨집니다)': { en: 'Delete this report? (It will be hidden from the list)', zh: '删除此报告吗？（将从列表中隐藏）', ja: 'このレポートを削除しますか？（一覧から非表示になります）' },
   '최근 1시간 내 동일 조건 리포트를 표시합니다 (중복 실행 방지 — 최대 60분 이전 결과일 수 있음).': { en: 'Showing a matching report from the last hour (dedup guard — the result may be up to 60 min old).', zh: '显示最近1小时内的相同条件报告（防止重复执行 — 结果可能是最多60分钟前的）。', ja: '直近1時間以内の同条件レポートを表示します（重複実行防止 — 最大60分前の結果の場合があります）。' },
-  'Deep (15섹션)': { en: 'Deep (15 sections)', zh: 'Deep（15个分区）', ja: 'Deep（15セクション）' },
+  'Deep (15+1섹션)': { en: 'Deep (15+1 sections)', zh: 'Deep（15+1个分区）', ja: 'Deep（15+1セクション）' },
   '진단 중…': { en: 'Diagnosing…', zh: '诊断中…', ja: '診断中…' },
   '진단 실행': { en: 'Run Diagnosis', zh: '运行诊断', ja: '診断実行' },
   'Opus: 더 깊은 분석, 비용↑': { en: 'Opus: deeper analysis, higher cost', zh: 'Opus：分析更深入，费用更高', ja: 'Opus: より深い分析、コスト増' },

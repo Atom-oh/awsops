@@ -262,7 +262,7 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
     """Collect → evaluate active invariants → render each section → markdown + summary.
     Returns (markdown, summary, sources_used). Read-only throughout; the LLM sees verdict-only
     drift, never raw untrusted edge text. `report_id` (optional) enables the parent-report diff.
-    `tier` picks the catalog (mid/light=9, deep=15) and `model` ('sonnet'|'opus', deep-only) the
+    `tier` picks the catalog (mid/light=8, deep=15; +intended-vs-actual appended → 9/16 rendered) and `model` ('sonnet'|'opus', deep-only) the
     Bedrock model + token budget. `on_progress(current, total, section, phase)` (optional, A3 / V1
     parity) is called as work advances — best-effort (a callback error never aborts the report)."""
     base_catalog, model_id, max_tokens = _resolve_tier(tier, model)

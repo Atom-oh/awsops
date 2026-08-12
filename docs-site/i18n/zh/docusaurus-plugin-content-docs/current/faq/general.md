@@ -17,7 +17,7 @@ AWSops 是面向 AWS 与 Kubernetes 环境的**实时只读（read-only）运维
 - **安全分析**：IAM 权限分析、合规、漏洞检查
 - **成本管理**：基于 Cost Explorer 的成本分析与仪表板
 - **AI 助手**：通过自然语言查询进行 AWS 资源分析与问题排查（流式输出 + 领域路由 + 对话持久化）
-- **AI 诊断（Diagnosis）**：由 worker 生成的只读诊断报告（base 8 个章节 / deep 15 个章节，支持 DOCX·PDF 导出）
+- **AI 诊断（Diagnosis）**：由 worker 生成的只读诊断报告（Light·Mid 8+1 个章节（共 9） / Deep 15+1 个章节（共 16），支持 DOCX·PDF 导出）
 
 平台是**基于 Terraform 的 MSA**——实时 AWS 查询由 **Amazon Bedrock AgentCore MCP 工具**负责，应用状态持久化在 **Aurora Serverless v2（PostgreSQL 17）**中。
 
@@ -35,7 +35,7 @@ AWSops 是由 **Terraform**（`terraform/v2/foundation/`，部分 S3 backend）�
 | **边缘** | CloudFront（TLS）→ VPC Origin（`https-only:443`）→ 内部 ALB HTTPS:443（区域 ACM）→ Fargate。**没有公开 ALB** |
 | **计算** | ECS Fargate（arm64）。web 是 Next.js 14 thin-BFF，在**根路径（`/`）**提供服务 |
 | **数据** | Aurora Serverless v2（PostgreSQL 17），通过 node-pg 访问 |
-| **AI** | AgentCore Runtime + 8 个分区网关的 MCP Lambda 工具（实时查询） |
+| **AI** | AgentCore Runtime + 9 个分区网关的 MCP Lambda 工具（实时查询） |
 | **异步 worker** | SQS → ESM（kill-switch）→ dispatcher Lambda → Step Functions → Lambda 或 Fargate |
 
 繁重、耗时或有内存（OOM）风险的任务不会由 web 直接处理，而是发送到**异步 worker 层**：`POST /api/jobs` → 写入 `worker_jobs` 队列 → SQS → 幂等 dispatcher Lambda → Step Functions 按任务时长路由，短任务走 RunLambda，长/有 OOM 风险的任务走 `ecs:runTask.sync` Fargate。失败由 status_updater Lambda 记录，reaper（EventBridge 5 分钟）对 stale 任务进行对账。
@@ -48,7 +48,7 @@ AWSops 是由 **Terraform**（`terraform/v2/foundation/`，部分 S3 backend）�
 
 **不会。** AWSops 是**只读运维仪表板 + AI 诊断**工具。**AWS 资源变更与自主执行（autonomy）已永久冻结（do-not-enable）**。任何页面或 AI 功能都不会终止 EC2、修改 SG 或变更基础设施。
 
-AI 助手与诊断只是**查询**实时数据进行分析·诊断，不执行变更（mutation）。约 120 个 AgentCore MCP 工具全部为 read-only。
+AI 助手与诊断只是**查询**实时数据进行分析·诊断，不执行变更（mutation）。约 160 个 AgentCore MCP Lambda 工具全部为 read-only。
 
 在治理下唯一被允许的"写入"是**外部数据记录**——例如在外部系统中留下报告·工单·消息。该功能仅在以下防护下运行：
 
@@ -93,10 +93,10 @@ AWSops 不使用 EC2 实例内的 JSON 文件，而是将状态存储在**托管
 
 ## 如何查询实时 AWS 数据？
 
-实时 AWS / Kubernetes 数据通过 **AgentCore MCP Lambda 工具**查询。约 120 个只读工具分布在 **8 个分区网关**（network · container · data · security · cost · monitoring · iac · ops）中。
+实时 AWS / Kubernetes 数据通过 **AgentCore MCP Lambda 工具**查询。约 160 个只读工具分布在 **9 个分区网关**（network · container · data · security · cost · monitoring · iac · ops · external-obs）中。
 
 - 所有工具均为 read-only。
-- 网关数量保持为 **8 个**（ADR-004）。外部可观测性是独立的"Integrations 轴"，不是第 9 个网关。
+- 网关数量为 **9 个**（ADR-004 修订 2026-06-24）— 承载 Prometheus·ClickHouse 连接器的 external-obs 作为第九个网关被配置并参与路由。
 - 不再依赖本地 Steampipe（127.0.0.1:9193）服务或对 380 个表的直接访问。
 
 ## 可以查询外部可观测性数据（Prometheus / Loki / Tempo / ClickHouse / Datadog）吗？

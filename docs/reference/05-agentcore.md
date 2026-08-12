@@ -19,23 +19,26 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 - **AgentCore Runtime** — Strands; reuses `agent/agent.py` as-is. Gateway URLs are
   injected via a `GATEWAYS_JSON` env var (agent.py's documented discovery fallback —
   no awscli-in-image dependency). Runtime name `awsops_v2_agent` (underscores only).
-- **9 section gateways** — 8 AWS-domain `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`
-  + `awsops-v2-external-obs-gateway` (ADR-004 as amended **2026-06-24**: **9 provisioned / 9
-  routed** — external-obs was promoted to a routed section hosting the external-observability
-  connectors [Prometheus·ClickHouse]; the chat key `observability` aliases to it, see
-  `agent/agent.py` `_GATEWAY_ALIAS`). `monitoring` covers AWS-native monitoring
-  (Loki/Tempo/Mimir stay there); the wider Integrations egress substrate remains governed by
-  ADR-007.
+- **9 section gateways** — `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops,external-obs}-gateway`
+  (**ADR-004 as amended 2026-06-24: 9 provisioned / 9 routed** — external-obs, hosting the
+  Prometheus·ClickHouse connectors, was promoted from a provisioned-only slot into the routing
+  set; the chat key `observability` aliases to it). **Integrations is the governance axis**
+  (ADR-007/017) — its gated vendor-hosted MCP presets (Datadog·Dynatrace·New Relic,
+  `official_mcp_enabled`) attach to the external-obs gateway as `mcpServer` targets when enabled. `monitoring` covers AWS-native monitoring;
+  the external-obs plugin datasource registry / OTLP / datasource-diag re-home is the Integrations
+  axis (P3).
 - **Memory** — `awsops_v2_memory-*`, `eventExpiryDuration = 365` days.
 - **Code Interpreter** — `awsops_v2_code_interpreter-*` (underscores only).
 
 **Design target:** **9 section agents + 1 incident orchestrator** (the orchestrator is
-P4). **Fleet is deployed** — all 9 gateways hold READY MCP targets; the fleet is defined
-in `terraform/v2/foundation/ai.tf` `local.agent_lambdas` (30 slices: 21 gated on
-`agentcore_enabled`, 9 on `integrations_enabled`). `iam-mcp` (14 tools → security
-gateway) and `flow-monitor` (1 tool → network gateway) were the first two slices used to
-exercise every provisioner code path; the P4 **incident orchestrator** is the only piece
-still backlog.
+P4). **Fleet state: complete** — 30 Lambda slices are defined in `ai.tf` `local.agent_lambdas`
+(21 gated on `agentcore_enabled`, 9 on `integrations_enabled`; both flags default `false`,
+so a fresh `plan` is a no-op). In the **live environment** (flags enabled) all 9 gateways
+carry READY MCP targets and all 16 chat section keys are **registered and routable** — fleet
+completed 2026-08-02. Note the runtime nuance (matches the customer deck's slide 12):
+`aws-data` and the 6 collector keys currently fall back to standard `ops` routing because
+the BFF-local live-Steampipe path is closed by design (ADR-001/010, `steampipeAvailable()`
+hard-`false`); the 9 gateway-routed keys answer via their own agents.
 
 **Provisioner:** `scripts/v2/agentcore/{catalog.py, provision.py}` — `catalog.py` holds
 the 9 gateway names + the target tool schemas; `provision.py` does boto3 `list →
@@ -51,10 +54,9 @@ also invokes the runtime end-to-end. **Everything is gated by `agentcore_enabled
 
 **Terraform-owned parts** (`terraform/v2/foundation/ai.tf`): dual-tier ECR
 (`awsops-v2-agentcore`), the AgentCore IAM role (Runtime + gateways), the agent Lambda
-role + the full `local.agent_lambdas` slice (`for_each` + `archive_file` + permission —
-30 entries today, not a fixed count), 3 SSM placeholder params (`ignore_changes =
-[value]`), and the web task-role SSM read grant. Control-plane resources are **not**
-Terraform-native, so they live in `provision.py`.
+role + the Lambda slices (`for_each` over `local.agent_lambdas` + `archive_file` + permission), 3 SSM placeholder
+params (`ignore_changes = [value]`), and the web task-role SSM read grant. Control-plane
+resources are **not** Terraform-native, so they live in `provision.py`.
 
 **Config source of truth = SSM**, at `/ops/awsops-v2/agentcore/{runtime_arn,
 interpreter_id, memory_id}`. The web BFF reads these at **runtime** via the task role —
@@ -66,8 +68,7 @@ Terraform; `provision.py` overwrites with real values.
 - **ADR-004** — AgentCore gateways & runtime, incl. runtime-customizable agents & skills
   (Aurora catalog + resolver + registry-agnostic `agent.py`; built-in vs custom tiers;
   per-account Agent Spaces; BYO-MCP). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
-- **ADR-004** — gateway role split (corrections: **2026-06-03 7 → 8 gateways**, then the
-  **2026-06-24 amendment 8 → 9 routed** — external-obs promoted to a routed section).
+- **ADR-004** — gateway role split (note the **2026-06-03 correction: 7 → 8 gateways**).
   [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
 - **ADR-003** — AI agent routing (hybrid routing & multi-route parallel synthesis; the
   classifier picks built-in routes + enabled custom agents).
@@ -82,13 +83,11 @@ Terraform; `provision.py` overwrites with real values.
 | `scripts/v2/agentcore/catalog.py` | 9 gateway names + GW descriptions + target tool schemas |
 | `scripts/v2/agentcore/provision.py` | Idempotent boto3 provisioner (Runtime/Gateways/Targets/Memory/Interpreter), SSM write, diff report, `--smoke` |
 | `agent/agent.py` | Strands agent (reused as-is; receives `GATEWAYS_JSON`) |
-| `agent/lambda/` | Agent tool Lambda sources — full fleet (30 slices per `ai.tf` `local.agent_lambdas`; e.g. `aws_iam_mcp.py`, `flowmonitor.py`, `cross_account.py`) |
+| `agent/lambda/` | Agent tool Lambda sources — full fleet (30 slices; e.g. `aws_iam_mcp.py`, `flowmonitor.py`, connector lambdas, `cross_account.py`) |
 
 ## Status / 상태
 
-**P1f ✅ — A7 GREEN** (historical milestone record — the provisioner's *first* verified
-run, back when only the 2 bootstrap slices existed; see Current design above for the
-fleet's present size).
+**P1f ✅ — A7 GREEN.**
 - `provision` first run: 0 errors; smoke OK (runtime → security gateway → `list_roles` →
   real IAM data).
 - Idempotent re-run: every resource `EXISTS`, Runtime `UPDATED` (the update path
@@ -97,9 +96,9 @@ fleet's present size).
 - Intentional schema drift re-run: `update_gateway_target` (`UPDATED ... (schema drift)`)
   — a reconciliation path v1 never had.
 
-Skeleton verified at the time: 9 gateways incl. `awsops-v2-external-obs-gateway`, runtime
-ARN + memory id in SSM (not `PENDING`), `lambda_arns = [iam-mcp, flow-monitor]` — the
-fleet has since grown to 30 slices (Current design above).
+Skeleton first verified (P1f) with 9 gateways incl. `awsops-v2-external-obs-gateway`,
+runtime ARN + memory id in SSM (not `PENDING`) and an initial 2-slice `lambda_arns =
+[iam-mcp, flow-monitor]`; the fleet has since grown to the full 30 slices (2026-08-02).
 
 ## Learnings & gotchas / 학습·함정
 
@@ -115,8 +114,8 @@ fleet has since grown to 30 slices (Current design above).
 - **Name collision avoidance** — gateways were renamed from v1's `awsops-{key}` to
   `awsops-v2-{key}-gateway` to isolate from v1 in the shared account.
 
-**P3 backlog (DO NOT implement — list only):**
-- Full Lambda tool fleet — **done** (30 slices deployed via `ai.tf` `local.agent_lambdas`, see Current design above); remaining backlog is only the P4 incident orchestrator
+**P3 backlog (DO NOT implement — list only; struck items shipped since):**
+- ~~Full Lambda tool fleet~~ (shipped 2026-08-02)
 - `section = routing`
 - Right-docking chat UI
 - OpenCost setup = a **read-only out-of-band install bundle** the operator runs (AWS-resource mutation stays FROZEN, ADR-005) — NOT an in-app mutating action
@@ -124,9 +123,9 @@ fleet has since grown to 30 slices (Current design above).
 ## Source / 출처
 
 Consolidates three source docs (now archived):
-- `docs/history/archive/2026-05-31-awsops-v2-p1f-agentcore-provisioner.md` (primary)
-- `docs/history/archive/2026-05-31-custom-agents-skills-design.md`
-- `docs/history/archive/2026-05-31-adr-031-phase1.md`
+- `docs/superpowers/archive/2026-05-31-awsops-v2-p1f-agentcore-provisioner.md` (primary)
+- `docs/superpowers/archive/2026-05-31-custom-agents-skills-design.md`
+- `docs/superpowers/archive/2026-05-31-adr-031-phase1.md`
 
 Review: [`docs/reviews/v2-p1f-scope-architecture-review.md`](../../reviews/v2-p1f-scope-architecture-review.md)
 (3-AI cross review — MID-minus scope decision, least-privilege roles, SSM-not-valueFrom).

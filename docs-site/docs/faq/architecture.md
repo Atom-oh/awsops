@@ -109,15 +109,15 @@ AWSops는 (v1의) Steampipe pg Pool(포트 9193, node-cache, cache-warmer, batch
 
 ## 라이브 AWS 조회는 어떻게 하나요? (AgentCore vs Steampipe)
 
-AWSops의 라이브 AWS 데이터는 **AgentCore MCP Lambda 도구**가 담당합니다. 약 **120개의 읽기 전용 도구**가 **8개 섹션 게이트웨이**(network / container / data / security / cost / monitoring / iac / ops)에 걸쳐 배포됩니다.
+AWSops의 라이브 AWS 데이터는 **AgentCore MCP Lambda 도구**가 담당합니다. 약 **160개의 읽기 전용 도구**가 **9개 섹션 게이트웨이**(network / container / data / security / cost / monitoring / iac / ops / external-obs)에 걸쳐 배포됩니다.
 
 | 구분 | 역할 |
 |------|------|
 | **AgentCore MCP 도구 (라이브)** | 실시간 AWS API 조회 — 챗·진단·페이지의 라이브 데이터 소스 |
 | **Steampipe (flag-gated)** | `steampipe_enabled`(기본 OFF) 인벤토리 sync **전용**. 라이브 쿼리 엔진이 아니며, 로컬 9193 서비스도 아님 |
 
-:::info 게이트웨이 수는 8개입니다 (ADR-004)
-외부 관측성(Observability)은 별도의 **Integrations 축**(ADR-039)이며 9번째 게이트웨이가 아닙니다. ADR-004에 따라 게이트웨이 수는 **8**로 유지됩니다.
+:::info 게이트웨이 수는 9개입니다 (ADR-004 개정 2026-06-24)
+외부 관측성 커넥터(Prometheus·ClickHouse)는 **external-obs 게이트웨이**로 승격되어 아홉 번째로 프로비저닝·라우팅됩니다(9 프로비저닝 / 9 라우트). 그 외 외부 연동은 별도의 **Integrations 축**(ADR-007/017)입니다.
 :::
 
 ## AI 라우팅은 어떻게 동작하나요? (ADR-038 하이브리드)

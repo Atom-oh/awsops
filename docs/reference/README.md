@@ -1,6 +1,6 @@
 # AWSops — System Overview & Component Reference / 시스템 개요 · 컴포넌트 레퍼런스
 
-> v2 is live on `main`. Current decisions live in
+> Branch `feat/v2-architecture-design`. Current decisions live in
 > [`../decisions/BASELINE.md`](../decisions/BASELINE.md) (single current-truth). ADRs hold detail.
 
 **EN** — AWSops is a **read-only AWS / Kubernetes operations dashboard + AI diagnosis**, organized
@@ -26,8 +26,8 @@ BASELINE §2 참조).
 per component (current design, decisions, key files, status, gotchas). The current cross-cutting
 decision baseline is [`../decisions/BASELINE.md`](../decisions/BASELINE.md); ADRs under
 [`../decisions/`](../decisions/) hold the detail (the *why*); per-phase execution history lives in
-[`../history/archive/`](../history/archive/). 이 레퍼런스 문서들이 컴포넌트별 **현행 단일 출처**, 현행 결정 기준선은
-`../decisions/BASELINE.md`, ADR은 상세 결정 출처, 실행 이력은 `../history/archive/`다.
+[`../archive/`](../archive/). 이 레퍼런스 문서들이 컴포넌트별 **현행 단일 출처**, 현행 결정 기준선은
+`../decisions/BASELINE.md`, ADR은 상세 결정 출처, 실행 이력은 `../archive/`다.
 
 ## Request flow / 요청 흐름
 
@@ -72,9 +72,8 @@ routes. 무거운 작업은 워커 큐로 enqueue하는 thin-BFF.
 **AgentCore Agents — [`05-agentcore.md`](05-agentcore.md).** Strands agent on **AgentCore Runtime**
 fronted by domain gateways exposing **read-only MCP tools**, plus Memory + Code Interpreter, all
 provisioned by an idempotent boto3 provisioner with config delivered through SSM. **9 gateways are
-provisioned and `agent.py` routes across all 9** — external-obs was promoted to a routed section by
-the ADR-004 amendment (2026-06-24); the chat key `observability` aliases to it. 9개 프로비저닝 / 9
-섹션 에이전트 라우트 (external-obs는 2026-06-24 ADR-004 개정으로 라우팅 섹션 승격).
+provisioned and all 9 are routed** (external-obs, hosting the Prometheus·ClickHouse connectors,
+was promoted into the routing set per amended ADR-004, 2026-06-24). 9개 프로비저닝 / 9 라우트.
 
 **Async Worker Backbone — [`06-workers.md`](06-workers.md).** an enqueue (generic `POST /api/jobs`
 for `noop`; ownership-scoped `/api/diagnosis` · `/api/compliance/run` for domain work) → `worker_jobs` +
@@ -108,4 +107,4 @@ register) is in [`../decisions/BASELINE.md`](../decisions/BASELINE.md). 단계�
 ## Execution history / 실행 이력
 
 Per-phase execution history (plans, verification logs, design notes) lives under
-[`../history/archive/`](../history/archive/) — see its README. 각 단계의 실행 이력은 `../history/archive/`를 참조한다.
+[`../archive/`](../archive/) — see its README. 각 단계의 실행 이력은 `../archive/`를 참조한다.
