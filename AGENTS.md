@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 6be02fc13b9b · generated-at: 2026-08-06 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f032551e2566 · generated-at: 2026-08-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -22,7 +22,7 @@ v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *pro
 - **IaC:** Terraform only (CDK dropped). Single root `terraform/v2/foundation/`, partial S3 backend (`backend.hcl`, no DynamoDB), TF ≥1.15, provider `~>6.0`.
 - **Edge:** CloudFront(TLS) → VPC Origin `https-only:443` → internal ALB HTTPS:443 (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** ALB SG allows 443 from `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only → 504).
 - **AI:** Bedrock Sonnet 5 / Opus 4.8 / Haiku 4.5 + AgentCore (Strands, `agent/agent.py`, routes via `GATEWAYS_JSON`). Live AWS queries via AgentCore MCP Lambda tools (`agent/lambda/*.py`), never inline in the BFF. Config source of truth = SSM `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}` (runtime read; no ECS `valueFrom`).
-- **Chat routing (ADR-003[legacy 038], LIVE):** regex fast-path (`web/lib/route.ts`, first-match-wins RULES) → Haiku classifier fallback; gated by `hybrid_routing_enabled`. 16 chat keys = 9 gateway-routed sections + `aws-data` (LLM Steampipe SQL, SELECT-only + 200-row cap, `web/lib/aws-data.ts`) + 6 auto-collect collectors (`web/lib/collectors/`) — the latter 7 are web-BFF-local, not via AgentCore.
+- **Chat routing (ADR-003[legacy 038], LIVE):** regex fast-path (`web/lib/route.ts`, first-match-wins RULES) → Haiku classifier fallback; gated by `hybrid_routing_enabled`. **16 routing keys are registered** = 9 gateway-routed sections + `aws-data` + 6 auto-collect collectors (`web/lib/collectors/`); the latter 7 are web-BFF-local (not via AgentCore) and their Steampipe-backed execution is hard-disabled (see Known false-positives) — they fail-open to normal routing at runtime.
 - **Datasource connectors:** `agent/lambda/{clickhouse,prometheus,loki,tempo,mimir,opensearch}_mcp.py` all import shared `datasource_http.py`; it must be bundled into each Lambda zip (ai.tf `dynamic source`) or the Lambda dies with `Runtime.ImportModuleError`.
 - **Async workers (P2):** enqueue → `worker_jobs` + SQS → ESM (kill-switch) → dispatcher Lambda (idempotent on job_id) → Step Functions → RunLambda (short) or `ecs:runTask.sync` Fargate (long/OOM) → worker writes running/succeeded itself → status_updater on Catch sets failed (SFN can't write VPC Aurora) → reaper (5min) reconciles stale. Files: `terraform/v2/foundation/workers.tf`, `scripts/v2/workers/`.
 
@@ -67,7 +67,7 @@ No repo-root `package.json` — the only one outside `web/`/`docs-site/` is `scr
 
 ## Review checklist
 1. **Posture:** no mutation/autonomy enabled (ADR-005); external write must satisfy ADR-007 governance; current truth = BASELINE.md.
-2. **Edge/auth:** RS256 verification intact (no decode-only regression); no new public-route bypass; `session_revocations` check not removed; ownership checks keyed on `sub`.
+2. **Edge/auth — two layers, only one is per-route optional:** *authentication* terminates at the CloudFront Lambda@Edge (RS256/`iss`/`aud`/`token_use`; public-path allowlist lives in `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl` — currently `/api/health`, `/api/auth/signout`, `/login`, `/api/auth/login`, `/icon.svg`, and any addition is itself flag-worthy). *Authorization, ownership (`sub`) and session revocation are BFF-side only* (ADR-002 §2-4) → RS256 verification intact (no decode-only regression); `verifyUser()` present on every data-returning/billable route outside the three enumerated carve-outs; `session_revocations` check not removed; ownership keyed on `sub`.
 3. **Thin-BFF:** heavy work enqueued (domain jobs via their dedicated ownership-checked routes, never generic `/api/jobs`); Aurora via `getPool`; AgentCore ARNs from SSM; admin via `web/lib/admin.ts`.
 4. **Terraform:** under `terraform/v2/foundation/`; flag-gated; SG description unchanged; no `0.0.0.0/0` / `Principal:*`; no `-auto-approve`.
 5. **Containers:** arm64; `HOSTNAME=0.0.0.0` runtime env; worker `CMD`; health path `/api/health` everywhere.
@@ -84,9 +84,9 @@ No repo-root `package.json` — the only one outside `web/`/`docs-site/` is `scr
 - Fetch `/api/...` without `/awsops` prefix is correct in v2.
 - Feature flags defaulting false (so `plan` = No changes) is intentional.
 - Legacy-numbered ADR citations styled `ADR-0NN[legacy 0XX]` are the documented convention, not typos; bare legacy numbers in `docs/history/` provenance files are expected.
-- Some `/api/*` routes without their own auth check are fine — authentication terminates at the CloudFront Lambda@Edge (ADR-002 reconciles the split); flag only routes added to the edge's public-path allowlist.
+- `/api/db`, `/api/stream`, `/api/incidents/webhook` skipping `verifyUser()` is sanctioned — the three carve-outs ADR-002 §2-4 enumerates (`/api/db` leaks only a table count + db name, `/api/stream` only a tick counter, and the webhook is machine ingress on HMAC-SHA256/SNS alternate auth per ADR-013, never a Cognito session path). **Every other data-returning or billable route must call `verifyUser()`** — the edge is JWT-only and knows nothing of `session_revocations`, so an omission is an immediate revocation bypass. Do flag it.
 - Chat classifier calling Bedrock Haiku for routing is intentional (regex-first, golden-set informational band 0.3–0.85, not a gate).
-- Flag-gated Steampipe Fargate+Lambda inventory sync (default off) is the only sanctioned Steampipe in v2 — a batch loader into Aurora, not a live-query service. The `aws-data` chat route executing LLM-generated Steampipe SQL is governed by ADR-018 (SELECT-only guard + row cap).
+- Flag-gated Steampipe Fargate+Lambda inventory sync (default off) is the only sanctioned Steampipe in v2 — a batch loader into Aurora, not a live-query service. The `aws-data` chat route and the 6 auto-collect collectors are **HARD-DISABLED**: `steampipeAvailable()` (`web/lib/aws-data.ts`) returns `false` unconditionally because ADR-001/010 prohibit any live-Steampipe query path in v2 (live AWS reads go through AgentCore MCP Lambda tools). The SELECT-only guard, 200-row cap and `SQL_GEN_PROMPT` are retained **dark code** — do not flag them as dead, and do not "fix" `steampipeAvailable()` back onto `steampipe_enabled` (that flag toggles only the batch inventory-sync worker; gating on it re-opens the prohibited path).
 - Exact Aurora minor `17.9` + `lifecycle{ignore_changes=[engine_version]}` on cluster AND instance is deliberate.
 - `CloudFront-VPCOrigins-Service-SG` 443 ingress on the ALB SG is required (VPC-CIDR-only causes 504).
 - SFN `.sync` briefly RUNNING after the worker wrote `succeeded` is polling lag; `worker_jobs` is the ledger of truth.
