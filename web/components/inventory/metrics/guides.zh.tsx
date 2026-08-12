@@ -631,4 +631,44 @@ export const GUIDES_ZH: Record<string, GuideSpec> = {
       ['VPC CNI IP 余量', '偏低', 'Pod IP 耗尽'],
     ],
   },
+  ANFW: {
+    service: 'ANFW',
+    intro: (
+      <>Network Firewall 监控需要同时关注三个层面 — <b>CloudWatch 指标、防火墙日志（Alert/Flow/TLS）与补充数据源（VPC Flow Logs、CloudTrail、路由）</b>：指标看量与趋势，日志提供“哪条规则拦截了什么”的上下文，补充源捕捉绕过与变更。</>
+    ),
+    sections: [
+      { title: '① CloudWatch 指标（AWS/NetworkFirewall）', items: [
+        <><b>ReceivedPackets / ReceivedBytes</b> — 总流入量与带宽。维度为（FirewallName, AZ, Engine）— 所有数据包先经过 stateless 引擎，因此<b>接收统计只能用 Engine=Stateless</b>，避免转发到 SFE 的数据包被重复计数（本页的统计方式）。</>,
+        <><b>PassedPackets / DroppedPackets / RejectedPackets</b> — 放行/丢弃/显式拒绝（TCP RST）。拦截流量激增是攻击或规则错配信号 — 用 Alert 日志确认是哪条规则。</>,
+        <><b>InvalidDroppedPackets / OtherDroppedPackets / StreamExceptionPolicyPackets</b> — 异常包/其他丢弃/流异常处理。持续出现时怀疑非对称路由/会话处理问题。</>,
+        <><b>TLS*Packets</b>（使用 TLS 检查时）— 监控解密失败（TLSDropped/Rejected）。</>,
+        <>防火墙<b>状态</b>来自 API（READY / IN_SYNC / 按 AZ 端点）而非 CW 指标 — 本页顶部表格即此用途。<b>CustomAction</b> 维度可实现按规则的自定义指标。</>,
+      ]},
+      { title: '② 防火墙日志（S3 / CloudWatch Logs / Firehose）', items: [
+        <><b>Alert 日志</b> — stateful 规则 alert/drop 命中的流量。哪条规则（sid）拦截/告警了什么 — <b>威胁分析的核心</b>。下方卡片用 Insights 汇总 CloudWatch Logs 目标。</>,
+        <><b>Flow 日志</b> — stateful 引擎看到的全部流（5元组、字节/包数、会话起止）。用于流量模式与 Top talker 分析。</>,
+        <><b>TLS 日志</b> — TLS 检查事件（SNI、证书、错误）。</>,
+        <>日志包含源/目标 IP·端口、协议、规则命中、时间戳 — 仅靠指标无法获得的上下文。<b>S3/Firehose 目标无法在本页汇总</b>（需 Athena 等另行分析）。</>,
+      ]},
+      { title: '③ 补充数据源', items: [
+        <><b>VPC Flow Logs</b> — 验证防火墙端点子网与路由，<b>检测绕过 ANFW 的流量</b>。</>,
+        <><b>CloudTrail</b> — 审计策略/规则组变更管理事件（谁改了规则）— 下方变更审计卡片。</>,
+        <><b>路由表</b> — 确认流量确实经过防火墙端点（参见 VPC 资源地图）。</>,
+      ]},
+      { title: '④ 按分析目标的路径', items: [
+        <><b>威胁检测</b> → Alert 日志 + Dropped/RejectedPackets 激增。</>,
+        <><b>容量/性能</b> → ReceivedPackets/Bytes 趋势 + Flow 日志 Top talker。</>,
+        <><b>可用性</b> → 防火墙状态（READY/IN_SYNC）+ 按 AZ 端点/指标偏差。</>,
+        <><b>变更审计/合规</b> → CloudTrail 管理事件（write 事件优先）。</>,
+      ]},
+    ],
+    priorityHeader: ['数据', '目标', '关键信号'],
+    priority: [
+      ['Alert 日志 + Dropped/RejectedPackets', '威胁检测', '拦截激增 · 签名（sid）命中'],
+      ['ReceivedPackets/Bytes + Flow 日志', '容量/性能', '流量趋势 · Top talker'],
+      ['防火墙状态 + 按 AZ 指标', '可用性', 'READY/IN_SYNC · AZ 偏差'],
+      ['CloudTrail 管理事件', '变更审计', '谁改了策略/规则'],
+      ['VPC Flow Logs + 路由', '绕过检测', '未经防火墙的流量'],
+    ],
+  },
 };

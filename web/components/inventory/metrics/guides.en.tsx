@@ -641,4 +641,64 @@ export const GUIDES_EN: Record<string, GuideSpec> = {
       ['VPC CNI IP headroom', 'Low', 'Pod IP exhaustion'],
     ],
   },
+  ANFW: {
+    service: 'ANFW',
+    intro: (
+      <>Network Firewall monitoring looks at three layers together â <b>CloudWatch metrics, firewall logs
+      (Alert/Flow/TLS), and complementary sources (VPC Flow Logs, CloudTrail, routing)</b>: metrics give
+      volume and trends, logs give the &ldquo;which rule caught what&rdquo; context, and the complementary
+      sources catch bypasses and changes.</>
+    ),
+    sections: [
+      { title: '① CloudWatch metrics (AWS/NetworkFirewall)', items: [
+        <><b>ReceivedPackets / ReceivedBytes</b> — total ingress and bandwidth. Dimensions are
+        (FirewallName, AZ, Engine) — every packet passes the stateless engine first, so <b>received
+        aggregation must use Engine=Stateless only</b> to avoid double-counting SFE-forwarded packets
+        (how this page aggregates).</>,
+        <><b>PassedPackets / DroppedPackets / RejectedPackets</b> — passed / dropped / explicitly rejected
+        (TCP RST). A spike in blocked traffic signals an attack or a rule misplacement — use the Alert log
+        to see which rule.</>,
+        <><b>InvalidDroppedPackets / OtherDroppedPackets / StreamExceptionPolicyPackets</b> — abnormal
+        packets, other drops, stream-exception handling. Sustained occurrences suggest asymmetric routing or
+        session-handling issues.</>,
+        <><b>TLS*Packets</b> (with TLS inspection) — monitor decryption failures (TLSDropped/Rejected).</>,
+        <>Firewall <b>state</b> comes from the API (READY / IN_SYNC / per-AZ endpoints), not a CW metric —
+        the table at the top of this page serves that role. The <b>CustomAction</b> dimension enables
+        per-rule custom metrics.</>,
+      ]},
+      { title: '② Firewall logs (S3 / CloudWatch Logs / Firehose)', items: [
+        <><b>Alert log</b> — traffic matched by stateful alert/drop rules. Which rule (sid) blocked or
+        alerted on what — <b>the core of threat analysis</b>. The card below aggregates CloudWatch Logs
+        destinations with Insights.</>,
+        <><b>Flow log</b> — every flow the stateful engine saw (5-tuple, bytes/packets, session
+        start/end). For traffic-pattern and top-talker analysis.</>,
+        <><b>TLS log</b> — TLS inspection events (SNI, certificates, errors).</>,
+        <>Logs carry source/destination IP·port, protocol, rule match, and timestamps — context
+        metrics alone cannot give. <b>S3/Firehose destinations cannot be aggregated on this page</b>
+        (analyze separately, e.g. Athena).</>,
+      ]},
+      { title: '③ Complementary data sources', items: [
+        <><b>VPC Flow Logs</b> — verify firewall-endpoint subnets and routing, <b>detect traffic
+        bypassing ANFW</b>.</>,
+        <><b>CloudTrail</b> — audit policy / rule group change events (who changed the rules) —
+        the change-audit card below.</>,
+        <><b>Route tables</b> — confirm traffic actually traverses the firewall endpoints (see the VPC
+        resource map).</>,
+      ]},
+      { title: '④ Paths by analysis goal', items: [
+        <><b>Threat detection</b> → Alert log + spikes in DroppedPackets/RejectedPackets.</>,
+        <><b>Capacity/performance</b> → ReceivedPackets/Bytes trend + Flow-log top talkers.</>,
+        <><b>Availability</b> → firewall state (READY/IN_SYNC) + per-AZ endpoint/metric skew.</>,
+        <><b>Change audit / compliance</b> → CloudTrail management events (write events first).</>,
+      ]},
+    ],
+    priorityHeader: ['Data', 'Goal', 'Key signal'],
+    priority: [
+      ['Alert log + Dropped/RejectedPackets', 'Threat detection', 'Block spikes · signature (sid) matches'],
+      ['ReceivedPackets/Bytes + Flow log', 'Capacity/performance', 'Traffic volume trend · top talkers'],
+      ['Firewall state + per-AZ metrics', 'Availability', 'READY/IN_SYNC · AZ skew'],
+      ['CloudTrail management events', 'Change audit', 'Who changed policies/rules'],
+      ['VPC Flow Logs + routing', 'Bypass detection', 'Traffic not traversing the firewall'],
+    ],
+  },
 };

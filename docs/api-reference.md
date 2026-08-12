@@ -59,7 +59,7 @@
 ## anfw (1)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
-| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재) | verifyUser |
+| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재). `?view=logs` Alert/Flow 로그 Insights 집계 (CWL 대상만), `?view=audit` CloudTrail 변경 감사 | verifyUser |
 
 ## dx (1)
 | 경로 | 메서드 | 역할 | 인증 |
