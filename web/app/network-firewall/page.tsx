@@ -165,6 +165,13 @@ function kpiVariant(hasRealDanger: boolean, degraded: boolean): Variant {
   return 'default';
 }
 
+/** kpiVariant의 warn-only 변형 — 룰 그룹 용량 임박·보호 미설정처럼 원래도 'danger'가
+ *  아니라 'warn'까지만 올라가는 조건에 쓴다. degraded든 실측 경고든 danger로 승격하지 않는다
+ *  (kpiVariant를 그대로 쓰면 원래 warn이던 조건이 danger로 잘못 격상된다). */
+function warnVariant(hasWarn: boolean, degraded: boolean): Variant {
+  return hasWarn || degraded ? 'warn' : 'default';
+}
+
 export default function NetworkFirewallPage() {
   const { tt } = useI18n();
   const [range, setRange] = useState(86400);
@@ -401,6 +408,10 @@ export default function NetworkFirewallPage() {
           const resourcesDegraded = data.degradedRegions.length > 0;
           const lb = (n: number) => (resourcesDegraded ? `${n}+` : String(n));
           const degradedHint = tt('일부 리전 조회 실패 — 실제보다 적을 수 있음');
+          // 원래 힌트를 지우지 않고 뒤에 붙인다 — 저하됐다고 실측 카운트를 숨기면
+          // 그 자체가 또 다른 형태의 오정보가 된다.
+          const withDegradedNote = (hint: string) => (resourcesDegraded ? `${hint} · ${degradedHint}` : hint);
+          const droppedStr = fmtCount(t.droppedPackets);
           return (
           <>
             {/* ① KPI — 다운/보호 off/ALERT 갭/전량 통과 정책이 경고 축 */}
@@ -409,42 +420,42 @@ export default function NetworkFirewallPage() {
                 label="방화벽"
                 value={lb(t.firewalls)}
                 variant={resourcesDegraded ? 'warn' : 'default'}
-                hint={resourcesDegraded ? degradedHint : `${tt('엔드포인트')} ${t.endpoints}`}
+                hint={withDegradedNote(`${tt('엔드포인트')} ${t.endpoints}`)}
                 icon={<Flame size={16} />}
               />
               <StatTile
                 label="다운 감지"
                 value={lb(t.firewallsDown)}
                 variant={kpiVariant(t.firewallsDown > 0, resourcesDegraded)}
-                hint={resourcesDegraded ? degradedHint : `${tt('엔드포인트 미준비')} ${t.endpointsNotReady}`}
+                hint={withDegradedNote(`${tt('엔드포인트 미준비')} ${t.endpointsNotReady}`)}
                 icon={<Unplug size={16} />}
               />
               <StatTile
                 label="정책"
                 value={lb(t.policies)}
                 variant={kpiVariant(t.policiesPassthrough > 0, resourcesDegraded)}
-                hint={resourcesDegraded ? degradedHint : `${tt('전량 통과 기본')} ${t.policiesPassthrough}`}
+                hint={withDegradedNote(`${tt('전량 통과 기본')} ${t.policiesPassthrough}`)}
                 icon={<Scroll size={16} />}
               />
               <StatTile
                 label="룰 그룹"
                 value={lb(t.ruleGroups)}
-                variant={kpiVariant(t.ruleGroupsHighCapacity > 0, resourcesDegraded)}
-                hint={resourcesDegraded ? degradedHint : `${tt('미연결')} ${t.ruleGroupsUnassociated} · ${tt('용량 80%+')} ${t.ruleGroupsHighCapacity}`}
+                variant={warnVariant(t.ruleGroupsHighCapacity > 0, resourcesDegraded)}
+                hint={withDegradedNote(`${tt('미연결')} ${t.ruleGroupsUnassociated} · ${tt('용량 80%+')} ${t.ruleGroupsHighCapacity}`)}
                 icon={<Layers size={16} />}
               />
               <StatTile
                 label="보호 미설정"
                 value={lb(t.protectionsOffFirewalls)}
-                variant={kpiVariant(t.protectionsOffFirewalls > 0, resourcesDegraded)}
-                hint={resourcesDegraded ? degradedHint : "삭제/서브넷/정책 변경 보호"}
+                variant={warnVariant(t.protectionsOffFirewalls > 0, resourcesDegraded)}
+                hint={withDegradedNote(tt('삭제/서브넷/정책 변경 보호'))}
                 icon={<ShieldAlert size={16} />}
               />
               <StatTile
                 label="드롭 패킷"
-                value={resourcesDegraded ? `≥ ${fmtCount(t.droppedPackets) ?? '0'}` : (fmtCount(t.droppedPackets) ?? '—')}
-                variant={resourcesDegraded ? 'warn' : 'default'}
-                hint={resourcesDegraded ? degradedHint : `${tt('거부')} ${fmtCount(t.rejectedPackets) ?? '—'} · ${tt('통과')} ${fmtCount(t.passedPackets) ?? '—'}`}
+                value={droppedStr == null ? '—' : resourcesDegraded ? `≥ ${droppedStr}` : droppedStr}
+                variant={droppedStr != null && resourcesDegraded ? 'warn' : 'default'}
+                hint={withDegradedNote(`${tt('거부')} ${fmtCount(t.rejectedPackets) ?? '—'} · ${tt('통과')} ${fmtCount(t.passedPackets) ?? '—'}`)}
                 icon={<Shield size={16} />}
               />
             </div>
