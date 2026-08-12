@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 2ad982d01c2c · generated-at: 2026-08-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 74c76ce22eff · generated-at: 2026-08-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -10,7 +10,7 @@
 
 ## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
 v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *proposal* (read-only).**
-- **FROZEN (do-not-enable, ADR-005):** AWS-resource mutation + autonomy (remediation substrate, arbitrary BYO-MCP, mutating tools). Unfreezing needs a NEW ADR + multi-AI panel + dated owner-override. Frozen substrate is retained **dark code** (regression = *enabling* it, not its presence).
+- **FROZEN (do-not-enable, ADR-005):** AWS-resource mutation + autonomy (remediation substrate, arbitrary BYO-MCP, mutating tools). Unfreezing is **not a doc cleanup** — it needs a NEW ADR + multi-AI panel + dated owner-override, full stop. Frozen substrate is retained **dark code** (regression = *enabling* it, not its presence).
   - **One granted exception: ADR-015** (`secret_rotation_redeploy_enabled`, default-off, owner-override 2026-07-01) — exactly one call: `ecs:UpdateService(forceNewDeployment)` restarting the host's own web service on its own Aurora master-secret rotation event (same image/task-def — not a code deploy), IAM scoped to one service ARN, secret-id fail-closed (`terraform/v2/foundation/secret-rotation.tf`). Do NOT flag this specific path; any OTHER mutating/autonomous path is still a FROZEN violation.
 - **GATED analysis-only (ADR-006):** incident lifecycle / RCA write-back / K8sGPT — read-only triage/RCA, no autonomous mitigation; flags default OFF.
 - **External DATA is NOT the freeze (ADR-007, keystone):** external observability read + governed external write are allowed under governance; curated connectors only (arbitrary `custom_mcp` dropped). `diagnosis_notify_enabled` (SNS email) is the **one LIVE external write**; broad `integrations_write_enabled` stays GATED-OFF. Curated official MCP presets = ADR-017 (vendor-hosted 3 only, runtime fail-closed tool allowlist, GATED; ClickHouse stdio embed FROZEN).
@@ -67,7 +67,7 @@ No repo-root `package.json` — the only one outside `web/`/`docs-site/` is `scr
 
 ## Review checklist
 1. **Posture:** no mutation/autonomy enabled (ADR-005); external write must satisfy ADR-007 governance; current truth = BASELINE.md.
-2. **Edge/auth — two layers, only one is per-route optional:** *authentication* terminates at the CloudFront Lambda@Edge (RS256/`iss`/`aud`/`token_use`; public-path allowlist lives in `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl` — currently `/api/health`, `/api/auth/signout`, `/login`, `/api/auth/login`, `/icon.svg`, and any addition is itself flag-worthy). *Authorization, ownership (`sub`) and session revocation are BFF-side only* (ADR-002 §2-4) → RS256 verification intact (no decode-only regression); `verifyUser()` present on every data-returning/billable route outside the three enumerated carve-outs; `session_revocations` check not removed; ownership keyed on `sub`.
+2. **Edge/auth — two layers, only one is per-route optional:** *authentication* terminates at the CloudFront Lambda@Edge (RS256/`iss`/`aud`/`token_use`; public-path allowlist lives in `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl` — currently 5 exact matches (`/api/health`, `/api/auth/signout`, `/login`, `/api/auth/login`, `/icon.svg`) + a `/_next/static/*` prefix + `/api/incidents/webhook` (ADR-013 machine-ingress carve-out, HMAC-SHA256/SNS-verified — see Known false-positives), and any OTHER addition is itself flag-worthy). *Authorization, ownership (`sub`) and session revocation are BFF-side only* (ADR-002 §2-4) → RS256 verification intact (no decode-only regression); `verifyUser()` present on every data-returning/billable route outside the three enumerated carve-outs; `session_revocations` check not removed; ownership keyed on `sub`.
 3. **Thin-BFF:** heavy work enqueued (domain jobs via their dedicated ownership-checked routes, never generic `/api/jobs`); Aurora via `getPool`; AgentCore ARNs from SSM; admin via `web/lib/admin.ts`.
 4. **Terraform:** under `terraform/v2/foundation/`; flag-gated; SG description unchanged; no `0.0.0.0/0` / `Principal:*`; no `-auto-approve`.
 5. **Containers:** arm64; `HOSTNAME=0.0.0.0` runtime env; worker `CMD`; health path `/api/health` everywhere.

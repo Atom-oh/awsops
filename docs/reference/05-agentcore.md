@@ -30,9 +30,12 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 - **Code Interpreter** — `awsops_v2_code_interpreter-*` (underscores only).
 
 **Design target:** **9 section agents + 1 incident orchestrator** (the orchestrator is
-P4). **Currently deployed: 2 read-only target slices** that exercise every provisioner
-code path — `iam-mcp` (14 tools → security gateway) and `flow-monitor` (1 tool → network
-gateway). The **full Lambda fleet is P3.**
+P4). **Fleet is deployed** — all 9 gateways hold READY MCP targets; the fleet is defined
+in `terraform/v2/foundation/ai.tf` `local.agent_lambdas` (30 slices: 21 gated on
+`agentcore_enabled`, 9 on `integrations_enabled`). `iam-mcp` (14 tools → security
+gateway) and `flow-monitor` (1 tool → network gateway) were the first two slices used to
+exercise every provisioner code path; the P4 **incident orchestrator** is the only piece
+still backlog.
 
 **Provisioner:** `scripts/v2/agentcore/{catalog.py, provision.py}` — `catalog.py` holds
 the 9 gateway names + the target tool schemas; `provision.py` does boto3 `list →
@@ -78,7 +81,7 @@ Terraform; `provision.py` overwrites with real values.
 | `scripts/v2/agentcore/catalog.py` | 9 gateway names + GW descriptions + target tool schemas |
 | `scripts/v2/agentcore/provision.py` | Idempotent boto3 provisioner (Runtime/Gateways/Targets/Memory/Interpreter), SSM write, diff report, `--smoke` |
 | `agent/agent.py` | Strands agent (reused as-is; receives `GATEWAYS_JSON`) |
-| `agent/lambda/` | Agent tool Lambda sources (slice `aws_iam_mcp.py`, `flowmonitor.py`, `cross_account.py`; full fleet = P3) |
+| `agent/lambda/` | Agent tool Lambda sources — full fleet (30 slices per `ai.tf` `local.agent_lambdas`; e.g. `aws_iam_mcp.py`, `flowmonitor.py`, `cross_account.py`) |
 
 ## Status / 상태
 
@@ -109,7 +112,7 @@ memory id in SSM (not `PENDING`), `lambda_arns = [iam-mcp, flow-monitor]`.
   `awsops-v2-{key}-gateway` to isolate from v1 in the shared account.
 
 **P3 backlog (DO NOT implement — list only):**
-- Full Lambda tool fleet
+- Full Lambda tool fleet — **done** (30 slices deployed via `ai.tf` `local.agent_lambdas`, see Current design above); remaining backlog is only the P4 incident orchestrator
 - `section = routing`
 - Right-docking chat UI
 - OpenCost setup = a **read-only out-of-band install bundle** the operator runs (AWS-resource mutation stays FROZEN, ADR-005) — NOT an in-app mutating action
