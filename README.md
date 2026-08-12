@@ -52,13 +52,13 @@ Stats: 35 pages, 84 API routes, 86 components (`web/`), 18 consolidated ADRs, Te
 | Gateway | Capabilities | Status |
 |---------|--------------|--------|
 | network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live |
-| security | IAM, policy simulation, CIS/benchmark | ✅ live |
+| security | IAM users/roles/policies + policy simulation (14 tools, iam-mcp) | ✅ live |
 | container | EKS, ECS, Istio, Kubernetes | ✅ live |
 | data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | ✅ live |
 | cost | Cost Explorer, forecast, budgets, container cost | ✅ live |
 | monitoring | CloudWatch, CloudTrail | ✅ live |
 | iac | CloudFormation, CDK, Terraform | ✅ live |
-| ops | Steampipe SQL listing/status/docs/inventory | ✅ live |
+| ops | Aurora-backed inventory/topology reads + AWS docs/CLI suggestions (no live Steampipe) | ✅ live |
 | external-obs | External observability & integrations (Prometheus, ClickHouse, Notion) | ✅ live |
 
 All 9 rows are gated behind `agentcore_enabled`/`integrations_enabled` (default `false` in a fresh clone/deploy — `plan` = No changes, $0); "live" here describes this project's actual running deployment, which has both flags on.
@@ -222,13 +222,13 @@ Terraform(`ai.tf`)에 9개 섹션 게이트웨이가 정의되어 있으며, 각
 | Gateway | 주요 기능 | 상태 |
 |---------|-----------|------|
 | network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live |
-| security | IAM, 정책 시뮬레이션, CIS/benchmark | ✅ live |
+| security | IAM 사용자/역할/정책 + 정책 시뮬레이션 (14개 도구, iam-mcp) | ✅ live |
 | container | EKS, ECS, Istio, Kubernetes | ✅ live |
 | data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | ✅ live |
 | cost | Cost Explorer, forecast, budgets, 컨테이너 비용 | ✅ live |
 | monitoring | CloudWatch, CloudTrail | ✅ live |
 | iac | CloudFormation, CDK, Terraform | ✅ live |
-| ops | Steampipe SQL listing/status/docs/inventory | ✅ live |
+| ops | Aurora 기반 인벤토리/토폴로지 조회 + AWS 문서/CLI 제안(라이브 Steampipe 없음) | ✅ live |
 | external-obs | 외부 옵저버빌리티 & 연동(Prometheus, ClickHouse, Notion) | ✅ live |
 
 9개 행 모두 `agentcore_enabled`/`integrations_enabled` 뒤에 게이트되어 있습니다(새로 클론·배포 시 기본값은 `false` — `plan` = No changes, $0). 여기서 "live"는 이 프로젝트의 실제 운영 배포 기준이며, 그 배포는 두 플래그 모두 켜져 있습니다.
