@@ -117,6 +117,10 @@ export interface AnfwAnalysis {
    *  빈 배열이 아니면 firewalls/policies/ruleGroups·totals는 "리전에 리소스 없음"이 아니라
    *  "AWS 조회 실패로 알 수 없음" — 0/빈 결과를 그대로 신뢰하면 안 됨. */
   degradedRegions: string[];
+  /** CloudWatch(ListMetrics 미순회 잔여분·100튜플 캡·쿼리 단위 실패)로 트래픽/드롭 수치가
+   *  실측보다 낮게 나올 수 있는 리전 — List/Describe는 성공했지만 메트릭만 저하됨.
+   *  degradedRegions와 달리 firewalls/policies/ruleGroups 자체는 완전하다. */
+  metricsDegradedRegions: string[];
   totals: {
     firewalls: number; firewallsDown: number;
     endpoints: number; endpointsNotReady: number;
@@ -125,6 +129,9 @@ export interface AnfwAnalysis {
     /** 보호 설정이 1개 이상 꺼진 방화벽 수. */
     protectionsOffFirewalls: number;
     alertLoggingMissing: number;
+    /** loggingKnown === false인 방화벽 수(SCP류로 로깅 구성 조회 자체가 거부됨) — 1건이라도
+     *  있으면 "모든 방화벽 이상 없음"을 주장할 수 없다(해당 방화벽의 실제 로깅 상태를 모른다). */
+    loggingUnknownFirewalls: number;
     receivedPackets: number | null; passedPackets: number | null;
     droppedPackets: number | null; rejectedPackets: number | null;
   };
@@ -170,30 +177,47 @@ type FwMetricKey = (typeof FW_METRICS)[number]['key'];
 
 interface TupleMetrics { az: string; engine: string; values: Partial<Record<FwMetricKey, number>> }
 
+interface AnfwMetricsResult {
+  byFw: Record<string, TupleMetrics[]>;
+  /** false면 이 리전의 트래픽/드롭 수치가 실측보다 적을 수 있다(ListMetrics 미순회 잔여분,
+   *  100-튜플 캡, CloudWatch 쿼리 단위 실패) — dx.ts의 RegionMetrics.ok와 동일 계약. */
+  ok: boolean;
+}
+
 /** 방화벽별 (AZ, Engine) 튜플 발견 후 8종 카운터 기간 Sum — 3-dim 변형만 채택. */
-async function anfwMetrics(region: string, rangeSec: number, fwNames: string[]): Promise<Record<string, TupleMetrics[]>> {
+async function anfwMetrics(region: string, rangeSec: number, fwNames: string[]): Promise<AnfwMetricsResult> {
   const out: Record<string, TupleMetrics[]> = {};
-  if (fwNames.length === 0) return out;
+  if (fwNames.length === 0) return { byFw: out, ok: true };
+  let ok = true;
   try {
-    const lm = await cw(region).send(new ListMetricsCommand({ Namespace: 'AWS/NetworkFirewall', MetricName: 'ReceivedPackets' }));
     const nameSet = new Set(fwNames);
     const tuples: { fw: string; az: string; engine: string; dims: { Name: string; Value: string }[] }[] = [];
     const seen = new Set<string>();
-    for (const m of lm.Metrics ?? []) {
-      const dims = m.Dimensions ?? [];
-      // EndpointName 포함 4-dim 변형은 제외 — 3-dim과 동시 발행되어 합산 시 이중 집계.
-      if (dims.length !== 3) continue;
-      const fw = dims.find((d) => d.Name === 'FirewallName')?.Value;
-      const az = dims.find((d) => d.Name === 'AvailabilityZone')?.Value;
-      const engine = dims.find((d) => d.Name === 'Engine')?.Value;
-      if (!fw || !az || !engine || !nameSet.has(fw)) continue;
-      const key = `${fw}|${az}|${engine}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      tuples.push({ fw, az, engine, dims: dims.map((d) => ({ Name: d.Name ?? '', Value: d.Value ?? '' })) });
-    }
+    // NextToken 순회 — 페이지당 500 metric 캡이라 미순회면 튜플이 조용히 누락돼 ok=true인
+    // 채로 receivedPackets 등이 null 강등된다(리뷰 MAJOR — dx.ts:284-299와 동일 계약).
+    let nextToken: string | undefined;
+    do {
+      const lm = await cw(region).send(new ListMetricsCommand({ Namespace: 'AWS/NetworkFirewall', MetricName: 'ReceivedPackets', NextToken: nextToken }));
+      for (const m of lm.Metrics ?? []) {
+        const dims = m.Dimensions ?? [];
+        // EndpointName 포함 4-dim 변형은 제외 — 3-dim과 동시 발행되어 합산 시 이중 집계.
+        if (dims.length !== 3) continue;
+        const fw = dims.find((d) => d.Name === 'FirewallName')?.Value;
+        const az = dims.find((d) => d.Name === 'AvailabilityZone')?.Value;
+        const engine = dims.find((d) => d.Name === 'Engine')?.Value;
+        if (!fw || !az || !engine || !nameSet.has(fw)) continue;
+        const key = `${fw}|${az}|${engine}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tuples.push({ fw, az, engine, dims: dims.map((d) => ({ Name: d.Name ?? '', Value: d.Value ?? '' })) });
+      }
+      nextToken = lm.NextToken;
+    } while (nextToken);
+
     const capped = tuples.slice(0, 100);
-    if (capped.length === 0) return out;
+    // 캡은 API 제약이 아니라 우리 상한 — 물리는 순간만 degrade로 표기(무신호 금지, dx.ts와 동일).
+    if (tuples.length > capped.length) ok = false;
+    if (capped.length === 0) return { byFw: out, ok };
 
     const queries = capped.flatMap((t, i) => FW_METRICS.map((m) => ({
       Id: `${m.key}_i${i}`, ReturnData: true,
@@ -202,18 +226,27 @@ async function anfwMetrics(region: string, rangeSec: number, fwNames: string[]):
         Period: rangeSec, Stat: 'Sum',
       },
     })));
-    const results: { Id?: string; Values?: number[] }[] = [];
+    const results: { Id?: string; Values?: number[]; StatusCode?: string }[] = [];
     for (let i = 0; i < queries.length; i += 500) {
       const r = await cw(region).send(new GetMetricDataCommand({
         StartTime: new Date(Date.now() - rangeSec * 1000), EndTime: new Date(),
         MetricDataQueries: queries.slice(i, i + 500),
       }));
-      results.push(...(r.MetricDataResults ?? []));
+      for (const res of r.MetricDataResults ?? []) {
+        // CloudWatch는 HTTP 200 안에 쿼리 단위 실패(PartialData/InternalError/Forbidden)를
+        // 실을 수 있다 — 무검사면 그 쿼리만 조용히 null 강등되면서 ok=true로 남는다
+        // (리뷰 MAJOR, dx.ts:338과 동일 계약). Complete 외는 degrade.
+        if (res.StatusCode && res.StatusCode !== 'Complete') ok = false;
+        results.push(res);
+      }
     }
     const byTuple: Partial<Record<FwMetricKey, number>>[] = capped.map(() => ({}));
     for (const res of results) {
       const mm = (res.Id ?? '').match(/^(\w+?)_i(\d+)$/);
-      const v = res.Values?.[0];
+      // Period가 rangeSec 전체라도 CloudWatch는 epoch 정렬 버킷으로 나눠 응답할 수 있어
+      // Values가 여러 개일 수 있다 — 첫 값만 쓰면(구 코드) 최신 부분 버킷만 반영돼 기간
+      // Sum이 실제보다 훨씬 작게 나온다(리뷰 MAJOR). 전체 Values를 합산해야 진짜 기간 합계.
+      const v = res.Values?.length ? res.Values.reduce((s, x) => s + x, 0) : undefined;
       if (!mm || typeof v !== 'number') continue;
       const idx = Number(mm[2]);
       const key = FW_METRICS.find((m) => m.key === mm[1])?.key;
@@ -222,8 +255,8 @@ async function anfwMetrics(region: string, rangeSec: number, fwNames: string[]):
     capped.forEach((t, i) => {
       (out[t.fw] ??= []).push({ az: t.az, engine: t.engine, values: byTuple[i] });
     });
-  } catch { /* region degrade — 메트릭 없이 리스트만 */ }
-  return out;
+  } catch { ok = false; /* region degrade — 메트릭 없이 리스트만, 호출자에 노출 */ }
+  return { byFw: out, ok };
 }
 
 // ---- raw API shapes (필요 필드만) ----
@@ -275,7 +308,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
   return cached(`a|${rangeSec}`, async () => {
     const regions = await regionsFromInventory();
     const perRegion = await Promise.all(regions.map(async (region) => {
-      const empty = { firewalls: [] as AnfwFirewallRow[], policies: [] as AnfwPolicyRow[], ruleGroups: [] as AnfwRuleGroupRow[], degraded: false };
+      const empty = { firewalls: [] as AnfwFirewallRow[], policies: [] as AnfwPolicyRow[], ruleGroups: [] as AnfwRuleGroupRow[], degraded: false, metricsDegraded: false };
       try {
         const [fwList, policyList, rgList] = await Promise.all([
           listAll(async (nextToken) => {
@@ -303,7 +336,8 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
         ]);
         if (fwList.length === 0 && policyList.length === 0 && rgList.length === 0) return empty;
 
-        const metricsByFw = await anfwMetrics(region, rangeSec, fwList);
+        const metricsResult = await anfwMetrics(region, rangeSec, fwList);
+        const metricsByFw = metricsResult.byFw;
 
         const firewalls = await Promise.all(fwList.map(async (name): Promise<AnfwFirewallRow | null> => {
           try {
@@ -422,11 +456,15 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
         const partial = firewallsOk.length < fwList.length
           || policiesOk.length < policyList.length
           || ruleGroupsOk.length < rgList.length;
-        return { firewalls: firewallsOk, policies: policiesOk, ruleGroups: ruleGroupsOk, degraded: partial };
+        return {
+          firewalls: firewallsOk, policies: policiesOk, ruleGroups: ruleGroupsOk,
+          degraded: partial, metricsDegraded: !metricsResult.ok,
+        };
       } catch { return { ...empty, degraded: true }; }
     }));
 
     const degradedRegions = perRegion.flatMap((r, i) => (r.degraded ? [regions[i]] : []));
+    const metricsDegradedRegions = perRegion.flatMap((r, i) => (r.metricsDegraded ? [regions[i]] : []));
     const firewalls = perRegion.flatMap((r) => r.firewalls);
     const policies = perRegion.flatMap((r) => r.policies);
     const ruleGroups = perRegion.flatMap((r) => r.ruleGroups);
@@ -444,11 +482,12 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
       protectionsOffFirewalls: firewalls.filter((f) => f.protectionsOff > 0).length,
       // "확인 불가"(loggingKnown=false)는 미설정으로 세지 않음 — 거짓 경고 방지.
       alertLoggingMissing: firewalls.filter((f) => f.loggingKnown && f.alertLogging == null).length,
+      loggingUnknownFirewalls: firewalls.filter((f) => !f.loggingKnown).length,
       receivedPackets: sum(firewalls.map((f) => f.receivedPackets ?? undefined)),
       passedPackets: sum(firewalls.map((f) => f.passedPackets ?? undefined)),
       droppedPackets: sum(firewalls.map((f) => f.droppedPackets ?? undefined)),
       rejectedPackets: sum(firewalls.map((f) => f.rejectedPackets ?? undefined)),
     };
-    return { firewalls, policies, ruleGroups, degradedRegions, totals, rangeSec };
+    return { firewalls, policies, ruleGroups, degradedRegions, metricsDegradedRegions, totals, rangeSec };
   });
 }

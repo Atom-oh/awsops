@@ -1,8 +1,8 @@
 # 앱 라우트 모듈 / App Routes Module
 
 ## 역할 / Role
-Next.js App Router — 페이지 34개 + API 라우트 83개(`app/api/`). API는 thin-BFF: Aurora 조회, AWS SDK read, AgentCore 호출까지만. 장기/OOM 위험 작업은 `POST /api/jobs`로 enqueue.
-(34 pages + 83 API routes. Thin-BFF: DB reads, AWS SDK reads, AgentCore calls only; long jobs are enqueued.)
+Next.js App Router — 페이지 36개 + API 라우트 85개(`app/api/`). API는 thin-BFF: Aurora 조회, AWS SDK read, AgentCore 호출까지만. 장기/OOM 위험 작업은 `POST /api/jobs`로 enqueue.
+(36 pages + 85 API routes. Thin-BFF: DB reads, AWS SDK reads, AgentCore calls only; long jobs are enqueued.)
 
 ## 구조 / Structure
 - 페이지 (pages): 개요 `page.tsx`, `inventory/[type]`·`inventory/g/[group]`, `eks/`(개요·nodes·pods·deployments·services·explorer·cost·`[cluster]`), `topology/`(개요·infra·services·`resource/[id]`), `monitoring`, `network-flow`, `dns-query`, `ip-addresses`, `vpc-endpoints`, `direct-connect`, `network-firewall`, `security`, `compliance`, `cost`, `bedrock`, `agentcore`, `ai-diagnosis`, `assistant`, `datasources`, `integrations`(+`datasources/[id]`), `accounts`, `customization`, `jobs`, `login`

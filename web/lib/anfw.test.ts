@@ -357,5 +357,90 @@ describe('anfwAnalysis', () => {
     expect(a.firewalls[0].alertLogging).toBeNull();
     // 확인 불가는 "미설정"이 아니다 — 거짓 경고 방지 (실측: 태스크 롤만 SCP류로 거부된 사례)
     expect(a.totals.alertLoggingMissing).toBe(0);
+    // 하지만 "이상 없음" 요약 카드가 이 방화벽을 근거로 확정하면 안 된다 — 총계로 노출.
+    expect(a.totals.loggingUnknownFirewalls).toBe(1);
+  });
+
+  it('ListMetrics NextToken 미순회 잔여분 → metricsDegradedRegions에 노출 (조용한 null 강등 금지)', async () => {
+    mockDb([]);
+    mockNfw();
+    cwSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'ListMetricsCommand') {
+        if (!(cmd.input as { NextToken?: string }).NextToken) {
+          // 1페이지: NextToken을 돌려줘 다음 페이지에 실제 튜플이 있음을 알림
+          return { Metrics: [], NextToken: 'page2' };
+        }
+        // 2페이지: 진짜 Stateless 튜플
+        return {
+          Metrics: [{
+            Dimensions: [
+              { Name: 'AvailabilityZone', Value: 'ap-northeast-2a' },
+              { Name: 'Engine', Value: 'Stateless' },
+              { Name: 'FirewallName', Value: 'DMZVPC-nfw' },
+            ],
+          }],
+        };
+      }
+      return { MetricDataResults: [{ Id: 'recv_i0', Values: [1000] }] };
+    });
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    // 페이지 순회를 안 했다면 1페이지(빈 Metrics)에서 멈춰 recv가 null이 됐을 것.
+    expect(a.firewalls[0].receivedPackets).toBe(1000);
+    expect(a.metricsDegradedRegions).toEqual([]);
+  });
+
+  it('CloudWatch 쿼리 단위 실패(StatusCode!=Complete) → 무신호 아니라 metricsDegradedRegions', async () => {
+    mockDb([]);
+    mockNfw();
+    cwSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'ListMetricsCommand') {
+        return {
+          Metrics: [{
+            Dimensions: [
+              { Name: 'AvailabilityZone', Value: 'ap-northeast-2a' },
+              { Name: 'Engine', Value: 'Stateless' },
+              { Name: 'FirewallName', Value: 'DMZVPC-nfw' },
+            ],
+          }],
+        };
+      }
+      // recv 쿼리는 성공, pass 쿼리는 HTTP 200 안에서 실패(PartialData) — 예외는 없음.
+      return {
+        MetricDataResults: [
+          { Id: 'recv_i0', Values: [1000], StatusCode: 'Complete' },
+          { Id: 'pass_i0', Values: [], StatusCode: 'PartialData' },
+        ],
+      };
+    });
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    expect(a.firewalls[0].receivedPackets).toBe(1000);
+    // StatusCode를 무시했다면 이 리전은 정상으로 보였을 것 — 실패 쿼리가 하나라도 있으면 degrade.
+    expect(a.metricsDegradedRegions).toEqual(['ap-northeast-2']);
+  });
+
+  it('Sum 윈도우가 여러 datapoint를 반환하면 첫 값만이 아니라 전부 합산 (epoch 경계 분할 대응)', async () => {
+    mockDb([]);
+    mockNfw();
+    cwSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'ListMetricsCommand') {
+        return {
+          Metrics: [{
+            Dimensions: [
+              { Name: 'AvailabilityZone', Value: 'ap-northeast-2a' },
+              { Name: 'Engine', Value: 'Stateless' },
+              { Name: 'FirewallName', Value: 'DMZVPC-nfw' },
+            ],
+          }],
+        };
+      }
+      // CloudWatch가 요청 구간을 epoch 경계로 쪼개 2개 datapoint를 반환하는 실측 상황.
+      return { MetricDataResults: [{ Id: 'recv_i0', Values: [700, 300], StatusCode: 'Complete' }] };
+    });
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(86400);
+    // Values[0]만 썼다면(구 코드) 700만 반영됐을 것 — 진짜 기간 합계는 1000.
+    expect(a.firewalls[0].receivedPackets).toBe(1000);
   });
 });

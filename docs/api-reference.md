@@ -59,7 +59,7 @@
 ## anfw (1)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
-| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재) | verifyUser |
+| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 인벤토리 VPC 리전 fan-out, 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재). `?range=`는 3600/21600/86400/604800 allowlist(그 외는 86400), `maxDuration` 60s, 상위 실패는 502. 부분 실패는 정직 강등: `degradedRegions`(List/Describe 실패)·`metricsDegradedRegions`(CloudWatch 미순회/캡/쿼리 실패) | verifyUser |
 
 ## dx (1)
 | 경로 | 메서드 | 역할 | 인증 |
