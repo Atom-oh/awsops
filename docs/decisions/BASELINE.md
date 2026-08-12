@@ -56,6 +56,7 @@
 | **GATED** | 자율 인시던트 라이프사이클 | `incident_lifecycle_enabled` | analysis-only(read-only triage/RCA, 권고전용, mutation 라우팅 금지). 활성화해도 자율 조치 없음 | ADR-006 |
 | **GATED** | RCA write-back (OpsCenter/Incident Manager 관측메타 write) | `rca_writeback_enabled` | `incident_lifecycle_enabled` + **자족 role 분리 선행**(현재 frozen remediation role 상속 → 분리 전 do-not-enable) | ADR-006 |
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |
+| **LIVE** (외부 write 중 유일) | 진단 완료 SNS 이메일 통지 | `diagnosis_notify_enabled` | **이미 켜져 있음** — IAM 단일 토픽 스코프, AWS-리소스 변경 아님(거버넌스 충족 — 아래 "주의" blockquote 참조) | ADR-013 |
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
 | **GATED** | 그래프 쿼리 LLM 폴백 (ClickHouse trace_spans 1건) | `graph_querygen_enabled` | `datasource_diagnosis_enabled` 선행. ClickHouse 스키마가 표준 OTel shape 과 다를 때 Bedrock(Haiku)이 **그래프 쿼리 1건**을 생성하고, static read-only 검사 + (선택) Code Interpreter + LIMIT 1 dry-run 을 모두 통과한 것만 캐시. 실행 경로는 read-only 커넥터 | ADR-018 |
@@ -80,7 +81,7 @@
 | ADR | 토픽 | 한 줄 | 6기둥 |
 |---|---|---|---|
 | [001](001-v2-foundation.md) | v2 파운데이션 | Terraform MSA·비공개 엣지·Aurora·thin-BFF·이중 ECR (CDK·라이브 Steampipe 폐기) | 운영우수성·안정성·비용 |
-| [002](002-auth-and-login.md) | 인증·로그인 | Cognito+Lambda@Edge RS256 + 인앱 `/login`(USER_PASSWORD_AUTH), Hosted UI 다크폴백 + Aurora `session_revocations` 서버측 로그아웃 폐기(BFF-side, edge는 JWT-only) | 보안 |
+| [002](002-auth-and-login.md) | 인증·로그인 | Cognito+Lambda@Edge RS256 + 인앱 `/login`(USER_PASSWORD_AUTH), Hosted UI 다크폴백 + Aurora `session_revocations` 기반 서버측 로그아웃 무효화(revocation, **live** — BFF-side에서 검사, edge는 JWT-only) | 보안 |
 | [003](003-ai-agent-routing.md) | AI 에이전트 라우팅 | 하이브리드(정규식+Haiku 분류기) + 교차도메인 자동합성 (LIVE) | 운영우수성 |
 | [004](004-agentcore-gateways-runtime.md) | AgentCore 게이트웨이·런타임 | **9 게이트웨이 프로비저닝 / 9 섹션 에이전트 라우트** (external-obs 승격 2026-06-24: Prometheus+ClickHouse) + Memory + Code Interpreter. **§7(2026-07-31 amendment, 사실 기록): Aurora Data API agent Lambda는 master secret 대신 최소권한 `awsops_sql_reader`로 인증하고, `sql_reader` 스키마의 명시적 컬럼 VIEW에만 SELECT를 부여(`public`에는 table/column grant 0). 테이블 allowlist는 컬럼 단위 fail-open으로 `eks_registrations.auth`, 이어 `worker_jobs.task_token`(SFN capability token)을 누출해 폐기. host 계정 PostgreSQL 전용이며 권한 제거이므로 신규 capability 아님** | 운영우수성 |
 | [005](005-aws-mutation-autonomy-frozen.md) | AWS 변경·자율 **FROZEN** | do-not-enable; 재활성화=새 ADR+패널+owner-override | 보안·운영우수성 |

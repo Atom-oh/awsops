@@ -69,4 +69,4 @@
 
 ## Source / 출처
 
-- `docs/superpowers/archive/2026-05-31-awsops-v2-p1e-eks-onboarding.md` (the P1e plan, after archival)
+- `docs/history/archive/2026-05-31-awsops-v2-p1e-eks-onboarding.md` (the P1e plan, after archival)

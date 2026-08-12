@@ -4,7 +4,7 @@
 
 - **BASELINE.md** = 북극성(§0) + 불변식(§1) + 게이트/동결 register(§2) + 결정 인덱스(§3). 읽기 시작점.
 - **0NN-*.md** = 통합 ADR(현행 결정 상세 + why). single Status.
-- **옛 ADR(001~046) 본문은 트리에 없다** — git tag `adr-legacy-2026-06-22` 보존. 매핑 `../history/ADR-MAPPING.md`. 복원: `git show adr-legacy-2026-06-22:docs/decisions/<옛파일>.md`. **명시 요청 없이는 옛 본문을 읽지 않는다.**
+- **옛 ADR(001~046) 본문은 트리에 없다** — git tag `adr-legacy-2026-06-22` 보존. 매핑 [`ADR-MAPPING.md`](ADR-MAPPING.md)(canonical — `../history/` 쪽은 포인터 스텁). 복원: `git show adr-legacy-2026-06-22:docs/decisions/<옛파일>.md`. **명시 요청 없이는 옛 본문을 읽지 않는다.**
 
 ## 새 ADR 추가
 1. 번호 = 현재 최고번호 + 1 (현재 최고 = 018)

@@ -55,19 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/check-doc-sync.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
-          },
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/accumulate-pending-guides.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
-          },
-          {
-            "type": "command",
             "command": "bash .claude/hooks/check-guide-i18n-sync.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
-          },
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/check-menu-guide-sync.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
           }
         ]
       }

@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 256c5e4042b9 · generated-at: 2026-07-08 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 1c86ce9eaf8e · generated-at: 2026-08-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -16,7 +16,7 @@ Operational playbooks, one Markdown file per failure/operational scenario (servi
 
 ## Boundaries
 - Doc sink only: imports nothing, is imported by nothing. Review focus is editorial — structure, accuracy of cited paths/commands, ADR cross-references — not code.
-- Runbooks may target either stack; legacy v1 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) runs in parallel with v2 (`web/` + `terraform/v2/`, root path, Aurora). v1 rules do not apply to v2 (e.g. `/awsops` prefix and the Steampipe Pool are v1-only) — confirm a runbook's commands aren't mistakenly cross-applied.
+- **v2 is live on `main`; v1 is decommissioned** (ADR-016) — its application code left the tree 2026-07-12 (`git tag v1-pre-code-removal-20260712`), only stopped AWS infra remains pending final teardown. v1 does NOT run in parallel with v2. A runbook may still document a **legacy v1 procedure for historical/decommission reference** (marked `⚠️ v1(legacy)` in the index) — that's not the same as v1 being a live, parallel target. Confirm a runbook's commands aren't mistakenly presented as applying to v2 (e.g. `/awsops` prefix and the Steampipe Pool are v1-only).
 
 ## Gotchas / banned patterns
 - Do not let a runbook embed secrets, AWS account IDs, ARNs, or live domains.

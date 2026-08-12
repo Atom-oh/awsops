@@ -87,7 +87,9 @@ Terraform; `provision.py` overwrites with real values.
 
 ## Status / 상태
 
-**P1f ✅ — A7 GREEN.**
+**P1f ✅ — A7 GREEN** (historical milestone record — the provisioner's *first* verified
+run, back when only the 2 bootstrap slices existed; see Current design above for the
+fleet's present size).
 - `provision` first run: 0 errors; smoke OK (runtime → security gateway → `list_roles` →
   real IAM data).
 - Idempotent re-run: every resource `EXISTS`, Runtime `UPDATED` (the update path
@@ -123,9 +125,9 @@ runtime ARN + memory id in SSM (not `PENDING`) and an initial 2-slice `lambda_ar
 ## Source / 출처
 
 Consolidates three source docs (now archived):
-- `docs/superpowers/archive/2026-05-31-awsops-v2-p1f-agentcore-provisioner.md` (primary)
-- `docs/superpowers/archive/2026-05-31-custom-agents-skills-design.md`
-- `docs/superpowers/archive/2026-05-31-adr-031-phase1.md`
+- `docs/history/archive/2026-05-31-awsops-v2-p1f-agentcore-provisioner.md` (primary)
+- `docs/history/archive/2026-05-31-custom-agents-skills-design.md`
+- `docs/history/archive/2026-05-31-adr-031-phase1.md`
 
 Review: [`docs/reviews/v2-p1f-scope-architecture-review.md`](../../reviews/v2-p1f-scope-architecture-review.md)
 (3-AI cross review — MID-minus scope decision, least-privilege roles, SSM-not-valueFrom).

@@ -17,15 +17,20 @@ echo "# AWSops Project Structure Tests"
 echo ""
 
 # ── Hook Tests ──
+# Child scripts that exit non-zero count as a runner-level failure (their own
+# "not ok" lines are display-only). Scripts without exit-code propagation keep
+# their historical advisory behavior.
 echo "# Hook tests"
 for f in tests/hooks/test-*.sh; do
-  [ -f "$f" ] && bash "$f"
+  [ -f "$f" ] || continue
+  bash "$f" && pass "$(basename "$f") clean" || fail "$(basename "$f") reported failures"
 done
 
 # ── Structure Tests ──
 echo "# Structure tests"
 for f in tests/structure/test-*.sh; do
-  [ -f "$f" ] && bash "$f"
+  [ -f "$f" ] || continue
+  bash "$f" && pass "$(basename "$f") clean" || fail "$(basename "$f") reported failures"
 done
 
 # ── Core Structure Assertions ──

@@ -72,6 +72,6 @@ Reuse-critical, in priority order:
 
 ## Source / 출처
 
-- Plan (to be archived): `docs/superpowers/archive/2026-05-31-awsops-v2-p1d-web-cicd-auth.md` (currently at `docs/superpowers/plans/2026-05-31-awsops-v2-p1d-web-cicd-auth.md`).
+- Plan (archived): `docs/history/archive/2026-05-31-awsops-v2-p1d-web-cicd-auth.md`.
 - Readiness / cross-AI review: [`docs/reviews/v2-p1d-readiness-architecture-review.md`](../../reviews/v2-p1d-readiness-architecture-review.md).
 - Root `CLAUDE.md` — HOSTNAME / arm64 deployment gotchas.
