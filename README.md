@@ -32,7 +32,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito auth) -> VPC Origin (https-only
   -> async workers: POST /api/jobs -> SQS -> Step Functions -> Lambda or Fargate worker
 ```
 
-Stats: 21 pages, 83 API routes, 72 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
+Stats: 35 pages, 84 API routes, 86 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
 
 > **No public ALB.** The edge is fully private — CloudFront reaches the ALB only through a VPC Origin, and the ALB only accepts traffic from CloudFront's managed security group. v2's posture is a **read-only ops dashboard + AI diagnosis**: AWS-resource mutation and autonomous remediation are FROZEN by design (ADR-005) — infra changes stay with the operator's own IaC/Change Manager, with one narrowly-scoped exception for self-healing service restarts (ADR-015).
 
@@ -47,19 +47,21 @@ Stats: 21 pages, 83 API routes, 72 components (`web/`), 18 consolidated ADRs, Te
 
 ### AI Gateways (Amazon Bedrock AgentCore)
 
-9 section gateways are defined in Terraform (`ai.tf`); each is provisioned idempotently and routes to Lambda-backed MCP tools. **Only 2 of the 9 are live today** (the rest are flag-gated behind `agentcore_enabled`/`integrations_enabled`, default off) — the table below is the target shape, not the current deployed state.
+9 section gateways are defined in Terraform (`ai.tf`); each is provisioned idempotently and routes to Lambda-backed MCP tools. **All 9 gateways hold READY MCP targets** — the fleet (`local.agent_lambdas`, 30 slices: 21 gated on `agentcore_enabled`, 9 on `integrations_enabled`) is deployed; the table below reflects the live shape.
 
 | Gateway | Capabilities | Status |
 |---------|--------------|--------|
-| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live (flow-monitor slice) |
-| security | IAM, policy simulation, CIS/benchmark | ✅ live (iam-mcp slice, 14 tools) |
-| container | EKS, ECS, Istio, Kubernetes | flag-gated |
-| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | flag-gated |
-| cost | Cost Explorer, forecast, budgets, container cost | flag-gated |
-| monitoring | CloudWatch, CloudTrail | flag-gated |
-| iac | CloudFormation, CDK, Terraform | flag-gated |
-| ops | Steampipe SQL listing/status/docs/inventory | flag-gated |
-| external-obs | External observability & integrations (Prometheus, ClickHouse, Notion) | flag-gated |
+| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live |
+| security | IAM, policy simulation, CIS/benchmark | ✅ live |
+| container | EKS, ECS, Istio, Kubernetes | ✅ live |
+| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | ✅ live |
+| cost | Cost Explorer, forecast, budgets, container cost | ✅ live |
+| monitoring | CloudWatch, CloudTrail | ✅ live |
+| iac | CloudFormation, CDK, Terraform | ✅ live |
+| ops | Steampipe SQL listing/status/docs/inventory | ✅ live |
+| external-obs | External observability & integrations (Prometheus, ClickHouse, Notion) | ✅ live |
+
+All 9 rows are gated behind `agentcore_enabled`/`integrations_enabled` (default `false` in a fresh clone/deploy — `plan` = No changes, $0); "live" here describes this project's actual running deployment, which has both flags on.
 
 Models: Claude Sonnet 5 (default), Opus 4.8 (deep analysis), Haiku 4.5 (fast/low-cost).
 
@@ -143,7 +145,7 @@ AgentCore's own config (runtime ARN, Memory ID, Code Interpreter ID) is written 
 
 ```
 awsops/
-  web/                    # Next.js 14 thin-BFF: 21 pages, 83 API routes, 72 components
+  web/                    # Next.js 14 thin-BFF: 35 pages, 84 API routes, 86 components
   agent/                  # Strands Agent (Runtime source) + MCP Lambda tool sources
   terraform/v2/foundation/  # single Terraform root: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/             # configure/deploy/migrate/agentcore/workers tooling (all Node.js/Python)
@@ -162,7 +164,7 @@ cd web && npx vitest run          # web unit tests only
 
 ## API Documentation
 
-The 83 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
+The 84 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
 
 ## Contributing
 
@@ -200,7 +202,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
   -> 비동기 워커: POST /api/jobs -> SQS -> Step Functions -> Lambda 또는 Fargate 워커
 ```
 
-현황: 21 페이지, 83 API 라우트, 72 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
+현황: 35 페이지, 84 API 라우트, 86 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
 
 > **공개 ALB 없음.** 엣지는 완전히 비공개입니다 — CloudFront는 VPC Origin을 통해서만 ALB에 도달하고, ALB는 CloudFront 관리형 보안 그룹의 트래픽만 허용합니다. v2의 자세는 **read-only 운영 대시보드 + AI 진단**입니다: AWS 리소스 변경·자율 조치는 설계상 FROZEN(ADR-005) — 인프라 변경은 운영자 자신의 IaC/Change Manager가 담당하며, 자가치유 서비스 재시작 하나만 좁게 예외 허용됩니다(ADR-015).
 
@@ -311,7 +313,7 @@ AgentCore 자체 설정(runtime ARN, Memory ID, Code Interpreter ID)은 provisio
 
 ```
 awsops/
-  web/                      # Next.js 14 thin-BFF: 21 페이지, 83 API 라우트, 72 컴포넌트
+  web/                      # Next.js 14 thin-BFF: 35 페이지, 84 API 라우트, 86 컴포넌트
   agent/                    # Strands Agent(Runtime 소스) + MCP Lambda 도구 소스
   terraform/v2/foundation/  # 단일 Terraform 루트: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/               # configure/deploy/migrate/agentcore/workers 도구(전부 Node.js/Python)

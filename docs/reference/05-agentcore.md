@@ -124,9 +124,9 @@ fleet has since grown to 30 slices (Current design above).
 ## Source / 출처
 
 Consolidates three source docs (now archived):
-- `docs/superpowers/archive/2026-05-31-awsops-v2-p1f-agentcore-provisioner.md` (primary)
-- `docs/superpowers/archive/2026-05-31-custom-agents-skills-design.md`
-- `docs/superpowers/archive/2026-05-31-adr-031-phase1.md`
+- `docs/history/archive/2026-05-31-awsops-v2-p1f-agentcore-provisioner.md` (primary)
+- `docs/history/archive/2026-05-31-custom-agents-skills-design.md`
+- `docs/history/archive/2026-05-31-adr-031-phase1.md`
 
 Review: [`docs/reviews/v2-p1f-scope-architecture-review.md`](../../reviews/v2-p1f-scope-architecture-review.md)
 (3-AI cross review — MID-minus scope decision, least-privilege roles, SSM-not-valueFrom).

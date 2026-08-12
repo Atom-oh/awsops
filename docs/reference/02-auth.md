@@ -50,7 +50,7 @@ v2는 **Cognito 인증을 CloudFront 엣지 앞단에 배치**하여 인증되�
 
 ## Source / 출처
 
-- Plans (to be archived under `docs/superpowers/archive/`): `2026-05-31-awsops-v2-p1b-cognito-edge-auth.md` (primary), `2026-05-31-awsops-v2-p1d-web-cicd-auth.md` (RS256 / PKCE auth-hardening, Task D4).
+- Plans (archived under `docs/history/archive/`): `2026-05-31-awsops-v2-p1b-cognito-edge-auth.md` (primary), `2026-05-31-awsops-v2-p1d-web-cicd-auth.md` (RS256 / PKCE auth-hardening, Task D4).
 - Decision: `docs/decisions/020-cognito-lambda-edge-auth.md` (esp. the 2026-06-03 post-acceptance RS256 note).
 - Review: `docs/reviews/v2-p1d-readiness-architecture-review.md` (3-AI cross review — CRITICAL JWKS / HIGH state+PKCE drivers).
 - Code: `terraform/v2/foundation/auth.tf`, `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl`.
