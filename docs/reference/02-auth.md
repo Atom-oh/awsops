@@ -15,10 +15,10 @@ v2는 **Cognito 인증을 CloudFront 엣지 앞단에 배치**하여 인증되�
   - Verifies the ID token via **pure-python RS256** (RSASSA-PKCS1-v1_5 + SHA-256) against Cognito's **JWKS** (`/.well-known/jwks.json`, cached in a module global) — no extra deps, stays under the 1 MB viewer-request limit.
   - Validates claims: `iss`, `aud` (= client id), `token_use == 'id'`, `exp`/`iat`/`nbf`.
   - Enforces OAuth **`state`** + **PKCE** (S256 challenge; verifier stored in a short-lived HMAC-signed `awsops_flow` cookie) — CSRF defense, and no client secret is compiled into the edge code (HMAC `state_key` injected via `random_password` at apply).
-  - **Public-path bypass**: `/_next/static/*` (immutable assets) and `/api/health` (smoke target) skip auth.
-- **Served at root path `/`** — v2 dropped the v1 `/awsops` basePath; callback is `/_callback`, post-login redirect is `/`.
+  - **Public-path bypass** (`cognito_edge.py.tftpl:26-28`): a `/_next/static/*` prefix plus 6 exact paths — `/api/health`, `/api/auth/signout`, `/login`, `/api/auth/login`, `/icon.svg`, and `/api/incidents/webhook` (ADR-013 machine-ingress carve-out, HMAC-SHA256/SNS-verified downstream, not a Cognito session path).
+- **Served at root path `/`** — v2 dropped the v1 `/awsops` basePath; callback is `/_callback` (dark Hosted-UI fallback only), post-login redirect is `/`.
 - **Admin user** `admin@awsops.local`, created from gitignored `terraform.tfvars` (`admin_email` / `admin_password`).
-- Cookie flags: `awsops_token=<id_token>; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600`.
+- Cookie flags (`web/lib/login.ts` `sessionCookie()`): `awsops_token=<id_token>; Path=/; Secure; HttpOnly; SameSite=Lax`, plus `Max-Age={expiresIn}` (12h / 43200s) only when the user checks "remember me" — unchecked, it's a session cookie with no `Max-Age` (dies with the browser session), not a fixed 1-hour cookie.
 
 ## Decisions (ADRs) / 결정
 
@@ -32,10 +32,11 @@ v2는 **Cognito 인증을 CloudFront 엣지 앞단에 배치**하여 인증되�
 
 ## Status / 상태
 
-- **P1b + P1d ✅** — browser login e2e verified.
-  - P1b shipped Cognito + the edge function (initially exp-only, ported from v1 for parity) and the unauthenticated `302 → Cognito /login` redirect through CloudFront.
+- **P1b + P1d ✅** (historical milestone record) — browser login e2e verified.
+  - P1b shipped Cognito + the edge function (initially exp-only, ported from v1 for parity) and, **at the time**, an unauthenticated `302 → Cognito /login` (Hosted UI) redirect through CloudFront.
   - P1d hardened the edge to RS256 + `state` + PKCE (public client replacing the secret client) and cut the web tier over to the real Next.js image.
-- e2e checks: Cognito → web via `state`/PKCE login succeeds; root without cookie → `302` to Cognito; a **forged token → `302`** (rejected), confirming signature verification works (a pre-hardening build would have returned `200`).
+  - ADR-002's later self-hosted-`/login` decision superseded the Hosted-UI redirect above: unauthenticated requests today redirect to the **self-hosted `/login`** page (see Purpose), with the Hosted-UI PKCE flow (`/_callback`) kept only as a dark fallback.
+- e2e checks at the time: Cognito → web via `state`/PKCE login succeeds; root without cookie → `302`; a **forged token → `302`** (rejected), confirming signature verification works (a pre-hardening build would have returned `200`).
 
 ## Learnings & gotchas / 학습·함정
 
