@@ -110,82 +110,82 @@ AWSops는 이 4가지 문제를 동시에 해결합니다.
 # AWSops — Single Pane of Glass
 
 :::html
-<div class="tab-bar" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#00d4ff;color:#0a0e1a;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,0)">Data Layer</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,1)">AI Engine</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,2)">Dashboard</button>
+<div class="tab-bar" style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+  <button class="tab-btn" style="padding:.5rem 1rem;border:none;border-radius:6px;background:var(--accent);color:var(--accent-on);font-weight:bold;cursor:pointer;font-size:.875rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,0)">Data Layer</button>
+  <button class="tab-btn" style="padding:.5rem 1rem;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text-muted);font-weight:bold;cursor:pointer;font-size:.875rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,1)">AI Engine</button>
+  <button class="tab-btn" style="padding:.5rem 1rem;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text-muted);font-weight:bold;cursor:pointer;font-size:.875rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,2)">Dashboard</button>
 </div>
-<div class="tc" style="display:block;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:20px;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:18px;margin-bottom:8px;">Aurora Serverless v2 — 영속 상태</div>
-    <div style="color:#b0b0b0;line-height:1.6;">PostgreSQL 17 · 0.5–4 ACU · KMS CMK<br>worker jobs · chat threads · 진단 리포트 영속 저장</div>
+<div class="tc" style="display:block;padding:.75rem;background:var(--bg-secondary);border-radius:8px;">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+  <div style="background:var(--blue-bg);border:1px solid var(--cyan);border-radius:8px;padding:1.25rem;">
+    <div style="color:var(--cyan);font-weight:bold;font-size:1.125rem;margin-bottom:.5rem;">Aurora Serverless v2 — 영속 상태</div>
+    <div style="color:var(--text-secondary);line-height:1.6;">PostgreSQL 17 · 0.5–4 ACU · KMS CMK<br>worker jobs · chat threads · 진단 리포트 영속 저장</div>
   </div>
-  <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
-    <div style="background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.2);border-radius:8px;padding:12px;text-align:center;">
-      <div style="color:#00d4ff;font-size:28px;font-weight:bold;">node-pg</div>
-      <div style="color:#8b95a5;font-size:13px;">Durable State</div>
+  <div style="display:grid;grid-template-rows:1fr 1fr;gap:.75rem;">
+    <div style="background:var(--blue-bg);border:1px solid var(--cyan);border-radius:8px;padding:.75rem;text-align:center;">
+      <div style="color:var(--cyan);font-size:1.75rem;font-weight:bold;">node-pg</div>
+      <div style="color:var(--text-muted);font-size:.8125rem;">Durable State</div>
     </div>
-    <div style="background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.2);border-radius:8px;padding:12px;text-align:center;">
-      <div style="color:#00ff88;font-size:28px;font-weight:bold;">41</div>
-      <div style="color:#8b95a5;font-size:13px;">Inventory Types (Steampipe sync)</div>
-    </div>
-  </div>
-</div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:20px;">
-    <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Bedrock AgentCore</div>
-    <div style="color:#b0b0b0;line-height:1.6;">Claude Opus 4.8 / Sonnet 5 / Haiku 4.5<br>AgentCore Runtime + 섹션 에이전트<br>ADR-003 하이브리드 라우팅</div>
-  </div>
-  <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
-    <div style="background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;text-align:center;">
-      <div style="color:#f59e0b;font-size:28px;font-weight:bold;">9</div>
-      <div style="color:#8b95a5;font-size:13px;">Section Gateways (설계 160+ 도구 · 2 슬라이스 라이브)</div>
-    </div>
-    <div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:12px;text-align:center;">
-      <div style="color:#a855f7;font-size:28px;font-weight:bold;">~160</div>
-      <div style="color:#8b95a5;font-size:13px;">Read-only Tools (27 슬라이스 설계)</div>
+    <div style="background:var(--green-bg);border:1px solid var(--green);border-radius:8px;padding:.75rem;text-align:center;">
+      <div style="color:var(--green);font-size:1.75rem;font-weight:bold;">41</div>
+      <div style="color:var(--text-muted);font-size:.8125rem;">Inventory Types (Steampipe sync)</div>
     </div>
   </div>
 </div>
 </div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
-  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:14px;text-align:center;">
-    <div style="color:#ef4444;font-size:24px;font-weight:bold;">Overview</div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">Dashboard</div>
-    <div style="color:#666;font-size:10px;">Cost · Bedrock · Inventory · Datasources · EKS</div>
+<div class="tc" style="display:none;padding:.75rem;background:var(--bg-secondary);border-radius:8px;">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+  <div style="background:var(--yellow-bg);border:1px solid var(--orange);border-radius:8px;padding:1.25rem;">
+    <div style="color:var(--orange);font-weight:bold;font-size:1.125rem;margin-bottom:.5rem;">Bedrock AgentCore</div>
+    <div style="color:var(--text-secondary);line-height:1.6;">Claude Opus 4.8 / Sonnet 5 / Haiku 4.5<br>AgentCore Runtime + 섹션 에이전트<br>ADR-003 하이브리드 라우팅</div>
   </div>
-  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:14px;text-align:center;">
-    <div style="color:#ef4444;font-size:24px;font-weight:bold;">AI</div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">Assistant · Diagnosis</div>
-    <div style="color:#666;font-size:10px;">스트리밍 챗 + 종합진단 리포트</div>
-  </div>
-  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:14px;text-align:center;">
-    <div style="color:#ef4444;font-size:24px;font-weight:bold;">Security · Compliance</div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">Findings · CIS 벤치마크</div>
-    <div style="color:#666;font-size:10px;">read-only, Aurora 파생</div>
-  </div>
-  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:14px;text-align:center;">
-    <div style="color:#ef4444;font-size:24px;font-weight:bold;">Topology · Monitoring</div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">EKS · 리소스 그래프</div>
-    <div style="color:#666;font-size:10px;">async worker tier가 무거운 작업 처리</div>
+  <div style="display:grid;grid-template-rows:1fr 1fr;gap:.75rem;">
+    <div style="background:var(--yellow-bg);border:1px solid var(--orange);border-radius:8px;padding:.75rem;text-align:center;">
+      <div style="color:var(--orange);font-size:1.75rem;font-weight:bold;">9</div>
+      <div style="color:var(--text-muted);font-size:.8125rem;">Section Gateways (설계 160+ 도구 · 2 슬라이스 라이브)</div>
+    </div>
+    <div style="background:var(--accent-subtle);border:1px solid var(--accent);border-radius:8px;padding:.75rem;text-align:center;">
+      <div style="color:var(--accent);font-size:1.75rem;font-weight:bold;">~160</div>
+      <div style="color:var(--text-muted);font-size:.8125rem;">Read-only Tools (27 슬라이스 설계)</div>
+    </div>
   </div>
 </div>
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:12px;">
-  <div style="background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.25);border-radius:8px;padding:14px;text-align:center;">
-    <div style="color:#00d4ff;font-size:24px;font-weight:bold;">Accounts</div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">멀티 어카운트 전환</div>
+</div>
+<div class="tc" style="display:none;padding:.75rem;background:var(--bg-secondary);border-radius:8px;">
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.75rem;">
+  <div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:.875rem;text-align:center;">
+    <div style="color:var(--red);font-size:1.5rem;font-weight:bold;">Overview</div>
+    <div style="color:var(--text-muted);font-size:.75rem;margin-top:.25rem;">Dashboard</div>
+    <div style="color:var(--text-muted);font-size:.625rem;">Cost · Bedrock · Inventory · Datasources · EKS</div>
   </div>
-  <div style="background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.25);border-radius:8px;padding:14px;text-align:center;">
-    <div style="color:#00d4ff;font-size:24px;font-weight:bold;">Integrations</div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">에이전트 · 스킬 · 커넥터 · 데이터소스 허브</div>
+  <div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:.875rem;text-align:center;">
+    <div style="color:var(--red);font-size:1.5rem;font-weight:bold;">AI</div>
+    <div style="color:var(--text-muted);font-size:.75rem;margin-top:.25rem;">Assistant · Diagnosis</div>
+    <div style="color:var(--text-muted);font-size:.625rem;">스트리밍 챗 + 종합진단 리포트</div>
   </div>
-  <div style="background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.25);border-radius:8px;padding:14px;text-align:center;">
-    <div style="color:#00d4ff;font-size:24px;font-weight:bold;">Jobs · Customization</div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">비동기 작업 현황 · 테마/언어 설정</div>
+  <div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:.875rem;text-align:center;">
+    <div style="color:var(--red);font-size:1.5rem;font-weight:bold;">Security · Compliance</div>
+    <div style="color:var(--text-muted);font-size:.75rem;margin-top:.25rem;">Findings · CIS 벤치마크</div>
+    <div style="color:var(--text-muted);font-size:.625rem;">read-only, Aurora 파생</div>
+  </div>
+  <div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:.875rem;text-align:center;">
+    <div style="color:var(--red);font-size:1.5rem;font-weight:bold;">Topology · Monitoring</div>
+    <div style="color:var(--text-muted);font-size:.75rem;margin-top:.25rem;">EKS · 리소스 그래프</div>
+    <div style="color:var(--text-muted);font-size:.625rem;">async worker tier가 무거운 작업 처리</div>
+  </div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.75rem;margin-top:.75rem;">
+  <div style="background:var(--blue-bg);border:1px solid var(--cyan);border-radius:8px;padding:.875rem;text-align:center;">
+    <div style="color:var(--cyan);font-size:1.5rem;font-weight:bold;">Accounts</div>
+    <div style="color:var(--text-muted);font-size:.75rem;margin-top:.25rem;">멀티 어카운트 전환</div>
+  </div>
+  <div style="background:var(--blue-bg);border:1px solid var(--cyan);border-radius:8px;padding:.875rem;text-align:center;">
+    <div style="color:var(--cyan);font-size:1.5rem;font-weight:bold;">Integrations</div>
+    <div style="color:var(--text-muted);font-size:.75rem;margin-top:.25rem;">에이전트 · 스킬 · 커넥터 · 데이터소스 허브</div>
+  </div>
+  <div style="background:var(--blue-bg);border:1px solid var(--cyan);border-radius:8px;padding:.875rem;text-align:center;">
+    <div style="color:var(--cyan);font-size:1.5rem;font-weight:bold;">Jobs · Customization</div>
+    <div style="color:var(--text-muted);font-size:.75rem;margin-top:.25rem;">비동기 작업 현황 · 테마/언어 설정</div>
   </div>
 </div>
 </div>
@@ -346,21 +346,21 @@ Cmd-K 커맨드 팔레트로 마우스 없이 전체 화면을 이동할 수 있
 # 핵심 차별점
 
 :::html
-<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 32px;">
-  <div style="background: rgba(0,212,255,0.1); border: 1px solid rgba(0,212,255,0.3); border-radius: 12px; padding: 24px; text-align: center;">
-    <div style="font-size: 48px; margin-bottom: 12px;">🧠</div>
-    <div style="color: #00d4ff; font-weight: bold; font-size: 18px; margin-bottom: 8px;">In-Account Bedrock AI</div>
-    <div style="color: #8b95a5; font-size: 14px;">고객 계정 안에서 Bedrock 호출<br>외부 AI SaaS API 불필요 — 데이터가 밖으로 안 나감</div>
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; margin-top: 2rem;">
+  <div style="background: var(--blue-bg); border: 1px solid var(--cyan); border-radius: 12px; padding: 1.5rem; text-align: center;">
+    <div style="font-size: 3rem; margin-bottom: .75rem;">🧠</div>
+    <div style="color: var(--cyan); font-weight: bold; font-size: 1.125rem; margin-bottom: .5rem;">In-Account Bedrock AI</div>
+    <div style="color: var(--text-muted); font-size: .875rem;">고객 계정 안에서 Bedrock 호출<br>외부 AI SaaS API 불필요 — 데이터가 밖으로 안 나감</div>
   </div>
-  <div style="background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3); border-radius: 12px; padding: 24px; text-align: center;">
-    <div style="font-size: 48px; margin-bottom: 12px;">🔒</div>
-    <div style="color: #00ff88; font-weight: bold; font-size: 18px; margin-bottom: 8px;">Read-Only Posture</div>
-    <div style="color: #8b95a5; font-size: 14px;">AWS 리소스 변경·자율 실행 동결<br>ADR-005 (FROZEN) / ADR-007 — 설계상 안전</div>
+  <div style="background: var(--green-bg); border: 1px solid var(--green); border-radius: 12px; padding: 1.5rem; text-align: center;">
+    <div style="font-size: 3rem; margin-bottom: .75rem;">🔒</div>
+    <div style="color: var(--green); font-weight: bold; font-size: 1.125rem; margin-bottom: .5rem;">Read-Only Posture</div>
+    <div style="color: var(--text-muted); font-size: .875rem;">AWS 리소스 변경·자율 실행 동결<br>ADR-005 (FROZEN) / ADR-007 — 설계상 안전</div>
   </div>
-  <div style="background: rgba(168,85,247,0.1); border: 1px solid rgba(168,85,247,0.3); border-radius: 12px; padding: 24px; text-align: center;">
-    <div style="font-size: 48px; margin-bottom: 12px;">📊</div>
-    <div style="color: #a855f7; font-weight: bold; font-size: 18px; margin-bottom: 8px;">AI Diagnosis Report</div>
-    <div style="color: #8b95a5; font-size: 14px;">Well-Architected · light·mid 9 / deep 16 섹션<br>비동기 워커 생성 → DOCX / PDF</div>
+  <div style="background: var(--accent-subtle); border: 1px solid var(--accent); border-radius: 12px; padding: 1.5rem; text-align: center;">
+    <div style="font-size: 3rem; margin-bottom: .75rem;">📊</div>
+    <div style="color: var(--accent); font-weight: bold; font-size: 1.125rem; margin-bottom: .5rem;">AI Diagnosis Report</div>
+    <div style="color: var(--text-muted); font-size: .875rem;">Well-Architected · light·mid 9 / deep 16 섹션<br>비동기 워커 생성 → DOCX / PDF</div>
   </div>
 </div>
 :::
