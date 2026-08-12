@@ -77,7 +77,7 @@ export interface AnfwFirewallRow {
   passedPackets: number | null; droppedPackets: number | null;
   rejectedPackets: number | null; invalidDropped: number | null; otherDropped: number | null;
   streamExceptionPackets: number | null;
-  /** (드롭+무효+기타+거부) ÷ 수신 ×100 — 유효숫자 2자리 (null=산출 불가). */
+  /** (드롭+무효+기타+거부) ÷ 수신 ×100 — 소수 2자리 (null=산출 불가). */
   dropRatePct: number | null;
   /** AZ·엔진별 표시용 요약 행 (상세 패널 idlist). */
   metricRows: string[];
@@ -391,8 +391,10 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
               passedPackets: pick('pass'), droppedPackets: pick('drop'),
               rejectedPackets: pick('rej'), invalidDropped: pick('invdrop'), otherDropped: pick('othdrop'),
               streamExceptionPackets: pick('sep'),
+              // toPrecision(2)(유효숫자 2자리)는 아주 작은 비율에서 "1e-4%"처럼 지수 표기로
+              // 렌더링된다(리뷰 MINOR) — 소수 2자리 고정으로 항상 일반 표기 유지.
               dropRatePct: recv != null && recv > 0 && droppedAll != null
-                ? Number(((droppedAll / recv) * 100).toPrecision(2))
+                ? Math.round((droppedAll / recv) * 10000) / 100
                 : null,
               metricRows: tuples.map((t) =>
                 `${t.az} ${t.engine} · recv ${t.values.recv ?? '—'} · pass ${t.values.pass ?? '—'} · drop ${t.values.drop ?? '—'}`),
