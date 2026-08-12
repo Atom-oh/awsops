@@ -801,6 +801,8 @@ export const TERMS: Record<string, Pair> = {
   '시각': { en: 'Time', zh: '时间', ja: '時刻' },
   '이벤트': { en: 'Event', zh: '事件', ja: 'イベント' },
   '사용자': { en: 'User', zh: '用户', ja: 'ユーザー' },
+  'Flow 프로토콜 분포': { en: 'Flow protocol distribution', zh: 'Flow 协议分布', ja: 'Flow プロトコル分布' },
+  'Top talker 전송량 (MB)': { en: 'Top talkers by transfer (MB)', zh: 'Top talker 传输量（MB）', ja: 'Top talker 転送量（MB）' },
 
 };
 

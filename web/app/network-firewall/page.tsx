@@ -239,6 +239,15 @@ export default function NetworkFirewallPage() {
       .slice(0, 10),
   [rgs]);
 
+  // Flow 로그 시각화 — 프로토콜 도넛(플로우 수) + Top talker 바(HBarList는 정수 표시라 MB 단위).
+  const flowProtoDist = useMemo(() => logsData?.flow?.byProto ?? [], [logsData]);
+  const talkerBars = useMemo(() =>
+    (logsData?.flow?.topTalkers ?? []).map((t) => ({
+      pair: `${t.src} → ${t.dst}`,
+      mb: Math.round(t.bytes / 1e6),
+    })),
+  [logsData]);
+
   // 점검 카드: 보호 off 또는 (조회 성공했는데) ALERT 미설정 방화벽만 나열 — "확인 불가"는 경고 아님.
   const issueFws = useMemo(() => fws.filter((f) => f.protectionsOff > 0 || (f.loggingKnown && f.alertLogging == null)), [fws]);
 
@@ -694,6 +703,14 @@ export default function NetworkFirewallPage() {
                 </>
               ))}
             </Card>
+
+            {/* ⑧-b Flow 시각화 — 프로토콜 분포 도넛 + Top talker 전송량 바 */}
+            {logsData?.flow != null && logsData.flow.totalFlows > 0 && (
+              <div className="grid gap-6 lg:grid-cols-2">
+                <DonutBreakdown title="Flow 프로토콜 분포" data={flowProtoDist} nameKey="name" valueKey="value" />
+                <HBarList title="Top talker 전송량 (MB)" data={talkerBars} labelKey="pair" valueKey="mb" highlightMax />
+              </div>
+            )}
 
             {/* ⑨ 구성 변경 감사 — CloudTrail 변경(mutation) 이벤트만 이름별 조회
                 (EventSource 단위 조회는 이 앱 자신의 read 이벤트가 목록을 가득 채움 — 실측) */}
