@@ -107,11 +107,18 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 # pre-flight: a missing dependency/asset must not masquerade as a tampered deck
 node -e 'require("pptxgenjs")' 2>/dev/null || fail "pptxgenjs not installed — run npm ci in docs-site/ (lockfile-pinned)"
+# every addImage must pass altText: pptxgenjs writes descr=altText||<absolute
+# build path>, so a missing altText both leaks the build-host path into the
+# published deck and breaks rebuild parity across machines (CI vs local)
+if grep -n "addImage(" scripts/pptx/*.js | grep -v "altText" ; then
+  fail "addImage without altText — pptxgenjs would embed the absolute build path (breaks parity, leaks host path)"
+fi
+
 # pin every generator PNG asset (backgrounds · logos · icons, vendored from the
 # AWS light template kit) to its reviewed hash — an asset swap must not be able
-# to launder itself through the rebuild-parity check. Hash list is also
-# recorded in static/presentation/awsops-intro/README.md.
-sha256sum -c --quiet <<'SUM' || fail "generator asset missing or hash mismatch — update the SUM list (here + README.md) only via reviewed asset commits"
+# to launder itself through the rebuild-parity check. This SUM list is the
+# single source of truth (the deck README points here, not the other way).
+sha256sum -c --quiet <<'SUM' || fail "generator asset missing or hash mismatch — update the SUM list below only via reviewed asset commits"
 e915f9afeca6dc0e07b16469be7c9e2c67bd6956d1c63635db3719e8a07b08d6  scripts/pptx/assets/ai_agent.png
 5aa903c2e4e347bc37e572fd773868c76906e6e452f716a417fe4f99a010eef0  scripts/pptx/assets/aws_cloud.png
 00af7a668f834da597dd5bd49f41b6642e644882abe9c6d7bde9c0e08395ebff  scripts/pptx/assets/aws_logo.png
