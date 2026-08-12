@@ -190,6 +190,7 @@ export default function NetworkFirewallPage() {
     // 실패 시 영원히) 그대로 남아있었다 — 로딩 표시 없이 이전 기간 수치를 보여주는 오정보.
     setData(null);
     setSelected(null);
+    setErr('');
     fetch(`/api/anfw?range=${range}`)
       .then(async (r) => {
         const d = await r.json().catch(() => null);

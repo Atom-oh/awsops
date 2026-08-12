@@ -358,11 +358,19 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
             }));
             const notReady = endpoints.filter((e) => e.status !== 'READY').length;
             const logs = logging.r.LoggingConfiguration?.LogDestinationConfigs ?? [];
+            // 리뷰 MINOR: Object.values(LogDestination)[0]는 키 순서에 의존한다 — S3는
+            // bucketName과 prefix를 함께 가질 수 있어 순서가 바뀌면 prefix가 버킷명 자리에
+            // 뜬다. LogDestinationType으로 실제 필드를 명시 선택.
             const logOf = (type: string) => {
               const c = logs.find((l) => l.LogType === type);
               if (!c) return null;
-              const dest = Object.values(c.LogDestination ?? {})[0] ?? '';
-              return `${c.LogDestinationType ?? '?'}${dest ? `:${dest}` : ''}`;
+              const destType = c.LogDestinationType ?? '?';
+              const destMap = c.LogDestination ?? {};
+              const dest = destType === 'S3' ? destMap.bucketName
+                : destType === 'CloudWatchLogs' ? destMap.logGroup
+                : destType === 'KinesisDataFirehose' ? destMap.deliveryStream
+                : Object.values(destMap)[0];
+              return `${destType}${dest ? `:${dest}` : ''}`;
             };
             const tuples = metricsByFw[name] ?? [];
             const pick = (k: FwMetricKey) => sum(tuples.map((t) => t.values[k]));
