@@ -113,11 +113,16 @@ node -e 'require("pptxgenjs")' 2>/dev/null || fail "pptxgenjs not installed — 
 if grep -n "addImage(" scripts/pptx/*.js | grep -v "altText" ; then
   fail "addImage without altText — pptxgenjs would embed the absolute build path (breaks parity, leaks host path)"
 fi
+if grep -nE "altText: *(\"\"|'')" scripts/pptx/*.js ; then
+  fail "empty altText — falls back to the absolute build path exactly like a missing one"
+fi
 
 # pin every generator PNG asset (backgrounds · logos · icons, vendored from the
 # AWS light template kit) to its reviewed hash — an asset swap must not be able
 # to launder itself through the rebuild-parity check. This SUM list is the
 # single source of truth (the deck README points here, not the other way).
+PNG_COUNT=$(find scripts/pptx/assets -maxdepth 1 -name '*.png' | wc -l)
+[ "$PNG_COUNT" -eq 13 ] || fail "assets/ has $PNG_COUNT PNGs, SUM pins exactly 13 — unpinned/missing asset (pin set is equality, not subset)"
 sha256sum -c --quiet <<'SUM' || fail "generator asset missing or hash mismatch — update the SUM list below only via reviewed asset commits"
 e915f9afeca6dc0e07b16469be7c9e2c67bd6956d1c63635db3719e8a07b08d6  scripts/pptx/assets/ai_agent.png
 5aa903c2e4e347bc37e572fd773868c76906e6e452f716a417fe4f99a010eef0  scripts/pptx/assets/aws_cloud.png
