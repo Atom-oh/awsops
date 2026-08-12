@@ -154,6 +154,17 @@ type Selected =
   | { kind: 'policy'; row: AnfwPolicyRow }
   | { kind: 'rg'; row: AnfwRuleGroupRow };
 
+type Variant = 'default' | 'danger' | 'warn';
+
+/** KPI 배지 판정 — 확인된 위험(danger)은 절대 저하(degraded)로 강등하지 않는다.
+ *  degraded는 "더 나쁠 수도 있다"는 뜻일 뿐, 이미 확인된 위험을 무효화하는 근거가
+ *  아니다. danger가 아닐 때만 degraded가 warn으로 격상된다. (dx.ts와 동일 계약) */
+function kpiVariant(hasRealDanger: boolean, degraded: boolean): Variant {
+  if (hasRealDanger) return 'danger';
+  if (degraded) return 'warn';
+  return 'default';
+}
+
 export default function NetworkFirewallPage() {
   const { tt } = useI18n();
   const [range, setRange] = useState(86400);
@@ -384,48 +395,56 @@ export default function NetworkFirewallPage() {
           </div>
         )}
 
-        {data && t && (
+        {data && t && (() => {
+          // 리전 통째 누락(degradedRegions)이 있으면 모든 카운트/합계가 하한이다 —
+          // "0건"·"이상 없음"을 확정값처럼 보여주면 실제보다 낙관적인 오탐이 된다.
+          const resourcesDegraded = data.degradedRegions.length > 0;
+          const lb = (n: number) => (resourcesDegraded ? `${n}+` : String(n));
+          const degradedHint = tt('일부 리전 조회 실패 — 실제보다 적을 수 있음');
+          return (
           <>
             {/* ① KPI — 다운/보호 off/ALERT 갭/전량 통과 정책이 경고 축 */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <StatTile
                 label="방화벽"
-                value={t.firewalls}
-                hint={`${tt('엔드포인트')} ${t.endpoints}`}
+                value={lb(t.firewalls)}
+                variant={resourcesDegraded ? 'warn' : 'default'}
+                hint={resourcesDegraded ? degradedHint : `${tt('엔드포인트')} ${t.endpoints}`}
                 icon={<Flame size={16} />}
               />
               <StatTile
                 label="다운 감지"
-                value={t.firewallsDown}
-                variant={t.firewallsDown > 0 ? 'danger' : 'default'}
-                hint={`${tt('엔드포인트 미준비')} ${t.endpointsNotReady}`}
+                value={lb(t.firewallsDown)}
+                variant={kpiVariant(t.firewallsDown > 0, resourcesDegraded)}
+                hint={resourcesDegraded ? degradedHint : `${tt('엔드포인트 미준비')} ${t.endpointsNotReady}`}
                 icon={<Unplug size={16} />}
               />
               <StatTile
                 label="정책"
-                value={t.policies}
-                variant={t.policiesPassthrough > 0 ? 'danger' : 'default'}
-                hint={`${tt('전량 통과 기본')} ${t.policiesPassthrough}`}
+                value={lb(t.policies)}
+                variant={kpiVariant(t.policiesPassthrough > 0, resourcesDegraded)}
+                hint={resourcesDegraded ? degradedHint : `${tt('전량 통과 기본')} ${t.policiesPassthrough}`}
                 icon={<Scroll size={16} />}
               />
               <StatTile
                 label="룰 그룹"
-                value={t.ruleGroups}
-                variant={t.ruleGroupsHighCapacity > 0 ? 'warn' : 'default'}
-                hint={`${tt('미연결')} ${t.ruleGroupsUnassociated} · ${tt('용량 80%+')} ${t.ruleGroupsHighCapacity}`}
+                value={lb(t.ruleGroups)}
+                variant={kpiVariant(t.ruleGroupsHighCapacity > 0, resourcesDegraded)}
+                hint={resourcesDegraded ? degradedHint : `${tt('미연결')} ${t.ruleGroupsUnassociated} · ${tt('용량 80%+')} ${t.ruleGroupsHighCapacity}`}
                 icon={<Layers size={16} />}
               />
               <StatTile
                 label="보호 미설정"
-                value={t.protectionsOffFirewalls}
-                variant={t.protectionsOffFirewalls > 0 ? 'warn' : 'default'}
-                hint="삭제/서브넷/정책 변경 보호"
+                value={lb(t.protectionsOffFirewalls)}
+                variant={kpiVariant(t.protectionsOffFirewalls > 0, resourcesDegraded)}
+                hint={resourcesDegraded ? degradedHint : "삭제/서브넷/정책 변경 보호"}
                 icon={<ShieldAlert size={16} />}
               />
               <StatTile
                 label="드롭 패킷"
-                value={fmtCount(t.droppedPackets) ?? '—'}
-                hint={`${tt('거부')} ${fmtCount(t.rejectedPackets) ?? '—'} · ${tt('통과')} ${fmtCount(t.passedPackets) ?? '—'}`}
+                value={resourcesDegraded ? `≥ ${fmtCount(t.droppedPackets) ?? '0'}` : (fmtCount(t.droppedPackets) ?? '—')}
+                variant={resourcesDegraded ? 'warn' : 'default'}
+                hint={resourcesDegraded ? degradedHint : `${tt('거부')} ${fmtCount(t.rejectedPackets) ?? '—'} · ${tt('통과')} ${fmtCount(t.passedPackets) ?? '—'}`}
                 icon={<Shield size={16} />}
               />
             </div>
@@ -442,17 +461,29 @@ export default function NetworkFirewallPage() {
               subtitle="보호 설정(삭제·서브넷·정책 변경)과 ALERT 로깅이 꺼진 방화벽"
               padded={false}
             >
-              {fws.length === 0 ? (
+              {fws.length === 0 && !resourcesDegraded ? (
                 <div className="px-4 py-3 text-[13px] text-ink-400">{tt('방화벽 없음')}</div>
               ) : issueFws.length === 0 ? (
-                <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-emerald-700">
-                  <CheckCircle2 size={15} />
-                  {tt('이상 없음 — 모든 방화벽에 보호 설정과 ALERT 로깅이 켜져 있습니다')}
-                </div>
+                resourcesDegraded ? (
+                  // 리전이 통째로 빠진 상태에서는 점검한 방화벽이 전부 정상이라도
+                  // "이상 없음"이라고 확정할 수 없다 — 누락된 리전에 문제가 있을 수 있다.
+                  <div className="flex items-start gap-2 px-4 py-3 text-[13px] text-warning-text">
+                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                    <span>{tt('일부 리전 조회 실패로 점검 결과를 신뢰할 수 없습니다')} ({data.degradedRegions.join(', ')})</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-emerald-700">
+                    <CheckCircle2 size={15} />
+                    {tt('이상 없음 — 모든 방화벽에 보호 설정과 ALERT 로깅이 켜져 있습니다')}
+                  </div>
+                )
               ) : (
                 <>
                   <div className="px-4 pt-3 text-[12px] text-ink-500">
                     {tt('보호 설정이 꺼진 방화벽은 실수로 삭제·변경될 수 있고, ALERT 로그가 없으면 룰이 잡은 위협을 볼 수 없습니다')}
+                    {resourcesDegraded && (
+                      <> · {tt('일부 리전 조회 실패로 이 목록은 실제보다 짧을 수 있습니다')} ({data.degradedRegions.join(', ')})</>
+                    )}
                   </div>
                   <div className="overflow-x-auto pb-2">
                     <table className="w-full">
@@ -531,7 +562,8 @@ export default function NetworkFirewallPage() {
               />
             </Card>
           </>
-        )}
+          );
+        })()}
       </div>
 
       <DetailPanel
