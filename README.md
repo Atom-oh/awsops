@@ -217,19 +217,21 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
 
 ### AI 게이트웨이 (Amazon Bedrock AgentCore)
 
-Terraform(`ai.tf`)에 9개 섹션 게이트웨이가 정의되어 있으며, 각각 멱등하게 프로비저닝되어 Lambda 기반 MCP 도구로 라우팅됩니다. **현재 9개 중 2개만 live**입니다(나머지는 `agentcore_enabled`/`integrations_enabled` 플래그 뒤에 게이트, 기본 비활성) — 아래 표는 목표 형태이며 현재 배포 상태가 아닙니다.
+Terraform(`ai.tf`)에 9개 섹션 게이트웨이가 정의되어 있으며, 각각 멱등하게 프로비저닝되어 Lambda 기반 MCP 도구로 라우팅됩니다. **9개 게이트웨이 전부 READY MCP 타깃을 보유**합니다 — 함대(`local.agent_lambdas`, 슬라이스 30개: 21개 `agentcore_enabled` + 9개 `integrations_enabled` 게이트)가 배포되어 있으며, 아래 표는 실제 live 상태를 반영합니다.
 
 | Gateway | 주요 기능 | 상태 |
 |---------|-----------|------|
-| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live (flow-monitor 슬라이스) |
-| security | IAM, 정책 시뮬레이션, CIS/benchmark | ✅ live (iam-mcp 슬라이스, 14 도구) |
-| container | EKS, ECS, Istio, Kubernetes | flag-gated |
-| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | flag-gated |
-| cost | Cost Explorer, forecast, budgets, 컨테이너 비용 | flag-gated |
-| monitoring | CloudWatch, CloudTrail | flag-gated |
-| iac | CloudFormation, CDK, Terraform | flag-gated |
-| ops | Steampipe SQL listing/status/docs/inventory | flag-gated |
-| external-obs | 외부 옵저버빌리티 & 연동(Prometheus, ClickHouse, Notion) | flag-gated |
+| network | VPC, ENI, reachability, flow logs, TGW, VPN, firewall | ✅ live |
+| security | IAM, 정책 시뮬레이션, CIS/benchmark | ✅ live |
+| container | EKS, ECS, Istio, Kubernetes | ✅ live |
+| data | DynamoDB, RDS/Aurora, ElastiCache, MSK, OpenSearch | ✅ live |
+| cost | Cost Explorer, forecast, budgets, 컨테이너 비용 | ✅ live |
+| monitoring | CloudWatch, CloudTrail | ✅ live |
+| iac | CloudFormation, CDK, Terraform | ✅ live |
+| ops | Steampipe SQL listing/status/docs/inventory | ✅ live |
+| external-obs | 외부 옵저버빌리티 & 연동(Prometheus, ClickHouse, Notion) | ✅ live |
+
+9개 행 모두 `agentcore_enabled`/`integrations_enabled` 뒤에 게이트되어 있습니다(새로 클론·배포 시 기본값은 `false` — `plan` = No changes, $0). 여기서 "live"는 이 프로젝트의 실제 운영 배포 기준이며, 그 배포는 두 플래그 모두 켜져 있습니다.
 
 모델: Claude Sonnet 5(기본), Opus 4.8(심층 분석), Haiku 4.5(빠르고 저렴).
 
