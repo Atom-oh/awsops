@@ -13,7 +13,6 @@ const LOGO = path.join(ASSETS, "aws_logo.png");
 const LOGO_WHITE = path.join(ASSETS, "aws_logo_white.png");
 const LOGO_AR = 412 / 247;
 const BG_COVER = path.join(ASSETS, "cover_glow.png");
-const BG_GLOW = path.join(ASSETS, "content_glow.png");
 const BG_SECTION = path.join(ASSETS, "section_grad.png");
 const GRAD_PILL = path.join(ASSETS, "grad_pill.png");
 
@@ -108,9 +107,8 @@ function addHeader(pres, s, title, subtitle) {
   }
 }
 
-function applyBg(s, mode) {
-  if (mode === "glow") s.background = { path: BG_GLOW };
-  else s.background = { color: C.bg };
+function applyBg(s) {
+  s.background = { color: C.bg };
 }
 
 // ─── LAYOUT: COVER ───
@@ -151,7 +149,7 @@ function cover(pres, opts) {
 // ─── LAYOUT: AGENDA (content chapters only) ───
 function agenda(pres, opts) {
   const s = pres.addSlide();
-  applyBg(s, "plain");
+  applyBg(s);
   s.addText(opts.title || "Agenda", {
     x: PAD - 0.02, y: 0.62, w: 11, h: 0.85, fontFace: FONT, fontSize: 38, bold: true,
     color: C.ink, charSpacing: -1, align: "left", valign: "top",
@@ -224,7 +222,7 @@ function closing(pres, opts = {}) {
 
 module.exports = {
   pptxgen, newDeck, FONT, W, H, PAD, C, COPYRIGHT,
-  ASSETS, LOGO, LOGO_AR, BG_COVER, BG_GLOW, GRAD_PILL,
+  ASSETS, LOGO, LOGO_AR, BG_COVER, GRAD_PILL,
   icon, mkShadow, addFooter, addHeader, applyBg,
   KO_CHAR_RATIO, estimateLines, autoH, safeText,
   cover, agenda, sectionDivider, closing,

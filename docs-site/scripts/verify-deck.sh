@@ -23,6 +23,13 @@
 #                    local records must tile the file with zero gap bytes
 #   4. rel targets — no TargetMode="External" relationships
 #
+# Gate-3 pre-flights (fail-closed, run before the rebuild):
+#   - asset pin is SET EQUALITY: assets/ must contain exactly the pinned files
+#     (an unpinned file fails, not just a mismatched pinned one)
+#   - every addImage( must pass a NON-EMPTY altText on the same line —
+#     pptxgenjs writes descr=altText||<absolute build path>, so a missing or
+#     empty altText leaks the build-host path AND breaks cross-machine parity
+#
 # Known limits (documented in static/presentation/awsops-intro/README.md):
 # embedded images are pixels grep cannot read — provenance pins them to the
 # reviewed generator assets, and any asset change must come through code review.
@@ -110,19 +117,18 @@ node -e 'require("pptxgenjs")' 2>/dev/null || fail "pptxgenjs not installed — 
 # every addImage must pass altText: pptxgenjs writes descr=altText||<absolute
 # build path>, so a missing altText both leaks the build-host path into the
 # published deck and breaks rebuild parity across machines (CI vs local)
-if grep -n "addImage(" scripts/pptx/*.js | grep -v "altText" ; then
-  fail "addImage without altText — pptxgenjs would embed the absolute build path (breaks parity, leaks host path)"
-fi
-if grep -nE "altText: *(\"\"|'')" scripts/pptx/*.js ; then
-  fail "empty altText — falls back to the absolute build path exactly like a missing one"
-fi
+ADDIMG_LINES=$(grep -n "addImage(" scripts/pptx/*.js) || fail "altText pre-flight found no addImage( lines — generator moved/renamed, update this check"
+NO_ALT=$(printf '%s\n' "$ADDIMG_LINES" | grep -v "altText" || true)
+[ -z "$NO_ALT" ] || { printf '%s\n' "$NO_ALT"; fail "addImage without altText — pptxgenjs would embed the absolute build path (breaks parity, leaks host path)"; }
+EMPTY_ALT=$(grep -nE "altText: *(\"\"|'')" scripts/pptx/*.js || true)
+[ -z "$EMPTY_ALT" ] || { printf '%s\n' "$EMPTY_ALT"; fail "empty altText — falls back to the absolute build path exactly like a missing one"; }
 
 # pin every generator PNG asset (backgrounds · logos · icons, vendored from the
 # AWS light template kit) to its reviewed hash — an asset swap must not be able
 # to launder itself through the rebuild-parity check. This SUM list is the
 # single source of truth (the deck README points here, not the other way).
-PNG_COUNT=$(find scripts/pptx/assets -maxdepth 1 -name '*.png' | wc -l)
-[ "$PNG_COUNT" -eq 13 ] || fail "assets/ has $PNG_COUNT PNGs, SUM pins exactly 13 — unpinned/missing asset (pin set is equality, not subset)"
+ASSET_COUNT=$(find scripts/pptx/assets -type f | wc -l)
+[ "$ASSET_COUNT" -eq 12 ] || fail "assets/ has $ASSET_COUNT files, SUM pins exactly 12 — unpinned/missing asset (pin is set equality over ALL files, any type/depth)"
 sha256sum -c --quiet <<'SUM' || fail "generator asset missing or hash mismatch — update the SUM list below only via reviewed asset commits"
 e915f9afeca6dc0e07b16469be7c9e2c67bd6956d1c63635db3719e8a07b08d6  scripts/pptx/assets/ai_agent.png
 5aa903c2e4e347bc37e572fd773868c76906e6e452f716a417fe4f99a010eef0  scripts/pptx/assets/aws_cloud.png
@@ -130,7 +136,6 @@ e915f9afeca6dc0e07b16469be7c9e2c67bd6956d1c63635db3719e8a07b08d6  scripts/pptx/a
 c2f256e8757493520536ed9371af587399d8ab7dd1d1615b5ad435afd281906f  scripts/pptx/assets/aws_logo_white.png
 00521bdb306a5a0361167bbbdb9e6b79384648a894a09adcdc7595d320fa6011  scripts/pptx/assets/browser_tool.png
 294d1b2c54ad335f8c70e03299a9afc1f8d8a8fcd944a4f9ab7d99d78c63e446  scripts/pptx/assets/cloudwatch.png
-ae2744540b2f437e7f5c85c308f396ed8a3b68f6a2fa66792e6d98d8782845e4  scripts/pptx/assets/content_glow.png
 69ddf68c59e5b3d8da62d3b2338088f26643efc4d630b538a00564f4b6e81716  scripts/pptx/assets/cover_glow.png
 a8669b51d63cb5266f3896073959347fd2d0af2699728bb6918f98149f0ab4f3  scripts/pptx/assets/evaluations.png
 8323ab12688d855c98b28d9ddfba3b2a2cf489456ae9bdc461a04c6fc0a89c54  scripts/pptx/assets/gateway.png

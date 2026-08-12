@@ -37,7 +37,7 @@ let pageNum = 1;
 
 function newContent(title, subtitle) {
   const s = pres.addSlide();
-  kit.applyBg(s, "plain");
+  kit.applyBg(s);
   if (title) kit.addHeader(pres, s, title, subtitle);
   return s;
 }
@@ -489,8 +489,8 @@ kit.sectionDivider(pres, {
   });
   const cols = [
     ["대화형 어시스턴트", "ai_agent", "자연어 질문을 자동 라우팅하거나 슬래시(/)로 섹션을 지정. \"두 리소스 간 통신이 안 되는 원인\", \"이 IAM 역할 과다권한 점검\" 같은 운영 질문에 라이브 근거로 답변", A.blue],
-    ["aws-data — 리소스 질의 섹션", "gateway", "\"리전별 EC2 몇 개야?\" 같은 수량·목록 질문을 받는 generic 섹션. 라이브 AWS 조회는 AgentCore 게이트웨이 경유가 원칙(ADR-001/010) — 별도 SQL 라이브 실행 경로는 설계상 차단", A.green],
-    ["전문 섹션 6종 (자동 수집형 설계)", "memory", "유휴 리소스 스캔 · EKS/DB/MSK 최적화 · 지연 분석 · 인시던트 — 근거 데이터를 먼저 모으고 분석하는 설계 — 현재는 설계 원칙(ADR-001/010)에 따라 비활성, 표준 라우팅으로 대응. 총 16개 챗 섹션 구성", A.magenta],
+    ["aws-data — 리소스 질의 섹션", "aws_cloud", "\"리전별 EC2 몇 개야?\" 같은 수량·목록 질문을 받는 generic 섹션. 라이브 AWS 조회는 AgentCore 게이트웨이 경유가 원칙(ADR-001/010) — 별도 SQL 라이브 실행 경로는 설계상 차단", A.green],
+    ["전문 섹션 6종 (자동 수집형 설계)", "evaluations", "유휴 리소스 스캔 · EKS/DB/MSK 최적화 · 지연 분석 · 인시던트 — 근거 데이터를 먼저 모으고 분석하는 설계 — 현재는 설계 원칙(ADR-001/010)에 따라 비활성, 표준 라우팅으로 대응. 총 16개 챗 섹션 구성", A.magenta],
   ];
   const gw5 = 0.35, cw = (CW - gw5 * 2) / 3, cy = 3.15, chh = 2.85;
   cols.forEach((c, i) => {
