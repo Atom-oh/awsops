@@ -113,6 +113,10 @@ export interface AnfwAnalysis {
   firewalls: AnfwFirewallRow[];
   policies: AnfwPolicyRow[];
   ruleGroups: AnfwRuleGroupRow[];
+  /** List / Describe 호출 실패로 해당 리전의 리소스가 누락됐거나 개수가 과소집계된 리전.
+   *  빈 배열이 아니면 firewalls/policies/ruleGroups·totals는 "리전에 리소스 없음"이 아니라
+   *  "AWS 조회 실패로 알 수 없음" — 0/빈 결과를 그대로 신뢰하면 안 됨. */
+  degradedRegions: string[];
   totals: {
     firewalls: number; firewallsDown: number;
     endpoints: number; endpointsNotReady: number;
@@ -271,7 +275,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
   return cached(`a|${rangeSec}`, async () => {
     const regions = await regionsFromInventory();
     const perRegion = await Promise.all(regions.map(async (region) => {
-      const empty = { firewalls: [] as AnfwFirewallRow[], policies: [] as AnfwPolicyRow[], ruleGroups: [] as AnfwRuleGroupRow[] };
+      const empty = { firewalls: [] as AnfwFirewallRow[], policies: [] as AnfwPolicyRow[], ruleGroups: [] as AnfwRuleGroupRow[], degraded: false };
       try {
         const [fwList, policyList, rgList] = await Promise.all([
           listAll(async (nextToken) => {
@@ -410,14 +414,19 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
           } catch { return null; }
         }));
 
-        return {
-          firewalls: firewalls.filter((f): f is AnfwFirewallRow => f != null),
-          policies: policies.filter((p): p is AnfwPolicyRow => p != null),
-          ruleGroups: ruleGroups.filter((r): r is AnfwRuleGroupRow => r != null),
-        };
-      } catch { return empty; }
+        const firewallsOk = firewalls.filter((f): f is AnfwFirewallRow => f != null);
+        const policiesOk = policies.filter((p): p is AnfwPolicyRow => p != null);
+        const ruleGroupsOk = ruleGroups.filter((r): r is AnfwRuleGroupRow => r != null);
+        // Describe* 개별 실패(null)는 조용히 드롭되면 "리소스 없음"으로 오독된다 —
+        // List*가 돌려준 개수보다 적게 채워졌으면 이 리전도 degraded로 표시.
+        const partial = firewallsOk.length < fwList.length
+          || policiesOk.length < policyList.length
+          || ruleGroupsOk.length < rgList.length;
+        return { firewalls: firewallsOk, policies: policiesOk, ruleGroups: ruleGroupsOk, degraded: partial };
+      } catch { return { ...empty, degraded: true }; }
     }));
 
+    const degradedRegions = perRegion.flatMap((r, i) => (r.degraded ? [regions[i]] : []));
     const firewalls = perRegion.flatMap((r) => r.firewalls);
     const policies = perRegion.flatMap((r) => r.policies);
     const ruleGroups = perRegion.flatMap((r) => r.ruleGroups);
@@ -440,6 +449,6 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
       droppedPackets: sum(firewalls.map((f) => f.droppedPackets ?? undefined)),
       rejectedPackets: sum(firewalls.map((f) => f.rejectedPackets ?? undefined)),
     };
-    return { firewalls, policies, ruleGroups, totals, rangeSec };
+    return { firewalls, policies, ruleGroups, degradedRegions, totals, rangeSec };
   });
 }

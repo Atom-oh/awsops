@@ -721,6 +721,7 @@ export const TERMS: Record<string, Pair> = {
   // ---- Network Firewall (/network-firewall) ----
   '방화벽·정책·룰 그룹 인벤토리 + AWS/NetworkFirewall 메트릭 트래픽·드롭 집계 — 보호 설정·로깅 갭·전량 통과 기본 액션·룰 용량 분석': { en: 'Firewall / policy / rule group inventory + AWS/NetworkFirewall traffic & drop aggregation — protection settings, logging gaps, pass-through default actions, rule capacity analysis', zh: '防火墙·策略·规则组清单 + AWS/NetworkFirewall 指标流量·丢弃汇总 — 保护设置·日志缺口·全量放行默认操作·规则容量分析', ja: 'ファイアウォール・ポリシー・ルールグループのインベントリ + AWS/NetworkFirewall メトリクスのトラフィック・ドロップ集計 — 保護設定・ログギャップ・全量通過デフォルトアクション・ルール容量分析' },
   'Network Firewall 조회 실패': { en: 'Failed to load Network Firewall', zh: '获取 Network Firewall 失败', ja: 'Network Firewall の取得に失敗' },
+  '해당 리전의 방화벽·정책·룰 그룹이 누락되거나 실제보다 적게 집계되어 보호·로깅·트래픽·용량 분석이 실제보다 낙관적일 수 있습니다.': { en: 'Firewalls, policies, or rule groups in that region may be missing or undercounted, so protection, logging, traffic, and capacity analysis may look more optimistic than it actually is.', zh: '该区域的防火墙·策略·规则组可能缺失或统计不足，导致保护·日志·流量·容量分析看起来比实际情况更乐观。', ja: '該当リージョンのファイアウォール・ポリシー・ルールグループが欠落または過少集計されている可能性があり、保護・ログ・トラフィック・容量分析が実際より楽観的に見える場合があります。' },
   '방화벽': { en: 'Firewalls', zh: '防火墙', ja: 'ファイアウォール' },
   '엔드포인트': { en: 'Endpoints', zh: '端点', ja: 'エンドポイント' },
   '엔드포인트 미준비': { en: 'Endpoints not ready', zh: '端点未就绪', ja: 'エンドポイント未準備' },
