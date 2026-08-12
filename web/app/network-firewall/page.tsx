@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Flame, Layers, Scroll, Shield, ShieldAlert, Unplug } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Flame, Layers, Scroll, Shield, ShieldAlert, Unplug } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
@@ -374,6 +374,15 @@ export default function NetworkFirewallPage() {
           <div className="text-[13px] text-rose-600">{tt('Network Firewall 조회 실패')}: {err}</div>
         )}
         {!data && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
+
+        {data && data.degradedRegions.length > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-[12px] text-warning-text">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              {tt('일부 리전 조회 실패')} ({data.degradedRegions.join(', ')}) — {tt('해당 리전의 방화벽·정책·룰 그룹이 누락되거나 실제보다 적게 집계되어 보호·로깅·트래픽·용량 분석이 실제보다 낙관적일 수 있습니다.')}
+            </span>
+          </div>
+        )}
 
         {data && t && (
           <>

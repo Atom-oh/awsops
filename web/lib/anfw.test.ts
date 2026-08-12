@@ -280,7 +280,7 @@ describe('anfwAnalysis', () => {
     expect(a.totals.alertLoggingMissing).toBe(1);
   });
 
-  it('리전 degrade: 실패 리전 건너뛰고 나머지 유지', async () => {
+  it('리전 degrade: 실패 리전 건너뛰고 나머지 유지 + degradedRegions에 노출 (조용히 0으로 보이면 안 됨)', async () => {
     mockDb(['us-west-2']);
     mockNfw({ failRegions: ['us-west-2'] });
     mockCw({});
@@ -288,6 +288,40 @@ describe('anfwAnalysis', () => {
     const a = await anfwAnalysis(3600);
     expect(a.firewalls).toHaveLength(1);
     expect(a.policies).toHaveLength(1);
+    expect(a.degradedRegions).toEqual(['us-west-2']);
+  });
+
+  it('정상 리전만 있으면 degradedRegions는 빈 배열 (진짜 무-리소스와 조회실패를 혼동하지 않음)', async () => {
+    mockDb([]);
+    mockNfw();
+    mockCw({});
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    expect(a.degradedRegions).toEqual([]);
+  });
+
+  it('개별 방화벽 Describe 실패: List는 성공했는데 그 항목만 조용히 드롭 → 리전이 degraded로 표시됨', async () => {
+    mockDb([]);
+    mockNfw({ fws: [{ FirewallName: 'DMZVPC-nfw' }, { FirewallName: 'other-nfw' }] });
+    nfwSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'DescribeFirewallCommand' && (cmd.input as { FirewallName: string }).FirewallName === 'other-nfw') {
+        throw new Error('Throttling');
+      }
+      switch (cmd.constructor.name) {
+        case 'ListFirewallsCommand': return { Firewalls: [{ FirewallName: 'DMZVPC-nfw' }, { FirewallName: 'other-nfw' }] };
+        case 'DescribeFirewallCommand': return FW_DESCRIBE;
+        case 'DescribeLoggingConfigurationCommand': return LOGGING;
+        case 'ListFirewallPoliciesCommand': return { FirewallPolicies: [] };
+        case 'ListRuleGroupsCommand': return { RuleGroups: [] };
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    mockCw({});
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    // 실측 방화벽 2개 중 1개만 응답에 남음 — 조용히 "방화벽 1개"로 보이면 오탐/과소경고이므로 degraded 신호가 필수.
+    expect(a.firewalls).toHaveLength(1);
+    expect(a.degradedRegions).toEqual(['ap-northeast-2']);
   });
 
   it('메트릭 전무 → 트래픽 null, 드롭율 null, 리스트는 정상', async () => {
