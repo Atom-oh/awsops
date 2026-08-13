@@ -33,10 +33,18 @@ export function _resetAnfwLogsCacheForTests() { cache.clear(); inflight.clear();
 
 type Row = Record<string, string>;
 
-async function runInsights(region: string, group: string, query: string, rangeSec: number): Promise<Row[]> {
+// 리뷰 MAJOR(확정): 이전엔 그룹별로 쿼리를 따로 실행해 각자 `| limit 10`으로 잘린 뒤
+// 병합·재정렬했다 — 그룹 A·B 각각에서 11위인 항목이 실제 전역 1위여도 두 결과 모두에서
+// 빠져 최종 Top-N에서 통째로 사라지고, 살아남은 항목의 합산 카운트도 실제보다 낮게
+// 나온다(이 카드들의 핵심 산출물인 "어떤 sid가 무엇을 차단했는지"가 조용히 틀어짐).
+// Logs Insights StartQuery는 같은 리전의 여러 로그 그룹을 `logGroupNames`로 한 쿼리에
+// 묶을 수 있다 — 리전당 그룹 전체를 하나의 쿼리로 집계하면 `limit`이 진짜 전역 Top-N이
+// 된다(리전이 여럿이면 리전 단위 결과를 병합하는데, 리전 수는 보통 1~소수라 오차 폭이
+// 이전의 "그룹 수" 규모에서 "리전 수" 규모로 크게 줄어든다).
+async function runInsights(region: string, groups: string[], query: string, rangeSec: number): Promise<Row[]> {
   const end = Math.floor(Date.now() / 1000);
   const { queryId } = await logs(region).send(new StartQueryCommand({
-    logGroupName: group, queryString: query, startTime: end - rangeSec, endTime: end, limit: 1000,
+    logGroupNames: groups, queryString: query, startTime: end - rangeSec, endTime: end, limit: 1000,
   }));
   if (!queryId) return [];
   // 폴링 상한 45s — flow 로그는 대용량(실측 24h 566만 행)이라 30s로는 group-by가 미완료.
@@ -159,16 +167,24 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     const alertTargets = dedupeByGroup(targets.filter((t) => t.type === 'ALERT'));
     const flowTargets = dedupeByGroup(targets.filter((t) => t.type === 'FLOW'));
 
+    // 같은 리전의 그룹들을 하나의 쿼리로 묶는다 — `logGroupNames`는 리전당 한 번만
+    // 호출 가능해 리전이 다른 그룹은 각자 별도 쿼리로 남는다(대개 리전 1개).
+    const groupByRegion = (ts: AnfwLogTarget[]): [string, string[]][] => {
+      const m = new Map<string, string[]>();
+      for (const t of ts) m.set(t.region, [...(m.get(t.region) ?? []), t.group]);
+      return [...m.entries()];
+    };
+
     const runMerged = async (ts: AnfwLogTarget[], key: string, query: string): Promise<Row[]> => {
       const rows: Row[] = [];
       // 리뷰 MAJOR: "그룹 중 하나라도 성공하면 ok"였던 이전 계약은 실패한 그룹의 트래픽이
-      // 조용히 누락된 채 완전한 결과처럼 보이게 만든다(무신호 총계 축소) — all-groups
+      // 조용히 누락된 채 완전한 결과처럼 보이게 만든다(무신호 총계 축소) — all-regions
       // 성공이어야 failed에서 빠진다(하나라도 실패하면 이 쿼리 키를 degrade로 표시).
       let anyFail = false;
-      await Promise.all(ts.map(async (t) => {
+      await Promise.all(groupByRegion(ts).map(async ([region, groups]) => {
         try {
-          rows.push(...await runInsights(t.region, t.group, query, rangeSec));
-        } catch { anyFail = true; /* 그룹 단위 degrade */ }
+          rows.push(...await runInsights(region, groups, query, rangeSec));
+        } catch { anyFail = true; /* 리전 단위 degrade */ }
       }));
       if (anyFail) failed.push(key);
       return rows;
@@ -216,10 +232,10 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       const runMergedWindow = async (ts: AnfwLogTarget[], key: string, query: string, windowSec: number): Promise<Row[]> => {
         const rows: Row[] = [];
         let anyFail = false;
-        await Promise.all(ts.map(async (t) => {
+        await Promise.all(groupByRegion(ts).map(async ([region, groups]) => {
           try {
-            rows.push(...await runInsights(t.region, t.group, query, windowSec));
-          } catch { anyFail = true; /* 그룹 단위 degrade */ }
+            rows.push(...await runInsights(region, groups, query, windowSec));
+          } catch { anyFail = true; /* 리전 단위 degrade */ }
         }));
         if (anyFail) failed.push(key);
         return rows;

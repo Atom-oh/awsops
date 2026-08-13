@@ -126,6 +126,10 @@ interface SgDetail {
   rules: SgRule[];
   /** 이 SG의 VPC를 커버하는 CWL flow log 그룹 (없으면 null). */
   flowLogGroup: string | null;
+  /** true = DescribeFlowLogs 자체가 실패(SCP 거부/스로틀)해 flowLogGroup이 null로 보이는
+   *  것이지 "정말 Flow Logs가 없음"이 아니다 — sgHits()가 no_source 대신 query_failed로
+   *  구분해야 한다(리뷰 MAJOR: 이전엔 이 실패가 "Flow Logs 없음"과 구분 없이 렌더링됐다). */
+  flowDiscoveryFailed: boolean;
 }
 // build-then-swap: sgAnalysis 재실행이 clear()로 빈 구간을 만들면 진행 중 sgHits의 지연
 // peer 조회가 깨지므로, 새 Map을 지역에서 채운 뒤 완료 시점에 원자 교체한다.
@@ -241,6 +245,7 @@ export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
 
     const perRegion = await Promise.all(regions.map(async (region) => {
       let eniTruncated = false;
+      let flowDiscoveryFailed = false;
       try {
         // SG + ENI + 관리형 프리픽스 리스트 + flow logs (병렬, 각자 페이지네이션)
         const [sgs, enis, plNames, flowByVpc] = await Promise.all([
@@ -270,9 +275,19 @@ export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
             return out;
           })(),
           (async () => {
+            // MINOR(누적 지적): 단일 페이지(MaxResults:100) 미순회 — 관리형 프리픽스
+            // 리스트가 100개를 넘는 계정은 뒤쪽 pl-*의 이름이 조용히 빠져 peerLabel이
+            // ID만 표시된다. 다른 List* 호출과 동일하게 전량 순회.
             try {
-              const r = await ec2(region).send(new DescribeManagedPrefixListsCommand({ MaxResults: 100 }));
-              return new Map((r.PrefixLists ?? []).map((p) => [p.PrefixListId ?? '', p.PrefixListName ?? '']));
+              const m = new Map<string, string>();
+              let NextToken: string | undefined;
+              do {
+                const r: { PrefixLists?: { PrefixListId?: string; PrefixListName?: string }[]; NextToken?: string } =
+                  await ec2(region).send(new DescribeManagedPrefixListsCommand({ MaxResults: 100, NextToken }));
+                for (const p of r.PrefixLists ?? []) m.set(p.PrefixListId ?? '', p.PrefixListName ?? '');
+                NextToken = r.NextToken;
+              } while (NextToken);
+              return m;
             } catch { return new Map<string, string>(); }
           })(),
           (async () => {
@@ -301,7 +316,13 @@ export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
                 NextToken = r.NextToken;
               } while (NextToken);
               return m;
-            } catch { return new Map<string, string>(); }
+            } catch {
+              // 리뷰 MAJOR(확정): 이전엔 이 catch가 빈 Map을 반환해 "실패해서 모름"과
+              // "정말 이 VPC에 Flow Logs가 없음"이 똑같이 보였다 — SCP 거부/스로틀이면
+              // sgHits()가 no_source(소스 없음)로 오판하지 않도록 구분 신호를 남긴다.
+              flowDiscoveryFailed = true;
+              return new Map<string, string>();
+            }
           })(),
         ]);
 
@@ -403,6 +424,7 @@ export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
             eniIds: att?.ids ?? [], ips: att?.ips ?? [],
             rules,
             flowLogGroup: flowByVpc.get(g.VpcId ?? '') ?? null,
+            flowDiscoveryFailed,
           });
           const isDefault = g.GroupName === 'default';
           return {
@@ -425,7 +447,7 @@ export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
             rules,
           };
         });
-        return { rows, flowLogVpcs: flowByVpc.size, degraded: eniTruncated };
+        return { rows, flowLogVpcs: flowByVpc.size, degraded: eniTruncated || flowDiscoveryFailed };
       } catch { return { rows: [] as SgUsageRow[], flowLogVpcs: 0, degraded: true }; }
     }));
 
@@ -549,7 +571,11 @@ export async function sgHits(sgId: string, rangeSec: number, scopeRegions?: stri
       return { ...empty, note: 'no_eni', ruleHits: nullRuleHits(), idleIngressRules: 0 };
     }
     const ownIps = new Set(detail.ips);
-    let flowQueryFailed = false;
+    // 리뷰 MAJOR(확정): DescribeFlowLogs 발견 자체가 실패(SCP 거부/스로틀)하면 flowLogGroup이
+    // null인 채로 여기 도달하는데, 이전엔 그대로 NFM 폴백 → 최종 'no_source'로 떨어져
+    // "이 SG엔 Flow Logs가 없음"처럼 보였다. anfw-logs.ts의 logDiscovery 패턴과 동일하게
+    // 발견 실패를 query_failed로 미리 표시해 둔다(NFM이 성공하면 상대 식별은 그대로 쓴다).
+    let flowQueryFailed = detail.flowDiscoveryFailed;
 
     // ① VPC Flow Logs (CWL) — 룰-레벨 정확 매칭 (인바운드만)
     if (detail.flowLogGroup) {

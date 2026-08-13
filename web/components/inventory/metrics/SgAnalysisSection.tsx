@@ -136,9 +136,14 @@ function SgHitsPanel({ sgId, range, regionsKey }: { sgId: string; range: number;
   );
 }
 
+/** 서버(/api/sg)가 `?regions=` 파싱 단계에서 상한/형식 불일치로 스코프를 잘랐을 때
+ *  얹는 신호 — sgAnalysis()의 SgAnalysis 타입 자체엔 없다(라우트 계층에서만 계산되는
+ *  값이라 sg-analysis.ts의 리턴 타입을 오염시키지 않고 응답에만 덧붙인다). */
+type SgAnalysisResponse = SgAnalysis & { scopeTruncated?: boolean };
+
 export function SgAnalysisSection({ rows }: { rows: Row[] }) {
   const { tt } = useI18n();
-  const [data, setData] = useState<SgAnalysis | null>(null);
+  const [data, setData] = useState<SgAnalysisResponse | null>(null);
   const [err, setErr] = useState('');
   const [range, setRange] = useState(86400);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -151,7 +156,7 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
     let live = true;
     const regionsParam = regionsKey ? `?regions=${encodeURIComponent(regionsKey)}` : '';
     fetch(`/api/sg${regionsParam}`)
-      .then(async (r) => { const d = await r.json().catch(() => null); if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`); return d as SgAnalysis; })
+      .then(async (r) => { const d = await r.json().catch(() => null); if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`); return d as SgAnalysisResponse; })
       .then((d) => { if (live) { setData(d); setErr(''); } })
       .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { live = false; };
@@ -233,6 +238,15 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
         <div className="px-4 pt-4 text-[12px] text-ink-400">{tt('이 분석은 위 표와 같은 리전만 스캔하지만, 계정은 항상 호스트 계정입니다.')}</div>
         {err && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('보안 그룹 분석 조회 실패')}: {err}</div>}
         {!data && !err && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로딩 중…')}</div>}
+        {/* 리뷰 MAJOR(확정, 라운드5): 서버가 ?regions= 상한(20개)이나 형식 불일치로 스코프를
+            조용히 잘라도 이전엔 응답에 아무 신호가 없었다 — "위 표와 같은 리전만 스캔한다"는
+            위 고지와 달리 실제로는 더 적은 리전만 스캔됐는데도 "이상 없음"이 확정처럼 보였다. */}
+        {data && data.scopeTruncated && (
+          <div className="flex items-start gap-2 px-4 pt-4 text-[12px] text-warning-text">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>{tt('스캔 범위가 상한을 넘어 일부 리전이 제외됐습니다')} — {tt('해당 리전의 보안 그룹·부착 집계가 실제보다 적을 수 있습니다.')}</span>
+          </div>
+        )}
         {data && data.degradedRegions.length > 0 && (
           <div className="flex items-start gap-2 px-4 pt-4 text-[12px] text-warning-text">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
@@ -240,7 +254,7 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
           </div>
         )}
         {data && t && (() => {
-          const resourcesDegraded = data.degradedRegions.length > 0;
+          const resourcesDegraded = data.degradedRegions.length > 0 || !!data.scopeTruncated;
           const lb = (n: number) => (resourcesDegraded ? `${n}+` : String(n));
           const degradedHint = tt('일부 리전 조회 실패 — 실제보다 적을 수 있음');
           return (

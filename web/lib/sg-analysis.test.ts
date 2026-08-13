@@ -523,6 +523,28 @@ describe('sgHits/sgAnalysis — 리뷰 라운드3', () => {
     expect(h.note).toBe('query_failed');
   });
 
+  it('DescribeFlowLogs 자체가 실패(SCP 거부/스로틀)하면 "Flow Logs 없음"이 아니라 query_failed로 구분 (리뷰 MAJOR)', async () => {
+    mockDb();
+    ec2Send.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'DescribeSecurityGroupsCommand': return { SecurityGroups: SGS };
+        case 'DescribeNetworkInterfacesCommand': return { NetworkInterfaces: ENIS };
+        case 'DescribeManagedPrefixListsCommand': return { PrefixLists: [] };
+        case 'DescribeFlowLogsCommand': throw new Error('AccessDenied');
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    mockNfmStatus.mockResolvedValue({ monitors: [], scopeCount: 0 }); // NFM도 모니터 없음 → no_source 후보 배제
+    const { sgAnalysis, sgHits } = await import('./sg-analysis');
+    const a = await sgAnalysis();
+    // 리전 자체도 degraded로 표시돼야 한다 — Flow Logs 발견 실패는 "이 리전의 SG 히트
+    // 매칭 근거가 불완전함"을 뜻하는 anfw.ts류 degradedRegions와 동일 계약.
+    expect(a.degradedRegions).toEqual(['ap-northeast-2']);
+    const h = await sgHits('sg-web', 3600);
+    expect(h.source).toBe('none');
+    expect(h.note).toBe('query_failed'); // 'no_source'였다면 "Flow Logs가 원래 없음"으로 오독됨
+  });
+
   it('vpcMeta 쿼리는 account_id로 호스트만 필터 — 멤버 계정의 겹치는 CIDR/VPC ID와 오매칭 방지', async () => {
     mockQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('DISTINCT region')) return { rows: [] };
