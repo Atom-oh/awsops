@@ -1,8 +1,8 @@
 # 라이브러리 모듈 / Library Module
 
 ## 역할 / Role
-API 라우트와 컴포넌트가 공유하는 도메인 로직 115개 모듈 (React 비의존 위주, `collectors/` 포함). 테스트는 vitest로 소스 옆 colocate.
-(115 domain-logic modules shared by API routes and components, mostly React-free. Tests colocated, vitest.)
+API 라우트와 컴포넌트가 공유하는 도메인 로직 117개 모듈 (React 비의존 위주, `collectors/` 포함). 테스트는 vitest로 소스 옆 colocate.
+(117 domain-logic modules shared by API routes and components, mostly React-free. Tests colocated, vitest.)
 
 ## 주요 파일 / Key Files
 - `db.ts` — Aurora node-pg 공유 풀 `getPool()`: RDS IAM DB 인증(`awsops_web` 역할, master secret 아님). `password`를 함수로 전달해 커넥션마다 15분 토큰을 새로 서명 — 7일 secret 자동회전에 안전. `max: 3` (shared pool; IAM DB auth, per-connection fresh token)
