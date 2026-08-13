@@ -22,16 +22,22 @@ import { getPool } from './db';
 //    근사(정직 고지). 소스 생성(Flow Logs enable)은 ADR-005 동결이라 하지 않는다.
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
+// 리뷰 MAJOR(확정, 라운드6): scope/detail 캐시엔 상한+eviction을 넣었지만, 리전별 SDK
+// 클라이언트 Map(ec2Clients/logsClients)은 그대로 무제한이었다 — `?regions=`가 형식만
+// 검증하고 실제 존재 리전과 교집합하지 않아, 임의의 형식-유효 리전 문자열마다 새
+// EC2Client/CloudWatchLogsClient가 영구적으로 쌓인다(OOM 민감한 Fargate web 티어).
+// evictOldest는 아래에서 선언되지만 함수 선언 호이스팅으로 여기서도 참조 가능.
+const CLIENT_MAP_MAX = 64;
 const ec2Clients = new Map<string, EC2Client>();
 const ec2 = (r: string) => {
   let c = ec2Clients.get(r);
-  if (!c) { c = new EC2Client({ region: r }); ec2Clients.set(r, c); }
+  if (!c) { c = new EC2Client({ region: r }); ec2Clients.set(r, c); evictOldest(ec2Clients, CLIENT_MAP_MAX); }
   return c;
 };
 const logsClients = new Map<string, CloudWatchLogsClient>();
 const logs = (r: string) => {
   let c = logsClients.get(r);
-  if (!c) { c = new CloudWatchLogsClient({ region: r }); logsClients.set(r, c); }
+  if (!c) { c = new CloudWatchLogsClient({ region: r }); logsClients.set(r, c); evictOldest(logsClients, CLIENT_MAP_MAX); }
   return c;
 };
 
@@ -141,6 +147,16 @@ const ipLabelCacheByScope = new Map<string, Map<string, string>>();
 const scopeCacheKey = (scopeRegions?: string[]): string =>
   scopeRegions && scopeRegions.length > 0 ? `a|${[...scopeRegions].sort().join(',')}` : 'a|*';
 
+async function allInventoryRegions(): Promise<string[]> {
+  try {
+    const r = await getPool().query<{ region: string }>(
+      `SELECT DISTINCT region FROM inventory_resources WHERE resource_type = 'vpc' AND region IS NOT NULL`);
+    const set = new Set(r.rows.map((x) => x.region));
+    set.add(REGION);
+    return [...set];
+  } catch { return [REGION]; }
+}
+
 // 리뷰 MAJOR(확정): 이전엔 항상 인벤토리 전 리전·전 계정을 스캔해 (1) 페이지 상단의
 // 계정/리전 스코프 선택과 무관하게 호스트 계정 SG가 항상 보였고, (2) 스코프 밖 리전의
 // CIDR/이름이 VPC 식별에 섞여 다른 계정의 겹치는 RFC1918 대역과 오매칭될 수 있었다.
@@ -149,13 +165,22 @@ const scopeCacheKey = (scopeRegions?: string[]): string =>
 // 스캔한다 — 안 넘기면(예: 배치/진단 컨텍스트) 기존처럼 전 리전.
 async function regionsFromInventory(scopeRegions?: string[]): Promise<string[]> {
   if (scopeRegions && scopeRegions.length > 0) return [...new Set(scopeRegions)];
-  try {
-    const r = await getPool().query<{ region: string }>(
-      `SELECT DISTINCT region FROM inventory_resources WHERE resource_type = 'vpc' AND region IS NOT NULL`);
-    const set = new Set(r.rows.map((x) => x.region));
-    set.add(REGION);
-    return [...set];
-  } catch { return [REGION]; }
+  return allInventoryRegions();
+}
+
+// 리뷰 MAJOR(확정, 라운드6): scopeRegions는 형식만 검증된 클라이언트 입력이라(sg/route.ts
+// REGION_RE는 실존 리전 여부를 보장 안 함) 그대로 regions로 쓰면 존재하지 않는/모니터링
+// 대상이 아닌 리전에도 EC2Client/CloudWatchLogsClient가 생성되고 Describe 호출이 나간다.
+// 게다가 scopeCacheKey가 이 원본 입력 그대로 캐시 키가 되므로, 실존 리전 집합은 같은데
+// 표기만 다른(무작위 문자열 포함) 입력마다 캐시가 무한히 갈라진다. 인벤토리에 실제 있는
+// 리전과 교집합해 반환 — sgAnalysis/sgHits가 캐시 키 계산 전에 이 결과를 쓰면 두 문제가
+// 한 번에 해소된다(무효 리전은 스캔 대상에서 빠지고, 캐시 키도 실제 스캔 범위 기준이 됨).
+// 교집합이 빈 집합이면(전부 무효) 스코프 없음(전 리전)으로 안전하게 폴백.
+async function resolveScopeRegions(scopeRegions?: string[]): Promise<string[] | undefined> {
+  if (!scopeRegions || scopeRegions.length === 0) return undefined;
+  const allowed = new Set(await allInventoryRegions());
+  const intersected = [...new Set(scopeRegions)].filter((r) => allowed.has(r));
+  return intersected.length > 0 ? intersected : undefined;
 }
 
 /** 인벤토리 VPC 이름/CIDR (peer CIDR 식별용) — scopeRegions가 있으면 그 리전만. */
@@ -236,12 +261,15 @@ const portRange = (from?: number, to?: number): string =>
 /** SG 사용 현황 + 룰 식별 분석 (4분 TTL) — scopeRegions를 주면 그 리전만(페이지 상단
  *  계정/리전 선택과 동일 범위), 안 주면 인벤토리 전 리전(레거시/배치 호출용). */
 export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
-  const cacheKey = scopeCacheKey(scopeRegions);
+  // resolveScopeRegions()는 캐시 조회 전에 실행 — 캐시 키 자체를 "실제 검증된 스캔 범위"
+  // 기준으로 만들어야 무효/무작위 리전 문자열로 캐시를 무한 분할하는 걸 막을 수 있다.
+  const resolved = await resolveScopeRegions(scopeRegions);
+  const cacheKey = scopeCacheKey(resolved);
   return cached(cacheKey, async () => {
     // clear()가 아니라 지역 Map에 채운 뒤 반환 직전 원자 교체 (진행 중 sgHits 보호).
     const nextDetail = new Map<string, SgDetail>();
     const nextIpLabel = new Map<string, string>();
-    const [regions, vpcs] = await Promise.all([regionsFromInventory(scopeRegions), vpcMeta(scopeRegions)]);
+    const [regions, vpcs] = await Promise.all([regionsFromInventory(resolved), vpcMeta(resolved)]);
 
     const perRegion = await Promise.all(regions.map(async (region) => {
       let eniTruncated = false;
@@ -551,9 +579,11 @@ async function runInsights(region: string, group: string, query: string, rangeSe
 /** 선택 SG의 트래픽 히트 매칭 — flow logs 우선, NFM 폴백 (모두 없으면 none). scopeRegions는
  *  sgAnalysis()와 동일 계약 — 호출한 페이지의 스코프에 맞는 detailCache를 읽어야 한다. */
 export async function sgHits(sgId: string, rangeSec: number, scopeRegions?: string[]): Promise<SgHitsResult> {
-  const scopeKey = scopeCacheKey(scopeRegions);
+  const resolved = await resolveScopeRegions(scopeRegions);
+  const scopeKey = scopeCacheKey(resolved);
   return cached(`h|${scopeKey}|${sgId}|${rangeSec}`, async () => {
-    await sgAnalysis(scopeRegions); // 이 스코프의 detailCache 채움 (캐시면 no-op)
+    await sgAnalysis(resolved); // 이 스코프의 detailCache 채움 (캐시면 no-op) — sgAnalysis도
+    // 같은 resolved를 다시 resolveScopeRegions에 통과시키지만 이미 검증된 값이라 no-op.
     const detailCache = detailCacheByScope.get(scopeKey) ?? new Map<string, SgDetail>();
     const ipLabelCache = ipLabelCacheByScope.get(scopeKey) ?? new Map<string, string>();
     const detail = detailCache.get(sgId);

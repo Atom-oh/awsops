@@ -598,6 +598,44 @@ describe('sgHits/sgAnalysis — 리뷰 라운드3', () => {
   });
 });
 
+describe('sgAnalysis — 스코프 리전 교집합 (리뷰 MAJOR 라운드6)', () => {
+  it('인벤토리에 없는 임의 리전 문자열은 교집합에서 걸러지고, 실제 인벤토리 리전만 스캔됨', async () => {
+    mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('DISTINCT region')) return { rows: [{ region: 'us-west-2' }] };
+      if (params) return { rows: [] };
+      return { rows: [] };
+    });
+    const seenRegions = new Set<string>();
+    ec2Send.mockImplementation(async (cmd: Cmd, region: string) => {
+      seenRegions.add(region);
+      switch (cmd.constructor.name) {
+        case 'DescribeSecurityGroupsCommand': return { SecurityGroups: [] };
+        case 'DescribeNetworkInterfacesCommand': return { NetworkInterfaces: [] };
+        case 'DescribeManagedPrefixListsCommand': return { PrefixLists: [] };
+        case 'DescribeFlowLogsCommand': return { FlowLogs: [] };
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    const { sgAnalysis } = await import('./sg-analysis');
+    // 'zz-fake-9'는 실제 존재하는 인벤토리 리전이 아니다 — client가 이 리전으로 SDK 호출을
+    // 보내면(교집합 미적용) EC2Client가 생성되고 무의미한 리전에 Describe가 나간다.
+    await sgAnalysis(['us-west-2', 'zz-fake-9']);
+    expect(seenRegions.has('zz-fake-9')).toBe(false);
+    expect(seenRegions.has('us-west-2')).toBe(true);
+  });
+
+  it('요청 스코프가 전부 인벤토리 밖이면 안전하게 전 리전 스캔으로 폴백(빈 결과로 조용히 끝나지 않음)', async () => {
+    mockQuery.mockImplementation(async (sql: string) =>
+      sql.includes('DISTINCT region') ? { rows: [] } : { rows: [] });
+    mockEc2();
+    const { sgAnalysis } = await import('./sg-analysis');
+    const a = await sgAnalysis(['zz-fake-9']);
+    // 폴백 결과는 REGION(기본 ap-northeast-2) 전 리전 스캔과 동일해야 한다 — 빈 스코프로
+    // 조용히 끝나(rows:[]) "SG가 원래 없음"처럼 보이면 안 된다.
+    expect(a.rows.length).toBe(3);
+  });
+});
+
 describe('ipInCidr', () => {
   it('IPv4 CIDR 포함 판정', async () => {
     const { ipInCidr } = await import('./sg-analysis');

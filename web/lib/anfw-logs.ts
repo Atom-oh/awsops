@@ -100,11 +100,18 @@ export interface AnfwLogsAnalysis {
 const num = (s: string | undefined): number => (s != null && s !== '' ? Number(s) || 0 : 0);
 
 /** 로깅 구성(알면 정확) 또는 접두사 발견(모르면 휴리스틱)으로 CWL 대상 도출. */
-async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean }> {
+async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean; firewallDiscoveryDegraded: boolean }> {
   const a = await anfwAnalysis(rangeSec);
   const targets: AnfwLogTarget[] = [];
   let unsupported = 0;
   const discoverRegions = new Set<string>();
+  // 리뷰 MAJOR(확정, 라운드6): List/Describe 자체가 실패한 리전은 anfwAnalysis()의
+  // firewalls[]에서 통째로 빠지고 degradedRegions에만 남는다(anfw.ts 계약) — 이 함수는
+  // a.firewalls만 순회하므로 그런 리전은 targets에 아무것도 안 남고 unsupported/
+  // discoveryFailed도 안 켜진다. 결과적으로 "이 방화벽이 어떤 대상으로 로깅하는지도
+  // 모르는" 상태가 "CloudWatch Logs 대상 로그 없음"으로 렌더링된다 — 이 PR이 다른
+  // 모든 경로에서 지키는 "unknown ≠ off" 계약을 이 함수 자신이 어긴 것.
+  const firewallDiscoveryDegraded = (a.degradedRegions ?? []).length > 0;
   for (const f of a.firewalls) {
     if (!f.loggingKnown) { discoverRegions.add(f.region); continue; }
     // 리뷰 MINOR: ALERT→CWL + FLOW→S3처럼 섞인 방화벽은 anyCwl=true라 unsupported에서
@@ -141,17 +148,20 @@ async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarge
       } while (nextToken);
     } catch { discoveryFailed = true; }
   }
-  return { targets, unsupported, discoveryFailed };
+  return { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded };
 }
 
 /** Alert/Flow 로그 Insights 집계 — 그룹별 병렬 실행 후 병합, 개별 실패는 failed로 degrade. */
 export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalysis> {
   return cached(`l|${rangeSec}`, async () => {
-    const { targets, unsupported, discoveryFailed } = await resolveTargets(rangeSec);
+    const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded } = await resolveTargets(rangeSec);
     const failed: string[] = [];
     // 로그 그룹 발견 자체가 실패(스로틀/거부)한 것과 "발견됐지만 로그가 없음"을 구분 —
     // 전자를 후자로 렌더링하면 SCP 거부 환경에서 "로그 없음"이라는 거짓 all-clear가 된다.
     if (discoveryFailed) failed.push('logDiscovery');
+    // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().degradedRegions) 그
+    // 리전 방화벽들의 로깅 구성을 원래 확인조차 못 했다 — "로그 없음"과 구분되는 별도 키.
+    if (firewallDiscoveryDegraded) failed.push('firewallDiscovery');
     // 리뷰 MAJOR: targets는 방화벽 단위라, 중앙 공용 로그 그룹으로 로깅하는 방화벽이
     // 2개 이상이면 같은 (region, group)이 그대로 두 번 나열된다 — 아래 query 단위 집계가
     // 그룹당 한 번이 아니라 대상 수만큼 실행돼 모든 합계·Top 리스트가 배로 부풀려진다.
@@ -190,14 +200,20 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       return rows;
     };
 
+    // 리뷰 MAJOR(확정, 라운드6): 같은 리전의 그룹은 logGroupNames로 묶었지만, 리전이
+    // 여럿이면 여전히 리전별로 `limit 10`까지 잘린 뒤 병합한다 — 모든 리전에서 11위인
+    // 항목이 실제 전역 1위여도 사라질 수 있다. 병합 전 리전별 상한을 표시 컷오프(10)보다
+    // 훨씬 크게(100) 잡아 오차 범위를 "리전 수 × (100-10)" 꼬리로 좁힌다(완전 제거는
+    // 아니지만 실사용 규모에서 사실상 무시 가능한 수준으로 축소).
+    const PER_REGION_OVERFETCH = 100;
     let alert: AnfwAlertAnalytics | null = null;
     if (alertTargets.length > 0) {
       const [totals, byAction, topSig, topSrc, topDst] = await Promise.all([
         runMerged(alertTargets, 'alertTotals', `filter event.event_type = 'alert' | stats count(*) as cnt`),
         runMerged(alertTargets, 'alertByAction', `fields event.alert.action as action | filter event.event_type = 'alert' | stats count(*) as cnt by action | sort cnt desc`),
-        runMerged(alertTargets, 'alertTopSignatures', `fields event.alert.signature_id as sid, event.alert.signature as sig | filter event.event_type = 'alert' | stats count(*) as cnt by sid, sig | sort cnt desc | limit 10`),
-        runMerged(alertTargets, 'alertTopSources', `fields event.src_ip as src | filter event.event_type = 'alert' | stats count(*) as cnt by src | sort cnt desc | limit 10`),
-        runMerged(alertTargets, 'alertTopDests', `fields concat(event.dest_ip, ':', event.dest_port) as dst | filter event.event_type = 'alert' | stats count(*) as cnt by dst | sort cnt desc | limit 10`),
+        runMerged(alertTargets, 'alertTopSignatures', `fields event.alert.signature_id as sid, event.alert.signature as sig | filter event.event_type = 'alert' | stats count(*) as cnt by sid, sig | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
+        runMerged(alertTargets, 'alertTopSources', `fields event.src_ip as src | filter event.event_type = 'alert' | stats count(*) as cnt by src | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
+        runMerged(alertTargets, 'alertTopDests', `fields concat(event.dest_ip, ':', event.dest_port) as dst | filter event.event_type = 'alert' | stats count(*) as cnt by dst | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
       ]);
       const merge = (rows: Row[], nameField: string) => {
         const m = new Map<string, number>();
@@ -242,7 +258,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       };
       const [totals, talkers, byProto] = await Promise.all([
         runMerged(flowTargets, 'flowTotals', `filter event.event_type = 'netflow' | stats count(*) as cnt, sum(event.netflow.bytes) as bytes`),
-        runMergedWindow(flowTargets, 'flowTopTalkers', `fields event.src_ip as src, event.dest_ip as dst | filter event.event_type = 'netflow' | stats sum(event.netflow.bytes) as bytes, count(*) as cnt by src, dst | sort bytes desc | limit 10`, talkersWindowSec),
+        runMergedWindow(flowTargets, 'flowTopTalkers', `fields event.src_ip as src, event.dest_ip as dst | filter event.event_type = 'netflow' | stats sum(event.netflow.bytes) as bytes, count(*) as cnt by src, dst | sort bytes desc | limit ${PER_REGION_OVERFETCH}`, talkersWindowSec),
         runMerged(flowTargets, 'flowByProto', `fields event.proto as proto | filter event.event_type = 'netflow' | stats count(*) as cnt by proto | sort cnt desc`),
       ]);
       const protoMap = new Map<string, number>();

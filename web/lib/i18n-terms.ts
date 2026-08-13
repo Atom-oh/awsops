@@ -856,7 +856,7 @@ export const TERMS: Record<string, Pair> = {
   '상대만': { en: 'peers only', zh: '仅对端', ja: '相手のみ' },
   '이 룰 유형은 히트 매칭을 산출할 수 없음': { en: 'Hit matching cannot be computed for this rule type', zh: '此规则类型无法计算命中匹配', ja: 'このルールタイプはヒットマッチングを算出できません' },
   'SG를 찾을 수 없음': { en: 'Security group not found', zh: '未找到安全组', ja: 'SG が見つかりません' },
-  '부착된 ENI가 없어 트래픽이 존재하지 않습니다 (미사용)': { en: 'No attached ENIs, so no traffic exists (unused)', zh: '没有附加的 ENI，因此不存在流量（未使用）', ja: 'アタッチされた ENI がないためトラフィックは存在しません（未使用）' },
+  '부착된 ENI가 없어 트래픽 증거 자체가 없습니다 (확인 불가 — 미사용 확정 아님)': { en: 'No attached ENIs, so there is no traffic evidence at all (unconfirmed — not a confirmed-unused verdict)', zh: '没有附加的 ENI，因此完全没有流量证据（无法确认 — 并非确定未使用）', ja: 'アタッチされた ENI がないためトラフィックの証拠自体がありません（確認不可 — 未使用確定ではありません）' },
   'VPC Flow Logs·NFM 모두 없음 — 트래픽 데이터 소스가 없습니다': { en: 'Neither VPC Flow Logs nor NFM available — no traffic data source', zh: 'VPC Flow Logs 与 NFM 均不可用 — 没有流量数据源', ja: 'VPC Flow Logs・NFM とも利用不可 — トラフィックデータソースがありません' },
   'Flow Logs 조회가 실패했습니다(소스가 없는 게 아님) — 잠시 후 다시 시도해 주세요': { en: 'The Flow Logs query failed (a source does exist) — please try again shortly', zh: 'Flow Logs 查询失败（数据源确实存在）— 请稍后重试', ja: 'Flow Logs の照会に失敗しました（ソース自体は存在します）— しばらくしてから再度お試しください' },
   'Flow Logs에 기간 내 레코드 없음 (또는 커스텀 포맷 — 기본 포맷만 해석)': { en: 'No Flow Logs records in range (or a custom format — only the default format is parsed)', zh: '时段内 Flow Logs 无记录（或为自定义格式 — 仅解析默认格式）', ja: '期間内の Flow Logs レコードなし（またはカスタム形式 — 既定形式のみ解析）' },
