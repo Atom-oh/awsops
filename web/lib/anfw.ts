@@ -120,6 +120,11 @@ export interface AnfwAnalysis {
    *  빈 배열이 아니면 firewalls/policies/ruleGroups·totals는 "리전에 리소스 없음"이 아니라
    *  "AWS 조회 실패로 알 수 없음" — 0/빈 결과를 그대로 신뢰하면 안 됨. */
   degradedRegions: string[];
+  /** 이번 분석이 실제로 조회를 시도한 전 리전 목록(인벤토리 기반) — firewalls[].region은
+   *  현재 방화벽이 있는 리전만 담아 "리전의 마지막 방화벽이 삭제됨" 케이스를 놓친다.
+   *  audit 등 firewalls 목록과 무관하게 "우리가 감시하는 리전 전체"가 필요한 호출자는
+   *  이 목록을 써야 한다(리뷰 MAJOR). */
+  scannedRegions: string[];
   /** CloudWatch(ListMetrics 미순회 잔여분·100튜플 캡·쿼리 단위 실패)로 트래픽/드롭 수치가
    *  실측보다 낮게 나올 수 있는 리전 — List/Describe는 성공했지만 메트릭만 저하됨.
    *  degradedRegions와 달리 firewalls/policies/ruleGroups 자체는 완전하다. */
@@ -508,6 +513,6 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
       droppedPackets: sum(firewalls.map((f) => f.droppedPackets ?? undefined)),
       rejectedPackets: sum(firewalls.map((f) => f.rejectedPackets ?? undefined)),
     };
-    return { firewalls, policies, ruleGroups, degradedRegions, metricsDegradedRegions, totals, rangeSec };
+    return { firewalls, policies, ruleGroups, degradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec };
   });
 }

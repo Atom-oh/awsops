@@ -13,11 +13,18 @@ const REGION_RE = /^[a-z]{2}-[a-z]+-\d$/;
 // 페이지 상단의 계정/리전 선택과 무관하게 보였다(형제 TgwSection은 scope-filtered rows의
 // ids를 서버에 넘겨 스코핑) — ?regions=로 현재 뷰의 SG 인벤토리 행이 속한 리전만 스캔하도록
 // SgAnalysisSection이 넘긴다.
+// 리뷰 MAJOR(확정): scopeCacheKey는 정렬된 리전 목록 그대로를 캐시 키로 쓰므로, 길이
+// 제한이 없으면 실제 리전의 부분집합을 계속 바꿔 요청하는 것만으로 매번 새 캐시 키가
+// 생겨 4분 TTL을 무한히 우회하고(계정 공유 쿼터에 매 요청 풀 스캔) sg-analysis.ts의
+// detailCacheByScope/ipLabelCacheByScope에 스코프별 Map을 계속 새로 쌓는다(OOM
+// 민감한 Fargate web 티어에서 무제한 증가). 실사용(페이지의 계정/리전 선택)은 한
+// 화면에 표시되는 리전 몇 개를 넘지 않으므로 넉넉한 상한으로 그 외의 조합 폭증을 막는다.
+const MAX_SCOPE_REGIONS = 20;
 function parseRegions(url: URL): string[] | undefined {
   const raw = url.searchParams.get('regions');
   if (!raw) return undefined;
   const regions = raw.split(',').map((r) => r.trim()).filter((r) => REGION_RE.test(r));
-  return regions.length > 0 ? [...new Set(regions)] : undefined;
+  return regions.length > 0 ? [...new Set(regions)].slice(0, MAX_SCOPE_REGIONS) : undefined;
 }
 
 // Security Group 분석: 사용 유무(ENI 부착+상호참조) + 룰 소스/목적지 식별.

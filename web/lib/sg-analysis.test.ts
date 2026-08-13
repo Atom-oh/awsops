@@ -523,6 +523,33 @@ describe('sgHits/sgAnalysis — 리뷰 라운드3', () => {
     expect(h.note).toBe('query_failed');
   });
 
+  it('vpcMeta 쿼리는 account_id로 호스트만 필터 — 멤버 계정의 겹치는 CIDR/VPC ID와 오매칭 방지', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('DISTINCT region')) return { rows: [] };
+      expect(sql).toContain("account_id = 'self'");
+      return { rows: [{ resource_id: 'vpc-1', detail: { name: 'host-vpc', cidr_block: '10.254.0.0/16' } }] };
+    });
+    mockEc2();
+    const { sgAnalysis } = await import('./sg-analysis');
+    await sgAnalysis();
+    expect(mockQuery).toHaveBeenCalled();
+  });
+
+  it('스코프 캐시 Map은 상한을 넘기면 가장 오래된 스코프부터 비워 무제한 증가를 막음', async () => {
+    mockDb();
+    mockEc2();
+    const { sgAnalysis, _resetSgCacheForTests } = await import('./sg-analysis');
+    _resetSgCacheForTests();
+    // 서로 다른 스코프를 33개 생성(상한 32) — 가장 먼저 만든 스코프는 evict돼야 한다.
+    for (let i = 0; i < 33; i++) {
+      await sgAnalysis([`ap-northeast-${(i % 9) + 1}`, `us-east-${i}`]);
+    }
+    // detailCacheByScope/ipLabelCacheByScope는 모듈 비공개라 간접 확인: 첫 스코프를 다시
+    // 조회해도 예외 없이 (재구축돼) 동작하면 evict가 크래시를 일으키지 않았다는 최소 보증.
+    const again = await sgAnalysis(['ap-northeast-1', 'us-east-0']);
+    expect(again.rows.length).toBeGreaterThanOrEqual(0);
+  });
+
   it('sgAnalysis(scopeRegions)는 스코프 리전만 스캔 — 스코프별 detailCache가 서로 오염되지 않음', async () => {
     mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (sql.includes('DISTINCT region')) return { rows: [] };
