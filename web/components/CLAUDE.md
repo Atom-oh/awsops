@@ -1,8 +1,8 @@
 # 컴포넌트 모듈 / Components Module
 
 ## 역할 / Role
-클라이언트 컴포넌트 88개, 11개 서브디렉토리: `ui`(공용 프리미티브), `shell`(AppShell·Sidebar·LanguageProvider·AccountSelector 등), `charts`, `chat`, `inventory`(+`metrics/`), `eks`, `diagnosis`, `datasources`, `insights`, `nfm`, `overview`.
-(88 client components across 11 subdirs: shared primitives in `ui/`, app shell, and domain components.)
+클라이언트 컴포넌트 89개, 11개 서브디렉토리: `ui`(공용 프리미티브), `shell`(AppShell·Sidebar·LanguageProvider·AccountSelector 등), `charts`, `chat`, `inventory`(+`metrics/`), `eks`, `diagnosis`, `datasources`, `insights`, `nfm`, `overview`.
+(89 client components across 11 subdirs: shared primitives in `ui/`, app shell, and domain components.)
 
 ## 주요 파일 / Key Files
 - `ui/DataTable.tsx` + `ui/DetailPanel.tsx` — 목록+상세 기본 조합. DetailPanel은 행이 이미 들고 있는 전체 데이터를 추가 fetch 없이 렌더 — `spec`(`InvType`)에 `sections`가 있으면 섹션 그룹 렌더, 없으면 flat key 목록(하위호환). 신규 인벤토리 타입은 `sections` 정의 필수 (renders the full row; grouped sections when the spec provides them)

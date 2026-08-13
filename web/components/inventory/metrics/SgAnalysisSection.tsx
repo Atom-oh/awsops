@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Globe, Layers, Link2, Unplug, Activity } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Globe, Layers, Link2, Unplug, Activity } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
 import Badge from '@/components/ui/Badge';
@@ -38,6 +38,7 @@ const NOTE_TEXT: Record<Exclude<SgHitNote, null>, string> = {
   no_source: 'VPC Flow Logs·NFM 모두 없음 — 트래픽 데이터 소스가 없습니다',
   flow_no_records: 'Flow Logs에 기간 내 레코드 없음 (또는 커스텀 포맷 — 기본 포맷만 해석)',
   flow_eni_truncated: 'ENI 50개까지만 집계 — 히트 수는 부분 집계이며 매칭 0 룰이 실제 유휴가 아닐 수 있습니다',
+  flow_capped: 'Insights 상위 200건 캡 — 저용량 매칭이 누락됐을 수 있어 매칭 0으로 보이는 룰 중 일부는 확인 불가로 표시됩니다',
   nfm_peers_only: 'VPC Flow Logs 미설정 — NFM은 트래픽 상대만 식별하며 특정 룰 히트로 귀속하지 못합니다 (룰 매칭은 Flow Logs 필요, 최근 1시간)',
 };
 
@@ -166,13 +167,16 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
     { key: 'vpc', label: 'VPC', mono: true, facet: true, value: (r) => r.vpcLabel || null },
     {
       key: 'usage', label: tt('사용'), facet: true,
-      title: tt('부착=ENI 연결됨 · 참조=다른 SG 룰이 소스로 사용 · 미사용=둘 다 없음'),
-      value: (r) => (r.eniCount > 0 ? 'attached' : r.referencedBy.length > 0 ? 'referenced' : 'unused'),
+      title: tt('부착=ENI 연결됨 · 참조=다른 SG 룰이 소스로 사용 · 미사용=둘 다 없음 (default SG는 AWS가 삭제를 막아 별도 표시)'),
+      value: (r) => (r.eniCount > 0 ? 'attached' : r.referencedBy.length > 0 ? 'referenced' : r.isDefault ? 'default' : 'unused'),
       render: (r) => r.eniCount > 0
         ? <span className="text-emerald-700">{tt('부착')} {r.eniCount}</span>
         : r.referencedBy.length > 0
           ? <Badge variant="soft">{tt('참조만')}</Badge>
-          : <Badge tone="negative" variant="soft">{tt('미사용')}</Badge>,
+          // default SG는 AWS가 삭제를 막는다 — "정리 후보"로 표시하면 오탐(모든 VPC에 상시 존재).
+          : r.isDefault
+            ? <Badge variant="outline">{tt('기본 — 삭제 불가')}</Badge>
+            : <Badge tone="negative" variant="soft">{tt('미사용')}</Badge>,
       danger: (r) => r.unused,
     },
     {
@@ -214,20 +218,37 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
       >
         {err && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('보안 그룹 분석 조회 실패')}: {err}</div>}
         {!data && !err && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로딩 중…')}</div>}
-        {data && t && (
+        {data && data.degradedRegions.length > 0 && (
+          <div className="flex items-start gap-2 px-4 pt-4 text-[12px] text-warning-text">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>{tt('일부 리전 조회 실패')} ({data.degradedRegions.join(', ')}) — {tt('해당 리전의 보안 그룹·부착 집계가 실제보다 적을 수 있습니다.')}</span>
+          </div>
+        )}
+        {data && t && (() => {
+          const resourcesDegraded = data.degradedRegions.length > 0;
+          const lb = (n: number) => (resourcesDegraded ? `${n}+` : String(n));
+          const degradedHint = tt('일부 리전 조회 실패 — 실제보다 적을 수 있음');
+          return (
           <>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 px-4 pt-4">
-              <StatTile label="보안 그룹" value={t.total} hint={`ENI ${t.enis}`} icon={<Layers size={16} />} />
-              <StatTile label="부착됨" value={t.attached} hint={`${tt('사용 중')}`} icon={<Activity size={16} />} />
-              <StatTile label="미사용" value={t.unused} variant={t.unused > 0 ? 'warn' : 'default'} hint={tt('부착·참조 모두 없음')} icon={<Unplug size={16} />} />
-              <StatTile label="참조만" value={t.referencedOnly} hint={tt('다른 SG가 참조 — 삭제 불가')} icon={<Link2 size={16} />} />
-              <StatTile label="개방 인바운드" value={t.openIngress} variant={t.openIngress > 0 ? 'danger' : 'default'} hint="0.0.0.0/0 · ::/0" icon={<Globe size={16} />} />
+              <StatTile label="보안 그룹" value={lb(t.total)} variant={resourcesDegraded ? 'warn' : 'default'} hint={resourcesDegraded ? degradedHint : `ENI ${t.enis}`} icon={<Layers size={16} />} />
+              <StatTile label="부착됨" value={lb(t.attached)} variant={resourcesDegraded ? 'warn' : 'default'} hint={resourcesDegraded ? degradedHint : `${tt('사용 중')}`} icon={<Activity size={16} />} />
+              <StatTile label="미사용" value={lb(t.unused)} variant={t.unused > 0 || resourcesDegraded ? 'warn' : 'default'} hint={resourcesDegraded ? degradedHint : tt('부착·참조 모두 없음 (default SG 제외)')} icon={<Unplug size={16} />} />
+              <StatTile label="참조만" value={lb(t.referencedOnly)} variant={resourcesDegraded ? 'warn' : 'default'} hint={resourcesDegraded ? degradedHint : tt('다른 SG가 참조 — 삭제 불가')} icon={<Link2 size={16} />} />
+              <StatTile label="개방 인바운드" value={lb(t.openIngress)} variant={t.openIngress > 0 ? 'danger' : resourcesDegraded ? 'warn' : 'default'} hint={resourcesDegraded ? degradedHint : "0.0.0.0/0 · ::/0"} icon={<Globe size={16} />} />
             </div>
 
             {t.unused === 0 && (
-              <div className="flex items-center gap-2 px-4 pt-3 text-[13px] text-emerald-700">
-                <CheckCircle2 size={15} />{tt('이상 없음 — 미사용 보안 그룹 없음')}
-              </div>
+              resourcesDegraded ? (
+                <div className="flex items-start gap-2 px-4 pt-3 text-[13px] text-warning-text">
+                  <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                  {tt('일부 리전 조회 실패로 미사용 보안 그룹 여부를 확정할 수 없습니다')}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-4 pt-3 text-[13px] text-emerald-700">
+                  <CheckCircle2 size={15} />{tt('이상 없음 — 미사용 보안 그룹 없음')}
+                </div>
+              )
             )}
 
             <div className="px-1 pt-2">
@@ -240,7 +261,8 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
               />
             </div>
           </>
-        )}
+          );
+        })()}
       </Card>
 
       {/* 부착 리소스 종류 분포 — 페이지 레벨 (DonutBreakdown이 자체 Card 렌더, 중첩 회피) */}

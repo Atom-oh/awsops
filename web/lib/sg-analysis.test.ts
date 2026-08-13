@@ -231,14 +231,112 @@ describe('sgHits', () => {
     expect(h.peers[0]).toMatchObject({ ip: '10.254.9.9', label: 'EC2: i-peer', count: 7, bytes: 777 * 7 });
   });
 
-  it('부착 ENI 0 SG → 트래픽 없음 정직 처리', async () => {
+  it('부착 ENI 0 SG → 증거 없음(hits=null)으로 정직 처리, idle 확정 금지', async () => {
     mockDb();
     mockEc2();
     const { sgHits } = await import('./sg-analysis');
     const h = await sgHits('sg-stale', 3600);
     expect(h.source).toBe('none');
     expect(h.note).toBe('no_eni');
-    expect(h.idleIngressRules).toBe(1);
+    // 리뷰 MAJOR 수정: ENI가 없어 트래픽 증거 자체가 없는데 hits=0(확정 idle)로 세면
+    // "매칭 없음이 확인됨"과 "확인할 방법이 없음"을 혼동한다 — null(확인 불가)로 강등.
+    expect(h.ruleHits.every((r) => r.hits === null)).toBe(true);
+    expect(h.idleIngressRules).toBe(0);
+  });
+
+  it('Flow Logs 있지만 기간 내 레코드 0건 → 증거 없음(hits=null), idle 확정 금지', async () => {
+    mockDb();
+    mockEc2({ flowLogs: [{ ResourceId: 'vpc-1', LogDestinationType: 'cloud-watch-logs', LogGroupName: '/vpc/flow' }] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'StartQueryCommand' ? { queryId: 'q1' } : { status: 'Complete', results: [] });
+    const { sgHits } = await import('./sg-analysis');
+    const h = await sgHits('sg-web', 86400);
+    expect(h.source).toBe('flowlogs');
+    expect(h.note).toBe('flow_no_records');
+    // 레코드 0건은 "매칭 안 됨이 확인됨"이 아니다(커스텀 포맷이라 parse가 전부 실패해도
+    // 똑같이 0건으로 보임) — 매칭 가능 룰도 null로 둔다.
+    expect(h.ruleHits.every((r) => r.hits === null)).toBe(true);
+    expect(h.idleIngressRules).toBe(0);
+  });
+
+  it('Insights 상위 200건 캡에 물리면 hits=0 룰만 null(확인 불가)로 강등 — 실제 매칭(hits>0)은 유지', async () => {
+    mockDb();
+    mockEc2({ flowLogs: [{ ResourceId: 'vpc-1', LogDestinationType: 'cloud-watch-logs', LogGroupName: '/vpc/flow' }] });
+    // 정확히 200건 반환 — limit 200에 물렸다는 신호. 그중 1건만 https(443) 룰과 매칭.
+    const rows = Array.from({ length: 200 }, (_, i) => [
+      { field: 'srcaddr', value: i === 0 ? '1.2.3.4' : `10.0.0.${i % 250}` },
+      { field: 'dstaddr', value: '10.254.1.10' },
+      { field: 'dstport', value: i === 0 ? '443' : '9999' },
+      { field: 'protocol', value: '6' },
+      { field: 'action', value: 'ACCEPT' },
+      { field: 'cnt', value: '1' },
+      { field: 'bytes', value: '10' },
+    ]);
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'StartQueryCommand' ? { queryId: 'q1' } : { status: 'Complete', results: rows });
+    const { sgHits } = await import('./sg-analysis');
+    const h = await sgHits('sg-web', 86400);
+    expect(h.source).toBe('flowlogs');
+    expect(h.note).toBe('flow_capped');
+    const https = h.ruleHits.find((r) => r.peerKind === 'internet' && r.portRange === '443')!;
+    expect(https.hits).toBe(1); // 실제로 관측된 매칭은 신뢰 유지
+    const internal = h.ruleHits.find((r) => r.portRange === '8080-8081')!;
+    expect(internal.hits).toBeNull(); // 매칭 0건 — 캡 때문일 수 있으니 확인 불가로 강등
+    expect(h.idleIngressRules).toBe(0); // null로 강등된 룰은 idle 카운트에서 제외
+  });
+
+  it('TrafficType=REJECT 전용 flow log는 룰-히트 소스로 채택하지 않고 NFM 폴백', async () => {
+    mockDb();
+    // REJECT 전용 flow log는 ACCEPT 레코드가 구조적으로 없어 모든 인바운드 룰이
+    // 거짓 idle로 보인다(리뷰 MAJOR) — 애초에 룰-히트 소스로 쓰지 않고 NFM으로 폴백.
+    mockEc2({ flowLogs: [{ ResourceId: 'vpc-1', LogDestinationType: 'cloud-watch-logs', LogGroupName: '/vpc/flow', TrafficType: 'REJECT' }] });
+    mockNfmStatus.mockResolvedValue({ monitors: [{ name: 'nfm-vpc-all', status: 'ACTIVE', cluster: null }], scopeCount: 1 });
+    mockNfmTop.mockResolvedValue({ rows: [], unit: 'Bytes', tookMs: 1 });
+    const { sgHits } = await import('./sg-analysis');
+    const h = await sgHits('sg-web', 86400);
+    expect(h.source).toBe('nfm');
+    expect(logsSend).not.toHaveBeenCalled(); // Insights를 아예 시도하지 않음
+  });
+});
+
+describe('sgAnalysis — degrade + default SG', () => {
+  it('리전 조회 실패 시 degradedRegions에 노출 (조용히 0건으로 보이면 안 됨)', async () => {
+    mockQuery.mockImplementation(async (sql: string) =>
+      sql.includes('DISTINCT region') ? { rows: [{ region: 'us-west-2' }] } : { rows: [] });
+    ec2Send.mockImplementation(async (cmd: Cmd, region: string) => {
+      if (region === 'us-west-2') throw new Error('boom us-west-2');
+      switch (cmd.constructor.name) {
+        case 'DescribeSecurityGroupsCommand': return { SecurityGroups: SGS };
+        case 'DescribeNetworkInterfacesCommand': return { NetworkInterfaces: ENIS };
+        case 'DescribeManagedPrefixListsCommand': return { PrefixLists: [] };
+        case 'DescribeFlowLogsCommand': return { FlowLogs: [] };
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    const { sgAnalysis } = await import('./sg-analysis');
+    const a = await sgAnalysis();
+    expect(a.rows.length).toBe(3); // ap-northeast-2는 정상 로드
+    expect(a.degradedRegions).toEqual(['us-west-2']);
+  });
+
+  it('default SG는 unused(정리 후보)로 세지 않음 — AWS가 삭제를 막아 상시 오탐이었음', async () => {
+    mockDb();
+    ec2Send.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'DescribeSecurityGroupsCommand':
+          return { SecurityGroups: [{ GroupId: 'sg-default', GroupName: 'default', Description: 'default VPC security group', VpcId: 'vpc-1', IpPermissions: [], IpPermissionsEgress: [] }] };
+        case 'DescribeNetworkInterfacesCommand': return { NetworkInterfaces: [] };
+        case 'DescribeManagedPrefixListsCommand': return { PrefixLists: [] };
+        case 'DescribeFlowLogsCommand': return { FlowLogs: [] };
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    const { sgAnalysis } = await import('./sg-analysis');
+    const a = await sgAnalysis();
+    const row = a.rows.find((r) => r.id === 'sg-default')!;
+    expect(row.isDefault).toBe(true);
+    expect(row.unused).toBe(false); // 부착·참조 모두 0이지만 default라 정리 후보 아님
+    expect(a.totals.unused).toBe(0);
   });
 });
 

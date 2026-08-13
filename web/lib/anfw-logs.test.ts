@@ -108,6 +108,17 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.totalAlerts).toBe(base.alerts);
   });
 
+  it('ALERT는 CWL, FLOW는 S3처럼 섞인 대상도 unsupported로 집계 (리뷰 MINOR: 이전엔 누락)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: 'S3:my-log-bucket' })] });
+    mockInsights(() => [{ cnt: 3 }]);
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // ALERT 쪽은 여전히 CWL이라 분석은 정상 수행되지만, FLOW의 S3 leg는 고지 대상이어야 한다.
+    expect(a.targets.map((t) => t.type)).toEqual(['ALERT']);
+    expect(a.unsupportedDestinations).toBe(1);
+    expect(a.alert).not.toBeNull();
+  });
+
   it('S3/Firehose 대상만 있으면 unsupported 집계 + 분석 null (정직 고지)', async () => {
     mockAnalysis.mockResolvedValue({ firewalls: [fw({ alertLogging: 'S3:my-log-bucket', flowLogging: 'KinesisDataFirehose:stream' })] });
     mockInsights(() => []);
@@ -135,6 +146,47 @@ describe('anfwLogsAnalysis', () => {
     expect(a.failed).toEqual(['alertByAction']);
     expect(a.alert!.totalAlerts).toBe(5);
     expect(a.flow).toBeNull(); // FLOW 대상 없음
+  });
+
+  it('두 방화벽이 같은 로그 그룹을 공유하면 쿼리를 한 번만 실행 — 이중 집계 방지 (리뷰 MAJOR)', async () => {
+    // 중앙 공용 alert 로그 그룹으로 로깅하는 방화벽 2개 — (region, type, group) 동일.
+    mockAnalysis.mockResolvedValue({
+      firewalls: [
+        fw({ name: 'fw-a', flowLogging: null }),
+        fw({ name: 'fw-b', flowLogging: null }), // fw()의 alertLogging 기본값과 동일한 그룹 재사용
+      ],
+    });
+    mockInsights(() => [{ cnt: 10 }]); // totals — 그룹당 한 번만 실행되면 합계는 10 그대로
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // targets는 방화벽 단위로 2건 남아 있어도(어느 방화벽이 이 그룹을 쓰는지 표시 목적)
+    // 실제 쿼리는 그룹당 1회만 — 중복 실행이었다면 같은 결과 행이 두 번 합산돼 20이 됐을 것.
+    expect(a.targets).toHaveLength(2);
+    expect(a.alert!.totalAlerts).toBe(10);
+  });
+
+  it('그룹 중 하나라도 실패하면 다른 그룹이 성공해도 failed로 표시 (all-groups 계약, 리뷰 MAJOR)', async () => {
+    // 서로 다른 두 그룹(중복 제거되지 않음) — 하나는 성공, 하나는 실패.
+    mockAnalysis.mockResolvedValue({
+      firewalls: [
+        fw({ name: 'fw-a', flowLogging: null }),
+        fw({ name: 'fw-b', flowLogging: null, alertLogging: 'CloudWatchLogs:/aws/network-firewall/other/alert' }),
+      ],
+    });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const group = cmd.input.logGroupName as string;
+        if (group.includes('other')) throw new Error('boom other');
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 5 })] };
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // 이전 계약("하나라도 성공하면 ok")이었다면 실패한 그룹의 누락된 트래픽이 조용히
+    // 사라진 채 totals만 부분치로 조용히 보였을 것 — 지금은 실패가 있었다는 신호를 남긴다.
+    expect(a.failed).toContain('alertTotals');
   });
 });
 

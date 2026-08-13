@@ -99,13 +99,17 @@ async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarge
   const discoverRegions = new Set<string>();
   for (const f of a.firewalls) {
     if (!f.loggingKnown) { discoverRegions.add(f.region); continue; }
-    let anyCwl = false;
+    // 리뷰 MINOR: ALERT→CWL + FLOW→S3처럼 섞인 방화벽은 anyCwl=true라 unsupported에서
+    // 누락됐다 — S3 쪽 로그는 여전히 Insights 분석 불가인데 그 사실이 고지되지 않았다.
+    // "CWL 아닌 대상이 하나라도 있으면" 기준으로 변경 — 전체/부분 미지원 모두 집계.
+    let anyNonCwl = false;
     for (const [type, dest] of [['ALERT', f.alertLogging], ['FLOW', f.flowLogging]] as const) {
       if (!dest) continue;
       const m = /^CloudWatchLogs:(.+)$/.exec(dest);
-      if (m) { targets.push({ firewall: f.name, region: f.region, type, group: m[1], discovered: false }); anyCwl = true; }
+      if (m) targets.push({ firewall: f.name, region: f.region, type, group: m[1], discovered: false });
+      else anyNonCwl = true;
     }
-    if (!anyCwl && (f.alertLogging || f.flowLogging)) unsupported += 1;
+    if (anyNonCwl) unsupported += 1;
   }
   // 폴백: 관례 접두사 스캔 (콘솔 기본 명명 /aws/network-firewall/...) — 이름으로 alert/flow 분류.
   for (const region of discoverRegions) {
@@ -127,19 +131,33 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
   return cached(`l|${rangeSec}`, async () => {
     const { targets, unsupported } = await resolveTargets(rangeSec);
     const failed: string[] = [];
-    const alertTargets = targets.filter((t) => t.type === 'ALERT');
-    const flowTargets = targets.filter((t) => t.type === 'FLOW');
+    // 리뷰 MAJOR: targets는 방화벽 단위라, 중앙 공용 로그 그룹으로 로깅하는 방화벽이
+    // 2개 이상이면 같은 (region, group)이 그대로 두 번 나열된다 — 아래 query 단위 집계가
+    // 그룹당 한 번이 아니라 대상 수만큼 실행돼 모든 합계·Top 리스트가 배로 부풀려진다.
+    // (region, type, group) 단위로 중복 제거해 쿼리는 그룹당 정확히 한 번만 실행.
+    const dedupeByGroup = (ts: AnfwLogTarget[]): AnfwLogTarget[] => {
+      const seen = new Map<string, AnfwLogTarget>();
+      for (const t of ts) {
+        const key = `${t.region}|${t.type}|${t.group}`;
+        if (!seen.has(key)) seen.set(key, t);
+      }
+      return [...seen.values()];
+    };
+    const alertTargets = dedupeByGroup(targets.filter((t) => t.type === 'ALERT'));
+    const flowTargets = dedupeByGroup(targets.filter((t) => t.type === 'FLOW'));
 
     const runMerged = async (ts: AnfwLogTarget[], key: string, query: string): Promise<Row[]> => {
       const rows: Row[] = [];
-      let ok = ts.length === 0;
+      // 리뷰 MAJOR: "그룹 중 하나라도 성공하면 ok"였던 이전 계약은 실패한 그룹의 트래픽이
+      // 조용히 누락된 채 완전한 결과처럼 보이게 만든다(무신호 총계 축소) — all-groups
+      // 성공이어야 failed에서 빠진다(하나라도 실패하면 이 쿼리 키를 degrade로 표시).
+      let anyFail = false;
       await Promise.all(ts.map(async (t) => {
         try {
           rows.push(...await runInsights(t.region, t.group, query, rangeSec));
-          ok = true;
-        } catch { /* 그룹 단위 degrade */ }
+        } catch { anyFail = true; /* 그룹 단위 degrade */ }
       }));
-      if (!ok) failed.push(key);
+      if (anyFail) failed.push(key);
       return rows;
     };
 
@@ -184,14 +202,13 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       const talkersWindowSec = Math.min(rangeSec, 21600);
       const runMergedWindow = async (ts: AnfwLogTarget[], key: string, query: string, windowSec: number): Promise<Row[]> => {
         const rows: Row[] = [];
-        let ok = ts.length === 0;
+        let anyFail = false;
         await Promise.all(ts.map(async (t) => {
           try {
             rows.push(...await runInsights(t.region, t.group, query, windowSec));
-            ok = true;
-          } catch { /* 그룹 단위 degrade */ }
+          } catch { anyFail = true; /* 그룹 단위 degrade */ }
         }));
-        if (!ok) failed.push(key);
+        if (anyFail) failed.push(key);
         return rows;
       };
       const [totals, talkers, byProto] = await Promise.all([

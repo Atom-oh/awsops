@@ -201,6 +201,7 @@ export default function NetworkFirewallPage() {
   const [logsErr, setLogsErr] = useState('');
   const [audit, setAudit] = useState<AuditEvent[] | null>(null);
   const [auditErr, setAuditErr] = useState('');
+  const [auditDegradedRegions, setAuditDegradedRegions] = useState<string[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -240,9 +241,9 @@ export default function NetworkFirewallPage() {
       .then(async (r) => {
         const d = await r.json().catch(() => null);
         if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`);
-        return d as { events: AuditEvent[] };
+        return d as { events: AuditEvent[]; degradedRegions: string[] };
       })
-      .then((d) => { if (alive) { setAudit(d.events); setAuditErr(''); } })
+      .then((d) => { if (alive) { setAudit(d.events); setAuditDegradedRegions(d.degradedRegions ?? []); setAuditErr(''); } })
       .catch((e) => { if (alive) setAuditErr(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
   }, []);
@@ -684,6 +685,14 @@ export default function NetworkFirewallPage() {
                       {logsData.unsupportedDestinations > 0 && <span>{tt('S3/Firehose 대상 로그는 이 화면에서 집계할 수 없습니다 (Athena 등 별도 분석)')}</span>}
                     </div>
                   )}
+                  {logsData.failed.length > 0 && (
+                    // 리뷰 MAJOR: 이 배열이 이전엔 어디에도 렌더링되지 않아, 로그 그룹 조회가
+                    // 전부 실패해도 화면은 "정상 0건"과 똑같이 보였다 — 실패한 집계 키를 그대로 노출.
+                    <div className="flex items-start gap-2 px-4 pt-3 text-[12px] text-warning-text">
+                      <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                      <span>{tt('일부 로그 그룹 조회 실패')} ({logsData.failed.join(', ')}) — {tt('해당 집계는 실제보다 적을 수 있습니다.')}</span>
+                    </div>
+                  )}
                   {logsData.alert == null ? (
                     <div className="px-4 py-3 text-[13px] text-ink-400">{tt('CloudWatch Logs 대상 ALERT 로그 없음')}</div>
                   ) : (
@@ -811,8 +820,21 @@ export default function NetworkFirewallPage() {
             >
               {auditErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('감사 이벤트 조회 실패')}: {auditErr}</div>}
               {!audit && !auditErr && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로딩 중…')}</div>}
+              {audit && auditDegradedRegions.length > 0 && (
+                // 리뷰 MAJOR: 이벤트명 단위 CloudTrail 조회가 일부 실패해도 조용히 삼키면
+                // "조회 범위 내 변경 없음"과 "조회 자체가 실패함"을 구분할 수 없다 —
+                // 감사(audit) 화면에서 가장 나쁜 오류 형태이므로 항상 배너로 노출한다.
+                <div className="flex items-start gap-2 px-4 pt-3 text-[12px] text-warning-text">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>{tt('일부 리전 조회 실패')} ({auditDegradedRegions.join(', ')}) — {tt('해당 리전은 변경 이벤트 조회 자체가 실패해 "변경 없음"을 확정할 수 없습니다.')}</span>
+                </div>
+              )}
               {audit && (audit.length === 0 ? (
-                <div className="px-4 py-3 text-[13px] text-ink-400">{tt('조회 범위(90일) 내 변경 이벤트 없음')}</div>
+                auditDegradedRegions.length > 0 ? (
+                  <div className="px-4 py-3 text-[13px] text-ink-400">{tt('조회 실패로 변경 이벤트 유무를 확인할 수 없습니다')}</div>
+                ) : (
+                  <div className="px-4 py-3 text-[13px] text-ink-400">{tt('조회 범위(90일) 내 변경 이벤트 없음')}</div>
+                )
               ) : (
                 <div className="overflow-x-auto pb-2">
                   <table className="w-full">

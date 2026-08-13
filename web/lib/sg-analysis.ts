@@ -88,7 +88,7 @@ export interface SgAnalysis {
   rows: SgUsageRow[];
   totals: {
     total: number; attached: number;
-    /** 부착 0 + 참조 0. */
+    /** 부착 0 + 참조 0 (default SG는 제외 — 삭제 불가라 정리 후보가 아님). */
     unused: number;
     /** 부착은 없지만 다른 SG가 참조 중 (삭제 불가). */
     referencedOnly: number;
@@ -96,6 +96,10 @@ export interface SgAnalysis {
   };
   /** CWL 대상 VPC Flow Logs 보유 VPC 수 — 0이면 히트 매칭은 NFM 폴백. */
   flowLogVpcs: number;
+  /** List/Describe 실패 또는 ENI 5000건 캡 도달로 해당 리전의 SG 목록·부착 집계가
+   *  실제보다 적을 수 있는 리전 — 0/빈 결과를 "리전에 리소스 없음"으로 신뢰하면 안 됨
+   *  (anfw.ts의 degradedRegions와 동일 계약). */
+  degradedRegions: string[];
 }
 
 // ── 내부 상세(히트 매칭용) — 직렬화하지 않음 ────────────────────────────────
@@ -189,6 +193,7 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
     const [regions, vpcs] = await Promise.all([regionsFromInventory(), vpcMeta()]);
 
     const perRegion = await Promise.all(regions.map(async (region) => {
+      let eniTruncated = false;
       try {
         // SG + ENI + 관리형 프리픽스 리스트 + flow logs (병렬, 각자 페이지네이션)
         const [sgs, enis, plNames, flowByVpc] = await Promise.all([
@@ -212,6 +217,9 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
               out.push(...(r.NetworkInterfaces ?? []));
               NextToken = r.NextToken;
             } while (NextToken && out.length < 5000);
+            // 5000건 캡에 물리면(우리 상한, API 제약 아님) 잘린 ENI들의 부착 집계가
+            // 조용히 과소산정된다 — 무신호 금지, 리전을 degraded로 표시(리뷰 MAJOR류).
+            if (NextToken) eniTruncated = true;
             return out;
           })(),
           (async () => {
@@ -221,12 +229,17 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
             } catch { return new Map<string, string>(); }
           })(),
           (async () => {
-            // VPC 단위 CWL flow log 발견 — SG 히트 매칭의 1차 소스
+            // VPC 단위 CWL flow log 발견 — SG 히트 매칭의 1차 소스.
+            // 리뷰 MAJOR: TrafficType=REJECT 전용 flow log는 ACCEPT 레코드가 전혀 없어
+            // sgHits()의 ACCEPT 필터가 항상 0건으로 남는다 — 모든 인바운드 룰이 거짓
+            // idle(정리 후보)로 보인다. ACCEPT/ALL만 룰-히트 소스로 채택, REJECT 전용은
+            // 제외해 NFM 폴백으로 넘긴다(NFM은 hits=null로 정직 표기).
             try {
               const r = await ec2(region).send(new DescribeFlowLogsCommand({}));
               const m = new Map<string, string>();
               for (const f of r.FlowLogs ?? []) {
-                if (f.LogDestinationType === 'cloud-watch-logs' && f.ResourceId?.startsWith('vpc-') && f.LogGroupName) {
+                if (f.LogDestinationType === 'cloud-watch-logs' && f.ResourceId?.startsWith('vpc-') && f.LogGroupName
+                  && f.TrafficType !== 'REJECT') {
                   m.set(f.ResourceId, f.LogGroupName);
                 }
               }
@@ -333,11 +346,12 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
             rules,
             flowLogGroup: flowByVpc.get(g.VpcId ?? '') ?? null,
           });
+          const isDefault = g.GroupName === 'default';
           return {
             id, name: g.GroupName ?? id, description: g.Description ?? '',
             region, vpcId: g.VpcId ?? '',
             vpcLabel: vpcs.byId.get(g.VpcId ?? '') ?? g.VpcId ?? '',
-            isDefault: g.GroupName === 'default',
+            isDefault,
             eniCount: att?.ids.length ?? 0,
             attachedKinds: [...(att?.kinds ?? new Map<string, number>()).entries()]
               .map(([kind, count]) => ({ kind, count }))
@@ -346,12 +360,15 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
             ingressRules: ingress.length,
             egressRules: rules.length - ingress.length,
             openIngress: ingress.filter((r) => r.open).length,
-            unused: (att?.ids.length ?? 0) === 0 && refs.length === 0,
+            // default SG는 AWS가 삭제를 막아 "정리 후보"로 세면 오탐(리뷰 MAJOR) — 매 VPC마다
+            // 항상 존재해 상시 발생하는 거짓 경고였다. isDefault는 별도 필드로 노출해 클라가
+            // "기본 — 삭제 불가"로 구분 표시.
+            unused: !isDefault && (att?.ids.length ?? 0) === 0 && refs.length === 0,
             rules,
           };
         });
-        return { rows, flowLogVpcs: flowByVpc.size };
-      } catch { return { rows: [] as SgUsageRow[], flowLogVpcs: 0 }; }
+        return { rows, flowLogVpcs: flowByVpc.size, degraded: eniTruncated };
+      } catch { return { rows: [] as SgUsageRow[], flowLogVpcs: 0, degraded: true }; }
     }));
 
     const rows = perRegion.flatMap((r) => r.rows);
@@ -369,6 +386,7 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
         enis: rows.reduce((s, r) => s + r.eniCount, 0),
       },
       flowLogVpcs: perRegion.reduce((s, r) => s + r.flowLogVpcs, 0),
+      degradedRegions: perRegion.flatMap((r, i) => (r.degraded ? [regions[i]] : [])),
     };
   });
 }
@@ -387,7 +405,7 @@ export interface SgPeerTraffic {
 /** 표시 문자열은 클라이언트가 tt()로 해석 — 서버는 코드만 반환 (i18n). */
 export type SgHitNote =
   | 'sg_not_found' | 'no_eni' | 'no_source'
-  | 'flow_no_records' | 'flow_eni_truncated'
+  | 'flow_no_records' | 'flow_eni_truncated' | 'flow_capped'
   | 'nfm_peers_only' | null;
 export interface SgHitsResult {
   source: 'flowlogs' | 'nfm' | 'none';
@@ -450,10 +468,14 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
     if (!detail) return { ...empty, note: 'sg_not_found' };
     const ingress = detail.rules.filter((r) => r.direction === 'ingress');
     // 매칭 가능 룰만 hits=0으로 시작(pl/IPv6 CIDR은 null=n/a), idle 카운트는 hits===0만.
+    // 실제 조회를 하고 매칭이 안 나온 경우에만 쓴다 — "증거가 아예 없음"(ENI 없음/소스 없음/
+    // 레코드 0건)에는 쓰면 안 된다(리뷰 MAJOR: 근거 없는 idle 확정).
     const initRuleHits = (): SgRuleHit[] => ingress.map((r) => ({ ...r, hits: ruleMatchable(r) ? 0 : null, bytes: 0 }));
+    // 증거 없음 — 매칭 가능 룰도 hits=null(확인 불가)로 둔다. idle(정리 후보) 오판 방지.
+    const nullRuleHits = (): SgRuleHit[] => ingress.map((r) => ({ ...r, hits: null, bytes: 0 }));
     const idleCount = (rh: SgRuleHit[]) => rh.filter((r) => r.hits === 0).length;
     if (detail.eniIds.length === 0) {
-      return { ...empty, note: 'no_eni', ruleHits: initRuleHits(), idleIngressRules: idleCount(initRuleHits()) };
+      return { ...empty, note: 'no_eni', ruleHits: nullRuleHits(), idleIngressRules: 0 };
     }
     const ownIps = new Set(detail.ips);
 
@@ -490,11 +512,22 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
             peers.push({ ip: src, label: ipLabelCache.get(src) ?? null, port: row.dstport ?? null, action: row.action ?? null, count: c, bytes: b });
           }
         }
+        if (rows.length === 0) {
+          // 레코드 자체가 0건 — "매칭 안 됨"이 아니라 "판단할 근거가 없음"이다(커스텀 로그
+          // 포맷이라 parse가 전부 실패하는 경우도 이 분기로 떨어짐). idle 확정 금지.
+          return { source: 'flowlogs' as const, note: 'flow_no_records', ruleHits: nullRuleHits(), idleIngressRules: 0, peers, rangeSec };
+        }
+        // Insights `limit 200`은 우리 상한(API 제약 아님) — SG의 저용량 룰 매칭이 상위
+        // 200 튜플에 못 들면 조용히 hits=0(=idle)으로 오판된다(리뷰 MAJOR). 캡에 물리면
+        // 매칭 가능 룰 중 관측된 매칭이 없는(hits===0) 항목만 null(확인 불가)로 강등 —
+        // 실제로 카운트된 매칭(hits>0)은 그대로 신뢰.
+        const capped = rows.length === 200;
+        const finalHits = capped ? ruleHits.map((r) => (r.hits === 0 ? { ...r, hits: null } : r)) : ruleHits;
         return {
           source: 'flowlogs' as const,
-          note: rows.length === 0 ? 'flow_no_records' : truncated ? 'flow_eni_truncated' : null,
-          ruleHits,
-          idleIngressRules: idleCount(ruleHits),
+          note: truncated ? 'flow_eni_truncated' : capped ? 'flow_capped' : null,
+          ruleHits: finalHits,
+          idleIngressRules: idleCount(finalHits),
           peers, rangeSec,
         };
       } catch { /* Insights 실패 → NFM 폴백 시도 */ }
@@ -535,6 +568,6 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
       }
     } catch { /* NFM도 불가 → none */ }
 
-    return { ...empty, note: 'no_source', ruleHits: initRuleHits(), idleIngressRules: idleCount(initRuleHits()) };
+    return { ...empty, note: 'no_source', ruleHits: nullRuleHits(), idleIngressRules: 0 };
   });
 }
