@@ -51,10 +51,13 @@ beforeEach(async () => {
 type Cmd = { constructor: { name: string }; input: Record<string, unknown> };
 
 function mockDb() {
+  // 실제 컬럼은 data(JSONB) — 쿼리가 `data AS detail`로 별칭하므로 결과 행도 detail 키로
+  // 온다(리뷰 MAJOR 회귀 방지: 이전엔 존재하지 않는 row 컬럼을 mock이 그대로 흉내 내
+  // 매 호출 실패하던 프로덕션 버그를 테스트가 가렸다).
   mockQuery.mockImplementation(async (sql: string) =>
     sql.includes('DISTINCT region')
       ? { rows: [] }
-      : { rows: [{ resource_id: 'vpc-1', row: { name: 'mgmt-vpc', cidr_block: '10.254.0.0/16' } }] });
+      : { rows: [{ resource_id: 'vpc-1', detail: { name: 'mgmt-vpc', cidr_block: '10.254.0.0/16' } }] });
 }
 
 // 실측 형태 SG 3개: web(부착+개방), db(참조만), stale(미사용)
@@ -337,6 +340,101 @@ describe('sgAnalysis — degrade + default SG', () => {
     expect(row.isDefault).toBe(true);
     expect(row.unused).toBe(false); // 부착·참조 모두 0이지만 default라 정리 후보 아님
     expect(a.totals.unused).toBe(0);
+  });
+});
+
+describe('sgHits — 구조적 매칭 불가 케이스 수정 (리뷰 MAJOR 라운드2)', () => {
+  function mockCustomSg(sg: Record<string, unknown>, enis: Record<string, unknown>[], flowLogs: unknown[] = []) {
+    ec2Send.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'DescribeSecurityGroupsCommand': return { SecurityGroups: [sg] };
+        case 'DescribeNetworkInterfacesCommand': return { NetworkInterfaces: enis };
+        case 'DescribeManagedPrefixListsCommand': return { PrefixLists: [] };
+        case 'DescribeFlowLogsCommand': return { FlowLogs: flowLogs };
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+  }
+  function mockFlowRows(rows: Record<string, string>[]) {
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'StartQueryCommand'
+        ? { queryId: 'q' }
+        : { status: 'Complete', results: rows.map((r) => Object.entries(r).map(([field, value]) => ({ field, value }))) });
+  }
+
+  it('자기 참조(self-reference) 룰: intra-SG 트래픽(src·dst 모두 자기 IP)도 매칭 — 이전엔 구조적으로 항상 idle이었음', async () => {
+    mockDb();
+    mockCustomSg(
+      { GroupId: 'sg-self', GroupName: 'self-sg', VpcId: 'vpc-1', IpPermissions: [{ IpProtocol: 'tcp', FromPort: 5432, ToPort: 5432, UserIdGroupPairs: [{ GroupId: 'sg-self' }] }], IpPermissionsEgress: [] },
+      [
+        { NetworkInterfaceId: 'eni-a', InterfaceType: 'interface', Groups: [{ GroupId: 'sg-self' }], VpcId: 'vpc-1', PrivateIpAddresses: [{ PrivateIpAddress: '10.0.0.1' }] },
+        { NetworkInterfaceId: 'eni-b', InterfaceType: 'interface', Groups: [{ GroupId: 'sg-self' }], VpcId: 'vpc-1', PrivateIpAddresses: [{ PrivateIpAddress: '10.0.0.2' }] },
+      ],
+      [{ ResourceId: 'vpc-1', LogDestinationType: 'cloud-watch-logs', LogGroupName: '/vpc/flow' }],
+    );
+    mockFlowRows([{ srcaddr: '10.0.0.1', dstaddr: '10.0.0.2', dstport: '5432', protocol: '6', action: 'ACCEPT', cnt: '42', bytes: '1000' }]);
+    const { sgHits } = await import('./sg-analysis');
+    const h = await sgHits('sg-self', 3600);
+    expect(h.ruleHits[0].hits).toBe(42);
+  });
+
+  it('ICMP 룰: FromPort/ToPort는 type/code라 flow log dstport(항상 0)와 비교 불가 — hits=null', async () => {
+    mockDb();
+    mockCustomSg(
+      { GroupId: 'sg-icmp', GroupName: 'icmp-sg', VpcId: 'vpc-1', IpPermissions: [{ IpProtocol: '1', FromPort: 8, ToPort: -1, IpRanges: [{ CidrIp: '0.0.0.0/0' }] }], IpPermissionsEgress: [] },
+      [{ NetworkInterfaceId: 'eni-i', InterfaceType: 'interface', Groups: [{ GroupId: 'sg-icmp' }], VpcId: 'vpc-1', PrivateIpAddresses: [{ PrivateIpAddress: '10.0.0.5' }] }],
+      [{ ResourceId: 'vpc-1', LogDestinationType: 'cloud-watch-logs', LogGroupName: '/vpc/flow' }],
+    );
+    // ICMP echo request 인바운드 — flow log의 dstport는 항상 '0'.
+    mockFlowRows([{ srcaddr: '1.2.3.4', dstaddr: '10.0.0.5', dstport: '0', protocol: '1', action: 'ACCEPT', cnt: '5', bytes: '500' }]);
+    const { sgHits } = await import('./sg-analysis');
+    const h = await sgHits('sg-icmp', 3600);
+    expect(h.ruleHits[0].hits).toBeNull();
+    expect(h.idleIngressRules).toBe(0);
+  });
+
+  it('IPv6 ::/0 룰: ENI의 IPv6 주소를 ownIps에 수집해야 매칭 가능 (이전엔 IPv4만 수집해 항상 idle)', async () => {
+    mockDb();
+    mockCustomSg(
+      { GroupId: 'sg-v6', GroupName: 'v6-sg', VpcId: 'vpc-1', IpPermissions: [{ IpProtocol: 'tcp', FromPort: 443, ToPort: 443, Ipv6Ranges: [{ CidrIpv6: '::/0' }] }], IpPermissionsEgress: [] },
+      [{ NetworkInterfaceId: 'eni-6', InterfaceType: 'interface', Groups: [{ GroupId: 'sg-v6' }], VpcId: 'vpc-1', PrivateIpAddresses: [], Ipv6Addresses: [{ Ipv6Address: '2001:db8::1' }] }],
+      [{ ResourceId: 'vpc-1', LogDestinationType: 'cloud-watch-logs', LogGroupName: '/vpc/flow' }],
+    );
+    mockFlowRows([{ srcaddr: '2001:db8::abcd', dstaddr: '2001:db8::1', dstport: '443', protocol: '6', action: 'ACCEPT', cnt: '9', bytes: '900' }]);
+    const { sgHits } = await import('./sg-analysis');
+    const h = await sgHits('sg-v6', 3600);
+    expect(h.ruleHits[0].hits).toBe(9);
+  });
+
+  it('NFM 폴백은 홈 리전이 아닌 SG에는 시도하지 않음 — 클라이언트가 리전 고정이라 엉뚱한 리전 데이터를 붙일 위험', async () => {
+    mockQuery.mockImplementation(async (sql: string) =>
+      sql.includes('DISTINCT region') ? { rows: [{ region: 'us-west-2' }] } : { rows: [] });
+    ec2Send.mockImplementation(async (cmd: Cmd, region: string) => {
+      if (region === 'us-west-2') {
+        switch (cmd.constructor.name) {
+          case 'DescribeSecurityGroupsCommand':
+            return { SecurityGroups: [{ GroupId: 'sg-remote', GroupName: 'remote-sg', VpcId: 'vpc-remote', IpPermissions: [{ IpProtocol: 'tcp', FromPort: 22, ToPort: 22, IpRanges: [{ CidrIp: '0.0.0.0/0' }] }], IpPermissionsEgress: [] }] };
+          case 'DescribeNetworkInterfacesCommand':
+            return { NetworkInterfaces: [{ NetworkInterfaceId: 'eni-r', InterfaceType: 'interface', Groups: [{ GroupId: 'sg-remote' }], VpcId: 'vpc-remote', PrivateIpAddresses: [{ PrivateIpAddress: '10.1.1.1' }] }] };
+          case 'DescribeManagedPrefixListsCommand': return { PrefixLists: [] };
+          case 'DescribeFlowLogsCommand': return { FlowLogs: [] };
+          default: throw new Error(`unexpected ${cmd.constructor.name}`);
+        }
+      }
+      switch (cmd.constructor.name) {
+        case 'DescribeSecurityGroupsCommand': return { SecurityGroups: [] };
+        case 'DescribeNetworkInterfacesCommand': return { NetworkInterfaces: [] };
+        case 'DescribeManagedPrefixListsCommand': return { PrefixLists: [] };
+        case 'DescribeFlowLogsCommand': return { FlowLogs: [] };
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    mockNfmStatus.mockResolvedValue({ monitors: [{ name: 'nfm-home', status: 'ACTIVE', cluster: null }], scopeCount: 1 });
+    const { sgHits } = await import('./sg-analysis');
+    const h = await sgHits('sg-remote', 3600);
+    expect(h.source).toBe('none');
+    expect(h.note).toBe('no_source');
+    expect(mockNfmStatus).not.toHaveBeenCalled();
   });
 });
 

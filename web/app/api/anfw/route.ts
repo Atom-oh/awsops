@@ -50,39 +50,68 @@ const AUDIT_EVENT_NAMES = [
 
 /** ANFW 구성 변경 감사 (owner 가이드 3계층): 방화벽 리전의 CloudTrail에서 변경 이벤트만
  *  이름별로 조회 (LookupEvents 2TPS — 리전 내 순차 실행 + 페이싱). */
+/** 이 이벤트명이 목표(10건) 찾을 때까지, 또는 페이지 상한(5)까지 NextToken 순회.
+ *  리뷰 MAJOR(확정): CreateRuleGroup/UpdateRuleGroup/DeleteRuleGroup은 WAFv2 이벤트명과도
+ *  동일 — MaxResults:10 단일 페이지 + 클라이언트 사이드 EventSource 필터만으로는 계정에
+ *  WAF 활동이 있으면 그 페이지가 WAF 이벤트로 가득 차 실제 ANFW 변경이 안 보일 수 있다. */
+async function lookupNetworkFirewallEvents(region: string, name: string): Promise<{ raw: unknown[]; failed: boolean }> {
+  const matched: unknown[] = [];
+  let NextToken: string | undefined;
+  let page = 0;
+  try {
+    do {
+      const r: { Events?: { EventSource?: string }[]; NextToken?: string } = await ct(region).send(new LookupEventsCommand({
+        MaxResults: 10,
+        LookupAttributes: [{ AttributeKey: 'EventName', AttributeValue: name }],
+        NextToken,
+      }));
+      for (const e of r.Events ?? []) if (e.EventSource === 'network-firewall.amazonaws.com') matched.push(e);
+      NextToken = r.NextToken;
+      page += 1;
+      if (matched.length >= 10 || page >= 5 || !NextToken) break;
+      await new Promise((res) => setTimeout(res, 600)); // 페이지 사이도 페이싱
+    } while (NextToken);
+    return { raw: matched, failed: false };
+  } catch { return { raw: matched, failed: true }; }
+}
+
 async function auditEvents(): Promise<{ events: AnfwAuditEvent[]; degradedRegions: string[] }> {
   return cachedAudit('audit', async () => {
     const regions = new Set<string>([REGION]);
-    try { (await anfwAnalysis(86400)).firewalls.forEach((f) => regions.add(f.region)); } catch { /* 홈 리전만 */ }
+    // 리뷰 MAJOR(확정): anfwAnalysis()가 자체 degradedRegions로 표시한 리전(List/Describe
+    // 부분 실패)은 firewalls 목록에 아예 안 잡히므로 이전엔 audit 조회 대상에서도, 우리
+    // 자신의 degradedRegions에서도 조용히 빠졌다 — "변경 없음"을 그 리전까지 확정해버렸다.
+    // 방화벽 목록 자체가 불완전한 리전도 조회 대상에 넣고 선제적으로 degraded로 시작한다.
+    const preDegraded = new Set<string>();
+    try {
+      const a = await anfwAnalysis(86400);
+      a.firewalls.forEach((f) => regions.add(f.region));
+      a.degradedRegions.forEach((r) => { regions.add(r); preDegraded.add(r); });
+    } catch { /* 홈 리전만 */ }
     const perRegion = await Promise.all([...regions].map(async (region) => {
       const out: AnfwAuditEvent[] = [];
       // 리뷰 MAJOR: 이벤트명 단위 실패(스로틀 등)를 조용히 삼키면 "조회 범위 내 변경 없음"과
       // "조회 자체가 실패함"이 구분 안 된다 — 감사(audit) 화면에서 가장 나쁜 오류 형태.
       // 실패한 이벤트명이 하나라도 있으면 이 리전을 degraded로 표시해 "변경 없음" 단정을 막는다.
-      let degraded = false;
+      let degraded = preDegraded.has(region);
       for (let i = 0; i < AUDIT_EVENT_NAMES.length; i++) {
         const name = AUDIT_EVENT_NAMES[i];
         // 계정 전체 ~2 TPS 공유 — 순차 호출 사이 페이싱해 스로틀(=삼켜진 실패의 흔한 원인) 완화.
         if (i > 0) await new Promise((r) => setTimeout(r, 600));
-        try {
-          const r = await ct(region).send(new LookupEventsCommand({
-            MaxResults: 10,
-            LookupAttributes: [{ AttributeKey: 'EventName', AttributeValue: name }],
-          }));
-          for (const e of r.Events ?? []) {
-            if (e.EventSource !== 'network-firewall.amazonaws.com') continue;
-            const res = e.Resources?.[0];
-            out.push({
-              time: e.EventTime instanceof Date ? e.EventTime.toISOString() : String(e.EventTime ?? ''),
-              name: e.EventName ?? '',
-              user: e.Username ?? '',
-              region,
-              resourceType: res?.ResourceType?.replace(/^AWS::NetworkFirewall::/, '') ?? '',
-              resourceName: res?.ResourceName?.split('/').pop() ?? '',
-              readOnly: false,
-            });
-          }
-        } catch { degraded = true; }
+        const { raw, failed } = await lookupNetworkFirewallEvents(region, name);
+        if (failed) degraded = true;
+        for (const ev of raw as { EventTime?: Date | string; EventName?: string; Username?: string; Resources?: { ResourceType?: string; ResourceName?: string }[] }[]) {
+          const res = ev.Resources?.[0];
+          out.push({
+            time: ev.EventTime instanceof Date ? ev.EventTime.toISOString() : String(ev.EventTime ?? ''),
+            name: ev.EventName ?? '',
+            user: ev.Username ?? '',
+            region,
+            resourceType: res?.ResourceType?.replace(/^AWS::NetworkFirewall::/, '') ?? '',
+            resourceName: res?.ResourceName?.split('/').pop() ?? '',
+            readOnly: false,
+          });
+        }
       }
       return { region, out, degraded };
     }));

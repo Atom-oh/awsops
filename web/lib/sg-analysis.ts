@@ -131,12 +131,17 @@ async function vpcMeta(): Promise<{ byId: Map<string, string>; cidrs: { cidr: st
   const byId = new Map<string, string>();
   const cidrs: { cidr: string; label: string }[] = [];
   try {
-    const r = await getPool().query<{ resource_id: string; row: { name?: string; cidr_block?: string } }>(
-      `SELECT resource_id, row FROM inventory_resources WHERE resource_type = 'vpc'`);
+    // 리뷰 MAJOR(확정): inventory_resources에 row 컬럼은 없다(schema.sql 실제 컬럼은 data
+    // JSONB) — 이 쿼리는 매 호출 매번 예외를 던졌고 catch가 조용히 삼켜 VPC 이름/CIDR
+    // 식별(광고된 기능 축)이 프로덕션에서 한 번도 동작하지 않았다. 테스트는 mock pool이
+    // row 키를 직접 반환해 이 버그를 가려서 통과했다. security-findings.ts와 동일한
+    // `data AS detail` 패턴으로 수정.
+    const r = await getPool().query<{ resource_id: string; detail: { name?: string; cidr_block?: string } }>(
+      `SELECT resource_id, data AS detail FROM inventory_resources WHERE resource_type = 'vpc'`);
     for (const v of r.rows) {
-      const label = v.row?.name || v.resource_id;
+      const label = v.detail?.name || v.resource_id;
       byId.set(v.resource_id, label);
-      if (v.row?.cidr_block) cidrs.push({ cidr: v.row.cidr_block, label });
+      if (v.detail?.cidr_block) cidrs.push({ cidr: v.detail.cidr_block, label });
     }
   } catch { /* Aurora 미가용 시 라벨만 생략 */ }
   return { byId, cidrs };
@@ -179,6 +184,9 @@ interface RawEni {
   Groups?: { GroupId?: string }[]; VpcId?: string;
   Attachment?: { InstanceId?: string };
   PrivateIpAddresses?: { PrivateIpAddress?: string }[]; PrivateIpAddress?: string;
+  /** 리뷰 MAJOR(확정): 기존엔 IPv4만 수집해 ownIps에 IPv6가 전혀 없었다 — ::/0(IPv6 전체
+   *  개방) 인바운드 룰은 매칭될 IPv6 대상 IP 자체가 없어 항상 hits=0(거짓 idle)이었다. */
+  Ipv6Addresses?: { Ipv6Address?: string }[];
 }
 
 const portRange = (from?: number, to?: number): string =>
@@ -260,6 +268,7 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
           const { kind, resource } = classifyEni(e.InterfaceType ?? 'interface', e.Description ?? '', e.Attachment?.InstanceId ?? null);
           const ips = (e.PrivateIpAddresses ?? []).map((p) => p.PrivateIpAddress).filter((x): x is string => !!x);
           if (ips.length === 0 && e.PrivateIpAddress) ips.push(e.PrivateIpAddress);
+          for (const v6 of e.Ipv6Addresses ?? []) if (v6.Ipv6Address) ips.push(v6.Ipv6Address);
           for (const ip of ips) nextIpLabel.set(ip, resource ? `${kind}: ${resource}` : kind);
           for (const g of e.Groups ?? []) {
             if (!g.GroupId) continue;
@@ -419,9 +428,12 @@ export interface SgHitsResult {
 }
 
 const isV6 = (s: string): boolean => s.includes(':');
-/** matchRule이 구조적으로 판정 가능한 룰인지 — pl/IPv6 CIDR은 해석 불가(hits=null 처리). */
+/** matchRule이 구조적으로 판정 가능한 룰인지 — pl/IPv6 CIDR은 해석 불가, ICMP는 FromPort/
+ *  ToPort가 포트가 아니라 type/code라 flow log dstport(항상 0)와 비교가 무의미(리뷰 MAJOR
+ *  확정) — 둘 다 hits=null 처리. */
 const ruleMatchable = (r: SgRule): boolean =>
-  r.peerKind !== 'pl' && !(r.peerKind === 'cidr' && isV6(r.peer));
+  r.peerKind !== 'pl' && !(r.peerKind === 'cidr' && isV6(r.peer))
+  && r.protocol !== 'icmp' && r.protocol !== 'icmpv6';
 
 /** 인바운드 룰 매칭 (Flow Logs 전용) — srcIp는 실제 유입 소스 IP. */
 const matchRule = (rule: SgRule, port: number | null, protoNum: string | null, srcIp: string | null, detailOf: (sgId: string) => SgDetail | undefined): boolean => {
@@ -483,8 +495,7 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
     if (detail.flowLogGroup) {
       try {
         // 기본 포맷 space-separated 원문 — parse로 14필드 추출 (커스텀 포맷이면 0행 → 정직 폴백).
-        // 방향: ENI flow log엔 아웃바운드(srcaddr=자기 IP) 레코드도 있으므로 dstaddr가 자기 IP인
-        // 행(=인바운드)만 룰 매칭 — 아웃바운드 오매칭·자기 IP peer·intra-SG 이중 집계 방지.
+        // 방향: dstaddr가 자기 IP인 행(=인바운드)만 룰 매칭 — 아웃바운드(dst≠자기IP) 오매칭 방지.
         const truncated = detail.eniIds.length > 50;
         const eniList = detail.eniIds.slice(0, 50).map((id) => `'${id}'`).join(', ');
         const rows = await runInsights(detail.region, detail.flowLogGroup, `parse @message '* * * * * * * * * * * * * *' as version, account, interfaceId, srcaddr, dstaddr, srcport, dstport, protocol, packets, bytes, startt, endt, action, logStatus
@@ -498,7 +509,13 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
           const src = row.srcaddr ?? null;
           const dst = row.dstaddr ?? null;
           // 인바운드 판정: 목적지가 이 SG의 ENI IP여야 유입 트래픽 (아웃바운드/통과 레코드 제외).
-          if (!dst || !ownIps.has(dst) || !src || ownIps.has(src)) continue;
+          // 리뷰 MAJOR(확정): 이전엔 src도 ownIps에 없어야 한다는 조건이 있었는데, 그게
+          // 자기 참조(self-reference) SG 룰의 유일한 매칭 가능 레코드(src·dst 둘 다 자기
+          // ENI IP인 intra-SG 트래픽)를 통째로 걸러냈다 — 자기 참조 룰은 구조적으로 항상
+          // idle(정리 후보)로 보였다. dst∈ownIps만으로 인바운드 판정은 충분하다(아웃바운드는
+          // dst가 자기 IP가 아니므로 이미 배제됨).
+          if (!dst || !ownIps.has(dst) || !src) continue;
+          if (src === dst) continue; // 자기 자신으로의 루프백 잡음 방지
           const port = row.dstport ? Number(row.dstport) : null;
           const proto = row.protocol ?? null;
           const c = Number(row.cnt) || 0;
@@ -518,11 +535,13 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
           return { source: 'flowlogs' as const, note: 'flow_no_records', ruleHits: nullRuleHits(), idleIngressRules: 0, peers, rangeSec };
         }
         // Insights `limit 200`은 우리 상한(API 제약 아님) — SG의 저용량 룰 매칭이 상위
-        // 200 튜플에 못 들면 조용히 hits=0(=idle)으로 오판된다(리뷰 MAJOR). 캡에 물리면
-        // 매칭 가능 룰 중 관측된 매칭이 없는(hits===0) 항목만 null(확인 불가)로 강등 —
-        // 실제로 카운트된 매칭(hits>0)은 그대로 신뢰.
+        // 200 튜플에 못 들거나(capped) ENI가 50개를 넘어 뒤쪽 ENI가 통째로 빠지면(truncated)
+        // 그 트래픽의 hits=0이 조용히 idle로 오판된다(리뷰 MAJOR, 둘 다 동일 계약). 매칭
+        // 가능 룰 중 관측된 매칭이 없는(hits===0) 항목만 null(확인 불가)로 강등 — 실제로
+        // 카운트된 매칭(hits>0)은 그대로 신뢰.
         const capped = rows.length === 200;
-        const finalHits = capped ? ruleHits.map((r) => (r.hits === 0 ? { ...r, hits: null } : r)) : ruleHits;
+        const degraded = truncated || capped;
+        const finalHits = degraded ? ruleHits.map((r) => (r.hits === 0 ? { ...r, hits: null } : r)) : ruleHits;
         return {
           source: 'flowlogs' as const,
           note: truncated ? 'flow_eni_truncated' : capped ? 'flow_capped' : null,
@@ -535,7 +554,11 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
 
     // ② NFM 폴백 — 트래픽 "상대 식별"만 (NFM은 양방향 바이트 집계라 인바운드 룰 귀속 불가).
     // 룰 매칭은 하지 않고 hits=null로 두어 거짓 idle(정리 후보) 신호를 내지 않는다.
+    // 리뷰 MAJOR(확정): NFM 클라이언트는 REGION(홈 리전) 고정이라 다른 리전 SG를 조회하면
+    // 엉뚱한 리전의 모니터 데이터가 "이 SG의 트래픽"처럼 보인다 — 홈 리전이 아니면 애초에
+    // 시도하지 않고 no_source로 정직 강등.
     try {
+      if (detail.region !== REGION) throw new Error('nfm client is home-region only');
       const st = await nfmStatus();
       const monitor = st.monitors.find((m) => m.status === 'ACTIVE' && !m.cluster) ?? st.monitors.find((m) => m.status === 'ACTIVE');
       if (monitor) {
@@ -548,6 +571,11 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
           const localIsSg = flow.local.ip != null && ownIps.has(flow.local.ip);
           const remoteIsSg = flow.remote.ip != null && ownIps.has(flow.remote.ip);
           if (!localIsSg && !remoteIsSg) continue;
+          // 리뷰 MAJOR(확정): IP만으로 매칭하면 RFC1918 대역이 겹치는 다른 VPC의 흐름이
+          // 이 SG의 트래픽으로 잘못 귀속될 수 있다 — 로컬쪽 엔드포인트의 vpcId가 이 SG의
+          // VPC와 다르면 스킵(NfmEndpoint는 vpcId를 이미 들고 있음).
+          const localEp = localIsSg ? flow.local : flow.remote;
+          if (localEp.vpcId != null && localEp.vpcId !== detail.vpcId) continue;
           const peerEp = localIsSg ? flow.remote : flow.local;
           const peerIp = peerEp.ip ?? null;
           if (!peerIp || ownIps.has(peerIp)) continue;

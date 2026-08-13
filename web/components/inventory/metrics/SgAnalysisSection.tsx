@@ -216,6 +216,11 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
         padded={false}
         right={<RangePicker value={range} onChange={setRange} />}
       >
+        {/* 리뷰 MAJOR(확정): /api/sg는 페이지 상단의 계정/리전 스코프 선택과 무관하게 항상
+            호스트 계정·인벤토리 전 리전을 조회한다(형제 metrics 섹션들과 달리 scope-filtered
+            rows의 ids로 스코핑되지 않음) — 멤버 계정 뷰에서 위 테이블은 멤버 리소스를 보여주는데
+            이 섹션은 호스트 계정 SG를 보여줄 수 있다. 최소 고지: 항상 스코프 무관임을 명시. */}
+        <div className="px-4 pt-4 text-[12px] text-ink-400">{tt('이 분석은 상단의 계정/리전 선택과 무관하게 항상 호스트 계정의 전 리전을 대상으로 합니다.')}</div>
         {err && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('보안 그룹 분석 조회 실패')}: {err}</div>}
         {!data && !err && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로딩 중…')}</div>}
         {data && data.degradedRegions.length > 0 && (
