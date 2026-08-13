@@ -175,12 +175,19 @@ async function regionsFromInventory(scopeRegions?: string[]): Promise<string[]> 
 // 표기만 다른(무작위 문자열 포함) 입력마다 캐시가 무한히 갈라진다. 인벤토리에 실제 있는
 // 리전과 교집합해 반환 — sgAnalysis/sgHits가 캐시 키 계산 전에 이 결과를 쓰면 두 문제가
 // 한 번에 해소된다(무효 리전은 스캔 대상에서 빠지고, 캐시 키도 실제 스캔 범위 기준이 됨).
-// 교집합이 빈 집합이면(전부 무효) 스코프 없음(전 리전)으로 안전하게 폴백.
-async function resolveScopeRegions(scopeRegions?: string[]): Promise<string[] | undefined> {
-  if (!scopeRegions || scopeRegions.length === 0) return undefined;
+// 리뷰 MAJOR(확정, 라운드7): 이전엔 결과만(string[] | undefined) 반환해서, 교집합이
+// 리전을 떨어냈다는 사실 자체가 호출자(sg/route.ts)에게 전혀 안 보였다 — 페이지의
+// "위 표와 같은 리전만 스캔한다" 고지·route의 400-on-invalid 원칙과 반대로, 인벤토리에
+// 없는 리전이 섞이면 조용히 좁아지거나(일부 무효) 아예 전 리전으로 넓어졌다(전부 무효).
+// dropped 플래그를 같이 반환해 route가 scopeTruncated를 정확히 계산하고, 전부 무효인
+// 경우엔 넓히지 말고 형식-무효와 동일하게 거부할 수 있게 한다.
+export async function resolveScopeRegions(scopeRegions?: string[]): Promise<{ regions: string[] | undefined; dropped: boolean }> {
+  if (!scopeRegions || scopeRegions.length === 0) return { regions: undefined, dropped: false };
   const allowed = new Set(await allInventoryRegions());
-  const intersected = [...new Set(scopeRegions)].filter((r) => allowed.has(r));
-  return intersected.length > 0 ? intersected : undefined;
+  const requested = new Set(scopeRegions);
+  const intersected = [...requested].filter((r) => allowed.has(r));
+  const dropped = intersected.length < requested.size;
+  return { regions: intersected.length > 0 ? intersected : undefined, dropped };
 }
 
 /** 인벤토리 VPC 이름/CIDR (peer CIDR 식별용) — scopeRegions가 있으면 그 리전만. */
@@ -263,7 +270,10 @@ const portRange = (from?: number, to?: number): string =>
 export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
   // resolveScopeRegions()는 캐시 조회 전에 실행 — 캐시 키 자체를 "실제 검증된 스캔 범위"
   // 기준으로 만들어야 무효/무작위 리전 문자열로 캐시를 무한 분할하는 걸 막을 수 있다.
-  const resolved = await resolveScopeRegions(scopeRegions);
+  // dropped는 여기선 쓰지 않음 — 호출자(sg/route.ts)가 직접 resolveScopeRegions를 불러
+  // scopeTruncated/400 판단에 쓰고, 이미 검증된 결과를 sgAnalysis에 넘기므로 여기 재호출은
+  // no-op(같은 입력 재검증)이라 dropped가 항상 false로 나온다.
+  const { regions: resolved } = await resolveScopeRegions(scopeRegions);
   const cacheKey = scopeCacheKey(resolved);
   return cached(cacheKey, async () => {
     // clear()가 아니라 지역 Map에 채운 뒤 반환 직전 원자 교체 (진행 중 sgHits 보호).
@@ -579,7 +589,7 @@ async function runInsights(region: string, group: string, query: string, rangeSe
 /** 선택 SG의 트래픽 히트 매칭 — flow logs 우선, NFM 폴백 (모두 없으면 none). scopeRegions는
  *  sgAnalysis()와 동일 계약 — 호출한 페이지의 스코프에 맞는 detailCache를 읽어야 한다. */
 export async function sgHits(sgId: string, rangeSec: number, scopeRegions?: string[]): Promise<SgHitsResult> {
-  const resolved = await resolveScopeRegions(scopeRegions);
+  const { regions: resolved } = await resolveScopeRegions(scopeRegions);
   const scopeKey = scopeCacheKey(resolved);
   return cached(`h|${scopeKey}|${sgId}|${rangeSec}`, async () => {
     await sgAnalysis(resolved); // 이 스코프의 detailCache 채움 (캐시면 no-op) — sgAnalysis도

@@ -1,5 +1,5 @@
 import { verifyUser } from '@/lib/auth';
-import { sgAnalysis, sgHits } from '@/lib/sg-analysis';
+import { sgAnalysis, sgHits, resolveScopeRegions } from '@/lib/sg-analysis';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -52,10 +52,21 @@ export async function GET(request: Request) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   const url = new URL(request.url);
-  const { regions, truncated, invalid } = parseRegions(url);
+  const { regions: formatRegions, truncated: formatTruncated, invalid } = parseRegions(url);
   if (invalid) {
     return Response.json({ status: 'error', message: 'no valid region in regions param' }, { status: 400 });
   }
+  // 리뷰 MAJOR(확정, 라운드7): sg-analysis.ts의 resolveScopeRegions()는 인벤토리와
+  // 교집합해 실제 없는 리전을 걸러내지만(캐시 오염 방지), 그 사실이 route까지 안
+  // 올라와 scopeTruncated에 반영되지 않았다 — 인벤토리에 없는 리전만 요청되면
+  // 조용히 "스코프 없음"(전 리전 스캔)으로 넓어졌다. 여기서 직접 호출해 dropped를
+  // truncated에 합치고, 형식은 유효했지만 인벤토리에 전혀 없는 경우는 형식-무효와
+  // 동일하게 거부한다(넓히지 않음).
+  const { regions, dropped } = await resolveScopeRegions(formatRegions);
+  if (formatRegions && formatRegions.length > 0 && !regions) {
+    return Response.json({ status: 'error', message: 'no valid region in regions param' }, { status: 400 });
+  }
+  const scopeTruncated = formatTruncated || dropped;
   try {
     if (url.searchParams.get('view') === 'hits') {
       const id = url.searchParams.get('id') ?? '';
@@ -64,9 +75,9 @@ export async function GET(request: Request) {
       }
       const rangeRaw = Number(url.searchParams.get('range') ?? 86400);
       const range = RANGE_ALLOWED.includes(rangeRaw) ? rangeRaw : 86400;
-      return Response.json({ ...(await sgHits(id, range, regions)), scopeTruncated: truncated });
+      return Response.json({ ...(await sgHits(id, range, regions)), scopeTruncated });
     }
-    return Response.json({ ...(await sgAnalysis(regions)), scopeTruncated: truncated });
+    return Response.json({ ...(await sgAnalysis(regions)), scopeTruncated });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

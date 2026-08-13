@@ -41,14 +41,21 @@ type Row = Record<string, string>;
 // 묶을 수 있다 — 리전당 그룹 전체를 하나의 쿼리로 집계하면 `limit`이 진짜 전역 Top-N이
 // 된다(리전이 여럿이면 리전 단위 결과를 병합하는데, 리전 수는 보통 1~소수라 오차 폭이
 // 이전의 "그룹 수" 규모에서 "리전 수" 규모로 크게 줄어든다).
-async function runInsights(region: string, groups: string[], query: string, rangeSec: number): Promise<Row[]> {
+// 리뷰 MAJOR(확정, 라운드7): 폴링 상한이 호출마다 고정 45회(45s)였는데, anfwLogsAnalysis()는
+// 이 함수를 부르기 전에 이미 anfwAnalysis()의 콜드 멀티 리전 fan-out을 기다린다 — 그 다음
+// 45s+ 폴링이 겹치면 이 라우트의 maxDuration=60/CloudFront origin_read_timeout=60을 실제로
+// 넘긴다(코드 자신의 실측 코멘트 "24h 566만 행에서 30s 미완료"가 45s+ 폴링이 드문 일이 아님을
+// 증언). audit 경로(anfw/route.ts)가 이미 하는 것과 같은 패턴 — 요청 전체에 공유되는
+// 데드라인을 anfwAnalysis() 호출 "전"에 계산해 폴링 루프에 흘려보낸다. 고정 반복 횟수가
+// 아니라 남은 예산만큼만 기다리므로, 앞단(anfwAnalysis)이 오래 걸렸으면 폴링은 그만큼
+// 짧게 남고 — 개별 쿼리가 실패로 끝나 failed[]에 표시될 뿐 전체 패널이 504로 죽지 않는다.
+async function runInsights(region: string, groups: string[], query: string, rangeSec: number, deadlineAt: number): Promise<Row[]> {
   const end = Math.floor(Date.now() / 1000);
   const { queryId } = await logs(region).send(new StartQueryCommand({
     logGroupNames: groups, queryString: query, startTime: end - rangeSec, endTime: end, limit: 1000,
   }));
   if (!queryId) return [];
-  // 폴링 상한 45s — flow 로그는 대용량(실측 24h 566만 행)이라 30s로는 group-by가 미완료.
-  for (let i = 0; i < 45; i++) {
+  while (Date.now() < deadlineAt) {
     const res = await logs(region).send(new GetQueryResultsCommand({ queryId }));
     if (res.status === 'Complete') {
       return (res.results ?? []).map((row) =>
@@ -60,7 +67,7 @@ async function runInsights(region: string, groups: string[], query: string, rang
     await new Promise((r) => setTimeout(r, 1000));
   }
   await logs(region).send(new StopQueryCommand({ queryId })).catch(() => {});
-  throw new Error('Insights query poll cap reached');
+  throw new Error('Insights query deadline reached');
 }
 
 export interface AnfwLogTarget {
@@ -100,7 +107,7 @@ export interface AnfwLogsAnalysis {
 const num = (s: string | undefined): number => (s != null && s !== '' ? Number(s) || 0 : 0);
 
 /** 로깅 구성(알면 정확) 또는 접두사 발견(모르면 휴리스틱)으로 CWL 대상 도출. */
-async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean; firewallDiscoveryDegraded: boolean }> {
+async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean; firewallDiscoveryDegraded: boolean; loggingUnknownRegions: string[] }> {
   const a = await anfwAnalysis(rangeSec);
   const targets: AnfwLogTarget[] = [];
   let unsupported = 0;
@@ -133,7 +140,15 @@ async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarge
   // 이 폴백이 존재하는 이유였던 "unknown ≠ off" 계약을 이 경로 자신이 어겼다.
   // 또한 미순회였던 NextToken도 페이지네이션해 1페이지 너머의 로그 그룹을 놓치지 않는다.
   let discoveryFailed = false;
+  // 리뷰 MAJOR(확정, 라운드7): loggingKnown=false(구성 조회 거부)인데 접두사 스캔이
+  // "예외 없이 정상 실행되고 0건 반환"하면(관례 명명이 아닌 커스텀 로그 그룹이 흔한
+  // 정상 상황) discoveryFailed는 그대로 false로 남아 targets:[]·failed:[] — 결과가
+  // discoverRegions가 아예 없었던 경우("로깅 구성을 확인해 정말 CWL 대상이 없음")와
+  // 구분이 안 된다. 두 케이스 모두 "unknown"인데 하나는 "off"로 렌더링된 것 —
+  // 이 스캔이 무엇 하나도 못 찾은 리전을 별도로 기록해 confirmed-absence와 분리한다.
+  const loggingUnknownRegions: string[] = [];
   for (const region of discoverRegions) {
+    const before = targets.length;
     try {
       let nextToken: string | undefined;
       do {
@@ -146,19 +161,30 @@ async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarge
         }
         nextToken = r.nextToken;
       } while (nextToken);
+      if (targets.length === before) loggingUnknownRegions.push(region);
     } catch { discoveryFailed = true; }
   }
-  return { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded };
+  return { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownRegions };
 }
 
 /** Alert/Flow 로그 Insights 집계 — 그룹별 병렬 실행 후 병합, 개별 실패는 failed로 degrade. */
+const LOGS_BUDGET_MS = 45_000; // maxDuration=60에서 응답 직렬화 여유 15s를 뺀 예산
+
 export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalysis> {
   return cached(`l|${rangeSec}`, async () => {
-    const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded } = await resolveTargets(rangeSec);
+    // 데드라인은 anfwAnalysis()의 콜드 멀티 리전 fan-out을 기다리기 "전"에 계산 —
+    // audit 경로(anfw/route.ts)와 동일 패턴. 앞단이 오래 걸렸으면 Insights 폴링에
+    // 남는 시간이 그만큼 줄어들 뿐, 전체 예산은 항상 60s 안에 수렴한다.
+    const deadlineAt = Date.now() + LOGS_BUDGET_MS;
+    const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownRegions } = await resolveTargets(rangeSec);
     const failed: string[] = [];
     // 로그 그룹 발견 자체가 실패(스로틀/거부)한 것과 "발견됐지만 로그가 없음"을 구분 —
     // 전자를 후자로 렌더링하면 SCP 거부 환경에서 "로그 없음"이라는 거짓 all-clear가 된다.
     if (discoveryFailed) failed.push('logDiscovery');
+    // 구성 조회는 거부됐고(loggingKnown=false) 접두사 스캔은 예외 없이 실행됐지만 그
+    // 리전에서 관례 명명과 일치하는 그룹을 하나도 못 찾은 경우(커스텀 명명이면 흔함) —
+    // "이 리전은 CWL 대상이 없음이 확인됨"이 아니라 "여전히 모름"이다. 리전별로 표시.
+    for (const region of loggingUnknownRegions) failed.push(`logDiscoveryEmpty:${region}`);
     // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().degradedRegions) 그
     // 리전 방화벽들의 로깅 구성을 원래 확인조차 못 했다 — "로그 없음"과 구분되는 별도 키.
     if (firewallDiscoveryDegraded) failed.push('firewallDiscovery');
@@ -193,7 +219,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       let anyFail = false;
       await Promise.all(groupByRegion(ts).map(async ([region, groups]) => {
         try {
-          rows.push(...await runInsights(region, groups, query, rangeSec));
+          rows.push(...await runInsights(region, groups, query, rangeSec, deadlineAt));
         } catch { anyFail = true; /* 리전 단위 degrade */ }
       }));
       if (anyFail) failed.push(key);
@@ -250,7 +276,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         let anyFail = false;
         await Promise.all(groupByRegion(ts).map(async ([region, groups]) => {
           try {
-            rows.push(...await runInsights(region, groups, query, windowSec));
+            rows.push(...await runInsights(region, groups, query, windowSec, deadlineAt));
           } catch { anyFail = true; /* 리전 단위 degrade */ }
         }));
         if (anyFail) failed.push(key);

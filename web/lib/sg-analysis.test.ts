@@ -634,6 +634,29 @@ describe('sgAnalysis — 스코프 리전 교집합 (리뷰 MAJOR 라운드6)', 
     // 조용히 끝나(rows:[]) "SG가 원래 없음"처럼 보이면 안 된다.
     expect(a.rows.length).toBe(3);
   });
+
+  it('resolveScopeRegions()는 인벤토리 교집합으로 리전이 걸러졌음을 dropped로 노출 — sg/route.ts가 scopeTruncated에 반영할 수 있어야 함 (리뷰 MAJOR 라운드7)', async () => {
+    mockQuery.mockImplementation(async (sql: string) =>
+      sql.includes('DISTINCT region') ? { rows: [{ region: 'us-west-2' }] } : { rows: [] });
+    const { resolveScopeRegions } = await import('./sg-analysis');
+    // 하나는 실존(us-west-2), 하나는 인벤토리에 없음 — 이전엔 결과만(string[])
+    // 반환해서 호출자가 "일부가 걸러졌다"는 사실 자체를 알 방법이 없었다.
+    const partial = await resolveScopeRegions(['us-west-2', 'zz-fake-9']);
+    expect(partial.regions).toEqual(['us-west-2']);
+    expect(partial.dropped).toBe(true);
+
+    const clean = await resolveScopeRegions(['us-west-2']);
+    expect(clean.regions).toEqual(['us-west-2']);
+    expect(clean.dropped).toBe(false); // 아무것도 안 걸러졌으면 dropped:false
+
+    const allInvalid = await resolveScopeRegions(['zz-fake-9']);
+    expect(allInvalid.regions).toBeUndefined(); // 전 리전 폴백
+    expect(allInvalid.dropped).toBe(true); // 그래도 "걸러졌다"는 신호는 남아야 route가 400으로 거부할 수 있음
+
+    const noScope = await resolveScopeRegions(undefined);
+    expect(noScope.regions).toBeUndefined();
+    expect(noScope.dropped).toBe(false); // 스코프 요청 자체가 없었던 정상 케이스와는 구분
+  });
 });
 
 describe('ipInCidr', () => {
