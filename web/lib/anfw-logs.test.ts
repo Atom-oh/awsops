@@ -278,6 +278,52 @@ describe('anfwLogsAnalysis', () => {
       '/aws/network-firewall/other/alert',
     ]);
   });
+
+  it('구성 조회 거부(loggingKnown=false) + 접두사 스캔이 예외 없이 0건 반환하면 "로그 없음 확정"이 아니라 logDiscoveryEmpty로 표시 (리뷰 MAJOR 라운드7)', async () => {
+    // 접두사 스캔이 실패한 게 아니라(discoveryFailed=false) 정상 실행됐는데 관례 명명과
+    // 일치하는 그룹이 하나도 없는 경우(커스텀 명명이면 흔함) — 여전히 "모름"이지 "없음"이
+    // 확인된 게 아니다. 이전엔 이 경우 targets:[], failed:[]로 확정 all-clear처럼 보였다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand' ? { logGroups: [] } : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.targets).toEqual([]);
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2');
+  });
+
+  it('Insights 폴링은 anfwLogsAnalysis 진입 시점부터 계산된 공유 데드라인을 넘기면 중단(StopQuery)하고 failed로 표시 (리뷰 MAJOR 라운드7)', async () => {
+    // anfwAnalysis()의 콜드 fan-out + 45s 폴링이 겹치면 60s 라우트 예산을 넘길 수 있다는
+    // 것이 라운드7 MAJOR였다 — 데드라인이 anfwLogsAnalysis 호출 "시점"부터 공유돼야
+    // 폴링이 스스로 멈춘다. Date.now를 조작해 "StartQuery 직후 이미 데드라인을 넘긴"
+    // 상황을 시뮬레이션 — 폴링 루프가 한 번도 GetQueryResults를 완료로 못 보고 즉시
+    // StopQuery로 빠져야 한다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    let stopped = false;
+    let now = 1_000_000;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'StartQueryCommand':
+          now += 46_000; // 45s 예산을 이미 넘긴 상태로 진입
+          return { queryId: 'q' };
+        case 'GetQueryResultsCommand':
+          return { status: 'Running' }; // 완료 신호가 없어도 데드라인 검사가 즉시 루프를 빠져나가야 함
+        case 'StopQueryCommand':
+          stopped = true;
+          return {};
+        default: return {};
+      }
+    });
+    try {
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(3600);
+      expect(stopped).toBe(true);
+      expect(a.failed).toContain('alertTotals');
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
 });
 
 /** 발견 폴백용 mock: DescribeLogGroups가 관례 이름 2개 반환 + 최소 Insights 응답. */
