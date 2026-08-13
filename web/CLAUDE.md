@@ -8,7 +8,7 @@ Next.js 14 thin-BFF. 루트 경로(`/`) 서빙 — basePath 없음, fetch는 `/a
 | 디렉토리 | 내용 / Contents | 규모 |
 |---|---|---|
 | `app/` | 페이지 + API 라우트 (App Router) | 36 pages / 86 API routes |
-| `lib/` | 도메인 로직 — React 비의존 (domain logic, mostly React-free) | 117 modules |
+| `lib/` | 도메인 로직 — React 비의존 (domain logic, mostly React-free) | 118 modules |
 | `components/` | 클라이언트 컴포넌트 (client components) | 89 files, 11 subdirs |
 
 ## 주요 파일 / Key Files

@@ -1239,7 +1239,6 @@ export const TERMS: Record<string, Pair> = {
   '보안 그룹 사용 분석': { en: 'Security group usage analysis', zh: '安全组使用分析', ja: 'セキュリティグループ使用分析' },
   'ENI 부착·상호참조 기반 사용 유무 + 룰 소스/목적지 식별 — 행 클릭 시 트래픽 히트 매칭': { en: 'Usage via ENI attachment and cross-reference + rule source/destination identification — click a row for traffic hit matching', zh: '基于 ENI 附加与相互引用的使用情况 + 规则源/目标识别 — 点击行查看流量命中匹配', ja: 'ENI アタッチと相互参照に基づく使用状況 + ルールの送信元/宛先識別 — 行クリックでトラフィックのヒットマッチング' },
   '보안 그룹 분석 조회 실패': { en: 'Failed to load security group analysis', zh: '获取安全组分析失败', ja: 'セキュリティグループ分析の取得に失敗' },
-  '보안 그룹': { en: 'Security groups', zh: '安全组', ja: 'セキュリティグループ' },
   '부착됨': { en: 'Attached', zh: '已附加', ja: 'アタッチ済み' },
   '부착·참조 모두 없음': { en: 'No attachment or reference', zh: '无附加也无引用', ja: 'アタッチも参照もなし' },
   '참조만': { en: 'Referenced only', zh: '仅被引用', ja: '参照のみ' },
