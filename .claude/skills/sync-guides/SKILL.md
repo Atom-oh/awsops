@@ -6,7 +6,9 @@ triggers: sync guides, guide update
 
 # 가이드 문서 동기화 / Sync Guides
 
-src 코드 변경에 따라 web 가이드 문서(한국어)와 i18n 영어 번역을 일괄 생성/업데이트합니다.
+> **⚠️ v1-era 스킬 — 트리거 경로가 낡음(2026-08-07 표기).** 아래 표의 `src/app`·`src/lib/queries`·`infra-cdk/`·`scripts/0*.sh`는 v1 트리로, 2026-07-12에 삭제됨. v2 대응 경로는 `web/app/*/page.tsx`·`terraform/v2/foundation/*.tf`·`scripts/v2/`. 자동 축적 훅(`accumulate-pending-guides.sh`)도 제거되어 pending 목록은 더 이상 자동 생성되지 않음 — §1의 git diff 기반 감지를 사용한다. 본격 v2 개정 전까지 표는 참고용.
+
+코드 변경에 따라 web 가이드 문서(한국어)와 i18n 영어 번역을 일괄 생성/업데이트합니다.
 
 ## 트리거
 `/sync-guides` 명령어로 실행
@@ -37,13 +39,13 @@ src/app 페이지 변경 시 — 표준 서비스 가이드 (Screenshot + 기능
 
 ## 동작 원리
 
-### 1. Pending 목록 읽기
-`.omc/state/pending-guides.json`에서 축적된 변경 목록을 읽습니다.
-Hook(`accumulate-pending-guides.sh`)이 파일 변경 시 자동으로 축적합니다.
+### 1. 변경 목록 수집
+자동 축적 훅은 제거됨(2026-08-07 — `src/*`만 매칭하던 v1 no-op). 변경 목록은 실행 시점에 직접 수집한다:
+`.omc/state/pending-guides.json`이 남아 있으면 참고하되, 기본은 `git diff --name-only <last-sync>..HEAD`로 감지.
 
-감지 대상:
-- `src/app/*/page.tsx`, `src/lib/queries/*.ts`, `src/components/*.tsx` (Tier 2)
-- `infra-cdk/lib/*.ts`, `agent/agent.py`, `scripts/0*.sh` (Tier 1)
+감지 대상 (v2):
+- `web/app/*/page.tsx`, `web/components/**` (Tier 2)
+- `terraform/v2/foundation/*.tf`, `agent/agent.py`, `scripts/v2/**` (Tier 1)
 
 ### 2. 변경 분석 및 가이드 생성
 각 pending 항목에 대해:

@@ -99,7 +99,7 @@ heartbeat at least every ~20s.
 
 ## Source / 출처
 
-- Primary: `docs/superpowers/archive/2026-05-30-awsops-v2-p1a-foundation-edge-spine.md`
+- Primary: `docs/history/archive/2026-05-30-awsops-v2-p1a-foundation-edge-spine.md`
   (the P1a execution plan; will be moved to `archive/` in a later consolidation step).
 - Live module: `terraform/v2/foundation/edge.tf`, `terraform/v2/foundation/network.tf`, `terraform/v2/foundation/workload.tf`, `terraform/v2/foundation/providers.tf`, `terraform/v2/foundation/backend.tf`.
 - Root `CLAUDE.md` — "아키텍처 (v2)" and "알려진 이슈 / 학습" sections.

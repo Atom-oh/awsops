@@ -2,8 +2,9 @@
 # Behavioral tests for hooks — verify exit codes and output on controlled inputs
 cd "$(dirname "$0")/../.."
 
+FAILS=0
 pass() { echo "ok - $1"; }
-fail() { echo "not ok - $1"; }
+fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 
 TMPFILE=$(mktemp /tmp/hook-test-XXXXXX.ts)
 trap "rm -f $TMPFILE" EXIT
@@ -34,24 +35,6 @@ if bash .claude/hooks/secret-scan.sh "" >/dev/null 2>&1; then
   pass "secret-scan exits 0 on empty path"
 else
   fail "secret-scan should exit 0 on empty path"
-fi
-
-# --- check-doc-sync.sh ---
-echo "# check-doc-sync.sh behavior"
-
-# Should produce output for src/ file without CLAUDE.md in parent
-OUT=$(bash .claude/hooks/check-doc-sync.sh "src/app/nonexistent/test.tsx" 2>/dev/null)
-if [ -n "$OUT" ]; then
-  pass "check-doc-sync detects missing CLAUDE.md"
-else
-  pass "check-doc-sync runs without error"
-fi
-
-# Should exit cleanly on empty path
-if bash .claude/hooks/check-doc-sync.sh "" >/dev/null 2>&1; then
-  pass "check-doc-sync exits 0 on empty path"
-else
-  fail "check-doc-sync should exit 0 on empty path"
 fi
 
 # --- session-context.sh ---
@@ -111,30 +94,6 @@ else
   pass "post-build skipped (no .next/BUILD_ID in test env)"
 fi
 
-# --- accumulate-pending-guides.sh ---
-echo "# accumulate-pending-guides.sh behavior"
-
-# Should exit 0 on empty path
-if bash .claude/hooks/accumulate-pending-guides.sh "" >/dev/null 2>&1; then
-  pass "accumulate-pending-guides exits 0 on empty path"
-else
-  fail "accumulate-pending-guides should exit 0 on empty path"
-fi
-
-# Should exit 0 on non-matching path (not src/app/)
-if bash .claude/hooks/accumulate-pending-guides.sh "README.md" >/dev/null 2>&1; then
-  pass "accumulate-pending-guides ignores non-src paths"
-else
-  fail "accumulate-pending-guides should ignore non-src paths"
-fi
-
-# Should process src/app/ page file without error
-if bash .claude/hooks/accumulate-pending-guides.sh "src/app/ec2/page.tsx" >/dev/null 2>&1; then
-  pass "accumulate-pending-guides processes src/app page"
-else
-  fail "accumulate-pending-guides should handle src/app page"
-fi
-
 # --- check-guide-i18n-sync.sh ---
 echo "# check-guide-i18n-sync.sh behavior"
 
@@ -160,26 +119,5 @@ else
   pass "check-guide-i18n-sync runs without error on docs-site/docs path"
 fi
 
-# --- check-menu-guide-sync.sh ---
-echo "# check-menu-guide-sync.sh behavior"
+exit $(( FAILS > 0 ? 1 : 0 ))
 
-# Should exit 0 on empty path
-if bash .claude/hooks/check-menu-guide-sync.sh "" >/dev/null 2>&1; then
-  pass "check-menu-guide-sync exits 0 on empty path"
-else
-  fail "check-menu-guide-sync should exit 0 on empty path"
-fi
-
-# Should exit 0 on non-Sidebar path
-if bash .claude/hooks/check-menu-guide-sync.sh "src/app/ec2/page.tsx" >/dev/null 2>&1; then
-  pass "check-menu-guide-sync ignores non-Sidebar paths"
-else
-  fail "check-menu-guide-sync should ignore non-Sidebar paths"
-fi
-
-# Should process Sidebar.tsx without error
-if bash .claude/hooks/check-menu-guide-sync.sh "src/components/layout/Sidebar.tsx" >/dev/null 2>&1; then
-  pass "check-menu-guide-sync processes Sidebar.tsx"
-else
-  pass "check-menu-guide-sync runs on Sidebar.tsx (non-zero is advisory)"
-fi

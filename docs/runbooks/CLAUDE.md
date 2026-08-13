@@ -7,10 +7,13 @@ Operational playbooks organized by scenario. Each follows symptoms → diagnosis
 
 | 런북 / Runbook | 주제 / Topic |
 |---|---|
-| [start-services.md](start-services.md) | 전체 서비스 시작 (Steampipe + Next.js) |
-| [deploy-new-version.md](deploy-new-version.md) | 새 버전 배포 (앱 / 에이전트 / Lambda / CDK) |
+| [start-services.md](start-services.md) | **⚠️ v1(legacy)** 전체 서비스 시작 (Steampipe + Next.js on EC2) — v2는 ECS 상시 기동 |
+| [deploy-new-version.md](deploy-new-version.md) | **⚠️ v1(legacy)** 새 버전 배포 (CDK) — v2는 `make deploy` |
 | [add-new-page.md](add-new-page.md) | 새 대시보드 페이지 추가 |
-| [multi-account-setup.md](multi-account-setup.md) | 신규 AWS 계정 추가 (Steampipe Aggregator) |
+| [multi-account-setup.md](multi-account-setup.md) | **⚠️ v1(legacy)** 신규 AWS 계정 추가 (Steampipe Aggregator) — v2는 onboard-target-account.md |
+| [onboard-target-account.md](onboard-target-account.md) | v2 타깃 계정 온보딩 (`AWSopsReadOnlyRole` + ExternalId) |
+| [istio-agent-eks-access.md](istio-agent-eks-access.md) | `istio-read` MCP의 EKS 클러스터 접근 부여 (agent Lambda role Access Entry) |
+| [k8sgpt-operator-install.md](k8sgpt-operator-install.md) | K8sGPT 오퍼레이터 아웃-오브-밴드 설치 (오퍼레이터 수동 작업, ADR-005 선례) |
 | [alert-pipeline-troubleshoot.md](alert-pipeline-troubleshoot.md) | 알림 파이프라인 장애 대응 (ADR-008/013) |
 | [cache-warmer-issues.md](cache-warmer-issues.md) | 캐시 워머 stale / 에러 대응 |
 | [cognito-auth-issues.md](cognito-auth-issues.md) | 로그인 실패, Lambda@Edge 검증 오류 |
