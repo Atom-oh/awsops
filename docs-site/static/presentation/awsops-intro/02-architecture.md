@@ -122,7 +122,7 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
 {cue: pause}
 큰 모듈은 전부 feature flag로 게이트합니다. 지금은 약 17개까지 늘어났습니다 — agentcore, workers, steampipe, hybrid_routing뿐 아니라 diagnosis_schedule, diagnosis_notify, incident_lifecycle, k8sgpt, rca_writeback, eks_auto_register, ai_cost_tracking, multi_route_synthesis, 그리고 동결(do-not-enable) 상태인 remediation까지. 전부 기본값이 false라서 plan을 돌리면 No changes, 비용은 0입니다.
 {cue: pause}
-다만 라이브 환경은 이미 여러 개를 켜 놓은 상태입니다. workers, steampipe, agentcore, integrations, ai_cost_tracking, diagnosis_schedule, diagnosis_notify, eks_auto_register, hybrid_routing가 terraform.tfvars에서 true입니다. remediation과 integrations_write는 계속 off이자 동결 상태입니다.
+다만 라이브 환경은 이미 여러 개를 켜 놓은 상태입니다. workers, steampipe, agentcore, integrations, ai_cost_tracking, diagnosis_schedule, diagnosis_notify, eks_auto_register, hybrid_routing가 terraform.tfvars에서 true입니다. remediation은 계속 off이자 ADR-005 동결 상태이고, integrations_write는 off이지만 ADR-007 거버넌스 아래 게이트 상태(동결은 아님)입니다.
 공유 인프라는 절대 auto-approve를 쓰지 않고, 저장된 tfplan을 apply하는 규율을 지킵니다. CloudFront나 SG 같은 긴 apply는 컨트롤러가 직접 실행합니다.
 {cue: transition}
 파일별로 어떻게 나뉘어 있는지 보겠습니다.
@@ -174,7 +174,7 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
 :::notes
 {timing: 1min}
 파일별 역할입니다.
-왼쪽이 핵심 레이어입니다. 네트워크, 엣지, 인증, 데이터, 워크로드, ECR, AI, 워커까지 항상 살아 있는 기반입니다.
+왼쪽이 핵심 레이어입니다. 네트워크, 엣지, 인증, 데이터, 워크로드, ECR, AI, 워커까지 — 전부 flag-gated 모듈이지만 현재 라이브 환경에서는 이미 켜져 있는 기반 레이어입니다.
 {cue: pause}
 오른쪽은 게이트로 묶인 서브시스템입니다. EKS에 더해 steampipe, notify, incidents, k8sgpt, writeback, remediation, secret-rotation까지 각 서브시스템이 별도 파일과 flag로 분리되어 있습니다. remediation은 ADR-005로 동결(do-not-enable) 상태입니다.
 {cue: transition}
@@ -506,7 +506,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 ### 잡 종류 (2026-06-18 이후 증가)
 
 - **schedule_dispatcher** — 시간별 EventBridge → `report_schedules` 스캔 → 진단 잡 enqueue (`diagnosis_schedule_enabled`, LIVE)
-- **diagnosis_digest** (notify.tf) — 리포트별 이메일 대신 배치 SNS 다이제스트 (`diagnosis_notify_enabled`, ADR-013, 병합 대기 중)
+- **diagnosis_digest** (notify.tf) — 리포트별 이메일 대신 배치 SNS 다이제스트 (`diagnosis_notify_enabled`, ADR-013, `workers_enabled && diagnosis_notify_enabled` 게이트로 이미 배포됨)
 - **compliance** (Powerpipe) — CIS 벤치마크 Fargate 잡 (`steampipe_enabled`)
 
 :::
@@ -522,7 +522,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 :::notes
 {timing: 1min}
 이 백본에 얹히는 잡 종류도 계속 늘었습니다.
-schedule_dispatcher는 시간별로 report_schedules를 스캔해서 예약된 진단 잡을 큐에 넣고, diagnosis_digest는 리포트가 끝날 때마다 개별 이메일을 보내던 걸 배치 SNS 다이제스트로 바꾸는 작업인데, 별도 브랜치에서 완료돼 병합을 기다리고 있습니다. 그리고 Powerpipe 기반 compliance 잡이 CIS 벤치마크를 이 워커 티어 위에서 돌립니다. schedule_dispatcher와 compliance는 flag-gated로 라이브 환경에서 이미 켜져 있습니다.
+schedule_dispatcher는 시간별로 report_schedules를 스캔해서 예약된 진단 잡을 큐에 넣고, diagnosis_digest는 리포트가 끝날 때마다 개별 이메일을 보내던 걸 배치 SNS 다이제스트로 바꾸는 작업인데, 이미 workers.tf에 병합되어 `workers_enabled && diagnosis_notify_enabled` 게이트로 배포되어 있습니다. 그리고 Powerpipe 기반 compliance 잡이 CIS 벤치마크를 이 워커 티어 위에서 돌립니다. schedule_dispatcher와 compliance는 flag-gated로 라이브 환경에서 이미 켜져 있습니다.
 {cue: transition}
 관측성과 토폴로지로 넘어갑니다.
 :::

@@ -4,7 +4,7 @@
 
 | 자산 | 무엇인가 | 소스 / 재생성 경로 |
 |---|---|---|
-| `index.html` + `0N-*.html` (웹 슬라이드) | remarp 블록 기반 웹 프레젠테이션 (42장) | `_presentation.md` 매니페스트 + `0N-*.md` 블록에서 생성 |
+| `index.html` + `0N-*.html` (웹 슬라이드) | remarp 블록 기반 웹 프레젠테이션 (52장) | `_presentation.md` 매니페스트 + `0N-*.md` 블록에서 생성 |
 | `awsops-intro.pptx` (정식 PPTX 덱) | 고객 발표용으로 별도 제작한 PowerPoint 덱 — 16:9, Pretendard 폰트(미설치 시 대체 폰트), 슬라이드마다 한국어 스피커 노트 포함 | `docs-site/scripts/pptx/build-awsops-intro-pptx.js` (pptxgenjs) — 아래 참조 |
 
 ## 정식 PPTX 덱 재생성

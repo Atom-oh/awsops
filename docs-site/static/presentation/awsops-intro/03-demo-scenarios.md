@@ -1112,11 +1112,11 @@ EKS 화면도 read-only지만 이제 완전한 메뉴 패밀리입니다. fleet 
 <div class="columns">
   <div class="col">
     <h3>Security Findings Pipeline</h3>
-    <img src="assets/security-findings-pipeline.svg" alt="Security findings 파이프라인 — inventory_resources에서 Public S3·Open SG·Unencrypted EBS·IAM MFA를 BFF가 도출하고 ECR 스캔 CVE를 집계" class="slide-img" style="max-width:100%;max-height:50vh" />
+    <img src="assets/security-findings-pipeline.svg" alt="Security findings 파이프라인 — inventory_resources에서 Public S3·Open SG·Unencrypted EBS·IAM MFA를 BFF가 도출; ECR 스캔 CVE는 별도 live SDK 경로로 집계(FINDING_SQL 미포함)" class="slide-img" style="max-width:100%;max-height:50vh" />
   </div>
   <div class="col">
     <h3>Compliance Benchmark Flow</h3>
-    <img src="assets/compliance-benchmark-flow.svg" alt="Compliance 벤치마크 흐름 — Powerpipe 워커가 계정 단위로 실행하고 결과를 compliance_runs·compliance_results에 적재" class="slide-img" style="max-width:100%;max-height:50vh" />
+    <img src="assets/compliance-benchmark-flow.svg" alt="Compliance 벤치마크 흐름 — Powerpipe 워커가 warm Steampipe FDW를 조회(기본 scope=all, 계정별 실행도 가능; 라이브 AWS 직접 조회 아님)하고 결과를 compliance_runs·compliance_results에 적재" class="slide-img" style="max-width:100%;max-height:50vh" />
   </div>
 </div>
 :::
