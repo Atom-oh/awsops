@@ -47,7 +47,7 @@ async function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
   inflight.set(key, p);
   return p;
 }
-export function _resetSgCacheForTests() { cache.clear(); inflight.clear(); ec2Clients.clear(); logsClients.clear(); detailCache = new Map(); ipLabelCache = new Map(); }
+export function _resetSgCacheForTests() { cache.clear(); inflight.clear(); ec2Clients.clear(); logsClients.clear(); detailCacheByScope.clear(); ipLabelCacheByScope.clear(); }
 
 export interface SgRule {
   direction: 'ingress' | 'egress';
@@ -88,7 +88,7 @@ export interface SgAnalysis {
   rows: SgUsageRow[];
   totals: {
     total: number; attached: number;
-    /** 부착 0 + 참조 0. */
+    /** 부착 0 + 참조 0 (default SG는 제외 — 삭제 불가라 정리 후보가 아님). */
     unused: number;
     /** 부착은 없지만 다른 SG가 참조 중 (삭제 불가). */
     referencedOnly: number;
@@ -96,6 +96,10 @@ export interface SgAnalysis {
   };
   /** CWL 대상 VPC Flow Logs 보유 VPC 수 — 0이면 히트 매칭은 NFM 폴백. */
   flowLogVpcs: number;
+  /** List/Describe 실패 또는 ENI 5000건 캡 도달로 해당 리전의 SG 목록·부착 집계가
+   *  실제보다 적을 수 있는 리전 — 0/빈 결과를 "리전에 리소스 없음"으로 신뢰하면 안 됨
+   *  (anfw.ts의 degradedRegions와 동일 계약). */
+  degradedRegions: string[];
 }
 
 // ── 내부 상세(히트 매칭용) — 직렬화하지 않음 ────────────────────────────────
@@ -107,12 +111,23 @@ interface SgDetail {
   flowLogGroup: string | null;
 }
 // build-then-swap: sgAnalysis 재실행이 clear()로 빈 구간을 만들면 진행 중 sgHits의 지연
-// peer 조회가 깨지므로, 새 Map을 지역에서 채운 뒤 완료 시점에 원자 교체한다 (let 바인딩).
-let detailCache = new Map<string, SgDetail>();
-/** IP → 리소스 식별 (flow/NFM 상대 식별용). */
-let ipLabelCache = new Map<string, string>();
+// peer 조회가 깨지므로, 새 Map을 지역에서 채운 뒤 완료 시점에 원자 교체한다.
+// 스코프별로 분리 — 스코프 A로 sgAnalysis가 끝나자마자 스코프 B 요청이 들어와도 서로의
+// 캐시를 덮어쓰지 않는다(단일 Map이었다면 동시 요청 간 스코프가 뒤섞일 수 있었다).
+const detailCacheByScope = new Map<string, Map<string, SgDetail>>();
+/** IP → 리소스 식별 (flow/NFM 상대 식별용) — 스코프별. */
+const ipLabelCacheByScope = new Map<string, Map<string, string>>();
+const scopeCacheKey = (scopeRegions?: string[]): string =>
+  scopeRegions && scopeRegions.length > 0 ? `a|${[...scopeRegions].sort().join(',')}` : 'a|*';
 
-async function regionsFromInventory(): Promise<string[]> {
+// 리뷰 MAJOR(확정): 이전엔 항상 인벤토리 전 리전·전 계정을 스캔해 (1) 페이지 상단의
+// 계정/리전 스코프 선택과 무관하게 호스트 계정 SG가 항상 보였고, (2) 스코프 밖 리전의
+// CIDR/이름이 VPC 식별에 섞여 다른 계정의 겹치는 RFC1918 대역과 오매칭될 수 있었다.
+// TgwSection이 scope-filtered rows에서 ids를 뽑아 서버에 전달하는 것과 같은 패턴으로,
+// 호출자가 scopeRegions(현재 뷰의 SG 인벤토리 행이 속한 리전 집합)를 넘기면 그 리전만
+// 스캔한다 — 안 넘기면(예: 배치/진단 컨텍스트) 기존처럼 전 리전.
+async function regionsFromInventory(scopeRegions?: string[]): Promise<string[]> {
+  if (scopeRegions && scopeRegions.length > 0) return [...new Set(scopeRegions)];
   try {
     const r = await getPool().query<{ region: string }>(
       `SELECT DISTINCT region FROM inventory_resources WHERE resource_type = 'vpc' AND region IS NOT NULL`);
@@ -122,17 +137,26 @@ async function regionsFromInventory(): Promise<string[]> {
   } catch { return [REGION]; }
 }
 
-/** 인벤토리 VPC 이름/CIDR (peer CIDR 식별용). */
-async function vpcMeta(): Promise<{ byId: Map<string, string>; cidrs: { cidr: string; label: string }[] }> {
+/** 인벤토리 VPC 이름/CIDR (peer CIDR 식별용) — scopeRegions가 있으면 그 리전만. */
+async function vpcMeta(scopeRegions?: string[]): Promise<{ byId: Map<string, string>; cidrs: { cidr: string; label: string }[] }> {
   const byId = new Map<string, string>();
   const cidrs: { cidr: string; label: string }[] = [];
   try {
-    const r = await getPool().query<{ resource_id: string; row: { name?: string; cidr_block?: string } }>(
-      `SELECT resource_id, row FROM inventory_resources WHERE resource_type = 'vpc'`);
+    // 리뷰 MAJOR(확정): inventory_resources에 row 컬럼은 없다(schema.sql 실제 컬럼은 data
+    // JSONB) — 이 쿼리는 매 호출 매번 예외를 던졌고 catch가 조용히 삼켜 VPC 이름/CIDR
+    // 식별(광고된 기능 축)이 프로덕션에서 한 번도 동작하지 않았다. 테스트는 mock pool이
+    // row 키를 직접 반환해 이 버그를 가려서 통과했다. security-findings.ts와 동일한
+    // `data AS detail` 패턴으로 수정.
+    const scoped = scopeRegions && scopeRegions.length > 0;
+    const r = await getPool().query<{ resource_id: string; detail: { name?: string; cidr_block?: string } }>(
+      scoped
+        ? `SELECT resource_id, data AS detail FROM inventory_resources WHERE resource_type = 'vpc' AND region = ANY($1)`
+        : `SELECT resource_id, data AS detail FROM inventory_resources WHERE resource_type = 'vpc'`,
+      scoped ? [scopeRegions] : undefined);
     for (const v of r.rows) {
-      const label = v.row?.name || v.resource_id;
+      const label = v.detail?.name || v.resource_id;
       byId.set(v.resource_id, label);
-      if (v.row?.cidr_block) cidrs.push({ cidr: v.row.cidr_block, label });
+      if (v.detail?.cidr_block) cidrs.push({ cidr: v.detail.cidr_block, label });
     }
   } catch { /* Aurora 미가용 시 라벨만 생략 */ }
   return { byId, cidrs };
@@ -175,20 +199,26 @@ interface RawEni {
   Groups?: { GroupId?: string }[]; VpcId?: string;
   Attachment?: { InstanceId?: string };
   PrivateIpAddresses?: { PrivateIpAddress?: string }[]; PrivateIpAddress?: string;
+  /** 리뷰 MAJOR(확정): 기존엔 IPv4만 수집해 ownIps에 IPv6가 전혀 없었다 — ::/0(IPv6 전체
+   *  개방) 인바운드 룰은 매칭될 IPv6 대상 IP 자체가 없어 항상 hits=0(거짓 idle)이었다. */
+  Ipv6Addresses?: { Ipv6Address?: string }[];
 }
 
 const portRange = (from?: number, to?: number): string =>
   from == null || from === -1 ? 'all' : from === to ? String(from) : `${from}-${to}`;
 
-/** 전 리전 SG 사용 현황 + 룰 식별 분석 (4분 TTL). */
-export async function sgAnalysis(): Promise<SgAnalysis> {
-  return cached('a', async () => {
+/** SG 사용 현황 + 룰 식별 분석 (4분 TTL) — scopeRegions를 주면 그 리전만(페이지 상단
+ *  계정/리전 선택과 동일 범위), 안 주면 인벤토리 전 리전(레거시/배치 호출용). */
+export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
+  const cacheKey = scopeCacheKey(scopeRegions);
+  return cached(cacheKey, async () => {
     // clear()가 아니라 지역 Map에 채운 뒤 반환 직전 원자 교체 (진행 중 sgHits 보호).
     const nextDetail = new Map<string, SgDetail>();
     const nextIpLabel = new Map<string, string>();
-    const [regions, vpcs] = await Promise.all([regionsFromInventory(), vpcMeta()]);
+    const [regions, vpcs] = await Promise.all([regionsFromInventory(scopeRegions), vpcMeta(scopeRegions)]);
 
     const perRegion = await Promise.all(regions.map(async (region) => {
+      let eniTruncated = false;
       try {
         // SG + ENI + 관리형 프리픽스 리스트 + flow logs (병렬, 각자 페이지네이션)
         const [sgs, enis, plNames, flowByVpc] = await Promise.all([
@@ -212,6 +242,9 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
               out.push(...(r.NetworkInterfaces ?? []));
               NextToken = r.NextToken;
             } while (NextToken && out.length < 5000);
+            // 5000건 캡에 물리면(우리 상한, API 제약 아님) 잘린 ENI들의 부착 집계가
+            // 조용히 과소산정된다 — 무신호 금지, 리전을 degraded로 표시(리뷰 MAJOR류).
+            if (NextToken) eniTruncated = true;
             return out;
           })(),
           (async () => {
@@ -221,15 +254,30 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
             } catch { return new Map<string, string>(); }
           })(),
           (async () => {
-            // VPC 단위 CWL flow log 발견 — SG 히트 매칭의 1차 소스
+            // VPC 단위 CWL flow log 발견 — SG 히트 매칭의 1차 소스.
+            // 리뷰 MAJOR: TrafficType=REJECT 전용 flow log는 ACCEPT 레코드가 전혀 없어
+            // sgHits()의 ACCEPT 필터가 항상 0건으로 남는다 — 모든 인바운드 룰이 거짓
+            // idle(정리 후보)로 보인다. ACCEPT/ALL만 룰-히트 소스로 채택, REJECT 전용은
+            // 제외해 NFM 폴백으로 넘긴다(NFM은 hits=null로 정직 표기).
             try {
-              const r = await ec2(region).send(new DescribeFlowLogsCommand({}));
+              // 리뷰 MAJOR(확정): NextToken 미순회 — flow log가 한 페이지를 넘는 계정은
+              // 뒤쪽 페이지의 VPC가 조용히 빠져 그 VPC의 SG들이 Flow Logs 대신 NFM/no_source로
+              // 강등된다(무신호 축소). 다른 List* 호출과 동일하게 전량 순회.
               const m = new Map<string, string>();
-              for (const f of r.FlowLogs ?? []) {
-                if (f.LogDestinationType === 'cloud-watch-logs' && f.ResourceId?.startsWith('vpc-') && f.LogGroupName) {
-                  m.set(f.ResourceId, f.LogGroupName);
+              let NextToken: string | undefined;
+              do {
+                const r: { FlowLogs?: { LogDestinationType?: string; ResourceId?: string; LogGroupName?: string; TrafficType?: string }[]; NextToken?: string } =
+                  await ec2(region).send(new DescribeFlowLogsCommand({ NextToken }));
+                for (const f of r.FlowLogs ?? []) {
+                  if (f.LogDestinationType === 'cloud-watch-logs' && f.ResourceId?.startsWith('vpc-') && f.LogGroupName
+                    && f.TrafficType !== 'REJECT' && !m.has(f.ResourceId)) {
+                    // VPC당 여러 CWL flow log가 있으면 먼저 발견한 것(=API 응답 순서상 최신 우선인
+                    // 경우가 흔함)을 채택 — 임의 선택보다는 결정적 선택.
+                    m.set(f.ResourceId, f.LogGroupName);
+                  }
                 }
-              }
+                NextToken = r.NextToken;
+              } while (NextToken);
               return m;
             } catch { return new Map<string, string>(); }
           })(),
@@ -247,6 +295,7 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
           const { kind, resource } = classifyEni(e.InterfaceType ?? 'interface', e.Description ?? '', e.Attachment?.InstanceId ?? null);
           const ips = (e.PrivateIpAddresses ?? []).map((p) => p.PrivateIpAddress).filter((x): x is string => !!x);
           if (ips.length === 0 && e.PrivateIpAddress) ips.push(e.PrivateIpAddress);
+          for (const v6 of e.Ipv6Addresses ?? []) if (v6.Ipv6Address) ips.push(v6.Ipv6Address);
           for (const ip of ips) nextIpLabel.set(ip, resource ? `${kind}: ${resource}` : kind);
           for (const g of e.Groups ?? []) {
             if (!g.GroupId) continue;
@@ -333,11 +382,12 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
             rules,
             flowLogGroup: flowByVpc.get(g.VpcId ?? '') ?? null,
           });
+          const isDefault = g.GroupName === 'default';
           return {
             id, name: g.GroupName ?? id, description: g.Description ?? '',
             region, vpcId: g.VpcId ?? '',
             vpcLabel: vpcs.byId.get(g.VpcId ?? '') ?? g.VpcId ?? '',
-            isDefault: g.GroupName === 'default',
+            isDefault,
             eniCount: att?.ids.length ?? 0,
             attachedKinds: [...(att?.kinds ?? new Map<string, number>()).entries()]
               .map(([kind, count]) => ({ kind, count }))
@@ -346,18 +396,21 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
             ingressRules: ingress.length,
             egressRules: rules.length - ingress.length,
             openIngress: ingress.filter((r) => r.open).length,
-            unused: (att?.ids.length ?? 0) === 0 && refs.length === 0,
+            // default SG는 AWS가 삭제를 막아 "정리 후보"로 세면 오탐(리뷰 MAJOR) — 매 VPC마다
+            // 항상 존재해 상시 발생하는 거짓 경고였다. isDefault는 별도 필드로 노출해 클라가
+            // "기본 — 삭제 불가"로 구분 표시.
+            unused: !isDefault && (att?.ids.length ?? 0) === 0 && refs.length === 0,
             rules,
           };
         });
-        return { rows, flowLogVpcs: flowByVpc.size };
-      } catch { return { rows: [] as SgUsageRow[], flowLogVpcs: 0 }; }
+        return { rows, flowLogVpcs: flowByVpc.size, degraded: eniTruncated };
+      } catch { return { rows: [] as SgUsageRow[], flowLogVpcs: 0, degraded: true }; }
     }));
 
     const rows = perRegion.flatMap((r) => r.rows);
     // 완전 적재된 Map을 원자 교체 — 지연 peer 조회가 항상 완성본만 보게 한다.
-    detailCache = nextDetail;
-    ipLabelCache = nextIpLabel;
+    detailCacheByScope.set(cacheKey, nextDetail);
+    ipLabelCacheByScope.set(cacheKey, nextIpLabel);
     return {
       rows,
       totals: {
@@ -369,6 +422,7 @@ export async function sgAnalysis(): Promise<SgAnalysis> {
         enis: rows.reduce((s, r) => s + r.eniCount, 0),
       },
       flowLogVpcs: perRegion.reduce((s, r) => s + r.flowLogVpcs, 0),
+      degradedRegions: perRegion.flatMap((r, i) => (r.degraded ? [regions[i]] : [])),
     };
   });
 }
@@ -386,8 +440,8 @@ export interface SgPeerTraffic {
 }
 /** 표시 문자열은 클라이언트가 tt()로 해석 — 서버는 코드만 반환 (i18n). */
 export type SgHitNote =
-  | 'sg_not_found' | 'no_eni' | 'no_source'
-  | 'flow_no_records' | 'flow_eni_truncated'
+  | 'sg_not_found' | 'no_eni' | 'no_source' | 'query_failed'
+  | 'flow_no_records' | 'flow_eni_truncated' | 'flow_capped'
   | 'nfm_peers_only' | null;
 export interface SgHitsResult {
   source: 'flowlogs' | 'nfm' | 'none';
@@ -401,9 +455,16 @@ export interface SgHitsResult {
 }
 
 const isV6 = (s: string): boolean => s.includes(':');
-/** matchRule이 구조적으로 판정 가능한 룰인지 — pl/IPv6 CIDR은 해석 불가(hits=null 처리). */
-const ruleMatchable = (r: SgRule): boolean =>
-  r.peerKind !== 'pl' && !(r.peerKind === 'cidr' && isV6(r.peer));
+/** matchRule이 구조적으로 판정 가능한 룰인지 — pl/IPv6 CIDR은 해석 불가, ICMP는 FromPort/
+ *  ToPort가 포트가 아니라 type/code라 flow log dstport(항상 0)와 비교가 무의미(리뷰 MAJOR
+ *  확정) — 둘 다 hits=null 처리. */
+const ruleMatchable = (r: SgRule, scopeDetail: Map<string, SgDetail>): boolean =>
+  r.peerKind !== 'pl' && !(r.peerKind === 'cidr' && isV6(r.peer))
+  && r.protocol !== 'icmp' && r.protocol !== 'icmpv6'
+  // 리뷰 MAJOR(확정): 참조 SG가 detailCache에 없으면(다른 계정 UserIdGroupPairs, 피어링
+  // VPC의 SG) matchRule은 항상 false를 반환한다 — 매칭 시도 자체가 불가능한데 hits=0으로
+  // 시작하면 "매칭 없음이 확인됨"으로 오판된다.
+  && !(r.peerKind === 'sg' && !scopeDetail.has(r.peer));
 
 /** 인바운드 룰 매칭 (Flow Logs 전용) — srcIp는 실제 유입 소스 IP. */
 const matchRule = (rule: SgRule, port: number | null, protoNum: string | null, srcIp: string | null, detailOf: (sgId: string) => SgDetail | undefined): boolean => {
@@ -441,28 +502,36 @@ async function runInsights(region: string, group: string, query: string, rangeSe
   throw new Error('Insights poll cap');
 }
 
-/** 선택 SG의 트래픽 히트 매칭 — flow logs 우선, NFM 폴백 (모두 없으면 none). */
-export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResult> {
-  return cached(`h|${sgId}|${rangeSec}`, async () => {
-    await sgAnalysis(); // detailCache 채움 (캐시면 no-op)
+/** 선택 SG의 트래픽 히트 매칭 — flow logs 우선, NFM 폴백 (모두 없으면 none). scopeRegions는
+ *  sgAnalysis()와 동일 계약 — 호출한 페이지의 스코프에 맞는 detailCache를 읽어야 한다. */
+export async function sgHits(sgId: string, rangeSec: number, scopeRegions?: string[]): Promise<SgHitsResult> {
+  const scopeKey = scopeCacheKey(scopeRegions);
+  return cached(`h|${scopeKey}|${sgId}|${rangeSec}`, async () => {
+    await sgAnalysis(scopeRegions); // 이 스코프의 detailCache 채움 (캐시면 no-op)
+    const detailCache = detailCacheByScope.get(scopeKey) ?? new Map<string, SgDetail>();
+    const ipLabelCache = ipLabelCacheByScope.get(scopeKey) ?? new Map<string, string>();
     const detail = detailCache.get(sgId);
     const empty: SgHitsResult = { source: 'none', note: null, ruleHits: [], idleIngressRules: 0, peers: [], rangeSec };
     if (!detail) return { ...empty, note: 'sg_not_found' };
     const ingress = detail.rules.filter((r) => r.direction === 'ingress');
     // 매칭 가능 룰만 hits=0으로 시작(pl/IPv6 CIDR은 null=n/a), idle 카운트는 hits===0만.
-    const initRuleHits = (): SgRuleHit[] => ingress.map((r) => ({ ...r, hits: ruleMatchable(r) ? 0 : null, bytes: 0 }));
+    // 실제 조회를 하고 매칭이 안 나온 경우에만 쓴다 — "증거가 아예 없음"(ENI 없음/소스 없음/
+    // 레코드 0건)에는 쓰면 안 된다(리뷰 MAJOR: 근거 없는 idle 확정).
+    const initRuleHits = (): SgRuleHit[] => ingress.map((r) => ({ ...r, hits: ruleMatchable(r, detailCache) ? 0 : null, bytes: 0 }));
+    // 증거 없음 — 매칭 가능 룰도 hits=null(확인 불가)로 둔다. idle(정리 후보) 오판 방지.
+    const nullRuleHits = (): SgRuleHit[] => ingress.map((r) => ({ ...r, hits: null, bytes: 0 }));
     const idleCount = (rh: SgRuleHit[]) => rh.filter((r) => r.hits === 0).length;
     if (detail.eniIds.length === 0) {
-      return { ...empty, note: 'no_eni', ruleHits: initRuleHits(), idleIngressRules: idleCount(initRuleHits()) };
+      return { ...empty, note: 'no_eni', ruleHits: nullRuleHits(), idleIngressRules: 0 };
     }
     const ownIps = new Set(detail.ips);
+    let flowQueryFailed = false;
 
     // ① VPC Flow Logs (CWL) — 룰-레벨 정확 매칭 (인바운드만)
     if (detail.flowLogGroup) {
       try {
         // 기본 포맷 space-separated 원문 — parse로 14필드 추출 (커스텀 포맷이면 0행 → 정직 폴백).
-        // 방향: ENI flow log엔 아웃바운드(srcaddr=자기 IP) 레코드도 있으므로 dstaddr가 자기 IP인
-        // 행(=인바운드)만 룰 매칭 — 아웃바운드 오매칭·자기 IP peer·intra-SG 이중 집계 방지.
+        // 방향: dstaddr가 자기 IP인 행(=인바운드)만 룰 매칭 — 아웃바운드(dst≠자기IP) 오매칭 방지.
         const truncated = detail.eniIds.length > 50;
         const eniList = detail.eniIds.slice(0, 50).map((id) => `'${id}'`).join(', ');
         const rows = await runInsights(detail.region, detail.flowLogGroup, `parse @message '* * * * * * * * * * * * * *' as version, account, interfaceId, srcaddr, dstaddr, srcport, dstport, protocol, packets, bytes, startt, endt, action, logStatus
@@ -476,7 +545,13 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
           const src = row.srcaddr ?? null;
           const dst = row.dstaddr ?? null;
           // 인바운드 판정: 목적지가 이 SG의 ENI IP여야 유입 트래픽 (아웃바운드/통과 레코드 제외).
-          if (!dst || !ownIps.has(dst) || !src || ownIps.has(src)) continue;
+          // 리뷰 MAJOR(확정): 이전엔 src도 ownIps에 없어야 한다는 조건이 있었는데, 그게
+          // 자기 참조(self-reference) SG 룰의 유일한 매칭 가능 레코드(src·dst 둘 다 자기
+          // ENI IP인 intra-SG 트래픽)를 통째로 걸러냈다 — 자기 참조 룰은 구조적으로 항상
+          // idle(정리 후보)로 보였다. dst∈ownIps만으로 인바운드 판정은 충분하다(아웃바운드는
+          // dst가 자기 IP가 아니므로 이미 배제됨).
+          if (!dst || !ownIps.has(dst) || !src) continue;
+          if (src === dst) continue; // 자기 자신으로의 루프백 잡음 방지
           const port = row.dstport ? Number(row.dstport) : null;
           const proto = row.protocol ?? null;
           const c = Number(row.cnt) || 0;
@@ -490,31 +565,66 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
             peers.push({ ip: src, label: ipLabelCache.get(src) ?? null, port: row.dstport ?? null, action: row.action ?? null, count: c, bytes: b });
           }
         }
+        if (rows.length === 0) {
+          // 레코드 자체가 0건 — "매칭 안 됨"이 아니라 "판단할 근거가 없음"이다(커스텀 로그
+          // 포맷이라 parse가 전부 실패하는 경우도 이 분기로 떨어짐). idle 확정 금지.
+          return { source: 'flowlogs' as const, note: 'flow_no_records', ruleHits: nullRuleHits(), idleIngressRules: 0, peers, rangeSec };
+        }
+        // Insights `limit 200`은 우리 상한(API 제약 아님) — SG의 저용량 룰 매칭이 상위
+        // 200 튜플에 못 들거나(capped) ENI가 50개를 넘어 뒤쪽 ENI가 통째로 빠지면(truncated)
+        // 그 트래픽의 hits=0이 조용히 idle로 오판된다(리뷰 MAJOR, 둘 다 동일 계약). 매칭
+        // 가능 룰 중 관측된 매칭이 없는(hits===0) 항목만 null(확인 불가)로 강등 — 실제로
+        // 카운트된 매칭(hits>0)은 그대로 신뢰.
+        const capped = rows.length === 200;
+        const degraded = truncated || capped;
+        const finalHits = degraded ? ruleHits.map((r) => (r.hits === 0 ? { ...r, hits: null } : r)) : ruleHits;
         return {
           source: 'flowlogs' as const,
-          note: rows.length === 0 ? 'flow_no_records' : truncated ? 'flow_eni_truncated' : null,
-          ruleHits,
-          idleIngressRules: idleCount(ruleHits),
+          note: truncated ? 'flow_eni_truncated' : capped ? 'flow_capped' : null,
+          ruleHits: finalHits,
+          idleIngressRules: idleCount(finalHits),
           peers, rangeSec,
         };
-      } catch { /* Insights 실패 → NFM 폴백 시도 */ }
+      } catch {
+        // 리뷰 MAJOR(확정): Insights 조회 자체가 실패(AccessDenied/스로틀/타임아웃)해도 이전엔
+        // 그냥 NFM 폴백으로 넘어가고, NFM도 없으면 최종적으로 'no_source'("Flow Logs·NFM
+        // 모두 없음")로 끝났다 — 실제로는 Flow Logs가 있었는데 그 조회가 실패한 것이지
+        // "소스 자체가 없음"이 아니다. 구분해서 표시.
+        flowQueryFailed = true;
+      }
     }
 
     // ② NFM 폴백 — 트래픽 "상대 식별"만 (NFM은 양방향 바이트 집계라 인바운드 룰 귀속 불가).
     // 룰 매칭은 하지 않고 hits=null로 두어 거짓 idle(정리 후보) 신호를 내지 않는다.
+    // 리뷰 MAJOR(확정): NFM 클라이언트는 REGION(홈 리전) 고정이라 다른 리전 SG를 조회하면
+    // 엉뚱한 리전의 모니터 데이터가 "이 SG의 트래픽"처럼 보인다 — 홈 리전이 아니면 애초에
+    // 시도하지 않고 no_source로 정직 강등.
     try {
+      if (detail.region !== REGION) throw new Error('nfm client is home-region only');
       const st = await nfmStatus();
       const monitor = st.monitors.find((m) => m.status === 'ACTIVE' && !m.cluster) ?? st.monitors.find((m) => m.status === 'ACTIVE');
       if (monitor) {
         const window = Math.min(rangeSec, NFM_MAX_RANGE_SEC);
         // 전 카테고리 (인터넷/미분류 포함) — 상대 식별 누락 방지.
+        // 리뷰 MAJOR(확정): 7개 카테고리 호출이 전부 실패해도 이전엔 그냥 빈 rows로 삼켜
+        // source:'nfm'·0 peers를 반환했다 — "조회 실패"와 "진짜 트래픽 없음"을 구분 못 함.
+        let nfmAnyFail = false;
         const results = await Promise.all(NFM_CATEGORIES.map((c) =>
-          nfmTopContributors(monitor.name, 'DATA_TRANSFERRED', c, window, 50).catch(() => ({ rows: [], unit: '', tookMs: 0 }))));
+          nfmTopContributors(monitor.name, 'DATA_TRANSFERRED', c, window, 50).catch(() => { nfmAnyFail = true; return { rows: [], unit: '', tookMs: 0 }; })));
+        if (nfmAnyFail && results.every((r) => r.rows.length === 0)) {
+          flowQueryFailed = true;
+          throw new Error('all NFM category lookups failed');
+        }
         const byPeer = new Map<string, SgPeerTraffic>();
         for (const flow of results.flatMap((r) => r.rows)) {
           const localIsSg = flow.local.ip != null && ownIps.has(flow.local.ip);
           const remoteIsSg = flow.remote.ip != null && ownIps.has(flow.remote.ip);
           if (!localIsSg && !remoteIsSg) continue;
+          // 리뷰 MAJOR(확정): IP만으로 매칭하면 RFC1918 대역이 겹치는 다른 VPC의 흐름이
+          // 이 SG의 트래픽으로 잘못 귀속될 수 있다 — 로컬쪽 엔드포인트의 vpcId가 이 SG의
+          // VPC와 다르면 스킵(NfmEndpoint는 vpcId를 이미 들고 있음).
+          const localEp = localIsSg ? flow.local : flow.remote;
+          if (localEp.vpcId != null && localEp.vpcId !== detail.vpcId) continue;
           const peerEp = localIsSg ? flow.remote : flow.local;
           const peerIp = peerEp.ip ?? null;
           if (!peerIp || ownIps.has(peerIp)) continue;
@@ -533,8 +643,11 @@ export async function sgHits(sgId: string, rangeSec: number): Promise<SgHitsResu
         const ruleHits: SgRuleHit[] = ingress.map((r) => ({ ...r, hits: null, bytes: 0 }));
         return { source: 'nfm' as const, note: 'nfm_peers_only', ruleHits, idleIngressRules: 0, peers, rangeSec: window };
       }
-    } catch { /* NFM도 불가 → none */ }
+    } catch { /* NFM도 불가/전량 실패 → 아래 최종 강등에서 flowQueryFailed로 구분 */ }
 
-    return { ...empty, note: 'no_source', ruleHits: initRuleHits(), idleIngressRules: idleCount(initRuleHits()) };
+    // Flow Logs가 있었는데 조회가 실패했다면(또는 NFM 전량 실패) "소스 없음"이 아니라
+    // "조회 실패"로 정직 표기 — 리뷰 MAJOR: 이 둘을 구분 못 하면 재시도해야 할 상황이
+    // "이 SG는 원래 데이터가 없다"로 오인된다.
+    return { ...empty, note: flowQueryFailed ? 'query_failed' : 'no_source', ruleHits: nullRuleHits(), idleIngressRules: 0 };
   });
 }
