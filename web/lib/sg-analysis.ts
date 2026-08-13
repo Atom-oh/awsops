@@ -36,6 +36,19 @@ const logs = (r: string) => {
 };
 
 const TTL_MS = 4 * 60_000;
+// 리뷰 MAJOR(확정): `?regions=`가 scopeCacheKey를 통해 cache/detailCacheByScope/
+// ipLabelCacheByScope의 키를 만들기 때문에, 상한이 없으면 이 세 Map이 (요청자가 만들 수
+// 있는) 리전 부분집합 수만큼 무제한으로 커진다 — OOM 민감한 Fargate web 티어에서 위험.
+// 삽입 순서 FIFO로 오래된 스코프부터 비운다(스코프는 소수의 페이지 조합만 재사용되므로
+// 최신 몇 개만 남기면 충분 — LRU만큼 정교할 필요 없음).
+const MAX_SCOPE_ENTRIES = 32;
+function evictOldest<K, V>(m: Map<K, V>, max: number): void {
+  while (m.size > max) {
+    const oldest = m.keys().next().value;
+    if (oldest === undefined) break;
+    m.delete(oldest);
+  }
+}
 const cache = new Map<string, { at: number; v: unknown }>();
 const inflight = new Map<string, Promise<unknown>>();
 async function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -43,7 +56,11 @@ async function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
   if (hit && Date.now() - hit.at < TTL_MS) return hit.v as T;
   const running = inflight.get(key);
   if (running) return running as Promise<T>;
-  const p = fn().then((v) => { cache.set(key, { at: Date.now(), v }); return v; }).finally(() => inflight.delete(key));
+  const p = fn().then((v) => {
+    cache.set(key, { at: Date.now(), v });
+    evictOldest(cache, 500); // sgHits()는 (scope, sgId, range) 조합마다 별도 키 — 상한 넉넉히
+    return v;
+  }).finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
@@ -147,11 +164,16 @@ async function vpcMeta(scopeRegions?: string[]): Promise<{ byId: Map<string, str
     // 식별(광고된 기능 축)이 프로덕션에서 한 번도 동작하지 않았다. 테스트는 mock pool이
     // row 키를 직접 반환해 이 버그를 가려서 통과했다. security-findings.ts와 동일한
     // `data AS detail` 패턴으로 수정.
+    // 리뷰 MAJOR(확정): account_id 필터가 없어 멤버 계정 VPC까지 이 조회에 섞였다 —
+    // sg-analysis.ts는 호스트 계정만 스캔하는데, RFC1918이 겹치는 멤버 계정 VPC가 CIDR→
+    // VPC이름 매칭에서 잘못 이긴다(같은 VPC ID가 계정별로 중복 존재하면 byId도 비결정적).
+    // schema.sql의 inventory_resources PK는 account_id를 포함(기본값 'self'=호스트) —
+    // 'self'로 필터해 호스트 VPC만 식별에 쓴다.
     const scoped = scopeRegions && scopeRegions.length > 0;
     const r = await getPool().query<{ resource_id: string; detail: { name?: string; cidr_block?: string } }>(
       scoped
-        ? `SELECT resource_id, data AS detail FROM inventory_resources WHERE resource_type = 'vpc' AND region = ANY($1)`
-        : `SELECT resource_id, data AS detail FROM inventory_resources WHERE resource_type = 'vpc'`,
+        ? `SELECT resource_id, data AS detail FROM inventory_resources WHERE resource_type = 'vpc' AND account_id = 'self' AND region = ANY($1)`
+        : `SELECT resource_id, data AS detail FROM inventory_resources WHERE resource_type = 'vpc' AND account_id = 'self'`,
       scoped ? [scopeRegions] : undefined);
     for (const v of r.rows) {
       const label = v.detail?.name || v.resource_id;
@@ -411,6 +433,8 @@ export async function sgAnalysis(scopeRegions?: string[]): Promise<SgAnalysis> {
     // 완전 적재된 Map을 원자 교체 — 지연 peer 조회가 항상 완성본만 보게 한다.
     detailCacheByScope.set(cacheKey, nextDetail);
     ipLabelCacheByScope.set(cacheKey, nextIpLabel);
+    evictOldest(detailCacheByScope, MAX_SCOPE_ENTRIES);
+    evictOldest(ipLabelCacheByScope, MAX_SCOPE_ENTRIES);
     return {
       rows,
       totals: {

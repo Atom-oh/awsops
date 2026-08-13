@@ -108,6 +108,40 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.totalAlerts).toBe(base.alerts);
   });
 
+  it('발견 폴백 DescribeLogGroups가 실패(스로틀/거부)하면 "발견된 로그 없음"과 구분해 failed에 표시 (리뷰 MAJOR)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'DescribeLogGroupsCommand') throw new Error('AccessDenied');
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // DescribeLoggingConfiguration이 이미 거부된 환경에서 이 폴백까지 실패해도 targets:[]
+    // 자체는 "발견된 로그 없음"과 똑같이 보인다 — failed에 별도 키가 있어야 "확인 불가"와
+    // "정말 없음"이 구분된다.
+    expect(a.targets).toEqual([]);
+    expect(a.failed).toContain('logDiscovery');
+  });
+
+  it('발견 폴백 DescribeLogGroups는 NextToken을 순회해 1페이지 너머의 로그 그룹도 찾는다', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'DescribeLogGroupsCommand':
+          if (!cmd.input.nextToken) {
+            return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert' }], nextToken: 'page2' };
+          }
+          return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/flow' }] };
+        case 'StartQueryCommand': return { queryId: 'q' };
+        case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 1, bytes: 1 })] };
+        default: return {};
+      }
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.targets.map((t) => t.type).sort()).toEqual(['ALERT', 'FLOW']);
+  });
+
   it('ALERT는 CWL, FLOW는 S3처럼 섞인 대상도 unsupported로 집계 (리뷰 MINOR: 이전엔 누락)', async () => {
     mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: 'S3:my-log-bucket' })] });
     mockInsights(() => [{ cnt: 3 }]);

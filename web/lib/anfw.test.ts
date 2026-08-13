@@ -292,6 +292,10 @@ describe('anfwAnalysis', () => {
     expect(a.firewalls).toHaveLength(1);
     expect(a.policies).toHaveLength(1);
     expect(a.degradedRegions).toEqual(['us-west-2']);
+    // scannedRegions는 firewalls 유무와 무관하게 "실제로 조회를 시도한" 전 리전이다 —
+    // 호출자(anfw/route.ts의 audit)가 "리전의 마지막 방화벽이 삭제됨" 케이스를 놓치지
+    // 않도록 firewalls[].region보다 넓은 이 목록을 써야 한다(리뷰 MAJOR).
+    expect(a.scannedRegions.sort()).toEqual(['ap-northeast-2', 'us-west-2']);
   });
 
   it('정상 리전만 있으면 degradedRegions는 빈 배열 (진짜 무-리소스와 조회실패를 혼동하지 않음)', async () => {

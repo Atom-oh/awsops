@@ -92,7 +92,7 @@ export interface AnfwLogsAnalysis {
 const num = (s: string | undefined): number => (s != null && s !== '' ? Number(s) || 0 : 0);
 
 /** 로깅 구성(알면 정확) 또는 접두사 발견(모르면 휴리스틱)으로 CWL 대상 도출. */
-async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number }> {
+async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean }> {
   const a = await anfwAnalysis(rangeSec);
   const targets: AnfwLogTarget[] = [];
   let unsupported = 0;
@@ -112,25 +112,38 @@ async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarge
     if (anyNonCwl) unsupported += 1;
   }
   // 폴백: 관례 접두사 스캔 (콘솔 기본 명명 /aws/network-firewall/...) — 이름으로 alert/flow 분류.
+  // 리뷰 MAJOR(확정): 이전엔 DescribeLogGroups가 실패(스로틀/거부)해도 그냥 catch로 삼켜
+  // "발견된 로그 없음"과 똑같이 보였다 — DescribeLoggingConfiguration이 이미 거부된
+  // SCP류 환경에서 이 폴백까지 실패하면 "CloudWatch Logs 대상 로그 없음"으로 렌더링돼,
+  // 이 폴백이 존재하는 이유였던 "unknown ≠ off" 계약을 이 경로 자신이 어겼다.
+  // 또한 미순회였던 NextToken도 페이지네이션해 1페이지 너머의 로그 그룹을 놓치지 않는다.
+  let discoveryFailed = false;
   for (const region of discoverRegions) {
     try {
-      const r = await logs(region).send(new DescribeLogGroupsCommand({ logGroupNamePrefix: '/aws/network-firewall' }));
-      for (const g of r.logGroups ?? []) {
-        const name = g.logGroupName ?? '';
-        const lower = name.toLowerCase();
-        const type = lower.includes('alert') ? 'ALERT' : lower.includes('flow') ? 'FLOW' : null;
-        if (type) targets.push({ firewall: '(discovered)', region, type, group: name, discovered: true });
-      }
-    } catch { /* 발견 실패 — 대상 없음으로 강등 */ }
+      let nextToken: string | undefined;
+      do {
+        const r = await logs(region).send(new DescribeLogGroupsCommand({ logGroupNamePrefix: '/aws/network-firewall', nextToken }));
+        for (const g of r.logGroups ?? []) {
+          const name = g.logGroupName ?? '';
+          const lower = name.toLowerCase();
+          const type = lower.includes('alert') ? 'ALERT' : lower.includes('flow') ? 'FLOW' : null;
+          if (type) targets.push({ firewall: '(discovered)', region, type, group: name, discovered: true });
+        }
+        nextToken = r.nextToken;
+      } while (nextToken);
+    } catch { discoveryFailed = true; }
   }
-  return { targets, unsupported };
+  return { targets, unsupported, discoveryFailed };
 }
 
 /** Alert/Flow 로그 Insights 집계 — 그룹별 병렬 실행 후 병합, 개별 실패는 failed로 degrade. */
 export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalysis> {
   return cached(`l|${rangeSec}`, async () => {
-    const { targets, unsupported } = await resolveTargets(rangeSec);
+    const { targets, unsupported, discoveryFailed } = await resolveTargets(rangeSec);
     const failed: string[] = [];
+    // 로그 그룹 발견 자체가 실패(스로틀/거부)한 것과 "발견됐지만 로그가 없음"을 구분 —
+    // 전자를 후자로 렌더링하면 SCP 거부 환경에서 "로그 없음"이라는 거짓 all-clear가 된다.
+    if (discoveryFailed) failed.push('logDiscovery');
     // 리뷰 MAJOR: targets는 방화벽 단위라, 중앙 공용 로그 그룹으로 로깅하는 방화벽이
     // 2개 이상이면 같은 (region, group)이 그대로 두 번 나열된다 — 아래 query 단위 집계가
     // 그룹당 한 번이 아니라 대상 수만큼 실행돼 모든 합계·Top 리스트가 배로 부풀려진다.
