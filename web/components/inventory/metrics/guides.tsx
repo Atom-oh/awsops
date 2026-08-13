@@ -643,3 +643,54 @@ export const EKS_GUIDE: GuideSpec = {
     ['VPC CNI IP 잔량', '낮음', '파드 IP 고갈'],
   ],
 };
+
+export const ANFW_GUIDE: GuideSpec = {
+  service: 'ANFW',
+  intro: (
+    <>Network Firewall 모니터링은 <b>CloudWatch 지표 · 방화벽 로그(Alert/Flow/TLS) · 보완 소스
+    (VPC Flow Logs, CloudTrail, 라우팅)</b> 세 계층을 함께 봅니다 — 지표는 볼륨과 추이,
+    로그는 &ldquo;어떤 규칙이 어떤 트래픽을&rdquo;의 컨텍스트, 보완 소스는 우회·변경을 잡습니다.</>
+  ),
+  sections: [
+    { title: '① CloudWatch 지표 (AWS/NetworkFirewall)', items: [
+      <><b>ReceivedPackets / ReceivedBytes</b> — 전체 유입량·대역폭. 차원은 (FirewallName, AZ, Engine) —
+      모든 패킷이 stateless 엔진을 먼저 통과하므로 <b>수신 집계는 Engine=Stateless만</b> 사용해야
+      SFE 포워딩 분의 이중 집계를 피합니다 (이 화면의 집계 방식).</>,
+      <><b>PassedPackets / DroppedPackets / RejectedPackets</b> — 통과/폐기/명시적 거부(TCP RST).
+      차단 트래픽 급증은 공격 신호 또는 룰 오배치 신호 — Alert 로그로 어떤 룰인지 확인.</>,
+      <><b>InvalidDroppedPackets / OtherDroppedPackets / StreamExceptionPolicyPackets</b> —
+      비정상 패킷·기타 폐기·스트림 예외 처리. 지속 발생 시 비대칭 라우팅/세션 처리 이슈 의심.</>,
+      <><b>TLS*Packets</b> (TLS 검사 사용 시) — 복호화 실패(TLSDropped/Rejected) 모니터링.</>,
+      <>방화벽 <b>상태</b>는 CW 지표가 아닌 API(READY / IN_SYNC / AZ별 엔드포인트)로 확인 —
+      이 화면 상단 테이블이 그 역할입니다. <b>CustomAction</b> 차원을 쓰면 규칙별 커스텀 지표도 가능.</>,
+    ]},
+    { title: '② 방화벽 로그 (S3 / CloudWatch Logs / Firehose)', items: [
+      <><b>Alert 로그</b> — stateful 규칙의 alert/drop 매칭 트래픽. 어떤 규칙(sid)이 무엇을
+      차단/경고했는지 — <b>보안 위협 분석의 핵심</b>. 아래 카드가 CloudWatch Logs 대상을 Insights로 집계.</>,
+      <><b>Flow 로그</b> — stateful 엔진이 본 모든 플로우(5-tuple, 바이트/패킷, 세션 시작·종료).
+      트래픽 패턴·Top talker 분석용.</>,
+      <><b>TLS 로그</b> — TLS 검사 이벤트(SNI, 인증서, 오류).</>,
+      <>로그에는 소스/목적지 IP·포트, 프로토콜, 규칙 매칭, 타임스탬프가 포함 — 지표만으로는
+      알 수 없는 컨텍스트. <b>S3/Firehose 대상은 이 화면에서 집계 불가</b>(Athena 등 별도 분석).</>,
+    ]},
+    { title: '③ 보완 데이터 소스', items: [
+      <><b>VPC Flow Logs</b> — 방화벽 엔드포인트 서브넷·라우팅 검증, <b>ANFW 우회 트래픽 탐지</b>.</>,
+      <><b>CloudTrail</b> — 정책/룰 그룹 변경 관리 이벤트 감사 (누가 규칙을 바꿨는지) — 아래 변경 감사 카드.</>,
+      <><b>Route Table</b> — 트래픽이 실제 방화벽 엔드포인트를 경유하는지 확인 (VPC 리소스 맵 참조).</>,
+    ]},
+    { title: '④ 분석 목적별 경로', items: [
+      <><b>보안 위협 탐지</b> → Alert 로그 + DroppedPackets/RejectedPackets 급증.</>,
+      <><b>용량/성능</b> → ReceivedPackets/Bytes 추이 + Flow 로그 Top talker.</>,
+      <><b>가용성</b> → 방화벽 상태(READY/IN_SYNC) + AZ별 엔드포인트/지표 편차.</>,
+      <><b>변경 감사/규정 준수</b> → CloudTrail 관리 이벤트 (write 이벤트 우선).</>,
+    ]},
+  ],
+  priorityHeader: ['데이터', '목적', '핵심 신호'],
+  priority: [
+    ['Alert 로그 + Dropped/RejectedPackets', '보안 위협 탐지', '차단 급증 · 시그니처(sid) 매칭'],
+    ['ReceivedPackets/Bytes + Flow 로그', '용량/성능', '트래픽 볼륨 추이 · Top talker'],
+    ['방화벽 상태 + AZ별 지표', '가용성', 'READY/IN_SYNC · AZ 편차'],
+    ['CloudTrail 관리 이벤트', '변경 감사', '누가 정책/룰을 바꿨는지'],
+    ['VPC Flow Logs + 라우팅', '우회 탐지', '방화벽 미경유 트래픽'],
+  ],
+};

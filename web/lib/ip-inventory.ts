@@ -83,14 +83,12 @@ interface RawEni {
   PrivateIpAddress?: string;
 }
 
-function toEniRow(e: RawEni): EniRow {
-  const desc = e.Description ?? '';
-  const type = e.InterfaceType ?? 'interface';
-  const instanceId = e.Attachment?.InstanceId ?? null;
+/** ENI 소유 리소스 분류 — sg-analysis 등 다른 계층에서도 재사용 (toEniRow와 동일 로직). */
+export function classifyEni(interfaceType: string, description: string, instanceId: string | null): { kind: string; resource: string | null } {
   let kind: string; let resource: string | null = null;
-  const byDesc = classifyByDescription(desc);
-  if (type !== 'interface' && TYPE_KIND[type]) {
-    kind = TYPE_KIND[type];
+  const byDesc = classifyByDescription(description);
+  if (interfaceType !== 'interface' && TYPE_KIND[interfaceType]) {
+    kind = TYPE_KIND[interfaceType];
     resource = byDesc?.resource ?? null;
   } else if (byDesc) {
     kind = byDesc.kind; resource = byDesc.resource;
@@ -100,6 +98,14 @@ function toEniRow(e: RawEni): EniRow {
     kind = 'Other'; resource = null;
   }
   if (!resource && instanceId) resource = instanceId;
+  return { kind, resource };
+}
+
+function toEniRow(e: RawEni): EniRow {
+  const desc = e.Description ?? '';
+  const type = e.InterfaceType ?? 'interface';
+  const instanceId = e.Attachment?.InstanceId ?? null;
+  const { kind, resource } = classifyEni(type, desc, instanceId);
   const privateIps = (e.PrivateIpAddresses ?? [])
     .map((p) => p.PrivateIpAddress).filter((x): x is string => !!x);
   if (privateIps.length === 0 && e.PrivateIpAddress) privateIps.push(e.PrivateIpAddress);
