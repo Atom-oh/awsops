@@ -90,7 +90,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF 라우트
 - `app/security/page.tsx` + `app/api/security/{route,refresh}` — 보안 findings(Public S3·Open SG·Unencrypted EBS·IAM MFA), `inventory_resources`에서 BFF 파생(read-only). `s3_public_access`는 sync_lambda SDK sync로 추가
 - `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS 벤치마크(Powerpipe Fargate 워커 `compliance` job → `compliance_runs`/`compliance_results` 이력). 둘 다 `steampipe_enabled` 게이트
-- `app/{network-flow,dns-query,ip-addresses,vpc-endpoints,direct-connect}/` + `lib/{nfm,dns-logs,ip-inventory,vpce,dx}.ts` — 네트워크 메뉴 5종: 라이브 NFM top-contributor 쿼리 + E2E 홉 경로 · Resolver/CoreDNS 쿼리로그 Logs Insights 집계 · ENI 기반 IP 인벤토리(미사용 EIP/available ENI 감지) · VPC 엔드포인트 유휴/정책/Gateway 커버리지 분석 · Direct Connect 다운 감지/피크 사용률/BGP 라우트 가시성
+- `app/{network-flow,dns-query,ip-addresses,vpc-endpoints,direct-connect,network-firewall}/` + `lib/{nfm,dns-logs,ip-inventory,vpce,dx,anfw}.ts` — 네트워크 메뉴 6종: 라이브 NFM top-contributor 쿼리 + E2E 홉 경로 · Resolver/CoreDNS 쿼리로그 Logs Insights 집계 · ENI 기반 IP 인벤토리(미사용 EIP/available ENI 감지) · VPC 엔드포인트 유휴/정책/Gateway 커버리지 분석 · Direct Connect 다운 감지/피크 사용률/BGP 라우트 가시성 · Network Firewall 보호/로깅/룰 용량 + 트래픽·드롭 분석
 - `app/eks/` — EKS 드릴다운: 클러스터 목록 → `[cluster]` 탭(OpenCost 비용 패널 포함) + nodes/pods/deployments/services/explorer/cost 플릿 페이지
 - `lib/aws-data.ts` + `lib/collectors/` — 챗 BFF-로컬 핸들러(AgentCore 미경유): aws-data(LLM Steampipe SQL — 라이브 실행은 hard-disabled, ADR-001/010) + auto-collect 콜렉터 6종 레지스트리 — `app/api/chat/route.ts`가 로컬 분기
 - `lib/db.ts` — Aurora node-pg 공유 풀(`getPool`)
@@ -144,5 +144,5 @@ make workers     # arm64 worker 이미지 push (workers_enabled=true로 apply �
 ## Implementation References
 <!-- AUTO-MANAGED:references — /project-init sync가 이 블록을 관리. 수동 편집은 마커 밖에. -->
 계층별 구현 레퍼런스는 `docs/reference/`(인덱스: [README](docs/reference/README.md)) — [01 엣지 네트워크](docs/reference/01-edge-network.md) · [02 인증](docs/reference/02-auth.md) · [03 Aurora 데이터](docs/reference/03-data-aurora.md) · [04 web BFF](docs/reference/04-web-bff.md) · [05 AgentCore](docs/reference/05-agentcore.md) · [06 워커](docs/reference/06-workers.md) · [07 EKS](docs/reference/07-eks.md).
-전체 조감도: [docs/architecture.md](docs/architecture.md) (이중언어 + mermaid) · 신규 합류: [docs/onboarding.md](docs/onboarding.md) · API 전수 인덱스(84 라우트): [docs/api-reference.md](docs/api-reference.md) · 운영: [docs/runbooks/](docs/runbooks/).
+전체 조감도: [docs/architecture.md](docs/architecture.md) (이중언어 + mermaid) · 신규 합류: [docs/onboarding.md](docs/onboarding.md) · API 전수 인덱스(85 라우트): [docs/api-reference.md](docs/api-reference.md) · 운영: [docs/runbooks/](docs/runbooks/).
 <!-- /AUTO-MANAGED:references -->
