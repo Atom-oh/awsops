@@ -7,7 +7,10 @@ export const maxDuration = 60;
 const RANGE_ALLOWED = [3600, 21600, 86400, 604800];
 
 // AWS 리전 형식만 허용(예: ap-northeast-2) — DB 쿼리 파라미터로 그대로 들어가므로 형식 검증.
-const REGION_RE = /^[a-z]{2}-[a-z]+-\d$/;
+// 리뷰 MAJOR(확정, 라운드5): 세그먼트 3개 고정이라 us-gov-west-1/us-iso-east-1 같은 4세그먼트
+// 리전이 형식 검사에서 통과 못 해 스코프에서 조용히 빠졌다(다른 세그먼트 수 리전도 동일 위험).
+// 세그먼트 개수를 고정하지 않고 "2자 시작 + 하이픈-단어 반복 + 끝 숫자" 형태로 완화.
+const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 // 리뷰 MAJOR(확정): 스코프 파라미터가 없으면 /api/sg는 항상 호스트 계정 전 리전을 스캔해
 // 페이지 상단의 계정/리전 선택과 무관하게 보였다(형제 TgwSection은 scope-filtered rows의
@@ -20,11 +23,20 @@ const REGION_RE = /^[a-z]{2}-[a-z]+-\d$/;
 // 민감한 Fargate web 티어에서 무제한 증가). 실사용(페이지의 계정/리전 선택)은 한
 // 화면에 표시되는 리전 몇 개를 넘지 않으므로 넉넉한 상한으로 그 외의 조합 폭증을 막는다.
 const MAX_SCOPE_REGIONS = 20;
-function parseRegions(url: URL): string[] | undefined {
+// 리뷰 MAJOR(확정, 라운드5): 페이지는 "위 표와 같은 리전만 스캔한다"고 명시하는데,
+// 20개 초과 시 나머지를 이 함수가 조용히 잘라버리면(형식 불일치로 걸러진 리전도 마찬가지)
+// SG 총계·미사용 SG 판정·"이상 없음" 배너가 실제로는 불완전한데 확정처럼 보인다 —
+// degradedRegions와 같은 계약 위반. truncated를 반환해 호출자가 응답에 신호를 얹게 한다.
+function parseRegions(url: URL): { regions: string[] | undefined; truncated: boolean } {
   const raw = url.searchParams.get('regions');
-  if (!raw) return undefined;
-  const regions = raw.split(',').map((r) => r.trim()).filter((r) => REGION_RE.test(r));
-  return regions.length > 0 ? [...new Set(regions)].slice(0, MAX_SCOPE_REGIONS) : undefined;
+  if (!raw) return { regions: undefined, truncated: false };
+  const requested = new Set(raw.split(',').map((r) => r.trim()).filter(Boolean));
+  const valid = [...requested].filter((r) => REGION_RE.test(r));
+  const capped = valid.slice(0, MAX_SCOPE_REGIONS);
+  // requested는 이미 중복 제거됐으므로, 여기서 줄어들었다면 형식 불일치로 걸러졌거나
+  // 상한에 잘린 것 — 단순 중복 제거로는 truncated가 되지 않는다.
+  const truncated = capped.length < requested.size;
+  return { regions: capped.length > 0 ? capped : undefined, truncated };
 }
 
 // Security Group 분석: 사용 유무(ENI 부착+상호참조) + 룰 소스/목적지 식별.
@@ -35,7 +47,7 @@ export async function GET(request: Request) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   const url = new URL(request.url);
-  const regions = parseRegions(url);
+  const { regions, truncated } = parseRegions(url);
   try {
     if (url.searchParams.get('view') === 'hits') {
       const id = url.searchParams.get('id') ?? '';
@@ -44,9 +56,9 @@ export async function GET(request: Request) {
       }
       const rangeRaw = Number(url.searchParams.get('range') ?? 86400);
       const range = RANGE_ALLOWED.includes(rangeRaw) ? rangeRaw : 86400;
-      return Response.json(await sgHits(id, range, regions));
+      return Response.json({ ...(await sgHits(id, range, regions)), scopeTruncated: truncated });
     }
-    return Response.json(await sgAnalysis(regions));
+    return Response.json({ ...(await sgAnalysis(regions)), scopeTruncated: truncated });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

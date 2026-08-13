@@ -37,24 +37,24 @@ export interface AnfwAuditEvent {
   resourceType: string; resourceName: string; readOnly: boolean;
 }
 
-// 리뷰 MAJOR(확정): 이전엔 변경 API 이벤트명 16개를 리전마다 각각 LookupEvents로
-// 조회했다(EventSource 단위 조회는 이 앱 자신의 Describe* read 이벤트가 최근 목록을
-// 가득 채워 write가 안 보인다는 이전 이유) — 16개명 × N리전 × 최대 5페이지를 전역
-// 600ms 큐로 직렬화하면 리전 6개만 돼도 최소 57.6초로 CloudFront VPC Origin
-// origin_read_timeout=60s(edge.tf)·이 라우트의 maxDuration=60을 넘겨 첫 비캐시
-// 요청이 504가 된다(스로틀을 피하려던 수정이 타임아웃을 상시화). 또한 이벤트명을
-// 하드코딩하면 목록에 없는 이벤트(TLS 검사 구성 변경 등)가 감사 범위 밖으로 조용히
-// 빠진다. LookupEvents의 `EventSource` LookupAttribute로 리전당 단 1회(페이지네이션)
-// 조회해 network-firewall.amazonaws.com 이벤트 전체를 가져온 뒤 Event.ReadOnly로
-// 변경(mutation)만 클라이언트에서 필터 — 이벤트명 목록이 아예 필요 없어져 미래
-// API에도 자동 대응하고, 리전당 호출 수가 상수(≤6페이지)로 고정돼 리전이 늘어도
-// 전체 소요시간이 선형으로만 늘고 60s 예산 안에 들어온다.
-async function lookupNetworkFirewallMutations(region: string): Promise<{ raw: unknown[]; failed: boolean; capExhausted: boolean }> {
+// 리뷰 MAJOR(확정, 라운드5): "리전당 최대 6페이지" 고정 상한은 리전 수가 늘어나면 여전히
+// 총 소요시간이 리전 수에 선형으로 비례해 늘어난다 — 이 앱 자신의 Describe* read
+// 이벤트도 EventSource=network-firewall.amazonaws.com에 걸리므로(ReadOnly로만 클라이언트
+// 필터) 대시보드가 자주 열리는 계정에서는 리전마다 6페이지 캡에 realistic하게 도달한다.
+// 17개 리전이면 페이싱만으로 6×17×0.6s=61.2s로 maxDuration=60/CloudFront
+// origin_read_timeout=60을 넘긴다 — "60초 예산에 맞다"는 이전 코멘트는 리전 수가 늘면
+// 거짓이 된다. 페이지 상한이 아니라 **전체 요청의 남은 시간(데드라인)**을 기준으로
+// 멈춘다 — 리전이 아무리 많아도 총 소요시간은 데드라인 근처에서 수렴하고, 데드라인
+// 안에 처리 못 한 리전은 capExhausted로 표시돼 "변경 없음"이 아니라 "확인 못 함"으로 남는다.
+const AUDIT_BUDGET_MS = 40_000; // maxDuration=60에서 anfwAnalysis()·응답 직렬화 여유 20s를 뺀 예산
+async function lookupNetworkFirewallMutations(region: string, deadlineAt: number): Promise<{ raw: unknown[]; failed: boolean; capExhausted: boolean }> {
   const matched: unknown[] = [];
   let NextToken: string | undefined;
   let page = 0;
+  let deadlineHit = false;
   try {
     do {
+      if (Date.now() >= deadlineAt) { deadlineHit = true; break; }
       await acquireAuditPaceSlot();
       const r: { Events?: { EventSource?: string; ReadOnly?: string }[]; NextToken?: string } = await ct(region).send(new LookupEventsCommand({
         MaxResults: 50,
@@ -66,9 +66,9 @@ async function lookupNetworkFirewallMutations(region: string): Promise<{ raw: un
       page += 1;
       if (matched.length >= 30 || page >= 6 || !NextToken) break;
     } while (NextToken);
-    // 페이지 상한에 걸렸는데 NextToken이 남아있으면 탐색이 미완결이다 — failed:false로
-    // 보고하면 "더 없음=진짜 없음"처럼 보인다.
-    const capExhausted = page >= 6 && !!NextToken;
+    // 페이지 상한이나 데드라인에 걸렸는데 NextToken이 남아있거나 아예 시도조차 못 했으면
+    // 탐색이 미완결이다 — failed:false로 보고하면 "더 없음=진짜 없음"처럼 보인다.
+    const capExhausted = deadlineHit || (page >= 6 && !!NextToken);
     return { raw: matched, failed: false, capExhausted };
   } catch { return { raw: matched, failed: true, capExhausted: false }; }
 }
@@ -93,6 +93,9 @@ async function auditEvents(): Promise<{ events: AnfwAuditEvent[]; degradedRegion
     // 빠진다 — 감사에서 가장 보고 싶은 DeleteFirewall 이벤트 자체가 "90일간 변경 없음"
     // 뒤로 숨는다. anfwAnalysis()가 실제로 조회를 시도한 scannedRegions(인벤토리 기반
     // 전체 리전)를 써야 firewalls 유무와 무관하게 전 리전이 감사된다.
+    // 데드라인은 auditEvents() 진입 시점부터 계산 — anfwAnalysis() 자체가 걸리는 시간도
+    // 예산에서 빠져나간다(그래야 리전 조회 시작 전에 이미 예산을 다 써버리는 경우도 처리).
+    const deadlineAt = Date.now() + AUDIT_BUDGET_MS;
     const preDegraded = new Set<string>();
     try {
       const a = await anfwAnalysis(86400);
@@ -103,9 +106,10 @@ async function auditEvents(): Promise<{ events: AnfwAuditEvent[]; degradedRegion
       const out: AnfwAuditEvent[] = [];
       let degraded = preDegraded.has(region);
       // 계정 전체 ~2 TPS 공유 페이싱은 lookupNetworkFirewallMutations 내부의 전역
-      // acquireAuditPaceSlot 큐가 담당(리전×페이지 전체를 직렬화) — 리전당 단 1회
-      // (페이지네이션) 호출이라 리전이 늘어도 총 호출 수가 선형으로만 증가한다.
-      const { raw, failed, capExhausted } = await lookupNetworkFirewallMutations(region);
+      // acquireAuditPaceSlot 큐가 담당(리전×페이지 전체를 직렬화) — 페이지 상한이 아니라
+      // 공유 데드라인(deadlineAt)까지만 진행해 리전 수가 늘어도 총 소요시간이 예산 안에
+      // 수렴한다(뒤로 밀린 리전은 capExhausted로 표시돼 "변경 없음"과 구분된다).
+      const { raw, failed, capExhausted } = await lookupNetworkFirewallMutations(region, deadlineAt);
       // capExhausted도 degraded 신호다 — 페이지 상한에 걸려 남은 NextToken을 못 본
       // 상태를 "변경 없음"으로 단정하면 안 된다(리뷰 MAJOR, failed와 동일 계약).
       if (failed || capExhausted) degraded = true;

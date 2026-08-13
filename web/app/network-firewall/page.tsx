@@ -815,7 +815,7 @@ export default function NetworkFirewallPage() {
                 (EventSource 단위 조회는 이 앱 자신의 read 이벤트가 목록을 가득 채움 — 실측) */}
             <Card
               title="구성 변경 감사"
-              subtitle="CloudTrail 변경 이벤트 — 누가 방화벽/정책/룰을 바꿨는지 (조회 범위 90일, 이벤트명별 최근 10건)"
+              subtitle="CloudTrail 변경 이벤트 — 누가 방화벽/정책/룰을 바꿨는지 (조회 범위 90일, 리전당 최근 30건)"
               padded={false}
             >
               {auditErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('감사 이벤트 조회 실패')}: {auditErr}</div>}

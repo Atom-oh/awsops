@@ -45,7 +45,8 @@ function mockInsights(resultsFor: (group: string, query: string) => Record<strin
     switch (cmd.constructor.name) {
       case 'StartQueryCommand': {
         const id = `q${n++}`;
-        queries.set(id, { group: cmd.input.logGroupName as string, query: cmd.input.queryString as string });
+        const groups = (cmd.input.logGroupNames as string[]) ?? [];
+        queries.set(id, { group: groups[0] ?? '', query: cmd.input.queryString as string });
         return { queryId: id };
       }
       case 'GetQueryResultsCommand': {
@@ -199,18 +200,18 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.totalAlerts).toBe(10);
   });
 
-  it('그룹 중 하나라도 실패하면 다른 그룹이 성공해도 failed로 표시 (all-groups 계약, 리뷰 MAJOR)', async () => {
-    // 서로 다른 두 그룹(중복 제거되지 않음) — 하나는 성공, 하나는 실패.
+  it('리전 중 하나라도 실패하면 다른 리전이 성공해도 failed로 표시 (all-regions 계약, 리뷰 MAJOR)', async () => {
+    // 리뷰 MAJOR 수정으로 같은 리전의 그룹들은 이제 logGroupNames로 한 쿼리에 묶이므로,
+    // 부분 실패를 검증하려면 그룹이 아니라 리전을 달리해야 한다(리전 = 실패 단위).
     mockAnalysis.mockResolvedValue({
       firewalls: [
-        fw({ name: 'fw-a', flowLogging: null }),
-        fw({ name: 'fw-b', flowLogging: null, alertLogging: 'CloudWatchLogs:/aws/network-firewall/other/alert' }),
+        fw({ name: 'fw-a', flowLogging: null }), // ap-northeast-2 (기본)
+        fw({ name: 'fw-b', flowLogging: null, region: 'us-east-1', alertLogging: 'CloudWatchLogs:/aws/network-firewall/other/alert' }),
       ],
     });
-    logsSend.mockImplementation(async (cmd: Cmd) => {
+    logsSend.mockImplementation(async (cmd: Cmd, region: string) => {
       if (cmd.constructor.name === 'StartQueryCommand') {
-        const group = cmd.input.logGroupName as string;
-        if (group.includes('other')) throw new Error('boom other');
+        if (region === 'us-east-1') throw new Error('boom other region');
         return { queryId: 'q' };
       }
       if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 5 })] };
@@ -218,9 +219,37 @@ describe('anfwLogsAnalysis', () => {
     });
     const { anfwLogsAnalysis } = await import('./anfw-logs');
     const a = await anfwLogsAnalysis(3600);
-    // 이전 계약("하나라도 성공하면 ok")이었다면 실패한 그룹의 누락된 트래픽이 조용히
+    // 이전 계약("하나라도 성공하면 ok")이었다면 실패한 리전의 누락된 트래픽이 조용히
     // 사라진 채 totals만 부분치로 조용히 보였을 것 — 지금은 실패가 있었다는 신호를 남긴다.
     expect(a.failed).toContain('alertTotals');
+  });
+
+  it('같은 리전의 여러 로그 그룹은 logGroupNames로 한 쿼리에 묶여 그룹별 limit이 진짜 전역 Top-N이 됨 (리뷰 MAJOR)', async () => {
+    // 서로 다른 두 그룹(중복 제거 대상 아님, 같은 리전) — 이전엔 그룹별로 최대 10개까지
+    // 잘라 병합해 11위 항목이 두 그룹 모두에서 통째로 사라질 수 있었다. 이제 한 쿼리로
+    // 묶이므로 mock도 logGroupNames에 두 그룹이 모두 실려 있는지 검증한다.
+    mockAnalysis.mockResolvedValue({
+      firewalls: [
+        fw({ name: 'fw-a', flowLogging: null }),
+        fw({ name: 'fw-b', flowLogging: null, alertLogging: 'CloudWatchLogs:/aws/network-firewall/other/alert' }),
+      ],
+    });
+    let seenGroups: string[] = [];
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const groups = cmd.input.logGroupNames as string[];
+        if (groups.length > 1) seenGroups = groups;
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 5 })] };
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    await anfwLogsAnalysis(3600);
+    expect(seenGroups.sort()).toEqual([
+      '/aws/network-firewall/DMZVPC/alert',
+      '/aws/network-firewall/other/alert',
+    ]);
   });
 });
 
