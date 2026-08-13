@@ -56,6 +56,11 @@ async function lookupNetworkFirewallMutations(region: string, deadlineAt: number
     do {
       if (Date.now() >= deadlineAt) { deadlineHit = true; break; }
       await acquireAuditPaceSlot();
+      // 리뷰 MAJOR(확정, 라운드6): 슬롯을 받기 전 검사만으로는 부족하다 — N개 리전이
+      // Promise.all로 동시에 이 검사를 통과한 뒤 전역 페이싱 큐에 줄서면, 큐가 소진되는
+      // 동안(최대 N×600ms) 데드라인을 이미 넘긴 뒤에도 LookupEvents를 계속 호출한다.
+      // 슬롯을 실제로 받은 "직후" 다시 검사해 데드라인 이후엔 호출 자체를 보내지 않는다.
+      if (Date.now() >= deadlineAt) { deadlineHit = true; break; }
       const r: { Events?: { EventSource?: string; ReadOnly?: string }[]; NextToken?: string } = await ct(region).send(new LookupEventsCommand({
         MaxResults: 50,
         LookupAttributes: [{ AttributeKey: 'EventSource', AttributeValue: 'network-firewall.amazonaws.com' }],

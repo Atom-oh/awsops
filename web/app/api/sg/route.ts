@@ -27,16 +27,21 @@ const MAX_SCOPE_REGIONS = 20;
 // 20개 초과 시 나머지를 이 함수가 조용히 잘라버리면(형식 불일치로 걸러진 리전도 마찬가지)
 // SG 총계·미사용 SG 판정·"이상 없음" 배너가 실제로는 불완전한데 확정처럼 보인다 —
 // degradedRegions와 같은 계약 위반. truncated를 반환해 호출자가 응답에 신호를 얹게 한다.
-function parseRegions(url: URL): { regions: string[] | undefined; truncated: boolean } {
+function parseRegions(url: URL): { regions: string[] | undefined; truncated: boolean; invalid: boolean } {
   const raw = url.searchParams.get('regions');
-  if (!raw) return { regions: undefined, truncated: false };
+  if (!raw) return { regions: undefined, truncated: false, invalid: false };
   const requested = new Set(raw.split(',').map((r) => r.trim()).filter(Boolean));
   const valid = [...requested].filter((r) => REGION_RE.test(r));
   const capped = valid.slice(0, MAX_SCOPE_REGIONS);
   // requested는 이미 중복 제거됐으므로, 여기서 줄어들었다면 형식 불일치로 걸러졌거나
   // 상한에 잘린 것 — 단순 중복 제거로는 truncated가 되지 않는다.
   const truncated = capped.length < requested.size;
-  return { regions: capped.length > 0 ? capped : undefined, truncated };
+  // 리뷰 MINOR(확정, 라운드6): ?regions=가 있는데 하나도 유효하지 않으면 이전엔
+  // regions:undefined를 반환해 "스코프 없음"(전 리전 스캔)으로 조용히 넓어졌다 —
+  // 사용자가 명시적으로 스코프를 요청했는데 정반대로 넓혀버리는 게 오히려 위험하다.
+  // regions param이 아예 없는 경우(정당한 전체 스캔 요청)와는 구분해 거부한다.
+  const invalid = capped.length === 0 && requested.size > 0;
+  return { regions: capped.length > 0 ? capped : undefined, truncated, invalid };
 }
 
 // Security Group 분석: 사용 유무(ENI 부착+상호참조) + 룰 소스/목적지 식별.
@@ -47,7 +52,10 @@ export async function GET(request: Request) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   const url = new URL(request.url);
-  const { regions, truncated } = parseRegions(url);
+  const { regions, truncated, invalid } = parseRegions(url);
+  if (invalid) {
+    return Response.json({ status: 'error', message: 'no valid region in regions param' }, { status: 400 });
+  }
   try {
     if (url.searchParams.get('view') === 'hits') {
       const id = url.searchParams.get('id') ?? '';

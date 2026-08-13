@@ -224,6 +224,33 @@ describe('anfwLogsAnalysis', () => {
     expect(a.failed).toContain('alertTotals');
   });
 
+  it('anfwAnalysis()의 degradedRegions가 있으면(방화벽 목록 자체 조회 실패) "로그 없음"과 구분해 failed에 표시 (리뷰 MAJOR)', async () => {
+    // firewalls는 비어 있지만 degradedRegions엔 실패 리전이 있다 — 그 리전의 방화벽이
+    // 어떤 대상으로 로깅하는지 원래 확인조차 못 한 것이지 "로깅 대상이 없음"이 아니다.
+    mockAnalysis.mockResolvedValue({ firewalls: [], degradedRegions: ['us-west-2'] });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.targets).toEqual([]);
+    expect(a.failed).toContain('firewallDiscovery');
+  });
+
+  it('리전별 top-N 쿼리는 표시 컷오프(10)보다 훨씬 큰 상한으로 오버페치 — 리전 간 병합 절단 축소 (리뷰 MAJOR)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw()] });
+    let sigQuery = '';
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const q = cmd.input.queryString as string;
+        if (q.includes('by sid, sig')) sigQuery = q;
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 1 })] };
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    await anfwLogsAnalysis(3600);
+    expect(sigQuery).toContain('limit 100');
+  });
+
   it('같은 리전의 여러 로그 그룹은 logGroupNames로 한 쿼리에 묶여 그룹별 limit이 진짜 전역 Top-N이 됨 (리뷰 MAJOR)', async () => {
     // 서로 다른 두 그룹(중복 제거 대상 아님, 같은 리전) — 이전엔 그룹별로 최대 10개까지
     // 잘라 병합해 11위 항목이 두 그룹 모두에서 통째로 사라질 수 있었다. 이제 한 쿼리로

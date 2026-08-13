@@ -34,7 +34,7 @@ function peerLabel(r: SgRule, tt: (s: string) => string): string {
 /** note 코드 → 한국어 원문 (tt가 en/zh/ja로 해석). */
 const NOTE_TEXT: Record<Exclude<SgHitNote, null>, string> = {
   sg_not_found: 'SG를 찾을 수 없음',
-  no_eni: '부착된 ENI가 없어 트래픽이 존재하지 않습니다 (미사용)',
+  no_eni: '부착된 ENI가 없어 트래픽 증거 자체가 없습니다 (확인 불가 — 미사용 확정 아님)',
   no_source: 'VPC Flow Logs·NFM 모두 없음 — 트래픽 데이터 소스가 없습니다',
   query_failed: 'Flow Logs 조회가 실패했습니다(소스가 없는 게 아님) — 잠시 후 다시 시도해 주세요',
   flow_no_records: 'Flow Logs에 기간 내 레코드 없음 (또는 커스텀 포맷 — 기본 포맷만 해석)',
@@ -154,13 +154,21 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
 
   useEffect(() => {
     let live = true;
+    // 리뷰 MINOR(확정, 라운드6): 스코프(regionsKey)가 바뀌었는데 이전 응답을 그대로
+    // 들고 있으면, 새 fetch가 완료되기 전까지 이전 스코프의 데이터가 화면에 남아 마치
+    // 새 스코프 결과인 것처럼 보인다 — 스코프 전환 즉시 비워서 그 창을 없앤다.
+    setData(null); setErr(''); setOpenId(null);
+    // rows가 비어 있으면(아래 rows.length===0 → return null 가드로 화면엔 아무것도
+    // 안 그려지지만, 훅은 무조건 실행되므로) regionsKey=''로 무스코프 전체 호스트 계정
+    // 스캔이 나갔다 — 표시할 데이터가 없는데 계정 전체를 스캔할 이유가 없다.
+    if (rows.length === 0) return;
     const regionsParam = regionsKey ? `?regions=${encodeURIComponent(regionsKey)}` : '';
     fetch(`/api/sg${regionsParam}`)
       .then(async (r) => { const d = await r.json().catch(() => null); if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`); return d as SgAnalysisResponse; })
       .then((d) => { if (live) { setData(d); setErr(''); } })
       .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { live = false; };
-  }, [regionsKey]);
+  }, [regionsKey, rows.length]);
 
   // 부착 리소스 종류 분포 (전 SG 합산 — 도넛).
   const kindDist = useMemo(() => {
