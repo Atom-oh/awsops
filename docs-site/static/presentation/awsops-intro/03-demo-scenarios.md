@@ -1116,7 +1116,7 @@ EKS 화면도 read-only지만 이제 완전한 메뉴 패밀리입니다. fleet 
   </div>
   <div class="col">
     <h3>Compliance Benchmark Flow</h3>
-    <img src="assets/compliance-benchmark-flow.svg" alt="Compliance 벤치마크 흐름 — Powerpipe 워커가 warm Steampipe FDW를 조회(기본 scope=all, 계정별 실행도 가능; 라이브 AWS 직접 조회 아님)하고 결과를 compliance_runs·compliance_results에 적재" class="slide-img" style="max-width:100%;max-height:50vh" />
+    <img src="assets/compliance-benchmark-flow.svg" alt="Compliance 벤치마크 흐름 — Powerpipe 워커가 warm Steampipe FDW를 조회(기본 scope=all, 계정별 실행도 가능; 워커가 AWS SDK를 직접 호출하지 않고 FDW를 경유해 라이브 조회)하고 결과를 compliance_runs·compliance_results에 적재" class="slide-img" style="max-width:100%;max-height:50vh" />
   </div>
 </div>
 :::

@@ -196,7 +196,7 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
 
 - **루트 경로 서빙** — basePath 없음, fetch는 `/api/*`
 - **Thin-BFF 원칙** — 무겁고·길고·OOM 위험 작업은 직접 실행 금지
-- 무거운 작업은 **`POST /api/jobs`로 enqueue**
+- 무거운 작업은 워커 큐로 enqueue — 범용 **`POST /api/jobs`는 `noop` 계열만**, `report`/`compliance` 등 도메인 job은 소유권 검사하는 전용 라우트(ADR-009)
 
 ### Routes
 
@@ -333,7 +333,7 @@ AI 엔진은 Bedrock AgentCore입니다.
     <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:0.3125rem 0.75rem;font-size:0.8125rem;">ops</span>
     <span style="background:rgba(0,212,255,0.18);color:#7fd8ff;border-radius:6px;padding:0.3125rem 0.75rem;font-size:0.8125rem;">external-obs</span>
   </div>
-  <div style="color:#8b95a5;font-size:0.75rem;margin-top:0.625rem;">external-obs = <b style="color:#00d4ff;">9번째 게이트웨이</b>(2026-06-24 승격, ADR-004) — Prometheus·ClickHouse 커넥터 호스팅, 챗 키 <code style="color:#00d4ff;">observability</code>로 별칭. 30슬라이스 <b style="color:#00ff88;">전부 LIVE</b>(9개 게이트웨이 전부 READY MCP 타깃, 16개 챗 키 전부 활성 — 2026-08-02 완료)</div>
+  <div style="color:#8b95a5;font-size:0.75rem;margin-top:0.625rem;">external-obs = <b style="color:#00d4ff;">9번째 게이트웨이</b>(2026-06-24 승격, ADR-004) — Prometheus·ClickHouse 커넥터 호스팅, 챗 키 <code style="color:#00d4ff;">observability</code>로 별칭. 30슬라이스 <b style="color:#00ff88;">전부 LIVE</b>(9개 게이트웨이 전부 READY MCP 타깃). 16개 챗 키는 전부 등록되어 있지만, 그중 aws-data + 콜렉터 6종(7개)은 <code>steampipeAvailable()</code>이 ADR-001/010에 따라 항상 false를 반환해 하드 비활성 — 선택하면 fail-open으로 ops에 위임됨</div>
 </div>
 :::
 
