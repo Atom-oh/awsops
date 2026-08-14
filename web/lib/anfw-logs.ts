@@ -10,6 +10,10 @@ import { anfwAnalysis } from './anfw';
 // (이름에 alert/flow 포함 여부로 분류, discovered=true로 표시).
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
+// 리뷰 MINOR(PR #221): 접두사 발견 폴백은 리전당 수만 개 로그 그룹을 순회할 수 있다(round-9
+// 코멘트) — 그룹마다 새 Set을 만들지 않도록 모듈 스코프로 끌어올린다.
+const ALERT_TOKENS = new Set(['alert', 'alerts']);
+const FLOW_TOKENS = new Set(['flow', 'flows', 'netflow', 'flowlog', 'flowlogs']);
 const logsClients = new Map<string, CloudWatchLogsClient>();
 const logs = (r: string) => {
   let c = logsClients.get(r);
@@ -89,7 +93,8 @@ export interface AnfwLogTarget {
 }
 
 export interface AnfwAlertAnalytics {
-  /** alertTotals 쿼리 자체가 실패하면 null — 0과 구분해 "0건"이 "조회 실패"를 가리지 않게 함. */
+  /** alertTotals 쿼리 자체가 실패했거나, 이 리전의 ALERT 로그 그룹 발견 자체가 unknown이면 null —
+   *  0과 구분해 "0건"이 "조회 실패/발견 unknown"을 가리지 않게 함. */
   totalAlerts: number | null;
   byAction: { name: string; value: number }[];
   topSignatures: { sid: string; signature: string; value: number }[];
@@ -98,7 +103,8 @@ export interface AnfwAlertAnalytics {
 }
 
 export interface AnfwFlowAnalytics {
-  /** flowTotals 쿼리 자체가 실패하면 둘 다 null — alertTotals와 동일 계약(0 ≠ 조회 실패). */
+  /** flowTotals 쿼리 자체가 실패했거나 FLOW 로그 그룹 발견이 unknown이면 둘 다 null — alertTotals와
+   *  동일 계약(0 ≠ 조회 실패/발견 unknown). */
   totalFlows: number | null; totalBytes: number | null;
   /** (src, dst) 호스트쌍 기준 — dest_port는 유동 포트라 group 카디널리티가 플로우 수와 같아져 시간 초과(실측). */
   topTalkers: { src: string; dst: string; bytes: number; flows: number }[];
@@ -236,17 +242,21 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
           const isFlow = lower.includes('flow');
           if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
           if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
-          const ALERT_TOKENS = new Set(['alert', 'alerts']);
-          const FLOW_TOKENS = new Set(['flow', 'flows', 'netflow', 'flowlog', 'flowlogs']);
-          const tokenize = (s: string) => s.split(/[^a-z0-9]+/).filter(Boolean);
+          // 리뷰 MAJOR(확정, PR #221 라운드5 — 라운드4 자체 수정의 결함): 확정(segment 전체
+          // 정확 일치)과 반대 타입 거부(veto)의 증거 기준이 서로 달랐다 — 확정은 세그먼트
+          // 전체 일치만 인정하면서, veto는 tokenize()로 하이픈까지 쪼갠 토큰을 봐서
+          // "alert-prod"(방화벽 이름 세그먼트) 안의 "alert" 토큰이 FLOW 확정을 막아버렸다.
+          // `/aws/network-firewall/alert-prod/flow`처럼 방화벽 이름에 하이픈으로 discriminator
+          // 토큰이 섞여 있으면, 마지막 세그먼트("flow")는 명확한데도 FLOW가 영구히 미확정
+          // 처리되어 계정 전체 total이 null이 된다 — 이 PR이 고치려는 바로 그 버그를 반대
+          // 방향(과다 unknown)으로 재현한 것. 고침: veto도 확정과 동일한 세그먼트 전체 일치
+          // 기준을 쓴다(whole-name tokenize 폴백 제거) — 한 그룹 이름 안에 ALERT/FLOW 세그먼트가
+          // 각각 독립적으로 존재하는 경우(예: "/alert/netflow-prod/flow")에만 서로를 거부한다.
           const segments = lower.split('/').filter(Boolean);
           const segmentHasAlert = segments.some((seg) => ALERT_TOKENS.has(seg));
           const segmentHasFlow = segments.some((seg) => FLOW_TOKENS.has(seg));
-          const wholeTokens = tokenize(lower);
-          const wholeHasAlert = wholeTokens.some((t) => ALERT_TOKENS.has(t));
-          const wholeHasFlow = wholeTokens.some((t) => FLOW_TOKENS.has(t));
-          if (segmentHasAlert && !wholeHasFlow) foundByType.ALERT = true;
-          if (segmentHasFlow && !wholeHasAlert) foundByType.FLOW = true;
+          if (segmentHasAlert && !segmentHasFlow) foundByType.ALERT = true;
+          if (segmentHasFlow && !segmentHasAlert) foundByType.FLOW = true;
         }
         nextToken = r.nextToken;
       } while (nextToken);

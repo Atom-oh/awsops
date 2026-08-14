@@ -421,6 +421,23 @@ describe('anfwLogsAnalysis', () => {
     expect(a.targets.some((t) => t.type === 'ALERT')).toBe(true);
   });
 
+  it('방화벽 이름 세그먼트에 하이픈으로 discriminator 토큰이 섞여 있어도(예: "alert-prod") 명확한 마지막 세그먼트("flow")는 정상 발견 확정됨 (리뷰 MAJOR, PR #221 라운드5 — 확정/거부 기준 불일치 수정)', async () => {
+    // 라운드4는 확정에는 세그먼트 전체 일치를 쓰면서 거부(veto)에는 tokenize()로 하이픈까지
+    // 쪼갠 토큰을 써서 기준이 서로 달랐다 — "alert-prod"(방화벽 이름)의 "alert" 토큰이
+    // FLOW 확정을 막아 영구 unknown이 됐다(이 PR이 고치려는 버그를 반대 방향으로 재현).
+    // 세그먼트 전체 일치 기준을 확정/거부 양쪽에 동일하게 적용하면 "alert-prod"는 세그먼트
+    // 전체가 "alert"가 아니므로 거부 근거가 안 되고, 마지막 세그먼트 "flow"가 정상 확정된다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/alert-prod/flow' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+  });
+
   it('방화벽 목록 조회 자체가 실패(firewallDiscoveryDegraded)하면 그 리전에 실제 성공한 CWL 대상이 있어도 totalAlerts/totalFlows는 null (리뷰 MAJOR 라운드15, 라운드19에서 제목 오류 수정 — 이 테스트는 discoveryFailed가 아니라 firewallDiscoveryDegraded를 검증함)', async () => {
     // loggingUnknownByType에만 걸린 null 판정은 "스캔이 정상 실행되고 0건"(덜 심각)만
     // 잡는다 — "스캔 자체가 예외로 죽음"(discoveryFailed, 더 심각)이나 방화벽 목록 조회
