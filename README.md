@@ -288,7 +288,7 @@ cd web && npx vitest run          # web 유닛 테스트만
 
 ## API 문서
 
-65개 API 라우트가 `web/app/api/`에 있습니다. 주요 라우트: `health`(공개), `stream`(SSE 채팅), `db`(Aurora ping), `jobs`(+`/[id]`, 비동기 작업 제출/상태), `security`, `compliance`, `auth/login`. 사용자 가이드는 docs site를, 아키텍처 결정은 [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md)를 참고하세요.
+86개 API 라우트가 `web/app/api/`에 있습니다. 주요 라우트: `health`(공개), `stream`(SSE 채팅), `db`(Aurora ping), `jobs`(+`/[id]`, 비동기 작업 제출/상태), `security`, `compliance`, `auth/login`. 사용자 가이드는 docs site를, 아키텍처 결정은 [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md)를 참고하세요.
 
 ## 기여 방법
 

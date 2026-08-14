@@ -289,7 +289,24 @@ describe('anfwLogsAnalysis', () => {
     const { anfwLogsAnalysis } = await import('./anfw-logs');
     const a = await anfwLogsAnalysis(3600);
     expect(a.targets).toEqual([]);
-    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2');
+    // 라운드12: 키가 타입별로 갈라졌다 — 0건 발견이면 ALERT/FLOW 둘 다 unknown.
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+  });
+
+  it('구성 조회 거부 + ALERT는 관례 명명으로 발견되지만 FLOW는 커스텀 명명이면, FLOW만 unknown으로 표시(ALERT는 아님) (리뷰 MAJOR 라운드12)', async () => {
+    // 리전 단위로만 unknown을 기록하면 이 리전은 "무언가 발견됨"으로 카운트돼 빠지고
+    // FLOW 카드가 unknown을 확정 없음("CloudWatch Logs 대상 FLOW 로그 없음")으로
+    // 렌더링한다 — 타입별로 독립 추적해야 FLOW만 unknown 신호가 살아있어야 한다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert' }] } // FLOW 그룹은 커스텀 명명이라 미발견
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
   });
 
   it('Insights 폴링은 anfwLogsAnalysis 진입 시점부터 계산된 공유 데드라인을 넘기면 중단(StopQuery)하고 failed로 표시 (리뷰 MAJOR 라운드7)', async () => {
