@@ -64,8 +64,12 @@ function SgHitsPanel({ sgId, range, regionsKey }: { sgId: string; range: number;
   if (err) return <div className="px-4 py-3 text-[13px] text-rose-600">{tt('히트 매칭 조회 실패')}: {err}</div>;
   if (!data) return <div className="px-4 py-3 text-[13px] text-ink-400">{tt('트래픽 매칭 조회 중…')}</div>;
 
+  // 리뷰 MAJOR(라운드11): 매칭은 (dstaddr,dstport,protocol) 튜플 비교라 같은 ENI에
+  // SG가 여러 개거나 인바운드 룰이 겹치면 실제로는 다른 SG/룰이 허용한 트래픽도 이
+  // 룰의 히트로 잡힐 수 있다 — "룰 단위로 정확히 귀속됨"처럼 보이면 과신 위험이라
+  // 툴팁으로 고지(과대추정 방향이라 거짓 idle 억제엔 유리하지만 숫자 자체는 근사).
   const srcBadge = data.source === 'flowlogs'
-    ? <Badge tone="brand" variant="soft">Flow Logs</Badge>
+    ? <span title={tt('(대상IP,포트,프로토콜) 튜플 매칭 — 같은 ENI에 SG가 여러 개거나 룰이 겹치면 다른 SG/룰이 허용한 트래픽도 이 룰의 히트로 집계될 수 있습니다')}><Badge tone="brand" variant="soft">Flow Logs</Badge></span>
     : data.source === 'nfm'
       ? <Badge variant="soft">NFM ({tt('상대만')})</Badge>
       : <Badge variant="outline">{tt('데이터 없음')}</Badge>;
@@ -86,7 +90,9 @@ function SgHitsPanel({ sgId, range, regionsKey }: { sgId: string; range: number;
           <table className="w-full">
             <thead><tr className="border-b border-ink-100">
               <th className={TH}>{tt('방향')}</th><th className={TH}>Proto</th><th className={TH}>Port</th>
-              <th className={TH}>{tt('소스')}</th><th className={TH}>{tt('매칭')}</th><th className={TH}>{tt('전송량')}</th>
+              <th className={TH}>{tt('소스')}</th>
+              <th className={TH} title={data.source === 'flowlogs' ? tt('튜플 매칭 근사 — SG/룰이 겹치면 다른 룰의 허용 트래픽도 포함될 수 있습니다') : undefined}>{tt('매칭')}</th>
+              <th className={TH}>{tt('전송량')}</th>
             </tr></thead>
             <tbody>
               {data.ruleHits.map((r, i) => (
