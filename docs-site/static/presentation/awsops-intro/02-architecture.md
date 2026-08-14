@@ -220,7 +220,7 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
 웹 레이어는 Next.js 14 standalone 빌드이고 arm64입니다.
 전용 도메인을 쓰므로 basePath 없이 루트 경로에서 서빙하고, fetch는 그냥 `/api/*`를 호출합니다.
 {cue: pause}
-가장 중요한 설계 원칙은 thin-BFF입니다. 무겁거나, 오래 걸리거나, OOM 위험이 있는 작업은 절대 인라인으로 돌리지 않습니다. 대신 `POST /api/jobs`로 워커 큐에 넣습니다. 라우트는 공개 헬스체크, SSE 스트림, Aurora ping, 비동기 작업 정도로 얇게 유지합니다.
+가장 중요한 설계 원칙은 thin-BFF입니다. 무겁거나, 오래 걸리거나, OOM 위험이 있는 작업은 절대 인라인으로 돌리지 않습니다. 대신 워커 큐에 넣는데, 범용 `POST /api/jobs`는 `noop` 계열만 받고, 진단·컴플라이언스 같은 도메인 job은 소유권을 검사하는 전용 라우트(`/api/diagnosis`, `/api/compliance/run`, ADR-009)로 제출합니다. 라우트는 공개 헬스체크, SSE 스트림, Aurora ping, 비동기 작업 정도로 얇게 유지합니다.
 오른쪽은 실전에서 꼭 챙겨야 하는 두 가지입니다. 첫째, HOSTNAME을 0.0.0.0으로 런타임 env에 명시해야 합니다. 이미지 ENV만으로는 ECS가 ENI IP로 덮어써서 헬스체크가 UNHEALTHY가 됩니다. 둘째, 컨테이너와 타깃 그룹의 헬스 경로가 앱의 `/api/health`와 정확히 일치해야 circuit breaker 루프를 피합니다.
 {cue: transition}
 영속 상태를 담는 데이터 레이어로 갑니다.
@@ -457,7 +457,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 :::html
 <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.875rem;font-size:0.8125rem;">
   <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.35);border-radius:8px;padding:0.75rem 1rem;">
-    <span style="color:#00d4ff;font-weight:bold;">web POST /api/jobs</span>
+    <span style="color:#00d4ff;font-weight:bold;">web POST /api/diagnosis · /api/compliance/run · /api/jobs(noop)</span>
     <span style="color:#8b95a5;"> → <code style="color:#00d4ff;">worker_jobs</code> (queued) + SQS</span>
   </div>
   <div style="text-align:center;color:#666;">↓ ESM (kill-switch)</div>
@@ -484,7 +484,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 :::notes
 {timing: 2min}
 무거운 작업은 모두 비동기 워커 티어가 받습니다.
-흐름은 이렇습니다. 웹이 `POST /api/jobs`로 들어오면 worker_jobs 테이블에 queued 상태로 기록하고 SQS에 넣습니다. ESM이 킬스위치 역할을 하면서 dispatcher Lambda를 호출하는데, dispatcher는 job_id 기준으로 멱등하게 동작합니다.
+흐름은 이렇습니다. 웹이 진단은 `/api/diagnosis`, 컴플라이언스는 `/api/compliance/run`으로 제출하면(범용 `POST /api/jobs`는 `noop` 계열만 허용, ADR-009) worker_jobs 테이블에 queued 상태로 기록하고 SQS에 넣습니다. ESM이 킬스위치 역할을 하면서 dispatcher Lambda를 호출하는데, dispatcher는 job_id 기준으로 멱등하게 동작합니다.
 {cue: pause}
 그다음 Step Functions Standard가 `$.runtime` 값을 보고 분기합니다. 짧은 작업은 RunLambda로, 길거나 OOM 위험이 있는 작업은 ecs:runTask.sync로 Fargate 워커에 넘깁니다. 진단 리포트나 DOCX·PDF 생성 같은 무거운 작업이 여기로 갑니다.
 워커는 스스로 running과 succeeded를 Aurora에 기록합니다. 실패해서 Catch로 빠지면 status_updater Lambda가 failed로 표시하는데, 이건 SFN이 VPC 안 Aurora에 직접 쓸 수 없기 때문입니다. 마지막으로 reaper가 5분마다 stale 작업을 정합화합니다. 그래서 OOM에 안전한 백본입니다. 참고로 Fargate 워커는 ENTRYPOINT가 아니라 CMD를 써야 SFN command override가 정상 동작합니다.
@@ -506,7 +506,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 ### 잡 종류 (2026-06-18 이후 증가)
 
 - **schedule_dispatcher** — 시간별 EventBridge → `report_schedules` 스캔 → 진단 잡 enqueue (`diagnosis_schedule_enabled`, LIVE)
-- **diagnosis_digest** (notify.tf) — 리포트별 이메일 대신 배치 SNS 다이제스트 (`diagnosis_notify_enabled`, ADR-013, `workers_enabled && diagnosis_notify_enabled` 게이트로 이미 배포됨)
+- **diagnosis_digest** (workers.tf) — 리포트별 이메일 대신 배치 SNS 다이제스트 (`workers_enabled && diagnosis_notify_enabled` 게이트로 이미 배포됨; ADR-13이 명시적으로 승인한 건 스케줄 진단 요약뿐이라 수동 실행분까지 배치하는 현재 구현은 ADR 범위를 넘어섬 — 후속 ADR 정리 필요)
 - **compliance** (Powerpipe) — CIS 벤치마크 Fargate 잡 (`steampipe_enabled`)
 
 :::
