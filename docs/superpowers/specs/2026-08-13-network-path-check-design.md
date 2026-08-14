@@ -28,8 +28,14 @@ render operator-run validation commands. It never runs those commands.
 
 - `agent/lambda/reachability_read_mcp.py` has deterministic ENI/EC2 SG, NACL, and subnet-route
   evaluation with no Network Insights resource creation.
-- `agent/lambda/datasource_diag_mcp.py` has bounded helpers for SG chains, TGW/Peering discovery,
-  Kubernetes service endpoints, and HTTP reachability diagnostics.
+- `agent/lambda/datasource_diag_mcp.py` has bounded helpers for SG chains, TGW/Peering discovery, and
+  Kubernetes service endpoints. Its HTTP reachability helper (`_test_http_connectivity`) is **not**
+  reused as-is: it does a raw `urlopen()` with no link-local/IMDS/private-range denial, and this
+  feature's destinations can include operator-supplied on-prem/internet hosts (DNS/L7 layer). Before
+  implementation, either route that helper's destination input through an `ssrf-guard`-equivalent check
+  (`web/lib/ssrf-guard.ts` is the project's reference shape) or confirm the destination never reaches an
+  HTTP fetch for this feature's candidates. Either way, response bodies and headers from that helper are
+  not persisted into `evidence` — only the bounded pass/fail/latency summary is.
 - `topology_nodes` / `topology_edges`, `/api/graph`, and the `flow` / `infra` / `trace` graph classes
   provide cached candidate-path discovery.
 - The v2 worker backbone provides `worker_jobs`, SQS, dispatcher, Step Functions, Fargate workers,
@@ -117,7 +123,7 @@ Each result uses:
 ```json
 {
   "layer": "alb-listener",
-  "status": "allowed|blocked|unknown|conditional",
+  "status": "allowed|blocked|unknown|conditional|not_run",
   "resource": "listener/app/orders/443",
   "summary": "Host matched; path condition did not match",
   "evidence": [],
@@ -129,15 +135,34 @@ Each result uses:
 }
 ```
 
-Overall status:
+A layer is **required** if it sits on the path between source and destination for the candidate under
+evaluation — e.g. an ALB listener layer is required only for a candidate that actually routes through
+that ALB; a candidate that bypasses it (a different listener, a direct ENI-to-ENI path) never marks it
+required. Adapters determine which layers apply to their candidate during `discover`/`verify`; a layer
+that doesn't apply to a given candidate is omitted from that candidate's step list rather than marked
+`unknown`.
 
-- any `blocked` layer -> `blocked`
-- no `blocked`, at least one required `unknown` -> `conditional`
-- every applicable layer `allowed` -> `allowed`
+**Per-candidate status** (computed independently for each candidate path):
+
+- any `blocked` layer on that candidate -> that candidate is `blocked`
+- no `blocked`, at least one required `unknown` -> that candidate is `conditional`
+- every required layer `allowed` -> that candidate is `allowed`
+
+**Overall status** is then reduced across candidates, not across layers directly:
+
+- at least one candidate `allowed` -> overall `allowed` (traffic has a working path; the response
+  surfaces that candidate as primary and lists the blocked/conditional candidates as alternates)
+- no candidate `allowed`, at least one candidate `conditional` -> overall `conditional`
+- every candidate `blocked` -> overall `blocked`
 - execution-level failure before meaningful inspection -> `failed`
 
-The UI preserves layers that were not evaluated after an earlier blocker and labels them `not_run`;
-it does not incorrectly display them as allowed or unknown.
+This is why "any blocked layer -> blocked" cannot be the overall-status rule directly: a blocked layer
+on one candidate says nothing about a sibling candidate that never touches that layer. Blocking is
+scoped to the candidate that contains the layer, and only propagates to the overall result once every
+candidate is accounted for.
+
+Within one candidate, the UI preserves layers that were not evaluated after an earlier blocker on that
+same candidate and labels them `not_run`; it does not incorrectly display them as allowed or unknown.
 
 ### Validation bundle
 
@@ -207,17 +232,23 @@ CREATE TABLE network_path_runs (
 );
 
 CREATE TABLE network_path_run_steps (
-  run_id       text NOT NULL REFERENCES network_path_runs(id) ON DELETE CASCADE,
-  ordinal      integer NOT NULL,
-  layer        text NOT NULL,
-  status       text NOT NULL,
-  resource     text,
-  summary      text NOT NULL,
-  evidence     jsonb NOT NULL DEFAULT '[]',
-  observed_at  timestamptz,
-  PRIMARY KEY (run_id, ordinal)
+  run_id        text NOT NULL REFERENCES network_path_runs(id) ON DELETE CASCADE,
+  candidate_id  text NOT NULL,
+  ordinal       integer NOT NULL,
+  layer         text NOT NULL,
+  status        text NOT NULL,
+  resource      text,
+  summary       text NOT NULL,
+  evidence      jsonb NOT NULL DEFAULT '[]',
+  observed_at   timestamptz,
+  PRIMARY KEY (run_id, candidate_id, ordinal)
 );
 ```
+
+`candidate_id` discriminates the multiple candidate paths a run can carry — assigned by the `discover`
+phase when it enumerates candidates (e.g. `c0`, `c1`, ...), stable for the lifetime of the run. Every
+step row belongs to exactly one candidate; per-candidate and overall status (above) are both computed
+by grouping this table on `candidate_id`.
 
 Evidence is bounded and redacted before persistence. Raw AWS responses, credentials, Kubernetes
 Secrets, labels unrelated to path evaluation, and free-form workload annotations are not stored.
@@ -265,12 +296,18 @@ manual investigation. The stored checklist remains the source of truth.
 ## Error handling
 
 - One adapter failure -> that layer is `?`; unrelated layers continue.
-- Global deadline -> remaining layers become `not_run`, run completes `conditional`.
+- Global deadline -> remaining layers on every still-running candidate become `not_run`; each affected
+  candidate's status is computed from whatever it evaluated before the deadline (per the per-candidate
+  rules above), and the overall status still follows the candidate reduction — a candidate that reached
+  `allowed` before the deadline still makes the overall result `allowed`, even if a sibling candidate
+  was truncated to `conditional` by the deadline.
 - Identity cannot be resolved -> run completes `failed` with a bounded, non-sensitive error.
 - Stale run -> existing worker reaper marks it failed.
 - Candidate topology is stale or empty -> live discovery continues where possible and records the
   cache limitation.
-- Multiple plausible paths -> show each candidate and the first known blocker on each.
+- Multiple plausible paths -> compute each candidate's status independently, show each candidate with
+  its first known blocker (if any), and reduce to overall status per the candidate-reduction rule (any
+  `allowed` candidate makes the overall result `allowed`, even alongside a blocked sibling).
 - On-premises segment -> always `?` past the AWS boundary.
 - Unsupported Calico, Cilium, or Istio CRD version -> `?`, never an assumed allow.
 
@@ -293,11 +330,18 @@ Table-driven tests cover:
 ### Orchestration
 
 - adapter failure isolation
-- global deadline behavior
-- multiple candidate paths
-- deterministic overall-status reduction
+- global deadline behavior, including a truncated sibling candidate not downgrading an already-`allowed`
+  candidate's contribution to the overall result
+- multiple candidate paths, each with independent per-candidate status
+- deterministic overall-status reduction: one blocked + one allowed candidate -> overall `allowed`;
+  all candidates blocked -> overall `blocked`; no allowed, at least one conditional -> overall `conditional`
+- a layer irrelevant to a given candidate is omitted from that candidate rather than marked `unknown`
+- `network_path_run_steps` rows for two candidates at the same `ordinal` do not collide (candidate_id
+  discriminates the primary key)
 - evidence redaction and size caps
 - definition snapshot immutability
+- HTTP-reachability helper never resolves/fetches an operator-supplied destination without the
+  SSRF-guard check (or is confirmed unreachable from this feature's code paths)
 - stale-run reaping
 
 ### Web and authorization

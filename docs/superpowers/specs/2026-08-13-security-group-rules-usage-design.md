@@ -137,6 +137,13 @@ When false:
   aggregation are disabled
 - current Usage behavior remains unchanged
 
+At implementation time, this flag gets a `docs/decisions/BASELINE.md` §2 register row before it ships.
+The Athena `StartQueryExecution`/`StopQueryExecution` calls and the S3 writes to the workgroup's
+results prefix (see IAM section) are not read-only, so the register row must record an ADR-005/ADR-007
+posture analysis (mutating-but-scoped: the mutation is confined to the caller's own Athena
+workgroup/S3 results prefix, never an AWS resource outside that scope) rather than being folded in as
+an ordinary read-only inventory gate.
+
 This separates the new recurring Athena cost from the existing SG analysis.
 
 ## Data model
@@ -200,7 +207,7 @@ CREATE TABLE sg_rule_activity_daily (
   unique_eni_count        integer NOT NULL DEFAULT 0,
   last_observed_at        timestamptz,
   coverage                jsonb NOT NULL DEFAULT '{}',
-  PRIMARY KEY (account_id, region, rule_id, rule_fingerprint, observed_on)
+  PRIMARY KEY (account_id, region, rule_id, observed_on)
 );
 
 CREATE TABLE sg_rule_scan_runs (
@@ -215,10 +222,27 @@ CREATE TABLE sg_rule_scan_runs (
   coverage              jsonb NOT NULL DEFAULT '{}',
   error_code            text,
   started_at            timestamptz NOT NULL DEFAULT now(),
-  finished_at           timestamptz,
-  UNIQUE (flow_source_id, partition_start, partition_end)
+  finished_at           timestamptz
 );
+
+CREATE INDEX sg_rule_scan_runs_partition_idx
+  ON sg_rule_scan_runs (flow_source_id, partition_start, partition_end, started_at DESC);
 ```
+
+`sg_rule_activity_daily`'s primary key is scoped to `(account_id, region, rule_id, observed_on)` —
+`rule_fingerprint` is stored as a plain column, not part of the key. This is deliberate: a rule's shape
+can change mid-lifetime, and a day's aggregate must have exactly one row regardless of how many
+fingerprint epochs the rule passed through that day. Keying on fingerprint would let reprocessing a day
+after a fingerprint change leave the old-fingerprint row in place alongside the new one, double-counting
+that day in any per-rule range roll-up.
+
+`sg_rule_scan_runs` intentionally has **no** uniqueness constraint on
+`(flow_source_id, partition_start, partition_end)` — only a lookup index. Every scan attempt for a given
+partition (daily retry, manual admin refresh, or a rerun after a failed run) inserts a **new** row; the
+partition's current status is whichever row for that `(flow_source_id, partition_start, partition_end)`
+has the latest `started_at`. A failed run's row is retained as history and never blocks the next attempt
+from being inserted — the "reprocessing a day recomputes and replaces that day's aggregates" behavior in
+the pipeline section below is about `sg_rule_activity_daily`, not an update-in-place on this run-log table.
 
 Daily aggregates are retained for at least 400 days so the 180-day selector does not require a new
 Athena query. Raw flow records are not copied into Aurora.
@@ -244,19 +268,33 @@ For each source:
 
 1. validate the saved source metadata
 2. snapshot all current SGRs and ENI-SG memberships
-3. calculate the next unprocessed completed UTC day from the discovered S3 partition scheme
+3. calculate the next unprocessed completed UTC day from the discovered S3 partition scheme,
+   **skipping any day less than `SG_RULE_DELIVERY_LAG_HOURS` (default 6h) old** — Flow Log delivery
+   lags real time by minutes to hours, and scanning a day whose partition is still being written would
+   silently read a partial day
 4. run one Athena query for that account/region/day batch, not one query per SG or rule
 5. select and aggregate only fields needed for deterministic matching
 6. match accepted flows against candidate ingress or egress rules
-7. replace that day's fingerprint-scoped rule aggregates and scan coverage in one transaction
+7. within one transaction: delete all `sg_rule_activity_daily` rows for
+   `(account_id, region, observed_on)` and insert the freshly computed rows (current-fingerprint or
+   not — the delete is scoped to the day, not to a fingerprint), and replace that day's scan coverage
 8. advance the watermark only after the complete transaction succeeds
 
 The generic `POST /api/jobs` rejects this job type. The dispatcher submits it only from the trusted
 daily path or the admin refresh route.
 
 The scan unit is one complete UTC day, even when the underlying table is partitioned hourly.
-Backfill proceeds day by day. Reprocessing a day recomputes and replaces that day's aggregates; it
-never adds counts to existing rows. This makes retries and manual refresh idempotent.
+Backfill proceeds day by day. Reprocessing a day recomputes and replaces that day's aggregates via the
+delete-then-insert in step 7; it never adds counts to existing rows. This makes retries and manual
+refresh idempotent regardless of whether a rule's fingerprint changed since the day was last scanned.
+
+Because the watermark only ever advances past a day once its transaction fully commits, and a day is
+never eligible for scanning until it clears the delivery-lag grace period in step 3, an already-advanced
+day is never revisited automatically. A scheduled re-scan of the trailing `SG_RULE_RESCAN_WINDOW_DAYS`
+(default 2) days runs alongside the normal watermark advance, re-running the same idempotent
+delete-then-insert for those days — this is the safety net for records that arrived late enough to miss
+the lag grace period entirely (rare, but Flow Log delivery has no hard SLA). This rescan does not move
+the watermark backward; it only refreshes already-committed days that are still inside the window.
 
 ## Match model
 
@@ -370,6 +408,10 @@ Missing permissions degrade only that account/region source to `unassessable`.
 
 - source validation
 - partition watermark idempotency
+- delivery-lag grace period is honored before a day becomes eligible
+- rescan window re-processes a trailing day without moving the watermark backward
+- rule-fingerprint change mid-window: day replace clears the prior fingerprint's row for that day
+- concurrent/retried run for the same partition does not block on a uniqueness conflict
 - one account/region batch rather than per-rule query
 - Athena pagination and terminal states
 - scan transaction rollback

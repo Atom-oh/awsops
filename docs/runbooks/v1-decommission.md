@@ -322,10 +322,15 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
   aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory')].{id:id,status:status}"
   aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter'].{id:codeInterpreterId,name:name,status:status}"
   # (b) 위 목록을 (조사 시점 8게이트웨이 + 1 memory + 1 interpreter) 과 대조 — 다르면 개별 확인 후 제외
+  #     확인이 끝나면 아래 변수에 실제 ID를 채운다(복붙 실행 시 프로세스 치환 `<(...)`과 겹치는
+  #     자리표시자 문법을 쓰지 않는다 — 삭제 절차라 문법 사고를 특히 피해야 함):
+  CONFIRMED_ORPHAN_GATEWAY_IDS=(<검토 완료 후 (b)에서 확정된 gatewayId만 여기 나열>)
+  CONFIRMED_ORPHAN_MEMORY_ID=<검토 완료 후 (b)에서 확정된 memory id>
+  CONFIRMED_ORPHAN_CODE_INTERPRETER_ID=<검토 완료 후 (b)에서 확정된 codeInterpreterId>
   # (c) 게이트웨이는 타깃부터 지우고, 그 삭제가 실제 반영될 때까지 기다린 다음에만 게이트웨이를 지운다 —
   #     타깃이 아직 DELETING인 채로 delete-gateway를 부르면 생성 때의 "GW READY 전 target 생성 실패"와
   #     대칭인 이유로 실패한다(비동기 삭제, 즉시 완료 보장 없음).
-  for gw in <(b)에서 확정된 gatewayId들>; do
+  for gw in "${CONFIRMED_ORPHAN_GATEWAY_IDS[@]}"; do
     for tgt in $(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'items[].targetId' --output text); do
       aws bedrock-agentcore-control delete-gateway-target --gateway-identifier "$gw" --target-id "$tgt"
     done
@@ -333,8 +338,8 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
     while [ -n "$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'items' --output text)" ]; do sleep 5; done
     aws bedrock-agentcore-control delete-gateway --gateway-identifier "$gw"
   done
-  aws bedrock-agentcore-control delete-memory --memory-id <(b)에서 확정된 memory id>
-  aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id <(b)에서 확정된 codeInterpreterId>
+  aws bedrock-agentcore-control delete-memory --memory-id "$CONFIRMED_ORPHAN_MEMORY_ID"
+  aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id "$CONFIRMED_ORPHAN_CODE_INTERPRETER_ID"
   ```
 - **공개 ALB `awsops-alb`(internet-facing) — 과금 중, 타깃 = 정지된 v1 EC2.** `AwsopsStack` CFN 삭제(4.3) 범위에 포함되는지 스택 리소스 목록으로 반드시 확인한다(CFN이 만들지 않은 별도 리소스라면 4.3이 지우지 않으므로 수동 정리 대상):
   ```bash
