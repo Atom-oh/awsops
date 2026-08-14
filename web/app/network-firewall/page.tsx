@@ -713,49 +713,55 @@ export default function NetworkFirewallPage() {
                           </Badge>
                         ))}
                       </div>
-                      {/* 리뷰 MAJOR(라운드10): totalAlerts>0 게이트는 totals 쿼리만 실패해도
-                          이미 성공적으로 받아온 topSignatures/topSources/topDests 표까지 숨겼다
-                          — 표 자체의 유무(topSignatures.length)로 게이트를 교체. */}
-                      {logsData.alert.topSignatures.length > 0 && (
+                      {/* 리뷰 MAJOR(라운드10, stop-hook 재수정): totalAlerts>0 게이트를
+                          topSignatures.length>0 하나로 바꿨더니, 시그니처 표만 실패하고
+                          소스/목적지 표는 성공한 경우 그 표까지 숨는 동일 계급의 버그가
+                          그대로 자리만 옮겼다 — 두 표를 각자 자기 데이터 유무로 독립
+                          게이트해 한쪽 실패가 다른 쪽의 로드된 결과를 가리지 않게 한다. */}
+                      {(logsData.alert.topSignatures.length > 0 || logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
                         <div className="grid gap-4 px-4 pb-3 lg:grid-cols-2">
-                          <div className="overflow-x-auto">
-                            <table className="w-full">
-                              <thead><tr className="border-b border-ink-100">
-                                <th className={TH}>SID</th>
-                                <th className={TH}>Signature</th>
-                                <th className={TH}>{tt('건수')}</th>
-                              </tr></thead>
-                              <tbody>
-                                {logsData.alert.topSignatures.map((s) => (
-                                  <tr key={`${s.sid}|${s.signature}`} className="border-b border-ink-50 last:border-0">
-                                    <td className={MONO}>{s.sid}</td>
-                                    <td className={TD}>{s.signature || dash}</td>
-                                    <td className={TD}>{s.value.toLocaleString()}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          <div className="overflow-x-auto">
-                            <table className="w-full">
-                              <thead><tr className="border-b border-ink-100">
-                                <th className={TH}>{tt('소스 IP')}</th>
-                                <th className={TH}>{tt('건수')}</th>
-                                <th className={TH}>{tt('목적지')}</th>
-                                <th className={TH}>{tt('건수')}</th>
-                              </tr></thead>
-                              <tbody>
-                                {Array.from({ length: Math.max(logsData.alert.topSources.length, logsData.alert.topDests.length) }).map((_, i) => (
-                                  <tr key={i} className="border-b border-ink-50 last:border-0">
-                                    <td className={MONO}>{logsData.alert?.topSources[i]?.name ?? ''}</td>
-                                    <td className={TD}>{logsData.alert?.topSources[i]?.value.toLocaleString() ?? ''}</td>
-                                    <td className={MONO}>{logsData.alert?.topDests[i]?.name ?? ''}</td>
-                                    <td className={TD}>{logsData.alert?.topDests[i]?.value.toLocaleString() ?? ''}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
+                          {logsData.alert.topSignatures.length > 0 && (
+                            <div className="overflow-x-auto">
+                              <table className="w-full">
+                                <thead><tr className="border-b border-ink-100">
+                                  <th className={TH}>SID</th>
+                                  <th className={TH}>Signature</th>
+                                  <th className={TH}>{tt('건수')}</th>
+                                </tr></thead>
+                                <tbody>
+                                  {logsData.alert.topSignatures.map((s) => (
+                                    <tr key={`${s.sid}|${s.signature}`} className="border-b border-ink-50 last:border-0">
+                                      <td className={MONO}>{s.sid}</td>
+                                      <td className={TD}>{s.signature || dash}</td>
+                                      <td className={TD}>{s.value.toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                          {(logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
+                            <div className="overflow-x-auto">
+                              <table className="w-full">
+                                <thead><tr className="border-b border-ink-100">
+                                  <th className={TH}>{tt('소스 IP')}</th>
+                                  <th className={TH}>{tt('건수')}</th>
+                                  <th className={TH}>{tt('목적지')}</th>
+                                  <th className={TH}>{tt('건수')}</th>
+                                </tr></thead>
+                                <tbody>
+                                  {Array.from({ length: Math.max(logsData.alert.topSources.length, logsData.alert.topDests.length) }).map((_, i) => (
+                                    <tr key={i} className="border-b border-ink-50 last:border-0">
+                                      <td className={MONO}>{logsData.alert?.topSources[i]?.name ?? ''}</td>
+                                      <td className={TD}>{logsData.alert?.topSources[i]?.value.toLocaleString() ?? ''}</td>
+                                      <td className={MONO}>{logsData.alert?.topDests[i]?.name ?? ''}</td>
+                                      <td className={TD}>{logsData.alert?.topDests[i]?.value.toLocaleString() ?? ''}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </div>
                       )}
                     </>

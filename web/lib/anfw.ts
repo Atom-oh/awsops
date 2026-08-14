@@ -412,14 +412,14 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
               passedPackets: pick('pass'), droppedPackets: pick('drop'),
               rejectedPackets: pick('rej'), invalidDropped: pick('invdrop'), otherDropped: pick('othdrop'),
               streamExceptionPackets: pick('sep'),
-              // 리뷰 MAJOR(확정, 라운드10): 라운드8이 recv/bytes의 이중 집계 방지 로직을
-              // tlsrecv에 그대로 옮겼는데, 그 전제(모든 패킷이 stateless를 먼저 통과)는
-              // TLS 검사 자체에는 적용되지 않는다 — TLS 검사는 stateful/TLS 엔진에서
-              // 수행되므로, pickWire(Stateless만)로 읽으면 TLS 검사가 관측하는 값 자체가
-              // 걸러져 TLS 검사가 활성인 방화벽에서도 항상 0/null(=미사용처럼 보임)이
-              // 된다. pass/drop/rej와 동일하게 pick(엔진 합산)을 쓴다 — recv/bytes의
-              // 룰과 tlsrecv/tlspass는 서로 다른 엔진을 대상으로 하므로 별개다.
-              tlsReceivedPackets: pick('tlsrecv'), tlsPassedPackets: pick('tlspass'),
+              // 리뷰 라운드10 되돌림: 라운드10에서 "TLS 검사는 stateful 엔진에서만 일어나므로
+              // pickWire가 값을 걸러낸다"는 근거로 pick(엔진 합산)으로 바꿨었으나, AWS 문서
+              // (monitoring-cloudwatch.html)가 TLSReceivedPackets를 "recv/bytes와 동일하게
+              // stateless→stateful TCP/TLS 종료 경계를 두고 두 엔진 모두에 값이 존재할 수
+              // 있다"고 명시한다 — 즉 recv/bytes와 같은 이중 집계 위험이 실재해 pickWire
+              // (Stateless만)가 맞았다(라운드10 stop-hook 리뷰가 이 되돌림을 지적). 최종
+              // 처분(pass/drop/rej)은 한 엔진에서만 발행되므로 pick(엔진 합산) 유지.
+              tlsReceivedPackets: pickWire('tlsrecv'), tlsPassedPackets: pick('tlspass'),
               tlsDroppedPackets: pick('tlsdrop'), tlsRejectedPackets: pick('tlsrej'),
               // toPrecision(2)(유효숫자 2자리)는 아주 작은 비율에서 "1e-4%"처럼 지수 표기로
               // 렌더링된다(리뷰 MINOR) — 소수 2자리 고정으로 항상 일반 표기 유지.
