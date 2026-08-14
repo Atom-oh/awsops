@@ -1,6 +1,6 @@
 name: AI Code Review
 
-# Each PR is reviewed by a lens×model matrix panel (Codex + Kiro x3, each of L2-L5 an
+# Each PR is reviewed by a lens×model matrix panel (Codex + Kiro x2, each of L2-L5 an
 # independent agent per lens), then a Claude Fable 5 chair (falling back to Opus 5 on
 # degradation) synthesizes per-lens and posts a comment (fail-closed VERDICT). Uses the
 # shared actions-runner-claude image. (Ports oh-my-cloud-skills' lens×model matrix design —
@@ -9,7 +9,7 @@ name: AI Code Review
 #  it reads it via its own trusted file tool; feeding a large diff directly via argv hits the
 #  kernel argv length limit — see run-panel.sh.)
 #   - pull_request_target base-ref checkout (M1): PR head code never executes, diff is data only
-#   - matrix fan-out: scripts/pr-review/run-panel.sh (4 models x 4 lenses = 16 cells) -> synthesize.sh
+#   - matrix fan-out: scripts/pr-review/run-panel.sh (3 models x 4 lenses = 12 cells) -> synthesize.sh
 #   - auth: EKS Pod Identity (ci-runner) SigV4 + ai-panel-keys (KIRO)
 #   - region: us-east-1 (Claude us. geo / codex gpt-5.6-sol bedrock-mantle In-Region)
 
