@@ -421,7 +421,7 @@ describe('anfwLogsAnalysis', () => {
     expect(a.targets.some((t) => t.type === 'ALERT')).toBe(true);
   });
 
-  it('접두사 스캔 자체가 예외로 실패(discoveryFailed)하면 그 리전에 실제 성공한 CWL 대상이 있어도 totalAlerts/totalFlows는 null (리뷰 MAJOR 라운드15)', async () => {
+  it('방화벽 목록 조회 자체가 실패(firewallDiscoveryDegraded)하면 그 리전에 실제 성공한 CWL 대상이 있어도 totalAlerts/totalFlows는 null (리뷰 MAJOR 라운드15, 라운드19에서 제목 오류 수정 — 이 테스트는 discoveryFailed가 아니라 firewallDiscoveryDegraded를 검증함)', async () => {
     // loggingUnknownByType에만 걸린 null 판정은 "스캔이 정상 실행되고 0건"(덜 심각)만
     // 잡는다 — "스캔 자체가 예외로 죽음"(discoveryFailed, 더 심각)이나 방화벽 목록 조회
     // 자체가 실패(firewallDiscoveryDegraded)한 경우는 반영되지 않아, 더 심각한 실패가
@@ -433,6 +433,22 @@ describe('anfwLogsAnalysis', () => {
     expect(a.failed).toContain('firewallDiscovery');
     expect(a.alert!.totalAlerts).toBeNull();
     expect(a.flow!.totalFlows).toBeNull();
+  });
+
+  it('접두사 스캔 자체가 예외로 실패(discoveryFailed)하면 totalAlerts/totalFlows는 null (리뷰 MINOR, PR #221 — 실제로 discoveryFailed 경로를 검증하는 테스트가 없다는 지적)', async () => {
+    // loggingKnown: false로 discoverRegions 루프에 들어가되, DescribeLogGroupsCommand 자체가
+    // 예외를 던져 discoveryFailed=true가 되는 경로 — 위 테스트(firewallDiscoveryDegraded)와는
+    // 다른 코드 경로다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'DescribeLogGroupsCommand') throw new Error('Throttling');
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscovery');
+    expect(a.alert).toBeNull();
+    expect(a.flow).toBeNull();
   });
 
   it('Insights 폴링은 anfwLogsAnalysis 진입 시점부터 계산된 공유 데드라인을 넘기면 중단(StopQuery)하고 failed로 표시 (리뷰 MAJOR 라운드7)', async () => {

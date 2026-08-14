@@ -375,6 +375,30 @@ describe('anfwAnalysis', () => {
     expect(a.firewallListDegradedRegions).toEqual([]);
   });
 
+  it('ListRuleGroupsCommand 자체가 던지면(스로틀) 방화벽 List는 성공했더라도 firewallListDegradedRegions는 비어 있음 — 세 List*는 서로 독립 (리뷰 MAJOR, PR #221 라운드4)', async () => {
+    // 라운드3까지는 세 List*가 하나의 Promise.all로 묶여 있어, 룰그룹 List 하나만 실패해도
+    // 방화벽 List가 이미 성공했든 상관없이 region 블록 전체가 catch로 떨어져
+    // firewallListDegraded까지 켜졌다 — "firewalls 자체만의 부분 실패"라는 계약 위반.
+    mockDb([]);
+    nfwSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'ListFirewallsCommand': return { Firewalls: [{ FirewallName: 'DMZVPC-nfw' }] };
+        case 'DescribeFirewallCommand': return FW_DESCRIBE;
+        case 'DescribeLoggingConfigurationCommand': return LOGGING;
+        case 'ListFirewallPoliciesCommand': return { FirewallPolicies: [] };
+        case 'ListRuleGroupsCommand': throw new Error('Throttling');
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    mockCw({});
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    // 방화벽 자체는 정상 조회됐다 — degradedRegions(포괄 신호)는 켜지지만 firewallList는 아니다.
+    expect(a.firewalls).toHaveLength(1);
+    expect(a.degradedRegions).toEqual(['ap-northeast-2']);
+    expect(a.firewallListDegradedRegions).toEqual([]);
+  });
+
   it('메트릭 전무 → 트래픽 null, 드롭율 null, 리스트는 정상', async () => {
     mockDb([]);
     mockNfw();

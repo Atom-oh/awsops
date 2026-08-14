@@ -220,39 +220,33 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
           // 결론이 안 나면(둘 다/둘 다 아님) 전체 이름의 토큰으로 폴백한다. 허용목록은
           // 정확 일치만(부분 문자열/prefix 아님) 인정 — "alerting"·"flowchart"·
           // "alert-prod"(방화벽 이름) 같은 임의 접두사는 더 이상 증거로 인정되지 않는다.
+          // 리뷰 MAJOR(확정, PR #221 라운드4 — 라운드2/3 자체 수정의 결함): 라운드2/3은 쿼리
+          // 등록(isAlert/isFlow)까지 exact-token 판정(terminal ∪ whole-name)으로 좁혀서,
+          // "alertlogs"/"netflows"처럼 정확히 "alert"/"flow"가 아닌 복합 토큰 이름은 쿼리조차
+          // 안 나갔다 — base(`includes`)는 이런 이름도 쿼리했으므로 base보다 나쁜 회귀였다.
+          // 고침: **쿼리 등록은 base와 동일한 permissive substring 매칭으로 되돌린다**(헛다리를
+          // 짚어도 event_type 필터 덕에 무해 — 쿼리 커버리지는 절대 base보다 좁아지면 안 된다).
+          // **발견 확정(foundByType)만** 엄격한 규칙을 쓴다: 이름의 `/`-세그먼트 중 하나가
+          // discriminator 토큰과 정확히 일치하고(부분 문자열 아님 — "alert-prod"는 세그먼트
+          // 전체가 "alert"가 아니므로 불일치), 그 이름 어디에도 반대 타입 토큰이 없을 때만
+          // 확정한다. 세그먼트 전체 일치 조건 덕에 `/…/alert/<방화벽이름>`처럼 타입이 중간
+          // 세그먼트에 있는 관례도 확정되고(라운드3이 놓친 케이스), "alert-prod"처럼 방화벽
+          // 이름에 토큰이 섞여 들어간 경우는 세그먼트 전체 일치가 아니라 여전히 미확정이다.
+          const isAlert = lower.includes('alert');
+          const isFlow = lower.includes('flow');
+          if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
+          if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
           const ALERT_TOKENS = new Set(['alert', 'alerts']);
           const FLOW_TOKENS = new Set(['flow', 'flows', 'netflow', 'flowlog', 'flowlogs']);
           const tokenize = (s: string) => s.split(/[^a-z0-9]+/).filter(Boolean);
-          const classify = (tokens: string[]) => ({
-            alert: tokens.some((t) => ALERT_TOKENS.has(t)),
-            flow: tokens.some((t) => FLOW_TOKENS.has(t)),
-          });
-          // 리뷰 MAJOR(확정, PR #221 라운드3 — 라운드2 자체 수정의 두 결함):
-          // (1) 마지막 세그먼트가 결론이 안 나면 whole-name 폴백으로 넘어가는데, 그 폴백이
-          //     "발견 확정"(foundByType)까지 겸했다 — `/…/alert-prod/logs`처럼 마지막 세그먼트가
-          //     아무것도 매칭 안 해도 whole-name엔 방화벽 이름 세그먼트("alert-prod")의 "alert"
-          //     토큰이 남아있어 그걸로 발견 확정이 나버렸다. 이 코드 자신이 "임의 접두사는 더
-          //     이상 증거로 인정 안 함"이라 주석에 써놓은 것과 정반대. (2) 마지막 세그먼트가
-          //     결론이 나면(정확히 한쪽만) 그 결론만 쓰고 whole-name은 전혀 안 봤다 —
-          //     `/…/alert/netflow-collector`처럼 마지막 세그먼트는 FLOW로 결론나지만 앞선
-          //     세그먼트에 "alert"가 그대로 있으면, 그 그룹은 FLOW로만 등록되고 ALERT로는
-          //     전혀 쿼리조차 안 된다 — base(`includes`)는 최소한 양쪽 다 쿼리했으므로 base보다
-          //     나쁜 회귀. 고침: **쿼리 등록(isAlert/isFlow)은 항상 terminal ∪ whole-name 합집합**
-          //     이라 결정적이지만 틀린 terminal이 반대 타입 쿼리를 막지 못한다(event_type 필터
-          //     덕에 헛다리도 무해). **발견 확정(foundByType)은 terminal이 결정적이고 그 결정에
-          //     whole-name이 반대 타입 토큰을 추가하지 않을 때만** — "결정적"과 "whole-name과
-          //     불일치 없음"을 동시에 만족해야 그 그룹의 이름이 실제로 그 타입의 증거로 인정된다.
           const segments = lower.split('/').filter(Boolean);
-          const terminalClass = classify(tokenize(segments[segments.length - 1] ?? ''));
-          const wholeClass = classify(tokenize(lower));
-          const isAlert = terminalClass.alert || wholeClass.alert;
-          const isFlow = terminalClass.flow || wholeClass.flow;
-          if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
-          if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
-          if (terminalClass.alert !== terminalClass.flow) {
-            if (terminalClass.alert && !wholeClass.flow) foundByType.ALERT = true;
-            if (terminalClass.flow && !wholeClass.alert) foundByType.FLOW = true;
-          }
+          const segmentHasAlert = segments.some((seg) => ALERT_TOKENS.has(seg));
+          const segmentHasFlow = segments.some((seg) => FLOW_TOKENS.has(seg));
+          const wholeTokens = tokenize(lower);
+          const wholeHasAlert = wholeTokens.some((t) => ALERT_TOKENS.has(t));
+          const wholeHasFlow = wholeTokens.some((t) => FLOW_TOKENS.has(t));
+          if (segmentHasAlert && !wholeHasFlow) foundByType.ALERT = true;
+          if (segmentHasFlow && !wholeHasAlert) foundByType.FLOW = true;
         }
         nextToken = r.nextToken;
       } while (nextToken);

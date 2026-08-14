@@ -328,7 +328,12 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
     const perRegion = await Promise.all(regions.map(async (region) => {
       const empty = { firewalls: [] as AnfwFirewallRow[], policies: [] as AnfwPolicyRow[], ruleGroups: [] as AnfwRuleGroupRow[], degraded: false, metricsDegraded: false, firewallListDegraded: false };
       try {
-        const [fwList, policyList, rgList] = await Promise.all([
+        // 리뷰 MAJOR(확정, PR #221 라운드4): 세 List*를 하나의 Promise.all로 묶으면 정책/룰그룹
+        // List 하나만 실패해도(스로틀 등) 방화벽 List가 이미 성공했더라도 전체가 거부되어
+        // firewallListDegraded까지 켜진다 — "firewalls 자체만의 부분 실패"라는 그 필드 자신의
+        // 계약을 어긴다. Promise.allSettled로 세 List를 독립시켜, 방화벽 List 실패만
+        // firewallListDegraded에 반영한다.
+        const [fwListR, policyListR, rgListR] = await Promise.allSettled([
           listAll(async (nextToken) => {
             const r: { Firewalls?: { FirewallName?: string }[]; NextToken?: string } =
               await nfw(region).send(new ListFirewallsCommand({ NextToken: nextToken }));
@@ -352,7 +357,15 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
             };
           }),
         ]);
-        if (fwList.length === 0 && policyList.length === 0 && rgList.length === 0) return empty;
+        const fwListFailed = fwListR.status === 'rejected';
+        const listFailed = fwListFailed || policyListR.status === 'rejected' || rgListR.status === 'rejected';
+        const fwList = fwListR.status === 'fulfilled' ? fwListR.value : [];
+        const policyList = policyListR.status === 'fulfilled' ? policyListR.value : [];
+        const rgList = rgListR.status === 'fulfilled' ? rgListR.value : [];
+        // 셋 다 실패 없이 정말 비어 있을 때만 "이 리전엔 리소스가 없다"로 조기 반환한다 —
+        // List 중 하나라도 실패했는데 나머지가 우연히 0건이면 degraded:false인 empty를
+        // 돌려줘 조회실패를 무-리소스로 오인시킬 위험이 있다.
+        if (!listFailed && fwList.length === 0 && policyList.length === 0 && rgList.length === 0) return empty;
 
         const metricsResult = await anfwMetrics(region, rangeSec, fwList);
         const metricsByFw = metricsResult.byFw;
@@ -489,8 +502,9 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
         const policiesOk = policies.filter((p): p is AnfwPolicyRow => p != null);
         const ruleGroupsOk = ruleGroups.filter((r): r is AnfwRuleGroupRow => r != null);
         // Describe* 개별 실패(null)는 조용히 드롭되면 "리소스 없음"으로 오독된다 —
-        // List*가 돌려준 개수보다 적게 채워졌으면 이 리전도 degraded로 표시.
-        const partial = firewallsOk.length < fwList.length
+        // List*가 돌려준 개수보다 적게 채워졌거나 List 자체가 실패했으면 이 리전도 degraded로 표시.
+        const partial = listFailed
+          || firewallsOk.length < fwList.length
           || policiesOk.length < policyList.length
           || ruleGroupsOk.length < rgList.length;
         return {
@@ -498,10 +512,11 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
           degraded: partial, metricsDegraded: !metricsResult.ok,
           // 리뷰 MAJOR(PR #221 라운드2, anfw-logs.ts firewallDiscoveryDegraded 소비처): degradedRegions는
           // firewalls·policies·ruleGroups 중 어느 것 하나라도 부분 실패하면 켜지는 포괄 신호라,
-          // 방화벽 자체의 로깅 구성과 무관한 정책/룰그룹 Describe 실패에도 켜진다. 로그 발견
+          // 방화벽 자체의 로깅 구성과 무관한 정책/룰그룹 List·Describe 실패에도 켜진다. 로그 발견
           // 계층처럼 "방화벽 목록(따라서 로깅 구성)을 확인할 수 있었는가"만 필요한 소비처를
-          // 위해 firewalls만의 부분 실패를 별도로 노출한다.
-          firewallListDegraded: firewallsOk.length < fwList.length,
+          // 위해 firewalls만의 부분 실패를 별도로 노출한다 — 라운드4: 정책/룰그룹 List만 실패한
+          // 경우까지 켜지지 않도록 fwListFailed(방화벽 List 자체의 성공 여부)만 반영한다.
+          firewallListDegraded: fwListFailed || firewallsOk.length < fwList.length,
         };
       } catch { return { ...empty, degraded: true, firewallListDegraded: true }; }
     }));
