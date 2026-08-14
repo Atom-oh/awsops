@@ -443,6 +443,62 @@ describe('anfwLogsAnalysis', () => {
       dateSpy.mockRestore();
     }
   });
+
+  it('alertTotals 쿼리가 실패하면 totalAlerts는 0이 아니라 null — 성공한 다른 alert 쿼리는 유지 (리뷰 MAJOR 라운드10)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const q = cmd.input.queryString as string;
+        // totals 쿼리(그룹by 없이 count(*)만)만 실패시키고 나머지 alert 쿼리는 성공시킨다.
+        if (!q.includes('by') && q.includes('stats count')) throw new Error('boom totals');
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') {
+        return { status: 'Complete', results: [row({ sid: '5', sig: 'x', cnt: 3 })] };
+      }
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('alertTotals');
+    // totals만 실패했을 뿐 — 0건이 아니라 "확인 불가"로 표현되어야 하고, 이미 받아온
+    // topSignatures 표는 살아 있어야 한다(totalAlerts>0 게이트였다면 여기서 숨겨졌을 것).
+    expect(a.alert!.totalAlerts).toBeNull();
+    expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'x', value: 3 }]);
+  });
+
+  it('51개 이상 그룹으로 청크가 갈린 리전이 있으면 alertTopNPartial을 failed에 표시 (리뷰 MAJOR 라운드10)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    const groupNames = Array.from({ length: 51 }, (_, i) => `/aws/network-firewall/fw${i}/alert`);
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'DescribeLogGroupsCommand': return { logGroups: groupNames.map((logGroupName) => ({ logGroupName })) };
+        case 'StartQueryCommand': return { queryId: 'q' };
+        case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 1 })] };
+        default: return {};
+      }
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('alertTopNPartial');
+  });
+
+  it('GetQueryResults가 던지면(스로틀 등) 데드라인 초과 경로와 동일하게 StopQuery를 시도 — 과금 쿼리를 방치하지 않음 (리뷰 MINOR 라운드10)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    let stopQueryCalled = false;
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'StartQueryCommand': return { queryId: 'q' };
+        case 'GetQueryResultsCommand': throw new Error('ThrottlingException');
+        case 'StopQueryCommand': stopQueryCalled = true; return {};
+        default: return {};
+      }
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(stopQueryCalled).toBe(true);
+    expect(a.failed).toContain('alertTotals');
+  });
 });
 
 /** 발견 폴백용 mock: DescribeLogGroups가 관례 이름 2개 반환 + 최소 Insights 응답. */

@@ -1221,6 +1221,8 @@ export const TERMS: Record<string, Pair> = {
   '해당 집계는 실제보다 적을 수 있습니다.': { en: 'That aggregate may be lower than reality.', zh: '该汇总数据可能低于实际值。', ja: 'その集計値は実際より少ない可能性があります。' },
   'CloudWatch Logs 대상 ALERT 로그 없음': { en: 'No ALERT logs with a CloudWatch Logs destination', zh: '没有以 CloudWatch Logs 为目标的 ALERT 日志', ja: 'CloudWatch Logs 宛ての ALERT ログなし' },
   'CloudWatch Logs 대상 FLOW 로그 없음': { en: 'No FLOW logs with a CloudWatch Logs destination', zh: '没有以 CloudWatch Logs 为目标的 FLOW 日志', ja: 'CloudWatch Logs 宛ての FLOW ログなし' },
+  '확인 불가 (로깅 구성 조회 실패 — ALERT 로그 유무 미확인)': { en: 'Unconfirmed (logging config lookup failed — ALERT log presence unknown)', zh: '无法确认（日志配置查询失败 — ALERT 日志是否存在未知）', ja: '確認不可（ロギング構成の照会に失敗 — ALERT ログの有無は未確認）' },
+  '확인 불가 (로깅 구성 조회 실패 — FLOW 로그 유무 미확인)': { en: 'Unconfirmed (logging config lookup failed — FLOW log presence unknown)', zh: '无法确认（日志配置查询失败 — FLOW 日志是否存在未知）', ja: '確認不可（ロギング構成の照会に失敗 — FLOW ログの有無は未確認）' },
   '알럿': { en: 'Alerts', zh: '告警', ja: 'アラート' },
   'Flow 로그 분석': { en: 'Flow log analysis', zh: 'Flow 日志分析', ja: 'Flow ログ分析' },
   'Stateful 엔진이 본 플로우(5-tuple·바이트) — Top talker와 프로토콜 분포': { en: 'Flows seen by the stateful engine (5-tuple, bytes) — top talkers and protocol distribution', zh: '有状态引擎观察到的流（5 元组·字节）— Top talker 与协议分布', ja: 'ステートフルエンジンが見たフロー（5-tuple・バイト）— Top talker とプロトコル分布' },
