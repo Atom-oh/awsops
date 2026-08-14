@@ -234,6 +234,15 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 경우 그 리전이 "발견됨"으로 빠져 FLOW 카드가 unknown을 확정 없음으로 렌더링했다).
     for (const region of loggingUnknownByType.ALERT) failed.push(`logDiscoveryEmpty:${region}:ALERT`);
     for (const region of loggingUnknownByType.FLOW) failed.push(`logDiscoveryEmpty:${region}:FLOW`);
+    // 리뷰 MAJOR(확정, 라운드14 — 라운드13 자체 리뷰 게이트): logDiscoveryEmpty가
+    // failed[]에 들어가 배너는 뜨지만, 그걸로 끝이었다 — targets는 이미 애매한 이름의
+    // 그룹으로 채워져 있어(쿼리는 안전하게 실행) alert/flow 자체는 null이 아니고, 그
+    // 성공한(그러나 무관할 수 있는) 쿼리가 진짜 0행을 반환하면 totalAlerts/totalFlows가
+    // 확정 0으로 계산된다 — 배너 옆에 "0"이 뜨는 건 라운드10/11이 alertTotals/
+    // flowTotals 쿼리 실패에 대해 이미 MAJOR로 고친 것과 정확히 같은 패턴. 이 리전이
+    // unknown인 타입은 totals 자체를 null로 만들어 같은 계약을 여기도 적용한다.
+    const alertDiscoveryUnknown = loggingUnknownByType.ALERT.length > 0;
+    const flowDiscoveryUnknown = loggingUnknownByType.FLOW.length > 0;
     // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().degradedRegions) 그
     // 리전 방화벽들의 로깅 구성을 원래 확인조차 못 했다 — "로그 없음"과 구분되는 별도 키.
     if (firewallDiscoveryDegraded) failed.push('firewallDiscovery');
@@ -341,7 +350,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         // 어긴 것. 게다가 그 확정 0이 아래 topSignatures 그리드의 표시 여부까지
         // 가려서, topN 쿼리는 성공했는데 totals만 실패한 경우 이미 받아온 표까지
         // 숨겨졌다(그리드 게이트는 아래에서 topSignatures.length로 교체).
-        totalAlerts: failed.includes('alertTotals') ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
+        totalAlerts: (failed.includes('alertTotals') || alertDiscoveryUnknown) ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         byAction: merge(byAction, 'action'),
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
         topSources: merge(topSrc, 'src'),
@@ -395,7 +404,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       // "조회 실패"와 구분 안 됐고, 그 확정 0이 아래 시각화 게이트(totalFlows>0)까지
       // 가려 이미 성공한 byProto/topTalkers 차트를 숨겼다(alert 쪽에서 라운드10에
       // 고친 것과 정확히 같은 버그 계급 — flow 쪽에 반영이 빠졌던 것).
-      const flowTotalsFailed = failed.includes('flowTotals');
+      const flowTotalsFailed = failed.includes('flowTotals') || flowDiscoveryUnknown;
       flow = {
         totalFlows: flowTotalsFailed ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         totalBytes: flowTotalsFailed ? null : totals.reduce((s, r) => s + num(r.bytes), 0),

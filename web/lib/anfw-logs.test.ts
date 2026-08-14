@@ -327,6 +327,14 @@ describe('anfwLogsAnalysis', () => {
     expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
     // 쿼리는 여전히 안전하게 양쪽 타입에 시도된다 — unknown 표시와 querying은 별개.
     expect(a.targets.map((t) => t.type).sort()).toEqual(['ALERT', 'FLOW']);
+    // 리뷰 MAJOR(라운드14): unknown 신호가 failed[]에만 있고 값 계약에 반영 안 되면,
+    // 애매한 그룹의 (실제로 무관할 수 있는) 성공한 빈 쿼리 결과가 확정 0으로 계산돼
+    // 배너 옆에 "0"이 뜬다 — alertTotals/flowTotals 쿼리 실패와 동일하게 null이어야
+    // "확인 불가"로 렌더링된다(page.tsx의 alert.totalAlerts==null / flow.totalFlows==null
+    // 인라인 표시 분기).
+    expect(a.alert!.totalAlerts).toBeNull();
+    expect(a.flow!.totalFlows).toBeNull();
+    expect(a.flow!.totalBytes).toBeNull();
   });
 
   it('Insights 폴링은 anfwLogsAnalysis 진입 시점부터 계산된 공유 데드라인을 넘기면 중단(StopQuery)하고 failed로 표시 (리뷰 MAJOR 라운드7)', async () => {
