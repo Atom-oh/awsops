@@ -337,6 +337,36 @@ describe('anfwLogsAnalysis', () => {
     expect(a.flow!.totalBytes).toBeNull();
   });
 
+  it('구성 조회 거부 + 발견된 로그 그룹 이름에 discriminator 토큰이 방화벽 이름 세그먼트에 우연히 박혀 있어도(예: "workflow-prod") 관례 명명 ALERT 그룹은 정상 발견 확정됨 (리뷰 MAJOR 라운드15)', async () => {
+    // "workflow-prod"는 "flow"를 부분 문자열로 포함하지만 토큰(비영숫자로 분리) 기준으로는
+    // "workflow"이지 "flow"가 아니다 — whole-name substring 판정이면 이 리전의 ALERT조차
+    // "애매함"으로 잘못 분류돼 영구히 unknown이 된다. 실제 관례 명명 ALERT 그룹은 정상
+    // 발견 확정돼야 하고(FLOW는 커스텀 명명이라 여전히 못 찾았으므로 FLOW만 unknown).
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/workflow-prod/alert' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+  });
+
+  it('접두사 스캔 자체가 예외로 실패(discoveryFailed)하면 그 리전에 실제 성공한 CWL 대상이 있어도 totalAlerts/totalFlows는 null (리뷰 MAJOR 라운드15)', async () => {
+    // loggingUnknownByType에만 걸린 null 판정은 "스캔이 정상 실행되고 0건"(덜 심각)만
+    // 잡는다 — "스캔 자체가 예외로 죽음"(discoveryFailed, 더 심각)이나 방화벽 목록 조회
+    // 자체가 실패(firewallDiscoveryDegraded)한 경우는 반영되지 않아, 더 심각한 실패가
+    // 확정 숫자로 렌더링되는 역전이 생긴다. 여기서는 firewallDiscoveryDegraded로 검증.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw()], degradedRegions: ['us-west-2'] });
+    mockInsights(() => [{ cnt: 3 }]);
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('firewallDiscovery');
+    expect(a.alert!.totalAlerts).toBeNull();
+    expect(a.flow!.totalFlows).toBeNull();
+  });
+
   it('Insights 폴링은 anfwLogsAnalysis 진입 시점부터 계산된 공유 데드라인을 넘기면 중단(StopQuery)하고 failed로 표시 (리뷰 MAJOR 라운드7)', async () => {
     // anfwAnalysis()의 콜드 fan-out + 45s 폴링이 겹치면 60s 라우트 예산을 넘길 수 있다는
     // 것이 라운드7 MAJOR였다 — 데드라인이 anfwLogsAnalysis 호출 "시점"부터 공유돼야

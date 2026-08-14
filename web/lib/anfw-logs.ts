@@ -197,8 +197,16 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
           // 쿼리는 여전히 양쪽에 실행하되(실제로 둘 다/어느 한쪽 담고 있을 가능성에
           // 대비 — 헛다리 짚어도 event_type 필터 덕에 무해), 어느 쪽 unknown 신호도
           // 끄지 않는다. 한쪽 토큰만 포함한 명확한 이름만 그 타입의 발견 확정 증거로 인정.
-          const isAlert = lower.includes('alert');
-          const isFlow = lower.includes('flow');
+          // 리뷰 MAJOR(확정, 라운드15): 위 판정을 whole-name substring(`includes`)으로
+          // 하면 discriminator 토큰이 이름의 다른 부분(방화벽 이름 세그먼트 등)에 우연히
+          // 박혀 있어도 매칭된다 — 예: `workflow-prod`엔 "flow"가, `netflow-edge`엔도
+          // "flow"가 포함되지만 실제로는 alert 전용 컨벤션 그룹이다. 경로를 영숫자 아닌
+          // 문자(`/`, `-`, `_`, `.`)로 토큰화해 토큰 단위로 판정 — "workflow"/"netflow"는
+          // "flow"로 시작하는 토큰이 아니므로 매칭되지 않지만, "flow-alerts"의 "flow"
+          // 토큰과 "alerts"(복수형, prefix 허용)는 여전히 매칭된다.
+          const tokens = lower.split(/[^a-z0-9]+/).filter(Boolean);
+          const isAlert = tokens.some((t) => t.startsWith('alert'));
+          const isFlow = tokens.some((t) => t.startsWith('flow'));
           if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
           if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
           if (isAlert && !isFlow) foundByType.ALERT = true;
@@ -241,8 +249,15 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 확정 0으로 계산된다 — 배너 옆에 "0"이 뜨는 건 라운드10/11이 alertTotals/
     // flowTotals 쿼리 실패에 대해 이미 MAJOR로 고친 것과 정확히 같은 패턴. 이 리전이
     // unknown인 타입은 totals 자체를 null로 만들어 같은 계약을 여기도 적용한다.
-    const alertDiscoveryUnknown = loggingUnknownByType.ALERT.length > 0;
-    const flowDiscoveryUnknown = loggingUnknownByType.FLOW.length > 0;
+    // 리뷰 MAJOR(확정, 라운드15): 위 null 판정을 loggingUnknownByType에만 걸면,
+    // discoverRegions 루프 자체가 던져서 discoveryFailed=true가 된 리전이나 방화벽
+    // 목록 조회 자체가 실패한 firewallDiscoveryDegraded 리전은 여기 반영되지 않는다 —
+    // "접두사 스캔이 예외 없이 실행돼 0건"(덜 심각)은 null이 되는데 "스캔 자체가
+    // 예외로 죽음"(더 심각)은 그대로 확정 숫자로 렌더링되는 역전이 발생한다. 두 실패
+    // 모드 모두 두 타입 모두를 unknown으로 taint한다(어느 타입이 원인인지 구분할 수
+    // 없으므로 보수적으로 둘 다).
+    const alertDiscoveryUnknown = loggingUnknownByType.ALERT.length > 0 || discoveryFailed || firewallDiscoveryDegraded;
+    const flowDiscoveryUnknown = loggingUnknownByType.FLOW.length > 0 || discoveryFailed || firewallDiscoveryDegraded;
     // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().degradedRegions) 그
     // 리전 방화벽들의 로깅 구성을 원래 확인조차 못 했다 — "로그 없음"과 구분되는 별도 키.
     if (firewallDiscoveryDegraded) failed.push('firewallDiscovery');
