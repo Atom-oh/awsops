@@ -412,7 +412,15 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
               passedPackets: pick('pass'), droppedPackets: pick('drop'),
               rejectedPackets: pick('rej'), invalidDropped: pick('invdrop'), otherDropped: pick('othdrop'),
               streamExceptionPackets: pick('sep'),
-              tlsReceivedPackets: pick('tlsrecv'), tlsPassedPackets: pick('tlspass'),
+              // 리뷰 MAJOR(확정, 라운드8): recv/bytes와 같은 이중 집계 위험 — TLS 검사도
+              // stateless 엔진을 먼저 통과하므로 tlsrecv를 pick(엔진 합산)으로 읽으면
+              // Stateful로 넘어간 동일 트래픽이 다시 잡혀 recv/bytes를 고친 것과 같은
+              // 버그가 재발한다. pass/drop/rej(최종 처분 엔진에서 한 번만 발행)와 달리
+              // recv 계열은 항상 pickWire(Stateless만). ListMetrics로 발견한 dimension
+              // tuple 자체가 TLS 메트릭에 그대로 적용 가능한지는 TLS 검사 활성 방화벽
+              // 실측으로 아직 확인 못함 — 값이 계속 null이면 "TLS 검사 미사용"과 구분이
+              // 안 되는 잔여 리스크가 있다(UI는 이미 null을 미사용처럼 honest하게 표시).
+              tlsReceivedPackets: pickWire('tlsrecv'), tlsPassedPackets: pick('tlspass'),
               tlsDroppedPackets: pick('tlsdrop'), tlsRejectedPackets: pick('tlsrej'),
               // toPrecision(2)(유효숫자 2자리)는 아주 작은 비율에서 "1e-4%"처럼 지수 표기로
               // 렌더링된다(리뷰 MINOR) — 소수 2자리 고정으로 항상 일반 표기 유지.

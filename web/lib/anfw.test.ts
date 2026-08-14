@@ -205,6 +205,21 @@ describe('anfwAnalysis', () => {
     expect(rg2.unassociated).toBe(false);
   });
 
+  it('TLS 수신 패킷도 recv/bytes와 동일하게 Engine=Stateless만 채택 — Stateful 재발행 이중 집계 방지 (리뷰 MAJOR 라운드8)', async () => {
+    mockDb([]);
+    mockNfw();
+    // Stateless 통과 후 Stateful로 forward_to_sfe된 트래픽은 TLS 검사 메트릭도 두 엔진
+    // 모두에서 발행될 수 있다 — pick(엔진 합산)으로 읽으면 recv/bytes에서 이미 고친
+    // 이중 집계가 tlsrecv에서 재발한다. pickWire(Stateless만)를 써야 한다.
+    mockCw({ tlsrecv_i0: 500, tlsrecv_i1: 480, tlspass_i0: 490, tlspass_i1: 470 });
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    const f = a.firewalls[0];
+    expect(f.tlsReceivedPackets).toBe(500); // Stateful tlsrecv(480)는 제외
+    // pass/drop/rej는 최종 처분 엔진에서 한 번만 발행되므로 엔진 합산 유지(변경 없음).
+    expect(f.tlsPassedPackets).toBe(960);
+  });
+
   it('룰 본문(RulesSource)은 어떤 형태로도 응답에 실리지 않음', async () => {
     mockDb([]);
     mockNfw();

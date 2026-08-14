@@ -50,6 +50,10 @@ type Row = Record<string, string>;
 // 아니라 남은 예산만큼만 기다리므로, 앞단(anfwAnalysis)이 오래 걸렸으면 폴링은 그만큼
 // 짧게 남고 — 개별 쿼리가 실패로 끝나 failed[]에 표시될 뿐 전체 패널이 504로 죽지 않는다.
 async function runInsights(region: string, groups: string[], query: string, rangeSec: number, deadlineAt: number): Promise<Row[]> {
+  // 리뷰 MINOR(확정, 라운드8): 데드라인 검사가 폴링 루프 안에만 있어서, 예산이 이미
+  // 소진된 뒤에도 새 StartQuery를 계속 만들어 냈다(billed) — 만들자마자 폴링 루프가
+  // 0회 반복하고 StopQuery로 취소하니 결과는 같지만 불필요한 과금 쿼리가 나간다.
+  if (Date.now() >= deadlineAt) throw new Error('Insights query deadline already exceeded');
   const end = Math.floor(Date.now() / 1000);
   const { queryId } = await logs(region).send(new StartQueryCommand({
     logGroupNames: groups, queryString: query, startTime: end - rangeSec, endTime: end, limit: 1000,
@@ -205,10 +209,24 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
 
     // 같은 리전의 그룹들을 하나의 쿼리로 묶는다 — `logGroupNames`는 리전당 한 번만
     // 호출 가능해 리전이 다른 그룹은 각자 별도 쿼리로 남는다(대개 리전 1개).
+    // 리뷰 MAJOR(확정, 라운드8): `StartQuery`의 `logGroupNames`는 API 상한이 50개다 —
+    // 접두사 발견 폴백이 `/aws/network-firewall` 전체를 훑으므로 그 리전에 51개 이상의
+    // 그룹이 있으면(관례 명명이 흔한 계정에서 realistic) 청크 없이 한 번에 넘겨
+    // InvalidParameterException으로 그 리전·카테고리 전체 분석이 죽는다. 50개씩 청크로
+    // 쪼개 각 청크를 독립 쿼리로 실행 — runMerged/runMergedWindow는 이미 [region, groups]
+    // 목록을 Promise.all로 병렬 실행해 병합하므로, 같은 리전이 여러 청크로 갈라져도
+    // 그대로 추가 항목처럼 처리된다(로직 변경 불필요).
+    const CWL_GROUPNAMES_MAX = 50;
     const groupByRegion = (ts: AnfwLogTarget[]): [string, string[]][] => {
       const m = new Map<string, string[]>();
       for (const t of ts) m.set(t.region, [...(m.get(t.region) ?? []), t.group]);
-      return [...m.entries()];
+      const out: [string, string[]][] = [];
+      for (const [region, groups] of m) {
+        for (let i = 0; i < groups.length; i += CWL_GROUPNAMES_MAX) {
+          out.push([region, groups.slice(i, i + CWL_GROUPNAMES_MAX)]);
+        }
+      }
+      return out;
     };
 
     const runMerged = async (ts: AnfwLogTarget[], key: string, query: string): Promise<Row[]> => {

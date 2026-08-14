@@ -1228,7 +1228,7 @@ export const TERMS: Record<string, Pair> = {
   '전송량': { en: 'Transferred', zh: '传输量', ja: '転送量' },
   '목적지': { en: 'Destination', zh: '目标', ja: '宛先' },
   '구성 변경 감사': { en: 'Change audit', zh: '配置变更审计', ja: '構成変更監査' },
-  'CloudTrail 변경 이벤트 — 누가 방화벽/정책/룰을 바꿨는지 (조회 범위 90일, 리전당 최근 30건)': { en: 'CloudTrail change events — who changed firewalls/policies/rules (90-day window, last 30 per region)', zh: 'CloudTrail 变更事件 — 谁更改了防火墙/策略/规则（90 天范围，每个区域最近 30 条）', ja: 'CloudTrail 変更イベント — 誰がファイアウォール/ポリシー/ルールを変更したか（90 日間、リージョンごとに直近 30 件）' },
+  'CloudTrail 변경 이벤트 — 누가 방화벽/정책/룰을 바꿨는지 (조회 범위 90일, 전체 최근 50건까지)': { en: 'CloudTrail change events — who changed firewalls/policies/rules (90-day window, up to the most recent 50 overall)', zh: 'CloudTrail 变更事件 — 谁更改了防火墙/策略/规则（90 天范围，全部最多显示最近 50 条）', ja: 'CloudTrail 変更イベント — 誰がファイアウォール/ポリシー/ルールを変更したか（90 日間、全体で直近最大 50 件）' },
   '조회 범위(90일) 내 변경 이벤트 없음': { en: 'No change events within the 90-day lookup window', zh: '90 天查询范围内无变更事件', ja: '90 日間の照会範囲内に変更イベントなし' },
   '해당 리전은 변경 이벤트 조회 자체가 실패해 "변경 없음"을 확정할 수 없습니다.': { en: 'The change-event lookup itself failed for that region, so "no changes" cannot be confirmed.', zh: '该区域的变更事件查询本身失败，无法确认"无变更"。', ja: '該当リージョンでは変更イベントの照会自体が失敗したため、「変更なし」を確定できません。' },
   '조회 실패로 변경 이벤트 유무를 확인할 수 없습니다': { en: 'The lookup failed — whether change events occurred cannot be confirmed', zh: '查询失败 — 无法确认是否存在变更事件', ja: '照会に失敗 — 変更イベントの有無を確認できません' },
