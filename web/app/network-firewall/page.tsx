@@ -694,18 +694,29 @@ export default function NetworkFirewallPage() {
                     </div>
                   )}
                   {logsData.alert == null ? (
-                    <div className="px-4 py-3 text-[13px] text-ink-400">{tt('CloudWatch Logs 대상 ALERT 로그 없음')}</div>
+                    <div className="px-4 py-3 text-[13px] text-ink-400">
+                      {/* Flow 카드와 동일하게 발견 실패(firewallDiscovery/logDiscovery*)는
+                          "로그 없음"이 아니라 "확인 불가"로 구분 표시. */}
+                      {logsData.failed.some((k) => k === 'firewallDiscovery' || k.startsWith('logDiscovery'))
+                        ? tt('확인 불가 (로깅 구성 조회 실패 — ALERT 로그 유무 미확인)')
+                        : tt('CloudWatch Logs 대상 ALERT 로그 없음')}
+                    </div>
                   ) : (
                     <>
                       <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-[13px]">
-                        <span className="font-semibold">{tt('알럿')} {logsData.alert.totalAlerts.toLocaleString()}</span>
+                        {/* 리뷰 MAJOR(라운드10): totalAlerts는 조회 실패 시 null(0과 구분) —
+                            그대로 0으로 렌더링하면 "조회 실패"가 "알럿 0건"처럼 보인다. */}
+                        <span className="font-semibold">{tt('알럿')} {logsData.alert.totalAlerts == null ? tt('확인 불가') : logsData.alert.totalAlerts.toLocaleString()}</span>
                         {logsData.alert.byAction.map((a) => (
                           <Badge key={a.name} tone={a.name === 'blocked' ? 'negative' : 'neutral'} variant="soft">
                             {`${a.name} ${a.value.toLocaleString()}`}
                           </Badge>
                         ))}
                       </div>
-                      {logsData.alert.totalAlerts > 0 && (
+                      {/* 리뷰 MAJOR(라운드10): totalAlerts>0 게이트는 totals 쿼리만 실패해도
+                          이미 성공적으로 받아온 topSignatures/topSources/topDests 표까지 숨겼다
+                          — 표 자체의 유무(topSignatures.length)로 게이트를 교체. */}
+                      {logsData.alert.topSignatures.length > 0 && (
                         <div className="grid gap-4 px-4 pb-3 lg:grid-cols-2">
                           <div className="overflow-x-auto">
                             <table className="w-full">
@@ -761,8 +772,21 @@ export default function NetworkFirewallPage() {
             >
               {logsErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('로그 분석 실패')}: {logsErr}</div>}
               {!logsData && !logsErr && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로그 집계 중… (Logs Insights)')}</div>}
+              {/* 리뷰 MAJOR(라운드10): 이 카드에는 failed[] 배너가 없어, resolveTargets가
+                  degrade(firewallDiscovery/logDiscovery*)돼 200으로 응답이 와도 "FLOW 로그
+                  없음"이 확정 부재처럼 보였다 — Alert 카드와 동일하게 배너를 렌더링. */}
+              {logsData && logsData.failed.length > 0 && (
+                <div className="flex items-start gap-2 px-4 pt-3 text-[12px] text-warning-text">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>{tt('일부 로그 그룹 조회 실패')} ({logsData.failed.join(', ')}) — {tt('해당 집계는 실제보다 적을 수 있습니다.')}</span>
+                </div>
+              )}
               {logsData && (logsData.flow == null ? (
-                <div className="px-4 py-3 text-[13px] text-ink-400">{tt('CloudWatch Logs 대상 FLOW 로그 없음')}</div>
+                <div className="px-4 py-3 text-[13px] text-ink-400">
+                  {logsData.failed.some((k) => k === 'firewallDiscovery' || k.startsWith('logDiscovery'))
+                    ? tt('확인 불가 (로깅 구성 조회 실패 — FLOW 로그 유무 미확인)')
+                    : tt('CloudWatch Logs 대상 FLOW 로그 없음')}
+                </div>
               ) : (
                 <>
                   <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-[13px]">

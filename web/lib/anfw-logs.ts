@@ -59,19 +59,27 @@ async function runInsights(region: string, groups: string[], query: string, rang
     logGroupNames: groups, queryString: query, startTime: end - rangeSec, endTime: end, limit: 1000,
   }));
   if (!queryId) return [];
-  while (Date.now() < deadlineAt) {
-    const res = await logs(region).send(new GetQueryResultsCommand({ queryId }));
-    if (res.status === 'Complete') {
-      return (res.results ?? []).map((row) =>
-        Object.fromEntries(row.filter((f) => f.field && f.field !== '@ptr').map((f) => [f.field as string, f.value ?? ''])));
+  // 리뷰 MINOR(확정, 라운드10): StopQuery는 데드라인 초과 경로에만 있었다 — GetQueryResults
+  // 자체가 던지면(스로틀/일시적 5xx) 쿼리를 취소하지 않고 그대로 함수를 빠져나가, 이 파일에서
+  // 가장 비싼 호출(GB 스캔 과금)이 백그라운드에서 계속 실행·과금된다. 완료 외의 모든 종료
+  // 경로(예외/Failed·Cancelled·Timeout/데드라인)에서 StopQuery를 시도하도록 통일.
+  try {
+    while (Date.now() < deadlineAt) {
+      const res = await logs(region).send(new GetQueryResultsCommand({ queryId }));
+      if (res.status === 'Complete') {
+        return (res.results ?? []).map((row) =>
+          Object.fromEntries(row.filter((f) => f.field && f.field !== '@ptr').map((f) => [f.field as string, f.value ?? ''])));
+      }
+      if (res.status === 'Failed' || res.status === 'Cancelled' || res.status === 'Timeout') {
+        throw new Error(`Insights query ${res.status}`);
+      }
+      await new Promise((r) => setTimeout(r, 1000));
     }
-    if (res.status === 'Failed' || res.status === 'Cancelled' || res.status === 'Timeout') {
-      throw new Error(`Insights query ${res.status}`);
-    }
-    await new Promise((r) => setTimeout(r, 1000));
+    throw new Error('Insights query deadline reached');
+  } catch (e) {
+    await logs(region).send(new StopQueryCommand({ queryId })).catch(() => {});
+    throw e;
   }
-  await logs(region).send(new StopQueryCommand({ queryId })).catch(() => {});
-  throw new Error('Insights query deadline reached');
 }
 
 export interface AnfwLogTarget {
@@ -81,7 +89,8 @@ export interface AnfwLogTarget {
 }
 
 export interface AnfwAlertAnalytics {
-  totalAlerts: number;
+  /** alertTotals 쿼리 자체가 실패하면 null — 0과 구분해 "0건"이 "조회 실패"를 가리지 않게 함. */
+  totalAlerts: number | null;
   byAction: { name: string; value: number }[];
   topSignatures: { sid: string; signature: string; value: number }[];
   topSources: { name: string; value: number }[];
@@ -265,6 +274,11 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 훨씬 크게(100) 잡아 오차 범위를 "리전 수 × (100-10)" 꼬리로 좁힌다(완전 제거는
     // 아니지만 실사용 규모에서 사실상 무시 가능한 수준으로 축소).
     const PER_REGION_OVERFETCH = 100;
+    // 리뷰 MAJOR(라운드10): alertTargets는 flowTargets와 동일하게 50개 초과 시 리전별로
+    // 여러 청크로 쪼개진다(위 groupByRegion) — flow 쪽만 anyRegionChunked로 신호를 남기고
+    // alert 쪽은 없었다. 청크당 limit(PER_REGION_OVERFETCH)이 사실상 "리전 전체"가 아니라
+    // "청크"에 적용돼 무신호 truncation이 재도입되므로 alert에도 동일 신호를 남긴다.
+    if (anyRegionChunked(alertTargets)) failed.push('alertTopNPartial');
     let alert: AnfwAlertAnalytics | null = null;
     if (alertTargets.length > 0) {
       const [totals, byAction, topSig, topSrc, topDst] = await Promise.all([
@@ -291,7 +305,13 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         sigMap.set(key, cur);
       }
       alert = {
-        totalAlerts: totals.reduce((s, r) => s + num(r.cnt), 0),
+        // 리뷰 MAJOR(라운드10): alertTotals 쿼리 자체가 실패하면 totals=[]가 되고
+        // reduce의 결과는 "0건 발생"과 구분 안 되는 0이 된다 — 이 페이지가 다른 모든
+        // 경로(failed[] 배너)에서 지키는 "unknown ≠ absent" 계약을 이 필드 자신이
+        // 어긴 것. 게다가 그 확정 0이 아래 topSignatures 그리드의 표시 여부까지
+        // 가려서, topN 쿼리는 성공했는데 totals만 실패한 경우 이미 받아온 표까지
+        // 숨겨졌다(그리드 게이트는 아래에서 topSignatures.length로 교체).
+        totalAlerts: failed.includes('alertTotals') ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         byAction: merge(byAction, 'action'),
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
         topSources: merge(topSrc, 'src'),
