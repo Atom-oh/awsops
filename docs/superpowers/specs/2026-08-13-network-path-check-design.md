@@ -187,7 +187,9 @@ that doesn't apply to a given candidate is omitted from that candidate's step li
   that candidate is `failed`, not `conditional` — zero evidence was gathered, which is a different case
   from "some evidence, still uncertain"
 
-**Candidate kind** — `discover` tags each candidate `resolved` or `hypothesis`:
+**Candidate kind** — `discover` tags each candidate `resolved` or `hypothesis` and writes one
+`network_path_run_candidates` row per candidate immediately (see Aurora, below); `conclude` fills in
+that row's `status` and `first_blocker` once the per-candidate reduction is computed:
 - `resolved`: discovery found genuine, verified redundancy for this specific flow — ECMP routes, a
   multi-target-group/multi-healthy-target ALB backend, multiple healthy TGW attachments — where traffic
   for this flow may legitimately take any of the listed candidates and all of them being viable is the
@@ -287,6 +289,19 @@ CREATE TABLE network_path_runs (
   worker_job_id         text UNIQUE,
   created_at            timestamptz NOT NULL DEFAULT now(),
   finished_at           timestamptz
+);
+
+-- 리뷰(round 7 self-check): candidate_kind(resolved|hypothesis, 위 Result semantics)와 매 후보의
+-- per-candidate status는 정의는 했지만 어디에도 저장할 곳이 없었다 — every step row로 candidate_kind를
+-- 중복 저장하는 것보다, 후보 단위로 한 번만 저장하는 별도 테이블이 정규화에 맞다. per-candidate
+-- status도 매번 step에서 재계산하지 않고 `conclude` 단계에서 여기 기록한다.
+CREATE TABLE network_path_run_candidates (
+  run_id          text NOT NULL REFERENCES network_path_runs(id) ON DELETE CASCADE,
+  candidate_id    text NOT NULL,
+  candidate_kind  text NOT NULL,  -- 'resolved' | 'hypothesis' — discover 단계에서 확정, 이후 불변
+  status          text,           -- 이 후보의 per-candidate status, conclude 전까지 NULL
+  first_blocker   text,           -- 표시용: 이 후보의 첫 블로커 layer/summary (있으면)
+  PRIMARY KEY (run_id, candidate_id)
 );
 
 CREATE TABLE network_path_run_steps (
