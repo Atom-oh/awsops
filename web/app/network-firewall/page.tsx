@@ -811,11 +811,13 @@ export default function NetworkFirewallPage() {
               </div>
             )}
 
-            {/* ⑨ 구성 변경 감사 — CloudTrail 변경(mutation) 이벤트만 이름별 조회
-                (EventSource 단위 조회는 이 앱 자신의 read 이벤트가 목록을 가득 채움 — 실측) */}
+            {/* ⑨ 구성 변경 감사 — CloudTrail 변경(mutation) 이벤트만 계정 전체에서 조회한 뒤
+                클라이언트에서 NFW EventSource로 필터(라운드8: EventSource 단위 조회는 이 앱
+                자신의 read 이벤트가 목록을 가득 채워 실제 변경 이벤트가 90일치가 아니라
+                최근 몇 시간분만 보이는 문제가 있었음 — ReadOnly=false 필터로 전환) */}
             <Card
               title="구성 변경 감사"
-              subtitle="CloudTrail 변경 이벤트 — 누가 방화벽/정책/룰을 바꿨는지 (조회 범위 90일, 리전당 최근 30건)"
+              subtitle="CloudTrail 변경 이벤트 — 누가 방화벽/정책/룰을 바꿨는지 (조회 범위 90일, 전체 최근 50건까지)"
               padded={false}
             >
               {auditErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('감사 이벤트 조회 실패')}: {auditErr}</div>}

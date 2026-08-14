@@ -324,6 +324,59 @@ describe('anfwLogsAnalysis', () => {
       dateSpy.mockRestore();
     }
   });
+
+  it('한 리전에 51개 이상의 발견된 로그 그룹이 있으면 50개씩 청크로 나눠 여러 StartQuery를 실행 (리뷰 MAJOR 라운드8)', async () => {
+    // StartQuery의 logGroupNames는 API 상한이 50개 — 접두사 발견 폴백이 관례 명명과
+    // 일치하는 그룹을 51개 발견하면(현실적인 시나리오), 청크 없이 한 번에 넘기면
+    // InvalidParameterException으로 이 카테고리 분석 전체가 죽는다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    const groupNames = Array.from({ length: 51 }, (_, i) => `/aws/network-firewall/fw${i}/alert`);
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'DescribeLogGroupsCommand':
+          return { logGroups: groupNames.map((logGroupName) => ({ logGroupName })) };
+        case 'StartQueryCommand': return { queryId: 'q' };
+        case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 1 })] };
+        default: return {};
+      }
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // 51개 그룹이 발견됐으므로 최소 2개의 StartQuery(청크)가 나갔어야 하고, 어떤 단일
+    // 호출도 50개를 넘지 않았어야 한다(안 그랬으면 mock이 그대로 통과시켜 이 assertion만
+    // 으로는 API 거부를 재현하지 못하지만, 최소 "쪼갰다"는 사실은 검증 가능).
+    const calls = logsSend.mock.calls.filter(([cmd]) => (cmd as Cmd).constructor.name === 'StartQueryCommand');
+    const alertTotalsCalls = calls.filter((c) => ((c[0] as Cmd).input.queryString as string).includes("event_type = 'alert'") && ((c[0] as Cmd).input.queryString as string).includes('stats count'));
+    for (const c of calls) {
+      const groups = (c[0] as Cmd).input.logGroupNames as string[];
+      expect(groups.length).toBeLessThanOrEqual(50);
+    }
+    expect(alertTotalsCalls.length).toBeGreaterThanOrEqual(1);
+    expect(a.failed).not.toContain('alertTotals');
+  });
+
+  it('데드라인이 이미 지났으면 StartQuery 자체를 보내지 않음(폴링 진입 전에 차단) — 불필요한 과금 쿼리 방지', async () => {
+    // deadlineAt은 anfwAnalysis() 호출 "전"에 고정되므로, 그 호출이 예산을 다 써버리면
+    // (여기선 mock으로 시간을 앞당겨 시뮬레이션) runInsights 진입 시점엔 이미 데드라인을
+    // 넘긴 상태 — StartQuery조차 나가면 안 된다(폴링 루프에 들어가서야 끊기면 그 사이
+    // 이미 과금 쿼리가 생성된 뒤였다).
+    let now = 1_000_000;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    mockAnalysis.mockImplementation(async () => { now += 50_000; return { firewalls: [fw({ flowLogging: null })] }; });
+    let startQueryCalled = false;
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') { startQueryCalled = true; return { queryId: 'q' }; }
+      return {};
+    });
+    try {
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(3600);
+      expect(startQueryCalled).toBe(false);
+      expect(a.failed).toContain('alertTotals');
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
 });
 
 /** 발견 폴백용 mock: DescribeLogGroups가 관례 이름 2개 반환 + 최소 Insights 응답. */

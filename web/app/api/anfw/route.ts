@@ -38,14 +38,10 @@ export interface AnfwAuditEvent {
 }
 
 // 리뷰 MAJOR(확정, 라운드5): "리전당 최대 6페이지" 고정 상한은 리전 수가 늘어나면 여전히
-// 총 소요시간이 리전 수에 선형으로 비례해 늘어난다 — 이 앱 자신의 Describe* read
-// 이벤트도 EventSource=network-firewall.amazonaws.com에 걸리므로(ReadOnly로만 클라이언트
-// 필터) 대시보드가 자주 열리는 계정에서는 리전마다 6페이지 캡에 realistic하게 도달한다.
-// 17개 리전이면 페이싱만으로 6×17×0.6s=61.2s로 maxDuration=60/CloudFront
-// origin_read_timeout=60을 넘긴다 — "60초 예산에 맞다"는 이전 코멘트는 리전 수가 늘면
-// 거짓이 된다. 페이지 상한이 아니라 **전체 요청의 남은 시간(데드라인)**을 기준으로
-// 멈춘다 — 리전이 아무리 많아도 총 소요시간은 데드라인 근처에서 수렴하고, 데드라인
-// 안에 처리 못 한 리전은 capExhausted로 표시돼 "변경 없음"이 아니라 "확인 못 함"으로 남는다.
+// 총 소요시간이 리전 수에 선형으로 비례해 늘어난다. 페이지 상한이 아니라 **전체 요청의
+// 남은 시간(데드라인)**을 기준으로 멈춘다 — 리전이 아무리 많아도 총 소요시간은 데드라인
+// 근처에서 수렴하고, 데드라인 안에 처리 못 한 리전은 capExhausted로 표시돼 "변경 없음"이
+// 아니라 "확인 못 함"으로 남는다.
 const AUDIT_BUDGET_MS = 40_000; // maxDuration=60에서 anfwAnalysis()·응답 직렬화 여유 20s를 뺀 예산
 async function lookupNetworkFirewallMutations(region: string, deadlineAt: number): Promise<{ raw: unknown[]; failed: boolean; capExhausted: boolean }> {
   const matched: unknown[] = [];
@@ -55,18 +51,27 @@ async function lookupNetworkFirewallMutations(region: string, deadlineAt: number
   try {
     do {
       if (Date.now() >= deadlineAt) { deadlineHit = true; break; }
-      await acquireAuditPaceSlot();
+      await acquireAuditPaceSlot(region);
       // 리뷰 MAJOR(확정, 라운드6): 슬롯을 받기 전 검사만으로는 부족하다 — N개 리전이
-      // Promise.all로 동시에 이 검사를 통과한 뒤 전역 페이싱 큐에 줄서면, 큐가 소진되는
-      // 동안(최대 N×600ms) 데드라인을 이미 넘긴 뒤에도 LookupEvents를 계속 호출한다.
-      // 슬롯을 실제로 받은 "직후" 다시 검사해 데드라인 이후엔 호출 자체를 보내지 않는다.
+      // Promise.all로 동시에 이 검사를 통과한 뒤 페이싱 큐에 줄서면, 큐가 소진되는
+      // 동안 데드라인을 이미 넘긴 뒤에도 LookupEvents를 계속 호출한다. 슬롯을 실제로
+      // 받은 "직후" 다시 검사해 데드라인 이후엔 호출 자체를 보내지 않는다.
       if (Date.now() >= deadlineAt) { deadlineHit = true; break; }
+      // 리뷰 MAJOR(확정, 라운드8): EventSource=network-firewall.amazonaws.com으로
+      // 조회하면 이 앱 자신이 4분마다 발행하는 수십 건의 Describe*/List* read 이벤트가
+      // 같은 EventSource에 잡혀 역시간순 300건(6페이지×50) 윈도우를 거의 다 채운다 —
+      // 90일치를 본다고 광고하지만 실제로는 이 앱 자신의 최근 read 트래픽 몇 시간분만
+      // 보인다. 코드 자신의 예전 코멘트("EventSource 단위 조회는 이 앱 자신의 read
+      // 이벤트가 목록을 가득 채움")가 뒤에 EventSource 필터로 되돌려져 스스로 모순됐던
+      // 것 — ReadOnly(유효한 LookupAttributeKey)로 "계정 전체의 변경 이벤트만" 조회한
+      // 뒤 클라이언트에서 EventSource로 NFW만 골라낸다. 변경 이벤트는 읽기보다 훨씬
+      // 드물어 같은 페이지 수로 훨씬 넓은 시간창을 덮는다.
       const r: { Events?: { EventSource?: string; ReadOnly?: string }[]; NextToken?: string } = await ct(region).send(new LookupEventsCommand({
         MaxResults: 50,
-        LookupAttributes: [{ AttributeKey: 'EventSource', AttributeValue: 'network-firewall.amazonaws.com' }],
+        LookupAttributes: [{ AttributeKey: 'ReadOnly', AttributeValue: 'false' }],
         NextToken,
       }));
-      for (const e of r.Events ?? []) if (e.ReadOnly !== 'true') matched.push(e);
+      for (const e of r.Events ?? []) if (e.EventSource === 'network-firewall.amazonaws.com') matched.push(e);
       NextToken = r.NextToken;
       page += 1;
       if (matched.length >= 30 || page >= 6 || !NextToken) break;
@@ -78,15 +83,16 @@ async function lookupNetworkFirewallMutations(region: string, deadlineAt: number
   } catch { return { raw: matched, failed: true, capExhausted: false }; }
 }
 
-// 리뷰 MAJOR(확정): 리전별 600ms 페이싱은 각 리전의 Promise.all이 "동시에" 자기 루프를
-// 도는 동안만 유효했다 — 리전이 N개면 계정 전체 공유 ~2 TPS 쿼터를 N배로 초과했다(코드가
-// 스스로 피하려던 스로틀을 오히려 상시화). 리전·페이지 구분 없이 전역 큐 하나로
-// 직렬화 — 매 LookupEvents 호출 사이에 항상 ≥600ms를 보장한다.
-let auditPaceGate: Promise<void> = Promise.resolve();
-function acquireAuditPaceSlot(): Promise<void> {
-  const prevSlot = auditPaceGate;
+// 리뷰 MAJOR(확정, 라운드8): CloudTrail LookupEvents 쿼터는 "계정 전체 공유"가 아니라
+// **리전별**이다(codex-L4) — 리전·페이지 구분 없이 전역 큐 하나로 직렬화하면 리전이
+// 여러 개인 계정에서 실제 쿼터보다 훨씬 느리게 페이징해, 안 그래도 좁아진(위 ReadOnly
+// 필터 이후에도 여전히 유한한) 40s 예산 안에서 페이지를 덜 본다. 리전별로 독립된
+// 페이싱 게이트를 둬 각 리전이 자기 쿼터만큼 병렬로 진행하게 한다.
+const auditPaceGates = new Map<string, Promise<void>>();
+function acquireAuditPaceSlot(region: string): Promise<void> {
+  const prevSlot = auditPaceGates.get(region) ?? Promise.resolve();
   let release: () => void;
-  auditPaceGate = new Promise<void>((res) => { release = res; });
+  auditPaceGates.set(region, new Promise<void>((res) => { release = res; }));
   return prevSlot.then(() => new Promise<void>((res) => setTimeout(res, 600))).then(() => { release(); });
 }
 
@@ -118,7 +124,7 @@ async function auditEvents(): Promise<{ events: AnfwAuditEvent[]; degradedRegion
       // capExhausted도 degraded 신호다 — 페이지 상한에 걸려 남은 NextToken을 못 본
       // 상태를 "변경 없음"으로 단정하면 안 된다(리뷰 MAJOR, failed와 동일 계약).
       if (failed || capExhausted) degraded = true;
-      for (const ev of raw as { EventTime?: Date | string; EventName?: string; Username?: string; Resources?: { ResourceType?: string; ResourceName?: string }[] }[]) {
+      for (const ev of raw as { EventTime?: Date | string; EventName?: string; Username?: string; ReadOnly?: string; Resources?: { ResourceType?: string; ResourceName?: string }[] }[]) {
         const res = ev.Resources?.[0];
         out.push({
           time: ev.EventTime instanceof Date ? ev.EventTime.toISOString() : String(ev.EventTime ?? ''),
@@ -127,7 +133,11 @@ async function auditEvents(): Promise<{ events: AnfwAuditEvent[]; degradedRegion
           region,
           resourceType: res?.ResourceType?.replace(/^AWS::NetworkFirewall::/, '') ?? '',
           resourceName: res?.ResourceName?.split('/').pop() ?? '',
-          readOnly: false,
+          // 리뷰 MINOR(확정, 라운드8): 하드코딩된 false는 base(inventory/cloudtrail/events)의
+          // fail-closed 기본값과 반대 — 이제 LookupAttributes로 ReadOnly=false를 명시
+          // 요청하므로 실제로도 항상 false여야 하지만, AWS가 필드를 생략하는 예외적
+          // 경우까지 대비해 실제 값을 그대로 반영(부재 시 read로 fail-closed)한다.
+          readOnly: ev.ReadOnly !== 'false',
         });
       }
       return { region, out, degraded };
