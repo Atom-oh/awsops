@@ -1,0 +1,417 @@
+# Security Group Rules and Usage
+
+**Status:** Approved 2026-08-13.
+
+## Summary
+
+Split the current Security Groups experience into a collapsed Network navigation subgroup:
+
+- **Security Groups** - existing SG inventory
+- **Rules** - new flattened SGR inventory plus 30/90/180-day traffic evidence
+- **Usage** - the existing SG-level ENI attachment and mutual-reference analysis moved out of the
+  inventory page
+
+The default Rules analysis window is 90 days. A daily internal job processes configured S3 VPC Flow
+Log sources through Athena and persists compact, rule-level evidence in Aurora. The Rules page never
+claims a rule is definitively unused. It uses:
+
+- observed-compatible
+- overlapping
+- no observed evidence
+- unassessable
+- usage source not configured
+
+No delete or revoke action is added.
+
+## Correctness constraint: Flow Logs do not contain a matched SGR ID
+
+The customer prompt proposed querying a `security-group-rule-id` field. That field is not part of the
+VPC Flow Logs record schema. Therefore AWSops cannot attribute a flow to one exact SGR.
+
+The engine instead compares each accepted flow tuple with the rule definitions and reports compatible
+candidates. Multiple SGs and multiple overlapping rules can allow the same flow, security groups are
+stateful, and historical ENI-SG membership can be incomplete. The UI and API must never describe this
+as exact rule attribution.
+
+This also corrects wording in the current upstream/v2 implementation:
+
+- `web/lib/sg-analysis.ts` comments and UI strings that call Flow Logs rule matching "exact" become
+  "compatible traffic matching".
+- a single flow may increment more than one compatible rule; that is an overlap signal, not proof
+  that every incremented rule was evaluated by AWS.
+- `0` means no compatible observation in the inspected data, not unused.
+
+## Existing upstream/v2 baseline
+
+The design builds on the SG analysis introduced by upstream/v2 commit `dd63683e` and its review fixes
+through the current v2 head:
+
+- `web/lib/sg-analysis.ts`
+  - SG usage from ENI attachment and SG mutual references
+  - peer identification for CIDR, SG, internet, and prefix list
+  - on-demand CloudWatch Flow Logs matching with NFM peer-only fallback
+- `web/components/inventory/metrics/SgAnalysisSection.tsx`
+  - SG-level KPIs and table
+  - row-click traffic drilldown
+  - 1h, 6h, 24h, and 7d range selector
+- `web/app/api/sg/route.ts`
+  - usage summary and selected-SG hits
+
+That behavior remains available under the new Usage page.
+
+## Navigation and pages
+
+Network navigation:
+
+```text
+Security Group
+  Security Groups
+  Rules
+  Usage
+```
+
+Routes:
+
+- **Security Groups:** existing `/inventory/security_group`
+- **Rules:** `/network/security-groups/rules`
+- **Usage:** `/network/security-groups/usage`
+
+The current `SgAnalysisSection` is removed from `web/app/inventory/[type]/page.tsx` and rendered on
+the new Usage page. Its existing behavior and range selector are retained. The selected-SG drilldown
+adds a link to Rules filtered by the SG ID.
+
+The Rules page contains:
+
+- all SGRs with `sgr-*` IDs
+- SG, account, region, VPC, direction, protocol, ports, peer, and description
+- traffic-evidence status
+- compatible match count, overlap count, last observed time, effective coverage
+- 30/90/180-day selector, default 90
+- account, region, VPC, SG, direction, status, and text filters
+- CSV/JSON export
+- admin-only `Flow Log settings`
+- admin-only `Refresh scan`
+- row detail with evidence and a link to Path Check
+
+## Flow Log source configuration
+
+Many customers do not have VPC Flow Logs or Athena tables. AWSops does not create them.
+
+An administrator configures each supported account and region inside Rules:
+
+- account ID
+- region
+- Athena workgroup
+- Glue database
+- Glue table
+- enabled state
+
+The workgroup must already enforce a query-results S3 location. AWSops validates:
+
+- workgroup exists and is usable
+- database and table exist
+- table location and schema are readable
+- canonical VPC Flow Log fields can be resolved without administrator-supplied SQL
+- the table exposes Glue partitions or partition projection that supports bounded time pruning
+- the caller has Athena, Glue, and S3 access
+
+Configuration is stored in Aurora, contains no credentials, and uses the existing account role.
+Missing configuration does not hide the Rule inventory. It sets activity to `not_configured`.
+
+The minimum accepted schema resolves the AWS field names `interface-id`, `srcaddr`, `dstaddr`,
+`srcport`, `dstport`, `protocol`, `action`, `log-status`, `start`, and `end`, including their common
+Athena underscore-normalized forms. `flow-direction`, `tcp-flags`, `bytes`, and `packets` are
+optional capabilities recorded in source validation. A table without a safe partition-pruning
+strategy is rejected rather than scanned in full. Schema mapping and the discovered partition
+strategy are generated by validation and stored in `validation`; users cannot provide arbitrary
+column expressions or SQL.
+
+## Feature gate
+
+Add `sg_rule_activity_enabled`, default `false`.
+
+When false:
+
+- the Rules inventory can still be shown from live `DescribeSecurityGroupRules`
+- Flow Log source configuration, scheduled scans, manual refresh, Athena IAM, and activity
+  aggregation are disabled
+- current Usage behavior remains unchanged
+
+This separates the new recurring Athena cost from the existing SG analysis.
+
+## Data model
+
+New ULID migration:
+
+```sql
+CREATE TABLE sg_flow_sources (
+  id               bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  account_id       text NOT NULL,
+  region           text NOT NULL,
+  workgroup        text NOT NULL,
+  database_name    text NOT NULL,
+  table_name       text NOT NULL,
+  enabled          boolean NOT NULL DEFAULT true,
+  validation       jsonb NOT NULL DEFAULT '{}',
+  created_by_sub   text NOT NULL,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, region)
+);
+
+CREATE TABLE sg_rule_inventory (
+  account_id       text NOT NULL,
+  region           text NOT NULL,
+  rule_id          text NOT NULL,
+  group_id         text NOT NULL,
+  is_egress        boolean NOT NULL,
+  protocol         text NOT NULL,
+  from_port        integer,
+  to_port          integer,
+  peer_kind        text NOT NULL,
+  peer_value       text NOT NULL,
+  description      text,
+  fingerprint      text NOT NULL,
+  first_seen_at    timestamptz NOT NULL,
+  last_seen_at     timestamptz NOT NULL,
+  active           boolean NOT NULL DEFAULT true,
+  PRIMARY KEY (account_id, region, rule_id)
+);
+
+CREATE TABLE sg_eni_membership_snapshots (
+  account_id       text NOT NULL,
+  region           text NOT NULL,
+  observed_at      timestamptz NOT NULL,
+  eni_id           text NOT NULL,
+  group_ids        jsonb NOT NULL,
+  private_ips      jsonb NOT NULL,
+  PRIMARY KEY (account_id, region, observed_at, eni_id)
+);
+
+CREATE TABLE sg_rule_activity_daily (
+  account_id              text NOT NULL,
+  region                  text NOT NULL,
+  rule_id                 text NOT NULL,
+  rule_fingerprint        text NOT NULL,
+  observed_on             date NOT NULL,
+  compatible_match_count  bigint NOT NULL DEFAULT 0,
+  compatible_bytes        bigint NOT NULL DEFAULT 0,
+  overlap_match_count     bigint NOT NULL DEFAULT 0,
+  unique_eni_count        integer NOT NULL DEFAULT 0,
+  last_observed_at        timestamptz,
+  coverage                jsonb NOT NULL DEFAULT '{}',
+  PRIMARY KEY (account_id, region, rule_id, rule_fingerprint, observed_on)
+);
+
+CREATE TABLE sg_rule_scan_runs (
+  id                    text PRIMARY KEY,
+  flow_source_id        bigint NOT NULL REFERENCES sg_flow_sources(id),
+  status                text NOT NULL,
+  partition_start       timestamptz,
+  partition_end         timestamptz,
+  athena_query_id       text,
+  data_scanned_bytes    bigint,
+  rows_processed        bigint,
+  coverage              jsonb NOT NULL DEFAULT '{}',
+  error_code            text,
+  started_at            timestamptz NOT NULL DEFAULT now(),
+  finished_at           timestamptz,
+  UNIQUE (flow_source_id, partition_start, partition_end)
+);
+```
+
+Daily aggregates are retained for at least 400 days so the 180-day selector does not require a new
+Athena query. Raw flow records are not copied into Aurora.
+
+## Rule inventory
+
+Use `DescribeSecurityGroupRules` with pagination. Do not reconstruct SGR IDs from
+`DescribeSecurityGroups`, because the Rules page requires stable `sgr-*` identifiers.
+
+The daily worker upserts current rules, fingerprints the match-relevant fields, marks missing rules
+inactive, and records first/last seen times. A changed fingerprint starts a new evidence epoch in the
+UI; evidence collected for an older rule shape is not silently presented as evidence for the new
+shape.
+
+Default outbound rules are displayed and marked protected from cleanup recommendations.
+
+## Daily pipeline
+
+The daily dispatcher creates one internal job per enabled account/region source. Manual refresh uses
+an admin-only dedicated route and the same job path.
+
+For each source:
+
+1. validate the saved source metadata
+2. snapshot all current SGRs and ENI-SG memberships
+3. calculate the next unprocessed completed UTC day from the discovered S3 partition scheme
+4. run one Athena query for that account/region/day batch, not one query per SG or rule
+5. select and aggregate only fields needed for deterministic matching
+6. match accepted flows against candidate ingress or egress rules
+7. replace that day's fingerprint-scoped rule aggregates and scan coverage in one transaction
+8. advance the watermark only after the complete transaction succeeds
+
+The generic `POST /api/jobs` rejects this job type. The dispatcher submits it only from the trusted
+daily path or the admin refresh route.
+
+The scan unit is one complete UTC day, even when the underlying table is partitioned hourly.
+Backfill proceeds day by day. Reprocessing a day recomputes and replaces that day's aggregates; it
+never adds counts to existing rows. This makes retries and manual refresh idempotent.
+
+## Match model
+
+Input fields include the available equivalents of:
+
+- interface ID
+- source and destination address
+- source and destination port
+- IP protocol
+- action
+- log status
+- start/end time
+- flow direction when configured
+- TCP flags when configured
+
+Rule matching covers:
+
+- IPv4 CIDR
+- IPv6 CIDR when the source format supports it
+- SG references using the closest available ENI membership snapshot
+- managed prefix lists when entries can be resolved read-only
+- ingress and egress
+- protocol and port ranges
+
+Classification:
+
+- `observed_compatible` - at least one accepted flow is compatible with this rule
+- `overlapping` - a compatible flow also matches another rule or SG
+- `no_observed_evidence` - no compatible flow in the selected range, with sufficient configured
+  source and scan coverage
+- `unassessable` - missing fields, missing partitions, incomplete membership history, unsupported
+  peer type, source errors, or insufficient coverage
+- `not_configured` - no enabled source for this account/region
+
+Security-group statefulness means return traffic may not require a rule in the observed direction.
+TCP flags can improve initiator inference but do not make attribution exact. UDP and ICMP often
+remain ambiguous. These limitations are shown in coverage and detail text.
+
+When `flow-direction` is absent, AWSops may infer direction only when the tuple can be related
+unambiguously to an IP on the selected ENI membership snapshot. NAT, transit, missing IP history,
+and any other ambiguous case become `unassessable`; they are not forced into ingress or egress.
+
+Initial historical backfill is partial because current EC2 APIs cannot reconstruct all historical
+ENI-SG associations. The UI distinguishes:
+
+- evidence collected after AWSops began snapshotting
+- historical evidence mapped using current membership only
+
+No-observation results from the partial backfill remain lower confidence.
+
+## APIs
+
+- `GET /api/sg/rules`
+  - filters and paginates Aurora inventory/activity
+- `GET /api/sg/flow-sources`
+  - authenticated read
+- `PUT /api/sg/flow-sources`
+  - admin-only create/update and metadata validation
+- `POST /api/sg/rules/refresh`
+  - admin-only async refresh
+- existing `GET /api/sg`
+  - Usage summary, unchanged
+- existing `GET /api/sg?view=hits&id=...`
+  - Usage row drilldown, with corrected "compatible" terminology
+
+Input database, table, and workgroup identifiers are strictly validated and quoted. They are never
+concatenated from an untrusted non-admin request.
+
+## IAM and multi-account behavior
+
+When the feature is enabled, the worker needs:
+
+- Athena Start/Get/Stop query execution, scoped to configured workgroups where supported
+- Glue GetDatabase/GetTable/GetPartitions
+- S3 read on the configured Flow Log table locations
+- S3 query-result access required by the workgroup
+- EC2 DescribeSecurityGroupRules and DescribeNetworkInterfaces
+
+Target accounts use the existing `AWSopsReadOnlyRole` with an explicitly documented optional policy
+extension. The host account uses its execution role and does not self-assume.
+
+Missing permissions degrade only that account/region source to `unassessable`.
+
+## Error handling
+
+- no source -> inventory visible, activity `not_configured`
+- invalid source schema -> source `invalid`, no scan
+- one account/region failure -> other sources continue
+- Athena failure -> retain the last successful aggregate and mark it stale
+- incomplete or missing day partitions -> do not advance the watermark
+- partial ENI history -> lower coverage, never authoritative zero
+- `SKIPDATA` -> coverage warning
+- table schema drift -> validation failure until an admin updates the source
+- mapping ambiguity -> `overlapping`, not multiple exact hits
+- stale job -> existing reaper marks it failed
+- evidence overflow -> retain bounded totals and set `truncated=true`
+
+## Testing
+
+### Matching
+
+- CIDR, IPv6, SG reference, prefix list, protocol, and port-range cases
+- overlapping SG and overlapping rule cases
+- ingress and egress
+- TCP initiator and return-flow ambiguity
+- UDP/ICMP ambiguity
+- rule fingerprint changes
+- default outbound protection
+
+### Pipeline
+
+- source validation
+- partition watermark idempotency
+- one account/region batch rather than per-rule query
+- Athena pagination and terminal states
+- scan transaction rollback
+- stale-last-known-good preservation
+- partial coverage classification
+- initial backfill confidence
+- cross-account failure isolation
+
+### Authorization
+
+- source mutation and manual refresh require admin
+- read routes require authentication
+- generic jobs route rejects the job type
+- feature gate fails closed
+
+### UI
+
+- Security Groups no longer embeds `SgAnalysisSection`
+- Usage renders the moved existing analysis and hit drilldown
+- Rules renders configured, unconfigured, partial, stale, overlapping, and no-evidence states
+- no deletion control exists
+- account/region filters and 30/90/180-day windows
+- deep links between Usage, Rules, SG inventory, and Path Check
+- desktop and mobile text do not overlap
+
+## Verification
+
+1. `cd web && npx vitest run`
+2. focused worker pytest suite
+3. `cd web && npm run build`
+4. `terraform -chdir=terraform/v2/foundation validate`
+5. gate-off Terraform plan has no new scheduler, IAM, or worker resources
+6. configured test source scans one bounded partition and writes Aurora aggregates
+7. rerunning the same partition is idempotent
+8. source failure leaves the previous result visible as stale
+9. Playwright screenshots cover all three Security Group menu pages
+
+## Explicit exclusions
+
+- no SG or SGR deletion
+- no Flow Log, S3 bucket, Glue table, Athena workgroup, or partition creation
+- no exact matched-rule claim
+- no arbitrary SQL supplied by users
+- no raw Flow Log storage in Aurora
+- no autonomous remediation

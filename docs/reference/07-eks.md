@@ -49,7 +49,11 @@
 - `onboarded_eks_clusters` output returns endpoint / ARN / CA.
 - Host clusters are all in `API_AND_CONFIG_MAP` auth mode, so Access Entry works without flipping any cluster.
 
+**Out-of-band expansion (live drift note, confirmed 2026-08-11):** `onboard_eks_clusters` only enumerates the Terraform-managed path. An operator can *also* onboard a cluster by running `create-access-entry` + `associate-access-policy` (view-only policies only) directly via the AWS CLI, outside Terraform. `eks_auto_register_enabled` (live: true) wires a read-only, CloudTrail-driven Lambda (`awsops-v2-eks-auto-register`, `scripts/v2/eks/auto_register.py`) that observes those calls and reflects the cluster into Aurora `eks_registrations` — the BFF's actual allow-list is `ONBOARDED_EKS_CLUSTERS` (env, Terraform) ∪ `eks_registrations` (runtime), not `onboard_eks_clusters` alone. As of 2026-08-11 the live task role (`awsops-v2-task`) holds Access Entries on **4** clusters — `fsi-demo-cluster` (Terraform) plus `mall-apne2-az-a`, `mall-apne2-az-c`, `mall-apne2-mgmt` (out-of-band, auto-registered 2026-06-11 – 2026-06-17). Ground truth: `aws eks list-access-entries --cluster-name <name>` + the `eks_registrations` table, not this doc's cluster count.
+
 **KO** — **P1e ✅ 완료.** `fsi-demo-cluster` 온보딩 및 검증 완료(access entry = `awsops-v2-task`, View 정책, endpoint/ARN/CA output). 호스트 클러스터는 모두 `API_AND_CONFIG_MAP` 모드라 클러스터 전환 없이 Access Entry가 동작한다.
+
+**Out-of-band 확장(라이브 드리프트 기록, 2026-08-11 확인):** `onboard_eks_clusters`는 Terraform 관리 경로만 나열한다. 운영자가 Terraform 밖에서 CLI로 `create-access-entry` + `associate-access-policy`(view-only 정책 한정)를 직접 실행해 클러스터를 추가로 온보딩할 수도 있다. `eks_auto_register_enabled`(라이브: true)가 그 CloudTrail 이벤트를 관찰하는 read-only Lambda(`awsops-v2-eks-auto-register`, `scripts/v2/eks/auto_register.py`)를 연결해두어, 그 클러스터를 Aurora `eks_registrations`에 반영한다 — BFF의 실제 allow-list는 `ONBOARDED_EKS_CLUSTERS`(env, Terraform) ∪ `eks_registrations`(runtime)이며 `onboard_eks_clusters` 단독이 아니다. 2026-08-11 기준 라이브 task role(`awsops-v2-task`)은 **4개** 클러스터에 Access Entry를 보유 — `fsi-demo-cluster`(Terraform) + `mall-apne2-az-a`/`mall-apne2-az-c`/`mall-apne2-mgmt`(out-of-band, 2026-06-11~06-17 자동등록). 사실 확인은 이 문서의 클러스터 수가 아니라 `aws eks list-access-entries --cluster-name <name>` + `eks_registrations` 테이블로.
 
 ## Learnings & gotchas / 학습·함정
 
