@@ -24,12 +24,12 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
 
 ---
 
-<!-- Slide 2: AI Assistant Demo Flow -->
+<!-- Slide 2a: AI Assistant Demo Flow (1/2) -->
 
 @type: content
 @transition: slide
 
-# AI Assistant Demo
+# AI Assistant Demo (1/2) — 라우팅 & 스트리밍
 
 :::html
 <div class="ai-query-demo-container">
@@ -56,12 +56,12 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
       width: 100%;
       max-width: 900px; /* Adjusted for better fit on a 1920x1080 slide */
       max-height: 600px;
-      padding: 25px;
+      padding: 1.5625rem;
       border-radius: 12px;
       box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 1.25rem;
       box-sizing: border-box;
       overflow: hidden; /* Important for max-height constraint */
       margin: 0 auto;
@@ -76,13 +76,13 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
     /* Input section styling */
     .input-section {
       display: flex;
-      gap: 12px;
+      gap: .75rem;
       align-items: center;
     }
 
     #queryInput {
       flex-grow: 1;
-      padding: 12px 18px;
+      padding: .75rem 1.125rem;
       border: 1px solid var(--border-color);
       border-radius: 8px;
       background-color: #1a2a4a;
@@ -103,7 +103,7 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
 
     /* Button styling */
     button {
-      padding: 12px 25px;
+      padding: .75rem 1.5625rem;
       border: none;
       border-radius: 8px;
       background-color: var(--button-bg);
@@ -133,16 +133,16 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
     .flow-section {
       display: flex;
       flex-direction: column;
-      gap: 15px;
-      padding-top: 15px;
+      gap: .9375rem;
+      padding-top: .9375rem;
       border-top: 1px dashed var(--border-color);
     }
 
     .step-indicators {
       display: flex;
       justify-content: center;
-      gap: 25px;
-      margin-bottom: 10px;
+      gap: 1.5625rem;
+      margin-bottom: .625rem;
     }
 
     .step-circle {
@@ -168,17 +168,17 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
     }
 
     .step-details > div {
-      padding: 15px;
+      padding: .9375rem;
       background-color: #1a2a4a;
       border-radius: 10px;
-      margin-bottom: 10px;
+      margin-bottom: .625rem;
       white-space: pre-wrap;
       border: 1px solid rgba(0, 0, 0, 0.3);
     }
 
     .status-message {
       font-size: 1.15em;
-      margin: 0 0 8px 0;
+      margin: 0 0 .5rem 0;
       color: var(--text-color);
     }
 
@@ -200,7 +200,7 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
     .output-section {
       position: relative;
       flex-grow: 1; /* Allows it to take available space within max-height */
-      padding: 15px 0;
+      padding: .9375rem 0;
       border-top: 1px dashed var(--border-color);
       overflow-y: auto; /* Enable scrolling for long responses */
       display: flex;
@@ -214,7 +214,7 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
       font-size: 0.95em;
       line-height: 1.7;
       margin: 0;
-      padding-right: 15px; /* Space for cursor */
+      padding-right: .9375rem; /* Space for cursor */
       flex-grow: 1; /* Allow text to grow */
     }
 
@@ -225,7 +225,7 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
       background-color: var(--accent-cyan);
       vertical-align: text-bottom;
       animation: blink 1s step-end infinite;
-      margin-left: 3px;
+      margin-left: .1875rem;
       transition: opacity 0.2s ease-in-out;
     }
 
@@ -238,8 +238,8 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
       font-size: 1.3em;
       font-weight: bold;
       color: var(--accent-green);
-      margin-top: 15px;
-      padding: 12px 15px;
+      margin-top: .9375rem;
+      padding: .75rem .9375rem;
       background-color: rgba(0, 255, 136, 0.15);
       border-radius: 8px;
       border: 1px solid rgba(0, 255, 136, 0.3);
@@ -415,12 +415,8 @@ AI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종
 </div>
 :::
 
-:::html
-<div style="text-align:right"><img src="../../screenshots/overview/assistant-answer.png" alt="" class="slide-img" style="max-width:22%" /></div>
-:::
-
 :::notes
-{timing: 3min}
+{timing: 2min}
 AI 어시스턴트의 동작 흐름을 보겠습니다. 자연어 질문 하나가 답변으로 이어지는 과정입니다.
 
 사용자가 "EKS 비용 개선점 찾아줘"라고 질문합니다. 첫 단계는 ADR-003 하이브리드 라우팅입니다. regex fast-path가 먼저 매칭을 시도하고, 애매하면 Haiku 분류기가 판단합니다. 프롬프트 캐싱으로 약 59% 히트율을 내고, 이 질문은 cost 섹션 게이트웨이로 라우팅됩니다.
@@ -429,6 +425,27 @@ AI 어시스턴트의 동작 흐름을 보겠습니다. 자연어 질문 하나�
 
 선택된 AgentCore 섹션 에이전트가 MCP 도구로 라이브 read-only AWS 조회를 수행합니다. Cost Explorer, EKS 메트릭 등 필요한 도구만 호출합니다. 그리고 in-account Bedrock이 결과를 분석합니다.
 
+{cue: transition}
+같은 질문이 실제 화면에서 어떻게 보이는지 이어서 보겠습니다.
+:::
+
+---
+
+<!-- Slide 2b: AI Assistant Demo — 실제 응답 화면 (2/2) -->
+
+@type: content
+@transition: slide
+
+# AI Assistant Demo (2/2) — 실제 응답 화면
+
+:::html
+<div style="text-align:center"><img src="../../screenshots/overview/assistant-answer.png" alt="어시스턴트 응답 화면 — 스트리밍된 답변과 함께 라우팅된 섹션·호출된 MCP 도구가 표시된다" class="slide-img" style="max-width:88%;max-height:64vh" /></div>
+:::
+
+> 답변과 함께 **라우트·도구 사용 내역** 표시 · 대화는 **Aurora thread**로 영속 저장 (resizable drawer와 `/assistant` 전체 화면이 같은 thread 공유)
+
+:::notes
+{timing: 1min}
 응답은 SSE 스트리밍으로 실시간 전달되고, 어떤 라우트와 도구가 쓰였는지 UI에 함께 표시됩니다. 대화는 Aurora에 thread로 영속 저장되어, 사이드바에서 이어보기가 가능합니다. resizable drawer나 /assistant 전체 화면 어디서든 같은 thread를 씁니다.
 
 {cue: demo}
@@ -440,12 +457,12 @@ AI 어시스턴트의 동작 흐름을 보겠습니다. 자연어 질문 하나�
 
 ---
 
-<!-- Slide 3: Cost Analysis & Rightsizing Insight -->
+<!-- Slide 3a: Cost Analysis & Rightsizing Insight (1/2) -->
 
 @type: content
 @transition: slide
 
-# Scenario 1: Cost Analysis & Rightsizing
+# Scenario 1: Cost Analysis & Rightsizing (1/2)
 
 ::: left
 
@@ -476,14 +493,10 @@ AI 어시스턴트의 동작 흐름을 보겠습니다. 자연어 질문 하나�
 > 권장사항만 제시 · **자동 적용 없음**
 > (mutating 설치 버튼은 **ADR-005**로 동결 — do-not-enable)
 
-:::html
-<div style="text-align:center"><img src="../../screenshots/cost/cost-explorer.png" alt="" class="slide-img" style="max-width:30%" /></div>
-:::
-
 :::
 
 :::notes
-{timing: 3min}
+{timing: 2min}
 첫 번째 시나리오는 비용 분석과 rightsizing 인사이트입니다.
 
 "비용 개선점 찾아줘"라고 입력하면 cost 섹션 게이트웨이로 라우팅됩니다. cost 에이전트가 Cost Explorer와 Forecast를 read-only로 조회하고, Cost 대시보드가 서비스별 비용과 추이를 시각화합니다.
@@ -492,6 +505,27 @@ AI 어시스턴트의 동작 흐름을 보겠습니다. 자연어 질문 하나�
 
 EKS 워크로드는 read-only 메트릭으로 request 대비 실사용량을 비교합니다. 과할당된 파드와 다운사이징 후보, 통합 가능한 노드를 식별합니다. 결과는 구체적인 절감 추정치와 함께 제시됩니다.
 
+{cue: transition}
+실제 Cost 대시보드 화면을 보겠습니다.
+:::
+
+---
+
+<!-- Slide 3b: Cost 대시보드 화면 (2/2) -->
+
+@type: content
+@transition: slide
+
+# Scenario 1: Cost Analysis & Rightsizing (2/2) — Cost 대시보드
+
+:::html
+<div style="text-align:center"><img src="../../screenshots/cost/cost-explorer.png" alt="Cost 대시보드 — 서비스별 비용과 추이를 시각화하고 rightsizing 후보를 도출하는 화면" class="slide-img" style="max-width:88%;max-height:64vh" /></div>
+:::
+
+> 서비스별 비용·추이 시각화 → rightsizing 후보 도출 · **권장만 제시, 자동 적용 없음**
+
+:::notes
+{timing: 1min}
 {cue: emphasis}
 
 여기서 중요한 점은, AWSops는 권장사항만 제시한다는 것입니다. 어떤 변경도 자동으로 적용하지 않습니다. 과거 설계에 있던 OpenCost mutating 설치 버튼은 **ADR-005**(AWS 리소스 변경·자율 조치 = FROZEN)로 동결됐습니다. 진단과 권고까지가 AWSops의 역할이고, 적용 결정과 실행은 운영자의 몫입니다.
@@ -502,12 +536,12 @@ EKS 워크로드는 read-only 메트릭으로 request 대비 실사용량을 비
 
 ---
 
-<!-- Slide 4: Inventory & Idle Review -->
+<!-- Slide 4a: Inventory & Idle Review (1/2) -->
 
 @type: content
 @transition: slide
 
-# Scenario 2: Inventory & Idle Review
+# Scenario 2: Inventory & Idle Review (1/2)
 
 ::: left
 
@@ -538,14 +572,10 @@ EKS 워크로드는 read-only 메트릭으로 request 대비 실사용량을 비
 > Steampipe = **인벤토리 sync 전용** (Aurora 적재)
 > 라이브 조회는 **AgentCore MCP 도구**가 담당
 
-:::html
-<div style="text-align:center"><img src="../../screenshots/resources/inventory.png" alt="" class="slide-img" style="max-width:32%" /></div>
-:::
-
 :::
 
 :::notes
-{timing: 2min}
+{timing: 1min}
 두 번째 시나리오는 인벤토리와 유휴 리소스 점검입니다.
 
 AWSops는 41가지 리소스 타입을 제네릭 `/inventory/[type]` 페이지로 제공합니다. 이 데이터는 flag-gated Steampipe sync가 warm Fargate에서 돌면서 Aurora로 적재한 것입니다. registry 기반으로 내비게이션이 자동 구성되고, 페이지마다 KPI, donut, 필터로 구성된 mini-dashboard가 붙습니다.
@@ -554,6 +584,27 @@ AWSops는 41가지 리소스 타입을 제네릭 `/inventory/[type]` 페이지�
 
 여기서 분명히 할 점은, Steampipe는 인벤토리 sync 전용이라는 것입니다. 라이브 쿼리 엔진이 아닙니다. 실시간 조회와 분석은 AgentCore MCP 도구가 담당합니다. 인벤토리 화면에서 후보를 좁히고, 에이전트로 라이브 현황을 보강하는 방식입니다.
 
+{cue: transition}
+실제 인벤토리 화면을 보겠습니다.
+:::
+
+---
+
+<!-- Slide 4b: 인벤토리 화면 (2/2) -->
+
+@type: content
+@transition: slide
+
+# Scenario 2: Inventory & Idle Review (2/2) — 인벤토리 화면
+
+:::html
+<div style="text-align:center"><img src="../../screenshots/resources/inventory.png" alt="/inventory 페이지 — 41종 리소스 타입 목록과 KPI·donut·필터로 구성된 mini-dashboard" class="slide-img" style="max-width:88%;max-height:64vh" /></div>
+:::
+
+> 페이지별 **mini-dashboard**에서 후보를 좁히고 → **AgentCore 라이브 조회**로 현황 보강
+
+:::notes
+{timing: 1min}
 미연결 EBS, 미사용 Elastic IP, 오래된 스냅샷, 중지된 EC2, 참조 없는 Security Group 같은 후보를 read-only로 점검합니다. 변경은 하지 않고, 검토 대상만 정리합니다.
 
 {cue: transition}
@@ -562,12 +613,12 @@ AWSops는 41가지 리소스 타입을 제네릭 `/inventory/[type]` 페이지�
 
 ---
 
-<!-- Slide 5: Topology & Dependency Visualization -->
+<!-- Slide 5a: Topology & Dependency Visualization (1/2) -->
 
 @type: content
 @transition: slide
 
-# Scenario 3: Topology & Dependencies
+# Scenario 3: Topology & Dependencies (1/2)
 
 :::html
 <div class="flow-h">
@@ -602,12 +653,8 @@ AWSops는 41가지 리소스 타입을 제네릭 `/inventory/[type]` 페이지�
 - **계정별 스코프 토폴로지** — 멀티 계정 그래프를 계정 단위로 필터링해 조회
 - **VPC Resource Map** — VPC 상세 패널에서 여는 풀스크린 VPC→Subnet→RouteTable→IGW/NAT/TGW 맵
 
-:::html
-<div style="text-align:center"><img src="../../screenshots/resources/topology.png" alt="" class="slide-img" style="max-width:34%" /></div>
-:::
-
 :::notes
-{timing: 3min}
+{timing: 2min}
 세 번째 시나리오는 토폴로지와 의존성 시각화입니다.
 
 AWSops는 flow 그래프와 infra 리소스 그래프 두 가지를 제공합니다. CloudFront에서 시작해 Load Balancer, Target Group, Database로 이어지는 CF → LB → TG → DB 체인을 한눈에 보여줍니다.
@@ -616,6 +663,27 @@ AWSops는 flow 그래프와 infra 리소스 그래프 두 가지를 제공합니
 
 리소스 노드를 클릭하면 `/topology/resource/[id]` 상세 페이지로 이동합니다. 해당 리소스가 무엇에 연결되어 있고 무엇이 그것에 의존하는지를 추적할 수 있습니다. 최근에는 그래프 자체가 **계정별로 스코핑**되어, 멀티 계정 환경에서 계정 단위로 필터링해 볼 수 있습니다.
 
+{cue: transition}
+실제 토폴로지 그래프 화면을 보겠습니다.
+:::
+
+---
+
+<!-- Slide 5b: 토폴로지 그래프 화면 (2/2) -->
+
+@type: content
+@transition: slide
+
+# Scenario 3: Topology & Dependencies (2/2) — 그래프 화면
+
+:::html
+<div style="text-align:center"><img src="../../screenshots/resources/topology.png" alt="토폴로지 그래프 화면 — CF→LB→TG→DB 의존 체인과 리소스 노드 상세" class="slide-img" style="max-width:88%;max-height:64vh" /></div>
+:::
+
+> 노드 클릭 → `/topology/resource/[id]` 상세 · **blast radius**(영향 범위) 추적 — 사람이 그래프를 보며 진단하는 read-only 방식
+
+:::notes
+{timing: 1min}
 이것이 진단에 중요한 이유는 blast radius, 즉 영향 범위 분석 때문입니다. 어떤 리소스에 문제가 생겼을 때 그 영향이 어디까지 전파되는지, 어떤 의존 관계를 끊어야 하는지를 그래프로 따라갈 수 있습니다. VPC 상세 패널에서는 풀스크린 **VPC Resource Map**을 열 수 있는데, VPC → Subnet(AZ별) → Route Table → IGW/NAT/TGW까지 라우팅 구조를 한 화면에서 클릭으로 하이라이트하며 추적합니다. 과거의 자율 인시던트 수집 루프 대신, 사람이 그래프를 보며 의존 관계를 진단하는 read-only 방식입니다.
 
 {cue: transition}
@@ -624,29 +692,29 @@ AWSops는 flow 그래프와 infra 리소스 그래프 두 가지를 제공합니
 
 ---
 
-<!-- Slide 6: AI Diagnosis Report -->
+<!-- Slide 6a: AI Diagnosis Report (1/2) -->
 
 @type: content
 @transition: slide
 
-# AI Diagnosis Report
+# AI Diagnosis Report (1/2) — 16 섹션 진행
 
 :::html
 <style>
-.ds{font-family:'Segoe UI',sans-serif;color:#fff;width:100%;max-width:580px;max-height:520px;margin:0 auto;overflow-y:auto;background:#1a2233;border-radius:10px;padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;border:1px solid #334466}
-.ds h3{text-align:center;color:#00d4ff;margin:0 0 8px;font-size:1.4em}
+.ds{font-family:'Segoe UI',sans-serif;color:#fff;width:100%;max-width:580px;max-height:520px;margin:0 auto;overflow-y:auto;background:#1a2233;border-radius:10px;padding:1.25rem;box-sizing:border-box;display:flex;flex-direction:column;gap:.875rem;border:1px solid #334466}
+.ds h3{text-align:center;color:#00d4ff;margin:0 0 .5rem;font-size:1.4em}
 .ds-bw{width:100%;background:#334466;border-radius:5px;height:8px;overflow:hidden}
 .ds-b{height:100%;width:0%;background:#00ff88;border-radius:5px;transition:width .3s}
 .ds-i{display:flex;justify-content:space-between;font-size:.85em;color:#bbb}
-.ds-btns{display:flex;justify-content:center;gap:12px}
-.ds .db{padding:10px 20px;border:none;border-radius:8px;cursor:pointer;font-size:.9em;font-weight:bold;color:#fff;transition:background .2s}
+.ds-btns{display:flex;justify-content:center;gap:.75rem}
+.ds .db{padding:.625rem 1.25rem;border:none;border-radius:8px;cursor:pointer;font-size:.9em;font-weight:bold;color:#fff;transition:background .2s}
 .ds .db:disabled{background:#555 !important;cursor:not-allowed;opacity:.6}
 .ds .db1{background:#00d4ff}.ds .db2{background:#a855f7}.ds .db3{background:#334466}
-.ds-sc{display:flex;flex-direction:column;gap:10px}
-.ds-pg{background:#2a354d;border-radius:8px;padding:10px;border:1px solid #334466}
-.ds-ph{font-weight:bold;font-size:.95em;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid}
-.ds-si{display:flex;align-items:center;padding:4px 0;font-size:.85em}
-.ds-si .ic{margin-right:8px;min-width:18px;text-align:center}
+.ds-sc{display:flex;flex-direction:column;gap:.625rem}
+.ds-pg{background:#2a354d;border-radius:8px;padding:.625rem;border:1px solid #334466}
+.ds-ph{font-weight:bold;font-size:.95em;margin-bottom:.375rem;padding-bottom:.25rem;border-bottom:1px solid}
+.ds-si{display:flex;align-items:center;padding:.25rem 0;font-size:.85em}
+.ds-si .ic{margin-right:.5rem;min-width:18px;text-align:center}
 </style>
 <div class="ds">
   <h3>AI 종합진단 리포트 (deep · 16 sections)</h3>
@@ -709,20 +777,37 @@ AWSops는 flow 그래프와 infra 리소스 그래프 두 가지를 제공합니
 </script>
 :::
 
-:::html
-<div style="text-align:center"><img src="../../screenshots/operations/ai-diagnosis.png" alt="" class="slide-img" style="max-width:30%" /></div>
-:::
-
 :::notes
-{timing: 3min}
+{timing: 2min}
 AI 종합진단 리포트는 AWSops의 플래그십 기능입니다. 전부 read-only로 동작합니다.
 
 리포트는 두 등급입니다. light·mid는 9개 섹션, deep는 16개 섹션이고 Well-Architected Framework에 매핑됩니다. deep 등급은 기본 Sonnet으로 동작하고, 필요하면 cost-gate를 거쳐 Opus를 선택할 수 있습니다.
 
 {cue: pause}
 
-실행은 비동기 워커 티어에서 일어납니다. 웹은 thin-BFF라 무거운 작업을 직접 돌리지 않고 `POST /api/jobs`로 큐에 넣습니다. SQS, Step Functions, Lambda 또는 Fargate 워커가 받아서 섹션을 분석합니다. 진행 상황은 SSE로 실시간 표시됩니다. "3/16 Security Posture 분석 중" 같은 상태가 클라이언트에 흐릅니다.
+실행은 비동기 워커 티어에서 일어납니다. 웹은 thin-BFF라 무거운 작업을 직접 돌리지 않고 워커 큐에 넣는데, 진단 잡은 범용 `POST /api/jobs`가 아니라 소유권을 검사하는 전용 라우트 `/api/diagnosis`로 제출합니다(ADR-009, IDOR 방지 — 범용 라우트는 `noop` 계열만 허용). SQS, Step Functions, Lambda 또는 Fargate 워커가 받아서 섹션을 분석합니다. 진행 상황은 SSE로 실시간 표시됩니다. "3/16 Security Posture 분석 중" 같은 상태가 클라이언트에 흐릅니다.
 
+{cue: transition}
+완성된 리포트 화면을 보겠습니다.
+:::
+
+---
+
+<!-- Slide 6b: AI Diagnosis Report — 리포트 화면 (2/2) -->
+
+@type: content
+@transition: slide
+
+# AI Diagnosis Report (2/2) — 리포트 화면
+
+:::html
+<div style="text-align:center"><img src="../../screenshots/operations/ai-diagnosis.png" alt="AI 종합진단 리포트 화면 — 섹션별 진단 결과와 자동 제목·태그" class="slide-img" style="max-width:88%;max-height:64vh" /></div>
+:::
+
+> 자동 제목 · 태그 · **소프트 삭제** 지원 — 리포트 목록과 상세 화면에서 열람
+
+:::notes
+{timing: 1min}
 완성된 리포트는 자동 제목과 태그가 붙고, 소프트 삭제를 지원합니다. 리포트 목록과 상세 화면에서 열람할 수 있습니다.
 
 {cue: transition}
@@ -809,9 +894,9 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 
 ::: right
 
-### 알림 다이제스트 (ADR-013, 병합 대기)
+### 알림 다이제스트 (병합·배포 완료)
 
-- **`diagnosis_digest.py`** — `notified_at IS NULL` 리포트를 ~15분 배치로 묶어 SNS 1건 발송 (별도 브랜치에서 구현 완료, main 병합 대기)
+- **`diagnosis_digest.py`** — `notified_at IS NULL` 리포트를 ~15분 배치로 묶어 SNS 1건 발송 (`workers_enabled && diagnosis_notify_enabled` 게이트로 이미 main 병합·라이브 배포됨; ADR-13이 승인한 건 스케줄 요약뿐이라 수동 실행분까지 묶는 현재 범위는 ADR 정리 대상)
 - 완료 즉시 개별 발송(per-report) 방식 폐기 — 폭주 방지(하루 44건 → 1건)
 - **PII 스크러빙** — Bedrock 호출 전 ARN·계정ID·이메일·IP·액세스키를 결정론적으로 마스킹 (현재 라이브)
 
@@ -821,14 +906,14 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 {timing: 2min}
 [요약]
 • 스케줄 진단은 `report_schedules` 테이블 + hourly `schedule_dispatcher`로 자동 실행
-• 알림은 개별 발송에서 ~15분 배치 다이제스트로 전환 중(폭주 방지, 병합 대기)
+• 알림은 개별 발송에서 ~15분 배치 다이제스트로 전환됨(폭주 방지, 이미 라이브)
 • Bedrock 호출 전 PII를 결정론적으로 스크러빙 — "왜 안전한가"의 핵심 근거
 
 리포트는 수동 실행뿐 아니라 스케줄로도 돌 수 있습니다. `report_schedules` 테이블에 사용자별로 주간, 격주, 월간 주기를 등록하면, hourly로 도는 `schedule_dispatcher`가 `next_run_at`을 스캔해서 리포트 job을 큐에 넣습니다. v1 `report-scheduler.ts`의 패턴을 그대로 승계했습니다.
 
 {cue: pause}
 
-완료된 리포트의 알림 방식도 곧 바뀔 예정입니다. 지금은 리포트가 끝날 때마다 SNS 이메일을 즉시 발송하는데, 하루에 44건이 몰리면 이메일이 44통 날아가는 문제가 있습니다. 별도 브랜치에서 완료된 `diagnosis_digest.py`가 ~15분 주기로 `notified_at IS NULL`인 리포트를 모아 SNS 한 건으로 묶어 보내는데, main 병합을 기다리고 있습니다.
+완료된 리포트의 알림 방식도 이미 개선됐습니다. 예전에는 리포트가 끝날 때마다 SNS 이메일을 즉시 발송해서 하루에 44건이 몰리면 이메일이 44통 날아가는 문제가 있었는데, `diagnosis_digest.py`가 ~15분 주기로 `notified_at IS NULL`인 리포트를 모아 SNS 한 건으로 묶어 보내도록 이미 main에 병합·배포되어 라이브에서 동작 중입니다.
 
 {cue: emphasis}
 
@@ -840,12 +925,12 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 
 ---
 
-<!-- Slide 9: Datasources -->
+<!-- Slide 9a: Datasources (1/2) -->
 
 @type: content
 @transition: slide
 
-# Datasources — 8종 Read-Only 커넥터
+# Datasources — 8종 Read-Only 커넥터 (1/2)
 
 ::: left
 
@@ -866,14 +951,10 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 - 스키마는 Aurora에 캐시되어 빠른 재조회
 - 전 커넥터 **READ만** — 변경·자율 없음
 
-:::html
-<div style="text-align:center"><img src="../../screenshots/observability/datasources.png" alt="" class="slide-img" style="max-width:40%" /></div>
-:::
-
 :::
 
 :::notes
-{timing: 2min}
+{timing: 1min}
 [요약]
 • Datasources는 8종 외부 관측성 백엔드를 read-only로 통합
 • ClickHouse/Prometheus/Loki/Tempo/Mimir 5종에 Jaeger/Dynatrace/Datadog 3종 추가
@@ -881,8 +962,27 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 
 `/datasources` Explore 페이지는 외부 관측성 백엔드를 read-only 커넥터 플랫폼으로 통합합니다. 기존 ClickHouse, Prometheus, Loki, Tempo, Mimir 5종에 이어 최근 Jaeger, Dynatrace, Datadog까지 8종으로 늘었습니다.
 
-{cue: pause}
+{cue: transition}
+Explore 화면을 보겠습니다.
+:::
 
+---
+
+<!-- Slide 9b: Datasources — Explore 화면 (2/2) -->
+
+@type: content
+@transition: slide
+
+# Datasources (2/2) — Explore 화면
+
+:::html
+<div style="text-align:center"><img src="../../screenshots/observability/datasources.png" alt="Datasources Explore 화면 — 커넥터 목록과 NL-to-query 입력, 캐시된 스키마 브라우저" class="slide-img" style="max-width:88%;max-height:64vh" /></div>
+:::
+
+> **NL → query** 변환 + 챗 주입 · 스키마는 **Aurora 캐시** · 전 커넥터 **READ만**
+
+:::notes
+{timing: 1min}
 각 커넥터 Lambda가 데이터를 가져오고 스키마는 Aurora에 캐시됩니다. 자연어를 쿼리로 변환하는 NL-to-query를 지원하고, 결과를 챗에 주입해 분석에 활용할 수 있습니다. 원칙은 동일합니다 — 전부 READ만 합니다.
 
 {cue: transition}
@@ -891,12 +991,12 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 
 ---
 
-<!-- Slide 10: EKS -->
+<!-- Slide 10a: EKS (1/2) -->
 
 @type: content
 @transition: slide
 
-# EKS — 전체 메뉴 패밀리 (read-only)
+# EKS — 전체 메뉴 패밀리 (read-only) (1/2)
 
 ::: left
 
@@ -905,10 +1005,6 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 - fleet-wide **nodes / pods / deployments / services** 개별 페이지
 - **explorer** — K9s 스타일, 11개 리소스 종류 탭
 - **container cost** 뷰
-
-:::html
-<div style="text-align:center"><img src="../../screenshots/resources/eks.png" alt="" class="slide-img" style="max-width:60%" /></div>
-:::
 
 :::
 
@@ -920,14 +1016,10 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 - task role **Access Entry + AmazonEKSAdminViewPolicy**
 - **LIVE 즉시 조회 등록** — Access Entry 보유 클러스터는 바로 등록
 
-:::html
-<div style="text-align:center"><img src="../../screenshots/resources/eks-cluster.png" alt="" class="slide-img" style="max-width:60%" /></div>
-:::
-
 :::
 
 :::notes
-{timing: 2min}
+{timing: 1min}
 [요약]
 • EKS는 nodes/pods/deployments/services 개별 페이지 + K9s 스타일 explorer(11탭) + container cost로 확장
 • 인증은 sa-token / assume-role / task-role(Access Entry) 3가지 모드
@@ -935,8 +1027,34 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 
 EKS 화면도 read-only지만 이제 완전한 메뉴 패밀리입니다. fleet 전체의 nodes, pods, deployments, services를 각각의 페이지로 보고, K9s 스타일 explorer에서는 11개 리소스 종류를 탭으로 오갈 수 있습니다. container cost 뷰도 붙었습니다.
 
-{cue: pause}
+{cue: transition}
+실제 EKS 화면 두 장을 보겠습니다.
+:::
 
+---
+
+<!-- Slide 10b: EKS — 화면 (2/2) -->
+
+@type: content
+@transition: slide
+
+# EKS (2/2) — fleet 조회 & 클러스터 상세
+
+:::html
+<div class="columns">
+  <div class="col">
+    <img src="../../screenshots/resources/eks.png" alt="EKS fleet 조회 화면 — nodes / pods / deployments / services 목록" class="slide-img" style="max-width:100%;max-height:56vh" />
+    <div style="text-align:center;font-size:.875rem;margin-top:.5rem;">fleet 조회 — nodes / pods / deployments / services</div>
+  </div>
+  <div class="col">
+    <img src="../../screenshots/resources/eks-cluster.png" alt="EKS 클러스터 상세 화면 — 인증 모드와 LIVE 등록 상태, explorer 탭" class="slide-img" style="max-width:100%;max-height:56vh" />
+    <div style="text-align:center;font-size:.875rem;margin-top:.5rem;">클러스터 상세 — 인증 모드 · LIVE 등록</div>
+  </div>
+</div>
+:::
+
+:::notes
+{timing: 1min}
 인증은 세 가지 모드를 지원합니다. 읽기 전용 ServiceAccount 토큰을 붙이는 sa-token, Access Entry가 있는 IAM Role을 assume하는 assume-role, 그리고 web task role 자체의 Access Entry를 쓰는 task-role입니다. task role은 **AmazonEKSAdminViewPolicy**(View가 아니라 AdminView — View는 클러스터 스코프 리소스가 없어 nodes 조회가 403남) 권한을 클러스터 스코프로 가지고, BFF의 kind allow-list가 secrets 등 민감 kind를 차단합니다. Access Entry가 이미 있는 클러스터는 별도 자격 증명 없이 LIVE로 즉시 등록할 수 있습니다.
 
 {cue: transition}
@@ -990,24 +1108,17 @@ EKS 화면도 read-only지만 이제 완전한 메뉴 패밀리입니다. fleet 
 
 **ADR-011** — STS AssumeRole read-only fan-out (ExternalId: 1st-party 옵션 · 3rd-party 필수) · 계정별 보안/컴플라이언스 스코핑 · CVE Severity Distribution donut(ECR 스캔 집계).
 
-::: left
-
-### Security Findings Pipeline
-
 :::html
-<div style="text-align:center"><img src="assets/security-findings-pipeline.svg" alt="" class="slide-img" style="max-width:100%" /></div>
-:::
-
-:::
-
-::: right
-
-### Compliance Benchmark Flow
-
-:::html
-<div style="text-align:center"><img src="assets/compliance-benchmark-flow.svg" alt="" class="slide-img" style="max-width:100%" /></div>
-:::
-
+<div class="columns">
+  <div class="col">
+    <h3>Security Findings Pipeline</h3>
+    <img src="assets/security-findings-pipeline.svg" alt="Security findings 파이프라인 — inventory_resources에서 Public S3·Open SG·Unencrypted EBS·IAM MFA를 BFF가 도출; ECR 스캔 CVE는 별도 live SDK 경로로 집계(FINDING_SQL 미포함)" class="slide-img" style="max-width:100%;max-height:50vh" />
+  </div>
+  <div class="col">
+    <h3>Compliance Benchmark Flow</h3>
+    <img src="assets/compliance-benchmark-flow.svg" alt="Compliance 벤치마크 흐름 — Powerpipe 워커가 warm Steampipe FDW를 조회(기본 scope=all, 계정별 실행도 가능; 워커가 AWS SDK를 직접 호출하지 않고 FDW를 경유해 라이브 조회)하고 결과를 compliance_runs·compliance_results에 적재" class="slide-img" style="max-width:100%;max-height:50vh" />
+  </div>
+</div>
 :::
 
 :::notes
@@ -1037,40 +1148,40 @@ EKS 화면도 read-only지만 이제 완전한 메뉴 패밀리입니다. fleet 
 # Deployment
 
 :::html
-<div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr;gap:12px;align-items:stretch;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">1. Configure</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;">
-      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">make configure (TUI)</div>
-      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">tfvars + backend.hcl</div>
+<div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr;gap:.75rem;align-items:stretch;">
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:1rem;min-height:13.75rem;display:flex;flex-direction:column;">
+    <div style="color:#00d4ff;font-weight:bold;font-size:.875rem;margin-bottom:.75rem;text-align:center;">1. Configure</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:.375rem;justify-content:center;">
+      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">make configure (TUI)</div>
+      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">tfvars + backend.hcl</div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;color:#00d4ff;font-size:24px;">→</div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#f59e0b;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">2. Terraform</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
-      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">init (S3 backend)</div>
-      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">plan -out tfplan</div>
-      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">controller apply tfplan</div>
+  <div style="display:flex;align-items:center;color:#00d4ff;font-size:1.5rem;">→</div>
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:1rem;min-height:13.75rem;display:flex;flex-direction:column;">
+    <div style="color:#f59e0b;font-weight:bold;font-size:.875rem;margin-bottom:.75rem;text-align:center;">2. Terraform</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:.375rem;">
+      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">init (S3 backend)</div>
+      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">plan -out tfplan</div>
+      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">controller apply tfplan</div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;color:#f59e0b;font-size:24px;">→</div>
-  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#ef4444;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">3. make deploy</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">migrate (ULID)</div>
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">buildx arm64 → ECR</div>
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">ECS rolling</div>
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">smoke /api/health</div>
+  <div style="display:flex;align-items:center;color:#f59e0b;font-size:1.5rem;">→</div>
+  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:1rem;min-height:13.75rem;display:flex;flex-direction:column;">
+    <div style="color:#ef4444;font-weight:bold;font-size:.875rem;margin-bottom:.75rem;text-align:center;">3. make deploy</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:.375rem;">
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">migrate (ULID)</div>
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">buildx arm64 → ECR</div>
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">ECS rolling</div>
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">smoke /api/health</div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;color:#00ff88;font-size:24px;">→</div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#00ff88;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">4. Flag-Gated</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;">
-      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">make agentcore</div>
-      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">make workers</div>
-      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">default off = $0</div>
+  <div style="display:flex;align-items:center;color:#00ff88;font-size:1.5rem;">→</div>
+  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:1rem;min-height:13.75rem;display:flex;flex-direction:column;">
+    <div style="color:#00ff88;font-weight:bold;font-size:.875rem;margin-bottom:.75rem;text-align:center;">4. Flag-Gated</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:.375rem;justify-content:center;">
+      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">make agentcore</div>
+      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">make workers</div>
+      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:.5rem;font-size:.8125rem;text-align:center;">default off = $0</div>
     </div>
   </div>
 </div>
