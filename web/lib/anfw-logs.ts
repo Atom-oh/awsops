@@ -6,10 +6,30 @@ import { anfwAnalysis } from './anfw';
 // dns-logs와 동일 제약, 화면에 정직 고지). 로그는 Suricata EVE JSON — 중첩 필드는
 // `event.alert.signature_id` 도트 표기로 접근.
 // 함정: 스테이징 태스크 롤은 DescribeLoggingConfiguration이 SCP류로 거부(loggingKnown=false)
-// → 이때는 `/aws/network-firewall/` 접두사 DescribeLogGroups로 **휴리스틱 발견** 폴백
-// (이름에 alert/flow 포함 여부로 분류, discovered=true로 표시).
+// → 이때는 `/aws/network-firewall/` 접두사 DescribeLogGroups로 **휴리스틱 발견** 폴백.
+// 리뷰(PR #221 라운드5): 분류는 2단계 — **쿼리 등록**은 이름에 alert/flow 부분 문자열
+// 포함 여부(permissive substring, base와 동일 — 쿼리 커버리지는 절대 base보다 좁아지면
+// 안 됨). **발견 확정**(foundByType, unknown 신호를 끄는 것)은 `/`-세그먼트 전체가
+// ALERT_TOKENS/FLOW_TOKENS와 정확히 일치할 때만(부분 문자열 아님) + 그 이름의 다른
+// 세그먼트에 반대 타입 세그먼트가 없을 때만 — 이름이 그저 그 타입을 우연히 포함한다는
+// 것과 실제로 그 타입의 증거라는 것은 다르다.
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
+// 리뷰 MINOR(PR #221): 접두사 발견 폴백은 리전당 수만 개 로그 그룹을 순회할 수 있다(round-9
+// 코멘트) — 그룹마다 새 Set을 만들지 않도록 모듈 스코프로 끌어올린다.
+// 리뷰 MAJOR(확정, PR #221 라운드6): 두 허용목록이 비대칭이고 하이픈 복합형을 못 커버했다 —
+// ALERT엔 복합형이 전혀 없고 FLOW엔 "flowlog(s)"만 있어 "netflows"·"alertlog(s)"·
+// "flow-logs"·"alert-logs"(AWS 콘솔 용어 "flow logs"의 가장 자연스러운 표기) 같은 관례적
+// 이름이 세그먼트 전체 일치에 걸리지 않아 영구히 미확정 처리됐다 — 쿼리는 permissive
+// substring이라 실제로 성공했는데도 헤드라인 total이 "확인 불가"로 굳어버리는, 이 PR이
+// 고치려는 바로 그 버그의 반대 방향 재현. base·suffix·하이픈유무를 대칭으로 생성해 둘 다
+// 동일한 파생 규칙을 따르게 한다(확정/거부 양쪽에서 여전히 세그먼트 전체 일치만 인정 —
+// 부분 문자열은 아님).
+const withLogSuffixes = (base: string): string[] => [
+  base, `${base}s`, `${base}log`, `${base}logs`, `${base}-log`, `${base}-logs`,
+];
+const ALERT_TOKENS = new Set(withLogSuffixes('alert'));
+const FLOW_TOKENS = new Set([...withLogSuffixes('flow'), ...withLogSuffixes('netflow')]);
 const logsClients = new Map<string, CloudWatchLogsClient>();
 const logs = (r: string) => {
   let c = logsClients.get(r);
@@ -89,7 +109,8 @@ export interface AnfwLogTarget {
 }
 
 export interface AnfwAlertAnalytics {
-  /** alertTotals 쿼리 자체가 실패하면 null — 0과 구분해 "0건"이 "조회 실패"를 가리지 않게 함. */
+  /** alertTotals 쿼리 자체가 실패했거나, 이 리전의 ALERT 로그 그룹 발견 자체가 unknown이면 null —
+   *  0과 구분해 "0건"이 "조회 실패/발견 unknown"을 가리지 않게 함. */
   totalAlerts: number | null;
   byAction: { name: string; value: number }[];
   topSignatures: { sid: string; signature: string; value: number }[];
@@ -98,7 +119,8 @@ export interface AnfwAlertAnalytics {
 }
 
 export interface AnfwFlowAnalytics {
-  /** flowTotals 쿼리 자체가 실패하면 둘 다 null — alertTotals와 동일 계약(0 ≠ 조회 실패). */
+  /** flowTotals 쿼리 자체가 실패했거나 FLOW 로그 그룹 발견이 unknown이면 둘 다 null — alertTotals와
+   *  동일 계약(0 ≠ 조회 실패/발견 unknown). */
   totalFlows: number | null; totalBytes: number | null;
   /** (src, dst) 호스트쌍 기준 — dest_port는 유동 포트라 group 카디널리티가 플로우 수와 같아져 시간 초과(실측). */
   topTalkers: { src: string; dst: string; bytes: number; flows: number }[];
@@ -132,7 +154,12 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
   // discoveryFailed도 안 켜진다. 결과적으로 "이 방화벽이 어떤 대상으로 로깅하는지도
   // 모르는" 상태가 "CloudWatch Logs 대상 로그 없음"으로 렌더링된다 — 이 PR이 다른
   // 모든 경로에서 지키는 "unknown ≠ off" 계약을 이 함수 자신이 어긴 것.
-  const firewallDiscoveryDegraded = (a.degradedRegions ?? []).length > 0;
+  // 리뷰 MAJOR(확정, PR #221 라운드2): a.degradedRegions는 firewalls·policies·ruleGroups 중
+  // 어느 것 하나라도 부분 실패하면 켜지는 포괄 신호다 — 방화벽 로깅 구성과 무관한
+  // DescribeFirewallPolicy/DescribeRuleGroup 실패(스로틀 등)에도 켜져서, 완전히 정상 조회된
+  // 리전의 확정 alert/flow 총계까지 account-wide로 null 처리해버린다. 방화벽 목록(따라서
+  // 로깅 구성) 자체를 확인할 수 있었는지만 보는 firewallListDegradedRegions로 좁힌다.
+  const firewallDiscoveryDegraded = (a.firewallListDegradedRegions ?? []).length > 0;
   for (const f of a.firewalls) {
     if (!f.loggingKnown) { discoverRegions.add(f.region); continue; }
     // 리뷰 MINOR: ALERT→CWL + FLOW→S3처럼 섞인 방화벽은 anyCwl=true라 unsupported에서
@@ -186,8 +213,66 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
           // 둘 다 포함하는 이름(예: /flow-alerts)이면 ALERT 하나에만 등록됐다. 쿼리는
           // event_type으로 필터하므로 양쪽 다 걸리는 이름은 두 타입 모두에 등록해도
           // 안전 — 어느 한쪽으로 단정하는 것보다 낫다.
-          if (lower.includes('alert')) { targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true }); foundByType.ALERT = true; }
-          if (lower.includes('flow')) { targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true }); foundByType.FLOW = true; }
+          // 리뷰 확정(라운드13, Codex stop-hook): 하지만 "안전하게 양쪽에 등록"과 "그
+          // 매칭을 발견 확정 증거로 인정"은 다른 얘기다 — AWS는 로그 그룹 이름을
+          // 임의로 허용하므로 /flow-alerts라는 이름 자체는 그 그룹이 실제로 FLOW
+          // 이벤트를 담고 있다는 증거가 아니다(순전한 명명 우연일 수 있음). 이걸
+          // foundByType로 인정하면, 진짜 FLOW 로그 그룹이 전혀 다른(추측 불가능한)
+          // 이름이라 못 찾힌 상황에서도 "발견됨"으로 잘못 카운트되어 unknown 신호가
+          // 죽고, 이 우연한 그룹의 텅 빈 결과가 "0 flows/0 B"라는 확정 부재처럼
+          // 보인다 — 정확히 이 PR이 계속 고쳐온 계약 위반. 애매한(둘 다 포함) 이름은
+          // 쿼리는 여전히 양쪽에 실행하되(실제로 둘 다/어느 한쪽 담고 있을 가능성에
+          // 대비 — 헛다리 짚어도 event_type 필터 덕에 무해), 어느 쪽 unknown 신호도
+          // 끄지 않는다. 한쪽 토큰만 포함한 명확한 이름만 그 타입의 발견 확정 증거로 인정.
+          // 리뷰 MAJOR(확정, 라운드15): 위 판정을 whole-name substring(`includes`)으로
+          // 하면 discriminator 토큰이 이름의 다른 부분(방화벽 이름 세그먼트 등)에 우연히
+          // 박혀 있어도 매칭된다 — 예: `workflow-prod`엔 "flow"가 포함되지만 실제로는
+          // alert 전용 컨벤션 그룹이다.
+          // 리뷰 MAJOR(확정, PR #221 라운드2 — 라운드15 자체 수정의 회귀):
+          // `startsWith('flow')` 토큰 판정으로 바꾼 결과 "netflow"라는 토큰 자체가
+          // "flow"로 시작하지 않아 전혀 매칭되지 않았다 — netflow는 이 모듈이 필터하는
+          // Suricata event_type("netflow")과 동일한, 콘솔에서도 흔히 쓰이는 정당한 FLOW
+          // 명명이라 이건 base(`includes`)보다도 나쁜 회귀다(base는 최소한 매칭은 했다).
+          // 또한 whole-name 토큰 판정은 위치를 안 가려서, 관례상 타입을 나타내는 마지막
+          // 세그먼트가 명확한데도 다른(방화벽 이름) 세그먼트의 우연한 토큰 때문에 애매로
+          // 오분류될 수 있었다(예: `/…/workflow-prod/alert` — 마지막 세그먼트 "alert"만
+          // 보면 명확한데 "workflow-prod" 세그먼트도 함께 보는 whole-name 판정이면 계속
+          // 잘못 애매해질 위험). 콘솔 명명 관례는 discriminator를 마지막 세그먼트에
+          // 두므로, 마지막 세그먼트만 먼저 명시적 허용목록으로 판정하고, 그 결과가
+          // 결론이 안 나면(둘 다/둘 다 아님) 전체 이름의 토큰으로 폴백한다. 허용목록은
+          // 정확 일치만(부분 문자열/prefix 아님) 인정 — "alerting"·"flowchart"·
+          // "alert-prod"(방화벽 이름) 같은 임의 접두사는 더 이상 증거로 인정되지 않는다.
+          // 리뷰 MAJOR(확정, PR #221 라운드4 — 라운드2/3 자체 수정의 결함): 라운드2/3은 쿼리
+          // 등록(isAlert/isFlow)까지 exact-token 판정(terminal ∪ whole-name)으로 좁혀서,
+          // "alertlogs"/"netflows"처럼 정확히 "alert"/"flow"가 아닌 복합 토큰 이름은 쿼리조차
+          // 안 나갔다 — base(`includes`)는 이런 이름도 쿼리했으므로 base보다 나쁜 회귀였다.
+          // 고침: **쿼리 등록은 base와 동일한 permissive substring 매칭으로 되돌린다**(헛다리를
+          // 짚어도 event_type 필터 덕에 무해 — 쿼리 커버리지는 절대 base보다 좁아지면 안 된다).
+          // **발견 확정(foundByType)만** 엄격한 규칙을 쓴다: 이름의 `/`-세그먼트 중 하나가
+          // discriminator 토큰과 정확히 일치하고(부분 문자열 아님 — "alert-prod"는 세그먼트
+          // 전체가 "alert"가 아니므로 불일치), 그 이름 어디에도 반대 타입 토큰이 없을 때만
+          // 확정한다. 세그먼트 전체 일치 조건 덕에 `/…/alert/<방화벽이름>`처럼 타입이 중간
+          // 세그먼트에 있는 관례도 확정되고(라운드3이 놓친 케이스), "alert-prod"처럼 방화벽
+          // 이름에 토큰이 섞여 들어간 경우는 세그먼트 전체 일치가 아니라 여전히 미확정이다.
+          const isAlert = lower.includes('alert');
+          const isFlow = lower.includes('flow');
+          if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
+          if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
+          // 리뷰 MAJOR(확정, PR #221 라운드5 — 라운드4 자체 수정의 결함): 확정(segment 전체
+          // 정확 일치)과 반대 타입 거부(veto)의 증거 기준이 서로 달랐다 — 확정은 세그먼트
+          // 전체 일치만 인정하면서, veto는 tokenize()로 하이픈까지 쪼갠 토큰을 봐서
+          // "alert-prod"(방화벽 이름 세그먼트) 안의 "alert" 토큰이 FLOW 확정을 막아버렸다.
+          // `/aws/network-firewall/alert-prod/flow`처럼 방화벽 이름에 하이픈으로 discriminator
+          // 토큰이 섞여 있으면, 마지막 세그먼트("flow")는 명확한데도 FLOW가 영구히 미확정
+          // 처리되어 계정 전체 total이 null이 된다 — 이 PR이 고치려는 바로 그 버그를 반대
+          // 방향(과다 unknown)으로 재현한 것. 고침: veto도 확정과 동일한 세그먼트 전체 일치
+          // 기준을 쓴다(whole-name tokenize 폴백 제거) — 한 그룹 이름 안에 ALERT/FLOW 세그먼트가
+          // 각각 독립적으로 존재하는 경우(예: "/alert/netflow-prod/flow")에만 서로를 거부한다.
+          const segments = lower.split('/').filter(Boolean);
+          const segmentHasAlert = segments.some((seg) => ALERT_TOKENS.has(seg));
+          const segmentHasFlow = segments.some((seg) => FLOW_TOKENS.has(seg));
+          if (segmentHasAlert && !segmentHasFlow) foundByType.ALERT = true;
+          if (segmentHasFlow && !segmentHasAlert) foundByType.FLOW = true;
         }
         nextToken = r.nextToken;
       } while (nextToken);
@@ -219,7 +304,23 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 경우 그 리전이 "발견됨"으로 빠져 FLOW 카드가 unknown을 확정 없음으로 렌더링했다).
     for (const region of loggingUnknownByType.ALERT) failed.push(`logDiscoveryEmpty:${region}:ALERT`);
     for (const region of loggingUnknownByType.FLOW) failed.push(`logDiscoveryEmpty:${region}:FLOW`);
-    // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().degradedRegions) 그
+    // 리뷰 MAJOR(확정, 라운드14 — 라운드13 자체 리뷰 게이트): logDiscoveryEmpty가
+    // failed[]에 들어가 배너는 뜨지만, 그걸로 끝이었다 — targets는 이미 애매한 이름의
+    // 그룹으로 채워져 있어(쿼리는 안전하게 실행) alert/flow 자체는 null이 아니고, 그
+    // 성공한(그러나 무관할 수 있는) 쿼리가 진짜 0행을 반환하면 totalAlerts/totalFlows가
+    // 확정 0으로 계산된다 — 배너 옆에 "0"이 뜨는 건 라운드10/11이 alertTotals/
+    // flowTotals 쿼리 실패에 대해 이미 MAJOR로 고친 것과 정확히 같은 패턴. 이 리전이
+    // unknown인 타입은 totals 자체를 null로 만들어 같은 계약을 여기도 적용한다.
+    // 리뷰 MAJOR(확정, 라운드15): 위 null 판정을 loggingUnknownByType에만 걸면,
+    // discoverRegions 루프 자체가 던져서 discoveryFailed=true가 된 리전이나 방화벽
+    // 목록 조회 자체가 실패한 firewallDiscoveryDegraded 리전은 여기 반영되지 않는다 —
+    // "접두사 스캔이 예외 없이 실행돼 0건"(덜 심각)은 null이 되는데 "스캔 자체가
+    // 예외로 죽음"(더 심각)은 그대로 확정 숫자로 렌더링되는 역전이 발생한다. 두 실패
+    // 모드 모두 두 타입 모두를 unknown으로 taint한다(어느 타입이 원인인지 구분할 수
+    // 없으므로 보수적으로 둘 다).
+    const alertDiscoveryUnknown = loggingUnknownByType.ALERT.length > 0 || discoveryFailed || firewallDiscoveryDegraded;
+    const flowDiscoveryUnknown = loggingUnknownByType.FLOW.length > 0 || discoveryFailed || firewallDiscoveryDegraded;
+    // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().firewallListDegradedRegions) 그
     // 리전 방화벽들의 로깅 구성을 원래 확인조차 못 했다 — "로그 없음"과 구분되는 별도 키.
     if (firewallDiscoveryDegraded) failed.push('firewallDiscovery');
     // 리뷰 MAJOR: targets는 방화벽 단위라, 중앙 공용 로그 그룹으로 로깅하는 방화벽이
@@ -326,7 +427,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         // 어긴 것. 게다가 그 확정 0이 아래 topSignatures 그리드의 표시 여부까지
         // 가려서, topN 쿼리는 성공했는데 totals만 실패한 경우 이미 받아온 표까지
         // 숨겨졌다(그리드 게이트는 아래에서 topSignatures.length로 교체).
-        totalAlerts: failed.includes('alertTotals') ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
+        totalAlerts: (failed.includes('alertTotals') || alertDiscoveryUnknown) ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         byAction: merge(byAction, 'action'),
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
         topSources: merge(topSrc, 'src'),
@@ -380,7 +481,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       // "조회 실패"와 구분 안 됐고, 그 확정 0이 아래 시각화 게이트(totalFlows>0)까지
       // 가려 이미 성공한 byProto/topTalkers 차트를 숨겼다(alert 쪽에서 라운드10에
       // 고친 것과 정확히 같은 버그 계급 — flow 쪽에 반영이 빠졌던 것).
-      const flowTotalsFailed = failed.includes('flowTotals');
+      const flowTotalsFailed = failed.includes('flowTotals') || flowDiscoveryUnknown;
       flow = {
         totalFlows: flowTotalsFailed ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         totalBytes: flowTotalsFailed ? null : totals.reduce((s, r) => s + num(r.bytes), 0),

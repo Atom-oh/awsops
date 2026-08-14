@@ -224,14 +224,28 @@ describe('anfwLogsAnalysis', () => {
     expect(a.failed).toContain('alertTotals');
   });
 
-  it('anfwAnalysis()의 degradedRegions가 있으면(방화벽 목록 자체 조회 실패) "로그 없음"과 구분해 failed에 표시 (리뷰 MAJOR)', async () => {
-    // firewalls는 비어 있지만 degradedRegions엔 실패 리전이 있다 — 그 리전의 방화벽이
-    // 어떤 대상으로 로깅하는지 원래 확인조차 못 한 것이지 "로깅 대상이 없음"이 아니다.
-    mockAnalysis.mockResolvedValue({ firewalls: [], degradedRegions: ['us-west-2'] });
+  it('anfwAnalysis()의 firewallListDegradedRegions가 있으면(방화벽 목록 자체 조회 실패) "로그 없음"과 구분해 failed에 표시 (리뷰 MAJOR)', async () => {
+    // firewalls는 비어 있지만 firewallListDegradedRegions엔 실패 리전이 있다 — 그 리전의
+    // 방화벽이 어떤 대상으로 로깅하는지 원래 확인조차 못 한 것이지 "로깅 대상이 없음"이 아니다.
+    mockAnalysis.mockResolvedValue({ firewalls: [], degradedRegions: ['us-west-2'], firewallListDegradedRegions: ['us-west-2'] });
     const { anfwLogsAnalysis } = await import('./anfw-logs');
     const a = await anfwLogsAnalysis(3600);
     expect(a.targets).toEqual([]);
     expect(a.failed).toContain('firewallDiscovery');
+  });
+
+  it('degradedRegions는 있지만 firewallListDegradedRegions는 비어 있으면(정책/룰그룹만 실패, 방화벽 목록은 완전) totals를 taint하지 않음 (리뷰 MAJOR, PR #221 라운드2)', async () => {
+    // degradedRegions는 firewalls·policies·ruleGroups 중 어느 것 하나라도 부분 실패하면
+    // 켜지는 포괄 신호다 — 방화벽 로깅 구성과 무관한 정책/룰그룹 Describe 실패도 여기 섞인다.
+    // 이 리전의 firewalls 자체는 완전히 조회됐으므로(firewallListDegradedRegions는 비어 있음)
+    // 로그 발견/총계는 영향받지 않아야 한다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw()], degradedRegions: ['ap-northeast-2'], firewallListDegradedRegions: [] });
+    mockInsights(() => [{ cnt: 3 }]);
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('firewallDiscovery');
+    expect(a.alert!.totalAlerts).not.toBeNull();
+    expect(a.flow!.totalFlows).not.toBeNull();
   });
 
   it('리전별 top-N 쿼리는 표시 컷오프(10)보다 훨씬 큰 상한으로 오버페치 — 리전 간 병합 절단 축소 (리뷰 MAJOR)', async () => {
@@ -307,6 +321,180 @@ describe('anfwLogsAnalysis', () => {
     const a = await anfwLogsAnalysis(3600);
     expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
     expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+  });
+
+  it('구성 조회 거부 + 발견된 그룹 이름이 alert/flow 토큰을 둘 다 포함(애매한 이름)하면 그 매칭만으로는 둘 중 어느 타입도 발견 확정 처리하지 않음 (리뷰 확정 라운드13, Codex stop-hook)', async () => {
+    // AWS는 로그 그룹 이름을 임의로 허용 — "/flow-alerts"라는 이름은 그 그룹이 실제로
+    // FLOW(또는 ALERT) 이벤트를 담고 있다는 증거가 아니라 순전한 명명 우연일 수 있다.
+    // 이걸 발견 확정으로 인정하면 진짜 FLOW 그룹이 전혀 다른 이름이라 못 찾힌 경우에도
+    // "발견됨"으로 잘못 카운트돼 unknown 신호가 죽고, 이 그룹의 텅 빈 결과가 "0 flows/
+    // 0 B"라는 확정 부재처럼 보인다 — 둘 다 unknown으로 남아야 한다(쿼리 자체는 안전하게
+    // 양쪽에 실행되므로 targets에는 여전히 등록됨).
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/flow-alerts' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    // 쿼리는 여전히 안전하게 양쪽 타입에 시도된다 — unknown 표시와 querying은 별개.
+    expect(a.targets.map((t) => t.type).sort()).toEqual(['ALERT', 'FLOW']);
+    // 리뷰 MAJOR(라운드14): unknown 신호가 failed[]에만 있고 값 계약에 반영 안 되면,
+    // 애매한 그룹의 (실제로 무관할 수 있는) 성공한 빈 쿼리 결과가 확정 0으로 계산돼
+    // 배너 옆에 "0"이 뜬다 — alertTotals/flowTotals 쿼리 실패와 동일하게 null이어야
+    // "확인 불가"로 렌더링된다(page.tsx의 alert.totalAlerts==null / flow.totalFlows==null
+    // 인라인 표시 분기).
+    expect(a.alert!.totalAlerts).toBeNull();
+    expect(a.flow!.totalFlows).toBeNull();
+    expect(a.flow!.totalBytes).toBeNull();
+  });
+
+  it('구성 조회 거부 + 발견된 로그 그룹 이름에 discriminator 토큰이 방화벽 이름 세그먼트에 우연히 박혀 있어도(예: "workflow-prod") 관례 명명 ALERT 그룹은 정상 발견 확정됨 (리뷰 MAJOR 라운드15)', async () => {
+    // "workflow-prod"는 "flow"를 부분 문자열로 포함하지만 토큰(비영숫자로 분리) 기준으로는
+    // "workflow"이지 "flow"가 아니다 — whole-name substring 판정이면 이 리전의 ALERT조차
+    // "애매함"으로 잘못 분류돼 영구히 unknown이 된다. 실제 관례 명명 ALERT 그룹은 정상
+    // 발견 확정돼야 하고(FLOW는 커스텀 명명이라 여전히 못 찾았으므로 FLOW만 unknown).
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/workflow-prod/alert' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+  });
+
+  it('"netflow"로 끝나는 관례 명명 그룹은 FLOW로 정상 발견 확정됨 (리뷰 MAJOR, PR #221 라운드2 — 라운드15 자체 수정의 회귀)', async () => {
+    // netflow는 이 모듈이 필터하는 Suricata event_type("netflow")과 동일한 문자열이라
+    // 콘솔에서도 흔히 쓰이는 정당한 FLOW 명명이다. `startsWith('flow')` 토큰 판정으로는
+    // "netflow" 토큰 자체가 "flow"로 시작하지 않아 전혀 매칭되지 않는 회귀가 있었다 —
+    // base(whole-name includes)보다도 나쁜 결과(이전엔 최소한 매칭은 됐다).
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/netflow' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.targets.some((t) => t.type === 'FLOW' && t.group === '/aws/network-firewall/DMZVPC/netflow')).toBe(true);
+  });
+
+  it('"flow-logs"로 끝나는 관례 명명 그룹(AWS 콘솔 "flow logs" 용어의 가장 자연스러운 표기)은 FLOW로 정상 발견 확정됨 (리뷰 MAJOR, PR #221 라운드6)', async () => {
+    // 라운드5까지 FLOW_TOKENS엔 "flowlog"/"flowlogs"(무하이픈)만 있어 "flow-logs"(하이픈)는
+    // 세그먼트 전체 일치에 걸리지 않았다 — 쿼리는 성공(permissive substring)했는데도 발견은
+    // 영구 미확정으로 남아 totalFlows가 계속 "확인 불가"였다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/flow-logs' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+  });
+
+  it('"alertlogs"로 끝나는 관례 명명 그룹은 ALERT로 정상 발견 확정됨 — ALERT_TOKENS도 FLOW_TOKENS와 동일한 파생 규칙(복수형/log/logs/하이픈)을 대칭으로 가짐 (리뷰 MAJOR, PR #221 라운드6)', async () => {
+    // 라운드5까지 ALERT_TOKENS엔 "alert"/"alerts"뿐이라 복합형이 전혀 없었다 — FLOW만 복합형을
+    // 인정하는 비대칭이 이 회귀의 근본 원인이었다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alertlogs' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+  });
+
+  it('마지막 세그먼트는 결정적이지만 다른 세그먼트에 반대 타입 토큰이 있으면(예: "/…/alert/netflow-prod/flow") 발견 확정은 안 하되 양쪽 다 쿼리 대상으로 등록됨 (리뷰 MAJOR, PR #221 라운드3 — 라운드2의 두 결함 수정)', async () => {
+    // 라운드2는 두 가지로 틀렸다: (1) 마지막 세그먼트가 결론이 안 나면 whole-name 폴백이
+    // 발견 "확정"까지 겸해 방화벽 이름의 우연한 토큰으로도 확정될 수 있었고, (2) 마지막
+    // 세그먼트가 결론이 나면(이 케이스처럼 "flow") whole-name은 전혀 안 봐서 앞선 "alert"
+    // 세그먼트가 있어도 ALERT로는 쿼리조차 안 됐다(base보다 나쁜 회귀). 고침: 쿼리는
+    // terminal ∪ whole-name 합집합(둘 다 등록), 발견 확정은 terminal이 결정적이고
+    // whole-name이 반대 타입을 추가하지 않을 때만 — 이 이름은 whole-name에 "alert"가
+    // 있어 FLOW 결론과 불일치하므로 어느 쪽도 확정하지 않지만, 쿼리는 양쪽 다 나간다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/alert/netflow-prod/flow' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.targets.map((t) => t.type).sort()).toEqual(['ALERT', 'FLOW']);
+  });
+
+  it('마지막 세그먼트가 결론이 안 나면(방화벽 이름 세그먼트에만 discriminator 토큰) 발견을 확정하지 않음 — whole-name 폴백은 쿼리 등록만, 확정 아님 (리뷰 MAJOR, PR #221 라운드3)', async () => {
+    // "/…/alert-prod/logs" — 마지막 세그먼트 "logs"는 아무것도 매칭 안 해 결론이 안 난다.
+    // whole-name에는 "alert-prod"의 "alert" 토큰이 남아있지만, 이건 방화벽 이름일 뿐 그
+    // 그룹이 실제로 ALERT 이벤트를 담는다는 증거가 아니다 — 발견 확정은 하지 않는다
+    // (다만 헛다리를 짚어도 무해하므로 쿼리 대상으로는 등록한다).
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/alert-prod/logs' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.targets.some((t) => t.type === 'ALERT')).toBe(true);
+  });
+
+  it('방화벽 이름 세그먼트에 하이픈으로 discriminator 토큰이 섞여 있어도(예: "alert-prod") 명확한 마지막 세그먼트("flow")는 정상 발견 확정됨 (리뷰 MAJOR, PR #221 라운드5 — 확정/거부 기준 불일치 수정)', async () => {
+    // 라운드4는 확정에는 세그먼트 전체 일치를 쓰면서 거부(veto)에는 tokenize()로 하이픈까지
+    // 쪼갠 토큰을 써서 기준이 서로 달랐다 — "alert-prod"(방화벽 이름)의 "alert" 토큰이
+    // FLOW 확정을 막아 영구 unknown이 됐다(이 PR이 고치려는 버그를 반대 방향으로 재현).
+    // 세그먼트 전체 일치 기준을 확정/거부 양쪽에 동일하게 적용하면 "alert-prod"는 세그먼트
+    // 전체가 "alert"가 아니므로 거부 근거가 안 되고, 마지막 세그먼트 "flow"가 정상 확정된다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/alert-prod/flow' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+  });
+
+  it('방화벽 목록 조회 자체가 실패(firewallDiscoveryDegraded)하면 그 리전에 실제 성공한 CWL 대상이 있어도 totalAlerts/totalFlows는 null (리뷰 MAJOR 라운드15, 라운드19에서 제목 오류 수정 — 이 테스트는 discoveryFailed가 아니라 firewallDiscoveryDegraded를 검증함)', async () => {
+    // loggingUnknownByType에만 걸린 null 판정은 "스캔이 정상 실행되고 0건"(덜 심각)만
+    // 잡는다 — "스캔 자체가 예외로 죽음"(discoveryFailed, 더 심각)이나 방화벽 목록 조회
+    // 자체가 실패(firewallDiscoveryDegraded)한 경우는 반영되지 않아, 더 심각한 실패가
+    // 확정 숫자로 렌더링되는 역전이 생긴다. 여기서는 firewallDiscoveryDegraded로 검증.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw()], degradedRegions: ['us-west-2'], firewallListDegradedRegions: ['us-west-2'] });
+    mockInsights(() => [{ cnt: 3 }]);
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('firewallDiscovery');
+    expect(a.alert!.totalAlerts).toBeNull();
+    expect(a.flow!.totalFlows).toBeNull();
+  });
+
+  it('접두사 스캔 자체가 예외로 실패(discoveryFailed)하면 totalAlerts/totalFlows는 null (리뷰 MINOR, PR #221 — 실제로 discoveryFailed 경로를 검증하는 테스트가 없다는 지적)', async () => {
+    // loggingKnown: false로 discoverRegions 루프에 들어가되, DescribeLogGroupsCommand 자체가
+    // 예외를 던져 discoveryFailed=true가 되는 경로 — 위 테스트(firewallDiscoveryDegraded)와는
+    // 다른 코드 경로다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'DescribeLogGroupsCommand') throw new Error('Throttling');
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscovery');
+    expect(a.alert).toBeNull();
+    expect(a.flow).toBeNull();
   });
 
   it('Insights 폴링은 anfwLogsAnalysis 진입 시점부터 계산된 공유 데드라인을 넘기면 중단(StopQuery)하고 failed로 표시 (리뷰 MAJOR 라운드7)', async () => {
