@@ -10,7 +10,7 @@ Next.js App Router — 36 pages + 86 API routes (`app/api/`). APIs are thin-BFF:
 ## Rules
 - Auth: private APIs call `verifyUser(request.headers.get('cookie'))` (`lib/auth.ts`, re-verifies the `awsops_token` cookie via RS256 JWKS) → 401 if null. Admin-only routes additionally check `isAdmin()` (`lib/admin.ts`). Only `/api/health` is public.
 - Route handlers declare `export const dynamic = 'force-dynamic'` (consistent across the existing 91 files).
-- `api/chat`'s `aws-data` (Steampipe SQL, `lib/aws-data.ts`) and the 6 auto-collect collectors (`lib/collectors/`) are **local handlers** — they have no AgentCore gateway behind them, so they're excluded from ADR-044's multi-route fan-out (fan-out covers only gateway-backed built-ins).
+- `api/chat`'s `aws-data` (Steampipe SQL, `lib/aws-data.ts`) and the 6 auto-collect collectors (`lib/collectors/`) are **local handlers** — they have no AgentCore gateway behind them, so they're excluded from ADR-003[legacy 044]'s multi-route fan-out (fan-out covers only gateway-backed built-ins).
 - Request bodies are parsed via `readJsonBounded` (`lib/http-body.ts`) — a streaming cap, doubled up with `middleware.ts`'s 2MB belt.
 - Fetch paths are `/api/*` — the v1 `/awsops` prefix is banned (no basePath).
 - When adding a new page, also register it in `components/shell/Sidebar.tsx` and add its nav key to `lib/i18n.ts`.

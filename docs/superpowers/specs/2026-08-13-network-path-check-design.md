@@ -29,13 +29,19 @@ render operator-run validation commands. It never runs those commands.
 - `agent/lambda/reachability_read_mcp.py` has deterministic ENI/EC2 SG, NACL, and subnet-route
   evaluation with no Network Insights resource creation.
 - `agent/lambda/datasource_diag_mcp.py` has bounded helpers for SG chains, TGW/Peering discovery, and
-  Kubernetes service endpoints. Its HTTP reachability helper (`_test_http_connectivity`) is **not**
-  reused as-is: it does a raw `urlopen()` with no link-local/IMDS/private-range denial, and this
-  feature's destinations can include operator-supplied on-prem/internet hosts (DNS/L7 layer). Before
-  implementation, either route that helper's destination input through an `ssrf-guard`-equivalent check
-  (`web/lib/ssrf-guard.ts` is the project's reference shape) or confirm the destination never reaches an
-  HTTP fetch for this feature's candidates. Either way, response bodies and headers from that helper are
-  not persisted into `evidence` — only the bounded pass/fail/latency summary is.
+  Kubernetes service endpoints. Its HTTP reachability helper (`_test_http_connectivity`,
+  `agent/lambda/datasource_diag_mcp.py:594`) is **not reused, at all, by this feature** — that helper
+  does a raw `urlopen()` on caller-supplied URL+headers with no metadata/link-local/private-range
+  denial, making it a prompt-injectable SSRF read primitive, and actually invoking it against an
+  operator-supplied destination would itself be the "packet injection or active probe" this spec
+  explicitly excludes (see Explicit exclusions) — reusing it is not a lesser-guarded version of this
+  feature's checks, it's a different feature (an active probe) that doesn't belong here regardless of
+  guarding. The DNS/L7 layer's checks in this feature are the deterministic AWS-side reads listed above
+  (Route 53 resolution, ALB listener/target-group config, Ingress/Service/EndpointSlice) — never an
+  actual HTTP request to the destination. If a future feature genuinely needs an active HTTP probe, it
+  must mandatorily route through `agent/lambda/datasource_http.py`'s `assert_host_allowed`/`SsrfBlocked`
+  (DNS-rebinding-safe IP pinning) — not `web/lib/ssrf-guard.ts`, which is BFF TypeScript and unreachable
+  from a Python MCP Lambda — as a hard requirement, not an "or confirm it's unreachable" alternative.
 - `topology_nodes` / `topology_edges`, `/api/graph`, and the `flow` / `infra` / `trace` graph classes
   provide cached candidate-path discovery.
 - The v2 worker backbone provides `worker_jobs`, SQS, dispatcher, Step Functions, Fargate workers,
@@ -340,8 +346,8 @@ Table-driven tests cover:
   discriminates the primary key)
 - evidence redaction and size caps
 - definition snapshot immutability
-- HTTP-reachability helper never resolves/fetches an operator-supplied destination without the
-  SSRF-guard check (or is confirmed unreachable from this feature's code paths)
+- `_test_http_connectivity` is never called by any code path this feature adds — grep-verifiable, not
+  just guard-verifiable (this feature does no active HTTP probing at all, per Explicit exclusions)
 - stale-run reaping
 
 ### Web and authorization

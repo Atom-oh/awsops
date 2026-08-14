@@ -333,11 +333,10 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
   CONFIRMED_ORPHAN_MEMORY_ID=""
   # 예: CONFIRMED_ORPHAN_CODE_INTERPRETER_ID="awsops_code_interpreter-abc12345"
   CONFIRMED_ORPHAN_CODE_INTERPRETER_ID=""
-  # 위 3개를 채우지 않고 그대로 진행하면 아래에서 즉시 에러로 중단한다(공백 memory-id/
-  # code-interpreter-id로 AWS CLI를 호출하는 사고 방지) — 게이트웨이 배열은 비어 있으면
-  # 루프가 0회 실행되어 안전하므로 별도 가드 불필요.
-  : "${CONFIRMED_ORPHAN_MEMORY_ID:?fill in the confirmed memory id from step (b) first}"
-  : "${CONFIRMED_ORPHAN_CODE_INTERPRETER_ID:?fill in the confirmed code interpreter id from step (b) first}"
+  # 위 3개는 각자 채워진 만큼만 독립적으로 삭제되도록, 가드를 각 삭제 호출 바로 앞에 둔다
+  # (게이트웨이만 확정되고 memory/interpreter는 아직 확인 전인 부분 정리를 막지 않기 위함 —
+  # 가드를 여기 앞부분에 한꺼번에 두면 게이트웨이 배열이 채워져 있어도 memory/interpreter가
+  # 비어 있다는 이유만으로 게이트웨이 삭제까지 통째로 막힌다).
   # (c) 게이트웨이는 타깃부터 지우고, 그 삭제가 실제 반영될 때까지 기다린 다음에만 게이트웨이를 지운다 —
   #     타깃이 아직 DELETING인 채로 delete-gateway를 부르면 생성 때의 "GW READY 전 target 생성 실패"와
   #     대칭인 이유로 실패한다(비동기 삭제, 즉시 완료 보장 없음).
@@ -345,11 +344,21 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
     for tgt in $(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'items[].targetId' --output text); do
       aws bedrock-agentcore-control delete-gateway-target --gateway-identifier "$gw" --target-id "$tgt"
     done
-    # 타깃 목록이 빈 배열이 될 때까지 대기(폴링) — 완료 전 delete-gateway 호출 시 실패
-    while [ -n "$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'items' --output text)" ]; do sleep 5; done
+    # 타깃 목록이 빈 배열이 될 때까지 대기(폴링) — 완료 전 delete-gateway 호출 시 실패.
+    # --query 'items'만 쓰면 응답에 items 키가 없을 때 CLI가 "None"(비어있지 않은 문자열)을
+    # 찍어 무한 루프가 될 수 있다 — length(items || [])로 항상 숫자를 받고, 최대 대기
+    # 횟수도 둬서 API 응답 구조가 예상과 다를 때 무한정 멈추지 않게 한다.
+    attempts=0
+    while [ "$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text)" != "0" ]; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 60 ]; then echo "타깃 삭제가 5분 넘게 안 끝남 — 콘솔/CLI로 직접 확인 필요: $gw" >&2; break; fi
+      sleep 5
+    done
     aws bedrock-agentcore-control delete-gateway --gateway-identifier "$gw"
   done
+  : "${CONFIRMED_ORPHAN_MEMORY_ID:?fill in the confirmed memory id from step (b) first}"
   aws bedrock-agentcore-control delete-memory --memory-id "$CONFIRMED_ORPHAN_MEMORY_ID"
+  : "${CONFIRMED_ORPHAN_CODE_INTERPRETER_ID:?fill in the confirmed code interpreter id from step (b) first}"
   aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id "$CONFIRMED_ORPHAN_CODE_INTERPRETER_ID"
   ```
 - **공개 ALB `awsops-alb`(internet-facing) — 과금 중, 타깃 = 정지된 v1 EC2.** `AwsopsStack` CFN 삭제(4.3) 범위에 포함되는지 스택 리소스 목록으로 반드시 확인한다(CFN이 만들지 않은 별도 리소스라면 4.3이 지우지 않으므로 수동 정리 대상):
@@ -357,12 +366,15 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
   aws elbv2 describe-load-balancers --names awsops-alb --query 'LoadBalancers[0].LoadBalancerArn'
   aws cloudformation describe-stack-resources --stack-name AwsopsStack \
     --query "StackResources[?ResourceType=='AWS::ElasticLoadBalancingV2::LoadBalancer']"
-  # 스택 밖(CFN 관리 아님)으로 확인된 경우에만: 리스너 → 타깃그룹 → ALB 순으로 삭제
+  # 스택 밖(CFN 관리 아님)으로 확인된 경우에만: 타깃그룹 ARN을 먼저 확보 → 리스너 삭제 →
+  # ALB 삭제 → 마지막에 확보해둔 타깃그룹 삭제. describe-target-groups는 --load-balancer-arn으로
+  # 조회하므로 ALB가 먼저 지워지면 LoadBalancerNotFound로 실패해 타깃그룹을 못 찾는다(리뷰 MAJOR
+  # — 원래 순서는 delete-load-balancer 다음에 describe-target-groups를 두어 이 문제가 있었다).
+  #   aws elbv2 describe-target-groups --load-balancer-arn <alb-arn> --query 'TargetGroups[].TargetGroupArn'   # ALB 삭제 전에 먼저 확보
   #   aws elbv2 describe-listeners --load-balancer-arn <alb-arn> --query 'Listeners[].ListenerArn'
   #   aws elbv2 delete-listener --listener-arn <listener-arn>   # 각 리스너
   #   aws elbv2 delete-load-balancer --load-balancer-arn <alb-arn>
-  #   aws elbv2 describe-target-groups --load-balancer-arn <alb-arn> --query 'TargetGroups[].TargetGroupArn'
-  #   aws elbv2 delete-target-group --target-group-arn <tg-arn>   # ALB 삭제 후, 각 타깃그룹
+  #   aws elbv2 delete-target-group --target-group-arn <tg-arn>   # 위에서 확보한 각 타깃그룹, ALB 삭제 후
   ```
 - **v1 alert 경로 SQS**(`awsops-alert-queue` + `awsops-alert-dlq`) — §1.3에서 외부 발신자 확인이 끝났다면 4.3(CFN 스택 삭제)에 포함되어 있을 가능성이 높다; 스택 밖이라면 개별 삭제:
   ```bash

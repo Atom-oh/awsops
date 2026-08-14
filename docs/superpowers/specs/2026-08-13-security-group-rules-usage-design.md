@@ -139,12 +139,16 @@ When false:
   aggregation are disabled
 - current Usage behavior remains unchanged
 
-At implementation time, this flag gets a `docs/decisions/BASELINE.md` §2 register row before it ships.
-The Athena `StartQueryExecution`/`StopQueryExecution` calls and the S3 writes to the workgroup's
-results prefix (see IAM section) are not read-only, so the register row must record an ADR-005/ADR-007
-posture analysis (mutating-but-scoped: the mutation is confined to the caller's own Athena
-workgroup/S3 results prefix, never an AWS resource outside that scope) rather than being folded in as
-an ordinary read-only inventory gate.
+**The `docs/decisions/BASELINE.md` §2 register row for `sg_rule_activity_enabled` lands in the same PR
+that introduces the flag** — BASELINE's own anti-drift rule requires this; it is not deferred to
+"implementation time" as a follow-up. The governing tier is **ADR-007** (external/customer-owned DATA
+read + a narrowly-scoped write confined to the caller's own resources), the same tier as
+`diagnosis_notify_enabled` (SNS publish, LIVE) — not ADR-005's AWS-resource-mutation freeze: the Athena
+`StartQueryExecution`/`StopQueryExecution` calls and the S3 writes to the workgroup's results prefix
+(see IAM section) touch only the account's own Flow Log data and its own query-result prefix, never an
+AWS resource outside that scope. The register row must state this ADR-007 classification explicitly
+(not left as an open question) and must also cover the new `AWSopsSgRuleAthenaRole` (below) as part of
+the same posture analysis, since granting that role is what makes the write path possible.
 
 This separates the new recurring Athena cost from the existing SG analysis.
 
@@ -190,12 +194,18 @@ CREATE TABLE sg_rule_inventory (
 CREATE TABLE sg_eni_membership_snapshots (
   account_id       text NOT NULL,
   region           text NOT NULL,
+  -- 리뷰 MAJOR(확정): vpc_id 없이 peer-IP → SG 역조회를 하면 같은 계정/리전 안에서 겹치는
+  -- RFC1918 대역을 쓰는 서로 다른 VPC의 ENI가 매칭될 수 있다. 역조회 쿼리는 반드시
+  -- vpc_id로 스코프한다(대상 ENI가 속한 VPC를 먼저 확정한 뒤에만 그 VPC 안에서 IP 매칭).
+  vpc_id           text NOT NULL,
   observed_at      timestamptz NOT NULL,
   eni_id           text NOT NULL,
   group_ids        jsonb NOT NULL,
   private_ips      jsonb NOT NULL,
   PRIMARY KEY (account_id, region, observed_at, eni_id)
 );
+CREATE INDEX sg_eni_membership_snapshots_vpc_idx
+  ON sg_eni_membership_snapshots (account_id, region, vpc_id, observed_at);
 
 CREATE TABLE sg_rule_activity_daily (
   account_id              text NOT NULL,
@@ -259,6 +269,21 @@ inactive, and records first/last seen times. A changed fingerprint starts a new 
 UI; evidence collected for an older rule shape is not silently presented as evidence for the new
 shape.
 
+**Fingerprint changes that happen mid-day are a schema conflict, not just a UI epoch boundary.**
+`sg_rule_activity_daily` carries exactly one `rule_fingerprint` per `(rule_id, observed_on)` row (see
+Data model), but a rule can be edited at any time of day — a day whose Athena scan window spans an edit
+has flow evidence belonging to two different rule shapes, and the pipeline can only record one
+fingerprint for that day. Rather than silently attributing the whole day's aggregate to whichever
+fingerprint happened to be current when the daily worker snapshotted rules (step 2 below), the daily
+worker compares the fingerprint it captures at snapshot time against the fingerprint recorded on that
+rule's most recent prior `sg_rule_activity_daily` row (if any) before writing: if they differ **and**
+the day being processed is the same UTC day the rule's `first_seen_at`/most recent fingerprint change
+timestamp falls in, the day is written with `coverage.fingerprint_epoch_crossing = true` and
+`unique_eni_count`/`compatible_match_count` are treated as a lower bound, not an exact count, in the UI
+(same rendering as any other `unassessable`-adjacent coverage flag — never a confident number with no
+caveat). This is a conservative degrade, not a blocker: the row is still written and still contributes
+to trend/history views, just flagged.
+
 Default outbound rules are displayed and marked protected from cleanup recommendations.
 
 ## Daily pipeline
@@ -316,7 +341,13 @@ Rule matching covers:
 
 - IPv4 CIDR
 - IPv6 CIDR when the source format supports it
-- SG references using the closest available ENI membership snapshot
+- SG references, resolved against the ENI membership snapshot from **the same UTC day being scanned**
+  and **scoped to the flow's own VPC** (via `sg_eni_membership_snapshots.vpc_id`) — not simply the
+  globally-nearest snapshot by timestamp, which could otherwise pick a snapshot from a different day
+  (attributing a flow to a SG membership that changed before or after that flow was recorded) or match
+  an ENI in an unrelated VPC that happens to share the same RFC1918 address. If no snapshot exists for
+  that day, the day's SG-reference matches for that VPC are `unassessable`, not silently matched against
+  the nearest other day's snapshot
 - managed prefix lists when entries can be resolved read-only
 - ingress and egress
 - protocol and port ranges
