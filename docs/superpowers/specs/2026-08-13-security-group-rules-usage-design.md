@@ -402,16 +402,20 @@ Rule matching covers:
   should not be used silently just because it's the only one available; outside the window, that day's
   SG-reference matches are `unassessable`.
   **This bound does not apply to the initial-historical-backfill case** (see "Initial historical
-  backfill" below): a day older than the earliest snapshot this source ever took has no in-window
+  backfill" below): a day older than the **earliest** snapshot this source ever took has no in-window
   snapshot by construction (snapshotting cannot retroactively exist before the source was configured),
-  and for that case the design deliberately falls back to the **current** (i.e. latest available at
-  backfill time — there is no earlier one to fall back to, since none existed yet for that historical
-  day) snapshot rather than marking the day `unassessable` — labeled in the UI exactly as written below,
-  "historical evidence mapped using current membership only" (lower confidence), not silently equated
-  with a normal, in-window match. The two
-  rules are for two different situations: "we have a snapshot but it's too old to trust" (normal
-  processing, `unassessable`) vs. "no snapshot could possibly exist yet for this day" (pre-snapshotting
-  backfill, labeled lower-confidence fallback).
+  and for that case the design deliberately falls back to that same earliest snapshot rather than
+  marking the day `unassessable` — labeled in the UI as "historical evidence mapped using the earliest
+  available membership snapshot" (lower confidence), not silently equated with a normal, in-window
+  match. This is pinned to a **fixed** reference (the earliest snapshot, which does not change once
+  recorded) rather than "whatever's current/latest right now" — a floating "current" reference would
+  drift every time this same historical day is reprocessed (retry, admin refresh, or the trailing
+  rescan revisiting a day it doesn't actually own), since "current" keeps moving forward while the
+  historical day being matched does not; that would silently violate the idempotent-reprocessing
+  guarantee the rest of this pipeline relies on. The two rules are for two different situations: "we
+  have a snapshot but it's too old to trust" (normal processing, `unassessable`) vs. "no snapshot could
+  possibly exist yet for this day" (pre-snapshotting backfill, pinned to the earliest one, labeled
+  lower-confidence).
   Scoped to **the flow's own VPC plus any VPC known to be able to legally reference it** — a VPC with an
   active VPC Peering connection to the flow's VPC, or a participant VPC in the same shared-VPC (RAM)
   arrangement, per this repo's existing VPC topology data — not simply the flow's own VPC alone (SG
@@ -445,7 +449,12 @@ Initial historical backfill is partial because current EC2 APIs cannot reconstru
 ENI-SG associations. The UI distinguishes:
 
 - evidence collected after AWSops began snapshotting
-- historical evidence mapped using current membership only
+- historical evidence mapped using the **earliest** membership snapshot this source ever took (not
+  "current"/latest-at-run-time — that would drift every time the same historical day is reprocessed,
+  since "current" keeps moving forward while the historical day it's being matched against does not,
+  breaking the pipeline's own idempotent-retry guarantee for exactly the days this exception covers.
+  Pinning to the earliest snapshot is a fixed reference: reprocessing the same pre-snapshotting day next
+  month resolves against the same snapshot row and produces the same result, same as any other day)
 
 No-observation results from the partial backfill remain lower confidence.
 
@@ -546,8 +555,11 @@ Missing permissions degrade only that account/region source to `unassessable`.
 - a day whose flows span two `sg_rule_inventory_versions` rows sets `coverage.fingerprint_epoch_crossing`
 - a flow's own `start` (not `end`) selects the version whose `[valid_from, valid_to)` interval covers it
 - ENI-membership snapshot lookup: in-window (used), stale beyond `SG_RULE_MEMBERSHIP_STALENESS_DAYS`
-  (`unassessable`), and pre-snapshotting backfill day (falls back to current, labeled lower-confidence)
-  are three distinct outcomes, not one collapsed into another
+  (`unassessable`), and pre-snapshotting backfill day (pinned to the earliest snapshot, labeled
+  lower-confidence) are three distinct outcomes, not one collapsed into another
+- reprocessing the same pre-snapshotting backfill day twice, with a new (later) snapshot taken in
+  between the two runs, produces the same result both times (pinned to the earliest snapshot, not to
+  whatever is current at each run) — the idempotent-retry regression this fix exists to prevent
 - concurrent/retried run for the same partition does not block on a uniqueness conflict
 - one account/region batch rather than per-rule query
 - Athena pagination and terminal states
