@@ -309,6 +309,26 @@ describe('anfwLogsAnalysis', () => {
     expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
   });
 
+  it('구성 조회 거부 + 발견된 그룹 이름이 alert/flow 토큰을 둘 다 포함(애매한 이름)하면 그 매칭만으로는 둘 중 어느 타입도 발견 확정 처리하지 않음 (리뷰 확정 라운드13, Codex stop-hook)', async () => {
+    // AWS는 로그 그룹 이름을 임의로 허용 — "/flow-alerts"라는 이름은 그 그룹이 실제로
+    // FLOW(또는 ALERT) 이벤트를 담고 있다는 증거가 아니라 순전한 명명 우연일 수 있다.
+    // 이걸 발견 확정으로 인정하면 진짜 FLOW 그룹이 전혀 다른 이름이라 못 찾힌 경우에도
+    // "발견됨"으로 잘못 카운트돼 unknown 신호가 죽고, 이 그룹의 텅 빈 결과가 "0 flows/
+    // 0 B"라는 확정 부재처럼 보인다 — 둘 다 unknown으로 남아야 한다(쿼리 자체는 안전하게
+    // 양쪽에 실행되므로 targets에는 여전히 등록됨).
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/flow-alerts' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    // 쿼리는 여전히 안전하게 양쪽 타입에 시도된다 — unknown 표시와 querying은 별개.
+    expect(a.targets.map((t) => t.type).sort()).toEqual(['ALERT', 'FLOW']);
+  });
+
   it('Insights 폴링은 anfwLogsAnalysis 진입 시점부터 계산된 공유 데드라인을 넘기면 중단(StopQuery)하고 failed로 표시 (리뷰 MAJOR 라운드7)', async () => {
     // anfwAnalysis()의 콜드 fan-out + 45s 폴링이 겹치면 60s 라우트 예산을 넘길 수 있다는
     // 것이 라운드7 MAJOR였다 — 데드라인이 anfwLogsAnalysis 호출 "시점"부터 공유돼야

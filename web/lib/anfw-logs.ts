@@ -186,8 +186,23 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
           // 둘 다 포함하는 이름(예: /flow-alerts)이면 ALERT 하나에만 등록됐다. 쿼리는
           // event_type으로 필터하므로 양쪽 다 걸리는 이름은 두 타입 모두에 등록해도
           // 안전 — 어느 한쪽으로 단정하는 것보다 낫다.
-          if (lower.includes('alert')) { targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true }); foundByType.ALERT = true; }
-          if (lower.includes('flow')) { targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true }); foundByType.FLOW = true; }
+          // 리뷰 확정(라운드13, Codex stop-hook): 하지만 "안전하게 양쪽에 등록"과 "그
+          // 매칭을 발견 확정 증거로 인정"은 다른 얘기다 — AWS는 로그 그룹 이름을
+          // 임의로 허용하므로 /flow-alerts라는 이름 자체는 그 그룹이 실제로 FLOW
+          // 이벤트를 담고 있다는 증거가 아니다(순전한 명명 우연일 수 있음). 이걸
+          // foundByType로 인정하면, 진짜 FLOW 로그 그룹이 전혀 다른(추측 불가능한)
+          // 이름이라 못 찾힌 상황에서도 "발견됨"으로 잘못 카운트되어 unknown 신호가
+          // 죽고, 이 우연한 그룹의 텅 빈 결과가 "0 flows/0 B"라는 확정 부재처럼
+          // 보인다 — 정확히 이 PR이 계속 고쳐온 계약 위반. 애매한(둘 다 포함) 이름은
+          // 쿼리는 여전히 양쪽에 실행하되(실제로 둘 다/어느 한쪽 담고 있을 가능성에
+          // 대비 — 헛다리 짚어도 event_type 필터 덕에 무해), 어느 쪽 unknown 신호도
+          // 끄지 않는다. 한쪽 토큰만 포함한 명확한 이름만 그 타입의 발견 확정 증거로 인정.
+          const isAlert = lower.includes('alert');
+          const isFlow = lower.includes('flow');
+          if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
+          if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
+          if (isAlert && !isFlow) foundByType.ALERT = true;
+          if (isFlow && !isAlert) foundByType.FLOW = true;
         }
         nextToken = r.nextToken;
       } while (nextToken);
