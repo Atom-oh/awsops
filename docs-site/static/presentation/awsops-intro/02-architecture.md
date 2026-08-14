@@ -174,9 +174,9 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
 :::notes
 {timing: 1min}
 파일별 역할입니다.
-왼쪽이 핵심 레이어입니다. 네트워크, 엣지, 인증, 데이터, 워크로드, ECR, AI, 워커까지 — 전부 flag-gated 모듈이지만 현재 라이브 환경에서는 이미 켜져 있는 기반 레이어입니다.
+왼쪽이 핵심 레이어입니다. 네트워크(`create_network`만 게이트), 엣지, 인증, 데이터, 워크로드, ECR은 항상 켜져 있는 core 레이어라 무조건 배포되고, AI와 워커만 각각 `agentcore_enabled`·`workers_enabled`로 게이트됩니다.
 {cue: pause}
-오른쪽은 게이트로 묶인 서브시스템입니다. EKS에 더해 steampipe, notify, incidents, k8sgpt, writeback, remediation, secret-rotation까지 각 서브시스템이 별도 파일과 flag로 분리되어 있습니다. remediation은 ADR-005로 동결(do-not-enable) 상태입니다.
+오른쪽은 게이트로 묶인 서브시스템입니다. EKS(Access Entry는 상시, `onboard_eks_clusters` for_each로 클러스터별 대상만 선택)에 더해 steampipe, notify, incidents, k8sgpt, writeback, remediation, secret-rotation까지 각 서브시스템이 별도 파일과 flag로 분리되어 있습니다. remediation은 ADR-005로 동결(do-not-enable) 상태입니다.
 {cue: transition}
 이제 컴퓨트와 웹 레이어입니다.
 :::
@@ -321,7 +321,7 @@ AI 엔진은 Bedrock AgentCore입니다.
 
 :::html
 <div style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.3);border-radius:10px;padding:1rem;margin-top:1rem;">
-  <div style="color:#a855f7;font-weight:bold;font-size:0.9375rem;margin-bottom:0.625rem;">9 Section Gateways &nbsp;·&nbsp; ~160 read-only tools (27 slices)</div>
+  <div style="color:#a855f7;font-weight:bold;font-size:0.9375rem;margin-bottom:0.625rem;">9 Section Gateways &nbsp;·&nbsp; ~160 read-only tools (30 slices, all LIVE)</div>
   <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
     <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:0.3125rem 0.75rem;font-size:0.8125rem;">network</span>
     <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:0.3125rem 0.75rem;font-size:0.8125rem;">container</span>
@@ -333,7 +333,7 @@ AI 엔진은 Bedrock AgentCore입니다.
     <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:0.3125rem 0.75rem;font-size:0.8125rem;">ops</span>
     <span style="background:rgba(0,212,255,0.18);color:#7fd8ff;border-radius:6px;padding:0.3125rem 0.75rem;font-size:0.8125rem;">external-obs</span>
   </div>
-  <div style="color:#8b95a5;font-size:0.75rem;margin-top:0.625rem;">external-obs = <b style="color:#00d4ff;">9번째 게이트웨이</b>(2026-06-24 승격, ADR-004) — Prometheus·ClickHouse 커넥터 호스팅, 챗 키 <code style="color:#00d4ff;">observability</code>로 별칭. 27슬라이스 중 <b style="color:#00ff88;">2개(iam-mcp+flow-monitor, 15도구)만 LIVE</b> — 나머지는 <code>ai.tf</code>에 정의되었으나 flag-off</div>
+  <div style="color:#8b95a5;font-size:0.75rem;margin-top:0.625rem;">external-obs = <b style="color:#00d4ff;">9번째 게이트웨이</b>(2026-06-24 승격, ADR-004) — Prometheus·ClickHouse 커넥터 호스팅, 챗 키 <code style="color:#00d4ff;">observability</code>로 별칭. 30슬라이스 <b style="color:#00ff88;">전부 LIVE</b>(9개 게이트웨이 전부 READY MCP 타깃, 16개 챗 키 전부 활성 — 2026-08-02 완료)</div>
 </div>
 :::
 
@@ -342,7 +342,7 @@ AI 엔진은 Bedrock AgentCore입니다.
 도구는 9개 섹션 게이트웨이로 묶입니다.
 network, container, data, security, cost, monitoring, iac, ops, 그리고 external-obs입니다. ADR-004가 2026년 6월 24일에 개정되면서 external-obs에 Prometheus·ClickHouse 커넥터가 붙었고, 그때부터 9번째 라우팅 가능한 게이트웨이로 승격됐습니다. 예전 버전에서 "9번째 게이트웨이가 아니다"라고 했던 건 그 커넥터가 붙기 전 부트스트랩 상태를 말한 거였고, 지금은 정반대입니다.
 {cue: pause}
-전체 카탈로그는 27개 슬라이스, 약 160개 읽기 전용 도구인데, 실제로 배포되어 LIVE인 건 iam-mcp와 flow-monitor 딱 2개 슬라이스, 15개 도구뿐입니다. 나머지는 ai.tf에 정의는 되어 있지만 flag가 꺼져 있어서 아직 뜨지 않습니다.
+전체 카탈로그는 30개 슬라이스, 약 160개 읽기 전용 도구이고, 함대 배포가 완료돼 30개 슬라이스 전부, 9개 게이트웨이 전부 READY 상태로 라이브입니다.
 {cue: transition}
 그럼 이 9개 게이트웨이 중 어디로 보낼지는 어떻게 정할까요?
 :::
@@ -801,7 +801,7 @@ AWSops는 읽기 전용 AWS 운영 대시보드에 AI 진단을 더한 것입니
 
 - **Terraform MSA on private edge** — CloudFront VPC Origin → 내부 ALB → Fargate, 공개 ALB 없음
 - **Aurora 영속 상태** — PostgreSQL 17.9 (Steampipe = flag-gated 인벤토리 sync일 뿐)
-- **AgentCore 섹션 에이전트** — 9 게이트웨이 · ~160 read-only 도구(27슬라이스, LIVE는 2슬라이스·15도구)로 라이브 AWS 읽기
+- **AgentCore 섹션 에이전트** — 9 게이트웨이 · ~160 read-only 도구(30슬라이스 전부 LIVE)로 라이브 AWS 읽기
 - **ADR-003 하이브리드 라우팅 + ADR-011 멀티 계정** — regex + Haiku 분류기 + caching, STS AssumeRole fan-out
 - **OOM-safe 비동기 워커 티어** — SQS + SFN + Lambda/Fargate, 진단·스케줄·알림·컴플라이언스 처리
 - **읽기 전용 동결 태세** — AWS 변경·자율 동결(ADR-005, 새 결정 전까지) + ADR-015 예외 1건, in-account Bedrock
@@ -811,7 +811,7 @@ AWSops는 읽기 전용 AWS 운영 대시보드에 AI 진단을 더한 것입니
 아키텍처 파트를 한 장으로 정리합니다.
 첫째, 비공개 엣지 위의 Terraform MSA입니다. CloudFront VPC Origin에서 내부 ALB를 거쳐 Fargate로 가고, 공개 ALB는 없습니다. 둘째, 영속 상태는 Aurora PostgreSQL 17.9입니다. Steampipe는 라이브 엔진이 아니라 flag로 켜는 인벤토리 sync일 뿐입니다.
 {cue: pause}
-셋째, 라이브 AWS 읽기는 AgentCore 섹션 에이전트가, 9개 게이트웨이에 약 160개 읽기 전용 도구로 처리합니다. 27개 슬라이스 중 실제 LIVE는 2개, 15개 도구뿐입니다. 넷째, 라우팅은 ADR-003 하이브리드고 ADR-011 멀티 계정 STS AssumeRole로 여러 계정을 fan-out 조회합니다. 다섯째, 무거운 작업은 OOM에 안전한 비동기 워커 티어가 받는데, 진단 리포트뿐 아니라 스케줄, 알림 다이제스트, 컴플라이언스 잡까지 늘었습니다. 여섯째, 그 위에 읽기 전용 동결 태세가 있는데 영구 금지는 아니고 ADR-015라는 좁은 예외 1건이 있습니다. 그리고 in-account Bedrock입니다.
+셋째, 라이브 AWS 읽기는 AgentCore 섹션 에이전트가, 9개 게이트웨이에 약 160개 읽기 전용 도구로 처리합니다. 30개 슬라이스 전부 LIVE입니다. 넷째, 라우팅은 ADR-003 하이브리드고 ADR-011 멀티 계정 STS AssumeRole로 여러 계정을 fan-out 조회합니다. 다섯째, 무거운 작업은 OOM에 안전한 비동기 워커 티어가 받는데, 진단 리포트뿐 아니라 스케줄, 알림 다이제스트, 컴플라이언스 잡까지 늘었습니다. 여섯째, 그 위에 읽기 전용 동결 태세가 있는데 영구 금지는 아니고 ADR-015라는 좁은 예외 1건이 있습니다. 그리고 in-account Bedrock입니다.
 {cue: transition}
 세 번째 파트, 실제 데모와 진단 리포트로 이어가겠습니다.
 :::

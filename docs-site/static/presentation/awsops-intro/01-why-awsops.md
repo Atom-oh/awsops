@@ -142,11 +142,11 @@ AWSops는 이 4가지 문제를 동시에 해결합니다.
   <div style="display:grid;grid-template-rows:1fr 1fr;gap:.75rem;">
     <div style="background:var(--yellow-bg);border:1px solid var(--orange);border-radius:8px;padding:.75rem;text-align:center;">
       <div style="color:var(--orange);font-size:1.75rem;font-weight:bold;">9</div>
-      <div style="color:var(--text-muted);font-size:.8125rem;">Section Gateways (설계 160+ 도구 · 2 슬라이스 라이브)</div>
+      <div style="color:var(--text-muted);font-size:.8125rem;">Section Gateways (설계 160+ 도구 · 30 슬라이스 전부 LIVE)</div>
     </div>
     <div style="background:var(--accent-subtle);border:1px solid var(--accent);border-radius:8px;padding:.75rem;text-align:center;">
       <div style="color:var(--accent);font-size:1.75rem;font-weight:bold;">~160</div>
-      <div style="color:var(--text-muted);font-size:.8125rem;">Read-only Tools (27 슬라이스 설계)</div>
+      <div style="color:var(--text-muted);font-size:.8125rem;">Read-only Tools (30 슬라이스 전부 LIVE)</div>
     </div>
   </div>
 </div>
@@ -198,7 +198,7 @@ AWSops는 3개 레이어로 구성됩니다.
 {cue: pause}
 Data Layer는 Aurora Serverless v2가 중심입니다. PostgreSQL 17 기반으로 worker 작업, chat 스레드, 진단 리포트 같은 영속 상태를 안전하게 저장합니다. 인벤토리는 flag로 켜는 Steampipe sync가 41종 리소스 타입을 Aurora로 동기화해 화면에 보여주는 보조 역할입니다. 라이브 조회 엔진이 아니라 인벤토리 캐시라는 점이 핵심입니다.
 
-AI Engine은 Bedrock입니다. Opus 4.8, Sonnet 5, Haiku 4.5를 상황에 맞게 쓰고, AgentCore는 9개 섹션 게이트웨이(8개 AWS 도메인 + external-obs)로 설계되어 160개 이상의 읽기 전용 도구를 갖췄지만, 현재 실제 라이브는 iam-mcp 14개 + flow-monitor 1개, 딱 2개 슬라이스뿐입니다 — 나머지는 flag로 꺼진 상태로 정의만 되어 있습니다. 라우팅은 ADR-003 하이브리드 방식으로 빠르고 정확합니다.
+AI Engine은 Bedrock입니다. Opus 4.8, Sonnet 5, Haiku 4.5를 상황에 맞게 쓰고, AgentCore는 9개 섹션 게이트웨이(8개 AWS 도메인 + external-obs)로 설계되어 160개 이상의 읽기 전용 도구를 갖췄고, 함대 배포가 완료되어 30개 슬라이스 전부, 9개 게이트웨이 전부 READY MCP 타깃을 보유하고 있습니다. 라우팅은 ADR-003 하이브리드 방식으로 빠르고 정확합니다.
 
 Dashboard는 Next.js 14 thin-BFF입니다. Overview, AI Diagnosis, Assistant, Security, Compliance, Topology, Monitoring, Accounts, Integrations, Jobs, Customization까지 하나의 대시보드로 통합되어 있고, 화면에 보이는 스크린샷처럼 실제 라이브 v2 환경입니다. 무거운 작업은 비동기 워커 티어로 넘깁니다.
 
@@ -256,7 +256,7 @@ Dashboard는 Next.js 14 thin-BFF입니다. Overview, AI Diagnosis, Assistant, Se
 
 데이터는 Aurora Serverless v2, PostgreSQL 17로 영속 상태를 보관하고, 인벤토리는 41종 리소스 타입을 sync합니다.
 
-AI는 9개 섹션 게이트웨이(8개 AWS 도메인 + external-obs)에 160개 이상의 읽기 전용 도구가 설계되어 있지만, 지금 실제로 라이브인 건 iam-mcp 14개 + flow-monitor 1개, 2개 슬라이스뿐입니다. 라우팅은 ADR-003 하이브리드로 게이트 정확도 96.9%를 달성했습니다. 진단은 light·mid 티어가 9섹션(기본 8 + 의도-실제 드리프트 1), deep 티어가 16섹션이며 Well-Architected에 매핑되고 DOCX/PDF로 뽑을 수 있습니다. UX 쪽은 3-테마·모바일 대응에 더해 한국어/English/中文/日本語 4개 언어를 완전히 지원합니다 — 일본어는 최근 복원되어 전체 화면 번역 커버리지 점검까지 마쳤습니다.
+AI는 9개 섹션 게이트웨이(8개 AWS 도메인 + external-obs)에 160개 이상의 읽기 전용 도구가 설계되어 있고, 30개 슬라이스 전부 함대 배포되어 9개 게이트웨이 전부 READY 상태입니다. 라우팅은 ADR-003 하이브리드로 게이트 정확도 96.9%를 달성했습니다. 진단은 light·mid 티어가 9섹션(기본 8 + 의도-실제 드리프트 1), deep 티어가 16섹션이며 Well-Architected에 매핑되고 DOCX/PDF로 뽑을 수 있습니다. UX 쪽은 3-테마·모바일 대응에 더해 한국어/English/中文/日本語 4개 언어를 완전히 지원합니다 — 일본어는 최근 복원되어 전체 화면 번역 커버리지 점검까지 마쳤습니다.
 
 {cue: transition}
 이게 어떤 가치를 만드는지 보겠습니다.

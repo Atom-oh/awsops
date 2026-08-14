@@ -785,7 +785,7 @@ AI 종합진단 리포트는 AWSops의 플래그십 기능입니다. 전부 read
 
 {cue: pause}
 
-실행은 비동기 워커 티어에서 일어납니다. 웹은 thin-BFF라 무거운 작업을 직접 돌리지 않고 `POST /api/jobs`로 큐에 넣습니다. SQS, Step Functions, Lambda 또는 Fargate 워커가 받아서 섹션을 분석합니다. 진행 상황은 SSE로 실시간 표시됩니다. "3/16 Security Posture 분석 중" 같은 상태가 클라이언트에 흐릅니다.
+실행은 비동기 워커 티어에서 일어납니다. 웹은 thin-BFF라 무거운 작업을 직접 돌리지 않고 워커 큐에 넣는데, 진단 잡은 범용 `POST /api/jobs`가 아니라 소유권을 검사하는 전용 라우트 `/api/diagnosis`로 제출합니다(ADR-009, IDOR 방지 — 범용 라우트는 `noop` 계열만 허용). SQS, Step Functions, Lambda 또는 Fargate 워커가 받아서 섹션을 분석합니다. 진행 상황은 SSE로 실시간 표시됩니다. "3/16 Security Posture 분석 중" 같은 상태가 클라이언트에 흐릅니다.
 
 {cue: transition}
 완성된 리포트 화면을 보겠습니다.
@@ -894,9 +894,9 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 
 ::: right
 
-### 알림 다이제스트 (ADR-013, 병합 대기)
+### 알림 다이제스트 (ADR-013, 병합·배포 완료)
 
-- **`diagnosis_digest.py`** — `notified_at IS NULL` 리포트를 ~15분 배치로 묶어 SNS 1건 발송 (별도 브랜치에서 구현 완료, main 병합 대기)
+- **`diagnosis_digest.py`** — `notified_at IS NULL` 리포트를 ~15분 배치로 묶어 SNS 1건 발송 (`workers_enabled && diagnosis_notify_enabled` 게이트로 이미 main 병합·라이브 배포됨)
 - 완료 즉시 개별 발송(per-report) 방식 폐기 — 폭주 방지(하루 44건 → 1건)
 - **PII 스크러빙** — Bedrock 호출 전 ARN·계정ID·이메일·IP·액세스키를 결정론적으로 마스킹 (현재 라이브)
 
@@ -906,14 +906,14 @@ DOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한
 {timing: 2min}
 [요약]
 • 스케줄 진단은 `report_schedules` 테이블 + hourly `schedule_dispatcher`로 자동 실행
-• 알림은 개별 발송에서 ~15분 배치 다이제스트로 전환 중(폭주 방지, 병합 대기)
+• 알림은 개별 발송에서 ~15분 배치 다이제스트로 전환됨(폭주 방지, 이미 라이브)
 • Bedrock 호출 전 PII를 결정론적으로 스크러빙 — "왜 안전한가"의 핵심 근거
 
 리포트는 수동 실행뿐 아니라 스케줄로도 돌 수 있습니다. `report_schedules` 테이블에 사용자별로 주간, 격주, 월간 주기를 등록하면, hourly로 도는 `schedule_dispatcher`가 `next_run_at`을 스캔해서 리포트 job을 큐에 넣습니다. v1 `report-scheduler.ts`의 패턴을 그대로 승계했습니다.
 
 {cue: pause}
 
-완료된 리포트의 알림 방식도 곧 바뀔 예정입니다. 지금은 리포트가 끝날 때마다 SNS 이메일을 즉시 발송하는데, 하루에 44건이 몰리면 이메일이 44통 날아가는 문제가 있습니다. 별도 브랜치에서 완료된 `diagnosis_digest.py`가 ~15분 주기로 `notified_at IS NULL`인 리포트를 모아 SNS 한 건으로 묶어 보내는데, main 병합을 기다리고 있습니다.
+완료된 리포트의 알림 방식도 이미 개선됐습니다. 예전에는 리포트가 끝날 때마다 SNS 이메일을 즉시 발송해서 하루에 44건이 몰리면 이메일이 44통 날아가는 문제가 있었는데, `diagnosis_digest.py`가 ~15분 주기로 `notified_at IS NULL`인 리포트를 모아 SNS 한 건으로 묶어 보내도록 이미 main에 병합·배포되어 라이브에서 동작 중입니다.
 
 {cue: emphasis}
 
