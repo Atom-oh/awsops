@@ -227,27 +227,32 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
             alert: tokens.some((t) => ALERT_TOKENS.has(t)),
             flow: tokens.some((t) => FLOW_TOKENS.has(t)),
           });
+          // 리뷰 MAJOR(확정, PR #221 라운드3 — 라운드2 자체 수정의 두 결함):
+          // (1) 마지막 세그먼트가 결론이 안 나면 whole-name 폴백으로 넘어가는데, 그 폴백이
+          //     "발견 확정"(foundByType)까지 겸했다 — `/…/alert-prod/logs`처럼 마지막 세그먼트가
+          //     아무것도 매칭 안 해도 whole-name엔 방화벽 이름 세그먼트("alert-prod")의 "alert"
+          //     토큰이 남아있어 그걸로 발견 확정이 나버렸다. 이 코드 자신이 "임의 접두사는 더
+          //     이상 증거로 인정 안 함"이라 주석에 써놓은 것과 정반대. (2) 마지막 세그먼트가
+          //     결론이 나면(정확히 한쪽만) 그 결론만 쓰고 whole-name은 전혀 안 봤다 —
+          //     `/…/alert/netflow-collector`처럼 마지막 세그먼트는 FLOW로 결론나지만 앞선
+          //     세그먼트에 "alert"가 그대로 있으면, 그 그룹은 FLOW로만 등록되고 ALERT로는
+          //     전혀 쿼리조차 안 된다 — base(`includes`)는 최소한 양쪽 다 쿼리했으므로 base보다
+          //     나쁜 회귀. 고침: **쿼리 등록(isAlert/isFlow)은 항상 terminal ∪ whole-name 합집합**
+          //     이라 결정적이지만 틀린 terminal이 반대 타입 쿼리를 막지 못한다(event_type 필터
+          //     덕에 헛다리도 무해). **발견 확정(foundByType)은 terminal이 결정적이고 그 결정에
+          //     whole-name이 반대 타입 토큰을 추가하지 않을 때만** — "결정적"과 "whole-name과
+          //     불일치 없음"을 동시에 만족해야 그 그룹의 이름이 실제로 그 타입의 증거로 인정된다.
           const segments = lower.split('/').filter(Boolean);
-          const terminalTokens = tokenize(segments[segments.length - 1] ?? '');
-          const terminalClass = classify(terminalTokens);
-          let isAlert: boolean;
-          let isFlow: boolean;
-          if (terminalClass.alert !== terminalClass.flow) {
-            // 마지막 세그먼트 단독으로 결론이 난다(정확히 한쪽만 매칭) — 다른 세그먼트의
-            // 우연한 토큰은 보지 않는다.
-            isAlert = terminalClass.alert;
-            isFlow = terminalClass.flow;
-          } else {
-            // 마지막 세그먼트가 결론이 안 남(둘 다 매칭돼 애매, 또는 둘 다 안 매칭) —
-            // 전체 이름의 토큰으로 폴백(예: "/flow-alerts" 단일 세그먼트는 이 경로로 옴).
-            const wholeClass = classify(tokenize(lower));
-            isAlert = wholeClass.alert;
-            isFlow = wholeClass.flow;
-          }
+          const terminalClass = classify(tokenize(segments[segments.length - 1] ?? ''));
+          const wholeClass = classify(tokenize(lower));
+          const isAlert = terminalClass.alert || wholeClass.alert;
+          const isFlow = terminalClass.flow || wholeClass.flow;
           if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
           if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
-          if (isAlert && !isFlow) foundByType.ALERT = true;
-          if (isFlow && !isAlert) foundByType.FLOW = true;
+          if (terminalClass.alert !== terminalClass.flow) {
+            if (terminalClass.alert && !wholeClass.flow) foundByType.ALERT = true;
+            if (terminalClass.flow && !wholeClass.alert) foundByType.FLOW = true;
+          }
         }
         nextToken = r.nextToken;
       } while (nextToken);
@@ -295,7 +300,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 없으므로 보수적으로 둘 다).
     const alertDiscoveryUnknown = loggingUnknownByType.ALERT.length > 0 || discoveryFailed || firewallDiscoveryDegraded;
     const flowDiscoveryUnknown = loggingUnknownByType.FLOW.length > 0 || discoveryFailed || firewallDiscoveryDegraded;
-    // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().degradedRegions) 그
+    // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().firewallListDegradedRegions) 그
     // 리전 방화벽들의 로깅 구성을 원래 확인조차 못 했다 — "로그 없음"과 구분되는 별도 키.
     if (firewallDiscoveryDegraded) failed.push('firewallDiscovery');
     // 리뷰 MAJOR: targets는 방화벽 단위라, 중앙 공용 로그 그룹으로 로깅하는 방화벽이

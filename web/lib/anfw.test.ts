@@ -346,6 +346,33 @@ describe('anfwAnalysis', () => {
     // 실측 방화벽 2개 중 1개만 응답에 남음 — 조용히 "방화벽 1개"로 보이면 오탐/과소경고이므로 degraded 신호가 필수.
     expect(a.firewalls).toHaveLength(1);
     expect(a.degradedRegions).toEqual(['ap-northeast-2']);
+    // 리뷰 MINOR(PR #221): firewallListDegradedRegions는 firewalls 자체의 부분 실패에서만
+    // 켜져야 한다 — 이 케이스는 DescribeFirewall이 실패했으므로 켜져야 함.
+    expect(a.firewallListDegradedRegions).toEqual(['ap-northeast-2']);
+  });
+
+  it('정책 Describe만 실패하면 degradedRegions는 켜지지만 firewallListDegradedRegions는 비어 있음 — 방화벽 목록·로깅 구성 자체는 완전 (리뷰 MINOR, PR #221)', async () => {
+    mockDb([]);
+    nfwSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'DescribeFirewallPolicyCommand' && (cmd.input as { FirewallPolicyName: string }).FirewallPolicyName === 'p2') {
+        throw new Error('Throttling');
+      }
+      switch (cmd.constructor.name) {
+        case 'ListFirewallsCommand': return { Firewalls: [{ FirewallName: 'DMZVPC-nfw' }] };
+        case 'DescribeFirewallCommand': return FW_DESCRIBE;
+        case 'DescribeLoggingConfigurationCommand': return LOGGING;
+        case 'ListFirewallPoliciesCommand': return { FirewallPolicies: [{ Name: 'p1' }, { Name: 'p2' }] };
+        case 'DescribeFirewallPolicyCommand': return POLICY_DESCRIBE;
+        case 'ListRuleGroupsCommand': return { RuleGroups: [] };
+        default: throw new Error(`unexpected ${cmd.constructor.name}`);
+      }
+    });
+    mockCw({});
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    expect(a.firewalls).toHaveLength(1);
+    expect(a.degradedRegions).toEqual(['ap-northeast-2']);
+    expect(a.firewallListDegradedRegions).toEqual([]);
   });
 
   it('메트릭 전무 → 트래픽 null, 드롭율 null, 리스트는 정상', async () => {

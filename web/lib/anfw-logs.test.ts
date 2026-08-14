@@ -384,10 +384,14 @@ describe('anfwLogsAnalysis', () => {
     expect(a.targets.some((t) => t.type === 'FLOW' && t.group === '/aws/network-firewall/DMZVPC/netflow')).toBe(true);
   });
 
-  it('마지막 세그먼트만 보면 명확한 이름은 다른(방화벽 이름) 세그먼트에 우연히 discriminator 토큰이 있어도 애매로 오분류되지 않음 — 위치 기반 판정 (리뷰 MAJOR, PR #221 라운드2)', async () => {
-    // "/…/alert/netflow-prod/flow" 처럼 마지막 세그먼트("flow") 하나로 결론이 나는 이름은
-    // 앞선 세그먼트("alert", "netflow-prod")의 토큰을 보지 않는다 — whole-name 토큰 판정이면
-    // alert/netflow/flow가 모두 걸려 애매로 잘못 분류된다.
+  it('마지막 세그먼트는 결정적이지만 다른 세그먼트에 반대 타입 토큰이 있으면(예: "/…/alert/netflow-prod/flow") 발견 확정은 안 하되 양쪽 다 쿼리 대상으로 등록됨 (리뷰 MAJOR, PR #221 라운드3 — 라운드2의 두 결함 수정)', async () => {
+    // 라운드2는 두 가지로 틀렸다: (1) 마지막 세그먼트가 결론이 안 나면 whole-name 폴백이
+    // 발견 "확정"까지 겸해 방화벽 이름의 우연한 토큰으로도 확정될 수 있었고, (2) 마지막
+    // 세그먼트가 결론이 나면(이 케이스처럼 "flow") whole-name은 전혀 안 봐서 앞선 "alert"
+    // 세그먼트가 있어도 ALERT로는 쿼리조차 안 됐다(base보다 나쁜 회귀). 고침: 쿼리는
+    // terminal ∪ whole-name 합집합(둘 다 등록), 발견 확정은 terminal이 결정적이고
+    // whole-name이 반대 타입을 추가하지 않을 때만 — 이 이름은 whole-name에 "alert"가
+    // 있어 FLOW 결론과 불일치하므로 어느 쪽도 확정하지 않지만, 쿼리는 양쪽 다 나간다.
     mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
     logsSend.mockImplementation(async (cmd: Cmd) =>
       cmd.constructor.name === 'DescribeLogGroupsCommand'
@@ -395,8 +399,26 @@ describe('anfwLogsAnalysis', () => {
         : {});
     const { anfwLogsAnalysis } = await import('./anfw-logs');
     const a = await anfwLogsAnalysis(3600);
-    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
     expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.targets.map((t) => t.type).sort()).toEqual(['ALERT', 'FLOW']);
+  });
+
+  it('마지막 세그먼트가 결론이 안 나면(방화벽 이름 세그먼트에만 discriminator 토큰) 발견을 확정하지 않음 — whole-name 폴백은 쿼리 등록만, 확정 아님 (리뷰 MAJOR, PR #221 라운드3)', async () => {
+    // "/…/alert-prod/logs" — 마지막 세그먼트 "logs"는 아무것도 매칭 안 해 결론이 안 난다.
+    // whole-name에는 "alert-prod"의 "alert" 토큰이 남아있지만, 이건 방화벽 이름일 뿐 그
+    // 그룹이 실제로 ALERT 이벤트를 담는다는 증거가 아니다 — 발견 확정은 하지 않는다
+    // (다만 헛다리를 짚어도 무해하므로 쿼리 대상으로는 등록한다).
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/alert-prod/logs' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.targets.some((t) => t.type === 'ALERT')).toBe(true);
   });
 
   it('접두사 스캔 자체가 예외로 실패(discoveryFailed)하면 그 리전에 실제 성공한 CWL 대상이 있어도 totalAlerts/totalFlows는 null (리뷰 MAJOR 라운드15)', async () => {
