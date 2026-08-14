@@ -1,6 +1,6 @@
 # Security Group Rules and Usage
 
-**Status:** Approved 2026-08-13.
+**Status:** Proposed 2026-08-13 — **not yet Approved.** The Feature Gate / IAM sections below classify the Athena write-capable path (StartQueryExecution/StopQueryExecution + result-prefix S3 write + a new cross-account role) as ADR-007-tier rather than ADR-005 FROZEN. That classification is this document's own reasoning, not a ratified decision — per BASELINE's own precedent (ADR-015 required a dedicated ADR + multi-AI panel + dated owner-override for a single narrowly-scoped `ecs:UpdateService` call), the instrument for settling this is a new ADR through that same process, not an Approved design spec. This document does not move to Approved, and the BASELINE §2 row it requires does not get written, until that ADR lands. Implementation must not start from this spec while it is Proposed.
 
 ## Summary
 
@@ -139,16 +139,16 @@ When false:
   aggregation are disabled
 - current Usage behavior remains unchanged
 
-**The `docs/decisions/BASELINE.md` §2 register row for `sg_rule_activity_enabled` lands in the same PR
-that introduces the flag** — BASELINE's own anti-drift rule requires this; it is not deferred to
-"implementation time" as a follow-up. The governing tier is **ADR-007** (external/customer-owned DATA
-read + a narrowly-scoped write confined to the caller's own resources), the same tier as
-`diagnosis_notify_enabled` (SNS publish, LIVE) — not ADR-005's AWS-resource-mutation freeze: the Athena
-`StartQueryExecution`/`StopQueryExecution` calls and the S3 writes to the workgroup's results prefix
-(see IAM section) touch only the account's own Flow Log data and its own query-result prefix, never an
-AWS resource outside that scope. The register row must state this ADR-007 classification explicitly
-(not left as an open question) and must also cover the new `AWSopsSgRuleAthenaRole` (below) as part of
-the same posture analysis, since granting that role is what makes the write path possible.
+**This flag cannot be implemented yet.** The Athena `StartQueryExecution`/`StopQueryExecution` calls,
+the S3 write to the workgroup's results prefix, and the new cross-account `AWSopsSgRuleAthenaRole` (see
+IAM section) are not read-only, and whether they fall under ADR-007 (external/customer-owned DATA,
+narrowly-scoped write confined to the caller's own resources — this document's own working hypothesis,
+by analogy to `diagnosis_notify_enabled`) or ADR-005's AWS-resource-mutation freeze is **not this
+document's decision to make**. Per BASELINE's own precedent (ADR-015 required a dedicated ADR + multi-AI
+panel + dated owner-override for one narrowly-scoped `ecs:UpdateService` call), that classification
+requires a new ADR through the same process — not a design-spec assertion. Implementation, the
+`docs/decisions/BASELINE.md` §2 register row, and this document's `Status:` all wait on that ADR landing
+(same-PR anti-drift rule applies to the ADR, not to this spec).
 
 This separates the new recurring Athena cost from the existing SG analysis.
 
@@ -190,6 +190,31 @@ CREATE TABLE sg_rule_inventory (
   active           boolean NOT NULL DEFAULT true,
   PRIMARY KEY (account_id, region, rule_id)
 );
+-- 리뷰 MAJOR(확정, 3모델): 위 sg_rule_inventory는 rule_id당 현재 fingerprint 1개만 보관하는
+-- mutable 캐시다 — Rule inventory 페이지(현재 상태 조회)에는 맞지만, 매칭 엔진이 "이 flow가
+-- 관측된 시점에 이 rule의 모양이 무엇이었는가"를 알아야 하는데 mutable 캐시로는 알 수 없다
+-- (스캔은 D-1일을 보는데 워커는 D일 실행 시점 rule 모양만 스냅샷하므로, D-1과 D 사이에
+-- fingerprint가 바뀌었으면 D-1일의 실제 flow를 D일 모양으로 오귀속한다). 아래 append-only
+-- 버전 테이블이 실제 매칭 기준이다 — sg_rule_inventory는 현재 상태 조회용 캐시로만 남는다.
+CREATE TABLE sg_rule_inventory_versions (
+  account_id       text NOT NULL,
+  region           text NOT NULL,
+  rule_id          text NOT NULL,
+  fingerprint      text NOT NULL,
+  group_id         text NOT NULL,
+  is_egress        boolean NOT NULL,
+  protocol         text NOT NULL,
+  from_port        integer,
+  to_port          integer,
+  peer_kind        text NOT NULL,
+  peer_value       text NOT NULL,
+  valid_from       timestamptz NOT NULL,
+  -- NULL = 현재 활성 버전(아직 다음 fingerprint 변경으로 닫히지 않음).
+  valid_to         timestamptz,
+  PRIMARY KEY (account_id, region, rule_id, valid_from)
+);
+CREATE INDEX sg_rule_inventory_versions_lookup_idx
+  ON sg_rule_inventory_versions (account_id, region, rule_id, valid_from, valid_to);
 
 CREATE TABLE sg_eni_membership_snapshots (
   account_id       text NOT NULL,
@@ -264,25 +289,32 @@ Athena query. Raw flow records are not copied into Aurora.
 Use `DescribeSecurityGroupRules` with pagination. Do not reconstruct SGR IDs from
 `DescribeSecurityGroups`, because the Rules page requires stable `sgr-*` identifiers.
 
-The daily worker upserts current rules, fingerprints the match-relevant fields, marks missing rules
-inactive, and records first/last seen times. A changed fingerprint starts a new evidence epoch in the
-UI; evidence collected for an older rule shape is not silently presented as evidence for the new
-shape.
+The daily worker upserts `sg_rule_inventory` (the current-state cache used by the Rules page) and
+independently maintains `sg_rule_inventory_versions` (append-only, used by matching — see Data model):
+on every run, if a rule's freshly computed fingerprint differs from its currently-open version
+(`valid_to IS NULL`) in `sg_rule_inventory_versions`, that version is closed (`valid_to = now()`) and a
+new version row is inserted (`valid_from = now()`). A rule seen for the first time gets its first
+version row with `valid_from = first_seen_at`. Missing-rule handling and first/last-seen tracking on
+`sg_rule_inventory` are unchanged.
 
-**Fingerprint changes that happen mid-day are a schema conflict, not just a UI epoch boundary.**
-`sg_rule_activity_daily` carries exactly one `rule_fingerprint` per `(rule_id, observed_on)` row (see
-Data model), but a rule can be edited at any time of day — a day whose Athena scan window spans an edit
-has flow evidence belonging to two different rule shapes, and the pipeline can only record one
-fingerprint for that day. Rather than silently attributing the whole day's aggregate to whichever
-fingerprint happened to be current when the daily worker snapshotted rules (step 2 below), the daily
-worker compares the fingerprint it captures at snapshot time against the fingerprint recorded on that
-rule's most recent prior `sg_rule_activity_daily` row (if any) before writing: if they differ **and**
-the day being processed is the same UTC day the rule's `first_seen_at`/most recent fingerprint change
-timestamp falls in, the day is written with `coverage.fingerprint_epoch_crossing = true` and
-`unique_eni_count`/`compatible_match_count` are treated as a lower bound, not an exact count, in the UI
-(same rendering as any other `unassessable`-adjacent coverage flag — never a confident number with no
-caveat). This is a conservative degrade, not a blocker: the row is still written and still contributes
-to trend/history views, just flagged.
+**Why versioning, not a day-level epoch flag.** The daily pipeline snapshots current rules on run day D
+(step 2 below) but scans Flow Log data for an *earlier* day (D-1, or an arbitrary backfill day) — so
+"the fingerprint captured at snapshot time" is never actually the shape in force during the scanned
+day unless the rule happened to be untouched across the whole gap. A day-level "did the fingerprint
+change today" flag can't express this, and there is no fingerprint-change timestamp on the old
+single-row cache to even test the condition against. Matching therefore never asks "what does the rule
+look like right now" — for each candidate rule match against a flow record, it looks up the
+`sg_rule_inventory_versions` row for that `rule_id` whose `[valid_from, valid_to)` interval contains the
+flow's own `start`/`end` timestamp (an open-ended `valid_to IS NULL` interval matches anything at or
+after `valid_from`). If no version row's interval covers the flow's timestamp (the rule didn't exist
+yet, or the version history has a gap from before this feature started recording it), that flow's match
+against that rule is `unassessable`, not silently attributed to whatever fingerprint happens to be
+current now. `sg_rule_activity_daily` continues to store the rule's fingerprint *as of the versions
+looked up for that day's matching*, not a snapshot-time fingerprint — if a day's flows split across two
+versions (the edit happened mid-day), the day's row records
+`coverage.fingerprint_epoch_crossing = true` and its counts render as a lower bound, not an exact count
+(same rendering as any other `unassessable`-adjacent coverage flag). This is a conservative degrade, not
+a blocker: the row is still written and still contributes to trend/history views, just flagged.
 
 Default outbound rules are displayed and marked protected from cleanup recommendations.
 
@@ -341,13 +373,20 @@ Rule matching covers:
 
 - IPv4 CIDR
 - IPv6 CIDR when the source format supports it
-- SG references, resolved against the ENI membership snapshot from **the same UTC day being scanned**
-  and **scoped to the flow's own VPC** (via `sg_eni_membership_snapshots.vpc_id`) — not simply the
-  globally-nearest snapshot by timestamp, which could otherwise pick a snapshot from a different day
-  (attributing a flow to a SG membership that changed before or after that flow was recorded) or match
-  an ENI in an unrelated VPC that happens to share the same RFC1918 address. If no snapshot exists for
-  that day, the day's SG-reference matches for that VPC are `unassessable`, not silently matched against
-  the nearest other day's snapshot
+- SG references, resolved against the **latest `sg_eni_membership_snapshots` row with
+  `observed_at` at or before the end of the day being scanned** (not "same calendar day" — the daily
+  pipeline snapshots current membership on run day D but scans flow data for an earlier day, so an
+  exact-day match is frequently unsatisfiable by construction; nearest-prior-in-time is the correct
+  semantics and mirrors how `sg_rule_inventory_versions` resolves rule shape). If no snapshot exists at
+  or before that day at all (the source is brand new), that day's SG-reference matches are
+  `unassessable`, never silently matched against a *later* snapshot.
+  Scoped to **the flow's own VPC plus any VPC known to be able to legally reference it** — a VPC with an
+  active VPC Peering connection to the flow's VPC, or a participant VPC in the same shared-VPC (RAM)
+  arrangement, per this repo's existing VPC topology data — not simply the flow's own VPC alone (SG
+  references are valid across peering and shared VPCs, so a same-VPC-only scope produces a false
+  `no_observed_evidence` for every legitimately cross-VPC-referenced rule) and never scoped to "any VPC"
+  (which is what let an ENI in an unrelated VPC match purely by coincidentally sharing the same RFC1918
+  address). An ENI that resolves outside this VPC set is `unassessable`, not treated as a non-match.
 - managed prefix lists when entries can be resolved read-only
 - ingress and egress
 - protocol and port ranges
@@ -412,10 +451,30 @@ When the feature is enabled, the worker needs:
 inline) as part of this feature — a role whose name is a declared read-only invariant does not carry
 write-capable actions under any attachment method, since the write capability is the same regardless of
 whether it arrives as a managed policy or an inline one. Target accounts instead get a wholly separate
-IAM role (e.g. `AWSopsSgRuleAthenaRole`), assumed only by this feature's worker path and scoped to
-exactly the workgroup(s) and result prefix configured for that source; this is the same ADR-005/ADR-007
-posture analysis and BASELINE §2 register row required by the feature gate above, applied at the IAM
-boundary rather than only at the flag. The host account uses its execution role and does not self-assume.
+IAM role (e.g. `AWSopsSgRuleAthenaRole`), scoped to exactly the workgroup(s) and result prefix configured
+for that source, explicitly excluding `s3:DeleteObject` and any bucket-policy/ACL write action; this is
+the same ADR-005/ADR-007 posture analysis and BASELINE §2 register row required by the feature gate
+above, applied at the IAM boundary rather than only at the flag. The host account uses its execution
+role and does not self-assume.
+
+**Trust policy** (this is the first write-capable role in a repo whose existing cross-account path is
+entirely read-only, so nothing to copy from): the target account's `AWSopsSgRuleAthenaRole` trust policy
+requires an `ExternalId` condition on the assuming principal (matching this repo's existing cross-account
+convention in `terraform/v2/foundation/workload.tf` for the read-only role) plus an explicit principal
+ARN restriction to the host account's Athena-worker identity — no wildcard principal, no missing
+ExternalId, which would otherwise make this a confused-deputy risk the read-only sibling role never had.
+
+**Assumption path — cannot reuse the shared Fargate worker task role as-is.** `terraform/v2/foundation/
+workers.tf` and `scripts/v2/workers/handlers.py` show `report`, `compliance`, and other job handlers
+share one Fargate task role/task definition. Granting *that* role `sts:AssumeRole` on
+`AWSopsSgRuleAthenaRole` would expose every job type this worker fleet runs — not just this feature — to
+Flow Log S3 reads, Athena execution, and result-prefix writes, making "assumed only by this feature's
+worker path" a documentation claim with no IAM enforcement behind it. This feature's Athena-executing
+work needs either (a) a dedicated task role/task definition (a separate Fargate service or a distinct
+container definition within the existing task, so `sts:AssumeRole` on the Athena role is scoped to that
+role alone) or (b) a broker Lambda that is the only principal allowed to assume `AWSopsSgRuleAthenaRole`,
+with the Fargate worker calling the broker rather than assuming the role directly. Pick one before
+implementation — this is not an optional hardening step, it's what makes the isolation claim true.
 
 Missing permissions degrade only that account/region source to `unassessable`.
 

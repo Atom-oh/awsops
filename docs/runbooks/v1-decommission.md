@@ -366,10 +366,23 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
     fi
     aws bedrock-agentcore-control delete-gateway --gateway-identifier "$gw"
   done
-  : "${CONFIRMED_ORPHAN_MEMORY_ID:?fill in the confirmed memory id from step (b) first}"
-  aws bedrock-agentcore-control delete-memory --memory-id "$CONFIRMED_ORPHAN_MEMORY_ID"
-  : "${CONFIRMED_ORPHAN_CODE_INTERPRETER_ID:?fill in the confirmed code interpreter id from step (b) first}"
-  aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id "$CONFIRMED_ORPHAN_CODE_INTERPRETER_ID"
+  # 리뷰 MAJOR(확정): `: "${VAR:?msg}"`는 비어 있으면 그 자리에서 셀 전체를 즉시 종료한다 —
+  # 삭제 호출 바로 앞으로 옮겨도 "이 자원 하나만 건너뛰기"가 아니라 "스크립트 전체 중단"이라,
+  # memory가 비어 있으면(검토 결과 지울 게 없음) interpreter 삭제까지 도달하지 못한다. 각
+  # 자원이 독립적으로 건너뛸 수 있도록 hard-fail을 조건부 실행으로 바꾼다 — 비어 있으면
+  # "지울 게 없다고 확인됨"으로 보고 그냥 건너뛴다(자리표시자를 깜빡하고 안 채운 경우와
+  # 구분이 안 되는 대가는 있지만, (b) 검토를 이미 마친 뒤에만 이 블록을 실행한다는 전제이므로
+  # 받아들일 수 있는 트레이드오프다).
+  if [ -n "$CONFIRMED_ORPHAN_MEMORY_ID" ]; then
+    aws bedrock-agentcore-control delete-memory --memory-id "$CONFIRMED_ORPHAN_MEMORY_ID"
+  else
+    echo "CONFIRMED_ORPHAN_MEMORY_ID 비어 있음 — memory 삭제 건너뜀" >&2
+  fi
+  if [ -n "$CONFIRMED_ORPHAN_CODE_INTERPRETER_ID" ]; then
+    aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id "$CONFIRMED_ORPHAN_CODE_INTERPRETER_ID"
+  else
+    echo "CONFIRMED_ORPHAN_CODE_INTERPRETER_ID 비어 있음 — code interpreter 삭제 건너뜀" >&2
+  fi
   ```
 - **공개 ALB `awsops-alb`(internet-facing) — 과금 중, 타깃 = 정지된 v1 EC2.** `AwsopsStack` CFN 삭제(4.3) 범위에 포함되는지 스택 리소스 목록으로 반드시 확인한다(CFN이 만들지 않은 별도 리소스라면 4.3이 지우지 않으므로 수동 정리 대상):
   ```bash

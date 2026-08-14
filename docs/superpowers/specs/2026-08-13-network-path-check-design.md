@@ -1,6 +1,12 @@
 # Network Path Check
 
-**Status:** Approved 2026-08-13.
+**Status:** Proposed 2026-08-13 — **not yet Approved.** This feature stays read-only (no mutation, no
+active probe, per Explicit exclusions below), so it does not raise the ADR-005/ADR-007 governance
+question the SG-rules sibling spec does. It still needs a `docs/decisions/BASELINE.md` §2 register row
+for `network_path_check_enabled` in the same PR that introduces the flag (BASELINE's anti-drift rule) —
+that row does not exist yet, so this document does not move to Approved until it's added alongside the
+implementation PR. Separately, this document's own status-reduction rules and adapter-safety
+requirements (see review-driven revisions below) need one more pass before implementation starts.
 
 ## Summary
 
@@ -12,10 +18,16 @@ Add a dedicated, read-only Network Path Check workflow that answers:
 The result is not a binary packet-level guarantee. It is a deterministic checklist of the policy
 layers AWSops could inspect:
 
-- `O` - inspected and allowed
-- `X` - inspected and blocked
-- `?` - not observable or not supported
-- `conditional` - no known blocker, but at least one segment remains unknown
+- `O` (`allowed`) - inspected and allowed
+- `X` (`blocked`) - inspected and blocked
+- `?` (`unknown`) - not observable or not supported
+- `conditional` - no known blocker, but at least one required segment remains unknown or was cut off
+  by the global deadline before it ran (`not_run`, see Result semantics)
+- `not_run` - the global deadline was reached before this layer executed; distinct from `?` (which means
+  the layer ran but couldn't be evaluated) — surfaced in per-layer results but never as a standalone
+  top-level status
+- `failed` - an execution-level failure (e.g. identity could not be resolved) prevented meaningful
+  inspection; also the per-candidate status when every required layer is `not_run`
 
 The engine evaluates cached topology first, then live read-only AWS and Kubernetes policy data. It
 never creates a Reachability Analyzer path, executes `kubectl exec`, changes a rule, or performs any
@@ -122,6 +134,21 @@ contract.
 Unsupported versions, missing CRDs, private external policy, and data-access failures become `?`.
 They never become `O`.
 
+**Reused-adapter contract, not just this feature's own layers.** `reachability_read_mcp.py`'s
+`check_reachability` (reused for the SG/NACL/subnet-route layer) appends a `blocking_component` and
+returns `reachable:false` whenever it finds no matching route — including for TGW route tables, the
+destination return route, instance-level firewalls, prefix-list contents, and DNS, none of which it
+actually evaluates (its own disclaimer says so). Wrapped unchanged, that produces a **false `X`
+(blocked)** verdict for exactly the cases this feature's own "Unsupported/missing/private -> `?`, never
+`O`" rule is trying to prevent — the rule as stated only forbids inventing an `allowed`, but says
+nothing about the adapter inventing a `blocked`. The adapter wrapper for this layer must translate
+"no route found because that component isn't modeled" into `?` (unknown), and reserve `X` (blocked) for
+cases the adapter actually evaluated and confirmed deny — the underlying function's disclaimer list is
+the exact set of conditions that must map to `?` rather than being passed through as `reachable:false`.
+Separately, the same adapter probes the NACL return path at a single representative ephemeral port; a
+verdict of `allowed` from that adapter is scoped to that probed port only, and the wrapper must not
+generalize it to "the real client's ephemeral port is also allowed" without a matching check.
+
 ### Result semantics
 
 Each result uses:
@@ -151,21 +178,46 @@ that doesn't apply to a given candidate is omitted from that candidate's step li
 **Per-candidate status** (computed independently for each candidate path):
 
 - any `blocked` layer on that candidate -> that candidate is `blocked`
-- no `blocked`, at least one required `unknown` -> that candidate is `conditional`
+- no `blocked`, at least one required layer `unknown` **or `not_run`** -> that candidate is `conditional`
+  (a layer the deadline cut off before evaluation is exactly as informative as one that returned
+  `unknown` — neither confirms the candidate works, and letting `not_run` silently drop out of the
+  reduction would let a deadline-truncated candidate report `allowed` on partial evidence)
 - every required layer `allowed` -> that candidate is `allowed`
+- every required layer `not_run` (the deadline hit before this candidate's first layer even started) ->
+  that candidate is `failed`, not `conditional` — zero evidence was gathered, which is a different case
+  from "some evidence, still uncertain"
 
-**Overall status** is then reduced across candidates, not across layers directly:
+**Candidate kind** — `discover` tags each candidate `resolved` or `hypothesis`:
+- `resolved`: discovery found genuine, verified redundancy for this specific flow — ECMP routes, a
+  multi-target-group/multi-healthy-target ALB backend, multiple healthy TGW attachments — where traffic
+  for this flow may legitimately take any of the listed candidates and all of them being viable is the
+  actually-correct description of the path.
+- `hypothesis`: discovery could not narrow to the single path this flow actually takes (ambiguous source
+  ENI/subnet resolution, multiple matching route-table entries with no way to disambiguate) and is
+  presenting guesses about which one is real. Forwarding itself is deterministic — exactly one path
+  exists — so multiple `hypothesis` candidates encode *our* uncertainty about which one it is, not
+  redundancy in the network.
 
-- at least one candidate `allowed` -> overall `allowed` (traffic has a working path; the response
-  surfaces that candidate as primary and lists the blocked/conditional candidates as alternates)
-- no candidate `allowed`, at least one candidate `conditional` -> overall `conditional`
-- every candidate `blocked` -> overall `blocked`
-- execution-level failure before meaningful inspection -> `failed`
+**Overall status** is reduced across candidates, not across layers directly, and the rule depends on
+candidate kind:
+
+- **All candidates `resolved`**: at least one `allowed` -> overall `allowed` (redundancy means traffic
+  gets through via *some* path; the response surfaces that candidate as primary and lists the
+  blocked/conditional candidates as alternates); no `allowed`, at least one `conditional` -> overall
+  `conditional`; every candidate `blocked` -> overall `blocked`.
+- **Any candidate `hypothesis`**: the reduction may not report `allowed` merely because one hypothesis
+  is allowed — that would hide a real blocker on whichever hypothesis is the flow's actual path, which
+  is exactly the operator's question. All-hypotheses-agree short-circuits the ambiguity (all `allowed`
+  -> overall `allowed`; all `blocked` -> overall `blocked`); any disagreement among hypotheses (some
+  allowed, some blocked/conditional) -> overall `conditional`, and the response must say *why* — that
+  discovery could not determine which candidate is the real path, not merely that some layer was
+  uncertain.
+- execution-level failure before meaningful inspection -> `failed`.
 
 This is why "any blocked layer -> blocked" cannot be the overall-status rule directly: a blocked layer
 on one candidate says nothing about a sibling candidate that never touches that layer. Blocking is
 scoped to the candidate that contains the layer, and only propagates to the overall result once every
-candidate is accounted for.
+candidate is accounted for (and, for `hypothesis` candidates, only once every hypothesis agrees).
 
 Within one candidate, the UI preserves layers that were not evaluated after an earlier blocker on that
 same candidate and labels them `not_run`; it does not incorrectly display them as allowed or unknown.
@@ -240,6 +292,11 @@ CREATE TABLE network_path_runs (
 CREATE TABLE network_path_run_steps (
   run_id        text NOT NULL REFERENCES network_path_runs(id) ON DELETE CASCADE,
   candidate_id  text NOT NULL,
+  -- 리뷰 MAJOR: Result semantics의 각 결과는 scope{accountId,region}을 약속하는데(멀티계정/
+  -- 멀티리전 워커라 필수), 이 테이블엔 그 두 컬럼이 없었다 — 후보가 계정/리전 경계를
+  -- 넘나들면 evidence만으로는 어느 계정/리전에서 관측됐는지 구분이 안 된다.
+  account_id    text NOT NULL,
+  region        text NOT NULL,
   ordinal       integer NOT NULL,
   layer         text NOT NULL,
   status        text NOT NULL,
@@ -304,16 +361,25 @@ manual investigation. The stored checklist remains the source of truth.
 - One adapter failure -> that layer is `?`; unrelated layers continue.
 - Global deadline -> remaining layers on every still-running candidate become `not_run`; each affected
   candidate's status is computed from whatever it evaluated before the deadline (per the per-candidate
-  rules above), and the overall status still follows the candidate reduction — a candidate that reached
-  `allowed` before the deadline still makes the overall result `allowed`, even if a sibling candidate
-  was truncated to `conditional` by the deadline.
+  rules above — a candidate whose required layers are entirely `not_run` becomes `failed`, one with a
+  mix becomes `conditional`), and the overall status still follows the candidate-kind reduction above —
+  a `resolved`-kind candidate that reached `allowed` before the deadline still makes the overall result
+  `allowed` even if a sibling `resolved` candidate was truncated; a `hypothesis`-kind candidate that
+  reached `allowed` does **not** by itself make the overall result `allowed` if a sibling hypothesis was
+  truncated to `conditional`/`failed` by the deadline — that's still "we don't know which path is real,
+  and couldn't finish checking one of them," which is `conditional`, not `allowed`.
 - Identity cannot be resolved -> run completes `failed` with a bounded, non-sensitive error.
-- Stale run -> existing worker reaper marks it failed.
+- Stale run -> a dedicated reaper query added to `scripts/v2/workers/reaper.py` reconciles
+  `network_path_runs` the same way it already does for `worker_jobs`/`diagnosis_reports` — the existing
+  reaper does not cover this table today and must be extended as part of this feature's implementation,
+  not assumed to already apply.
 - Candidate topology is stale or empty -> live discovery continues where possible and records the
   cache limitation.
 - Multiple plausible paths -> compute each candidate's status independently, show each candidate with
-  its first known blocker (if any), and reduce to overall status per the candidate-reduction rule (any
-  `allowed` candidate makes the overall result `allowed`, even alongside a blocked sibling).
+  its first known blocker (if any), tag each `resolved` or `hypothesis`, and reduce to overall status
+  per the candidate-kind reduction rule above (an `allowed` `resolved` candidate makes the overall
+  result `allowed` alongside a blocked sibling; an `allowed` `hypothesis` candidate does not, unless
+  every hypothesis agrees).
 - On-premises segment -> always `?` past the AWS boundary.
 - Unsupported Calico, Cilium, or Istio CRD version -> `?`, never an assumed allow.
 
