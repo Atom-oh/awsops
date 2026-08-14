@@ -10,7 +10,9 @@ const RANGE_ALLOWED = [3600, 21600, 86400, 604800];
 // 리뷰 MAJOR(확정, 라운드5): 세그먼트 3개 고정이라 us-gov-west-1/us-iso-east-1 같은 4세그먼트
 // 리전이 형식 검사에서 통과 못 해 스코프에서 조용히 빠졌다(다른 세그먼트 수 리전도 동일 위험).
 // 세그먼트 개수를 고정하지 않고 "2자 시작 + 하이픈-단어 반복 + 끝 숫자" 형태로 완화.
-const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
+// 리뷰 MINOR(확정, 라운드9): 첫 세그먼트를 2자로 고정해 eusc-de-east-1(유럽 소버린
+// 클라우드)처럼 4자 접두사인 리전이 여전히 거부됐다 — 2~4자로 완화.
+const REGION_RE = /^[a-z]{2,4}(-[a-z]+)+-\d$/;
 
 // 리뷰 MAJOR(확정): 스코프 파라미터가 없으면 /api/sg는 항상 호스트 계정 전 리전을 스캔해
 // 페이지 상단의 계정/리전 선택과 무관하게 보였다(형제 TgwSection은 scope-filtered rows의
@@ -28,8 +30,12 @@ const MAX_SCOPE_REGIONS = 20;
 // SG 총계·미사용 SG 판정·"이상 없음" 배너가 실제로는 불완전한데 확정처럼 보인다 —
 // degradedRegions와 같은 계약 위반. truncated를 반환해 호출자가 응답에 신호를 얹게 한다.
 function parseRegions(url: URL): { regions: string[] | undefined; truncated: boolean; invalid: boolean } {
-  const raw = url.searchParams.get('regions');
-  if (!raw) return { regions: undefined, truncated: false, invalid: false };
+  // 리뷰 MINOR(확정, 라운드9): `?regions=`(빈 값)은 `url.searchParams.get`이 ''를 반환해
+  // `!raw` 분기를 타고 "파라미터 없음"(정당한 전체 스캔)과 똑같이 처리됐다 — 파라미터가
+  // "명시적으로 존재하는데 비어 있음"과 "아예 없음"을 `has()`로 구분해야, 빈 값도
+  // 아래 유효-리전-0건 거부 로직을 똑같이 타게 된다(라운드6 결정과 일관).
+  if (!url.searchParams.has('regions')) return { regions: undefined, truncated: false, invalid: false };
+  const raw = url.searchParams.get('regions') ?? '';
   const requested = new Set(raw.split(',').map((r) => r.trim()).filter(Boolean));
   const valid = [...requested].filter((r) => REGION_RE.test(r));
   const capped = valid.slice(0, MAX_SCOPE_REGIONS);
@@ -40,7 +46,7 @@ function parseRegions(url: URL): { regions: string[] | undefined; truncated: boo
   // regions:undefined를 반환해 "스코프 없음"(전 리전 스캔)으로 조용히 넓어졌다 —
   // 사용자가 명시적으로 스코프를 요청했는데 정반대로 넓혀버리는 게 오히려 위험하다.
   // regions param이 아예 없는 경우(정당한 전체 스캔 요청)와는 구분해 거부한다.
-  const invalid = capped.length === 0 && requested.size > 0;
+  const invalid = capped.length === 0;
   return { regions: capped.length > 0 ? capped : undefined, truncated, invalid };
 }
 

@@ -78,7 +78,12 @@ async function lookupNetworkFirewallMutations(region: string, deadlineAt: number
     } while (NextToken);
     // 페이지 상한이나 데드라인에 걸렸는데 NextToken이 남아있거나 아예 시도조차 못 했으면
     // 탐색이 미완결이다 — failed:false로 보고하면 "더 없음=진짜 없음"처럼 보인다.
-    const capExhausted = deadlineHit || (page >= 6 && !!NextToken);
+    // 리뷰 MAJOR(확정, 라운드9): 이전엔 page>=6인 경우만 capExhausted 계산에 넣었는데,
+    // matched.length>=30로 먼저 break한 경우(page<6이어도)는 계산에서 빠졌다 — 바쁜
+    // 리전이 NextToken이 남은 채로 30건에서 끊겨도 "탐색 완결"로 보고돼, UI가 광고하는
+    // "전체 최근 50건까지"와 달리 그 리전의 오래된 이벤트가 조용히 잘려나간다. 두 중단
+    // 조건(페이지 상한/매칭 상한) 모두 NextToken이 남아있으면 미완결로 표시.
+    const capExhausted = deadlineHit || ((page >= 6 || matched.length >= 30) && !!NextToken);
     return { raw: matched, failed: false, capExhausted };
   } catch { return { raw: matched, failed: true, capExhausted: false }; }
 }
