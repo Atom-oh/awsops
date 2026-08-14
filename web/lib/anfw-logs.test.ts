@@ -467,6 +467,30 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'x', value: 3 }]);
   });
 
+  it('flowTotals 쿼리가 실패하면 totalFlows/totalBytes는 0이 아니라 null — byProto 등 다른 flow 쿼리 결과는 유지 (리뷰 MAJOR 라운드11)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ alertLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const q = cmd.input.queryString as string;
+        // totals 쿼리(group-by 없이 count+sum(bytes))만 실패시키고 나머지 flow 쿼리는 성공.
+        // 주의: "bytes"는 부분문자열로 "by"를 포함하므로 " by "(공백 포함)로 group-by절만 매칭.
+        if (q.includes('sum(event.netflow.bytes) as bytes') && !q.includes(' by ')) throw new Error('boom flow totals');
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') {
+        return { status: 'Complete', results: [row({ proto: 'TCP', cnt: 5 })] };
+      }
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('flowTotals');
+    expect(a.flow!.totalFlows).toBeNull();
+    expect(a.flow!.totalBytes).toBeNull();
+    // proto 쿼리는 별도 쿼리라 실패하지 않았어야 하고, 그 로드된 결과는 살아있어야 한다.
+    expect(a.flow!.byProto).toEqual([{ name: 'TCP', value: 5 }]);
+  });
+
   it('51개 이상 그룹으로 청크가 갈린 리전이 있으면 alertTopNPartial을 failed에 표시 (리뷰 MAJOR 라운드10)', async () => {
     mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
     const groupNames = Array.from({ length: 51 }, (_, i) => `/aws/network-firewall/fw${i}/alert`);

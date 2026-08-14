@@ -24,6 +24,13 @@ const REGION_RE = /^[a-z]{2,4}(-[a-z]+)+-\d$/;
 // detailCacheByScope/ipLabelCacheByScope에 스코프별 Map을 계속 새로 쌓는다(OOM
 // 민감한 Fargate web 티어에서 무제한 증가). 실사용(페이지의 계정/리전 선택)은 한
 // 화면에 표시되는 리전 몇 개를 넘지 않으므로 넉넉한 상한으로 그 외의 조합 폭증을 막는다.
+// 리뷰 MAJOR(라운드11, 오탐 — 파일 truncation): 이 상한은 "한 요청의 스코프 크기"만
+// 막고 "가능한 서로 다른 스코프 키의 개수"는 안 막는다는 지적 — 맞지만 그건 이미 두
+// 겹으로 막혀 있다: (1) 아래 resolveScopeRegions()가 요청 리전을 인벤토리 실존 리전과
+// 교집합해 키 공간을 실제 리전 수로 좁히고, (2) sg-analysis.ts의 detailCacheByScope/
+// ipLabelCacheByScope 자체가 MAX_SCOPE_ENTRIES=32 FIFO eviction으로 상한이 걸려 있다
+// (`evictOldest`, sg-analysis.ts:25-30/44-51/495-497 — 라운드6에서 이미 추가). 리뷰가
+// 3000줄 truncation으로 그 파일을 못 보고 route.ts만으로 판단해 생긴 오탐.
 const MAX_SCOPE_REGIONS = 20;
 // 리뷰 MAJOR(확정, 라운드5): 페이지는 "위 표와 같은 리전만 스캔한다"고 명시하는데,
 // 20개 초과 시 나머지를 이 함수가 조용히 잘라버리면(형식 불일치로 걸러진 리전도 마찬가지)

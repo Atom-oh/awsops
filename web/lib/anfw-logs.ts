@@ -98,7 +98,8 @@ export interface AnfwAlertAnalytics {
 }
 
 export interface AnfwFlowAnalytics {
-  totalFlows: number; totalBytes: number;
+  /** flowTotals 쿼리 자체가 실패하면 둘 다 null — alertTotals와 동일 계약(0 ≠ 조회 실패). */
+  totalFlows: number | null; totalBytes: number | null;
   /** (src, dst) 호스트쌍 기준 — dest_port는 유동 포트라 group 카디널리티가 플로우 수와 같아져 시간 초과(실측). */
   topTalkers: { src: string; dst: string; bytes: number; flows: number }[];
   /** Top talker 집계 창(초) — 플로우 볼륨 과다로 요청 범위보다 좁을 수 있음 (rangeSec와 다르면 UI 고지). */
@@ -360,9 +361,15 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         cur.bytes += num(r.bytes); cur.flows += num(r.cnt);
         talkerMap.set(key, cur);
       }
+      // 리뷰 MAJOR(라운드11): alertTotals에 적용한 nullable 계약을 flowTotals에도
+      // 그대로 적용 — 이전엔 flowTotals 실패 시에도 0으로 접혀 "0 flows / 0 B"가
+      // "조회 실패"와 구분 안 됐고, 그 확정 0이 아래 시각화 게이트(totalFlows>0)까지
+      // 가려 이미 성공한 byProto/topTalkers 차트를 숨겼다(alert 쪽에서 라운드10에
+      // 고친 것과 정확히 같은 버그 계급 — flow 쪽에 반영이 빠졌던 것).
+      const flowTotalsFailed = failed.includes('flowTotals');
       flow = {
-        totalFlows: totals.reduce((s, r) => s + num(r.cnt), 0),
-        totalBytes: totals.reduce((s, r) => s + num(r.bytes), 0),
+        totalFlows: flowTotalsFailed ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
+        totalBytes: flowTotalsFailed ? null : totals.reduce((s, r) => s + num(r.bytes), 0),
         talkersWindowSec,
         topTalkers: [...talkerMap.values()].sort((a, b) => b.bytes - a.bytes).slice(0, 10),
         byProto: [...protoMap.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),

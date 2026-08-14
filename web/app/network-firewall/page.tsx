@@ -796,7 +796,10 @@ export default function NetworkFirewallPage() {
               ) : (
                 <>
                   <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-[13px]">
-                    <span className="font-semibold">{tt('플로우')} {logsData.flow.totalFlows.toLocaleString()}</span>
+                    {/* 리뷰 MAJOR(라운드11): flowTotals 실패 시 totalFlows/totalBytes는 null —
+                        alert 카드와 동일하게 "확인 불가"로 표시(0건과 구분). 아래 표는 이미
+                        topTalkers.length로 독립 게이트돼 있어 totals 실패의 영향을 받지 않음. */}
+                    <span className="font-semibold">{tt('플로우')} {logsData.flow.totalFlows == null ? tt('확인 불가') : logsData.flow.totalFlows.toLocaleString()}</span>
                     <span>{tt('전송량')} {fmtBytes(logsData.flow.totalBytes) ?? dash}</span>
                     {logsData.flow.byProto.map((p) => (
                       <Badge key={p.name} variant="outline" mono>{`${p.name} ${p.value.toLocaleString()}`}</Badge>
@@ -834,7 +837,10 @@ export default function NetworkFirewallPage() {
             </Card>
 
             {/* ⑧-b Flow 시각화 — 프로토콜 분포 도넛 + Top talker 전송량 바 */}
-            {logsData?.flow != null && logsData.flow.totalFlows > 0 && (
+            {/* 리뷰 MAJOR(라운드11): totalFlows>0 게이트는 flowTotals만 실패해도(byProto/
+                topTalkers 쿼리는 성공) 이미 로드된 차트 두 개를 통째로 숨겼다 — 두 차트가
+                실제로 그릴 데이터 유무로 게이트를 교체(totalFlows는 위 카드에서 별도 표시). */}
+            {logsData?.flow != null && (logsData.flow.byProto.length > 0 || logsData.flow.topTalkers.length > 0) && (
               <div className="grid gap-6 lg:grid-cols-2">
                 <DonutBreakdown title="Flow 프로토콜 분포" data={flowProtoDist} nameKey="name" valueKey="value" />
                 <HBarList title="Top talker 전송량 (MB)" data={talkerBars} labelKey="pair" valueKey="mb" highlightMax />
