@@ -370,11 +370,19 @@ When the feature is enabled, the worker needs:
 - Athena Start/Get/Stop query execution, scoped to configured workgroups where supported
 - Glue GetDatabase/GetTable/GetPartitions
 - S3 read on the configured Flow Log table locations
-- S3 query-result access required by the workgroup
+- S3 write on the workgroup's query-result prefix only (required by Athena itself to run a query;
+  scoped to that one prefix, never a general S3 write grant)
 - EC2 DescribeSecurityGroupRules and DescribeNetworkInterfaces
 
-Target accounts use the existing `AWSopsReadOnlyRole` with an explicitly documented optional policy
-extension. The host account uses its execution role and does not self-assume.
+`Athena StartQueryExecution`/`StopQueryExecution` and the query-result S3 write are not read actions,
+so they are **not** added to the existing `AWSopsReadOnlyRole` as-is — extending a role whose name is a
+declared read-only invariant with write-capable actions would itself be a finding, independent of how
+narrowly those actions are scoped. Target accounts instead get a **separate, purpose-named policy**
+(e.g. `AWSopsSgRuleAthenaRole` or an inline policy attached alongside `AWSopsReadOnlyRole`, not merged
+into it) scoped to exactly the workgroup(s) and result prefix configured for that source; this is the
+same ADR-005/ADR-007 posture analysis and BASELINE §2 register row required by the feature gate above,
+applied at the IAM boundary rather than only at the flag. The host account uses its execution role and
+does not self-assume.
 
 Missing permissions degrade only that account/region source to `unassessable`.
 

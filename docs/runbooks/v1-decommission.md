@@ -305,7 +305,9 @@ terraform -chdir=terraform/v2/foundation plan   # DomainARecord 관련 변경 �
 aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].{Name:FunctionName,Runtime:Runtime,Modified:LastModified}"
 # ↑ 이 출력을 육안 검토: v1 조사 시점(2026-07-08) 기준 py3.12 runtime의 *-mcp 슬라이스 18개 + steampipe-query 여야 한다.
 #   목록이 다르면(다른 py 버전/최근 수정/모르는 이름) 그 함수는 제외하고 개별 확인한다.
-CONFIRMED_ORPHAN_LAMBDAS=(<검토 완료 후 (a)~(b)에서 확정된 함수명만 여기 나열>)
+# (a)~(b) 검토가 끝나기 전까지 빈 배열 — 그대로 실행해도 아무것도 지우지 않는다(안전한 기본값).
+# 검토 완료 후에만 실제 함수명으로 채운다. 예: CONFIRMED_ORPHAN_LAMBDAS=("awsops-foo-mcp" "awsops-bar-mcp")
+CONFIRMED_ORPHAN_LAMBDAS=()
 for fn in "${CONFIRMED_ORPHAN_LAMBDAS[@]}"; do aws lambda delete-function --function-name "$fn"; done
 
 aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bucket "${V1_DEPLOY_BUCKET}"
@@ -322,11 +324,15 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
   aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory')].{id:id,status:status}"
   aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter'].{id:codeInterpreterId,name:name,status:status}"
   # (b) 위 목록을 (조사 시점 8게이트웨이 + 1 memory + 1 interpreter) 과 대조 — 다르면 개별 확인 후 제외
-  #     확인이 끝나면 아래 변수에 실제 ID를 채운다(복붙 실행 시 프로세스 치환 `<(...)`과 겹치는
-  #     자리표시자 문법을 쓰지 않는다 — 삭제 절차라 문법 사고를 특히 피해야 함):
-  CONFIRMED_ORPHAN_GATEWAY_IDS=(<검토 완료 후 (b)에서 확정된 gatewayId만 여기 나열>)
-  CONFIRMED_ORPHAN_MEMORY_ID=<검토 완료 후 (b)에서 확정된 memory id>
-  CONFIRMED_ORPHAN_CODE_INTERPRETER_ID=<검토 완료 후 (b)에서 확정된 codeInterpreterId>
+  #     검토가 끝나기 전까지는 아래 값이 전부 비어 있어 그대로 실행해도 아무것도 지우지 않는다
+  #     (안전한 기본값 — 복붙 실행 시 프로세스 치환 `<(...)`과 겹치는 자리표시자 문법은 쓰지 않는다,
+  #     삭제 절차라 문법 사고를 특히 피해야 함). 검토 완료 후에만 실제 ID로 채운다.
+  # 예: CONFIRMED_ORPHAN_GATEWAY_IDS=("abc12345" "def67890")
+  CONFIRMED_ORPHAN_GATEWAY_IDS=()
+  # 예: CONFIRMED_ORPHAN_MEMORY_ID="awsops_memory-abc12345"
+  CONFIRMED_ORPHAN_MEMORY_ID=""
+  # 예: CONFIRMED_ORPHAN_CODE_INTERPRETER_ID="awsops_code_interpreter-abc12345"
+  CONFIRMED_ORPHAN_CODE_INTERPRETER_ID=""
   # (c) 게이트웨이는 타깃부터 지우고, 그 삭제가 실제 반영될 때까지 기다린 다음에만 게이트웨이를 지운다 —
   #     타깃이 아직 DELETING인 채로 delete-gateway를 부르면 생성 때의 "GW READY 전 target 생성 실패"와
   #     대칭인 이유로 실패한다(비동기 삭제, 즉시 완료 보장 없음).
