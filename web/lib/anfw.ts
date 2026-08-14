@@ -77,6 +77,9 @@ export interface AnfwFirewallRow {
   passedPackets: number | null; droppedPackets: number | null;
   rejectedPackets: number | null; invalidDropped: number | null; otherDropped: number | null;
   streamExceptionPackets: number | null;
+  /** TLS 검사 계열 (미사용 환경은 null/0 — 정직 표기). */
+  tlsReceivedPackets: number | null; tlsPassedPackets: number | null;
+  tlsDroppedPackets: number | null; tlsRejectedPackets: number | null;
   /** (드롭+무효+기타+거부) ÷ 수신 ×100 — 소수 2자리 (null=산출 불가). */
   dropRatePct: number | null;
   /** AZ·엔진별 표시용 요약 행 (상세 패널 idlist). */
@@ -117,6 +120,11 @@ export interface AnfwAnalysis {
    *  빈 배열이 아니면 firewalls/policies/ruleGroups·totals는 "리전에 리소스 없음"이 아니라
    *  "AWS 조회 실패로 알 수 없음" — 0/빈 결과를 그대로 신뢰하면 안 됨. */
   degradedRegions: string[];
+  /** 이번 분석이 실제로 조회를 시도한 전 리전 목록(인벤토리 기반) — firewalls[].region은
+   *  현재 방화벽이 있는 리전만 담아 "리전의 마지막 방화벽이 삭제됨" 케이스를 놓친다.
+   *  audit 등 firewalls 목록과 무관하게 "우리가 감시하는 리전 전체"가 필요한 호출자는
+   *  이 목록을 써야 한다(리뷰 MAJOR). */
+  scannedRegions: string[];
   /** CloudWatch(ListMetrics 미순회 잔여분·100튜플 캡·쿼리 단위 실패)로 트래픽/드롭 수치가
    *  실측보다 낮게 나올 수 있는 리전 — List/Describe는 성공했지만 메트릭만 저하됨.
    *  degradedRegions와 달리 firewalls/policies/ruleGroups 자체는 완전하다. */
@@ -172,6 +180,11 @@ const FW_METRICS = [
   { key: 'othdrop', name: 'OtherDroppedPackets' },
   { key: 'rej', name: 'RejectedPackets' },
   { key: 'sep', name: 'StreamExceptionPolicyPackets' },
+  // TLS 검사 계열 (owner 가이드: 복호화 실패/검사 트래픽 모니터링) — 미사용이면 0/부재
+  { key: 'tlsrecv', name: 'TLSReceivedPackets' },
+  { key: 'tlspass', name: 'TLSPassedPackets' },
+  { key: 'tlsdrop', name: 'TLSDroppedPackets' },
+  { key: 'tlsrej', name: 'TLSRejectedPackets' },
 ] as const;
 type FwMetricKey = (typeof FW_METRICS)[number]['key'];
 
@@ -399,6 +412,15 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
               passedPackets: pick('pass'), droppedPackets: pick('drop'),
               rejectedPackets: pick('rej'), invalidDropped: pick('invdrop'), otherDropped: pick('othdrop'),
               streamExceptionPackets: pick('sep'),
+              // 리뷰 라운드10 되돌림: 라운드10에서 "TLS 검사는 stateful 엔진에서만 일어나므로
+              // pickWire가 값을 걸러낸다"는 근거로 pick(엔진 합산)으로 바꿨었으나, AWS 문서
+              // (monitoring-cloudwatch.html)가 TLSReceivedPackets를 "recv/bytes와 동일하게
+              // stateless→stateful TCP/TLS 종료 경계를 두고 두 엔진 모두에 값이 존재할 수
+              // 있다"고 명시한다 — 즉 recv/bytes와 같은 이중 집계 위험이 실재해 pickWire
+              // (Stateless만)가 맞았다(라운드10 stop-hook 리뷰가 이 되돌림을 지적). 최종
+              // 처분(pass/drop/rej)은 한 엔진에서만 발행되므로 pick(엔진 합산) 유지.
+              tlsReceivedPackets: pickWire('tlsrecv'), tlsPassedPackets: pick('tlspass'),
+              tlsDroppedPackets: pick('tlsdrop'), tlsRejectedPackets: pick('tlsrej'),
               // toPrecision(2)(유효숫자 2자리)는 아주 작은 비율에서 "1e-4%"처럼 지수 표기로
               // 렌더링된다(리뷰 MINOR) — 소수 2자리 고정으로 항상 일반 표기 유지.
               dropRatePct: recv != null && recv > 0 && droppedAll != null
@@ -498,6 +520,6 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
       droppedPackets: sum(firewalls.map((f) => f.droppedPackets ?? undefined)),
       rejectedPackets: sum(firewalls.map((f) => f.rejectedPackets ?? undefined)),
     };
-    return { firewalls, policies, ruleGroups, degradedRegions, metricsDegradedRegions, totals, rangeSec };
+    return { firewalls, policies, ruleGroups, degradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec };
   });
 }

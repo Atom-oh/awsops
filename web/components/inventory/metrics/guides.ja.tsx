@@ -644,4 +644,44 @@ export const GUIDES_JA: Record<string, GuideSpec> = {
       ['VPC CNI IP 残量', '少ない', 'Pod IP の枯渇'],
     ],
   },
+  ANFW: {
+    service: 'ANFW',
+    intro: (
+      <>Network Firewall の監視は <b>CloudWatch メトリクス・ファイアウォールログ（Alert/Flow/TLS）・補完ソース（VPC Flow Logs、CloudTrail、ルーティング）</b>の 3 層を一緒に見ます — メトリクスは量と傾向、ログは「どのルールが何を」のコンテキスト、補完ソースはバイパスと変更を捕捉します。</>
+    ),
+    sections: [
+      { title: '① CloudWatch メトリクス（AWS/NetworkFirewall）', items: [
+        <><b>ReceivedPackets / ReceivedBytes</b> — 総流入量・帯域幅。ディメンションは（FirewallName, AZ, Engine）— 全パケットが先に stateless エンジンを通過するため、<b>受信集計は Engine=Stateless のみ</b>を使い SFE 転送分の二重集計を回避（本画面の集計方式）。</>,
+        <><b>PassedPackets / DroppedPackets / RejectedPackets</b> — 通過/破棄/明示的拒否（TCP RST）。遮断急増は攻撃またはルール誤配置のシグナル — Alert ログでどのルールか確認。</>,
+        <><b>InvalidDroppedPackets / OtherDroppedPackets / StreamExceptionPolicyPackets</b> — 異常パケット・その他破棄・ストリーム例外処理。継続発生は非対称ルーティング/セッション処理の問題を疑う。</>,
+        <><b>TLS*Packets</b>（TLS 検査使用時）— 復号化失敗（TLSDropped/Rejected）の監視。</>,
+        <>ファイアウォールの<b>状態</b>は CW メトリクスではなく API（READY / IN_SYNC / AZ 別エンドポイント）で確認 — 本画面上部のテーブルがその役割。<b>CustomAction</b> ディメンションでルール別カスタム指標も可能。</>,
+      ]},
+      { title: '② ファイアウォールログ（S3 / CloudWatch Logs / Firehose）', items: [
+        <><b>Alert ログ</b> — stateful ルールの alert/drop にマッチしたトラフィック。どのルール（sid）が何を遮断/警告したか — <b>脅威分析の中核</b>。下のカードが CloudWatch Logs 宛てを Insights で集計。</>,
+        <><b>Flow ログ</b> — stateful エンジンが見た全フロー（5-tuple、バイト/パケット、セッション開始・終了）。トラフィックパターン・Top talker 分析用。</>,
+        <><b>TLS ログ</b> — TLS 検査イベント（SNI、証明書、エラー）。</>,
+        <>ログには送信元/宛先 IP・ポート、プロトコル、ルールマッチ、タイムスタンプを含む — メトリクスだけでは得られないコンテキスト。<b>S3/Firehose 宛ては本画面で集計不可</b>（Athena 等で別途分析）。</>,
+      ]},
+      { title: '③ 補完データソース', items: [
+        <><b>VPC Flow Logs</b> — ファイアウォールエンドポイントのサブネット・ルーティング検証、<b>ANFW バイパストラフィックの検出</b>。</>,
+        <><b>CloudTrail</b> — ポリシー/ルールグループ変更の管理イベント監査（誰がルールを変えたか）— 下の変更監査カード。</>,
+        <><b>ルートテーブル</b> — トラフィックが実際にファイアウォールを経由するか確認（VPC リソースマップ参照）。</>,
+      ]},
+      { title: '④ 分析目的別の経路', items: [
+        <><b>脅威検知</b> → Alert ログ + Dropped/RejectedPackets 急増。</>,
+        <><b>容量/性能</b> → ReceivedPackets/Bytes 傾向 + Flow ログ Top talker。</>,
+        <><b>可用性</b> → ファイアウォール状態（READY/IN_SYNC）+ AZ 別の偏差。</>,
+        <><b>変更監査/コンプライアンス</b> → CloudTrail 管理イベント（write 優先）。</>,
+      ]},
+    ],
+    priorityHeader: ['データ', '目的', '主要シグナル'],
+    priority: [
+      ['Alert ログ + Dropped/RejectedPackets', '脅威検知', '遮断急増 · シグネチャ（sid）マッチ'],
+      ['ReceivedPackets/Bytes + Flow ログ', '容量/性能', 'トラフィック傾向 · Top talker'],
+      ['ファイアウォール状態 + AZ 別指標', '可用性', 'READY/IN_SYNC · AZ 偏差'],
+      ['CloudTrail 管理イベント', '変更監査', '誰がポリシー/ルールを変えたか'],
+      ['VPC Flow Logs + ルーティング', 'バイパス検出', 'ファイアウォールを経由しないトラフィック'],
+    ],
+  },
 };

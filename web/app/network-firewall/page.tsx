@@ -10,9 +10,18 @@ import MetricTable, { type MetricCol } from '@/components/inventory/metrics/Metr
 import { RangePicker, TH, MONO, TD, DANGER, dash } from '@/components/inventory/metrics/shared';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import HBarList from '@/components/charts/HBarList';
+import DiagnosisGuide from '@/components/inventory/metrics/DiagnosisGuide';
+import { ANFW_GUIDE } from '@/components/inventory/metrics/guides';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { AnfwAnalysis, AnfwFirewallRow, AnfwPolicyRow, AnfwRuleGroupRow } from '@/lib/anfw';
+import type { AnfwLogsAnalysis } from '@/lib/anfw-logs';
 import type { InvType } from '@/lib/inventory-types';
+
+/** /api/anfw?view=audit 응답 행 (라우트와 lockstep). */
+interface AuditEvent {
+  time: string; name: string; user: string; region: string;
+  resourceType: string; resourceName: string; readOnly: boolean;
+}
 
 // /network-firewall — AWS Network Firewall 리스트+분석 (Network 메뉴). 방화벽/정책/룰 그룹을
 // 리전 fan-out으로 수집하고 AWS/NetworkFirewall 메트릭(기간 Sum)으로 트래픽·드롭을 집계한다.
@@ -62,6 +71,8 @@ const FW_DETAIL_SPEC: InvType = {
     { key: 'passed_packets', label: 'Passed Packets' }, { key: 'dropped_packets', label: 'Dropped Packets' },
     { key: 'rejected_packets', label: 'Rejected Packets' }, { key: 'invalid_dropped', label: 'Invalid Dropped' },
     { key: 'other_dropped', label: 'Other Dropped' }, { key: 'stream_exception_packets', label: 'Stream Exception' },
+    { key: 'tls_received_packets', label: 'TLS Received' }, { key: 'tls_passed_packets', label: 'TLS Passed' },
+    { key: 'tls_dropped_packets', label: 'TLS Dropped' }, { key: 'tls_rejected_packets', label: 'TLS Rejected' },
     { key: 'drop_rate_pct', label: 'Drop Rate %' }, { key: 'az_engine_metrics', label: 'Per AZ / Engine' },
   ],
   sections: [
@@ -69,7 +80,7 @@ const FW_DETAIL_SPEC: InvType = {
     { label: 'Endpoints', keys: ['endpoints'] },
     { label: 'Protection', keys: ['delete_protection', 'subnet_change_protection', 'policy_change_protection'] },
     { label: 'Logging', keys: ['alert_logging', 'flow_logging', 'tls_logging'] },
-    { label: 'Traffic', keys: ['received_packets', 'received_bytes', 'passed_packets', 'dropped_packets', 'rejected_packets', 'invalid_dropped', 'other_dropped', 'stream_exception_packets', 'drop_rate_pct', 'az_engine_metrics'] },
+    { label: 'Traffic', keys: ['received_packets', 'received_bytes', 'passed_packets', 'dropped_packets', 'rejected_packets', 'invalid_dropped', 'other_dropped', 'stream_exception_packets', 'tls_received_packets', 'tls_passed_packets', 'tls_dropped_packets', 'tls_rejected_packets', 'drop_rate_pct', 'az_engine_metrics'] },
   ],
 };
 
@@ -126,6 +137,8 @@ function fwDetail(r: AnfwFirewallRow): Record<string, unknown> {
     passed_packets: fmtCount(r.passedPackets), dropped_packets: fmtCount(r.droppedPackets),
     rejected_packets: fmtCount(r.rejectedPackets), invalid_dropped: fmtCount(r.invalidDropped),
     other_dropped: fmtCount(r.otherDropped), stream_exception_packets: fmtCount(r.streamExceptionPackets),
+    tls_received_packets: fmtCount(r.tlsReceivedPackets), tls_passed_packets: fmtCount(r.tlsPassedPackets),
+    tls_dropped_packets: fmtCount(r.tlsDroppedPackets), tls_rejected_packets: fmtCount(r.tlsRejectedPackets),
     drop_rate_pct: r.dropRatePct == null ? undefined : `${r.dropRatePct}%`,
     az_engine_metrics: r.metricRows.length ? r.metricRows : undefined,
   });
@@ -183,6 +196,12 @@ export default function NetworkFirewallPage() {
   const [data, setData] = useState<AnfwAnalysis | null>(null);
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Selected | null>(null);
+  // 로그 분석(Insights)·변경 감사(CloudTrail)는 별도 lazy fetch — 메인 리스트를 막지 않음.
+  const [logsData, setLogsData] = useState<AnfwLogsAnalysis | null>(null);
+  const [logsErr, setLogsErr] = useState('');
+  const [audit, setAudit] = useState<AuditEvent[] | null>(null);
+  const [auditErr, setAuditErr] = useState('');
+  const [auditDegradedRegions, setAuditDegradedRegions] = useState<string[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -201,6 +220,33 @@ export default function NetworkFirewallPage() {
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
   }, [range]);
+
+  useEffect(() => {
+    let alive = true;
+    setLogsData(null);
+    fetch(`/api/anfw?view=logs&range=${range}`)
+      .then(async (r) => {
+        const d = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`);
+        return d as AnfwLogsAnalysis;
+      })
+      .then((d) => { if (alive) { setLogsData(d); setLogsErr(''); } })
+      .catch((e) => { if (alive) setLogsErr(e instanceof Error ? e.message : String(e)); });
+    return () => { alive = false; };
+  }, [range]);
+
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/anfw?view=audit')
+      .then(async (r) => {
+        const d = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`);
+        return d as { events: AuditEvent[]; degradedRegions: string[] };
+      })
+      .then((d) => { if (alive) { setAudit(d.events); setAuditDegradedRegions(d.degradedRegions ?? []); setAuditErr(''); } })
+      .catch((e) => { if (alive) setAuditErr(e instanceof Error ? e.message : String(e)); });
+    return () => { alive = false; };
+  }, []);
 
   const fws = useMemo(() => data?.firewalls ?? [], [data]);
   const policies = useMemo(() => data?.policies ?? [], [data]);
@@ -221,6 +267,15 @@ export default function NetworkFirewallPage() {
       .sort((a, b) => b.pct - a.pct)
       .slice(0, 10),
   [rgs]);
+
+  // Flow 로그 시각화 — 프로토콜 도넛(플로우 수) + Top talker 바(HBarList는 정수 표시라 MB 단위).
+  const flowProtoDist = useMemo(() => logsData?.flow?.byProto ?? [], [logsData]);
+  const talkerBars = useMemo(() =>
+    (logsData?.flow?.topTalkers ?? []).map((t) => ({
+      pair: `${t.src} → ${t.dst}`,
+      mb: Math.round(t.bytes / 1e6),
+    })),
+  [logsData]);
 
   // 점검 카드: 보호 off 또는 (조회 성공했는데) ALERT 미설정 방화벽만 나열 — "확인 불가"는 경고 아님.
   const issueFws = useMemo(() => fws.filter((f) => f.protectionsOff > 0 || (f.loggingKnown && f.alertLogging == null)), [fws]);
@@ -565,6 +620,8 @@ export default function NetworkFirewallPage() {
                   </div>
                 </>
               )}
+              {/* owner 제공 모니터링 계층 가이드 — 지표/로그/보완 소스 + 목적별 우선순위 */}
+              <DiagnosisGuide spec={ANFW_GUIDE} />
             </Card>
 
             {/* ④ 방화벽 — 상태/동기화/트래픽, 행 클릭 → 상세 */}
@@ -610,6 +667,242 @@ export default function NetworkFirewallPage() {
                 emptyText="룰 그룹 없음"
                 onRowClick={(r) => setSelected({ kind: 'rg', row: r })}
               />
+            </Card>
+
+            {/* ⑦ Alert 로그 분석 — stateful alert/drop 매칭 (Logs Insights, CWL 대상만) */}
+            <Card
+              title="Alert 로그 분석"
+              subtitle="어떤 규칙(sid)이 어떤 트래픽을 차단/경고했는지 — CloudWatch Logs 대상 Insights 집계"
+              padded={false}
+            >
+              {logsErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('로그 분석 실패')}: {logsErr}</div>}
+              {!logsData && !logsErr && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로그 집계 중… (Logs Insights)')}</div>}
+              {logsData && (
+                <>
+                  {(logsData.targets.some((t) => t.discovered) || logsData.unsupportedDestinations > 0) && (
+                    <div className="px-4 pt-3 text-[12px] text-ink-500">
+                      {logsData.targets.some((t) => t.discovered) && <span>{tt('로깅 구성 조회가 거부되어 관례 접두사(/aws/network-firewall)로 로그 그룹을 발견했습니다')} </span>}
+                      {logsData.unsupportedDestinations > 0 && <span>{tt('S3/Firehose 대상 로그는 이 화면에서 집계할 수 없습니다 (Athena 등 별도 분석)')}</span>}
+                    </div>
+                  )}
+                  {logsData.failed.length > 0 && (
+                    // 리뷰 MAJOR: 이 배열이 이전엔 어디에도 렌더링되지 않아, 로그 그룹 조회가
+                    // 전부 실패해도 화면은 "정상 0건"과 똑같이 보였다 — 실패한 집계 키를 그대로 노출.
+                    <div className="flex items-start gap-2 px-4 pt-3 text-[12px] text-warning-text">
+                      <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                      <span>{tt('일부 로그 그룹 조회 실패')} ({logsData.failed.join(', ')}) — {tt('해당 집계는 실제보다 적을 수 있습니다.')}</span>
+                    </div>
+                  )}
+                  {logsData.alert == null ? (
+                    <div className="px-4 py-3 text-[13px] text-ink-400">
+                      {/* Flow 카드와 동일하게 발견 실패(firewallDiscovery/logDiscovery/
+                          logDiscoveryEmpty:*:ALERT)는 "로그 없음"이 아니라 "확인 불가"로
+                          구분 표시. 리뷰 MAJOR(라운드12): logDiscoveryEmpty는 이제 타입별
+                          키(:ALERT/:FLOW)라 이 카드는 자기 타입 키만 봐야 한다 — FLOW만
+                          unknown인 리전을 ALERT 카드가 잘못 "확인 불가"로 표시하면 안 됨. */}
+                      {logsData.failed.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT'))
+                        ? tt('확인 불가 (로깅 구성 조회 실패 — ALERT 로그 유무 미확인)')
+                        : tt('CloudWatch Logs 대상 ALERT 로그 없음')}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-[13px]">
+                        {/* 리뷰 MAJOR(라운드10): totalAlerts는 조회 실패 시 null(0과 구분) —
+                            그대로 0으로 렌더링하면 "조회 실패"가 "알럿 0건"처럼 보인다. */}
+                        <span className="font-semibold">{tt('알럿')} {logsData.alert.totalAlerts == null ? tt('확인 불가') : logsData.alert.totalAlerts.toLocaleString()}</span>
+                        {logsData.alert.byAction.map((a) => (
+                          <Badge key={a.name} tone={a.name === 'blocked' ? 'negative' : 'neutral'} variant="soft">
+                            {`${a.name} ${a.value.toLocaleString()}`}
+                          </Badge>
+                        ))}
+                      </div>
+                      {/* 리뷰 MAJOR(라운드10, stop-hook 재수정): totalAlerts>0 게이트를
+                          topSignatures.length>0 하나로 바꿨더니, 시그니처 표만 실패하고
+                          소스/목적지 표는 성공한 경우 그 표까지 숨는 동일 계급의 버그가
+                          그대로 자리만 옮겼다 — 두 표를 각자 자기 데이터 유무로 독립
+                          게이트해 한쪽 실패가 다른 쪽의 로드된 결과를 가리지 않게 한다. */}
+                      {(logsData.alert.topSignatures.length > 0 || logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
+                        <div className="grid gap-4 px-4 pb-3 lg:grid-cols-2">
+                          {logsData.alert.topSignatures.length > 0 && (
+                            <div className="overflow-x-auto">
+                              <table className="w-full">
+                                <thead><tr className="border-b border-ink-100">
+                                  <th className={TH}>SID</th>
+                                  <th className={TH}>Signature</th>
+                                  <th className={TH}>{tt('건수')}</th>
+                                </tr></thead>
+                                <tbody>
+                                  {logsData.alert.topSignatures.map((s) => (
+                                    <tr key={`${s.sid}|${s.signature}`} className="border-b border-ink-50 last:border-0">
+                                      <td className={MONO}>{s.sid}</td>
+                                      <td className={TD}>{s.signature || dash}</td>
+                                      <td className={TD}>{s.value.toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                          {(logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
+                            <div className="overflow-x-auto">
+                              <table className="w-full">
+                                <thead><tr className="border-b border-ink-100">
+                                  <th className={TH}>{tt('소스 IP')}</th>
+                                  <th className={TH}>{tt('건수')}</th>
+                                  <th className={TH}>{tt('목적지')}</th>
+                                  <th className={TH}>{tt('건수')}</th>
+                                </tr></thead>
+                                <tbody>
+                                  {Array.from({ length: Math.max(logsData.alert.topSources.length, logsData.alert.topDests.length) }).map((_, i) => (
+                                    <tr key={i} className="border-b border-ink-50 last:border-0">
+                                      <td className={MONO}>{logsData.alert?.topSources[i]?.name ?? ''}</td>
+                                      <td className={TD}>{logsData.alert?.topSources[i]?.value.toLocaleString() ?? ''}</td>
+                                      <td className={MONO}>{logsData.alert?.topDests[i]?.name ?? ''}</td>
+                                      <td className={TD}>{logsData.alert?.topDests[i]?.value.toLocaleString() ?? ''}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </Card>
+
+            {/* ⑧ Flow 로그 분석 — stateful 엔진이 본 플로우, Top talker */}
+            <Card
+              title="Flow 로그 분석"
+              subtitle="Stateful 엔진이 본 플로우(5-tuple·바이트) — Top talker와 프로토콜 분포"
+              padded={false}
+            >
+              {logsErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('로그 분석 실패')}: {logsErr}</div>}
+              {!logsData && !logsErr && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로그 집계 중… (Logs Insights)')}</div>}
+              {/* 리뷰 MAJOR(라운드10): 이 카드에는 failed[] 배너가 없어, resolveTargets가
+                  degrade(firewallDiscovery/logDiscovery*)돼 200으로 응답이 와도 "FLOW 로그
+                  없음"이 확정 부재처럼 보였다 — Alert 카드와 동일하게 배너를 렌더링. */}
+              {logsData && logsData.failed.length > 0 && (
+                <div className="flex items-start gap-2 px-4 pt-3 text-[12px] text-warning-text">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>{tt('일부 로그 그룹 조회 실패')} ({logsData.failed.join(', ')}) — {tt('해당 집계는 실제보다 적을 수 있습니다.')}</span>
+                </div>
+              )}
+              {logsData && (logsData.flow == null ? (
+                <div className="px-4 py-3 text-[13px] text-ink-400">
+                  {/* 리뷰 MAJOR(라운드12): logDiscoveryEmpty가 타입별 키가 됐으므로 이
+                      카드는 자기 타입(:FLOW) 키만 봐야 한다 — ALERT만 unknown인 리전을
+                      이 카드가 잘못 "확인 불가"로 표시하면 안 됨. */}
+                  {logsData.failed.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || k.startsWith('logDiscoveryEmpty:') && k.endsWith(':FLOW'))
+                    ? tt('확인 불가 (로깅 구성 조회 실패 — FLOW 로그 유무 미확인)')
+                    : tt('CloudWatch Logs 대상 FLOW 로그 없음')}
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-[13px]">
+                    {/* 리뷰 MAJOR(라운드11): flowTotals 실패 시 totalFlows/totalBytes는 null —
+                        alert 카드와 동일하게 "확인 불가"로 표시(0건과 구분). 아래 표는 이미
+                        topTalkers.length로 독립 게이트돼 있어 totals 실패의 영향을 받지 않음. */}
+                    <span className="font-semibold">{tt('플로우')} {logsData.flow.totalFlows == null ? tt('확인 불가') : logsData.flow.totalFlows.toLocaleString()}</span>
+                    <span>{tt('전송량')} {fmtBytes(logsData.flow.totalBytes) ?? dash}</span>
+                    {logsData.flow.byProto.map((p) => (
+                      <Badge key={p.name} variant="outline" mono>{`${p.name} ${p.value.toLocaleString()}`}</Badge>
+                    ))}
+                  </div>
+                  {logsData.flow.talkersWindowSec < logsData.rangeSec && (
+                    <div className="px-4 pb-1 text-[12px] text-ink-500">
+                      {tt('Top talker는 최근 6시간 창 기준 — 플로우 볼륨이 커서 전체 범위 집계는 시간 초과')}
+                    </div>
+                  )}
+                  {logsData.flow.topTalkers.length > 0 && (
+                    <div className="overflow-x-auto pb-2">
+                      <table className="w-full">
+                        <thead><tr className="border-b border-ink-100">
+                          <th className={TH}>{tt('소스')}</th>
+                          <th className={TH}>{tt('목적지')}</th>
+                          <th className={TH}>{tt('전송량')}</th>
+                          <th className={TH}>{tt('플로우')}</th>
+                        </tr></thead>
+                        <tbody>
+                          {logsData.flow.topTalkers.map((t2) => (
+                            <tr key={`${t2.src}|${t2.dst}`} className="border-b border-ink-50 last:border-0">
+                              <td className={MONO}>{t2.src}</td>
+                              <td className={MONO}>{t2.dst}</td>
+                              <td className={TD}>{fmtBytes(t2.bytes) ?? dash}</td>
+                              <td className={TD}>{t2.flows.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              ))}
+            </Card>
+
+            {/* ⑧-b Flow 시각화 — 프로토콜 분포 도넛 + Top talker 전송량 바 */}
+            {/* 리뷰 MAJOR(라운드11): totalFlows>0 게이트는 flowTotals만 실패해도(byProto/
+                topTalkers 쿼리는 성공) 이미 로드된 차트 두 개를 통째로 숨겼다 — 두 차트가
+                실제로 그릴 데이터 유무로 게이트를 교체(totalFlows는 위 카드에서 별도 표시). */}
+            {logsData?.flow != null && (logsData.flow.byProto.length > 0 || logsData.flow.topTalkers.length > 0) && (
+              <div className="grid gap-6 lg:grid-cols-2">
+                <DonutBreakdown title="Flow 프로토콜 분포" data={flowProtoDist} nameKey="name" valueKey="value" />
+                <HBarList title="Top talker 전송량 (MB)" data={talkerBars} labelKey="pair" valueKey="mb" highlightMax />
+              </div>
+            )}
+
+            {/* ⑨ 구성 변경 감사 — CloudTrail 변경(mutation) 이벤트만 계정 전체에서 조회한 뒤
+                클라이언트에서 NFW EventSource로 필터(라운드8: EventSource 단위 조회는 이 앱
+                자신의 read 이벤트가 목록을 가득 채워 실제 변경 이벤트가 90일치가 아니라
+                최근 몇 시간분만 보이는 문제가 있었음 — ReadOnly=false 필터로 전환) */}
+            <Card
+              title="구성 변경 감사"
+              subtitle="CloudTrail 변경 이벤트 — 누가 방화벽/정책/룰을 바꿨는지 (조회 범위 90일, 전체 최근 50건까지)"
+              padded={false}
+            >
+              {auditErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('감사 이벤트 조회 실패')}: {auditErr}</div>}
+              {!audit && !auditErr && <div className="px-4 py-3 text-[13px] text-ink-400">{tt('로딩 중…')}</div>}
+              {audit && auditDegradedRegions.length > 0 && (
+                // 리뷰 MAJOR: 이벤트명 단위 CloudTrail 조회가 일부 실패해도 조용히 삼키면
+                // "조회 범위 내 변경 없음"과 "조회 자체가 실패함"을 구분할 수 없다 —
+                // 감사(audit) 화면에서 가장 나쁜 오류 형태이므로 항상 배너로 노출한다.
+                <div className="flex items-start gap-2 px-4 pt-3 text-[12px] text-warning-text">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>{tt('일부 리전 조회 실패')} ({auditDegradedRegions.join(', ')}) — {tt('해당 리전은 변경 이벤트 조회 자체가 실패해 "변경 없음"을 확정할 수 없습니다.')}</span>
+                </div>
+              )}
+              {audit && (audit.length === 0 ? (
+                auditDegradedRegions.length > 0 ? (
+                  <div className="px-4 py-3 text-[13px] text-ink-400">{tt('조회 실패로 변경 이벤트 유무를 확인할 수 없습니다')}</div>
+                ) : (
+                  <div className="px-4 py-3 text-[13px] text-ink-400">{tt('조회 범위(90일) 내 변경 이벤트 없음')}</div>
+                )
+              ) : (
+                <div className="overflow-x-auto pb-2">
+                  <table className="w-full">
+                    <thead><tr className="border-b border-ink-100">
+                      <th className={TH}>{tt('시각')}</th>
+                      <th className={TH}>{tt('이벤트')}</th>
+                      <th className={TH}>{tt('사용자')}</th>
+                      <th className={TH}>{tt('리소스')}</th>
+                      <th className={TH}>{tt('리전')}</th>
+                    </tr></thead>
+                    <tbody>
+                      {audit.map((e, i) => (
+                        <tr key={`${e.time}|${e.name}|${i}`} className="border-b border-ink-50 last:border-0">
+                          <td className={TD}>{e.time.replace('T', ' ').slice(0, 19)}</td>
+                          <td className={MONO}>{e.name}</td>
+                          <td className={TD}>{e.user || dash}</td>
+                          <td className={MONO}>{e.resourceName || dash}</td>
+                          <td className={TD}>{e.region}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
             </Card>
           </>
           );

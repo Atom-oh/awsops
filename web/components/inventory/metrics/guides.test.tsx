@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { GuideSpec } from './DiagnosisGuide';
 import {
   MSK_GUIDE, RDS_GUIDE, DDB_GUIDE, EC_GUIDE, OS_GUIDE, ALB_GUIDE,
-  NLB_GUIDE, S3_GUIDE, EBS_GUIDE, EC2_GUIDE, LAMBDA_GUIDE, EKS_GUIDE,
+  NLB_GUIDE, S3_GUIDE, EBS_GUIDE, EC2_GUIDE, LAMBDA_GUIDE, EKS_GUIDE, ANFW_GUIDE,
 } from './guides';
 import { GUIDES_EN } from './guides.en';
 import { GUIDES_ZH } from './guides.zh';
@@ -14,7 +14,7 @@ import { GUIDES_JA } from './guides.ja';
 
 const KO: Record<string, GuideSpec> = Object.fromEntries(
   [MSK_GUIDE, RDS_GUIDE, DDB_GUIDE, EC_GUIDE, OS_GUIDE, ALB_GUIDE,
-   NLB_GUIDE, S3_GUIDE, EBS_GUIDE, EC2_GUIDE, LAMBDA_GUIDE, EKS_GUIDE].map((g) => [g.service, g]),
+   NLB_GUIDE, S3_GUIDE, EBS_GUIDE, EC2_GUIDE, LAMBDA_GUIDE, EKS_GUIDE, ANFW_GUIDE].map((g) => [g.service, g]),
 );
 const VARIANTS: [string, Record<string, GuideSpec>][] = [['en', GUIDES_EN], ['zh', GUIDES_ZH], ['ja', GUIDES_JA]];
 

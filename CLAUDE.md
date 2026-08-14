@@ -144,5 +144,5 @@ make workers     # arm64 worker 이미지 push (workers_enabled=true로 apply �
 ## Implementation References
 <!-- AUTO-MANAGED:references — /project-init sync가 이 블록을 관리. 수동 편집은 마커 밖에. -->
 계층별 구현 레퍼런스는 `docs/reference/`(인덱스: [README](docs/reference/README.md)) — [01 엣지 네트워크](docs/reference/01-edge-network.md) · [02 인증](docs/reference/02-auth.md) · [03 Aurora 데이터](docs/reference/03-data-aurora.md) · [04 web BFF](docs/reference/04-web-bff.md) · [05 AgentCore](docs/reference/05-agentcore.md) · [06 워커](docs/reference/06-workers.md) · [07 EKS](docs/reference/07-eks.md).
-전체 조감도: [docs/architecture.md](docs/architecture.md) (이중언어 + mermaid) · 신규 합류: [docs/onboarding.md](docs/onboarding.md) · API 전수 인덱스(85 라우트): [docs/api-reference.md](docs/api-reference.md) · 운영: [docs/runbooks/](docs/runbooks/).
+전체 조감도: [docs/architecture.md](docs/architecture.md) (이중언어 + mermaid) · 신규 합류: [docs/onboarding.md](docs/onboarding.md) · API 전수 인덱스(86 라우트): [docs/api-reference.md](docs/api-reference.md) · 운영: [docs/runbooks/](docs/runbooks/).
 <!-- /AUTO-MANAGED:references -->

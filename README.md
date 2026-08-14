@@ -32,7 +32,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito auth) -> VPC Origin (https-only
   -> async workers: POST /api/jobs -> SQS -> Step Functions -> Lambda or Fargate worker
 ```
 
-Stats: 36 pages, 85 API routes, 88 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
+Stats: 36 pages, 86 API routes, 89 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
 
 > **No public ALB.** The edge is fully private — CloudFront reaches the ALB only through a VPC Origin, and the ALB only accepts traffic from CloudFront's managed security group. v2's posture is a **read-only ops dashboard + AI diagnosis**: AWS-resource mutation and autonomous remediation are FROZEN by design (ADR-005) — infra changes stay with the operator's own IaC/Change Manager, with one narrowly-scoped exception for self-healing service restarts (ADR-015).
 
@@ -145,7 +145,7 @@ AgentCore's own config (runtime ARN, Memory ID, Code Interpreter ID) is written 
 
 ```
 awsops/
-  web/                    # Next.js 14 thin-BFF: 36 pages, 85 API routes, 88 components
+  web/                    # Next.js 14 thin-BFF: 36 pages, 86 API routes, 89 components
   agent/                  # Strands Agent (Runtime source) + MCP Lambda tool sources
   terraform/v2/foundation/  # single Terraform root: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/             # configure/deploy/migrate/agentcore/workers tooling (all Node.js/Python)
@@ -164,7 +164,7 @@ cd web && npx vitest run          # web unit tests only
 
 ## API Documentation
 
-The 85 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
+The 86 API routes live under `web/app/api/`. Key routes: `health` (public), `stream` (SSE chat), `db` (Aurora ping), `jobs` (+`/[id]`, async job submission/status), `security`, `compliance`, `auth/login`. See the docs site for user-facing guidance and [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md) for architectural decisions.
 
 ## Contributing
 
@@ -202,7 +202,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
   -> 비동기 워커: POST /api/jobs -> SQS -> Step Functions -> Lambda 또는 Fargate 워커
 ```
 
-현황: 36 페이지, 85 API 라우트, 88 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
+현황: 36 페이지, 86 API 라우트, 89 컴포넌트(`web/`), 18개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
 
 > **공개 ALB 없음.** 엣지는 완전히 비공개입니다 — CloudFront는 VPC Origin을 통해서만 ALB에 도달하고, ALB는 CloudFront 관리형 보안 그룹의 트래픽만 허용합니다. v2의 자세는 **read-only 운영 대시보드 + AI 진단**입니다: AWS 리소스 변경·자율 조치는 설계상 FROZEN(ADR-005) — 인프라 변경은 운영자 자신의 IaC/Change Manager가 담당하며, 자가치유 서비스 재시작 하나만 좁게 예외 허용됩니다(ADR-015).
 
@@ -315,7 +315,7 @@ AgentCore 자체 설정(runtime ARN, Memory ID, Code Interpreter ID)은 provisio
 
 ```
 awsops/
-  web/                      # Next.js 14 thin-BFF: 36 페이지, 85 API 라우트, 88 컴포넌트
+  web/                      # Next.js 14 thin-BFF: 36 페이지, 86 API 라우트, 89 컴포넌트
   agent/                    # Strands Agent(Runtime 소스) + MCP Lambda 도구 소스
   terraform/v2/foundation/  # 단일 Terraform 루트: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/               # configure/deploy/migrate/agentcore/workers 도구(전부 Node.js/Python)
@@ -334,7 +334,7 @@ cd web && npx vitest run          # web 유닛 테스트만
 
 ## API 문서
 
-85개 API 라우트가 `web/app/api/`에 있습니다. 주요 라우트: `health`(공개), `stream`(SSE 채팅), `db`(Aurora ping), `jobs`(+`/[id]`, 비동기 작업 제출/상태), `security`, `compliance`, `auth/login`. 사용자 가이드는 docs site를, 아키텍처 결정은 [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md)를 참고하세요.
+86개 API 라우트가 `web/app/api/`에 있습니다. 주요 라우트: `health`(공개), `stream`(SSE 채팅), `db`(Aurora ping), `jobs`(+`/[id]`, 비동기 작업 제출/상태), `security`, `compliance`, `auth/login`. 사용자 가이드는 docs site를, 아키텍처 결정은 [docs/decisions/BASELINE.md](docs/decisions/BASELINE.md)를 참고하세요.
 
 ## 기여 방법
 

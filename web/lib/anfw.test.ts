@@ -205,6 +205,23 @@ describe('anfwAnalysis', () => {
     expect(rg2.unassociated).toBe(false);
   });
 
+  it('TLS 수신 패킷도 recv/bytes와 동일하게 Engine=Stateless만 채택 — Stateful 재발행 이중 집계 방지 (리뷰 MAJOR 라운드8, 라운드10 되돌림)', async () => {
+    mockDb([]);
+    mockNfw();
+    // AWS 문서(monitoring-cloudwatch.html)가 TLSReceivedPackets도 recv/bytes와 동일하게
+    // stateless→stateful TCP/TLS 종료 경계에서 두 엔진 모두에 값이 존재할 수 있다고
+    // 명시 — pick(엔진 합산)으로 읽으면 recv/bytes에서 고친 이중 집계가 tlsrecv에서
+    // 재발한다. pickWire(Stateless만)를 써야 한다(라운드10이 이걸 pick으로 잘못
+    // 바꿨다가 stop-hook 리뷰로 되돌림).
+    mockCw({ tlsrecv_i0: 500, tlsrecv_i1: 480, tlspass_i0: 490, tlspass_i1: 470 });
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(3600);
+    const f = a.firewalls[0];
+    expect(f.tlsReceivedPackets).toBe(500); // Stateful tlsrecv(480)는 제외
+    // pass/drop/rej는 최종 처분 엔진에서 한 번만 발행되므로 엔진 합산 유지(변경 없음).
+    expect(f.tlsPassedPackets).toBe(960);
+  });
+
   it('룰 본문(RulesSource)은 어떤 형태로도 응답에 실리지 않음', async () => {
     mockDb([]);
     mockNfw();
@@ -292,6 +309,10 @@ describe('anfwAnalysis', () => {
     expect(a.firewalls).toHaveLength(1);
     expect(a.policies).toHaveLength(1);
     expect(a.degradedRegions).toEqual(['us-west-2']);
+    // scannedRegions는 firewalls 유무와 무관하게 "실제로 조회를 시도한" 전 리전이다 —
+    // 호출자(anfw/route.ts의 audit)가 "리전의 마지막 방화벽이 삭제됨" 케이스를 놓치지
+    // 않도록 firewalls[].region보다 넓은 이 목록을 써야 한다(리뷰 MAJOR).
+    expect(a.scannedRegions.sort()).toEqual(['ap-northeast-2', 'us-west-2']);
   });
 
   it('정상 리전만 있으면 degradedRegions는 빈 배열 (진짜 무-리소스와 조회실패를 혼동하지 않음)', async () => {

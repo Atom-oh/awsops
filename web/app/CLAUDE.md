@@ -1,12 +1,12 @@
 # 앱 라우트 모듈 / App Routes Module
 
 ## 역할 / Role
-Next.js App Router — 페이지 36개 + API 라우트 85개(`app/api/`). API는 thin-BFF: Aurora 조회, AWS SDK read, AgentCore 호출까지만. 장기/OOM 위험 작업은 `POST /api/jobs`로 enqueue.
-(36 pages + 85 API routes. Thin-BFF: DB reads, AWS SDK reads, AgentCore calls only; long jobs are enqueued.)
+Next.js App Router — 페이지 36개 + API 라우트 86개(`app/api/`). API는 thin-BFF: Aurora 조회, AWS SDK read, AgentCore 호출까지만. 장기/OOM 위험 작업은 `POST /api/jobs`로 enqueue.
+(36 pages + 86 API routes. Thin-BFF: DB reads, AWS SDK reads, AgentCore calls only; long jobs are enqueued.)
 
 ## 구조 / Structure
 - 페이지 (pages): 개요 `page.tsx`, `inventory/[type]`·`inventory/g/[group]`, `eks/`(개요·nodes·pods·deployments·services·explorer·cost·`[cluster]`), `topology/`(개요·infra·services·`resource/[id]`), `monitoring`, `network-flow`, `dns-query`, `ip-addresses`, `vpc-endpoints`, `direct-connect`, `network-firewall`, `security`, `compliance`, `cost`, `bedrock`, `agentcore`, `ai-diagnosis`, `assistant`, `datasources`, `integrations`(+`datasources/[id]`), `accounts`, `customization`, `jobs`, `login`
-- API (`app/api/`): accounts, actions, agentcore, ai-usage, anfw, auth(login/signout), bedrock-metrics, changelog, chat(+threads/stats), compliance, cost, customization, datasources, db, diagnosis, dns-logs, dx, eks, graph, health, incidents, insights, integrations, inventory, ip-inventory, jobs, me, monitoring, nfm, opencost, overview, security, stream, tgw, vpce
+- API (`app/api/`): accounts, actions, agentcore, ai-usage, anfw, auth(login/signout), bedrock-metrics, changelog, chat(+threads/stats), compliance, cost, customization, datasources, db, diagnosis, dns-logs, dx, eks, graph, health, incidents, insights, integrations, inventory, ip-inventory, jobs, me, monitoring, nfm, opencost, overview, security, sg, stream, tgw, vpce
 
 ## 규칙 / Rules
 - 인증: 비공개 API는 `verifyUser(request.headers.get('cookie'))` (`lib/auth.ts`, `awsops_token` 쿠키 RS256 JWKS 재검증) → null이면 401. 관리자 전용은 추가로 `isAdmin()` (`lib/admin.ts`). `/api/health`만 공개.

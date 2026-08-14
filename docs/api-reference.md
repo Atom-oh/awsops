@@ -1,8 +1,8 @@
 # API 레퍼런스 / API Reference
 
 ## 역할 / Role
-`web/app/api/**/route.ts` 전수(85개 라우트) 인덱스 — 경로·메서드·역할·인증.
-(Full index of all 85 `route.ts` files under `web/app/api` — path, methods, role, auth.)
+`web/app/api/**/route.ts` 전수(86개 라우트) 인덱스 — 경로·메서드·역할·인증.
+(Full index of all 86 `route.ts` files under `web/app/api` — path, methods, role, auth.)
 - 인증 컬럼: `verifyUser` = Cognito `awsops_token` 쿠키 검증(`@/lib/auth`). `없음` = 라우트 자체 비게이트(엣지 Lambda@Edge 게이트는 별도). 역할에 "admin"이 있으면 `isAdmin` 추가 게이트.
 - 모든 라우트는 루트 경로(`/api/*`) — basePath 없음. web은 thin-BFF: 무거운 작업은 `POST /api/jobs`로 enqueue.
 
@@ -56,10 +56,15 @@
 | `/api/dns-logs` | GET | Resolver query-log 설정 상태(메뉴 게이트) — 미설정/무권한도 200 + 빈 configs | verifyUser |
 | `/api/dns-logs/analytics` | GET | Resolver 로그 집계 분석 (Logs Insights 병렬 폴링, `maxDuration` 60s, group은 라이브 allowlist 검증) | verifyUser |
 
+## sg (1)
+| 경로 | 메서드 | 역할 | 인증 |
+|------|--------|------|------|
+| `/api/sg` | GET | Security Group 사용 분석(ENI 부착+상호참조 미사용 감지, 룰 소스/목적지 식별). `?regions=`로 리전 스코핑(안 주면 인벤토리 전 리전). `?view=hits&id=sg-...` 트래픽 히트 매칭 — Flow Logs 우선(ACCEPT만 룰 귀속), NFM 폴백은 **상대 식별 전용**(양방향 집계라 룰 귀속 불가, hits=null) | verifyUser |
+
 ## anfw (1)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
-| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 인벤토리 VPC 리전 fan-out, 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재). `?range=`는 3600/21600/86400/604800 allowlist(그 외는 86400), `maxDuration` 60s, 상위 실패는 502. 부분 실패는 정직 강등: `degradedRegions`(List/Describe 실패)·`metricsDegradedRegions`(CloudWatch 미순회/캡/쿼리 실패) | verifyUser |
+| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 인벤토리 VPC 리전 fan-out, 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재). `?range=`는 3600/21600/86400/604800 allowlist(그 외는 86400), `maxDuration` 60s, 상위 실패는 502. 부분 실패는 정직 강등: `degradedRegions`(List/Describe 실패)·`metricsDegradedRegions`(CloudWatch 미순회/캡/쿼리 실패). `?view=logs` Alert/Flow 로그 Insights 집계(CWL 대상만), `?view=audit` CloudTrail 변경 감사 | verifyUser |
 
 ## dx (1)
 | 경로 | 메서드 | 역할 | 인증 |
