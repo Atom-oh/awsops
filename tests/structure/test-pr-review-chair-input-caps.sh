@@ -29,7 +29,7 @@ mkdir -p "$WORK/slot"
 echo "diff --git a/foo b/foo" > "$DIFF"
 : > "$WORK/responded.txt"
 i=0
-while [ "$i" -lt 16 ]; do
+while [ "$i" -lt 12 ]; do
   {
     printf '\033[38;5;141m> \033[0mfindings\033[0m\n'
     printf 'split credential: %s\033[31m%s\n' "$AWS_KEY_LEFT" "$AWS_KEY_RIGHT"
@@ -63,9 +63,9 @@ PATH="$BIN:$PATH" STDIN_SIZE_FILE="$STDIN_SIZE_FILE" \
   > "$WORK/synth.log" 2>&1
 
 if grep -q "Argument list too long" "$WORK/synth.log"; then
-  fail "16-cell x 25KB panel does not overflow argv (chair reads via stdin)"
+  fail "12-cell x 25KB panel does not overflow argv (chair reads via stdin)"
 else
-  pass "16-cell x 25KB panel does not overflow argv (chair reads via stdin)"
+  pass "12-cell x 25KB panel does not overflow argv (chair reads via stdin)"
 fi
 
 if [ -s "$WORK/stdin-size.txt" ]; then
@@ -127,7 +127,7 @@ fi
 # Second scenario: empty slot files must not reduce the fair cap for surviving reviews.
 WORK2=$(mktemp -d); mkdir -p "$WORK2/slot"; : > "$WORK2/responded.txt"
 i=0
-while [ "$i" -lt 16 ]; do
+while [ "$i" -lt 12 ]; do
   : > "$WORK2/slot/model$i-L2.md"
   if [ "$i" -lt 4 ]; then
     head -c 25000 /dev/zero | tr '\0' 'y' > "$WORK2/slot/model$i-L2.md"

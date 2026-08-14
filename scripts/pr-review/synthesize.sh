@@ -123,7 +123,7 @@ Panel: ${RESP}
 Synthesize ONE final review, grouped by lens (L2/L3/L4/L5):
 1. **Summary** (2-3 sentences)
 2. **Issues per lens** — CRITICAL/MAJOR/MINOR. Mark agreement/disagreement among the multiple
-   models that saw the same lens (e.g. "3/4 models flagged CRITICAL, 1/4 didn't mention it").
+   models that saw the same lens (e.g. "2/3 models flagged CRITICAL, 1/3 didn't mention it").
    Note when independent models reached the same finding — that's a strong signal — but never
    treat agreement itself as proof; verify against the diff (shared training bias can make
    multiple models converge on the same false positive). Exclude out-of-diff-scope findings
