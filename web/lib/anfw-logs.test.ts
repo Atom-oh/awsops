@@ -377,6 +377,72 @@ describe('anfwLogsAnalysis', () => {
       dateSpy.mockRestore();
     }
   });
+
+  it('Top talker는 리전/청크로 갈라진 동일 (src,dst) 쌍을 합산 — concat만 하면 바이트가 쪼개져 순위가 밀린다 (리뷰 MAJOR 라운드9)', async () => {
+    // alert의 topSignatures/topSources/topDests는 merge()/sigMap으로 키 합산하는데
+    // topTalkers는 이전엔 concat→sort→slice만 했다 — 두 리전에서 같은 (src,dst) 쌍이
+    // 나오면 별개 행으로 남아 진짜 합계보다 작게(그리고 순위가 낮게) 보였다.
+    mockAnalysis.mockResolvedValue({
+      firewalls: [
+        fw({ name: 'fw-a', alertLogging: null }),
+        fw({ name: 'fw-b', alertLogging: null, region: 'us-east-1', flowLogging: 'CloudWatchLogs:/aws/network-firewall/other/flow' }),
+      ],
+    });
+    logsSend.mockImplementation(async (cmd: Cmd, region: string) => {
+      switch (cmd.constructor.name) {
+        case 'StartQueryCommand': return { queryId: 'q' };
+        case 'GetQueryResultsCommand': {
+          if (region === 'us-east-1') return { status: 'Complete', results: [row({ src: '10.0.0.1', dst: '10.0.0.2', bytes: 400, cnt: 4 })] };
+          return { status: 'Complete', results: [row({ src: '10.0.0.1', dst: '10.0.0.2', bytes: 600, cnt: 6 })] };
+        }
+        default: return {};
+      }
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // 합산 안 됐다면 두 행(400/600)으로 쪼개져 있을 것 — 하나로 합쳐 1000이어야 한다.
+    expect(a.flow!.topTalkers).toHaveLength(1);
+    expect(a.flow!.topTalkers[0]).toMatchObject({ src: '10.0.0.1', dst: '10.0.0.2', bytes: 1000, flows: 10 });
+  });
+
+  it('51개 이상 그룹으로 청크가 갈린 리전이 있으면 flowTopTalkersPartial을 failed에 표시 (리뷰 MAJOR 라운드9 제안)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    const groupNames = Array.from({ length: 51 }, (_, i) => `/aws/network-firewall/fw${i}/flow`);
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      switch (cmd.constructor.name) {
+        case 'DescribeLogGroupsCommand': return { logGroups: groupNames.map((logGroupName) => ({ logGroupName })) };
+        case 'StartQueryCommand': return { queryId: 'q' };
+        case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 1, bytes: 1 })] };
+        default: return {};
+      }
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('flowTopTalkersPartial');
+  });
+
+  it('발견 폴백 DescribeLogGroups도 공유 데드라인을 넘기면 중단하고 discoveryFailed로 표시 (리뷰 MINOR 라운드9)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    let now = 1_000_000;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let describeLogGroupsCalled = false;
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'DescribeLogGroupsCommand') {
+        describeLogGroupsCalled = true;
+        now += 50_000; // 다음 검사에서 데드라인 초과가 되도록 시간을 앞당김
+        return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert' }], nextToken: 'page2' };
+      }
+      return {};
+    });
+    try {
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(3600);
+      expect(describeLogGroupsCalled).toBe(true); // 첫 페이지는 데드라인 전이라 정상 호출
+      expect(a.failed).toContain('logDiscovery'); // 두 번째 페이지 전 데드라인 초과 → discoveryFailed
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
 });
 
 /** 발견 폴백용 mock: DescribeLogGroups가 관례 이름 2개 반환 + 최소 Insights 응답. */

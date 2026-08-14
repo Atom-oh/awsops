@@ -111,7 +111,7 @@ export interface AnfwLogsAnalysis {
 const num = (s: string | undefined): number => (s != null && s !== '' ? Number(s) || 0 : 0);
 
 /** 로깅 구성(알면 정확) 또는 접두사 발견(모르면 휴리스틱)으로 CWL 대상 도출. */
-async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean; firewallDiscoveryDegraded: boolean; loggingUnknownRegions: string[] }> {
+async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean; firewallDiscoveryDegraded: boolean; loggingUnknownRegions: string[] }> {
   const a = await anfwAnalysis(rangeSec);
   const targets: AnfwLogTarget[] = [];
   let unsupported = 0;
@@ -156,6 +156,12 @@ async function resolveTargets(rangeSec: number): Promise<{ targets: AnfwLogTarge
     try {
       let nextToken: string | undefined;
       do {
+        // 리뷰 MINOR(확정, 라운드9): 이 파이프라인의 다른 모든 AWS 페이지네이션(감사
+        // 조회, Insights 폴링)은 deadlineAt을 공유해 예산을 넘기지 않는데, 이 루프만
+        // 무제한이었다 — 극단적으로 로그 그룹이 많은 계정(수만 개)에서 이론상 45s
+        // 예산을 이 발견 단계에서 다 써버릴 수 있다. 나머지 경로와 동일하게 데드라인
+        // 도달 시 중단하고 discoveryFailed로 미완결을 표시한다.
+        if (Date.now() >= deadlineAt) { discoveryFailed = true; break; }
         const r = await logs(region).send(new DescribeLogGroupsCommand({ logGroupNamePrefix: '/aws/network-firewall', nextToken }));
         for (const g of r.logGroups ?? []) {
           const name = g.logGroupName ?? '';
@@ -180,7 +186,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // audit 경로(anfw/route.ts)와 동일 패턴. 앞단이 오래 걸렸으면 Insights 폴링에
     // 남는 시간이 그만큼 줄어들 뿐, 전체 예산은 항상 60s 안에 수렴한다.
     const deadlineAt = Date.now() + LOGS_BUDGET_MS;
-    const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownRegions } = await resolveTargets(rangeSec);
+    const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownRegions } = await resolveTargets(rangeSec, deadlineAt);
     const failed: string[] = [];
     // 로그 그룹 발견 자체가 실패(스로틀/거부)한 것과 "발견됐지만 로그가 없음"을 구분 —
     // 전자를 후자로 렌더링하면 SCP 거부 환경에서 "로그 없음"이라는 거짓 all-clear가 된다.
@@ -227,6 +233,15 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         }
       }
       return out;
+    };
+    // 리뷰 MAJOR 라운드9 제안: 리전 하나가 50개 초과로 청크가 갈리면 청크별 overfetch
+    // 상한(PER_REGION_OVERFETCH)이 사실상 "리전 전체" 대신 "청크"에 적용돼, 라운드6에서
+    // 없앤 줄 알았던 per-group truncation이 재도입된다 — topTalkers처럼 무신호 병합에
+    // 취약한 쿼리는 이 경우 결과가 불완전할 수 있다는 신호를 남긴다.
+    const anyRegionChunked = (ts: AnfwLogTarget[]): boolean => {
+      const counts = new Map<string, number>();
+      for (const [region] of groupByRegion(ts)) counts.set(region, (counts.get(region) ?? 0) + 1);
+      return [...counts.values()].some((n) => n > 1);
     };
 
     const runMerged = async (ts: AnfwLogTarget[], key: string, query: string): Promise<Row[]> => {
@@ -289,6 +304,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       // Top talker(3필드 group-by)는 대용량 스캔이라 창을 최대 6h로 제한 — 실측: 24h 566만 행에서
       // 폴링 상한 초과. totals/proto(단순 집계)는 요청 범위 그대로.
       const talkersWindowSec = Math.min(rangeSec, 21600);
+      if (anyRegionChunked(flowTargets)) failed.push('flowTopTalkersPartial');
       const runMergedWindow = async (ts: AnfwLogTarget[], key: string, query: string, windowSec: number): Promise<Row[]> => {
         const rows: Row[] = [];
         let anyFail = false;
@@ -310,15 +326,25 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         if (!r.proto) continue;
         protoMap.set(r.proto, (protoMap.get(r.proto) ?? 0) + num(r.cnt));
       }
+      // 리뷰 MAJOR(확정, 라운드9): alert의 topSignatures/topSources/topDests는 (region×
+      // 청크) 결과를 키로 합산(merge()/sigMap)한 뒤 정렬·자르는데, topTalkers는 그대로
+      // concat→sort→slice만 했다 — 같은 (src,dst) 쌍이 리전/청크로 갈라지면 중복 행으로
+      // 나뉘어 바이트가 쪼개진 채 표시되고, 실제로는 상위인 쌍이 순위에서 밀려난다.
+      // alert 경로와 동일하게 (src,dst) 키로 먼저 합산한다.
+      const talkerMap = new Map<string, { src: string; dst: string; bytes: number; flows: number }>();
+      for (const r of talkers) {
+        const src = r.src ?? ''; const dst = r.dst ?? '';
+        if (!src) continue;
+        const key = `${src}|${dst}`;
+        const cur = talkerMap.get(key) ?? { src, dst, bytes: 0, flows: 0 };
+        cur.bytes += num(r.bytes); cur.flows += num(r.cnt);
+        talkerMap.set(key, cur);
+      }
       flow = {
         totalFlows: totals.reduce((s, r) => s + num(r.cnt), 0),
         totalBytes: totals.reduce((s, r) => s + num(r.bytes), 0),
         talkersWindowSec,
-        topTalkers: talkers
-          .map((r) => ({ src: r.src ?? '', dst: r.dst ?? '', bytes: num(r.bytes), flows: num(r.cnt) }))
-          .filter((t) => t.src)
-          .sort((a, b) => b.bytes - a.bytes)
-          .slice(0, 10),
+        topTalkers: [...talkerMap.values()].sort((a, b) => b.bytes - a.bytes).slice(0, 10),
         byProto: [...protoMap.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
       };
     }
