@@ -349,11 +349,21 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
     # 찍어 무한 루프가 될 수 있다 — length(items || [])로 항상 숫자를 받고, 최대 대기
     # 횟수도 둬서 API 응답 구조가 예상과 다를 때 무한정 멈추지 않게 한다.
     attempts=0
-    while [ "$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text)" != "0" ]; do
+    drained=false
+    while [ "$attempts" -lt 60 ]; do
+      if [ "$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text)" = "0" ]; then
+        drained=true
+        break
+      fi
       attempts=$((attempts + 1))
-      if [ "$attempts" -ge 60 ]; then echo "타깃 삭제가 5분 넘게 안 끝남 — 콘솔/CLI로 직접 확인 필요: $gw" >&2; break; fi
       sleep 5
     done
+    if [ "$drained" != true ]; then
+      # 타깃이 5분 넘게 안 비워짐 — delete-gateway를 불러도 (c) 위 주석대로 실패할 게 뻔하다.
+      # 여기서 그대로 진행하지 않고 이 게이트웨이만 건너뛴다 — 콘솔/CLI로 직접 확인 후 재실행.
+      echo "타깃 삭제가 5분 넘게 안 끝남 — 이 게이트웨이는 건너뜀, 콘솔/CLI로 직접 확인 필요: $gw" >&2
+      continue
+    fi
     aws bedrock-agentcore-control delete-gateway --gateway-identifier "$gw"
   done
   : "${CONFIRMED_ORPHAN_MEMORY_ID:?fill in the confirmed memory id from step (b) first}"
