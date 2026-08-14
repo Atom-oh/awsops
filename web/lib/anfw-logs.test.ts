@@ -384,6 +384,35 @@ describe('anfwLogsAnalysis', () => {
     expect(a.targets.some((t) => t.type === 'FLOW' && t.group === '/aws/network-firewall/DMZVPC/netflow')).toBe(true);
   });
 
+  it('"flow-logs"로 끝나는 관례 명명 그룹(AWS 콘솔 "flow logs" 용어의 가장 자연스러운 표기)은 FLOW로 정상 발견 확정됨 (리뷰 MAJOR, PR #221 라운드6)', async () => {
+    // 라운드5까지 FLOW_TOKENS엔 "flowlog"/"flowlogs"(무하이픈)만 있어 "flow-logs"(하이픈)는
+    // 세그먼트 전체 일치에 걸리지 않았다 — 쿼리는 성공(permissive substring)했는데도 발견은
+    // 영구 미확정으로 남아 totalFlows가 계속 "확인 불가"였다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/flow-logs' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+  });
+
+  it('"alertlogs"로 끝나는 관례 명명 그룹은 ALERT로 정상 발견 확정됨 — ALERT_TOKENS도 FLOW_TOKENS와 동일한 파생 규칙(복수형/log/logs/하이픈)을 대칭으로 가짐 (리뷰 MAJOR, PR #221 라운드6)', async () => {
+    // 라운드5까지 ALERT_TOKENS엔 "alert"/"alerts"뿐이라 복합형이 전혀 없었다 — FLOW만 복합형을
+    // 인정하는 비대칭이 이 회귀의 근본 원인이었다.
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ loggingKnown: false, alertLogging: null, flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) =>
+      cmd.constructor.name === 'DescribeLogGroupsCommand'
+        ? { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alertlogs' }] }
+        : {});
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).not.toContain('logDiscoveryEmpty:ap-northeast-2:ALERT');
+    expect(a.failed).toContain('logDiscoveryEmpty:ap-northeast-2:FLOW');
+  });
+
   it('마지막 세그먼트는 결정적이지만 다른 세그먼트에 반대 타입 토큰이 있으면(예: "/…/alert/netflow-prod/flow") 발견 확정은 안 하되 양쪽 다 쿼리 대상으로 등록됨 (리뷰 MAJOR, PR #221 라운드3 — 라운드2의 두 결함 수정)', async () => {
     // 라운드2는 두 가지로 틀렸다: (1) 마지막 세그먼트가 결론이 안 나면 whole-name 폴백이
     // 발견 "확정"까지 겸해 방화벽 이름의 우연한 토큰으로도 확정될 수 있었고, (2) 마지막

@@ -120,10 +120,14 @@ export interface AnfwAnalysis {
    *  빈 배열이 아니면 firewalls/policies/ruleGroups·totals는 "리전에 리소스 없음"이 아니라
    *  "AWS 조회 실패로 알 수 없음" — 0/빈 결과를 그대로 신뢰하면 안 됨. */
   degradedRegions: string[];
-  /** degradedRegions의 부분집합 — firewalls 자체(List/Describe, 따라서 로깅 구성 포함)만
-   *  부분 실패한 리전. policies/ruleGroups만 실패해 degradedRegions에는 들어가지만 firewalls
-   *  자체는 완전한 리전은 여기 포함되지 않는다. "이 리전의 방화벽 로깅 구성을 알 수 있었는가"
-   *  만 필요한 소비처(예: anfw-logs.ts)는 degradedRegions 대신 이 필드를 써야 한다. */
+  /** degradedRegions의 부분집합 — firewalls 자체(List 실패 또는 List가 돌려준 개수보다 적게
+   *  Describe됨)만 부분 실패한 리전. policies/ruleGroups만 실패해 degradedRegions에는 들어가지만
+   *  firewalls 자체는 완전한 리전은 여기 포함되지 않는다. 리뷰 MINOR(PR #221 라운드5, wording
+   *  정정): 이 필드는 방화벽 "목록"의 부분 실패만 가리킨다 — DescribeLoggingConfiguration이
+   *  거부돼도 그 자체는 catch되어 `loggingKnown:false`로 강등될 뿐 이 필드를 켜지 않는다
+   *  (그 방화벽은 firewalls[]에 정상 포함, 다만 alertLogging/flowLogging이 unknown). "이 리전의
+   *  방화벽 목록 자체를 확인할 수 있었는가"만 필요한 소비처(예: anfw-logs.ts)는 degradedRegions
+   *  대신 이 필드를 써야 한다. */
   firewallListDegradedRegions: string[];
   /** 이번 분석이 실제로 조회를 시도한 전 리전 목록(인벤토리 기반) — firewalls[].region은
    *  현재 방화벽이 있는 리전만 담아 "리전의 마지막 방화벽이 삭제됨" 케이스를 놓친다.

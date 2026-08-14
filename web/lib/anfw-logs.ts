@@ -6,14 +6,30 @@ import { anfwAnalysis } from './anfw';
 // dns-logs와 동일 제약, 화면에 정직 고지). 로그는 Suricata EVE JSON — 중첩 필드는
 // `event.alert.signature_id` 도트 표기로 접근.
 // 함정: 스테이징 태스크 롤은 DescribeLoggingConfiguration이 SCP류로 거부(loggingKnown=false)
-// → 이때는 `/aws/network-firewall/` 접두사 DescribeLogGroups로 **휴리스틱 발견** 폴백
-// (이름에 alert/flow 포함 여부로 분류, discovered=true로 표시).
+// → 이때는 `/aws/network-firewall/` 접두사 DescribeLogGroups로 **휴리스틱 발견** 폴백.
+// 리뷰(PR #221 라운드5): 분류는 2단계 — **쿼리 등록**은 이름에 alert/flow 부분 문자열
+// 포함 여부(permissive substring, base와 동일 — 쿼리 커버리지는 절대 base보다 좁아지면
+// 안 됨). **발견 확정**(foundByType, unknown 신호를 끄는 것)은 `/`-세그먼트 전체가
+// ALERT_TOKENS/FLOW_TOKENS와 정확히 일치할 때만(부분 문자열 아님) + 그 이름의 다른
+// 세그먼트에 반대 타입 세그먼트가 없을 때만 — 이름이 그저 그 타입을 우연히 포함한다는
+// 것과 실제로 그 타입의 증거라는 것은 다르다.
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 // 리뷰 MINOR(PR #221): 접두사 발견 폴백은 리전당 수만 개 로그 그룹을 순회할 수 있다(round-9
 // 코멘트) — 그룹마다 새 Set을 만들지 않도록 모듈 스코프로 끌어올린다.
-const ALERT_TOKENS = new Set(['alert', 'alerts']);
-const FLOW_TOKENS = new Set(['flow', 'flows', 'netflow', 'flowlog', 'flowlogs']);
+// 리뷰 MAJOR(확정, PR #221 라운드6): 두 허용목록이 비대칭이고 하이픈 복합형을 못 커버했다 —
+// ALERT엔 복합형이 전혀 없고 FLOW엔 "flowlog(s)"만 있어 "netflows"·"alertlog(s)"·
+// "flow-logs"·"alert-logs"(AWS 콘솔 용어 "flow logs"의 가장 자연스러운 표기) 같은 관례적
+// 이름이 세그먼트 전체 일치에 걸리지 않아 영구히 미확정 처리됐다 — 쿼리는 permissive
+// substring이라 실제로 성공했는데도 헤드라인 total이 "확인 불가"로 굳어버리는, 이 PR이
+// 고치려는 바로 그 버그의 반대 방향 재현. base·suffix·하이픈유무를 대칭으로 생성해 둘 다
+// 동일한 파생 규칙을 따르게 한다(확정/거부 양쪽에서 여전히 세그먼트 전체 일치만 인정 —
+// 부분 문자열은 아님).
+const withLogSuffixes = (base: string): string[] => [
+  base, `${base}s`, `${base}log`, `${base}logs`, `${base}-log`, `${base}-logs`,
+];
+const ALERT_TOKENS = new Set(withLogSuffixes('alert'));
+const FLOW_TOKENS = new Set([...withLogSuffixes('flow'), ...withLogSuffixes('netflow')]);
 const logsClients = new Map<string, CloudWatchLogsClient>();
 const logs = (r: string) => {
   let c = logsClients.get(r);
