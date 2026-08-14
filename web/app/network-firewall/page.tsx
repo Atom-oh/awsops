@@ -695,9 +695,12 @@ export default function NetworkFirewallPage() {
                   )}
                   {logsData.alert == null ? (
                     <div className="px-4 py-3 text-[13px] text-ink-400">
-                      {/* Flow 카드와 동일하게 발견 실패(firewallDiscovery/logDiscovery*)는
-                          "로그 없음"이 아니라 "확인 불가"로 구분 표시. */}
-                      {logsData.failed.some((k) => k === 'firewallDiscovery' || k.startsWith('logDiscovery'))
+                      {/* Flow 카드와 동일하게 발견 실패(firewallDiscovery/logDiscovery/
+                          logDiscoveryEmpty:*:ALERT)는 "로그 없음"이 아니라 "확인 불가"로
+                          구분 표시. 리뷰 MAJOR(라운드12): logDiscoveryEmpty는 이제 타입별
+                          키(:ALERT/:FLOW)라 이 카드는 자기 타입 키만 봐야 한다 — FLOW만
+                          unknown인 리전을 ALERT 카드가 잘못 "확인 불가"로 표시하면 안 됨. */}
+                      {logsData.failed.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT'))
                         ? tt('확인 불가 (로깅 구성 조회 실패 — ALERT 로그 유무 미확인)')
                         : tt('CloudWatch Logs 대상 ALERT 로그 없음')}
                     </div>
@@ -789,7 +792,10 @@ export default function NetworkFirewallPage() {
               )}
               {logsData && (logsData.flow == null ? (
                 <div className="px-4 py-3 text-[13px] text-ink-400">
-                  {logsData.failed.some((k) => k === 'firewallDiscovery' || k.startsWith('logDiscovery'))
+                  {/* 리뷰 MAJOR(라운드12): logDiscoveryEmpty가 타입별 키가 됐으므로 이
+                      카드는 자기 타입(:FLOW) 키만 봐야 한다 — ALERT만 unknown인 리전을
+                      이 카드가 잘못 "확인 불가"로 표시하면 안 됨. */}
+                  {logsData.failed.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || k.startsWith('logDiscoveryEmpty:') && k.endsWith(':FLOW'))
                     ? tt('확인 불가 (로깅 구성 조회 실패 — FLOW 로그 유무 미확인)')
                     : tt('CloudWatch Logs 대상 FLOW 로그 없음')}
                 </div>

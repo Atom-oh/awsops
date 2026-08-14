@@ -1273,6 +1273,8 @@ export const TERMS: Record<string, Pair> = {
   '트래픽 매칭 조회 중…': { en: 'Loading traffic matches…', zh: '正在获取流量匹配…', ja: 'トラフィックマッチを取得中…' },
   '근사': { en: 'approx.', zh: '近似', ja: '近似' },
   '히트 매칭': { en: 'Hit matching', zh: '命中匹配', ja: 'ヒットマッチング' },
+  '(대상IP,포트,프로토콜) 튜플 매칭 — 같은 ENI에 SG가 여러 개거나 룰이 겹치면 다른 SG/룰이 허용한 트래픽도 이 룰의 히트로 집계될 수 있습니다': { en: '(dest IP, port, protocol) tuple match — if an ENI has multiple SGs or overlapping rules, traffic allowed by a different SG/rule can also be counted as this rule’s hit', zh: '（目标 IP、端口、协议）元组匹配 — 若同一 ENI 上有多个 SG 或规则重叠，其他 SG/规则允许的流量也可能被计入此规则的命中', ja: '（宛先 IP・ポート・プロトコル）タプルマッチ — 同一 ENI に複数の SG があるかルールが重複していると、別の SG/ルールが許可したトラフィックもこのルールのヒットとして集計される場合があります' },
+  '튜플 매칭 근사 — SG/룰이 겹치면 다른 룰의 허용 트래픽도 포함될 수 있습니다': { en: 'Tuple-match approximation — overlapping SGs/rules may include traffic allowed by a different rule', zh: '元组匹配近似值 — SG/规则重叠时可能包含其他规则允许的流量', ja: 'タプルマッチによる近似値 — SG/ルールが重複していると別ルールの許可トラフィックも含まれる場合があります' },
   '매칭 없는 인바운드 룰': { en: 'Inbound rules with no match', zh: '无匹配的入站规则', ja: 'マッチのないインバウンドルール' },
   '매칭': { en: 'Matches', zh: '匹配', ja: 'マッチ' },
   '실제 트래픽 상대 (Top)': { en: 'Actual traffic peers (top)', zh: '实际流量对端（Top）', ja: '実際のトラフィック相手（Top）' },

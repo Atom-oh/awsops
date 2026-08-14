@@ -121,7 +121,7 @@ export interface AnfwLogsAnalysis {
 const num = (s: string | undefined): number => (s != null && s !== '' ? Number(s) || 0 : 0);
 
 /** 로깅 구성(알면 정확) 또는 접두사 발견(모르면 휴리스틱)으로 CWL 대상 도출. */
-async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean; firewallDiscoveryDegraded: boolean; loggingUnknownRegions: string[] }> {
+async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ targets: AnfwLogTarget[]; unsupported: number; discoveryFailed: boolean; firewallDiscoveryDegraded: boolean; loggingUnknownByType: Record<'ALERT' | 'FLOW', string[]> }> {
   const a = await anfwAnalysis(rangeSec);
   const targets: AnfwLogTarget[] = [];
   let unsupported = 0;
@@ -160,9 +160,15 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
   // discoverRegions가 아예 없었던 경우("로깅 구성을 확인해 정말 CWL 대상이 없음")와
   // 구분이 안 된다. 두 케이스 모두 "unknown"인데 하나는 "off"로 렌더링된 것 —
   // 이 스캔이 무엇 하나도 못 찾은 리전을 별도로 기록해 confirmed-absence와 분리한다.
-  const loggingUnknownRegions: string[] = [];
+  // 리뷰 MAJOR(확정, 라운드12): unknown-ness를 리전 단위로만 기록하면(이전 방식: 그
+  // 리전에서 ALERT/FLOW 둘 다 하나도 못 찾았을 때만 표시), 구성 조회가 거부됐는데
+  // 관례 명명 ALERT 그룹만 발견되고 FLOW는 커스텀 명명이라 못 찾은 경우 그 리전은
+  // "발견됨"으로 카운트돼 빠지고, FLOW 카드는 "unknown"을 "확정 없음"으로 렌더링한다
+  // — 다른 모든 경로가 지키는 계약을 이 경로만 타입 단위에서 어긴 것. ALERT/FLOW를
+  // 독립적으로 추적해, 한쪽만 발견돼도 다른 쪽의 unknown 신호가 죽지 않게 한다.
+  const loggingUnknownByType: Record<'ALERT' | 'FLOW', string[]> = { ALERT: [], FLOW: [] };
   for (const region of discoverRegions) {
-    const before = targets.length;
+    const foundByType: Record<'ALERT' | 'FLOW', boolean> = { ALERT: false, FLOW: false };
     try {
       let nextToken: string | undefined;
       do {
@@ -176,15 +182,20 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
         for (const g of r.logGroups ?? []) {
           const name = g.logGroupName ?? '';
           const lower = name.toLowerCase();
-          const type = lower.includes('alert') ? 'ALERT' : lower.includes('flow') ? 'FLOW' : null;
-          if (type) targets.push({ firewall: '(discovered)', region, type, group: name, discovered: true });
+          // 리뷰 MINOR(라운드12): "alert"/"flow" 접두사 매칭은 상호배타 우선순위였다 —
+          // 둘 다 포함하는 이름(예: /flow-alerts)이면 ALERT 하나에만 등록됐다. 쿼리는
+          // event_type으로 필터하므로 양쪽 다 걸리는 이름은 두 타입 모두에 등록해도
+          // 안전 — 어느 한쪽으로 단정하는 것보다 낫다.
+          if (lower.includes('alert')) { targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true }); foundByType.ALERT = true; }
+          if (lower.includes('flow')) { targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true }); foundByType.FLOW = true; }
         }
         nextToken = r.nextToken;
       } while (nextToken);
-      if (targets.length === before) loggingUnknownRegions.push(region);
+      if (!foundByType.ALERT) loggingUnknownByType.ALERT.push(region);
+      if (!foundByType.FLOW) loggingUnknownByType.FLOW.push(region);
     } catch { discoveryFailed = true; }
   }
-  return { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownRegions };
+  return { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownByType };
 }
 
 /** Alert/Flow 로그 Insights 집계 — 그룹별 병렬 실행 후 병합, 개별 실패는 failed로 degrade. */
@@ -196,15 +207,18 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // audit 경로(anfw/route.ts)와 동일 패턴. 앞단이 오래 걸렸으면 Insights 폴링에
     // 남는 시간이 그만큼 줄어들 뿐, 전체 예산은 항상 60s 안에 수렴한다.
     const deadlineAt = Date.now() + LOGS_BUDGET_MS;
-    const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownRegions } = await resolveTargets(rangeSec, deadlineAt);
+    const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownByType } = await resolveTargets(rangeSec, deadlineAt);
     const failed: string[] = [];
     // 로그 그룹 발견 자체가 실패(스로틀/거부)한 것과 "발견됐지만 로그가 없음"을 구분 —
     // 전자를 후자로 렌더링하면 SCP 거부 환경에서 "로그 없음"이라는 거짓 all-clear가 된다.
     if (discoveryFailed) failed.push('logDiscovery');
     // 구성 조회는 거부됐고(loggingKnown=false) 접두사 스캔은 예외 없이 실행됐지만 그
     // 리전에서 관례 명명과 일치하는 그룹을 하나도 못 찾은 경우(커스텀 명명이면 흔함) —
-    // "이 리전은 CWL 대상이 없음이 확인됨"이 아니라 "여전히 모름"이다. 리전별로 표시.
-    for (const region of loggingUnknownRegions) failed.push(`logDiscoveryEmpty:${region}`);
+    // "이 리전은 CWL 대상이 없음이 확인됨"이 아니라 "여전히 모름"이다. 리전×타입별로 표시
+    // (리뷰 MAJOR 라운드12: 리전 단위로만 묶으면 ALERT는 발견되고 FLOW만 커스텀 명명인
+    // 경우 그 리전이 "발견됨"으로 빠져 FLOW 카드가 unknown을 확정 없음으로 렌더링했다).
+    for (const region of loggingUnknownByType.ALERT) failed.push(`logDiscoveryEmpty:${region}:ALERT`);
+    for (const region of loggingUnknownByType.FLOW) failed.push(`logDiscoveryEmpty:${region}:FLOW`);
     // 방화벽 목록 조회 자체가 실패한 리전이 있으면(anfwAnalysis().degradedRegions) 그
     // 리전 방화벽들의 로깅 구성을 원래 확인조차 못 했다 — "로그 없음"과 구분되는 별도 키.
     if (firewallDiscoveryDegraded) failed.push('firewallDiscovery');
