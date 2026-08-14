@@ -305,19 +305,33 @@ change today" flag can't express this, and there is no fingerprint-change timest
 single-row cache to even test the condition against. Matching therefore never asks "what does the rule
 look like right now" — for each candidate rule match against a flow record, it looks up the
 `sg_rule_inventory_versions` row for that `rule_id` whose `[valid_from, valid_to)` interval contains the
-flow's own **`start`** timestamp (not `end` — a flow record covers a duration, and the rule shape in
-force when the connection was first evaluated by the security group is the one that actually decided
-whether it was allowed; using `end` would attribute a flow to a rule edit that happened *after* the
-connection was already permitted). An open-ended `valid_to IS NULL` interval matches anything at or
-after `valid_from`. If no version row's interval covers the flow's `start` (the rule didn't exist yet,
-or the version history has a gap from before this feature started recording it), that flow's match
-against that rule is `unassessable`, not silently attributed to whatever fingerprint happens to be
-current now. `sg_rule_activity_daily` continues to store the rule's fingerprint *as of the versions
-looked up for that day's matching*, not a snapshot-time fingerprint — if a day's flows split across two
-versions (the edit happened mid-day, so some flows' `start` falls in the old version's interval and
-others in the new one), the day's row records `coverage.fingerprint_epoch_crossing = true` and its
-counts render as a lower bound, not an exact count (same rendering as any other `unassessable`-adjacent
-coverage flag). This is a conservative degrade, not a blocker: the row is still written and still
+flow's own **`start`** timestamp (not `end` — using `end` would attribute a flow to a rule edit that
+happened strictly after the recorded window closed, which is never more correct than using `start`).
+An open-ended `valid_to IS NULL` interval matches anything at or after `valid_from`. If no version
+row's interval covers the flow's `start` (the rule didn't exist yet, or the version history has a gap
+from before this feature started recording it), that flow's match against that rule is `unassessable`,
+not silently attributed to whatever fingerprint happens to be current now.
+
+**Disclosed limitation, not a solved problem**: `start` is the beginning of *that flow-log record's own
+capture/aggregation window*, not necessarily the moment the security group first evaluated the
+connection. VPC Flow Logs publish further records for a long-lived, already-established connection at
+each aggregation interval — a rule edit partway through such a connection's lifetime means a later
+record's `start` falls after the edit, so per-row version lookup attributes that ongoing (already-
+permitted) traffic to the *new* rule version, when the connection was actually allowed under the
+version in force at its true, unrecorded initiation. This pipeline does no connection correlation (it
+aggregates rows in day batches, not by 5-tuple across a connection's lifetime), so there is no cheap way
+to recover the true initiation time from a single row in isolation. The practical effect is scoped: it
+only misattributes the *rule-fingerprint label* on continuing traffic across an edit mid-connection —
+it does not create a false allow/deny (Flow Log `action` already records what AWS actually permitted),
+and `coverage.fingerprint_epoch_crossing` still flags the day as containing more than one fingerprint.
+Accepted as a bounded, disclosed imprecision; connection-level correlation is out of scope for this spec.
+
+`sg_rule_activity_daily` continues to store the rule's fingerprint *as of the versions looked up for
+that day's matching*, not a snapshot-time fingerprint — if a day's flows split across two versions
+(the edit happened mid-day, so some flows' `start` falls in the old version's interval and others in
+the new one), the day's row records `coverage.fingerprint_epoch_crossing = true` and its counts render
+as a lower bound, not an exact count (same rendering as any other `unassessable`-adjacent coverage
+flag). This is a conservative degrade, not a blocker: the row is still written and still
 contributes to trend/history views, just flagged.
 
 Default outbound rules are displayed and marked protected from cleanup recommendations.
@@ -382,12 +396,20 @@ Rule matching covers:
   `SG_RULE_MEMBERSHIP_STALENESS_DAYS` (default 3) days older than that day** — not "same calendar day"
   (the daily pipeline snapshots current membership on run day D but scans flow data for an earlier day,
   so an exact-day match is frequently unsatisfiable by construction; nearest-prior-in-time is the
-  correct semantics and mirrors how `sg_rule_inventory_versions` resolves rule shape), and not an
-  unbounded "latest ever" lookup either — a snapshot from weeks or months before the scanned day is not
-  meaningfully "current" membership for that day and should not be used silently just because it's the
-  only one available. If no snapshot exists within that staleness window before the scanned day (the
-  source is brand new, or the worker was disabled for longer than the window), that day's SG-reference
-  matches are `unassessable`, never silently matched against a stale or a *later* snapshot.
+  correct semantics and mirrors how `sg_rule_inventory_versions` resolves rule shape). This staleness
+  bound governs **normal same-window processing and the trailing rescan window** — a snapshot from
+  weeks or months before an ordinarily-scanned day is not meaningfully "current" for that day and
+  should not be used silently just because it's the only one available; outside the window, that day's
+  SG-reference matches are `unassessable`.
+  **This bound does not apply to the initial-historical-backfill case** (see "Initial historical
+  backfill" below): a day older than the earliest snapshot this source ever took has no in-window
+  snapshot by construction (snapshotting cannot retroactively exist before the source was configured),
+  and for that case the design deliberately falls back to the earliest available snapshot rather than
+  marking the day `unassessable` — labeled in the UI as "historical evidence mapped using current
+  membership only" (lower confidence), not silently equated with a normal, in-window match. The two
+  rules are for two different situations: "we have a snapshot but it's too old to trust" (normal
+  processing, `unassessable`) vs. "no snapshot could possibly exist yet for this day" (pre-snapshotting
+  backfill, labeled lower-confidence fallback).
   Scoped to **the flow's own VPC plus any VPC known to be able to legally reference it** — a VPC with an
   active VPC Peering connection to the flow's VPC, or a participant VPC in the same shared-VPC (RAM)
   arrangement, per this repo's existing VPC topology data — not simply the flow's own VPC alone (SG
