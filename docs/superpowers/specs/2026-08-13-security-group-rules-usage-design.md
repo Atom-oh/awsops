@@ -404,9 +404,11 @@ Rule matching covers:
   **This bound does not apply to the initial-historical-backfill case** (see "Initial historical
   backfill" below): a day older than the earliest snapshot this source ever took has no in-window
   snapshot by construction (snapshotting cannot retroactively exist before the source was configured),
-  and for that case the design deliberately falls back to the earliest available snapshot rather than
-  marking the day `unassessable` — labeled in the UI as "historical evidence mapped using current
-  membership only" (lower confidence), not silently equated with a normal, in-window match. The two
+  and for that case the design deliberately falls back to the **current** (i.e. latest available at
+  backfill time — there is no earlier one to fall back to, since none existed yet for that historical
+  day) snapshot rather than marking the day `unassessable` — labeled in the UI exactly as written below,
+  "historical evidence mapped using current membership only" (lower confidence), not silently equated
+  with a normal, in-window match. The two
   rules are for two different situations: "we have a snapshot but it's too old to trust" (normal
   processing, `unassessable`) vs. "no snapshot could possibly exist yet for this day" (pre-snapshotting
   backfill, labeled lower-confidence fallback).
@@ -541,6 +543,11 @@ Missing permissions degrade only that account/region source to `unassessable`.
 - delivery-lag grace period is honored before a day becomes eligible
 - rescan window re-processes a trailing day without moving the watermark backward
 - rule-fingerprint change mid-window: day replace clears the prior fingerprint's row for that day
+- a day whose flows span two `sg_rule_inventory_versions` rows sets `coverage.fingerprint_epoch_crossing`
+- a flow's own `start` (not `end`) selects the version whose `[valid_from, valid_to)` interval covers it
+- ENI-membership snapshot lookup: in-window (used), stale beyond `SG_RULE_MEMBERSHIP_STALENESS_DAYS`
+  (`unassessable`), and pre-snapshotting backfill day (falls back to current, labeled lower-confidence)
+  are three distinct outcomes, not one collapsed into another
 - concurrent/retried run for the same partition does not block on a uniqueness conflict
 - one account/region batch rather than per-rule query
 - Athena pagination and terminal states
