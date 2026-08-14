@@ -333,6 +333,11 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
   CONFIRMED_ORPHAN_MEMORY_ID=""
   # 예: CONFIRMED_ORPHAN_CODE_INTERPRETER_ID="awsops_code_interpreter-abc12345"
   CONFIRMED_ORPHAN_CODE_INTERPRETER_ID=""
+  # 위 3개를 채우지 않고 그대로 진행하면 아래에서 즉시 에러로 중단한다(공백 memory-id/
+  # code-interpreter-id로 AWS CLI를 호출하는 사고 방지) — 게이트웨이 배열은 비어 있으면
+  # 루프가 0회 실행되어 안전하므로 별도 가드 불필요.
+  : "${CONFIRMED_ORPHAN_MEMORY_ID:?fill in the confirmed memory id from step (b) first}"
+  : "${CONFIRMED_ORPHAN_CODE_INTERPRETER_ID:?fill in the confirmed code interpreter id from step (b) first}"
   # (c) 게이트웨이는 타깃부터 지우고, 그 삭제가 실제 반영될 때까지 기다린 다음에만 게이트웨이를 지운다 —
   #     타깃이 아직 DELETING인 채로 delete-gateway를 부르면 생성 때의 "GW READY 전 target 생성 실패"와
   #     대칭인 이유로 실패한다(비동기 삭제, 즉시 완료 보장 없음).

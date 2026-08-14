@@ -115,7 +115,9 @@ The workgroup must already enforce a query-results S3 location. AWSops validates
 - the table exposes Glue partitions or partition projection that supports bounded time pruning
 - the caller has Athena, Glue, and S3 access
 
-Configuration is stored in Aurora, contains no credentials, and uses the existing account role.
+Configuration is stored in Aurora and contains no credentials — the account/region source config
+references a target account only; the actual query execution uses the purpose-named policy described
+under **IAM and multi-account behavior** below, never `AWSopsReadOnlyRole` itself.
 Missing configuration does not hide the Rule inventory. It sets activity to `not_configured`.
 
 The minimum accepted schema resolves the AWS field names `interface-id`, `srcaddr`, `dstaddr`,
@@ -374,15 +376,15 @@ When the feature is enabled, the worker needs:
   scoped to that one prefix, never a general S3 write grant)
 - EC2 DescribeSecurityGroupRules and DescribeNetworkInterfaces
 
-`Athena StartQueryExecution`/`StopQueryExecution` and the query-result S3 write are not read actions,
-so they are **not** added to the existing `AWSopsReadOnlyRole` as-is — extending a role whose name is a
-declared read-only invariant with write-capable actions would itself be a finding, independent of how
-narrowly those actions are scoped. Target accounts instead get a **separate, purpose-named policy**
-(e.g. `AWSopsSgRuleAthenaRole` or an inline policy attached alongside `AWSopsReadOnlyRole`, not merged
-into it) scoped to exactly the workgroup(s) and result prefix configured for that source; this is the
-same ADR-005/ADR-007 posture analysis and BASELINE §2 register row required by the feature gate above,
-applied at the IAM boundary rather than only at the flag. The host account uses its execution role and
-does not self-assume.
+`Athena StartQueryExecution`/`StopQueryExecution` and the query-result S3 write are not read actions.
+`AWSopsReadOnlyRole` itself gains **no new permissions and no new policy of any kind** (managed or
+inline) as part of this feature — a role whose name is a declared read-only invariant does not carry
+write-capable actions under any attachment method, since the write capability is the same regardless of
+whether it arrives as a managed policy or an inline one. Target accounts instead get a wholly separate
+IAM role (e.g. `AWSopsSgRuleAthenaRole`), assumed only by this feature's worker path and scoped to
+exactly the workgroup(s) and result prefix configured for that source; this is the same ADR-005/ADR-007
+posture analysis and BASELINE §2 register row required by the feature gate above, applied at the IAM
+boundary rather than only at the flag. The host account uses its execution role and does not self-assume.
 
 Missing permissions degrade only that account/region source to `unassessable`.
 
