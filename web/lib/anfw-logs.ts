@@ -132,7 +132,12 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
   // discoveryFailed도 안 켜진다. 결과적으로 "이 방화벽이 어떤 대상으로 로깅하는지도
   // 모르는" 상태가 "CloudWatch Logs 대상 로그 없음"으로 렌더링된다 — 이 PR이 다른
   // 모든 경로에서 지키는 "unknown ≠ off" 계약을 이 함수 자신이 어긴 것.
-  const firewallDiscoveryDegraded = (a.degradedRegions ?? []).length > 0;
+  // 리뷰 MAJOR(확정, PR #221 라운드2): a.degradedRegions는 firewalls·policies·ruleGroups 중
+  // 어느 것 하나라도 부분 실패하면 켜지는 포괄 신호다 — 방화벽 로깅 구성과 무관한
+  // DescribeFirewallPolicy/DescribeRuleGroup 실패(스로틀 등)에도 켜져서, 완전히 정상 조회된
+  // 리전의 확정 alert/flow 총계까지 account-wide로 null 처리해버린다. 방화벽 목록(따라서
+  // 로깅 구성) 자체를 확인할 수 있었는지만 보는 firewallListDegradedRegions로 좁힌다.
+  const firewallDiscoveryDegraded = (a.firewallListDegradedRegions ?? []).length > 0;
   for (const f of a.firewalls) {
     if (!f.loggingKnown) { discoverRegions.add(f.region); continue; }
     // 리뷰 MINOR: ALERT→CWL + FLOW→S3처럼 섞인 방화벽은 anyCwl=true라 unsupported에서
@@ -199,14 +204,46 @@ async function resolveTargets(rangeSec: number, deadlineAt: number): Promise<{ t
           // 끄지 않는다. 한쪽 토큰만 포함한 명확한 이름만 그 타입의 발견 확정 증거로 인정.
           // 리뷰 MAJOR(확정, 라운드15): 위 판정을 whole-name substring(`includes`)으로
           // 하면 discriminator 토큰이 이름의 다른 부분(방화벽 이름 세그먼트 등)에 우연히
-          // 박혀 있어도 매칭된다 — 예: `workflow-prod`엔 "flow"가, `netflow-edge`엔도
-          // "flow"가 포함되지만 실제로는 alert 전용 컨벤션 그룹이다. 경로를 영숫자 아닌
-          // 문자(`/`, `-`, `_`, `.`)로 토큰화해 토큰 단위로 판정 — "workflow"/"netflow"는
-          // "flow"로 시작하는 토큰이 아니므로 매칭되지 않지만, "flow-alerts"의 "flow"
-          // 토큰과 "alerts"(복수형, prefix 허용)는 여전히 매칭된다.
-          const tokens = lower.split(/[^a-z0-9]+/).filter(Boolean);
-          const isAlert = tokens.some((t) => t.startsWith('alert'));
-          const isFlow = tokens.some((t) => t.startsWith('flow'));
+          // 박혀 있어도 매칭된다 — 예: `workflow-prod`엔 "flow"가 포함되지만 실제로는
+          // alert 전용 컨벤션 그룹이다.
+          // 리뷰 MAJOR(확정, PR #221 라운드2 — 라운드15 자체 수정의 회귀):
+          // `startsWith('flow')` 토큰 판정으로 바꾼 결과 "netflow"라는 토큰 자체가
+          // "flow"로 시작하지 않아 전혀 매칭되지 않았다 — netflow는 이 모듈이 필터하는
+          // Suricata event_type("netflow")과 동일한, 콘솔에서도 흔히 쓰이는 정당한 FLOW
+          // 명명이라 이건 base(`includes`)보다도 나쁜 회귀다(base는 최소한 매칭은 했다).
+          // 또한 whole-name 토큰 판정은 위치를 안 가려서, 관례상 타입을 나타내는 마지막
+          // 세그먼트가 명확한데도 다른(방화벽 이름) 세그먼트의 우연한 토큰 때문에 애매로
+          // 오분류될 수 있었다(예: `/…/workflow-prod/alert` — 마지막 세그먼트 "alert"만
+          // 보면 명확한데 "workflow-prod" 세그먼트도 함께 보는 whole-name 판정이면 계속
+          // 잘못 애매해질 위험). 콘솔 명명 관례는 discriminator를 마지막 세그먼트에
+          // 두므로, 마지막 세그먼트만 먼저 명시적 허용목록으로 판정하고, 그 결과가
+          // 결론이 안 나면(둘 다/둘 다 아님) 전체 이름의 토큰으로 폴백한다. 허용목록은
+          // 정확 일치만(부분 문자열/prefix 아님) 인정 — "alerting"·"flowchart"·
+          // "alert-prod"(방화벽 이름) 같은 임의 접두사는 더 이상 증거로 인정되지 않는다.
+          const ALERT_TOKENS = new Set(['alert', 'alerts']);
+          const FLOW_TOKENS = new Set(['flow', 'flows', 'netflow', 'flowlog', 'flowlogs']);
+          const tokenize = (s: string) => s.split(/[^a-z0-9]+/).filter(Boolean);
+          const classify = (tokens: string[]) => ({
+            alert: tokens.some((t) => ALERT_TOKENS.has(t)),
+            flow: tokens.some((t) => FLOW_TOKENS.has(t)),
+          });
+          const segments = lower.split('/').filter(Boolean);
+          const terminalTokens = tokenize(segments[segments.length - 1] ?? '');
+          const terminalClass = classify(terminalTokens);
+          let isAlert: boolean;
+          let isFlow: boolean;
+          if (terminalClass.alert !== terminalClass.flow) {
+            // 마지막 세그먼트 단독으로 결론이 난다(정확히 한쪽만 매칭) — 다른 세그먼트의
+            // 우연한 토큰은 보지 않는다.
+            isAlert = terminalClass.alert;
+            isFlow = terminalClass.flow;
+          } else {
+            // 마지막 세그먼트가 결론이 안 남(둘 다 매칭돼 애매, 또는 둘 다 안 매칭) —
+            // 전체 이름의 토큰으로 폴백(예: "/flow-alerts" 단일 세그먼트는 이 경로로 옴).
+            const wholeClass = classify(tokenize(lower));
+            isAlert = wholeClass.alert;
+            isFlow = wholeClass.flow;
+          }
           if (isAlert) targets.push({ firewall: '(discovered)', region, type: 'ALERT', group: name, discovered: true });
           if (isFlow) targets.push({ firewall: '(discovered)', region, type: 'FLOW', group: name, discovered: true });
           if (isAlert && !isFlow) foundByType.ALERT = true;

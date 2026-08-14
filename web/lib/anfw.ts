@@ -120,6 +120,11 @@ export interface AnfwAnalysis {
    *  빈 배열이 아니면 firewalls/policies/ruleGroups·totals는 "리전에 리소스 없음"이 아니라
    *  "AWS 조회 실패로 알 수 없음" — 0/빈 결과를 그대로 신뢰하면 안 됨. */
   degradedRegions: string[];
+  /** degradedRegions의 부분집합 — firewalls 자체(List/Describe, 따라서 로깅 구성 포함)만
+   *  부분 실패한 리전. policies/ruleGroups만 실패해 degradedRegions에는 들어가지만 firewalls
+   *  자체는 완전한 리전은 여기 포함되지 않는다. "이 리전의 방화벽 로깅 구성을 알 수 있었는가"
+   *  만 필요한 소비처(예: anfw-logs.ts)는 degradedRegions 대신 이 필드를 써야 한다. */
+  firewallListDegradedRegions: string[];
   /** 이번 분석이 실제로 조회를 시도한 전 리전 목록(인벤토리 기반) — firewalls[].region은
    *  현재 방화벽이 있는 리전만 담아 "리전의 마지막 방화벽이 삭제됨" 케이스를 놓친다.
    *  audit 등 firewalls 목록과 무관하게 "우리가 감시하는 리전 전체"가 필요한 호출자는
@@ -321,7 +326,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
   return cached(`a|${rangeSec}`, async () => {
     const regions = await regionsFromInventory();
     const perRegion = await Promise.all(regions.map(async (region) => {
-      const empty = { firewalls: [] as AnfwFirewallRow[], policies: [] as AnfwPolicyRow[], ruleGroups: [] as AnfwRuleGroupRow[], degraded: false, metricsDegraded: false };
+      const empty = { firewalls: [] as AnfwFirewallRow[], policies: [] as AnfwPolicyRow[], ruleGroups: [] as AnfwRuleGroupRow[], degraded: false, metricsDegraded: false, firewallListDegraded: false };
       try {
         const [fwList, policyList, rgList] = await Promise.all([
           listAll(async (nextToken) => {
@@ -491,12 +496,19 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
         return {
           firewalls: firewallsOk, policies: policiesOk, ruleGroups: ruleGroupsOk,
           degraded: partial, metricsDegraded: !metricsResult.ok,
+          // 리뷰 MAJOR(PR #221 라운드2, anfw-logs.ts firewallDiscoveryDegraded 소비처): degradedRegions는
+          // firewalls·policies·ruleGroups 중 어느 것 하나라도 부분 실패하면 켜지는 포괄 신호라,
+          // 방화벽 자체의 로깅 구성과 무관한 정책/룰그룹 Describe 실패에도 켜진다. 로그 발견
+          // 계층처럼 "방화벽 목록(따라서 로깅 구성)을 확인할 수 있었는가"만 필요한 소비처를
+          // 위해 firewalls만의 부분 실패를 별도로 노출한다.
+          firewallListDegraded: firewallsOk.length < fwList.length,
         };
-      } catch { return { ...empty, degraded: true }; }
+      } catch { return { ...empty, degraded: true, firewallListDegraded: true }; }
     }));
 
     const degradedRegions = perRegion.flatMap((r, i) => (r.degraded ? [regions[i]] : []));
     const metricsDegradedRegions = perRegion.flatMap((r, i) => (r.metricsDegraded ? [regions[i]] : []));
+    const firewallListDegradedRegions = perRegion.flatMap((r, i) => (r.firewallListDegraded ? [regions[i]] : []));
     const firewalls = perRegion.flatMap((r) => r.firewalls);
     const policies = perRegion.flatMap((r) => r.policies);
     const ruleGroups = perRegion.flatMap((r) => r.ruleGroups);
@@ -520,6 +532,6 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
       droppedPackets: sum(firewalls.map((f) => f.droppedPackets ?? undefined)),
       rejectedPackets: sum(firewalls.map((f) => f.rejectedPackets ?? undefined)),
     };
-    return { firewalls, policies, ruleGroups, degradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec };
+    return { firewalls, policies, ruleGroups, degradedRegions, firewallListDegradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec };
   });
 }
