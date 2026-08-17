@@ -190,12 +190,11 @@ CREATE TABLE sg_rule_inventory (
   active           boolean NOT NULL DEFAULT true,
   PRIMARY KEY (account_id, region, rule_id)
 );
--- 리뷰 MAJOR(확정, 3모델): 위 sg_rule_inventory는 rule_id당 현재 fingerprint 1개만 보관하는
--- mutable 캐시다 — Rule inventory 페이지(현재 상태 조회)에는 맞지만, 매칭 엔진이 "이 flow가
--- 관측된 시점에 이 rule의 모양이 무엇이었는가"를 알아야 하는데 mutable 캐시로는 알 수 없다
--- (스캔은 D-1일을 보는데 워커는 D일 실행 시점 rule 모양만 스냅샷하므로, D-1과 D 사이에
--- fingerprint가 바뀌었으면 D-1일의 실제 flow를 D일 모양으로 오귀속한다). 아래 append-only
--- 버전 테이블이 실제 매칭 기준이다 — sg_rule_inventory는 현재 상태 조회용 캐시로만 남는다.
+-- Review MAJOR (confirmed, 3 models): the sg_rule_inventory above is a mutable cache holding exactly
+-- one current fingerprint per rule_id — fine for the Rules inventory page (current-state lookup), but
+-- the matching engine needs to know "what did this rule look like when this flow was observed," which
+-- a mutable cache cannot answer. The append-only version table below is the actual matching source of
+-- truth; sg_rule_inventory stays a current-state-only cache.
 CREATE TABLE sg_rule_inventory_versions (
   account_id       text NOT NULL,
   region           text NOT NULL,
@@ -208,8 +207,19 @@ CREATE TABLE sg_rule_inventory_versions (
   to_port          integer,
   peer_kind        text NOT NULL,
   peer_value       text NOT NULL,
+  -- Review MAJOR (confirmed, 2 models, round 12): valid_from/valid_to are observation timestamps (when
+  -- the daily snapshot first/last saw this fingerprint), NOT rule-change timestamps — there is no
+  -- CloudTrail-sourced mutation event here, only periodic DescribeSecurityGroupRules polling. Given
+  -- the pipeline's own detection lag (rules are snapshotted on run day D+1, after day D's flows already
+  -- happened — see "Why versioning" below), valid_from for a newly-detected fingerprint is *always*
+  -- later than every flow timestamp in the day that triggered its detection, regardless of when the
+  -- rule actually changed within that day. Comparing a single flow's `start` against `[valid_from,
+  -- valid_to)` therefore cannot localize *when within a day* a change happened — every matching decision
+  -- in this spec is made at day granularity (see "Why versioning"), never sub-day, and valid_from/
+  -- valid_to should be read as "first/last day this fingerprint was confirmed present," not as a
+  -- change-moment boundary.
   valid_from       timestamptz NOT NULL,
-  -- NULL = 현재 활성 버전(아직 다음 fingerprint 변경으로 닫히지 않음).
+  -- NULL = currently open (not yet closed by the next observed fingerprint change).
   valid_to         timestamptz,
   PRIMARY KEY (account_id, region, rule_id, valid_from)
 );
@@ -219,9 +229,10 @@ CREATE INDEX sg_rule_inventory_versions_lookup_idx
 CREATE TABLE sg_eni_membership_snapshots (
   account_id       text NOT NULL,
   region           text NOT NULL,
-  -- 리뷰 MAJOR(확정): vpc_id 없이 peer-IP → SG 역조회를 하면 같은 계정/리전 안에서 겹치는
-  -- RFC1918 대역을 쓰는 서로 다른 VPC의 ENI가 매칭될 수 있다. 역조회 쿼리는 반드시
-  -- vpc_id로 스코프한다(대상 ENI가 속한 VPC를 먼저 확정한 뒤에만 그 VPC 안에서 IP 매칭).
+  -- Review MAJOR (confirmed): without vpc_id, a peer-IP -> SG reverse lookup can match an ENI in a
+  -- different VPC within the same account/region that happens to use overlapping RFC1918 space. The
+  -- reverse-lookup query must always scope by vpc_id (confirm the target ENI's VPC first, then match
+  -- IPs only within that VPC).
   vpc_id           text NOT NULL,
   observed_at      timestamptz NOT NULL,
   eni_id           text NOT NULL,
@@ -297,42 +308,50 @@ new version row is inserted (`valid_from = now()`). A rule seen for the first ti
 version row with `valid_from = first_seen_at`. Missing-rule handling and first/last-seen tracking on
 `sg_rule_inventory` are unchanged.
 
-**Why versioning, not a day-level epoch flag.** The daily pipeline snapshots current rules on run day D
-(step 2 below) but scans Flow Log data for an *earlier* day (D-1, or an arbitrary backfill day) — so
-"the fingerprint captured at snapshot time" is never actually the shape in force during the scanned
-day unless the rule happened to be untouched across the whole gap. A day-level "did the fingerprint
-change today" flag can't express this, and there is no fingerprint-change timestamp on the old
-single-row cache to even test the condition against. Matching therefore never asks "what does the rule
-look like right now" — for each candidate rule match against a flow record, it looks up the
-`sg_rule_inventory_versions` row for that `rule_id` whose `[valid_from, valid_to)` interval contains the
-flow's own **`start`** timestamp (not `end` — using `end` would attribute a flow to a rule edit that
-happened strictly after the recorded window closed, which is never more correct than using `start`).
-An open-ended `valid_to IS NULL` interval matches anything at or after `valid_from`. If no version
-row's interval covers the flow's `start` (the rule didn't exist yet, or the version history has a gap
-from before this feature started recording it), that flow's match against that rule is `unassessable`,
-not silently attributed to whatever fingerprint happens to be current now.
+**Why versioning, not a day-level epoch flag — and why matching is day-granular, not per-flow.** The
+daily pipeline snapshots current rules on run day D+1 (step 2 below) but scans Flow Log data for the
+*prior* day D — so "the fingerprint captured at snapshot time" is never the shape confirmed in force
+*during* day D unless the rule was untouched across the whole gap. A day-level "did the fingerprint
+change today" flag on the old single-row cache can't express this at all (no fingerprint-change
+timestamp exists to test), which is why `sg_rule_inventory_versions` exists.
 
-**Disclosed limitation, not a solved problem**: `start` is the beginning of *that flow-log record's own
-capture/aggregation window*, not necessarily the moment the security group first evaluated the
-connection. VPC Flow Logs publish further records for a long-lived, already-established connection at
-each aggregation interval — a rule edit partway through such a connection's lifetime means a later
-record's `start` falls after the edit, so per-row version lookup attributes that ongoing (already-
-permitted) traffic to the *new* rule version, when the connection was actually allowed under the
-version in force at its true, unrecorded initiation. This pipeline does no connection correlation (it
-aggregates rows in day batches, not by 5-tuple across a connection's lifetime), so there is no cheap way
-to recover the true initiation time from a single row in isolation. The practical effect is scoped: it
-only misattributes the *rule-fingerprint label* on continuing traffic across an edit mid-connection —
-it does not create a false allow/deny (Flow Log `action` already records what AWS actually permitted),
-and `coverage.fingerprint_epoch_crossing` still flags the day as containing more than one fingerprint.
-Accepted as a bounded, disclosed imprecision; connection-level correlation is out of scope for this spec.
+**Round-12 self-check (this file's own reviewers caught this): per-flow `start`-vs-`[valid_from,
+valid_to)` comparison cannot actually localize a change within a day, and an earlier version of this
+spec claimed otherwise.** Because a fingerprint change is only *detected* on the D+1 snapshot — strictly
+after every flow in day D has already happened — `valid_from` for a newly-detected version is always
+later than every single-flow `start` timestamp within day D, regardless of whether the true change
+happened at the start, middle, or end of day D. Comparing one flow's `start` against `valid_from` cannot
+distinguish "this flow predates the change" from "this flow postdates the change but predates
+detection" — both compare as "before `valid_from`." There is no cheap fix within a periodic-poll design
+(only a CloudTrail-sourced SG-mutation event stream would give a real change timestamp, which is out of
+scope for this spec).
 
-`sg_rule_activity_daily` continues to store the rule's fingerprint *as of the versions looked up for
-that day's matching*, not a snapshot-time fingerprint — if a day's flows split across two versions
-(the edit happened mid-day, so some flows' `start` falls in the old version's interval and others in
-the new one), the day's row records `coverage.fingerprint_epoch_crossing = true` and its counts render
-as a lower bound, not an exact count (same rendering as any other `unassessable`-adjacent coverage
-flag). This is a conservative degrade, not a blocker: the row is still written and still
-contributes to trend/history views, just flagged.
+Matching is therefore done at **day granularity**, not per-flow: for each `(rule_id, observed_on)` pair,
+the worker checks whether a **single** `sg_rule_inventory_versions` row's `[valid_from, valid_to)`
+interval covers **the entire day** being scanned (i.e. `valid_from <= start-of-day` and `valid_to IS
+NULL OR valid_to > end-of-day`) — confirmed by the fingerprint being identical on both the snapshot taken
+before day D started and the snapshot taken after it ended (D+1's snapshot, per the detection-lag
+argument above). If it does, every flow that day matches against that one version with full confidence.
+**If the version open at the start of day D differs from the version open at the end of day D — a
+transition was detected somewhere in or before that day and its exact moment is unknowable — the whole
+day's matches against that rule are `unassessable`, not attributed to either version with a "lower
+bound" label.** Presenting a fabricated per-flow attribution as more precise than a coin flip is worse
+than admitting the day can't be confidently matched; `sg_rule_activity_daily`'s
+`coverage.fingerprint_epoch_crossing = true` flag exists to mark exactly this case, and — corrected from
+an earlier draft of this section — it changes the day's `compatible_match_count`/`unique_eni_count` to
+`unassessable` for that rule, not a lower-bound estimate, because there is no version we can honestly
+attribute the day's flows to.
+
+**Separately disclosed, narrower limitation**: even a day confidently matched to one version can still
+misattribute a single *ongoing* connection if that connection began before the version's `valid_from`
+but continues (with further Flow Log records) into or past a day matched to the new version — VPC Flow
+Logs publish periodic records for long-lived connections, and this pipeline does no 5-tuple connection
+correlation across records, so it cannot recognize "this is the same connection that started earlier
+under the old rule." This is a distinct, narrower issue from the day-boundary problem above (which is
+now fully avoided by day-granularity matching) — it only affects the rule-fingerprint *label* on
+already-permitted continuing traffic, never the allow/deny outcome (Flow Log's own `action` field
+already records what AWS actually permitted). Accepted as a bounded, disclosed imprecision; connection-
+level correlation is out of scope for this spec.
 
 Default outbound rules are displayed and marked protected from cleanup recommendations.
 
@@ -552,8 +571,13 @@ Missing permissions degrade only that account/region source to `unassessable`.
 - delivery-lag grace period is honored before a day becomes eligible
 - rescan window re-processes a trailing day without moving the watermark backward
 - rule-fingerprint change mid-window: day replace clears the prior fingerprint's row for that day
-- a day whose flows span two `sg_rule_inventory_versions` rows sets `coverage.fingerprint_epoch_crossing`
-- a flow's own `start` (not `end`) selects the version whose `[valid_from, valid_to)` interval covers it
+- a day whose start-of-day and end-of-day versions differ sets `coverage.fingerprint_epoch_crossing`
+  and downgrades that rule's counts for the day to `unassessable` — never a "lower bound" number
+- a day whose start-of-day and end-of-day versions agree matches confidently with no crossing flag,
+  even when a version transition happened on an adjacent day
+- per-flow `start` is never compared directly against `valid_from`/`valid_to` for matching (a single
+  flow's timestamp cannot localize a change within a day given the pipeline's own detection lag — see
+  "Why versioning"); matching is decided once per `(rule_id, observed_on)`, not per flow
 - ENI-membership snapshot lookup: in-window (used), stale beyond `SG_RULE_MEMBERSHIP_STALENESS_DAYS`
   (`unassessable`), and pre-snapshotting backfill day (pinned to the earliest snapshot, labeled
   lower-confidence) are three distinct outcomes, not one collapsed into another

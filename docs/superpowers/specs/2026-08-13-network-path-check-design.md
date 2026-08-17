@@ -141,10 +141,32 @@ destination return route, instance-level firewalls, prefix-list contents, and DN
 actually evaluates (its own disclaimer says so). Wrapped unchanged, that produces a **false `X`
 (blocked)** verdict for exactly the cases this feature's own "Unsupported/missing/private -> `?`, never
 `O`" rule is trying to prevent — the rule as stated only forbids inventing an `allowed`, but says
-nothing about the adapter inventing a `blocked`. The adapter wrapper for this layer must translate
-"no route found because that component isn't modeled" into `?` (unknown), and reserve `X` (blocked) for
-cases the adapter actually evaluated and confirmed deny — the underlying function's disclaimer list is
-the exact set of conditions that must map to `?` rather than being passed through as `reachable:false`.
+nothing about the adapter inventing a `blocked`.
+
+**A prose "translate not-modeled to `?`" rule is not implementable against the function as it stands
+today** — `_route_exists()` (base `reachability_read_mcp.py:135-151`) inspects only
+`DestinationCidrBlock` and returns a bare boolean; it does not expose *which* condition caused the
+`false` (a genuine missing-route deny vs. a TGW/prefix-list/return-route/DNS case it never evaluated).
+There is no information left in its return value for a wrapper to make the `?`-vs-`X` distinction the
+previous paragraph asks for. This layer's implementation must do one of:
+1. **Extend `_route_exists()`/`check_reachability`** to return structured provenance — which route
+   types were actually evaluated, and which of the disclaimed-but-relevant conditions (TGW attachment
+   present, prefix-list reference present, destination outside local CIDR) applied to this specific
+   route table — so the new adapter can map only the conditions it actually evaluated-and-denied to `X`,
+   and every disclaimed condition that applied to `?`.
+2. **Or write this layer's route evaluation from scratch** in the new adapter, not by wrapping
+   `check_reachability` at all, if extending the shared function is out of scope for this feature.
+Either way, ship one of the two — reusing `check_reachability`'s boolean output unchanged, with no
+provenance, is not an option; that's exactly the false-`X` risk this paragraph exists to close.
+
+**The same function also cannot evaluate internet/on-premises destinations at all** — `check_reachability`
+(`reachability_read_mcp.py:172`) requires *both* endpoints to resolve to ENIs and fails immediately
+otherwise. This feature explicitly supports internet and on-prem destinations (DNS and L7 layer,
+Direct Connect/VPN routes), so the SG/NACL/subnet-route layer for those candidates needs a **one-ended,
+source-side-only** adapter path (evaluate the source ENI's own SG/NACL/route table toward the
+destination CIDR/prefix, without requiring a destination ENI) — not a thin wrapper around a function
+built for ENI-to-ENI pairs only.
+
 Separately, the same adapter probes the NACL return path at a single representative ephemeral port; a
 verdict of `allowed` from that adapter is scoped to that probed port only, and the wrapper must not
 generalize it to "the real client's ephemeral port is also allowed" without a matching check.
@@ -190,31 +212,53 @@ that doesn't apply to a given candidate is omitted from that candidate's step li
 **Candidate kind** — `discover` tags each candidate `resolved` or `hypothesis` and writes one
 `network_path_run_candidates` row per candidate immediately (see Aurora, below); `conclude` fills in
 that row's `status` and `first_blocker` once the per-candidate reduction is computed:
-- `resolved`: discovery found genuine, verified redundancy for this specific flow — ECMP routes, a
-  multi-target-group/multi-healthy-target ALB backend, multiple healthy TGW attachments — where traffic
-  for this flow may legitimately take any of the listed candidates and all of them being viable is the
-  actually-correct description of the path.
-- `hypothesis`: discovery could not narrow to the single path this flow actually takes (ambiguous source
-  ENI/subnet resolution, multiple matching route-table entries with no way to disambiguate) and is
-  presenting guesses about which one is real. Forwarding itself is deterministic — exactly one path
-  exists — so multiple `hypothesis` candidates encode *our* uncertainty about which one it is, not
-  redundancy in the network.
+- `resolved`: discovery found genuine, health-check-aware redundancy where the *specific flow being
+  checked* can legitimately be served by any of the listed candidates — a multi-target-group/multi-
+  healthy-target ALB backend (the LB actively distributes and fails over away from unhealthy targets;
+  it does not commit a given flow to one fixed target the way routing hash-selection does), a Route 53
+  health-check-based failover record, or a NAT gateway with automatic AZ failover. **ECMP is deliberately
+  excluded from `resolved`, even though it involves multiple paths.** ECMP (VPC route-table ECMP, TGW
+  ECMP across multiple attachments) is a deterministic per-5-tuple hash: a specific flow is committed to
+  exactly one of the ECMP paths for its entire lifetime, not "any of them" — if that one path is blocked,
+  the flow is blocked, full stop, regardless of whether a sibling ECMP path is healthy. Treating ECMP as
+  `resolved` and reporting `allowed` because *some* ECMP sibling is allowed would tell an operator their
+  flow works when the specific path their flow actually hashes to may not.
+- `hypothesis`: discovery could not narrow to the single path this flow actually takes — this covers
+  both **ECMP** (the path is deterministically single per flow, but *we* cannot compute which hash bucket
+  this flow lands in from cached topology alone) and ambiguous source ENI/subnet resolution or multiple
+  matching route-table entries with no way to disambiguate. Forwarding itself is deterministic — exactly
+  one path exists — so multiple `hypothesis` candidates always encode *our* uncertainty about which one
+  it is, never redundancy in the network.
 
 **Overall status** is reduced across candidates, not across layers directly, and the rule depends on
 candidate kind:
 
+Per-candidate `status` (persisted on `network_path_run_candidates`, see Aurora below) is one of
+`allowed|blocked|conditional|failed` — `failed` per the rule above (every required layer `not_run`,
+zero evidence gathered for that candidate). The reduction folds `failed` in explicitly rather than
+leaving it unhandled:
+
 - **All candidates `resolved`**: at least one `allowed` -> overall `allowed` (redundancy means traffic
   gets through via *some* path; the response surfaces that candidate as primary and lists the
-  blocked/conditional candidates as alternates); no `allowed`, at least one `conditional` -> overall
-  `conditional`; every candidate `blocked` -> overall `blocked`.
+  blocked/conditional/failed candidates as alternates); no `allowed`, at least one `conditional` ->
+  overall `conditional`; every candidate `blocked` -> overall `blocked`; every candidate `failed` (or a
+  mix of only `blocked`/`failed`, no `allowed`/`conditional`) -> overall `failed` — a `blocked` verdict
+  requires at least one candidate that was actually evaluated to a confirmed deny; if every avenue
+  either denied or gathered zero evidence, `failed` is the honest overall (not `blocked`, which would
+  overstate confidence in a result partly built on zero-evidence candidates).
 - **Any candidate `hypothesis`**: the reduction may not report `allowed` merely because one hypothesis
   is allowed — that would hide a real blocker on whichever hypothesis is the flow's actual path, which
   is exactly the operator's question. All-hypotheses-agree short-circuits the ambiguity (all `allowed`
-  -> overall `allowed`; all `blocked` -> overall `blocked`); any disagreement among hypotheses (some
-  allowed, some blocked/conditional) -> overall `conditional`, and the response must say *why* — that
-  discovery could not determine which candidate is the real path, not merely that some layer was
-  uncertain.
-- execution-level failure before meaningful inspection -> `failed`.
+  -> overall `allowed`; all `blocked` -> overall `blocked`; all `failed` -> overall `failed`); any
+  disagreement among hypotheses (any mix of `allowed`/`blocked`/`conditional`/`failed` that isn't
+  unanimous) -> overall `conditional`, and the response must say *why* — that discovery could not
+  determine which candidate is the real path, not merely that some layer was uncertain. A `hypothesis`
+  set that is entirely `blocked`+`failed` (no `allowed`, not unanimous) still reduces to `conditional`,
+  not `blocked` or `failed` — the disagreement rule takes precedence, since not knowing which candidate
+  is real is itself the dominant source of uncertainty.
+- **Global execution-level failure before any candidate was discovered** (e.g. identity could not be
+  resolved) -> overall `failed` directly, bypassing per-candidate reduction entirely (there are no
+  candidates to reduce over).
 
 This is why "any blocked layer -> blocked" cannot be the overall-status rule directly: a blocked layer
 on one candidate says nothing about a sibling candidate that never touches that layer. Blocking is
@@ -291,25 +335,28 @@ CREATE TABLE network_path_runs (
   finished_at           timestamptz
 );
 
--- 리뷰(round 7 self-check): candidate_kind(resolved|hypothesis, 위 Result semantics)와 매 후보의
--- per-candidate status는 정의는 했지만 어디에도 저장할 곳이 없었다 — every step row로 candidate_kind를
--- 중복 저장하는 것보다, 후보 단위로 한 번만 저장하는 별도 테이블이 정규화에 맞다. per-candidate
--- status도 매번 step에서 재계산하지 않고 `conclude` 단계에서 여기 기록한다.
+-- Review (round 7 self-check): candidate_kind (resolved|hypothesis, see Result semantics above) and
+-- each candidate's per-candidate status were defined but had nowhere to be persisted — rather than
+-- duplicating candidate_kind across every step row, a separate per-candidate table is the correct
+-- normalization. per-candidate status is also not recomputed from steps every time; `conclude` records
+-- it here once.
 CREATE TABLE network_path_run_candidates (
   run_id          text NOT NULL REFERENCES network_path_runs(id) ON DELETE CASCADE,
   candidate_id    text NOT NULL,
-  candidate_kind  text NOT NULL,  -- 'resolved' | 'hypothesis' — discover 단계에서 확정, 이후 불변
-  status          text,           -- 이 후보의 per-candidate status, conclude 전까지 NULL
-  first_blocker   text,           -- 표시용: 이 후보의 첫 블로커 layer/summary (있으면)
+  candidate_kind  text NOT NULL,  -- 'resolved' | 'hypothesis' — set by discover, immutable afterward
+  status          text,           -- this candidate's per-candidate status; NULL until conclude runs
+                                    -- ('allowed' | 'blocked' | 'conditional' | 'failed', see Result semantics)
+  first_blocker   text,           -- display: this candidate's first blocker layer/summary, if any
   PRIMARY KEY (run_id, candidate_id)
 );
 
 CREATE TABLE network_path_run_steps (
   run_id        text NOT NULL REFERENCES network_path_runs(id) ON DELETE CASCADE,
   candidate_id  text NOT NULL,
-  -- 리뷰 MAJOR: Result semantics의 각 결과는 scope{accountId,region}을 약속하는데(멀티계정/
-  -- 멀티리전 워커라 필수), 이 테이블엔 그 두 컬럼이 없었다 — 후보가 계정/리전 경계를
-  -- 넘나들면 evidence만으로는 어느 계정/리전에서 관측됐는지 구분이 안 된다.
+  -- Review MAJOR: each result in Result semantics promises a scope{accountId,region} (required, since
+  -- this is an explicitly multi-account/multi-region worker), but this table had neither column — if a
+  -- candidate crosses account/region boundaries, evidence alone can't tell which account/region it was
+  -- observed in.
   account_id    text NOT NULL,
   region        text NOT NULL,
   ordinal       integer NOT NULL,
