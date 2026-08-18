@@ -681,6 +681,30 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'x', value: 3 }]);
   });
 
+  it('alertRuleHits 쿼리가 실패하면 ruleHits는 빈 배열이 아니라 null — 실패한 리전의 설정 룰이 "매칭 0(확정 idle)"으로 오판되지 않아야 함 (리뷰 MAJOR, PR #225)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const q = cmd.input.queryString as string;
+        // alertRuleHits 쿼리(ispresent(event.alert.signature_id) 필터로 식별)만 실패시키고
+        // 나머지 alert 쿼리는 성공시킨다.
+        if (q.includes('ispresent(event.alert.signature_id)')) throw new Error('boom rule hits');
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') {
+        return { status: 'Complete', results: [row({ sid: '5', sig: 'x', cnt: 3 })] };
+      }
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('alertRuleHits');
+    // ruleHits 쿼리만 실패했을 뿐 — 빈 배열(확정 매칭 0)이 아니라 null(불명)이어야 하고,
+    // 이미 받아온 topSignatures 등 다른 alert 결과는 살아 있어야 한다.
+    expect(a.alert!.ruleHits).toBeNull();
+    expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'x', value: 3 }]);
+  });
+
   it('flowTotals 쿼리가 실패하면 totalFlows/totalBytes는 0이 아니라 null — byProto 등 다른 flow 쿼리 결과는 유지 (리뷰 MAJOR 라운드11)', async () => {
     mockAnalysis.mockResolvedValue({ firewalls: [fw({ alertLogging: null })] });
     logsSend.mockImplementation(async (cmd: Cmd) => {

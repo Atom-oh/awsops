@@ -115,8 +115,14 @@ export interface AnfwAlertAnalytics {
   byAction: { name: string; value: number }[];
   topSignatures: { sid: string; signature: string; value: number }[];
   /** Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
-   *  (sid, signature, action)별 매칭 수, 상위 100. 설정 룰 SID와 조인해 매칭 0 룰을 표면화. */
-  ruleHits: { sid: string; signature: string; action: string; hits: number }[];
+   *  (sid, signature, action)별 매칭 수, 상위 100. 설정 룰 SID와 조인해 매칭 0 룰을 표면화.
+   *  리뷰 MAJOR(확정): alertRuleHits 쿼리 자체가 실패/청크 truncation됐거나 발견이
+   *  unknown이면 null — totalAlerts와 동일 계약. 이 게이트 없이는 조회 실패 리전의 설정
+   *  룰이 "매칭 0(확정 idle)"로 오판되어 정책 사각지대 경고가 거짓 양성을 낸다. */
+  ruleHits: { sid: string; signature: string; action: string; hits: number }[] | null;
+  /** true면 히트 집계가 top-100으로 잘렸음(hits=0인 SID가 실제로는 잘린 구간에 있을 수 있음) —
+   *  소비자는 ruleHits에 없는 설정 SID를 "매칭 0"이 아니라 "불명"으로 표시해야 한다. */
+  ruleHitsTruncated: boolean;
   topSources: { name: string; value: number }[];
   topDests: { name: string; value: number }[];
 }
@@ -443,7 +449,10 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         totalAlerts: (failed.includes('alertTotals') || alertDiscoveryUnknown) ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         byAction: merge(byAction, 'action'),
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
-        ruleHits: [...hitMap.values()].sort((a, b) => b.hits - a.hits).slice(0, 100),
+        ruleHits: (failed.includes('alertRuleHits') || failed.includes('alertTopNPartial') || alertDiscoveryUnknown)
+          ? null
+          : [...hitMap.values()].sort((a, b) => b.hits - a.hits).slice(0, 100),
+        ruleHitsTruncated: hitMap.size >= 100,
         topSources: merge(topSrc, 'src'),
         topDests: merge(topDst, 'dst'),
       };

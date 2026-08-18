@@ -268,24 +268,57 @@ export default function NetworkFirewallPage() {
       .slice(0, 10),
   [rgs]);
 
+  // 룰 그룹이 실제로 ALERT 로그를 관측할 수 있는가: 룰 그룹 → (같은 리전) 정책의
+  // statefulGroups에 포함 → 그 정책을 쓰는 방화벽 → 그 방화벽이 logsData.targets에 ALERT
+  // CWL 타깃으로 존재. 리뷰 MAJOR(확정): `!rg.unassociated`(정책 연결 개수>0)만으로는
+  // 관측 가능성이 서지 않는다 — 그 정책을 쓰는 방화벽이 하나도 없거나, 있어도 ALERT
+  // 로깅이 꺼짐/unknown/S3·Firehose 대상이면 여전히 트래픽을 볼 수 없다.
+  const observedFirewallKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of logsData?.targets ?? []) if (t.type === 'ALERT') s.add(`${t.region}|${t.firewall}`);
+    return s;
+  }, [logsData]);
+  const ruleGroupObserved = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const rg of rgs) m.set(`${rg.region}|${rg.name}`, false);
+    for (const policy of policies) {
+      for (const rgName of policy.statefulGroups) {
+        const rgKey = `${policy.region}|${rgName}`;
+        if (!m.has(rgKey) || m.get(rgKey)) continue;
+        const observed = fws.some((fw) =>
+          fw.region === policy.region && fw.policyName === policy.name && observedFirewallKeys.has(`${fw.region}|${fw.name}`));
+        if (observed) m.set(rgKey, true);
+      }
+    }
+    return m;
+  }, [rgs, policies, fws, observedFirewallKeys]);
+
   // Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
-  // 설정 룰 1개당 1행 (rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는 병합 오류),
-  // 로그 히트는 sid 단위로만 존재해 공유 SID는 그룹 귀속 불가(sharedSid 툴팁으로 명시).
-  // idle(매칭 0) 판정 제외: pass 룰(Alert 로그 미발생) · 미연결 룰 그룹(트래픽 관측 불가) ·
-  // 로그 히트가 top-100으로 잘린 경우(hits 0 ≠ 매칭 없음 — '불명' 처리).
+  // 설정 룰 1개당 1행 (region×rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는
+  // 병합 오류이고, 룰 그룹 이름은 여러 리전에 동일하게 배포될 수 있어 region도 필요 —
+  // 리뷰 MAJOR: region 없는 키는 멀티 리전에서 React key 충돌을 낸다). 로그 히트는 sid
+  // 단위로만 집계되고 리전을 구분하지 않아 같은 sid가 여러 룰 그룹(리전 불문)에 있으면
+  // 그 그룹들 사이에 귀속 불가 — sharedSid 툴팁으로 명시하고 hits를 신뢰 가능한 숫자로
+  // 취급하지 않는다. idle(매칭 0) 판정 제외: pass 룰(Alert 로그 미발생) · 관측 불가 룰
+  // 그룹(정책 미연결/방화벽 없음/ALERT 로깅 꺼짐-unknown-S3대상) · 로그 히트 집계 자체가
+  // 실패/청크 truncation됐거나(ruleHits=null) top-100으로 잘린 경우(hits 0 ≠ 매칭 없음).
   interface RuleHitRow {
     key: string; sid: string; msg: string; actions: string[]; hits: number;
     ruleGroups: string[]; configured: boolean; isPass: boolean;
-    /** 룰 그룹이 정책에 연결되어 트래픽을 관측할 수 있는가. */
+    /** 룰 그룹이 실제로 ALERT 로그를 관측할 수 있는 방화벽에 연결되어 있는가. */
     associated: boolean;
     /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. */
     sharedSid: boolean;
-    /** 로그 집계가 top-100으로 잘려 hits 0을 '매칭 없음'으로 단정 불가. */
+    /** 로그 집계 자체가 실패/잘렸거나(ruleHits=null) top-100 밖 — 매칭 여부 불명. */
     unknown: boolean;
   }
   const ruleHitRows = useMemo<RuleHitRow[]>(() => {
-    const hits = logsData?.alert?.ruleHits ?? [];
-    const truncated = hits.length >= 100;
+    const ruleHits = logsData?.alert?.ruleHits;
+    // 리뷰 MAJOR(확정): 쿼리 실패/청크 truncation을 null로 신호받으면 "매칭 0"이 아니라
+    // 전체를 불명으로 처리 — 실패를 확정 idle로 오판하면 정책 사각지대 경고가 거짓 양성.
+    const ruleHitsFailed = ruleHits == null;
+    const hits = ruleHits ?? [];
+    const truncated = logsData?.alert?.ruleHitsTruncated ?? false;
     const hitsBySid = new Map<string, { hits: number; actions: Set<string>; sig: string }>();
     for (const h of hits) {
       const cur = hitsBySid.get(h.sid) ?? { hits: 0, actions: new Set<string>(), sig: h.signature };
@@ -303,29 +336,31 @@ export default function NetworkFirewallPage() {
         configuredSids.add(s.sid);
         const h = hitsBySid.get(s.sid);
         rows.push({
-          key: `${rg.name}|${s.sid}`, sid: s.sid,
+          key: `${rg.region}|${rg.name}|${s.sid}`, sid: s.sid,
           msg: s.msg ?? h?.sig ?? '',
           actions: [...new Set([s.action, ...(h?.actions ?? [])].filter((x): x is string => !!x))],
           hits: h?.hits ?? 0,
           ruleGroups: [rg.name], configured: true,
           isPass: s.action === 'pass',
-          associated: !rg.unassociated,
+          associated: ruleGroupObserved.get(`${rg.region}|${rg.name}`) ?? false,
           sharedSid: (sidGroupCount.get(s.sid) ?? 0) > 1,
-          unknown: truncated && !h, // 잘린 집계 밖 — 매칭 여부 불명
+          unknown: ruleHitsFailed || (truncated && !h), // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
         });
       }
     }
     // 어느 설정 룰 그룹에도 없는 SID (관리형 룰 그룹 등)
-    for (const [sid, h] of hitsBySid) {
-      if (configuredSids.has(sid)) continue;
-      rows.push({
-        key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
-        ruleGroups: [], configured: false, isPass: false, associated: true, sharedSid: false, unknown: false,
-      });
+    if (!ruleHitsFailed) {
+      for (const [sid, h] of hitsBySid) {
+        if (configuredSids.has(sid)) continue;
+        rows.push({
+          key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
+          ruleGroups: [], configured: false, isPass: false, associated: true, sharedSid: false, unknown: false,
+        });
+      }
     }
     return rows.sort((a, b) => b.hits - a.hits || Number(a.sid) - Number(b.sid));
-  }, [logsData, rgs]);
-  // 히트 산출 불가(n/a): pass 룰 · 미연결 그룹 · top-100 밖 불명 — idle(빨간 배지)에서 제외
+  }, [logsData, rgs, ruleGroupObserved]);
+  // 히트 산출 불가(n/a): pass 룰 · 관측 불가 룰 그룹 · 불명 — idle(빨간 배지)에서 제외
   const idleConfiguredRules = useMemo(
     () => ruleHitRows.filter((r) => r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0).length,
   [ruleHitRows]);
