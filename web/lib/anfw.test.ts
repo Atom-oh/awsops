@@ -216,18 +216,21 @@ describe('anfwAnalysis', () => {
     mockNfw({
       rgs: [{ Name: 'domain-deny-list', Arn: 'arn:aws:network-firewall:r:1:stateful-rulegroup/domain-deny-list' }],
     });
-    // DescribeRuleGroupCommand 모킹은 RG_DESCRIBE에 이름이 없으면 기본값(Type: STATEFUL,
-    // RulesSource 없음)을 반환한다 — 도메인 리스트 응답을 흉내내려면 이 이름으로 등록.
+    // 리뷰 확정(PR #225 라운드12): 도메인 리스트의 실제 API Type은 'STATEFUL'이 아니라
+    // 별도 값 'STATEFUL_DOMAIN'이다(이 파일의 다른 테스트가 실측 검증). isStateful로
+    // 게이트한 첫 수정은 이 실제 Type에는 전혀 안 걸리는 죽은 코드였다 — 이 테스트는
+    // 반드시 실제 Type 문자열로 검증해야 그 회귀를 잡는다.
     RG_DESCRIBE['domain-deny-list'] = {
       RuleGroup: { RulesSource: { RulesSourceList: { Targets: ['evil.example'], TargetTypes: ['TLS_SNI'] } } },
       RuleGroupResponse: {
-        RuleGroupName: 'domain-deny-list', Type: 'STATEFUL', RuleGroupStatus: 'ACTIVE',
+        RuleGroupName: 'domain-deny-list', Type: 'STATEFUL_DOMAIN', RuleGroupStatus: 'ACTIVE',
         Capacity: 100, ConsumedCapacity: 10, NumberOfAssociations: 1,
       },
     };
     const { anfwAnalysis } = await import('./anfw');
     const a = await anfwAnalysis(86400);
     const rg = a.ruleGroups.find((r) => r.name === 'domain-deny-list')!;
+    expect(rg.type).toBe('STATEFUL_DOMAIN');
     expect(rg.statefulSids).toEqual([]); // 사용자 SID 없음 — 파싱 대상 아님
     expect(rg.sidsUnparseable).toBe(true); // 그런데도 SID 집합을 안다고 확정할 수 없음
     delete RG_DESCRIBE['domain-deny-list'];

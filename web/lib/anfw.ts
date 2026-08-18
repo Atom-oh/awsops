@@ -564,15 +564,20 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
             const associations = resp.NumberOfAssociations ?? 0;
             const isStateful = resp.Type === 'STATEFUL';
             const statefulSids = isStateful ? parseStatefulSids(d.RuleGroup) : [];
-            // 리뷰 MAJOR(확정, PR #225 라운드11): 도메인 리스트(RulesSourceList)는 의도적으로
-            // statefulSids를 비워두지만(사용자 SID가 없음), 이 그룹 자체는 여전히 rgs에 남아
-            // attributionUnsafe의 "rgKeys에 없는 그룹" 판정을 우회한다 — AWS가 내부 생성한
-            // SID가 사용자 설정 룰의 sid와 우연히 같으면 병합 시 구분 불가. RulesSourceList
-            // 존재 여부로 확정 판정하고, 혹시 다른 사유로 파싱이 실패했을 가능성까지 대비해
-            // "용량을 소비 중인데 파싱된 SID가 0개"인 경우도 함께 파싱 불가로 취급한다.
-            const sidsUnparseable = isStateful
-              && (!!d.RuleGroup?.RulesSource?.RulesSourceList
-                || (statefulSids.length === 0 && (consumed ?? 0) > 0));
+            // 리뷰 MAJOR(확정, PR #225 라운드11 — 라운드12에서 자체 수정의 결함 재수정):
+            // 도메인 리스트 룰 그룹의 실제 API Type은 'STATEFUL'이 아니라 별도 값
+            // 'STATEFUL_DOMAIN'이다(이 파일의 다른 회귀 테스트가 이미 이 사실을 실측
+            // 검증해 두었다 — ARN 이분 추정이 STATEFUL로 오분류하던 걸 고친 그 케이스).
+            // 그런데 이 필드를 `isStateful &&`로 게이트해서, 정작 실제로 존재하는
+            // STATEFUL_DOMAIN 그룹에는 전혀 적용되지 않는 죽은 코드가 됐다 — isStateful이
+            // false라서 statefulSids가 원래도 []이지만, sidsUnparseable도 함께 false로
+            // 굳어버려 이 리뷰가 고치려던 attributionUnsafe 우회를 그대로 방치했다.
+            // STATEFUL_DOMAIN은 정의상 항상 파싱 불가이므로 무조건 true, 나머지
+            // STATEFUL 경우(RulesSourceList/용량 소비인데 파싱 0개)는 기존 로직 유지.
+            const sidsUnparseable = resp.Type === 'STATEFUL_DOMAIN'
+              || (isStateful
+                && (!!d.RuleGroup?.RulesSource?.RulesSourceList
+                  || (statefulSids.length === 0 && (consumed ?? 0) > 0)));
             return {
               name: resp.RuleGroupName ?? g.name, region,
               type: resp.Type ?? '?',
