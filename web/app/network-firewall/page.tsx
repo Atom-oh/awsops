@@ -307,6 +307,13 @@ export default function NetworkFirewallPage() {
     return 'unobserved';
   };
   const ruleGroupObservability = useMemo(() => {
+    // 리뷰 확정(Codex stop-hook, PR #225): every()로 "서빙하는 모든 방화벽이 observed"를
+    // 요구해도, 그 every()가 도는 firewalls/policies 목록 자체가 List/Describe 부분
+    // 실패로 불완전하면(data.degradedRegions) — 우리가 못 찾은 정책/방화벽이 실제로는
+    // 존재해 미관측일 수 있는데, 찾은 것들만 전부 observed라서 확정 idle로 오판한다.
+    // 룰 그룹의 리전이 degradedRegions에 있으면(정책/방화벽/룰그룹 셋 중 하나라도 부분
+    // 실패) 그 리전의 토폴로지 자체를 못 믿으므로 무조건 'unknown'으로 강제한다.
+    const degradedRegions = new Set(data?.degradedRegions ?? []);
     const byKey = new Map<string, Observability[]>();
     for (const rg of rgs) byKey.set(`${rg.region}|${rg.name}`, []);
     for (const policy of policies) {
@@ -319,9 +326,12 @@ export default function NetworkFirewallPage() {
       }
     }
     const m = new Map<string, Observability>();
-    for (const [k, states] of byKey) m.set(k, combineObservability(states));
+    for (const rg of rgs) {
+      const rgKey = `${rg.region}|${rg.name}`;
+      m.set(rgKey, degradedRegions.has(rg.region) ? 'unknown' : combineObservability(byKey.get(rgKey) ?? []));
+    }
     return m;
-  }, [rgs, policies, fws, firewallObservability]);
+  }, [rgs, policies, fws, firewallObservability, data]);
 
   // Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
   // 설정 룰 1개당 1행 (region×rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는
