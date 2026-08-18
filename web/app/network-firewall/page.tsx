@@ -364,6 +364,11 @@ export default function NetworkFirewallPage() {
     unknown: boolean;
     /** unknown=true인 이유 — 툴팁 문구 분기용(리뷰 MINOR: 원인이 서로 다른데 문구가 같았음). */
     unknownReason: 'failed' | 'truncated' | null;
+    /** 화면에 실제 hits 숫자를 보여주는 행인가 — n/a/"?"로 숨기는 행과 동일한 조건.
+     *  리뷰 확정(Codex stop-hook, PR #225): 정렬 키가 이 값과 다르면(예: 화면엔 항상
+     *  n/a인 'unobserved' 행이 실제 hits로 정렬돼) top-50 표시 슬롯을 정보 없는 행이
+     *  차지해 진짜 신뢰 가능한 행을 밀어낸다 — 정렬은 항상 화면 표시와 같은 기준을 써야 한다. */
+    hitsAttributable: boolean;
   }
   const ruleHitRows = useMemo<RuleHitRow[]>(() => {
     const ruleHits = logsData?.alert?.ruleHits;
@@ -388,6 +393,10 @@ export default function NetworkFirewallPage() {
       for (const s of rg.statefulSids) {
         configuredSids.add(s.sid);
         const h = hitsBySid.get(s.sid);
+        const observability = ruleGroupObservability.get(`${rg.region}|${rg.name}`) ?? 'unobserved';
+        const isRegionDegraded = regionDegraded.has(rg.region);
+        const sharedSid = (sidGroupCount.get(s.sid) ?? 0) > 1;
+        const unknown = ruleHitsFailed || (truncated && !h); // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
         rows.push({
           key: `${rg.region}|${rg.name}|${s.sid}`, sid: s.sid,
           msg: s.msg ?? h?.sig ?? '',
@@ -395,11 +404,9 @@ export default function NetworkFirewallPage() {
           hits: h?.hits ?? 0,
           ruleGroups: [rg.name], configured: true,
           isPass: s.action === 'pass',
-          observability: ruleGroupObservability.get(`${rg.region}|${rg.name}`) ?? 'unobserved',
-          regionDegraded: regionDegraded.has(rg.region),
-          sharedSid: (sidGroupCount.get(s.sid) ?? 0) > 1,
-          unknown: ruleHitsFailed || (truncated && !h), // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
+          observability, regionDegraded: isRegionDegraded, sharedSid, unknown,
           unknownReason: ruleHitsFailed ? 'failed' : (truncated && !h) ? 'truncated' : null,
+          hitsAttributable: s.action !== 'pass' && !sharedSid && !unknown && !isRegionDegraded && observability !== 'unobserved',
         });
       }
     }
@@ -410,10 +417,18 @@ export default function NetworkFirewallPage() {
         rows.push({
           key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
           ruleGroups: [], configured: false, isPass: false, observability: 'observed', regionDegraded: false, sharedSid: false, unknown: false, unknownReason: null,
+          hitsAttributable: true,
         });
       }
     }
-    return rows.sort((a, b) => b.hits - a.hits || Number(a.sid) - Number(b.sid));
+    // 리뷰 확정(Codex stop-hook, PR #225): 정렬은 화면에 실제로 보여주는 값(hitsAttributable일
+    // 때만 hits, 아니면 0)을 기준으로 해야 — 안 그러면 표시상 n/a/"?"인 행이 큰 hits로
+    // 정렬돼 top-50 표시 슬롯을 정보 없는 행이 차지하고 진짜 신뢰 가능한 행을 밀어낸다.
+    return rows.sort((a, b) => {
+      const av = a.hitsAttributable ? a.hits : 0;
+      const bv = b.hitsAttributable ? b.hits : 0;
+      return bv - av || Number(a.sid) - Number(b.sid);
+    });
   }, [logsData, rgs, ruleGroupObservability, regionDegraded]);
   // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 리전 토폴로지
   // 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
@@ -932,7 +947,7 @@ export default function NetworkFirewallPage() {
                                     <td className={TD}>{r.msg || dash}</td>
                                     <td className={MONO}>{r.actions.join(', ') || dash}</td>
                                     <td className={MONO}>{r.ruleGroups.join(', ') || <span title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>}</td>
-                                    <td className={`${TD} ${!r.sharedSid && !r.regionDegraded && r.observability !== 'unobserved' && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
+                                    <td className={`${TD} ${r.hitsAttributable && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
                                       {/* 리뷰 확정(Codex stop-hook, PR #225 — 여러 라운드에 걸친 교정): 양수
                                           히트는 값 자체가 "이 sid가 실제로 매칭됐다"는 로그 증거이므로
                                           기본적으로 신뢰하지만, 예외가 세 가지다 — 그 증거를 특정 룰에
