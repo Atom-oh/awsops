@@ -935,8 +935,14 @@ export default function NetworkFirewallPage() {
                                           ? <span className="text-ink-300" title={tt(r.sharedSid ? '여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다' : '관측 불가 룰 그룹 — 트래픽에 매칭될 수 없음 (표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음)')}>n/a</span>
                                           : r.unknown
                                             ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
-                                            : r.observability === 'unknown' && r.hits === 0
-                                              ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 일부 방화벽의 ALERT 로깅 여부를 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
+                                            // 리뷰 확정(Codex stop-hook, PR #225): hits===0일 때만 불확실 처리하면
+                                            // hits>0인 경우엔 그대로 숫자를 보여줬다 — 하지만 observability가
+                                            // 'unknown'인 리전은 정책/방화벽 목록 자체가 불완전할 수 있어
+                                            // (data.degradedRegions), 놓친 형제 룰 그룹이 같은 sid를 쓰고 있을
+                                            // 가능성도 확인할 수 없다(sidGroupCount가 완전한 rgs 순회를 전제).
+                                            // 0이든 양수든 이 룰에 확정 귀속할 수 없으므로 값과 무관하게 불명 처리.
+                                            : r.observability === 'unknown'
+                                              ? <span className="text-ink-300" title={tt('이 리전의 정책/방화벽 데이터가 불완전해 매칭 여부·귀속을 확정할 수 없음')}>?</span>
                                               : r.hits.toLocaleString()}
                                     </td>
                                   </tr>
