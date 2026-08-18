@@ -114,6 +114,9 @@ export interface AnfwAlertAnalytics {
   totalAlerts: number | null;
   byAction: { name: string; value: number }[];
   topSignatures: { sid: string; signature: string; value: number }[];
+  /** Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
+   *  (sid, signature, action)별 매칭 수, 상위 100. 설정 룰 SID와 조인해 매칭 0 룰을 표면화. */
+  ruleHits: { sid: string; signature: string; action: string; hits: number }[];
   topSources: { name: string; value: number }[];
   topDests: { name: string; value: number }[];
 }
@@ -397,10 +400,12 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     if (anyRegionChunked(alertTargets)) failed.push('alertTopNPartial');
     let alert: AnfwAlertAnalytics | null = null;
     if (alertTargets.length > 0) {
-      const [totals, byAction, topSig, topSrc, topDst] = await Promise.all([
+      const [totals, byAction, topSig, ruleHitRows, topSrc, topDst] = await Promise.all([
         runMerged(alertTargets, 'alertTotals', `filter event.event_type = 'alert' | stats count(*) as cnt`),
         runMerged(alertTargets, 'alertByAction', `fields event.alert.action as action | filter event.event_type = 'alert' | stats count(*) as cnt by action | sort cnt desc`),
         runMerged(alertTargets, 'alertTopSignatures', `fields event.alert.signature_id as sid, event.alert.signature as sig | filter event.event_type = 'alert' | stats count(*) as cnt by sid, sig | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
+        // 룰 히트 카운트 — owner 확인 쿼리와 동일 형태 (sid+sig+action, limit 100)
+        runMerged(alertTargets, 'alertRuleHits', `fields event.alert.signature_id as sid, event.alert.signature as sig, event.alert.action as act | filter ispresent(event.alert.signature_id) | stats count(*) as cnt by sid, sig, act | sort cnt desc | limit 100`),
         runMerged(alertTargets, 'alertTopSources', `fields event.src_ip as src | filter event.event_type = 'alert' | stats count(*) as cnt by src | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
         runMerged(alertTargets, 'alertTopDests', `fields concat(event.dest_ip, ':', event.dest_port) as dst | filter event.event_type = 'alert' | stats count(*) as cnt by dst | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
       ]);
@@ -420,6 +425,14 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         cur.value += num(r.cnt);
         sigMap.set(key, cur);
       }
+      const hitMap = new Map<string, { sid: string; signature: string; action: string; hits: number }>();
+      for (const r of ruleHitRows) {
+        if (!r.sid) continue;
+        const key = `${r.sid}|${r.sig}|${r.act}`;
+        const cur = hitMap.get(key) ?? { sid: r.sid, signature: r.sig ?? '', action: r.act ?? '', hits: 0 };
+        cur.hits += num(r.cnt);
+        hitMap.set(key, cur);
+      }
       alert = {
         // 리뷰 MAJOR(라운드10): alertTotals 쿼리 자체가 실패하면 totals=[]가 되고
         // reduce의 결과는 "0건 발생"과 구분 안 되는 0이 된다 — 이 페이지가 다른 모든
@@ -430,6 +443,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         totalAlerts: (failed.includes('alertTotals') || alertDiscoveryUnknown) ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         byAction: merge(byAction, 'action'),
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
+        ruleHits: [...hitMap.values()].sort((a, b) => b.hits - a.hits).slice(0, 100),
         topSources: merge(topSrc, 'src'),
         topDests: merge(topDst, 'dst'),
       };

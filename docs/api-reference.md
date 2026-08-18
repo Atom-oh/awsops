@@ -64,7 +64,7 @@
 ## anfw (1)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
-| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 인벤토리 VPC 리전 fan-out, 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재). `?range=`는 3600/21600/86400/604800 allowlist(그 외는 86400), `maxDuration` 60s, 상위 실패는 502. 부분 실패는 정직 강등: `degradedRegions`(firewalls/policies/ruleGroups 중 하나라도 List/Describe 실패 — 포괄 신호)·`firewallListDegradedRegions`(그 중 firewalls 자체만의 부분 실패로 좁힌 부분집합 — 로깅 구성을 확인 못 한 리전만 필요한 소비처용)·`metricsDegradedRegions`(CloudWatch 미순회/캡/쿼리 실패). `?view=logs` Alert/Flow 로그 Insights 집계(CWL 대상만), `?view=audit` CloudTrail 변경 감사 | verifyUser |
+| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 인벤토리 VPC 리전 fan-out, 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재). `?range=`는 3600/21600/86400/604800 allowlist(그 외는 86400), `maxDuration` 60s, 상위 실패는 502. 부분 실패는 정직 강등: `degradedRegions`(firewalls/policies/ruleGroups 중 하나라도 List/Describe 실패 — 포괄 신호)·`firewallListDegradedRegions`(그 중 firewalls 자체만의 부분 실패로 좁힌 부분집합 — 로깅 구성을 확인 못 한 리전만 필요한 소비처용)·`metricsDegradedRegions`(CloudWatch 미순회/캡/쿼리 실패). `?view=logs` Alert/Flow 로그 Insights 집계(CWL 대상만, stateful 룰 히트 카운트 포함), `?view=audit` CloudTrail 변경 감사 | verifyUser |
 
 ## dx (1)
 | 경로 | 메서드 | 역할 | 인증 |
