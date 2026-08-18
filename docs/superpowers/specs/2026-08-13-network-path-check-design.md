@@ -246,21 +246,27 @@ Per-candidate `status` (persisted on `network_path_run_candidates`, see Aurora b
 zero evidence gathered for that candidate). The reduction folds `failed` in explicitly rather than
 leaving it unhandled:
 
-- **All candidates `resolved`**: every candidate `allowed` -> overall `allowed` (every avenue this flow
-  could legitimately take was confirmed open); every candidate `blocked` -> overall `blocked`; every
-  candidate `failed` (or a mix of only `blocked`/`failed`, no `allowed`/`conditional`) -> overall `failed`
-  — a `blocked` verdict requires at least one candidate that was actually evaluated to a confirmed deny;
-  if every avenue either denied or gathered zero evidence, `failed` is the honest overall (not `blocked`,
-  which would overstate confidence in a result partly built on zero-evidence candidates). **Any
-  disagreement among resolved candidates** (a mix including at least one `allowed` and at least one
-  `blocked`/`conditional`/`failed`) -> overall `conditional`, not `allowed` — health-check-aware
-  redundancy confirms the LB/failover mechanism *can* select any listed target, not that it is currently
-  selecting the allowed one over the blocked one (an LB's health check probes a different port than the
-  data path, or a failover record's last observed state predates a change, and would keep routing live
-  traffic to a target this check found blocked while a sibling target reports `allowed`). Reporting
-  `allowed` on a single healthy sibling would hide that live traffic may still be landing on the blocked
-  target; `conditional` is the honest overall, and the response must say which candidate(s) were blocked
-  so an operator can check the LB's actual current target selection out of band.
+- **All candidates `resolved`**, in precedence order (each rule applies only if the prior ones didn't
+  match, so together they are exhaustive over every combination of per-candidate status):
+  1. every candidate `allowed` -> overall `allowed` (every avenue this flow could legitimately take was
+     confirmed open);
+  2. every candidate `blocked` -> overall `blocked`;
+  3. no `allowed` and no `conditional` present (i.e. every candidate is `blocked` and/or `failed`, and
+     not all-`blocked` per rule 2) -> overall `failed` — a `blocked` verdict requires at least one
+     candidate that was actually evaluated to a confirmed deny, but once a zero-evidence `failed`
+     candidate is mixed in, `failed` is the honest overall for the whole set (not `blocked`, which would
+     overstate confidence in a result partly built on zero-evidence candidates);
+  4. every other combination -> overall `conditional`. This is the catch-all and covers two distinct
+     cases: (a) a `conditional` candidate present anywhere (evidence was gathered but stayed
+     inconclusive for at least one avenue), and (b) an `allowed` candidate mixed with anything short of
+     all-`allowed` — health-check-aware redundancy confirms the LB/failover mechanism *can* select any
+     listed target, not that it is currently selecting the allowed one over a blocked/uncertain sibling
+     (an LB's health check probes a different port than the data path, or a failover record's last
+     observed state predates a change, and would keep routing live traffic to a target this check found
+     blocked while a sibling target reports `allowed`). Reporting `allowed` on a single healthy sibling
+     would hide that live traffic may still be landing on the blocked target; `conditional` is the
+     honest overall, and the response must say which candidate(s) were blocked/uncertain so an operator
+     can check the LB's actual current target selection out of band.
 - **Any candidate `hypothesis`**: the reduction may not report `allowed` merely because one hypothesis
   is allowed — that would hide a real blocker on whichever hypothesis is the flow's actual path, which
   is exactly the operator's question. All-hypotheses-agree short-circuits the ambiguity (all `allowed`
