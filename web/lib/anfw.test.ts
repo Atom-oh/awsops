@@ -169,7 +169,13 @@ describe('anfwAnalysis', () => {
       recv_i1: 900, pass_i1: 880, drop_i1: 10, rej_i1: 10,
     });
     const { anfwAnalysis } = await import('./anfw');
+    const before = Date.now();
     const a = await anfwAnalysis(86400);
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20): 클라이언트가 range 시작을 자기 시계로
+    // 계산하면 시계 왜곡에 취약하다 — 서버가 이 분석을 생성한 실제 시각을 응답에 실어야
+    // 클라이언트가 그 값을 기준으로 계산할 수 있다.
+    expect(a.generatedAt).toBeGreaterThanOrEqual(before);
+    expect(a.generatedAt).toBeLessThanOrEqual(Date.now());
 
     expect(a.totals).toMatchObject({
       firewalls: 1, firewallsDown: 0,

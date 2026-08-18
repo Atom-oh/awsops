@@ -344,7 +344,11 @@ export default function NetworkFirewallPage() {
     // 수정됐다는 사실 자체가 "그 시점의 statefulGroups 스냅샷을 알 수 없다"는 뜻이므로,
     // round8과 동일한 논리(히트는 전역 병합 — 지역적 안전 판정은 성립 불가)로 계정 전체를
     // 불안전 처리한다(제거된 그룹을 열거할 수 없어 로컬 taint로는 대체 불가).
-    const rangeStartMs = Date.now() - range * 1000;
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20): range 시작을 브라우저 Date.now()로
+    // 계산하면 클라이언트 시계가 서버보다 빠를 때 실제보다 늦은 시점으로 잘못 계산돼, 그
+    // 사이에 수정된 정책이 "range 밖"으로 오판돼 이 가드가 fail-open한다 — data.generatedAt
+    // (서버가 이 분석을 만든 시각)을 기준으로 계산해 클라이언트 시계 왜곡을 배제한다.
+    const rangeStartMs = (data?.generatedAt ?? Date.now()) - range * 1000;
     return policies.some((p) => p.lastModified != null && Date.parse(p.lastModified) > rangeStartMs);
   }, [data, rgs, policies, range]);
   const ruleGroupObservability = useMemo(() => {
@@ -466,7 +470,10 @@ export default function NetworkFirewallPage() {
     // 그룹이 조회 range 시작 이후 수정됐으면 지금의 SID 목록이 range 전체에 걸쳐 동일했다고
     // 보장할 수 없다(SID가 range 중간에 추가/재정의됐을 수 있음) — 그런 룰 그룹의 SID는
     // hits=0이어도 확정 idle로 표시하지 않는다.
-    const rangeStartMs = Date.now() - range * 1000;
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20): 브라우저 Date.now() 대신 이 rgs가
+    // 나온 data.generatedAt(서버 시각)을 기준으로 계산 — 클라이언트 시계가 빠르면 range
+    // 시작을 실제보다 늦게 계산해 가드가 fail-open하는 것을 방지한다.
+    const rangeStartMs = (data?.generatedAt ?? Date.now()) - range * 1000;
 
     const rows: RuleHitRow[] = [];
     const configuredSids = new Set<string>();
@@ -521,7 +528,7 @@ export default function NetworkFirewallPage() {
       const bv = b.hitsAttributable ? b.hits : 0;
       return bv - av || Number(a.sid) - Number(b.sid);
     });
-  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range]);
+  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range, data]);
   // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 계정 전체
   // 토폴로지 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
   // 리뷰 MAJOR(확정, PR #225 라운드14): observability는 "지금" 서빙 방화벽이 관측되는지만

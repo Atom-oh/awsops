@@ -163,6 +163,13 @@ export interface AnfwAnalysis {
     droppedPackets: number | null; rejectedPackets: number | null;
   };
   rangeSec: number;
+  /** 서버가 이 분석을 생성한 시각(ms epoch) — 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20):
+   *  range 시작 시점(now - rangeSec)을 클라이언트가 브라우저 Date.now()로 계산하면 클라이언트
+   *  시계가 서버보다 빠를 때 range 시작을 실제보다 늦은 시점으로 잘못 계산해, 그 사이(진짜
+   *  range 시작 ~ 잘못 계산된 range 시작)에 수정된 룰그룹/정책이 "range 밖에서 수정됨"으로
+   *  오판돼 attributionUnsafe/ruleGroupModifiedInRange 가드가 fail-open한다. 서버 시각을
+   *  응답에 실어 클라이언트가 자기 시계 대신 이 값을 기준으로 계산하게 한다. */
+  generatedAt: number;
 }
 
 async function regionsFromInventory(): Promise<string[]> {
@@ -642,6 +649,6 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
       droppedPackets: sum(firewalls.map((f) => f.droppedPackets ?? undefined)),
       rejectedPackets: sum(firewalls.map((f) => f.rejectedPackets ?? undefined)),
     };
-    return { firewalls, policies, ruleGroups, degradedRegions, firewallListDegradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec };
+    return { firewalls, policies, ruleGroups, degradedRegions, firewallListDegradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec, generatedAt: Date.now() };
   });
 }
