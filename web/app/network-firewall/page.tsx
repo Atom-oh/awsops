@@ -352,6 +352,26 @@ export default function NetworkFirewallPage() {
     for (const [k, states] of byKey) m.set(k, combineObservability(states));
     return m;
   }, [rgs, policies, fws, firewallObservability]);
+  // 리뷰 MAJOR(확정, Codex/kiro-gpt, PR #225 라운드17): ruleGroupModifiedInRange는 룰 그룹
+  // 자체의 lastModified만 봤다 — 룰 그룹을 참조하는 정책이 range 시작 이후 수정됐다면(그
+  // 룰 그룹이 그 시점에 정책에 새로 추가/제거됐을 수 있음), 룰 그룹 자체는 안 바뀌었어도
+  // "이 룰이 range 내내 이 방화벽에 배포돼 있었다"는 전제가 깨진다 — 정확히 이 기능이
+  // 막으려는 거짓 정책 사각지대 경고다. AnfwPolicyRow.lastModified는 이미 있었지만
+  // (round15까지) 이 검증에 쓰이지 않았다.
+  const policyModifiedByRgKey = useMemo(() => {
+    const rangeStartMs = Date.now() - range * 1000;
+    const m = new Map<string, boolean>();
+    for (const rg of rgs) m.set(`${rg.region}|${rg.name}`, false);
+    for (const policy of policies) {
+      const modified = policy.lastModified != null && Date.parse(policy.lastModified) > rangeStartMs;
+      if (!modified) continue;
+      for (const rgName of policy.statefulGroups) {
+        const rgKey = `${policy.region}|${rgName}`;
+        if (m.has(rgKey)) m.set(rgKey, true);
+      }
+    }
+    return m;
+  }, [rgs, policies, range]);
 
   // Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
   // 설정 룰 1개당 1행 (region×rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는
@@ -392,10 +412,13 @@ export default function NetworkFirewallPage() {
      *  n/a인 'unobserved' 행이 실제 hits로 정렬돼) top-50 표시 슬롯을 정보 없는 행이
      *  차지해 진짜 신뢰 가능한 행을 밀어낸다 — 정렬은 항상 화면 표시와 같은 기준을 써야 한다. */
     hitsAttributable: boolean;
-    /** 이 룰 그룹이 조회 range 시작 이후 수정됐음 — 지금 있는 SID가 range 전체 동안
-     *  존재/동일했다고 보장할 수 없다(리뷰 MAJOR, PR #225 라운드15: 과거 히트가 현재
-     *  토폴로지에 조인되지만 rg.lastModified가 검증에 쓰이지 않았음). true면 hits=0을
-     *  확정 idle로 표시하지 않는다 — SID가 range 중간에 추가/재정의됐을 수 있어서다. */
+    /** 이 룰 그룹 자체가, 또는 이 룰 그룹을 참조하는 정책이 조회 range 시작 이후 수정됐음 —
+     *  지금 있는 SID가 range 전체 동안 이 방화벽에 이 설정 그대로 배포돼 있었다고 보장할 수
+     *  없다(리뷰 MAJOR, PR #225 라운드15: 과거 히트가 현재 토폴로지에 조인되지만
+     *  rg.lastModified가 검증에 쓰이지 않았음; 라운드17: 정책 쪽 lastModified도 동일하게
+     *  검증 — 룰 그룹 자체는 안 바뀌었어도 그 룰 그룹이 range 중간에 정책에 추가/제거됐을
+     *  수 있다). true면 hits=0을 확정 idle로 표시하지 않고, 양수 히트도 이 행에 확정
+     *  귀속하지 않는다(hitsAttributable=false). */
     ruleGroupModifiedInRange: boolean;
   }
   const ruleHitRows = useMemo<RuleHitRow[]>(() => {
@@ -443,7 +466,8 @@ export default function NetworkFirewallPage() {
     const rows: RuleHitRow[] = [];
     const configuredSids = new Set<string>();
     for (const rg of rgs) {
-      const ruleGroupModifiedInRange = rg.lastModified != null && Date.parse(rg.lastModified) > rangeStartMs;
+      const ruleGroupModifiedInRange = (rg.lastModified != null && Date.parse(rg.lastModified) > rangeStartMs)
+        || (policyModifiedByRgKey.get(`${rg.region}|${rg.name}`) ?? false);
       for (const s of rg.statefulSids) {
         const isPass = s.action === 'pass' || s.noalert;
         if (!isPass) configuredSids.add(s.sid);
@@ -493,7 +517,7 @@ export default function NetworkFirewallPage() {
       const bv = b.hitsAttributable ? b.hits : 0;
       return bv - av || Number(a.sid) - Number(b.sid);
     });
-  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range]);
+  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range, policyModifiedByRgKey]);
   // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 계정 전체
   // 토폴로지 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
   // 리뷰 MAJOR(확정, PR #225 라운드14): observability는 "지금" 서빙 방화벽이 관측되는지만
