@@ -462,7 +462,13 @@ export default function NetworkFirewallPage() {
           unknownReason: ruleHitsFailed ? 'failed' : ((truncated || partial) && !h) ? 'truncated' : null,
           // noalert 룰도 pass처럼 로그가 원천적으로 안 남으므로, 표시되는 양수 히트가 있다면
           // 그 자체가 오귀속 증거다(unobserved와 동일한 논리) — hitsAttributable에서 제외.
-          hitsAttributable: !isPass && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved',
+          // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드16): ruleGroupModifiedInRange는 처음엔
+          // "0을 확정 idle로 볼 수 없다"에만 반영했지만, 대칭적으로 양수 히트도 이 룰그룹에
+          // 안전하게 귀속할 수 없다 — SID가 range 도중 이 그룹으로 옮겨왔거나 재정의됐다면,
+          // 지금 보이는 양수 히트 중 일부는 실제로 range 앞쪽에서 "다른" 룰/그룹 설정이
+          // 만든 것일 수 있다. 그런데도 hitsAttributable=true로 두면 DANGER(차단 트래픽)
+          // 강조와 exact 표시가 잘못된 룰그룹에 확정 귀속되는 오귀속을 그대로 만든다.
+          hitsAttributable: !isPass && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved' && !ruleGroupModifiedInRange,
           ruleGroupModifiedInRange,
         });
       }
@@ -1044,7 +1050,14 @@ export default function NetworkFirewallPage() {
                                             ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
                                             : r.attributionUnsafe
                                               ? <span className="text-ink-300" title={tt('일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나 파싱할 수 없는 룰그룹이 있어 매칭 여부·귀속을 확정할 수 없음')}>?</span>
-                                              : r.observability === 'unobserved'
+                                              // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드16): 라운드15는 이 신호를
+                                              // "0을 확정 idle로 보지 않는다"에만 썼는데, 대칭적으로 양수 히트도
+                                              // 안전하지 않다 — SID가 range 도중 이 그룹으로 재정의/이동해왔다면
+                                              // 지금 보이는 양수 히트 중 일부는 실제로 range 앞쪽의 "다른" 룰/그룹
+                                              // 설정이 만든 것일 수 있다. hits 값과 무관하게 항상 불명 처리한다.
+                                              : r.ruleGroupModifiedInRange
+                                                ? <span className="text-ink-300" title={tt('이 룰 그룹이 조회 기간 중에 수정됨 — 현재 SID가 기간 전체 동안 이 설정 그대로였다고 확정할 수 없어 히트를 이 룰에 귀속할 수 없음')}>?</span>
+                                                : r.observability === 'unobserved'
                                                 ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음')}>n/a</span>
                                                 : r.hits === 0 && r.observability !== 'observed'
                                                   ? <span className="text-ink-300" title={tt('이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
@@ -1054,12 +1067,6 @@ export default function NetworkFirewallPage() {
                                                   // 확정 idle이 아니라 "커버리지 밖일 수 있음"이다.
                                                   : r.hits === 0 && !alertCoverageComplete
                                                     ? <span className="text-ink-300" title={tt('ALERT 로그가 선택한 기간 전체를 커버하지 않아 매칭 0을 확정할 수 없음 (로깅이 기간 중간에 시작됨)')}>?</span>
-                                                  // 리뷰 MAJOR(확정, PR #225 라운드15): 히트는 과거 로그를 지금의 룰
-                                                  // 토폴로지에 조인한 값이다 — 이 룰 그룹이 range 시작 이후 수정됐으면
-                                                  // 지금 있는 이 SID가 range 전체 동안 동일하게 존재했다는 보장이 없어
-                                                  // (range 중간에 추가/재정의됐을 수 있음) 0을 확정 idle로 볼 수 없다.
-                                                  : r.hits === 0 && r.ruleGroupModifiedInRange
-                                                    ? <span className="text-ink-300" title={tt('이 룰 그룹이 조회 기간 중에 수정됨 — 현재 SID가 기간 전체 동안 존재했다고 확정할 수 없어 매칭 0을 단정할 수 없음')}>?</span>
                                                   // 리뷰 MAJOR(확정, PR #225 라운드8): 리전별 상한(150)에 도달한 리전이
                                                   // 있으면(ruleHitsPartial), present인 sid의 hits도 그 리전 몫이 잘려
                                                   // 실제보다 적을 수 있다 — "정확한 수치"처럼 보이지 않게 하한 표기.
