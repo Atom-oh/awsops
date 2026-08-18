@@ -328,7 +328,13 @@ export default function NetworkFirewallPage() {
   const attributionUnsafe = useMemo(() => {
     if ((data?.degradedRegions ?? []).length > 0) return true;
     const rgKeys = new Set(rgs.map((rg) => `${rg.region}|${rg.name}`));
-    return policies.some((p) => p.statefulGroups.some((name) => !rgKeys.has(`${p.region}|${name}`)));
+    // 리뷰 MAJOR(확정, PR #225 라운드11): 도메인 리스트(RulesSourceList) 룰 그룹은 rgs에
+    // "존재"하지만(rgKeys 통과) statefulSids가 항상 비어 있다 — AWS가 SID를 내부 생성하고
+    // 우리는 그 SID를 알 수 없다. rgKeys 부재만 보면 이 케이스를 놓친다 — 파싱 불가
+    // (anfw.ts의 sidsUnparseable) 그룹을 참조하는 정책도 계정 전체 귀속 불안전으로 간주한다.
+    const unparseableRgKeys = new Set(rgs.filter((rg) => rg.sidsUnparseable).map((rg) => `${rg.region}|${rg.name}`));
+    return policies.some((p) => p.statefulGroups.some((name) =>
+      !rgKeys.has(`${p.region}|${name}`) || unparseableRgKeys.has(`${p.region}|${name}`)));
   }, [data, rgs, policies]);
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();

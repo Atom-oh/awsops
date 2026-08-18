@@ -211,6 +211,28 @@ describe('anfwAnalysis', () => {
     expect(rgStateless.unassociated).toBe(false);
   });
 
+  it('STATEFUL_DOMAIN(도메인 리스트) 룰 그룹은 sidsUnparseable=true — AWS가 SID를 내부 생성해 statefulSids로 알 수 없음 (리뷰 MAJOR 확정, PR #225 라운드11)', async () => {
+    mockDb([]);
+    mockNfw({
+      rgs: [{ Name: 'domain-deny-list', Arn: 'arn:aws:network-firewall:r:1:stateful-rulegroup/domain-deny-list' }],
+    });
+    // DescribeRuleGroupCommand 모킹은 RG_DESCRIBE에 이름이 없으면 기본값(Type: STATEFUL,
+    // RulesSource 없음)을 반환한다 — 도메인 리스트 응답을 흉내내려면 이 이름으로 등록.
+    RG_DESCRIBE['domain-deny-list'] = {
+      RuleGroup: { RulesSource: { RulesSourceList: { Targets: ['evil.example'], TargetTypes: ['TLS_SNI'] } } },
+      RuleGroupResponse: {
+        RuleGroupName: 'domain-deny-list', Type: 'STATEFUL', RuleGroupStatus: 'ACTIVE',
+        Capacity: 100, ConsumedCapacity: 10, NumberOfAssociations: 1,
+      },
+    };
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(86400);
+    const rg = a.ruleGroups.find((r) => r.name === 'domain-deny-list')!;
+    expect(rg.statefulSids).toEqual([]); // 사용자 SID 없음 — 파싱 대상 아님
+    expect(rg.sidsUnparseable).toBe(true); // 그런데도 SID 집합을 안다고 확정할 수 없음
+    delete RG_DESCRIBE['domain-deny-list'];
+  });
+
   it('parseStatefulSids: content/pcre 내부의 "sid:" 문자열에 속지 않음', async () => {
     const { parseStatefulSids } = await import('./anfw');
     expect(parseStatefulSids({ RulesSource: { RulesString: 'alert http any any -> any any (content:"sid: 999"; msg:"x"; sid:1234;)' } }))

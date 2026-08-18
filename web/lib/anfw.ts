@@ -113,6 +113,13 @@ export interface AnfwRuleGroupRow {
   /** stateful 룰 SID 목록 (sid·msg·action만 — 룰 본문 아님). Alert 로그 히트와 조인해
    *  "기간 내 매칭 0인 설정 룰"(정책 사각지대)을 표면화 — 2026-08 룰 히트 카운트 기능. */
   statefulSids: StatefulSid[];
+  /** true면 이 STATEFUL 룰 그룹의 SID 집합을 파싱할 수 없음(도메인 리스트 `RulesSourceList`
+   *  등) — statefulSids가 완전한 목록이 아니라는 뜻. 리뷰 MAJOR(확정, PR #225 라운드11):
+   *  도메인 리스트도 AWS 생성 SID로 Alert 로그를 남길 수 있고, 그 SID가 사용자 설정 룰의
+   *  sid와 우연히 같으면 병합 시 구분이 안 된다 — statefulSids가 빈 배열이라 이 그룹은
+   *  rgs에는 "존재"하므로(attributionUnsafe의 "rgKeys에 없는 그룹" 판정을 통과), 소비처가
+   *  이 필드로 별도 판정해야 한다. */
+  sidsUnparseable: boolean;
 }
 
 export interface AnfwAnalysis {
@@ -321,6 +328,8 @@ interface RawRgResp {
     RulesSource?: {
       RulesString?: string;
       StatefulRules?: { Action?: string; RuleOptions?: { Keyword?: string; Settings?: string[] }[] }[];
+      /** 도메인 리스트(계정 소유, AWS가 SID를 내부 생성) — 존재 유무만 확인, 내용은 안 씀. */
+      RulesSourceList?: unknown;
     };
   };
 }
@@ -553,6 +562,17 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
             const capacity = resp.Capacity ?? null;
             const consumed = resp.ConsumedCapacity ?? null;
             const associations = resp.NumberOfAssociations ?? 0;
+            const isStateful = resp.Type === 'STATEFUL';
+            const statefulSids = isStateful ? parseStatefulSids(d.RuleGroup) : [];
+            // 리뷰 MAJOR(확정, PR #225 라운드11): 도메인 리스트(RulesSourceList)는 의도적으로
+            // statefulSids를 비워두지만(사용자 SID가 없음), 이 그룹 자체는 여전히 rgs에 남아
+            // attributionUnsafe의 "rgKeys에 없는 그룹" 판정을 우회한다 — AWS가 내부 생성한
+            // SID가 사용자 설정 룰의 sid와 우연히 같으면 병합 시 구분 불가. RulesSourceList
+            // 존재 여부로 확정 판정하고, 혹시 다른 사유로 파싱이 실패했을 가능성까지 대비해
+            // "용량을 소비 중인데 파싱된 SID가 0개"인 경우도 함께 파싱 불가로 취급한다.
+            const sidsUnparseable = isStateful
+              && (!!d.RuleGroup?.RulesSource?.RulesSourceList
+                || (statefulSids.length === 0 && (consumed ?? 0) > 0));
             return {
               name: resp.RuleGroupName ?? g.name, region,
               type: resp.Type ?? '?',
@@ -563,7 +583,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
                 : null,
               associations, unassociated: associations === 0,
               lastModified: resp.LastModifiedTime ? new Date(resp.LastModifiedTime).toISOString() : null,
-              statefulSids: resp.Type === 'STATEFUL' ? parseStatefulSids(d.RuleGroup) : [],
+              statefulSids, sidsUnparseable,
             };
           } catch { return null; }
         }));
