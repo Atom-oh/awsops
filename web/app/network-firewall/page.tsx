@@ -394,6 +394,13 @@ export default function NetworkFirewallPage() {
     const ruleHitsFailed = ruleHits == null;
     const hits = ruleHits ?? [];
     const truncated = logsData?.alert?.ruleHitsTruncated ?? false;
+    // 리뷰 확정(Codex stop-hook, PR #225 라운드10): ruleHitsTruncated는 병합 "후" 전체 sid
+    // 개수가 join 컷오프를 넘었는지만 본다 — 어느 한 리전이 자기 상한(150)에 걸려 그
+    // 리전에만 있던 sid가 병합 전 단계에서 통째로 빠지면(다른 리전에 전혀 없던 sid), 전체
+    // sid 개수는 여전히 100 이하일 수 있어 ruleHitsTruncated=false인 채로 이 sid가
+    // hitsBySid에서 완전히 부재(undefined)해 확정 0(idle)으로 오판된다. ruleHitsPartial
+    // (리전별 상한 도달 신호)도 "부재 sid를 0으로 확정할 수 없다" 판정에 반영해야 한다.
+    const partial = logsData?.alert?.ruleHitsPartial ?? false;
     // 리뷰 MAJOR(확정, PR #225 라운드9): 백엔드가 이제 sid 단위로 이미 합산해서 넘겨주므로
     // (컷오프 적용 전에 sid로 먼저 합산 — 튜플 단위 컷오프의 부분합 문제 해소), 여기서는
     // sid당 행이 하나뿐이다. 그래도 병합 로직은 그대로 둬 방어적으로 안전하게 유지한다.
@@ -415,7 +422,7 @@ export default function NetworkFirewallPage() {
         const h = hitsBySid.get(s.sid);
         const observability = ruleGroupObservability.get(`${rg.region}|${rg.name}`) ?? 'unobserved';
         const sharedSid = (sidGroupCount.get(s.sid) ?? 0) > 1;
-        const unknown = ruleHitsFailed || (truncated && !h); // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
+        const unknown = ruleHitsFailed || ((truncated || partial) && !h); // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
         rows.push({
           key: `${rg.region}|${rg.name}|${s.sid}`, sid: s.sid,
           msg: s.msg ?? h?.sig ?? '',
@@ -424,7 +431,7 @@ export default function NetworkFirewallPage() {
           ruleGroups: [rg.name], configured: true,
           isPass: s.action === 'pass' || s.noalert,
           observability, attributionUnsafe, sharedSid, unknown,
-          unknownReason: ruleHitsFailed ? 'failed' : (truncated && !h) ? 'truncated' : null,
+          unknownReason: ruleHitsFailed ? 'failed' : ((truncated || partial) && !h) ? 'truncated' : null,
           // noalert 룰도 pass처럼 로그가 원천적으로 안 남으므로, 표시되는 양수 히트가 있다면
           // 그 자체가 오귀속 증거다(unobserved와 동일한 논리) — hitsAttributable에서 제외.
           hitsAttributable: s.action !== 'pass' && !s.noalert && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved',
