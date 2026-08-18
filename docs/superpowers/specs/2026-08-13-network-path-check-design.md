@@ -215,20 +215,28 @@ that row's `status` and `first_blocker` once the per-candidate reduction is comp
 - `resolved`: discovery found genuine, health-check-aware redundancy where the *specific flow being
   checked* can legitimately be served by any of the listed candidates — a multi-target-group/multi-
   healthy-target ALB backend (the LB actively distributes and fails over away from unhealthy targets;
-  it does not commit a given flow to one fixed target the way routing hash-selection does), a Route 53
-  health-check-based failover record, or a NAT gateway with automatic AZ failover. **ECMP is deliberately
-  excluded from `resolved`, even though it involves multiple paths.** ECMP (VPC route-table ECMP, TGW
-  ECMP across multiple attachments) is a deterministic per-5-tuple hash: a specific flow is committed to
-  exactly one of the ECMP paths for its entire lifetime, not "any of them" — if that one path is blocked,
-  the flow is blocked, full stop, regardless of whether a sibling ECMP path is healthy. Treating ECMP as
-  `resolved` and reporting `allowed` because *some* ECMP sibling is allowed would tell an operator their
-  flow works when the specific path their flow actually hashes to may not.
+  it does not commit a given flow to one fixed target the way routing hash-selection does) or a Route 53
+  health-check-based failover record. **Both ECMP and NAT Gateway are deliberately excluded from
+  `resolved`, even though each involves what looks like multiple redundant paths.** ECMP (VPC route-table
+  ECMP, TGW ECMP across multiple attachments) is a deterministic per-5-tuple hash: a specific flow is
+  committed to exactly one of the ECMP paths for its entire lifetime, not "any of them" — if that one path
+  is blocked, the flow is blocked, full stop, regardless of whether a sibling ECMP path is healthy. NAT
+  Gateway is excluded for the same deterministic-commitment reason, not because it lacks redundancy
+  examples elsewhere in AWS: NAT Gateways are AZ-scoped and AWS performs **no automatic cross-AZ
+  failover** between them — a private-subnet route table commits to one concrete NAT Gateway ENI, and if
+  that gateway is unhealthy or its return path is blocked, the flow is blocked even though a NAT Gateway
+  in a sibling AZ is fine. Treating ECMP or a single committed NAT Gateway as `resolved` and reporting
+  `allowed` because *some* sibling is allowed would tell an operator their flow works when the specific
+  path their flow actually takes may not.
 - `hypothesis`: discovery could not narrow to the single path this flow actually takes — this covers
-  both **ECMP** (the path is deterministically single per flow, but *we* cannot compute which hash bucket
-  this flow lands in from cached topology alone) and ambiguous source ENI/subnet resolution or multiple
-  matching route-table entries with no way to disambiguate. Forwarding itself is deterministic — exactly
-  one path exists — so multiple `hypothesis` candidates always encode *our* uncertainty about which one
-  it is, never redundancy in the network.
+  **ECMP** (the path is deterministically single per flow, but *we* cannot compute which hash bucket this
+  flow lands in from cached topology alone), **NAT Gateway selection** (the route table commits the flow's
+  source subnet to one specific NAT Gateway; if discovery cannot cheaply confirm which NAT Gateway that
+  route table currently targets, the candidate is `hypothesis`, not `resolved`, even though exactly one
+  NAT Gateway is genuinely in play), and ambiguous source ENI/subnet resolution or multiple matching
+  route-table entries with no way to disambiguate. Forwarding itself is deterministic — exactly one path
+  exists — so multiple `hypothesis` candidates always encode *our* uncertainty about which one it is,
+  never redundancy in the network.
 
 **Overall status** is reduced across candidates, not across layers directly, and the rule depends on
 candidate kind:
@@ -238,14 +246,21 @@ Per-candidate `status` (persisted on `network_path_run_candidates`, see Aurora b
 zero evidence gathered for that candidate). The reduction folds `failed` in explicitly rather than
 leaving it unhandled:
 
-- **All candidates `resolved`**: at least one `allowed` -> overall `allowed` (redundancy means traffic
-  gets through via *some* path; the response surfaces that candidate as primary and lists the
-  blocked/conditional/failed candidates as alternates); no `allowed`, at least one `conditional` ->
-  overall `conditional`; every candidate `blocked` -> overall `blocked`; every candidate `failed` (or a
-  mix of only `blocked`/`failed`, no `allowed`/`conditional`) -> overall `failed` — a `blocked` verdict
-  requires at least one candidate that was actually evaluated to a confirmed deny; if every avenue
-  either denied or gathered zero evidence, `failed` is the honest overall (not `blocked`, which would
-  overstate confidence in a result partly built on zero-evidence candidates).
+- **All candidates `resolved`**: every candidate `allowed` -> overall `allowed` (every avenue this flow
+  could legitimately take was confirmed open); every candidate `blocked` -> overall `blocked`; every
+  candidate `failed` (or a mix of only `blocked`/`failed`, no `allowed`/`conditional`) -> overall `failed`
+  — a `blocked` verdict requires at least one candidate that was actually evaluated to a confirmed deny;
+  if every avenue either denied or gathered zero evidence, `failed` is the honest overall (not `blocked`,
+  which would overstate confidence in a result partly built on zero-evidence candidates). **Any
+  disagreement among resolved candidates** (a mix including at least one `allowed` and at least one
+  `blocked`/`conditional`/`failed`) -> overall `conditional`, not `allowed` — health-check-aware
+  redundancy confirms the LB/failover mechanism *can* select any listed target, not that it is currently
+  selecting the allowed one over the blocked one (an LB's health check probes a different port than the
+  data path, or a failover record's last observed state predates a change, and would keep routing live
+  traffic to a target this check found blocked while a sibling target reports `allowed`). Reporting
+  `allowed` on a single healthy sibling would hide that live traffic may still be landing on the blocked
+  target; `conditional` is the honest overall, and the response must say which candidate(s) were blocked
+  so an operator can check the LB's actual current target selection out of band.
 - **Any candidate `hypothesis`**: the reduction may not report `allowed` merely because one hypothesis
   is allowed — that would hide a real blocker on whichever hypothesis is the flow's actual path, which
   is exactly the operator's question. All-hypotheses-agree short-circuits the ambiguity (all `allowed`
@@ -425,11 +440,13 @@ manual investigation. The stored checklist remains the source of truth.
   candidate's status is computed from whatever it evaluated before the deadline (per the per-candidate
   rules above — a candidate whose required layers are entirely `not_run` becomes `failed`, one with a
   mix becomes `conditional`), and the overall status still follows the candidate-kind reduction above —
-  a `resolved`-kind candidate that reached `allowed` before the deadline still makes the overall result
-  `allowed` even if a sibling `resolved` candidate was truncated; a `hypothesis`-kind candidate that
-  reached `allowed` does **not** by itself make the overall result `allowed` if a sibling hypothesis was
-  truncated to `conditional`/`failed` by the deadline — that's still "we don't know which path is real,
-  and couldn't finish checking one of them," which is `conditional`, not `allowed`.
+  a `resolved`-kind candidate truncated to anything short of `allowed` makes the overall result
+  `conditional` even if a sibling `resolved` candidate reached `allowed` before the deadline (the
+  reduction now requires every resolved candidate confirmed `allowed`, so one truncated sibling is
+  itself a disagreement, not a redundancy win); a `hypothesis`-kind candidate that reached `allowed`
+  does **not** by itself make the overall result `allowed` if a sibling hypothesis was truncated to
+  `conditional`/`failed` by the deadline — that's still "we don't know which path is real, and couldn't
+  finish checking one of them," which is `conditional`, not `allowed`.
 - Identity cannot be resolved -> run completes `failed` with a bounded, non-sensitive error.
 - Stale run -> a dedicated reaper query added to `scripts/v2/workers/reaper.py` reconciles
   `network_path_runs` the same way it already does for `worker_jobs`/`diagnosis_reports` — the existing
@@ -464,11 +481,13 @@ Table-driven tests cover:
 ### Orchestration
 
 - adapter failure isolation
-- global deadline behavior, including a truncated sibling candidate not downgrading an already-`allowed`
-  candidate's contribution to the overall result
+- global deadline behavior, including a truncated `resolved` sibling downgrading an already-`allowed`
+  `resolved` candidate's contribution to `conditional` overall (unanimity required), while a truncated
+  `hypothesis` sibling has the same downgrading effect for the same reason (disagreement, not redundancy)
 - multiple candidate paths, each with independent per-candidate status
-- deterministic overall-status reduction: one blocked + one allowed candidate -> overall `allowed`;
-  all candidates blocked -> overall `blocked`; no allowed, at least one conditional -> overall `conditional`
+- deterministic overall-status reduction: all-`resolved` with one blocked + one allowed -> overall
+  `conditional` (not `allowed` — disagreement among resolved candidates); all-`resolved` all blocked ->
+  overall `blocked`; all-`resolved` no allowed, at least one conditional -> overall `conditional`
 - a layer irrelevant to a given candidate is omitted from that candidate rather than marked `unknown`
 - `network_path_run_steps` rows for two candidates at the same `ordinal` do not collide (candidate_id
   discriminates the primary key)
