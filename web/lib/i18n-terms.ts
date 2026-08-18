@@ -1154,7 +1154,7 @@ export const TERMS: Record<string, Pair> = {
   'Alert 로그 집계 기반 — pass 룰은 Alert 로그를 남기지 않아 집계할 수 없습니다 (매칭 없음으로 세지 않음)': { en: 'Aggregated from Alert logs — pass rules leave no alert log entries and cannot be counted (not treated as unmatched)', zh: '基于 Alert 日志汇总 — pass 规则不产生 Alert 日志，无法统计（不计为无匹配）', ja: 'Alert ログ集計ベース — pass ルールは Alert ログを残さないため集計不可（マッチなしとは数えません）' },
   '히트': { en: 'Hits', zh: '命中', ja: 'ヒット' },
   '룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)': { en: 'SID not found in configured rule groups (managed rule groups, etc.)', zh: '在已配置的规则组中未找到该 SID（如托管规则组）', ja: '設定ルールグループに SID が見つかりません（マネージドルールグループ等）' },
-  'pass 룰 — Alert 로그 미발생': { en: 'pass rule — no alert log emitted', zh: 'pass 规则 — 不产生 Alert 日志', ja: 'pass ルール — Alert ログ非発生' },
+  'pass 또는 noalert 룰 — Alert 로그 미발생': { en: 'pass or noalert rule — no alert log emitted', zh: 'pass 或 noalert 规则 — 不产生 Alert 日志', ja: 'pass または noalert ルール — Alert ログ非発生' },
   '히트 상위 50행 + 매칭 없는 설정 룰만 표시 (나머지 생략)': { en: 'Showing the top 50 rows by hits plus configured rules with no match (rest omitted)', zh: '仅显示命中前 50 行 + 无匹配的已配置规则（其余省略）', ja: 'ヒット上位 50 行 + マッチのない設定ルールのみ表示（残りは省略）' },
   '여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음': { en: 'Multiple rule groups use this SID — alert logs do not identify the rule group, so hits cannot be attributed per group', zh: '多个规则组使用同一 SID — Alert 日志无法识别规则组，命中无法按组归属', ja: '複数のルールグループが同じ SID を使用 — Alert ログはルールグループを識別できず、ヒットをグループ別に帰属できません' },
   '이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음': { en: 'Cannot confirm this rule group is being observed — a zero match count cannot be confirmed', zh: '无法确认该规则组是否被观测 — 无法确认零匹配', ja: 'このルールグループが観測されているか確認できないため、マッチ 0 を確定できません' },

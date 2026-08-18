@@ -119,7 +119,7 @@ export interface AnfwAlertAnalytics {
    *  리뷰 MAJOR(확정): alertRuleHits 쿼리 자체가 실패/청크 truncation됐거나 발견이
    *  unknown이면 null — totalAlerts와 동일 계약. 이 게이트 없이는 조회 실패 리전의 설정
    *  룰이 "매칭 0(확정 idle)"로 오판되어 정책 사각지대 경고가 거짓 양성을 낸다. */
-  ruleHits: { sid: string; signature: string; action: string; hits: number }[] | null;
+  ruleHits: { sid: string; signature: string; actions: string[]; hits: number }[] | null;
   /** true면 히트 집계가 top-100으로 잘렸음(hits=0인 SID가 실제로는 잘린 구간에 있을 수 있음) —
    *  소비자는 ruleHits에 없는 설정 SID를 "매칭 0"이 아니라 "불명"으로 표시해야 한다. */
   ruleHitsTruncated: boolean;
@@ -468,13 +468,21 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         cur.value += num(r.cnt);
         sigMap.set(key, cur);
       }
-      const hitMap = new Map<string, { sid: string; signature: string; action: string; hits: number }>();
+      // 리뷰 MAJOR(확정, PR #225 라운드9): 이전엔 (sid,sig,act) 튜플 단위로 맵을 만들고 그
+      // 튜플 맵을 top-100으로 자른 뒤 화면에서 sid로 재합산했다 — 같은 sid가 기간 내에
+      // action/signature가 바뀐 두 개 이상의 튜플로 나뉘어 있으면, 한 튜플만 top-100 안에
+      // 살아남고 나머지는 잘려나가도 그 sid는 여전히 "present"라서 무신호 부분합이 "정확한
+      // 값"처럼 표시된다(ruleHitsTruncated는 부재 sid만 잡고, ruleHitsPartial은 리전별
+      // 150-캡만 잡아 이 케이스를 못 잡는다). 컷오프를 적용하기 "전에" sid 단위로 먼저
+      // 합산해, 한 sid의 값이 컷오프 경계에서 쪼개지는 일이 없게 한다.
+      const hitMap = new Map<string, { sid: string; signature: string; actions: Set<string>; hits: number }>();
       for (const r of ruleHitRows) {
         if (!r.sid) continue;
-        const key = `${r.sid}|${r.sig}|${r.act}`;
-        const cur = hitMap.get(key) ?? { sid: r.sid, signature: r.sig ?? '', action: r.act ?? '', hits: 0 };
+        const cur = hitMap.get(r.sid) ?? { sid: r.sid, signature: r.sig ?? '', actions: new Set<string>(), hits: 0 };
+        if (!cur.signature && r.sig) cur.signature = r.sig;
+        if (r.act) cur.actions.add(r.act);
         cur.hits += num(r.cnt);
-        hitMap.set(key, cur);
+        hitMap.set(r.sid, cur);
       }
       alert = {
         // 리뷰 MAJOR(라운드10): alertTotals 쿼리 자체가 실패하면 totals=[]가 되고
@@ -488,7 +496,10 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
         ruleHits: (failed.includes('alertRuleHits') || failed.includes('alertTopNPartial') || alertDiscoveryUnknown)
           ? null
-          : [...hitMap.values()].sort((a, b) => b.hits - a.hits).slice(0, RULE_HITS_JOIN_CUTOFF),
+          : [...hitMap.values()]
+            .map((h) => ({ sid: h.sid, signature: h.signature, actions: [...h.actions], hits: h.hits }))
+            .sort((a, b) => b.hits - a.hits)
+            .slice(0, RULE_HITS_JOIN_CUTOFF),
         // 리뷰 MINOR(확정, PR #225 라운드8): >=면 정확히 컷오프 개수(예: 100개)인, 실제로는
         // 아무것도 잘리지 않은 완전한 결과까지 truncated로 오표시해 확정 0을 "?"로 강등시켰다.
         // slice(0, CUTOFF)가 실제로 무언가를 잘라내는 경우는 size가 CUTOFF보다 클 때뿐이다.

@@ -93,8 +93,8 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'block outbound telnet', value: 7 }]);
     // 룰 히트 카운트 (sid+sig+action) — 2026-08 신기능과 동일한 Alert 로그 집계
     expect(a.alert!.ruleHits).toEqual([
-      { sid: '5', signature: 'block outbound telnet', action: 'blocked', hits: 7 },
-      { sid: '9', signature: 'http watch', action: 'allowed', hits: 3 },
+      { sid: '5', signature: 'block outbound telnet', actions: ['blocked'], hits: 7 },
+      { sid: '9', signature: 'http watch', actions: ['allowed'], hits: 3 },
     ]);
     expect(a.alert!.topSources[0]).toEqual({ name: '10.11.1.111', value: 8 });
     expect(a.alert!.topDests[0]).toEqual({ name: '10.12.2.34:23', value: 7 });
@@ -740,6 +740,27 @@ describe('anfwLogsAnalysis', () => {
     // >=였다면 여기서 잘못 true가 됐을 것.
     expect(a.alert!.ruleHits).toHaveLength(100);
     expect(a.alert!.ruleHitsTruncated).toBe(false);
+  });
+
+  it('같은 sid가 기간 내에 여러 (signature, action) 튜플로 나뉘어도 sid 단위로 먼저 합산 — 컷오프가 한 sid의 값을 부분합으로 쪼개지 않음 (리뷰 MAJOR, PR #225 라운드9)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) {
+        // 같은 sid=1이 라운드10에서 action이 alert→blocked로 바뀌어 두 개의 튜플로 집계됨.
+        // 튜플 단위로 자르는 이전 로직이었다면 이 중 하나가 top-N 밖으로 밀릴 수 있었다.
+        return [
+          { sid: '1', sig: 'old sig', act: 'allowed', cnt: 5 },
+          { sid: '1', sig: 'new sig', act: 'blocked', cnt: 7 },
+        ];
+      }
+      return [{ cnt: 12 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // sid=1은 정확히 한 행으로 합산되어야 하고(12 = 5+7), 두 액션이 모두 보존돼야 한다.
+    expect(a.alert!.ruleHits).toEqual([
+      { sid: '1', signature: 'old sig', actions: ['allowed', 'blocked'], hits: 12 },
+    ]);
   });
 
   it('한 리전이 자기 상한(150)에 도달하면 ruleHitsPartial=true — present인 sid도 그 리전 몫이 잘려 과소집계됐을 수 있음 (리뷰 MAJOR, PR #225 라운드8)', async () => {

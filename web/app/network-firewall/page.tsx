@@ -358,7 +358,11 @@ export default function NetworkFirewallPage() {
   // 실패/청크 truncation됐거나(ruleHits=null) top-100으로 잘린 경우(hits 0 ≠ 매칭 없음).
   interface RuleHitRow {
     key: string; sid: string; msg: string; actions: string[]; hits: number;
-    ruleGroups: string[]; configured: boolean; isPass: boolean;
+    ruleGroups: string[]; configured: boolean;
+    /** pass 룰 또는 noalert 룰 — 둘 다 Alert 로그를 남기지 않으므로 매칭 0을 idle로 볼 수 없다.
+     *  리뷰 MAJOR(PLAUSIBLE, PR #225 라운드9): noalert는 action이 alert/drop이어도 로그가
+     *  안 남으므로 pass와 동일하게 취급해야 한다. */
+    isPass: boolean;
     /** 이 룰 그룹을 서빙하는 방화벽들의 ALERT 관측 가능성(3상태) — 'observed'만 0을 신뢰.
      *  양수 히트는 이 값과 무관하게 항상 표시(실제 로그 매칭은 토폴로지 추정보다 강한
      *  증거) — attributionUnsafe/sharedSid만 양수 여부와 무관하게 숫자를 숨긴다. */
@@ -390,11 +394,14 @@ export default function NetworkFirewallPage() {
     const ruleHitsFailed = ruleHits == null;
     const hits = ruleHits ?? [];
     const truncated = logsData?.alert?.ruleHitsTruncated ?? false;
+    // 리뷰 MAJOR(확정, PR #225 라운드9): 백엔드가 이제 sid 단위로 이미 합산해서 넘겨주므로
+    // (컷오프 적용 전에 sid로 먼저 합산 — 튜플 단위 컷오프의 부분합 문제 해소), 여기서는
+    // sid당 행이 하나뿐이다. 그래도 병합 로직은 그대로 둬 방어적으로 안전하게 유지한다.
     const hitsBySid = new Map<string, { hits: number; actions: Set<string>; sig: string }>();
     for (const h of hits) {
       const cur = hitsBySid.get(h.sid) ?? { hits: 0, actions: new Set<string>(), sig: h.signature };
       cur.hits += h.hits;
-      if (h.action) cur.actions.add(h.action);
+      for (const act of h.actions) cur.actions.add(act);
       hitsBySid.set(h.sid, cur);
     }
     const sidGroupCount = new Map<string, number>();
@@ -415,10 +422,12 @@ export default function NetworkFirewallPage() {
           actions: [...new Set([s.action, ...(h?.actions ?? [])].filter((x): x is string => !!x))],
           hits: h?.hits ?? 0,
           ruleGroups: [rg.name], configured: true,
-          isPass: s.action === 'pass',
+          isPass: s.action === 'pass' || s.noalert,
           observability, attributionUnsafe, sharedSid, unknown,
           unknownReason: ruleHitsFailed ? 'failed' : (truncated && !h) ? 'truncated' : null,
-          hitsAttributable: s.action !== 'pass' && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved',
+          // noalert 룰도 pass처럼 로그가 원천적으로 안 남으므로, 표시되는 양수 히트가 있다면
+          // 그 자체가 오귀속 증거다(unobserved와 동일한 논리) — hitsAttributable에서 제외.
+          hitsAttributable: s.action !== 'pass' && !s.noalert && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved',
         });
       }
     }
@@ -983,7 +992,7 @@ export default function NetworkFirewallPage() {
                                           'observed')과 리전 토폴로지가 완전하다는 확신이 모두 있을 때만
                                           확정 idle로 표시한다 — 그 외엔 "?"로 불명 처리. */}
                                       {r.isPass
-                                        ? <span className="text-ink-300" title={tt('pass 룰 — Alert 로그 미발생')}>n/a</span>
+                                        ? <span className="text-ink-300" title={tt('pass 또는 noalert 룰 — Alert 로그 미발생')}>n/a</span>
                                         : r.sharedSid
                                           ? <span className="text-ink-300" title={tt('여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다')}>n/a</span>
                                           : r.unknown

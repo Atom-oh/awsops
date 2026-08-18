@@ -202,8 +202,8 @@ describe('anfwAnalysis', () => {
     expect(rg.capacityPct).toBe(3);
     // 룰 히트 카운트 조인용 SID 파싱 — sid 없는 룰/주석은 제외, sid·msg·action만 추출
     expect(rg.statefulSids).toEqual([
-      { sid: '1000001', msg: 'block outbound telnet', action: 'drop' },
-      { sid: '1000002', msg: 'http watch', action: 'alert' },
+      { sid: '1000001', msg: 'block outbound telnet', action: 'drop', noalert: false },
+      { sid: '1000002', msg: 'http watch', action: 'alert', noalert: false },
     ]);
     const rgStateless = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateless-allow-all')!;
     expect(rgStateless.statefulSids).toEqual([]); // STATELESS는 대상 아님
@@ -214,10 +214,29 @@ describe('anfwAnalysis', () => {
   it('parseStatefulSids: content/pcre 내부의 "sid:" 문자열에 속지 않음', async () => {
     const { parseStatefulSids } = await import('./anfw');
     expect(parseStatefulSids({ RulesSource: { RulesString: 'alert http any any -> any any (content:"sid: 999"; msg:"x"; sid:1234;)' } }))
-      .toEqual([{ sid: '1234', msg: 'x', action: 'alert' }]);
+      .toEqual([{ sid: '1234', msg: 'x', action: 'alert', noalert: false }]);
     expect(parseStatefulSids({ RulesSource: { RulesString: 'drop tcp any any -> any any (pcre:"/sid:55/"; sid:2000;)' } }))
-      .toEqual([{ sid: '2000', msg: null, action: 'drop' }]);
+      .toEqual([{ sid: '2000', msg: null, action: 'drop', noalert: false }]);
     expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"\\"; sid: 12;\\""; sid:4000;)' } })[0].sid).toBe('4000');
+  });
+
+  it('parseStatefulSids: noalert 룰은 action이 alert/drop이어도 Alert 로그를 안 남기므로 별도 플래그로 표시 (리뷰 MAJOR PLAUSIBLE, PR #225 라운드9)', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (msg:"silent"; flowbits:set,seen; noalert; sid:5000;)' } }))
+      .toEqual([{ sid: '5000', msg: 'silent', action: 'alert', noalert: true }]);
+    // 구조화된 StatefulRules 형태도 동일하게 처리
+    expect(parseStatefulSids({
+      RulesSource: {
+        StatefulRules: [{
+          Action: 'DROP',
+          RuleOptions: [
+            { Keyword: 'sid', Settings: ['5001'] },
+            { Keyword: 'msg', Settings: ['"silent2"'] },
+            { Keyword: 'noalert' },
+          ],
+        }],
+      },
+    })).toEqual([{ sid: '5001', msg: 'silent2', action: 'drop', noalert: true }]);
   });
 
   it('TLS 수신 패킷도 recv/bytes와 동일하게 Engine=Stateless만 채택 — Stateful 재발행 이중 집계 방지 (리뷰 MAJOR 라운드8, 라운드10 되돌림)', async () => {

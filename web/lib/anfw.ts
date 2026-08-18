@@ -327,7 +327,10 @@ interface RawRgResp {
 
 /** Suricata 룰 텍스트/StatefulRules에서 SID·msg·action만 추출 (2026-08 룰 히트 카운트 조인용).
  *  도메인 리스트(RulesSourceList)는 내부 생성 룰이라 사용자 SID가 없음 — 대상 아님. */
-export interface StatefulSid { sid: string; msg: string | null; action: string | null }
+// 리뷰 MAJOR(PLAUSIBLE, PR #225 라운드9): noalert 룰(예: alert ... noalert; ...)은 액션이
+// alert/drop이어도 Suricata가 Alert 로그를 내지 않는다 — pass 룰과 동일하게 매칭 0을
+// 확정 idle로 잡으면 안 된다.
+export interface StatefulSid { sid: string; msg: string | null; action: string | null; noalert: boolean }
 export function parseStatefulSids(rs?: RawRgResp['RuleGroup']): StatefulSid[] {
   const out = new Map<string, StatefulSid>();
   const src = rs?.RulesSource;
@@ -343,13 +346,15 @@ export function parseStatefulSids(rs?: RawRgResp['RuleGroup']): StatefulSid[] {
       sid,
       msg: /\bmsg\s*:\s*"([^"]*)"/.exec(t)?.[1] ?? null,
       action: /^(pass|drop|reject|alert)\b/i.exec(t)?.[1]?.toLowerCase() ?? null,
+      noalert: /\bnoalert\s*;/.test(scan),
     });
   }
   for (const r of src?.StatefulRules ?? []) {
     const sid = r.RuleOptions?.find((o) => o.Keyword === 'sid')?.Settings?.[0];
     if (!sid || out.has(sid)) continue;
     const msg = r.RuleOptions?.find((o) => o.Keyword === 'msg')?.Settings?.[0]?.replace(/^"|"$/g, '') ?? null;
-    out.set(sid, { sid, msg, action: r.Action?.toLowerCase() ?? null });
+    const noalert = r.RuleOptions?.some((o) => o.Keyword === 'noalert') ?? false;
+    out.set(sid, { sid, msg, action: r.Action?.toLowerCase() ?? null, noalert });
   }
   return [...out.values()];
 }
