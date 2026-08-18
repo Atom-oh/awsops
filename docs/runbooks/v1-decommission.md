@@ -305,11 +305,108 @@ terraform -chdir=terraform/v2/foundation plan   # DomainARecord 관련 변경 �
 aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].{Name:FunctionName,Runtime:Runtime,Modified:LastModified}"
 # ↑ 이 출력을 육안 검토: v1 조사 시점(2026-07-08) 기준 py3.12 runtime의 *-mcp 슬라이스 18개 + steampipe-query 여야 한다.
 #   목록이 다르면(다른 py 버전/최근 수정/모르는 이름) 그 함수는 제외하고 개별 확인한다.
-CONFIRMED_ORPHAN_LAMBDAS=(<검토 완료 후 (a)~(b)에서 확정된 함수명만 여기 나열>)
+# (a)~(b) 검토가 끝나기 전까지 빈 배열 — 그대로 실행해도 아무것도 지우지 않는다(안전한 기본값).
+# 검토 완료 후에만 실제 함수명으로 채운다. 예: CONFIRMED_ORPHAN_LAMBDAS=("awsops-foo-mcp" "awsops-bar-mcp")
+CONFIRMED_ORPHAN_LAMBDAS=()
 for fn in "${CONFIRMED_ORPHAN_LAMBDAS[@]}"; do aws lambda delete-function --function-name "$fn"; done
 
 aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bucket "${V1_DEPLOY_BUCKET}"
 ```
+
+### 4.5 4.4 밖의 v1 잔존물 (라이브 인벤토리로 확인, 2026-08-11) / v1 residue outside 4.4's Lambda grep
+
+4.4는 Lambda만 훑는다. read-only 조회로 대조한 결과, v1 잔존물이 아래 카테고리에도 더 있다 — Phase 4 실행 시 같이 정리 대상에 넣는다(각 항목도 4.4처럼 (a) dry-run 목록 → (b) 조사 시점 목록 대조 → (c) 삭제 순서를 따른다):
+
+- **AgentCore**: v1 게이트웨이 8개(`awsops-{network,container,data,security,cost,monitoring,iac,ops}-gateway`, `awsops-v2-*`와 별개) — 대부분 타깃 0개, `awsops-cost-gateway`만 `finops-mcp-target` 1개 보유. v1 Memory(`awsops_memory-*`)·Code Interpreter(`awsops_code_interpreter`)도 별도 리소스로 남아있다.
+  ```bash
+  # (a) dry-run 목록 — gatewayId/codeInterpreterId는 name이 아니라 이 ID로 지워야 한다(name으로 delete-* 호출 불가)
+  aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-')].{id:gatewayId,name:name,status:status}"
+  aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory')].{id:id,status:status}"
+  aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter'].{id:codeInterpreterId,name:name,status:status}"
+  # (b) 위 목록을 (조사 시점 8게이트웨이 + 1 memory + 1 interpreter) 과 대조 — 다르면 개별 확인 후 제외
+  #     검토가 끝나기 전까지는 아래 값이 전부 비어 있어 그대로 실행해도 아무것도 지우지 않는다
+  #     (안전한 기본값 — 복붙 실행 시 프로세스 치환 `<(...)`과 겹치는 자리표시자 문법은 쓰지 않는다,
+  #     삭제 절차라 문법 사고를 특히 피해야 함). 검토 완료 후에만 실제 ID로 채운다.
+  # 예: CONFIRMED_ORPHAN_GATEWAY_IDS=("abc12345" "def67890")
+  CONFIRMED_ORPHAN_GATEWAY_IDS=()
+  # 예: CONFIRMED_ORPHAN_MEMORY_ID="awsops_memory-abc12345"
+  CONFIRMED_ORPHAN_MEMORY_ID=""
+  # 예: CONFIRMED_ORPHAN_CODE_INTERPRETER_ID="awsops_code_interpreter-abc12345"
+  CONFIRMED_ORPHAN_CODE_INTERPRETER_ID=""
+  # 위 3개는 각자 채워진 만큼만 독립적으로 삭제되도록, 가드를 각 삭제 호출 바로 앞에 둔다
+  # (게이트웨이만 확정되고 memory/interpreter는 아직 확인 전인 부분 정리를 막지 않기 위함 —
+  # 가드를 여기 앞부분에 한꺼번에 두면 게이트웨이 배열이 채워져 있어도 memory/interpreter가
+  # 비어 있다는 이유만으로 게이트웨이 삭제까지 통째로 막힌다).
+  # (c) 게이트웨이는 타깃부터 지우고, 그 삭제가 실제 반영될 때까지 기다린 다음에만 게이트웨이를 지운다 —
+  #     타깃이 아직 DELETING인 채로 delete-gateway를 부르면 생성 때의 "GW READY 전 target 생성 실패"와
+  #     대칭인 이유로 실패한다(비동기 삭제, 즉시 완료 보장 없음).
+  for gw in "${CONFIRMED_ORPHAN_GATEWAY_IDS[@]}"; do
+    for tgt in $(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query '(items || [])[].targetId' --output text); do
+      aws bedrock-agentcore-control delete-gateway-target --gateway-identifier "$gw" --target-id "$tgt"
+    done
+    # 타깃 목록이 빈 배열이 될 때까지 대기(폴링) — 완료 전 delete-gateway 호출 시 실패.
+    # --query 'items'만 쓰면 응답에 items 키가 없을 때 CLI가 "None"(비어있지 않은 문자열)을
+    # 찍어 무한 루프가 될 수 있다 — length(items || [])로 항상 숫자를 받고, 최대 대기
+    # 횟수도 둬서 API 응답 구조가 예상과 다를 때 무한정 멈추지 않게 한다.
+    attempts=0
+    drained=false
+    while [ "$attempts" -lt 60 ]; do
+      if [ "$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text)" = "0" ]; then
+        drained=true
+        break
+      fi
+      attempts=$((attempts + 1))
+      sleep 5
+    done
+    if [ "$drained" != true ]; then
+      # 타깃이 5분 넘게 안 비워짐 — delete-gateway를 불러도 (c) 위 주석대로 실패할 게 뻔하다.
+      # 여기서 그대로 진행하지 않고 이 게이트웨이만 건너뛴다 — 콘솔/CLI로 직접 확인 후 재실행.
+      echo "타깃 삭제가 5분 넘게 안 끝남 — 이 게이트웨이는 건너뜀, 콘솔/CLI로 직접 확인 필요: $gw" >&2
+      continue
+    fi
+    aws bedrock-agentcore-control delete-gateway --gateway-identifier "$gw"
+  done
+  # 리뷰 MAJOR(확정): `: "${VAR:?msg}"`는 비어 있으면 그 자리에서 셀 전체를 즉시 종료한다 —
+  # 삭제 호출 바로 앞으로 옮겨도 "이 자원 하나만 건너뛰기"가 아니라 "스크립트 전체 중단"이라,
+  # memory가 비어 있으면(검토 결과 지울 게 없음) interpreter 삭제까지 도달하지 못한다. 각
+  # 자원이 독립적으로 건너뛸 수 있도록 hard-fail을 조건부 실행으로 바꾼다 — 비어 있으면
+  # "지울 게 없다고 확인됨"으로 보고 그냥 건너뛴다(자리표시자를 깜빡하고 안 채운 경우와
+  # 구분이 안 되는 대가는 있지만, (b) 검토를 이미 마친 뒤에만 이 블록을 실행한다는 전제이므로
+  # 받아들일 수 있는 트레이드오프다).
+  if [ -n "$CONFIRMED_ORPHAN_MEMORY_ID" ]; then
+    aws bedrock-agentcore-control delete-memory --memory-id "$CONFIRMED_ORPHAN_MEMORY_ID"
+  else
+    echo "CONFIRMED_ORPHAN_MEMORY_ID 비어 있음 — memory 삭제 건너뜀" >&2
+  fi
+  if [ -n "$CONFIRMED_ORPHAN_CODE_INTERPRETER_ID" ]; then
+    aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id "$CONFIRMED_ORPHAN_CODE_INTERPRETER_ID"
+  else
+    echo "CONFIRMED_ORPHAN_CODE_INTERPRETER_ID 비어 있음 — code interpreter 삭제 건너뜀" >&2
+  fi
+  ```
+- **공개 ALB `awsops-alb`(internet-facing) — 과금 중, 타깃 = 정지된 v1 EC2.** `AwsopsStack` CFN 삭제(4.3) 범위에 포함되는지 스택 리소스 목록으로 반드시 확인한다(CFN이 만들지 않은 별도 리소스라면 4.3이 지우지 않으므로 수동 정리 대상):
+  ```bash
+  aws elbv2 describe-load-balancers --names awsops-alb --query 'LoadBalancers[0].LoadBalancerArn'
+  aws cloudformation describe-stack-resources --stack-name AwsopsStack \
+    --query "StackResources[?ResourceType=='AWS::ElasticLoadBalancingV2::LoadBalancer']"
+  # 스택 밖(CFN 관리 아님)으로 확인된 경우에만: 타깃그룹 ARN을 먼저 확보 → 리스너 삭제 →
+  # ALB 삭제 → 마지막에 확보해둔 타깃그룹 삭제. describe-target-groups는 --load-balancer-arn으로
+  # 조회하므로 ALB가 먼저 지워지면 LoadBalancerNotFound로 실패해 타깃그룹을 못 찾는다(리뷰 MAJOR
+  # — 원래 순서는 delete-load-balancer 다음에 describe-target-groups를 두어 이 문제가 있었다).
+  #   aws elbv2 describe-target-groups --load-balancer-arn <alb-arn> --query 'TargetGroups[].TargetGroupArn'   # ALB 삭제 전에 먼저 확보
+  #   aws elbv2 describe-listeners --load-balancer-arn <alb-arn> --query 'Listeners[].ListenerArn'
+  #   aws elbv2 delete-listener --listener-arn <listener-arn>   # 각 리스너
+  #   aws elbv2 delete-load-balancer --load-balancer-arn <alb-arn>
+  #   aws elbv2 delete-target-group --target-group-arn <tg-arn>   # 위에서 확보한 각 타깃그룹, ALB 삭제 후
+  ```
+- **v1 alert 경로 SQS**(`awsops-alert-queue` + `awsops-alert-dlq`) — §1.3에서 외부 발신자 확인이 끝났다면 4.3(CFN 스택 삭제)에 포함되어 있을 가능성이 높다; 스택 밖이라면 개별 삭제:
+  ```bash
+  aws cloudformation describe-stack-resources --stack-name AwsopsStack \
+    --query "StackResources[?ResourceType=='AWS::SQS::Queue']"
+  # 스택 밖으로 확인된 경우에만, 메인 큐 먼저(DLQ의 redrive 참조가 남아있으면 DLQ 삭제가 막히지 않지만 순서를 지켜 혼선을 줄인다):
+  #   aws sqs delete-queue --queue-url https://sqs.<region>.amazonaws.com/<account>/awsops-alert-queue
+  #   aws sqs delete-queue --queue-url https://sqs.<region>.amazonaws.com/<account>/awsops-alert-dlq
+  ```
 
 **절대 삭제하지 않는 것**: v2 apply 이후에도 다른 서비스가 쓰는 공유 VPC/NLB, 공유 hosted zone, `CDKToolkit`, spoke 계정의 cross-account 조회 롤(v2가 계속 사용), 외부 docs 사이트 DNS 레코드, `awsops-v2-*` 전체.
 
@@ -319,6 +416,14 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
 aws cloudformation list-stacks --query "StackSummaries[?contains(StackName,'Awsops')]"  # 빈 결과 기대
 aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].FunctionName"  # 빈 결과 기대
 # v2 챗 cross-account 조회 정상 확인 (spoke 롤 생존 확인)
+
+# 4.5 잔존물 — 전부 빈 결과 기대
+aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-')]"
+aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory')]"
+aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter']"
+aws elbv2 describe-load-balancers --names awsops-alb   # 404/LoadBalancerNotFound 기대
+aws sqs get-queue-url --queue-name awsops-alert-queue  # QueueDoesNotExist 기대
+aws sqs get-queue-url --queue-name awsops-alert-dlq    # QueueDoesNotExist 기대
 ```
 
 ---

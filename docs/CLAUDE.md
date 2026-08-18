@@ -21,7 +21,11 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 | TEST-COVERAGE-PLAN.md | 테스트 커버리지 계획 |
 
 ## 문서 규칙 / Conventions
-- 모든 신규 문서는 **한국어/영어 병기**
+- 모든 신규 문서는 **한국어/영어 병기** — 예외: (a) Claude Code가 세션마다 자동으로 로드하는 컨텍스트
+  파일(루트 `CLAUDE.md`, `AGENTS.md`, `web/**/CLAUDE.md` 등 CLAUDE.md류)과 (b) `docs/superpowers/specs/`의
+  구현용 설계 스펙(주 독자가 AI 에이전트/구현자인 기술 문서)은 **영어 단일**로 작성한다 — 컨텍스트
+  크기 절감이 목적. `docs/runbooks/`·`docs/decisions/`(BASELINE 본문)·기타 사용자/운영자 대상 문서는
+  병기 규칙 그대로 유지.
 - 결정 현행 진실 = `docs/decisions/BASELINE.md`. 새 ADR = 통합 ADR 최고번호 + 1 (현재 **018**), 같은 PR에서 BASELINE 갱신
 - ADR 파일명: `NNN-kebab-case-title.md`
 - **현행 진실(decisions/BASELINE + superpowers/reference)과 옛 계획/이력을 섞지 않는다.** `superpowers/plans|specs`·`superpowers/archive`엔 reversed/frozen-era·승계된 문서가 섞여 있으니 live guidance로 단정 말 것 — 변경·자율 관련은 ADR-005 FROZEN이 최종.
