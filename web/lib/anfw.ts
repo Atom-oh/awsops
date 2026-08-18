@@ -339,16 +339,28 @@ export function parseStatefulSids(rs?: RawRgResp['RuleGroup']): StatefulSid[] {
     if (!t || t.startsWith('#')) continue;
     // content/pcre 등 따옴표 문자열 내부의 "sid:" 오탐 방지 — sid 추출 전에 문자열 리터럴 제거
     // (Suricata는 문자열 내 따옴표를 \"로 강제 이스케이프 — escape-aware 패턴 필수)
-    const scan = t.replace(/"(?:\\.|[^"\\])*"/g, '""');
+    const LITERAL = /"((?:\\.|[^"\\])*)"/g;
+    const scan = t.replace(LITERAL, '""');
     const sid = /\bsid\s*:\s*(\d+)\s*;/.exec(scan)?.[1];
     if (!sid) continue;
+    // 리뷰 MAJOR(확정, PR #225 라운드10·11 반복 지적): `[^"]*`는 이스케이프된 따옴표에서
+    // 잘렸다. 그래서 escape-aware 패턴으로 바꿨지만, sid와 달리 원문 `t`에서 그냥 처음
+    // 매칭되는 "msg:...""를 찾는 방식이라, 다른 옵션의 문자열 리터럴을 "닫는" 따옴표가
+    // 우연히 "msg:" 바로 뒤에 오면(예: `content:"foo msg:"; msg:"real";` — content 값
+    // 끝의 "가 가짜 msg 옵션의 시작 따옴표로 오인됨) 그 리터럴의 닫는 따옴표부터 실제 msg
+    // 리터럴의 여는 따옴표까지를 통째로 캡처해버린다 — 여전히 리터럴을 넘어간다. sid처럼
+    // "msg:" 뒤에 문자열이 오는지는 blank된 scan에서 판정하고(scan은 모든 리터럴을 ""로
+    // 지워버려 리터럴 *안*에 있던 가짜 "msg:" 텍스트도 함께 사라지므로 진짜 옵션 키워드
+    // 위치만 남는다), 그 위치가 원문 리터럴 등장 순서상 몇 번째인지 세어 원문에서 이스케
+    // 이프 그대로 보존된 실제 값을 되찾는다.
+    const literalsInOrder = [...t.matchAll(LITERAL)].map((m) => m[1]);
+    const msgKeyword = /\bmsg\s*:\s*"/.exec(scan);
+    const msg = msgKeyword
+      ? literalsInOrder[(scan.slice(0, msgKeyword.index + msgKeyword[0].length - 1).match(/""/g) ?? []).length] ?? null
+      : null;
     out.set(sid, {
       sid,
-      // 리뷰 MINOR(확정, PR #225 라운드5/9/10 반복 지적): `[^"]*`는 이스케이프된 따옴표에서
-      // 잘리고(`msg:"a \"b\" c"` → "a "), sid와 달리 payload-stripped scan을 안 써서 다른
-      // 문자열 리터럴 사이의 텍스트를 msg로 오추출할 수 있었다. sid/noalert와 동일한
-      // escape-aware 패턴으로 완전한 따옴표 문자열 하나만 매칭한다.
-      msg: /\bmsg\s*:\s*"((?:\\.|[^"\\])*)"/.exec(t)?.[1] ?? null,
+      msg,
       action: /^(pass|drop|reject|alert)\b/i.exec(t)?.[1]?.toLowerCase() ?? null,
       noalert: /\bnoalert\s*;/.test(scan),
     });

@@ -266,15 +266,22 @@ describe('anfwAnalysis', () => {
     })).toEqual([{ sid: '5003', msg: null, action: 'alert', noalert: false }]);
   });
 
-  it('parseStatefulSids: msg 추출이 이스케이프된 따옴표에서 잘리지 않고, 다른 문자열 리터럴 사이 텍스트를 오추출하지 않음 (리뷰 MINOR 반복 지적, PR #225 라운드10)', async () => {
+  it('parseStatefulSids: msg 추출이 이스케이프된 따옴표에서 잘리지 않고, 다른 문자열 리터럴을 넘어가며 오추출하지 않음 (리뷰 MAJOR 확정, PR #225 라운드10·11)', async () => {
     const { parseStatefulSids } = await import('./anfw');
     // 이스케이프된 내부 따옴표 — 이전엔 첫 \" 에서 잘려 'a '만 남았다.
     expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (msg:"a \\"b\\" c"; sid:6000;)' } })[0].msg)
       .toBe('a \\"b\\" c');
-    // content 옵션 안에 가짜 msg: 텍스트를 심어도, 실제 msg 리터럴만 추출돼야 한다
-    // (payload-stripped scan 없이 raw t에서 그냥 잘라내던 이전 로직은 리터럴 사이 텍스트를 오추출할 위험이 있었음).
+    // content 리터럴 "안"에 백슬래시로 이스케이프된 가짜 msg: 텍스트를 심어도, 실제 msg
+    // 리터럴만 추출돼야 한다.
     expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"msg:\\"decoy\\""; msg:"real"; sid:6001;)' } })[0].msg)
       .toBe('real');
+    // 리뷰 MAJOR(확정, 라운드11 — 라운드10 자체 수정의 결함): content 리터럴이 "msg:"로
+    // *끝나면*, 그 리터럴을 닫는 따옴표가 가짜 msg 옵션의 여는 따옴표로 오인되어 그
+    // 지점부터 진짜 msg 리터럴의 여는 따옴표까지("; msg:")를 통째로 캡처해버렸다 —
+    // 여전히 리터럴 경계를 넘어간 것. 순서 기반 대응(literalsInOrder)으로 고쳐 'real2'만
+    // 나와야 한다.
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"foo msg:"; msg:"real2"; sid:6002;)' } })[0].msg)
+      .toBe('real2');
   });
 
   it('TLS 수신 패킷도 recv/bytes와 동일하게 Engine=Stateless만 채택 — Stateful 재발행 이중 집계 방지 (리뷰 MAJOR 라운드8, 라운드10 되돌림)', async () => {
