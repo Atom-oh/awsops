@@ -1005,7 +1005,7 @@ export default function NetworkFirewallPage() {
                             {tt('Alert 로그 집계 기반 — pass 룰은 Alert 로그를 남기지 않아 집계할 수 없습니다 (매칭 없음으로 세지 않음)')}
                           </div>
                           {ruleHitRows.length > 50 && (
-                            <div className="px-4 pb-1 text-[12px] text-ink-500">{tt('히트 상위 50행 + 매칭 없는 설정 룰만 표시 (나머지 생략)')}</div>
+                            <div className="px-4 pb-1 text-[12px] text-ink-500">{tt('히트 상위 50행 + 실제 매칭 있는 행 + 매칭 없는 설정 룰만 표시 (나머지 생략)')}</div>
                           )}
                           <div className="overflow-x-auto px-4 pb-3">
                             <table className="w-full">
@@ -1018,7 +1018,14 @@ export default function NetworkFirewallPage() {
                               </tr></thead>
                               <tbody>
                                 {ruleHitRows
-                                  .filter((r, i) => i < 50 || (zeroTrustworthy(r) && r.hits === 0))
+                                  // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드17): 정렬은 hitsAttributable
+                                  // 기준(불확실한 귀속은 0으로 취급)이라, ruleGroupModifiedInRange 등으로
+                                  // 귀속이 불확실해진 "실제 양수 히트가 있는" 행이 정렬상 0으로 밀려
+                                  // top-50 밖으로 나가면 — hits===0이 아니므로 idle 예외 조건도 못 만족해
+                                  // 화면에서 통째로 사라진다(실제 로그 증거의 무음 누락). 실제 히트가 있는
+                                  // 행은 top-50 여부와 무관하게 항상 표시한다("?"/n/a로 표기되더라도 행
+                                  // 자체는 보여야 함 — 귀속 불확실 ≠ 증거 없음).
+                                  .filter((r, i) => i < 50 || r.hits > 0 || (zeroTrustworthy(r) && r.hits === 0))
                                   .map((r) => (
                                   <tr key={r.key} className={`border-b border-ink-50 last:border-0 ${zeroTrustworthy(r) && r.hits === 0 ? 'opacity-60' : ''}`}>
                                     <td className={MONO}>{r.sid}{r.sharedSid && <span className="ml-1 text-ink-400" title={tt('여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음')}>*</span>}</td>
