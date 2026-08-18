@@ -123,6 +123,12 @@ export interface AnfwAlertAnalytics {
   /** true면 히트 집계가 top-100으로 잘렸음(hits=0인 SID가 실제로는 잘린 구간에 있을 수 있음) —
    *  소비자는 ruleHits에 없는 설정 SID를 "매칭 0"이 아니라 "불명"으로 표시해야 한다. */
   ruleHitsTruncated: boolean;
+  /** true면 하나 이상의 리전이 자기 몫 조회에서 리전별 상한(RULE_HITS_PER_REGION_LIMIT)에
+   *  정확히 도달함 — 그 리전에 실제로 더 있었을 수 있다는 뜻이라, ruleHits에 present인
+   *  sid라도 hits가 그 리전의 몫만큼 과소집계됐을 수 있다(리뷰 MAJOR, 라운드8 — 병합
+   *  후 존재 여부만 보는 ruleHitsTruncated와 달리, 존재하는 sid의 "정확한 값" 신뢰도를
+   *  가리키는 별도 신호). 소비자는 양수 히트를 "≥N"(하한)으로 표시해야 한다. */
+  ruleHitsPartial: boolean;
   topSources: { name: string; value: number }[];
   topDests: { name: string; value: number }[];
 }
@@ -392,6 +398,25 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       if (anyFail) failed.push(key);
       return rows;
     };
+    // 리뷰 MAJOR(확정, PR #225 라운드8): runMerged는 리전별 결과를 그냥 이어붙이기만 해서,
+    // 어느 리전이 자기 limit(perRegionLimit)에 정확히 도달했는지(= 그 리전에 더 있었을
+    // 수 있다는 뜻) 신호가 사라진다 — 병합된 sid가 present로 보여도 실제로는 그 리전의
+    // 몫이 잘려나가 총합이 실제보다 낮은데 "정확한 수치"처럼 표시된다. 리전별 결과
+    // 개수를 limit과 비교해 "어느 한 리전이라도 캡에 도달했는가"를 별도로 반환한다.
+    const runMergedWithCap = async (ts: AnfwLogTarget[], key: string, query: string, perRegionLimit: number): Promise<{ rows: Row[]; anyRegionAtCap: boolean }> => {
+      const rows: Row[] = [];
+      let anyFail = false;
+      let anyRegionAtCap = false;
+      await Promise.all(groupByRegion(ts).map(async ([region, groups]) => {
+        try {
+          const regionRows = await runInsights(region, groups, query, rangeSec, deadlineAt);
+          if (regionRows.length >= perRegionLimit) anyRegionAtCap = true;
+          rows.push(...regionRows);
+        } catch { anyFail = true; }
+      }));
+      if (anyFail) failed.push(key);
+      return { rows, anyRegionAtCap };
+    };
 
     // 리뷰 MAJOR(확정, 라운드6): 같은 리전의 그룹은 logGroupNames로 묶었지만, 리전이
     // 여럿이면 여전히 리전별로 `limit 10`까지 잘린 뒤 병합한다 — 모든 리전에서 11위인
@@ -409,7 +434,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     if (anyRegionChunked(alertTargets)) failed.push('alertTopNPartial');
     let alert: AnfwAlertAnalytics | null = null;
     if (alertTargets.length > 0) {
-      const [totals, byAction, topSig, ruleHitRows, topSrc, topDst] = await Promise.all([
+      const [totals, byAction, topSig, ruleHitsResult, topSrc, topDst] = await Promise.all([
         runMerged(alertTargets, 'alertTotals', `filter event.event_type = 'alert' | stats count(*) as cnt`),
         runMerged(alertTargets, 'alertByAction', `fields event.alert.action as action | filter event.event_type = 'alert' | stats count(*) as cnt by action | sort cnt desc`),
         runMerged(alertTargets, 'alertTopSignatures', `fields event.alert.signature_id as sid, event.alert.signature as sig | filter event.event_type = 'alert' | stats count(*) as cnt by sid, sig | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
@@ -420,11 +445,13 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         // 행을 배제하기 위해 유지). (2) 리전별 limit이 최종 join 컷오프(RULE_HITS_JOIN_CUTOFF,
         // 아래 hitMap.size 판정과 동일 값)와 같아 여유가 전혀 없었다 — 리전별 상한을 join
         // 컷오프보다 크게 잡아, 여러 리전이 각자 상한 근처인 SID를 합산해도 실제로는 더
-        // 높은 순위였던 SID가 통째로 누락되는 경우를 줄인다.
-        runMerged(alertTargets, 'alertRuleHits', `fields event.alert.signature_id as sid, event.alert.signature as sig, event.alert.action as act | filter event.event_type = 'alert' and ispresent(event.alert.signature_id) | stats count(*) as cnt by sid, sig, act | sort cnt desc | limit ${RULE_HITS_PER_REGION_LIMIT}`),
+        // 높은 순위였던 SID가 통째로 누락되는 경우를 줄인다. runMergedWithCap으로 리전별
+        // 캡 도달 여부(ruleHitsPartial)까지 함께 반환한다(리뷰 MAJOR, 라운드8).
+        runMergedWithCap(alertTargets, 'alertRuleHits', `fields event.alert.signature_id as sid, event.alert.signature as sig, event.alert.action as act | filter event.event_type = 'alert' and ispresent(event.alert.signature_id) | stats count(*) as cnt by sid, sig, act | sort cnt desc | limit ${RULE_HITS_PER_REGION_LIMIT}`, RULE_HITS_PER_REGION_LIMIT),
         runMerged(alertTargets, 'alertTopSources', `fields event.src_ip as src | filter event.event_type = 'alert' | stats count(*) as cnt by src | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
         runMerged(alertTargets, 'alertTopDests', `fields concat(event.dest_ip, ':', event.dest_port) as dst | filter event.event_type = 'alert' | stats count(*) as cnt by dst | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
       ]);
+      const ruleHitRows = ruleHitsResult.rows;
       const merge = (rows: Row[], nameField: string) => {
         const m = new Map<string, number>();
         for (const r of rows) {
@@ -462,7 +489,11 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         ruleHits: (failed.includes('alertRuleHits') || failed.includes('alertTopNPartial') || alertDiscoveryUnknown)
           ? null
           : [...hitMap.values()].sort((a, b) => b.hits - a.hits).slice(0, RULE_HITS_JOIN_CUTOFF),
-        ruleHitsTruncated: hitMap.size >= RULE_HITS_JOIN_CUTOFF,
+        // 리뷰 MINOR(확정, PR #225 라운드8): >=면 정확히 컷오프 개수(예: 100개)인, 실제로는
+        // 아무것도 잘리지 않은 완전한 결과까지 truncated로 오표시해 확정 0을 "?"로 강등시켰다.
+        // slice(0, CUTOFF)가 실제로 무언가를 잘라내는 경우는 size가 CUTOFF보다 클 때뿐이다.
+        ruleHitsTruncated: hitMap.size > RULE_HITS_JOIN_CUTOFF,
+        ruleHitsPartial: ruleHitsResult.anyRegionAtCap,
         topSources: merge(topSrc, 'src'),
         topDests: merge(topDst, 'dst'),
       };

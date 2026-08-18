@@ -64,7 +64,7 @@
 ## anfw (1)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
-| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 인벤토리 VPC 리전 fan-out, 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재, `statefulSids`로 sid/msg/action만 파싱해 노출). `?range=`는 3600/21600/86400/604800 allowlist(그 외는 86400), `maxDuration` 60s, 상위 실패는 502. 부분 실패는 정직 강등: `degradedRegions`(firewalls/policies/ruleGroups 중 하나라도 List/Describe 실패 — 포괄 신호)·`firewallListDegradedRegions`(그 중 firewalls 자체만의 부분 실패로 좁힌 부분집합 — 로깅 구성을 확인 못 한 리전만 필요한 소비처용)·`metricsDegradedRegions`(CloudWatch 미순회/캡/쿼리 실패). `?view=logs` Alert/Flow 로그 Insights 집계(CWL 대상만) — stateful 룰 히트 카운트(`ruleHits`) 포함, `alertRuleHits` 쿼리 실패·discovery unknown 시 `ruleHits=null`(빈 배열이 아님 — totalAlerts와 동일한 unknown≠0 계약), top-100 초과는 `ruleHitsTruncated`, `?view=audit` CloudTrail 변경 감사 | verifyUser |
+| `/api/anfw` | GET | Network Firewall 방화벽/정책/룰그룹 목록+분석 — 인벤토리 VPC 리전 fan-out, 트래픽·드롭 집계, 보호/로깅/전량 통과 기본/룰 용량 (룰 본문은 미탑재, `statefulSids`로 sid/msg/action만 파싱해 노출). `?range=`는 3600/21600/86400/604800 allowlist(그 외는 86400), `maxDuration` 60s, 상위 실패는 502. 부분 실패는 정직 강등: `degradedRegions`(firewalls/policies/ruleGroups 중 하나라도 List/Describe 실패 — 포괄 신호)·`firewallListDegradedRegions`(그 중 firewalls 자체만의 부분 실패로 좁힌 부분집합 — 로깅 구성을 확인 못 한 리전만 필요한 소비처용)·`metricsDegradedRegions`(CloudWatch 미순회/캡/쿼리 실패). `?view=logs` Alert/Flow 로그 Insights 집계(CWL 대상만) — stateful 룰 히트 카운트(`ruleHits`) 포함, `alertRuleHits` 쿼리 실패·`alertTopNPartial`(50개 초과 로그 그룹 청크 분할)·discovery unknown 시 `ruleHits=null`(빈 배열이 아님 — totalAlerts와 동일한 unknown≠0 계약), 최종 join 컷오프(100개) 초과로 일부 sid가 누락됐을 수 있으면 `ruleHitsTruncated`, 리전별 상한(150개) 도달로 present인 sid의 값 자체가 과소집계됐을 수 있으면 `ruleHitsPartial`, `?view=audit` CloudTrail 변경 감사 | verifyUser |
 
 ## dx (1)
 | 경로 | 메서드 | 역할 | 인증 |

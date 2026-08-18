@@ -317,8 +317,19 @@ export default function NetworkFirewallPage() {
   // 단위 unknown은 그 방화벽이 실제로 관측하지 못했다는 뜻일 뿐 — 그런데도 로그에 진짜
   // 매칭이 찍혔다면 그 자체가 우리 토폴로지 추정이 틀렸다는 더 강한 증거이므로 숫자를
   // 숨길 이유가 없다). 그래서 firewall 기반 observability는 순수하게 유지하고,
-  // regionDegraded는 별도 신호로 노출해 0-신뢰 판정에만 결합한다.
-  const regionDegraded = useMemo(() => new Set(data?.degradedRegions ?? []), [data]);
+  // attributionUnsafe는 별도 신호로 노출해 0-신뢰·양수-귀속 판정에 결합한다.
+  // 리뷰 MAJOR(확정, PR #225 라운드8): 히트는 sid로 리전 불문 전역 병합되므로, "이 룰의
+  // 리전만 degraded가 아니면 안전하다"는 전제 자체가 틀렸다 — 다른 리전의 룰그룹 목록이
+  // 불완전해도, 그 리전에 있는(놓친) 룰그룹의 sid가 이 룰의 sidGroupCount 판정에 안 잡힌
+  // 채로 계정 전체 어느 설정 룰에든 잘못 귀속될 수 있다. 같은 이유로 우리가 파싱하지
+  // 못하는(AWS 관리형 등) stateful 룰그룹을 정책이 참조하고 있으면 — 그 그룹은 rgs에
+  // 전혀 나타나지 않으므로 리전 degraded 여부와 무관하게 동일한 위험이 있다. 그래서
+  // 이 판정은 리전별이 아니라 계정(현재 조회 스코프) 전체 단위의 단일 boolean이다.
+  const attributionUnsafe = useMemo(() => {
+    if ((data?.degradedRegions ?? []).length > 0) return true;
+    const rgKeys = new Set(rgs.map((rg) => `${rg.region}|${rg.name}`));
+    return policies.some((p) => p.statefulGroups.some((name) => !rgKeys.has(`${p.region}|${name}`)));
+  }, [data, rgs, policies]);
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();
     for (const rg of rgs) byKey.set(`${rg.region}|${rg.name}`, []);
@@ -350,12 +361,14 @@ export default function NetworkFirewallPage() {
     ruleGroups: string[]; configured: boolean; isPass: boolean;
     /** 이 룰 그룹을 서빙하는 방화벽들의 ALERT 관측 가능성(3상태) — 'observed'만 0을 신뢰.
      *  양수 히트는 이 값과 무관하게 항상 표시(실제 로그 매칭은 토폴로지 추정보다 강한
-     *  증거) — regionDegraded/sharedSid만 양수 여부와 무관하게 숫자를 숨긴다. */
+     *  증거) — attributionUnsafe/sharedSid만 양수 여부와 무관하게 숫자를 숨긴다. */
     observability: Observability;
-    /** 이 룰 그룹의 리전에서 firewalls/policies/ruleGroups List·Describe가 부분 실패했는가.
-     *  true면 서빙 방화벽 목록(0-신뢰)뿐 아니라 룰 그룹 목록 자체(sidGroupCount의 전제)도
-     *  불완전할 수 있어, 0과 양수 모두 이 룰에 확정 귀속할 수 없다. */
-    regionDegraded: boolean;
+    /** 계정(조회 스코프) 전체 단위 신호 — 어느 리전이든 firewalls/policies/ruleGroups
+     *  List·Describe가 부분 실패했거나, 어느 정책이든 파싱 못한(관리형 등) stateful 룰
+     *  그룹을 참조한다. true면 이 룰의 리전과 무관하게 sidGroupCount(rgs 전체 순회 전제)
+     *  자체를 못 믿으므로, 0과 양수 모두 이 룰에 확정 귀속할 수 없다(히트는 sid로 리전
+     *  불문 전역 병합되므로 "이 룰의 리전만 안전하면 된다"는 국지적 판정은 성립하지 않음). */
+    attributionUnsafe: boolean;
     /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. 리뷰 MAJOR(확정):
      *  숫자를 그대로 보여주면 그 그룹의 실제 트래픽처럼 오독된다 — 표시를 숨긴다(CLAUDE.md의
      *  "flagged in UI rather than counted" 서술을 실제로 구현). */
@@ -394,7 +407,6 @@ export default function NetworkFirewallPage() {
         configuredSids.add(s.sid);
         const h = hitsBySid.get(s.sid);
         const observability = ruleGroupObservability.get(`${rg.region}|${rg.name}`) ?? 'unobserved';
-        const isRegionDegraded = regionDegraded.has(rg.region);
         const sharedSid = (sidGroupCount.get(s.sid) ?? 0) > 1;
         const unknown = ruleHitsFailed || (truncated && !h); // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
         rows.push({
@@ -404,9 +416,9 @@ export default function NetworkFirewallPage() {
           hits: h?.hits ?? 0,
           ruleGroups: [rg.name], configured: true,
           isPass: s.action === 'pass',
-          observability, regionDegraded: isRegionDegraded, sharedSid, unknown,
+          observability, attributionUnsafe, sharedSid, unknown,
           unknownReason: ruleHitsFailed ? 'failed' : (truncated && !h) ? 'truncated' : null,
-          hitsAttributable: s.action !== 'pass' && !sharedSid && !unknown && !isRegionDegraded && observability !== 'unobserved',
+          hitsAttributable: s.action !== 'pass' && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved',
         });
       }
     }
@@ -416,7 +428,7 @@ export default function NetworkFirewallPage() {
         if (configuredSids.has(sid)) continue;
         rows.push({
           key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
-          ruleGroups: [], configured: false, isPass: false, observability: 'observed', regionDegraded: false, sharedSid: false, unknown: false, unknownReason: null,
+          ruleGroups: [], configured: false, isPass: false, observability: 'observed', attributionUnsafe: false, sharedSid: false, unknown: false, unknownReason: null,
           hitsAttributable: true,
         });
       }
@@ -429,10 +441,10 @@ export default function NetworkFirewallPage() {
       const bv = b.hitsAttributable ? b.hits : 0;
       return bv - av || Number(a.sid) - Number(b.sid);
     });
-  }, [logsData, rgs, ruleGroupObservability, regionDegraded]);
-  // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 리전 토폴로지
-  // 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
-  const zeroTrustworthy = (r: RuleHitRow) => r.configured && !r.isPass && r.observability === 'observed' && !r.regionDegraded && !r.sharedSid && !r.unknown;
+  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe]);
+  // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 계정 전체
+  // 토폴로지 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
+  const zeroTrustworthy = (r: RuleHitRow) => r.configured && !r.isPass && r.observability === 'observed' && !r.attributionUnsafe && !r.sharedSid && !r.unknown;
   const idleConfiguredRules = useMemo(
     () => ruleHitRows.filter((r) => zeroTrustworthy(r) && r.hits === 0).length,
   [ruleHitRows]);
@@ -889,12 +901,16 @@ export default function NetworkFirewallPage() {
                           <Badge tone="negative" variant="soft">{tt('매칭 없는 설정 룰')} {idleConfiguredRules}</Badge>
                         )}
                       </div>
-                      {/* 리뷰 MAJOR(확정, PR #225 라운드3): ruleHits가 null(쿼리 실패/discovery unknown)이고
-                          룰 그룹 자체도 비어 있으면(Describe 실패 등) ruleHitRows가 완전히 비어 이
-                          카드에서 "어떤 SID가 있었는지" 정보 자체가 사라진다. topSignatures는 이
-                          경로들과 독립적으로 채워지므로(alertTotals/ruleHits 실패와 무관), ruleHitRows가
-                          비었을 때 최소한의 SID 표면(설정 룰과 조인 없는 원시 Top 시그니처)으로 폴백한다. */}
-                      {ruleHitRows.length === 0 && (logsData.alert.topSignatures.length > 0) && (
+                      {/* 리뷰 MAJOR(확정, PR #225 라운드3 — 라운드8에서 게이트 조건 수정): ruleHits가
+                          null(쿼리 실패/discovery unknown)이면 이 카드에서 "어떤 SID가 있었는지" 조인된
+                          정보 자체가 사라진다. topSignatures는 이 경로들과 독립적으로 채워지므로
+                          (alertTotals/ruleHits 실패와 무관), ruleHits가 null일 때 최소한의 SID 표면
+                          (설정 룰과 조인 없는 원시 Top 시그니처)으로 폴백한다. 리뷰 MAJOR(확정, 라운드8 —
+                          라운드3 자체 수정의 결함): 게이트를 ruleHitRows.length===0으로 잡으면, ruleHits가
+                          null이어도 rgs(설정 룰 그룹)가 있는 한 ruleHitRows는 전부 "?" 행으로 채워져
+                          비지 않으므로(라운드3/4에서 만든 unknown 행들) 이 폴백이 절대 안 뜬다 — 정확히
+                          ruleHits==null 여부로만 게이트해야 한다. */}
+                      {logsData.alert.ruleHits == null && (logsData.alert.topSignatures.length > 0) && (
                         <>
                           <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Top 시그니처 (룰 그룹 정보 없음)')}</div>
                           <div className="px-4 pb-1 text-[12px] text-ink-500">
@@ -920,7 +936,9 @@ export default function NetworkFirewallPage() {
                           </div>
                         </>
                       )}
-                      {ruleHitRows.length > 0 && (
+                      {/* ruleHits===null이면 조인된 표는 전부 "?" 행뿐이라 위 원시 시그니처 폴백과
+                          중복·혼란만 준다 — 이때는 이 표를 건너뛴다. */}
+                      {logsData.alert.ruleHits != null && ruleHitRows.length > 0 && (
                         <>
                           <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Stateful 룰 히트 카운트')}</div>
                           <div className="px-4 pb-1 text-[12px] text-ink-500">
@@ -952,7 +970,7 @@ export default function NetworkFirewallPage() {
                                           히트는 값 자체가 "이 sid가 실제로 매칭됐다"는 로그 증거이므로
                                           기본적으로 신뢰하지만, 예외가 세 가지다 — 그 증거를 특정 룰에
                                           귀속할 수 없는 경우(sharedSid), sidGroupCount의 전제인 rgs 순회
-                                          자체가 불완전할 수 있는 경우(regionDegraded), 그리고 이 룰 그룹을
+                                          자체가 불완전할 수 있는 경우(attributionUnsafe), 그리고 이 룰 그룹을
                                           서빙하는 모든 방화벽의 ALERT 로깅이 확인상 꺼져 있다고 "확정"된
                                           경우(observability === 'unobserved' — loggingKnown=false/discovered
                                           같은 단순 불확실이 아니라 실제로 구성을 조회해서 로깅이 없다고
@@ -970,13 +988,18 @@ export default function NetworkFirewallPage() {
                                           ? <span className="text-ink-300" title={tt('여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다')}>n/a</span>
                                           : r.unknown
                                             ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
-                                            : r.regionDegraded
-                                              ? <span className="text-ink-300" title={tt('이 리전의 정책/방화벽/룰그룹 데이터가 불완전해 매칭 여부·귀속을 확정할 수 없음')}>?</span>
+                                            : r.attributionUnsafe
+                                              ? <span className="text-ink-300" title={tt('일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나 파싱할 수 없는 룰그룹이 있어 매칭 여부·귀속을 확정할 수 없음')}>?</span>
                                               : r.observability === 'unobserved'
                                                 ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음')}>n/a</span>
                                                 : r.hits === 0 && r.observability !== 'observed'
                                                   ? <span className="text-ink-300" title={tt('이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
-                                                  : r.hits.toLocaleString()}
+                                                  // 리뷰 MAJOR(확정, PR #225 라운드8): 리전별 상한(150)에 도달한 리전이
+                                                  // 있으면(ruleHitsPartial), present인 sid의 hits도 그 리전 몫이 잘려
+                                                  // 실제보다 적을 수 있다 — "정확한 수치"처럼 보이지 않게 하한 표기.
+                                                  : r.hits > 0 && (logsData.alert?.ruleHitsPartial ?? false)
+                                                    ? <span title={tt('리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한')}>{`≥${r.hits.toLocaleString()}`}</span>
+                                                    : r.hits.toLocaleString()}
                                     </td>
                                   </tr>
                                 ))}

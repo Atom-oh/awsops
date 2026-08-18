@@ -726,6 +726,46 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'x', value: 3 }]);
   });
 
+  it('룰 히트가 정확히 join 컷오프(100)개면 잘린 게 아니므로 ruleHitsTruncated=false (리뷰 MINOR off-by-one, PR #225 라운드8)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) {
+        return Array.from({ length: 100 }, (_, i) => ({ sid: String(i), sig: `sig${i}`, act: 'blocked', cnt: 1 }));
+      }
+      return [{ cnt: 100 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // 정확히 100개 — slice(0, 100)이 아무것도 잘라내지 않았으므로 truncated가 아니다.
+    // >=였다면 여기서 잘못 true가 됐을 것.
+    expect(a.alert!.ruleHits).toHaveLength(100);
+    expect(a.alert!.ruleHitsTruncated).toBe(false);
+  });
+
+  it('한 리전이 자기 상한(150)에 도달하면 ruleHitsPartial=true — present인 sid도 그 리전 몫이 잘려 과소집계됐을 수 있음 (리뷰 MAJOR, PR #225 라운드8)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) {
+        return Array.from({ length: 150 }, (_, i) => ({ sid: String(i), sig: `sig${i}`, act: 'blocked', cnt: 1 }));
+      }
+      return [{ cnt: 150 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.alert!.ruleHitsPartial).toBe(true);
+  });
+
+  it('리전 상한에 못 미치면 ruleHitsPartial=false', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) return [{ sid: '1', sig: 'x', act: 'blocked', cnt: 1 }];
+      return [{ cnt: 1 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.alert!.ruleHitsPartial).toBe(false);
+  });
+
   it('flowTotals 쿼리가 실패하면 totalFlows/totalBytes는 0이 아니라 null — byProto 등 다른 flow 쿼리 결과는 유지 (리뷰 MAJOR 라운드11)', async () => {
     mockAnalysis.mockResolvedValue({ firewalls: [fw({ alertLogging: null })] });
     logsSend.mockImplementation(async (cmd: Cmd) => {
