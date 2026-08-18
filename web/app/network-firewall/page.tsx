@@ -466,7 +466,13 @@ export default function NetworkFirewallPage() {
   }, [logsData, rgs, ruleGroupObservability, attributionUnsafe]);
   // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 계정 전체
   // 토폴로지 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
-  const zeroTrustworthy = (r: RuleHitRow) => r.configured && !r.isPass && r.observability === 'observed' && !r.attributionUnsafe && !r.sharedSid && !r.unknown;
+  // 리뷰 MAJOR(확정, PR #225 라운드14): observability는 "지금" 서빙 방화벽이 관측되는지만
+  // 보는 공간적 신호다 — 로깅이 선택한 range 중간에 켜졌거나 로그 그룹이 range 시작보다
+  // 늦게 생성됐으면(alertCoverageComplete=false), 지금 관측되고 있어도 range 앞쪽 구간의
+  // 실제 매칭은 로그가 없어 hits=0으로 보인다. 시간적 커버리지가 불완전하면 0을 확정
+  // idle로 표시하지 않는다.
+  const alertCoverageComplete = logsData?.alert?.alertCoverageComplete ?? false;
+  const zeroTrustworthy = (r: RuleHitRow) => r.configured && !r.isPass && r.observability === 'observed' && !r.attributionUnsafe && !r.sharedSid && !r.unknown && alertCoverageComplete;
   const idleConfiguredRules = useMemo(
     () => ruleHitRows.filter((r) => zeroTrustworthy(r) && r.hits === 0).length,
   [ruleHitRows]);
@@ -1016,6 +1022,12 @@ export default function NetworkFirewallPage() {
                                                 ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음')}>n/a</span>
                                                 : r.hits === 0 && r.observability !== 'observed'
                                                   ? <span className="text-ink-300" title={tt('이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
+                                                  // 리뷰 MAJOR(확정, PR #225 라운드14): observability만으로는 "지금
+                                                  // 관측 중"만 확인될 뿐, 그 관측이 선택한 range 시작부터 있었다는
+                                                  // 보장이 없다 — 로그 그룹이 range 도중 생성/활성화됐으면 0이
+                                                  // 확정 idle이 아니라 "커버리지 밖일 수 있음"이다.
+                                                  : r.hits === 0 && !alertCoverageComplete
+                                                    ? <span className="text-ink-300" title={tt('ALERT 로그가 선택한 기간 전체를 커버하지 않아 매칭 0을 확정할 수 없음 (로깅이 기간 중간에 시작됨)')}>?</span>
                                                   // 리뷰 MAJOR(확정, PR #225 라운드8): 리전별 상한(150)에 도달한 리전이
                                                   // 있으면(ruleHitsPartial), present인 sid의 hits도 그 리전 몫이 잘려
                                                   // 실제보다 적을 수 있다 — "정확한 수치"처럼 보이지 않게 하한 표기.

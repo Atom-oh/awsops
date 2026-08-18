@@ -763,6 +763,77 @@ describe('anfwLogsAnalysis', () => {
     ]);
   });
 
+  it('ALERT 로그 그룹 생성 시각이 range 시작보다 이전이면 alertCoverageComplete=true (리뷰 MAJOR, PR #225 라운드14)', async () => {
+    const now = 10_000_000_000; // 임의 고정 시각
+    const rangeSec = 3600;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+      logsSend.mockImplementation(async (cmd: Cmd) => {
+        switch (cmd.constructor.name) {
+          case 'DescribeLogGroupsCommand':
+            return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert', creationTime: now - rangeSec * 1000 - 1_000_000 }] };
+          case 'StartQueryCommand': return { queryId: 'q' };
+          case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 0 })] };
+          default: return {};
+        }
+      });
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(rangeSec);
+      expect(a.alert!.alertCoverageComplete).toBe(true);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it('ALERT 로그 그룹이 range 시작보다 늦게 생성됐으면(로깅이 기간 중간에 켜짐) alertCoverageComplete=false — hits=0을 확정 idle로 볼 수 없음 (리뷰 MAJOR 확정, PR #225 라운드14)', async () => {
+    const now = 10_000_000_000;
+    const rangeSec = 3600;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+      logsSend.mockImplementation(async (cmd: Cmd) => {
+        switch (cmd.constructor.name) {
+          case 'DescribeLogGroupsCommand':
+            // 로그 그룹이 range 시작(now - rangeSec*1000)보다 나중에 생성됨 — 로깅이 최근에야 켜졌을 가능성.
+            return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert', creationTime: now - (rangeSec * 1000) / 2 }] };
+          case 'StartQueryCommand': return { queryId: 'q' };
+          case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 0 })] };
+          default: return {};
+        }
+      });
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(rangeSec);
+      expect(a.alert!.alertCoverageComplete).toBe(false);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it('로그 그룹의 retentionInDays가 짧아 실제 보존 구간이 range 시작보다 늦게 시작되면 alertCoverageComplete=false (리뷰 MAJOR, PR #225 라운드14)', async () => {
+    const now = 10_000_000_000;
+    const rangeSec = 7 * 86400; // 7일
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+      logsSend.mockImplementation(async (cmd: Cmd) => {
+        switch (cmd.constructor.name) {
+          case 'DescribeLogGroupsCommand':
+            // 생성은 오래전이지만 보존기간이 1일뿐이라 7일 range의 앞쪽 6일은 이미 만료·삭제됨.
+            return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert', creationTime: now - 365 * 86400_000, retentionInDays: 1 }] };
+          case 'StartQueryCommand': return { queryId: 'q' };
+          case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 0 })] };
+          default: return {};
+        }
+      });
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(rangeSec);
+      expect(a.alert!.alertCoverageComplete).toBe(false);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
   it('한 리전이 자기 상한(150)에 도달하면 ruleHitsPartial=true — present인 sid도 그 리전 몫이 잘려 과소집계됐을 수 있음 (리뷰 MAJOR, PR #225 라운드8)', async () => {
     mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
     mockInsights((group, query) => {

@@ -129,6 +129,10 @@ export interface AnfwAlertAnalytics {
    *  후 존재 여부만 보는 ruleHitsTruncated와 달리, 존재하는 sid의 "정확한 값" 신뢰도를
    *  가리키는 별도 신호). 소비자는 양수 히트를 "≥N"(하한)으로 표시해야 한다. */
   ruleHitsPartial: boolean;
+  /** false면 ALERT 로그 그룹 중 하나 이상이 range 시작 시점을 커버하지 못함(로깅이 range
+   *  중간에 켜졌거나 그룹이 늦게 생성됨/보존기간 만료) — 이 range 안에서 hits=0인 설정
+   *  룰이라도 "확정 idle"이 아니라 "커버리지 밖일 수 있음"이다(리뷰 MAJOR, 라운드14). */
+  alertCoverageComplete: boolean;
   topSources: { name: string; value: number }[];
   topDests: { name: string; value: number }[];
 }
@@ -418,6 +422,43 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       return { rows, anyRegionAtCap };
     };
 
+    // 리뷰 MAJOR(확정, PR #225 라운드14): observability/zeroTrustworthy는 지금 이 순간의
+    // 로깅 구성 스냅샷이 선택한 range(최대 7일) "전체"를 커버했다고 가정한다 — ALERT
+    // 로깅이 range 중간에 켜졌거나 로그 그룹이 range 시작보다 늦게 생성됐으면, 그 이전
+    // 구간의 실제 매칭은 로그가 없어 hits=0으로 보이고 확정 idle로 오판된다. 이건 이
+    // 파일이 다른 곳에서 계속 고쳐온 "공간적 완전성"(리전/방화벽/룰그룹 커버리지)과는
+    // 다른 축인 "시간적 완전성" 문제다. 각 ALERT 로그 그룹의 creationTime(+retentionInDays로
+    // 실제 보존 구간까지 고려)을 조회해, range 시작 시점을 커버하지 못하는 그룹이 하나라도
+    // 있으면 전체 커버리지를 불명으로 표시한다 — 페이지는 이를 근거로 확정 idle 판정을
+    // 추가로 억제해야 한다.
+    async function alertCoverageComplete(ts: AnfwLogTarget[]): Promise<boolean> {
+      if (ts.length === 0) return true;
+      const rangeStartMs = Date.now() - rangeSec * 1000;
+      const byRegion = new Map<string, Set<string>>();
+      for (const t of ts) {
+        if (!byRegion.has(t.region)) byRegion.set(t.region, new Set());
+        byRegion.get(t.region)!.add(t.group);
+      }
+      try {
+        const perRegion = await Promise.all([...byRegion].map(async ([region, groups]) => {
+          const perGroup = await Promise.all([...groups].map(async (group) => {
+            if (Date.now() >= deadlineAt) throw new Error('coverage check deadline exceeded');
+            const r = await logs(region).send(new DescribeLogGroupsCommand({ logGroupNamePrefix: group }));
+            const lg = (r.logGroups ?? []).find((g) => g.logGroupName === group);
+            if (!lg || lg.creationTime == null) return false; // 못 찾음/필드 없음 — 커버리지 확정 불가
+            // retentionInDays가 설정돼 있으면 만료로 실제 보존 구간이 creationTime보다 늦게
+            // 시작될 수 있다 — 둘 중 더 늦은(더 짧게 남은) 쪽을 실질 커버리지 시작으로 본다.
+            const retentionStartMs = lg.retentionInDays != null ? Date.now() - lg.retentionInDays * 86_400_000 : -Infinity;
+            return Math.max(lg.creationTime, retentionStartMs) <= rangeStartMs;
+          }));
+          return perGroup.every(Boolean);
+        }));
+        return perRegion.every(Boolean);
+      } catch {
+        return false; // 조회 실패 — 커버리지를 확정할 수 없으므로 보수적으로 불명 처리
+      }
+    }
+
     // 리뷰 MAJOR(확정, 라운드6): 같은 리전의 그룹은 logGroupNames로 묶었지만, 리전이
     // 여럿이면 여전히 리전별로 `limit 10`까지 잘린 뒤 병합한다 — 모든 리전에서 11위인
     // 항목이 실제 전역 1위여도 사라질 수 있다. 병합 전 리전별 상한을 표시 컷오프(10)보다
@@ -434,7 +475,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     if (anyRegionChunked(alertTargets)) failed.push('alertTopNPartial');
     let alert: AnfwAlertAnalytics | null = null;
     if (alertTargets.length > 0) {
-      const [totals, byAction, topSig, ruleHitsResult, topSrc, topDst] = await Promise.all([
+      const [totals, byAction, topSig, ruleHitsResult, topSrc, topDst, coverageComplete] = await Promise.all([
         runMerged(alertTargets, 'alertTotals', `filter event.event_type = 'alert' | stats count(*) as cnt`),
         runMerged(alertTargets, 'alertByAction', `fields event.alert.action as action | filter event.event_type = 'alert' | stats count(*) as cnt by action | sort cnt desc`),
         runMerged(alertTargets, 'alertTopSignatures', `fields event.alert.signature_id as sid, event.alert.signature as sig | filter event.event_type = 'alert' | stats count(*) as cnt by sid, sig | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
@@ -450,6 +491,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         runMergedWithCap(alertTargets, 'alertRuleHits', `fields event.alert.signature_id as sid, event.alert.signature as sig, event.alert.action as act | filter event.event_type = 'alert' and ispresent(event.alert.signature_id) | stats count(*) as cnt by sid, sig, act | sort cnt desc | limit ${RULE_HITS_PER_REGION_LIMIT}`, RULE_HITS_PER_REGION_LIMIT),
         runMerged(alertTargets, 'alertTopSources', `fields event.src_ip as src | filter event.event_type = 'alert' | stats count(*) as cnt by src | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
         runMerged(alertTargets, 'alertTopDests', `fields concat(event.dest_ip, ':', event.dest_port) as dst | filter event.event_type = 'alert' | stats count(*) as cnt by dst | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
+        alertCoverageComplete(alertTargets),
       ]);
       const ruleHitRows = ruleHitsResult.rows;
       const merge = (rows: Row[], nameField: string) => {
@@ -505,6 +547,7 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         // slice(0, CUTOFF)가 실제로 무언가를 잘라내는 경우는 size가 CUTOFF보다 클 때뿐이다.
         ruleHitsTruncated: hitMap.size > RULE_HITS_JOIN_CUTOFF,
         ruleHitsPartial: ruleHitsResult.anyRegionAtCap,
+        alertCoverageComplete: coverageComplete,
         topSources: merge(topSrc, 'src'),
         topDests: merge(topDst, 'dst'),
       };
