@@ -1156,6 +1156,7 @@ export const TERMS: Record<string, Pair> = {
   '히트 상위 50행 + 매칭 없는 설정 룰만 표시 (나머지 생략)': { en: 'Showing the top 50 rows by hits plus configured rules with no match (rest omitted)', zh: '仅显示命中前 50 行 + 无匹配的已配置规则（其余省略）', ja: 'ヒット上位 50 行 + マッチのない設定ルールのみ表示（残りは省略）' },
   '여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음': { en: 'Multiple rule groups use this SID — alert logs do not identify the rule group, so hits cannot be attributed per group', zh: '多个规则组使用同一 SID — Alert 日志无法识别规则组，命中无法按组归属', ja: '複数のルールグループが同じ SID を使用 — Alert ログはルールグループを識別できず、ヒットをグループ別に帰属できません' },
   '미연결 룰 그룹 — 트래픽에 매칭될 수 없음': { en: 'Unassociated rule group — cannot match any traffic', zh: '未关联的规则组 — 无法匹配任何流量', ja: '未関連付けのルールグループ — トラフィックにマッチできません' },
+  '미연결 룰 그룹 — 트래픽에 매칭될 수 없음 (표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음)': { en: 'Unobserved rule group — cannot match any traffic (any hit count shown cannot be attributed to this rule)', zh: '未被观测的规则组 — 无法匹配任何流量（即使显示命中数，也不能归属于该规则）', ja: '観測不可のルールグループ — トラフィックにマッチできません（ヒット数が表示されてもこのルールへの帰属とは見なせません）' },
   '상위 100 집계 밖 — 매칭 여부 불명': { en: 'Outside the top-100 aggregation — match status unknown', zh: '超出前 100 汇总范围 — 匹配情况未知', ja: '上位 100 集計の範囲外 — マッチ有無は不明' },
 
   // ---- Network Firewall (/network-firewall) ----

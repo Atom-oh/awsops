@@ -844,11 +844,15 @@ export default function NetworkFirewallPage() {
                                     <td className={TD}>{r.msg || dash}</td>
                                     <td className={MONO}>{r.actions.join(', ') || dash}</td>
                                     <td className={MONO}>{r.ruleGroups.join(', ') || <span title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>}</td>
-                                    <td className={`${TD} ${r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
-                                      {r.hits === 0 && r.isPass
+                                    <td className={`${TD} ${r.associated && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
+                                      {r.isPass
                                         ? <span className="text-ink-300" title={tt('pass 룰 — Alert 로그 미발생')}>n/a</span>
-                                        : r.hits === 0 && !r.associated
-                                          ? <span className="text-ink-300" title={tt('미연결 룰 그룹 — 트래픽에 매칭될 수 없음')}>n/a</span>
+                                        // 리뷰 확정(codex stop-hook): hits===0일 때만 미관측 처리하면, 관측 불가한
+                                        // 룰 그룹이라도 공유 SID로 우연히 집계된 0 초과 히트가 그대로 표시되어
+                                        // 실제로 볼 수 없는 트래픽이 이 룰에 귀속된 것처럼 오독된다 — hits 값과
+                                        // 무관하게 관측 불가 여부를 먼저 확인한다.
+                                        : !r.associated
+                                          ? <span className="text-ink-300" title={tt('미연결 룰 그룹 — 트래픽에 매칭될 수 없음 (표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음)')}>n/a</span>
                                           : r.unknown
                                             ? <span className="text-ink-300" title={tt('상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
                                             : r.hits.toLocaleString()}
