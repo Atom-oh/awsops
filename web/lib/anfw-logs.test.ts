@@ -66,6 +66,10 @@ describe('anfwLogsAnalysis', () => {
     mockInsights((group, query) => {
       if (group.endsWith('/alert')) {
         if (query.includes('by action')) return [{ action: 'blocked', cnt: 7 }, { action: 'allowed', cnt: 3 }];
+        if (query.includes('by sid, sig, act')) return [
+          { sid: '5', sig: 'block outbound telnet', act: 'blocked', cnt: 7 },
+          { sid: '9', sig: 'http watch', act: 'allowed', cnt: 3 },
+        ];
         if (query.includes('by sid')) return [{ sid: '5', sig: 'block outbound telnet', cnt: 7 }];
         if (query.includes('by src')) return [{ src: '10.11.1.111', cnt: 8 }];
         if (query.includes('by dst')) return [{ dst: '10.12.2.34:23', cnt: 7 }];
@@ -87,6 +91,11 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.totalAlerts).toBe(10);
     expect(a.alert!.byAction).toEqual([{ name: 'blocked', value: 7 }, { name: 'allowed', value: 3 }]);
     expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'block outbound telnet', value: 7 }]);
+    // 룰 히트 카운트 (sid+sig+action) — 2026-08 신기능과 동일한 Alert 로그 집계
+    expect(a.alert!.ruleHits).toEqual([
+      { sid: '5', signature: 'block outbound telnet', action: 'blocked', hits: 7 },
+      { sid: '9', signature: 'http watch', action: 'allowed', hits: 3 },
+    ]);
     expect(a.alert!.topSources[0]).toEqual({ name: '10.11.1.111', value: 8 });
     expect(a.alert!.topDests[0]).toEqual({ name: '10.12.2.34:23', value: 7 });
 
