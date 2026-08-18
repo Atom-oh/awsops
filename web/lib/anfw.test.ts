@@ -221,7 +221,9 @@ describe('anfwAnalysis', () => {
     // 게이트한 첫 수정은 이 실제 Type에는 전혀 안 걸리는 죽은 코드였다 — 이 테스트는
     // 반드시 실제 Type 문자열로 검증해야 그 회귀를 잡는다.
     RG_DESCRIBE['domain-deny-list'] = {
-      RuleGroup: { RulesSource: { RulesSourceList: { Targets: ['evil.example'], TargetTypes: ['TLS_SNI'] } } },
+      // RulesSourceList의 GeneratedRulesType(ALLOWLIST|DENYLIST)은 실제 API에서 필수
+      // 필드 — 이게 빠진 응답은 AWS가 실제로 반환할 수 없는 형태였다(리뷰 확정, 라운드13).
+      RuleGroup: { RulesSource: { RulesSourceList: { Targets: ['evil.example'], TargetTypes: ['TLS_SNI'], GeneratedRulesType: 'DENYLIST' } } },
       RuleGroupResponse: {
         RuleGroupName: 'domain-deny-list', Type: 'STATEFUL_DOMAIN', RuleGroupStatus: 'ACTIVE',
         Capacity: 100, ConsumedCapacity: 10, NumberOfAssociations: 1,
