@@ -341,7 +341,7 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
   #     타깃이 아직 DELETING인 채로 delete-gateway를 부르면 생성 때의 "GW READY 전 target 생성 실패"와
   #     대칭인 이유로 실패한다(비동기 삭제, 즉시 완료 보장 없음).
   for gw in "${CONFIRMED_ORPHAN_GATEWAY_IDS[@]}"; do
-    for tgt in $(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'items[].targetId' --output text); do
+    for tgt in $(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query '(items || [])[].targetId' --output text); do
       aws bedrock-agentcore-control delete-gateway-target --gateway-identifier "$gw" --target-id "$tgt"
     done
     # 타깃 목록이 빈 배열이 될 때까지 대기(폴링) — 완료 전 delete-gateway 호출 시 실패.

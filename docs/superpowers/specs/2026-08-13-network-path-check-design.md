@@ -267,16 +267,28 @@ leaving it unhandled:
      would hide that live traffic may still be landing on the blocked target; `conditional` is the
      honest overall, and the response must say which candidate(s) were blocked/uncertain so an operator
      can check the LB's actual current target selection out of band.
-- **Any candidate `hypothesis`**: the reduction may not report `allowed` merely because one hypothesis
-  is allowed — that would hide a real blocker on whichever hypothesis is the flow's actual path, which
-  is exactly the operator's question. All-hypotheses-agree short-circuits the ambiguity (all `allowed`
-  -> overall `allowed`; all `blocked` -> overall `blocked`; all `failed` -> overall `failed`); any
-  disagreement among hypotheses (any mix of `allowed`/`blocked`/`conditional`/`failed` that isn't
-  unanimous) -> overall `conditional`, and the response must say *why* — that discovery could not
-  determine which candidate is the real path, not merely that some layer was uncertain. A `hypothesis`
-  set that is entirely `blocked`+`failed` (no `allowed`, not unanimous) still reduces to `conditional`,
-  not `blocked` or `failed` — the disagreement rule takes precedence, since not knowing which candidate
-  is real is itself the dominant source of uncertainty.
+- **All candidates `hypothesis`** (no `resolved` candidate in this run): the reduction may not report
+  `allowed` merely because one hypothesis is allowed — that would hide a real blocker on whichever
+  hypothesis is the flow's actual path, which is exactly the operator's question. All-hypotheses-agree
+  short-circuits the ambiguity (all `allowed` -> overall `allowed`; all `blocked` -> overall `blocked`;
+  all `failed` -> overall `failed`); any disagreement among hypotheses (any mix of
+  `allowed`/`blocked`/`conditional`/`failed` that isn't unanimous) -> overall `conditional`, and the
+  response must say *why* — that discovery could not determine which candidate is the real path, not
+  merely that some layer was uncertain. A `hypothesis` set that is entirely `blocked`+`failed` (no
+  `allowed`, not unanimous) still reduces to `conditional`, not `blocked` or `failed` — the disagreement
+  rule takes precedence, since not knowing which candidate is real is itself the dominant source of
+  uncertainty.
+- **Mixed set — both `resolved` and `hypothesis` candidates present in the same run**: this case is
+  never resolved by treating one candidate kind as authoritative over the other. Reduce the `resolved`
+  candidates and the `hypothesis` candidates independently, each per its own rule above, producing two
+  partial statuses; then combine those two partial statuses with the same unanimity logic used within
+  each kind: both partials `allowed` -> overall `allowed`; both partials `blocked` -> overall `blocked`;
+  either partial `failed` with neither partial `allowed`/`conditional` -> overall `failed`; every other
+  combination (including one partial `allowed` and the other anything else) -> overall `conditional`.
+  Concretely: a `resolved` candidate reporting `allowed` never offsets a `hypothesis` candidate reporting
+  `blocked`, and a unanimous-`allowed` `hypothesis` set never offsets a `resolved` candidate reporting
+  `blocked` — each kind's `allowed` verdict is evidence only about that kind's own candidates, not about
+  the other kind's.
 - **Global execution-level failure before any candidate was discovered** (e.g. identity could not be
   resolved) -> overall `failed` directly, bypassing per-candidate reduction entirely (there are no
   candidates to reduce over).
@@ -462,9 +474,19 @@ manual investigation. The stored checklist remains the source of truth.
   cache limitation.
 - Multiple plausible paths -> compute each candidate's status independently, show each candidate with
   its first known blocker (if any), tag each `resolved` or `hypothesis`, and reduce to overall status
-  per the candidate-kind reduction rule above (an `allowed` `resolved` candidate makes the overall
-  result `allowed` alongside a blocked sibling; an `allowed` `hypothesis` candidate does not, unless
-  every hypothesis agrees).
+  per the candidate-kind reduction rule above (a `resolved` set only reduces to overall `allowed` when
+  every resolved candidate is confirmed `allowed` — one blocked sibling pulls the overall result down to
+  `conditional`, not `allowed`; a `hypothesis` set follows the same unanimity requirement for the same
+  reason: not knowing which candidate is the real path is itself the dominant uncertainty).
+- Discovery produces a mix of `resolved` and `hypothesis` candidates for the same run -> reduce `resolved`
+  and `hypothesis` candidates independently per their own rules above, then combine the two partial
+  results with the same unanimity logic: both partial results `allowed` -> overall `allowed`; either
+  partial result anything other than `allowed` -> overall `conditional` (unless either side is `failed`
+  with no `allowed`/`conditional` anywhere in the set, which reduces to overall `failed`, or every
+  candidate on both sides is `blocked`, which reduces to overall `blocked`). Mixed-kind sets are never
+  reduced by treating one kind as authoritative over the other — a `hypothesis` candidate reporting
+  `allowed` does not offset a `resolved` candidate reporting `blocked`, and vice versa, since neither
+  kind's `allowed` status is evidence about the other kind's candidates.
 - On-premises segment -> always `?` past the AWS boundary.
 - Unsupported Calico, Cilium, or Istio CRD version -> `?`, never an assumed allow.
 
@@ -494,6 +516,10 @@ Table-driven tests cover:
 - deterministic overall-status reduction: all-`resolved` with one blocked + one allowed -> overall
   `conditional` (not `allowed` — disagreement among resolved candidates); all-`resolved` all blocked ->
   overall `blocked`; all-`resolved` no allowed, at least one conditional -> overall `conditional`
+- mixed `resolved`+`hypothesis` candidate set: a `resolved` candidate `allowed` alongside a `hypothesis`
+  candidate `blocked` -> overall `conditional`, not `allowed` (one kind's `allowed` never offsets the
+  other kind's non-`allowed`); both kinds fully `allowed` -> overall `allowed`; both kinds fully
+  `blocked` -> overall `blocked`
 - a layer irrelevant to a given candidate is omitted from that candidate rather than marked `unknown`
 - `network_path_run_steps` rows for two candidates at the same `ordinal` do not collide (candidate_id
   discriminates the primary key)
