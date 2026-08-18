@@ -263,7 +263,10 @@ describe('anfwLogsAnalysis', () => {
     logsSend.mockImplementation(async (cmd: Cmd) => {
       if (cmd.constructor.name === 'StartQueryCommand') {
         const q = cmd.input.queryString as string;
-        if (q.includes('by sid, sig')) sigQuery = q;
+        // alertTopSignatures는 "by sid, sig |"로 끝나지만, alertRuleHits는 같은 접두사
+        // "by sid, sig"를 공유하면서 ", act"가 더 붙는다(자체 오버페치 헤드룸 — 별도 검증,
+        // 아래 alertRuleHits 전용 테스트) — 여기서는 시그니처 쿼리만 정확히 식별한다.
+        if (q.includes('by sid, sig |')) sigQuery = q;
         return { queryId: 'q' };
       }
       if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 1 })] };
@@ -272,6 +275,24 @@ describe('anfwLogsAnalysis', () => {
     const { anfwLogsAnalysis } = await import('./anfw-logs');
     await anfwLogsAnalysis(3600);
     expect(sigQuery).toContain('limit 100');
+  });
+
+  it('alertRuleHits는 join 컷오프(100)보다 큰 리전별 상한(150)으로 오버페치 — 리전별 상한=컷오프였던 여유 없음 문제 해소 (리뷰 MINOR, PR #225 라운드3)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw()] });
+    let ruleHitsQuery = '';
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const q = cmd.input.queryString as string;
+        if (q.includes('by sid, sig, act')) ruleHitsQuery = q;
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 1 })] };
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    await anfwLogsAnalysis(3600);
+    expect(ruleHitsQuery).toContain("filter event.event_type = 'alert' and ispresent(event.alert.signature_id)");
+    expect(ruleHitsQuery).toContain('limit 150');
   });
 
   it('같은 리전의 여러 로그 그룹은 logGroupNames로 한 쿼리에 묶여 그룹별 limit이 진짜 전역 Top-N이 됨 (리뷰 MAJOR)', async () => {

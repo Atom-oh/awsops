@@ -273,25 +273,55 @@ export default function NetworkFirewallPage() {
   // CWL 타깃으로 존재. 리뷰 MAJOR(확정): `!rg.unassociated`(정책 연결 개수>0)만으로는
   // 관측 가능성이 서지 않는다 — 그 정책을 쓰는 방화벽이 하나도 없거나, 있어도 ALERT
   // 로깅이 꺼짐/unknown/S3·Firehose 대상이면 여전히 트래픽을 볼 수 없다.
-  const observedFirewallKeys = useMemo(() => {
-    const s = new Set<string>();
-    for (const t of logsData?.targets ?? []) if (t.type === 'ALERT') s.add(`${t.region}|${t.firewall}`);
-    return s;
+  // 리뷰 MAJOR(확정): targets는 로깅 구성 조회가 거부된 리전에서 `/aws/network-firewall`
+  // 접두사 발견 폴백으로 `firewall: '(discovered)'` 항목을 낸다(anfw-logs.ts 리뷰 라운드12
+  // 계약) — 실제 방화벽 이름이 아니라서 region|firewall 키가 절대 매칭되지 않고, 그 결과
+  // 폴백이 도는 리전의 모든 설정 룰이 "관측 불가"로 오판되어 실제 히트가 있어도 숨겨진다.
+  // '(discovered)'는 리전 단위 신호로 별도 처리해 해당 리전 방화벽을 'unknown'(확정도
+  // 부정도 아님)으로 분류한다. 리뷰 MAJOR(확정): 룰 그룹이 여러 방화벽에 서빙되면 그중
+  // 하나만 관측돼도(some()) "관측됨"으로 쳐서, 나머지 관측 불가 방화벽을 지나는 트래픽이
+  // 안 보이는데도 hits=0을 확정 idle로 표시했다 — "관측됨"(0을 신뢰)엔 전체 커버리지
+  // (every)가 필요하다. 3상태(observed/unknown/unobserved)로 모델링: 전부 observed면
+  // observed(0 신뢰 가능), 하나라도 unknown/observed가 섞이면 unknown(0 불신, 히트값은
+  // 그래도 실측이라 표시), 전부 확정 미관측(로깅이 확인상 꺼짐)이거나 서빙 방화벽이 전혀
+  // 없으면 unobserved(어떤 히트가 보이더라도 이 룰 귀속으로 볼 수 없음 — 숫자 자체를 숨김).
+  type Observability = 'observed' | 'unknown' | 'unobserved';
+  const firewallObservability = useMemo(() => {
+    const observed = new Set<string>();
+    const unknownRegions = new Set<string>();
+    for (const t of logsData?.targets ?? []) {
+      if (t.type !== 'ALERT') continue;
+      if (t.discovered) unknownRegions.add(t.region);
+      else observed.add(`${t.region}|${t.firewall}`);
+    }
+    return (fw: AnfwFirewallRow): Observability => {
+      if (observed.has(`${fw.region}|${fw.name}`)) return 'observed';
+      if (!fw.loggingKnown || unknownRegions.has(fw.region)) return 'unknown';
+      return 'unobserved';
+    };
   }, [logsData]);
-  const ruleGroupObserved = useMemo(() => {
-    const m = new Map<string, boolean>();
-    for (const rg of rgs) m.set(`${rg.region}|${rg.name}`, false);
+  const combineObservability = (states: Observability[]): Observability => {
+    if (states.length === 0) return 'unobserved';
+    if (states.every((s) => s === 'observed')) return 'observed';
+    if (states.some((s) => s === 'observed' || s === 'unknown')) return 'unknown';
+    return 'unobserved';
+  };
+  const ruleGroupObservability = useMemo(() => {
+    const byKey = new Map<string, Observability[]>();
+    for (const rg of rgs) byKey.set(`${rg.region}|${rg.name}`, []);
     for (const policy of policies) {
       for (const rgName of policy.statefulGroups) {
         const rgKey = `${policy.region}|${rgName}`;
-        if (!m.has(rgKey) || m.get(rgKey)) continue;
-        const observed = fws.some((fw) =>
-          fw.region === policy.region && fw.policyName === policy.name && observedFirewallKeys.has(`${fw.region}|${fw.name}`));
-        if (observed) m.set(rgKey, true);
+        if (!byKey.has(rgKey)) continue;
+        for (const fw of fws) {
+          if (fw.region === policy.region && fw.policyName === policy.name) byKey.get(rgKey)!.push(firewallObservability(fw));
+        }
       }
     }
+    const m = new Map<string, Observability>();
+    for (const [k, states] of byKey) m.set(k, combineObservability(states));
     return m;
-  }, [rgs, policies, fws, observedFirewallKeys]);
+  }, [rgs, policies, fws, firewallObservability]);
 
   // Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
   // 설정 룰 1개당 1행 (region×rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는
@@ -305,12 +335,16 @@ export default function NetworkFirewallPage() {
   interface RuleHitRow {
     key: string; sid: string; msg: string; actions: string[]; hits: number;
     ruleGroups: string[]; configured: boolean; isPass: boolean;
-    /** 룰 그룹이 실제로 ALERT 로그를 관측할 수 있는 방화벽에 연결되어 있는가. */
-    associated: boolean;
-    /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. */
+    /** 이 룰 그룹을 서빙하는 방화벽들의 ALERT 관측 가능성(3상태) — 'observed'만 0을 신뢰. */
+    observability: Observability;
+    /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. 리뷰 MAJOR(확정):
+     *  숫자를 그대로 보여주면 그 그룹의 실제 트래픽처럼 오독된다 — 표시를 숨긴다(CLAUDE.md의
+     *  "flagged in UI rather than counted" 서술을 실제로 구현). */
     sharedSid: boolean;
     /** 로그 집계 자체가 실패/잘렸거나(ruleHits=null) top-100 밖 — 매칭 여부 불명. */
     unknown: boolean;
+    /** unknown=true인 이유 — 툴팁 문구 분기용(리뷰 MINOR: 원인이 서로 다른데 문구가 같았음). */
+    unknownReason: 'failed' | 'truncated' | null;
   }
   const ruleHitRows = useMemo<RuleHitRow[]>(() => {
     const ruleHits = logsData?.alert?.ruleHits;
@@ -342,9 +376,10 @@ export default function NetworkFirewallPage() {
           hits: h?.hits ?? 0,
           ruleGroups: [rg.name], configured: true,
           isPass: s.action === 'pass',
-          associated: ruleGroupObserved.get(`${rg.region}|${rg.name}`) ?? false,
+          observability: ruleGroupObservability.get(`${rg.region}|${rg.name}`) ?? 'unobserved',
           sharedSid: (sidGroupCount.get(s.sid) ?? 0) > 1,
           unknown: ruleHitsFailed || (truncated && !h), // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
+          unknownReason: ruleHitsFailed ? 'failed' : (truncated && !h) ? 'truncated' : null,
         });
       }
     }
@@ -354,15 +389,15 @@ export default function NetworkFirewallPage() {
         if (configuredSids.has(sid)) continue;
         rows.push({
           key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
-          ruleGroups: [], configured: false, isPass: false, associated: true, sharedSid: false, unknown: false,
+          ruleGroups: [], configured: false, isPass: false, observability: 'observed', sharedSid: false, unknown: false, unknownReason: null,
         });
       }
     }
     return rows.sort((a, b) => b.hits - a.hits || Number(a.sid) - Number(b.sid));
-  }, [logsData, rgs, ruleGroupObserved]);
-  // 히트 산출 불가(n/a): pass 룰 · 관측 불가 룰 그룹 · 불명 — idle(빨간 배지)에서 제외
+  }, [logsData, rgs, ruleGroupObservability]);
+  // 히트 산출 불가(n/a): pass 룰 · 관측 불가/불확실 룰 그룹 · 공유 SID · 불명 — idle(빨간 배지)에서 제외
   const idleConfiguredRules = useMemo(
-    () => ruleHitRows.filter((r) => r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0).length,
+    () => ruleHitRows.filter((r) => r.configured && !r.isPass && r.observability === 'observed' && !r.sharedSid && !r.unknown && r.hits === 0).length,
   [ruleHitRows]);
 
   // Flow 로그 시각화 — 프로토콜 도넛(플로우 수) + Top talker 바(HBarList는 정수 표시라 MB 단위).
@@ -817,6 +852,37 @@ export default function NetworkFirewallPage() {
                           <Badge tone="negative" variant="soft">{tt('매칭 없는 설정 룰')} {idleConfiguredRules}</Badge>
                         )}
                       </div>
+                      {/* 리뷰 MAJOR(확정, PR #225 라운드3): ruleHits가 null(쿼리 실패/discovery unknown)이고
+                          룰 그룹 자체도 비어 있으면(Describe 실패 등) ruleHitRows가 완전히 비어 이
+                          카드에서 "어떤 SID가 있었는지" 정보 자체가 사라진다. topSignatures는 이
+                          경로들과 독립적으로 채워지므로(alertTotals/ruleHits 실패와 무관), ruleHitRows가
+                          비었을 때 최소한의 SID 표면(설정 룰과 조인 없는 원시 Top 시그니처)으로 폴백한다. */}
+                      {ruleHitRows.length === 0 && (logsData.alert.topSignatures.length > 0) && (
+                        <>
+                          <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Top 시그니처 (룰 그룹 정보 없음)')}</div>
+                          <div className="px-4 pb-1 text-[12px] text-ink-500">
+                            {tt('설정 룰과 조인할 수 없어 히트 카운트 대신 원시 Alert 시그니처만 표시합니다')}
+                          </div>
+                          <div className="overflow-x-auto px-4 pb-3">
+                            <table className="w-full">
+                              <thead><tr className="border-b border-ink-100">
+                                <th className={TH}>SID</th>
+                                <th className={TH}>Signature</th>
+                                <th className={TH}>{tt('건수')}</th>
+                              </tr></thead>
+                              <tbody>
+                                {logsData.alert.topSignatures.map((s) => (
+                                  <tr key={`${s.sid}|${s.signature}`} className="border-b border-ink-50 last:border-0">
+                                    <td className={MONO}>{s.sid}</td>
+                                    <td className={TD}>{s.signature || dash}</td>
+                                    <td className={TD}>{s.value.toLocaleString()}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
                       {ruleHitRows.length > 0 && (
                         <>
                           <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Stateful 룰 히트 카운트')}</div>
@@ -837,25 +903,31 @@ export default function NetworkFirewallPage() {
                               </tr></thead>
                               <tbody>
                                 {ruleHitRows
-                                  .filter((r, i) => i < 50 || (r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0))
+                                  .filter((r, i) => i < 50 || (r.configured && !r.isPass && r.observability === 'observed' && !r.sharedSid && !r.unknown && r.hits === 0))
                                   .map((r) => (
-                                  <tr key={r.key} className={`border-b border-ink-50 last:border-0 ${r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0 ? 'opacity-60' : ''}`}>
+                                  <tr key={r.key} className={`border-b border-ink-50 last:border-0 ${r.configured && !r.isPass && r.observability === 'observed' && !r.sharedSid && !r.unknown && r.hits === 0 ? 'opacity-60' : ''}`}>
                                     <td className={MONO}>{r.sid}{r.sharedSid && <span className="ml-1 text-ink-400" title={tt('여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음')}>*</span>}</td>
                                     <td className={TD}>{r.msg || dash}</td>
                                     <td className={MONO}>{r.actions.join(', ') || dash}</td>
                                     <td className={MONO}>{r.ruleGroups.join(', ') || <span title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>}</td>
-                                    <td className={`${TD} ${r.associated && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
+                                    <td className={`${TD} ${r.observability === 'observed' && !r.sharedSid && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
                                       {r.isPass
                                         ? <span className="text-ink-300" title={tt('pass 룰 — Alert 로그 미발생')}>n/a</span>
-                                        // 리뷰 확정(codex stop-hook): hits===0일 때만 미관측 처리하면, 관측 불가한
-                                        // 룰 그룹이라도 공유 SID로 우연히 집계된 0 초과 히트가 그대로 표시되어
-                                        // 실제로 볼 수 없는 트래픽이 이 룰에 귀속된 것처럼 오독된다 — hits 값과
-                                        // 무관하게 관측 불가 여부를 먼저 확인한다.
-                                        : !r.associated
-                                          ? <span className="text-ink-300" title={tt('미연결 룰 그룹 — 트래픽에 매칭될 수 없음 (표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음)')}>n/a</span>
+                                        // 리뷰 확정(codex stop-hook + PR #225 라운드3): hits===0일 때만 미관측
+                                        // 처리하면, 관측 불가한 룰 그룹이라도 공유 SID로 우연히 집계된 0 초과
+                                        // 히트가 그대로 표시되어 실제로 볼 수 없는 트래픽이 이 룰에 귀속된
+                                        // 것처럼 오독된다 — hits 값과 무관하게 관측/공유 여부를 먼저 확인한다.
+                                        // sharedSid(같은 sid를 쓰는 룰 그룹이 2개 이상)도 동일하게 숫자를
+                                        // 숨긴다 — 그룹별 귀속이 근본적으로 불가능한 숫자를 그룹별 행에
+                                        // 노출하면 CLAUDE.md가 문서화한 "귀속 불가는 표시만, 집계 안 함"
+                                        // 계약을 어긴다.
+                                        : r.observability === 'unobserved' || r.sharedSid
+                                          ? <span className="text-ink-300" title={tt(r.sharedSid ? '여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다' : '관측 불가 룰 그룹 — 트래픽에 매칭될 수 없음 (표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음)')}>n/a</span>
                                           : r.unknown
-                                            ? <span className="text-ink-300" title={tt('상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
-                                            : r.hits.toLocaleString()}
+                                            ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
+                                            : r.observability === 'unknown' && r.hits === 0
+                                              ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 일부 방화벽의 ALERT 로깅 여부를 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
+                                              : r.hits.toLocaleString()}
                                     </td>
                                   </tr>
                                 ))}

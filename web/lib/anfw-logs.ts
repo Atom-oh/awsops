@@ -399,6 +399,9 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 훨씬 크게(100) 잡아 오차 범위를 "리전 수 × (100-10)" 꼬리로 좁힌다(완전 제거는
     // 아니지만 실사용 규모에서 사실상 무시 가능한 수준으로 축소).
     const PER_REGION_OVERFETCH = 100;
+    // 룰 히트 조인 최종 컷오프(표시는 이보다 더 자름) — 리전별 상한은 이보다 커야 여유가 생긴다.
+    const RULE_HITS_JOIN_CUTOFF = 100;
+    const RULE_HITS_PER_REGION_LIMIT = 150;
     // 리뷰 MAJOR(라운드10): alertTargets는 flowTargets와 동일하게 50개 초과 시 리전별로
     // 여러 청크로 쪼개진다(위 groupByRegion) — flow 쪽만 anyRegionChunked로 신호를 남기고
     // alert 쪽은 없었다. 청크당 limit(PER_REGION_OVERFETCH)이 사실상 "리전 전체"가 아니라
@@ -411,7 +414,14 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         runMerged(alertTargets, 'alertByAction', `fields event.alert.action as action | filter event.event_type = 'alert' | stats count(*) as cnt by action | sort cnt desc`),
         runMerged(alertTargets, 'alertTopSignatures', `fields event.alert.signature_id as sid, event.alert.signature as sig | filter event.event_type = 'alert' | stats count(*) as cnt by sid, sig | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
         // 룰 히트 카운트 — owner 확인 쿼리와 동일 형태 (sid+sig+action, limit 100)
-        runMerged(alertTargets, 'alertRuleHits', `fields event.alert.signature_id as sid, event.alert.signature as sig, event.alert.action as act | filter ispresent(event.alert.signature_id) | stats count(*) as cnt by sid, sig, act | sort cnt desc | limit 100`),
+        // 리뷰 MINOR(확정, PR #225 라운드3): (1) 형제 쿼리들은 `event.event_type = 'alert'`로
+        // 필터하는데 이 쿼리만 `ispresent(signature_id)`만 써서 합계가 totalAlerts와 어긋날
+        // 여지가 있었다 — 형제와 동일 필터를 추가한다(signature_id 존재 필터는 sid 없는
+        // 행을 배제하기 위해 유지). (2) 리전별 limit이 최종 join 컷오프(RULE_HITS_JOIN_CUTOFF,
+        // 아래 hitMap.size 판정과 동일 값)와 같아 여유가 전혀 없었다 — 리전별 상한을 join
+        // 컷오프보다 크게 잡아, 여러 리전이 각자 상한 근처인 SID를 합산해도 실제로는 더
+        // 높은 순위였던 SID가 통째로 누락되는 경우를 줄인다.
+        runMerged(alertTargets, 'alertRuleHits', `fields event.alert.signature_id as sid, event.alert.signature as sig, event.alert.action as act | filter event.event_type = 'alert' and ispresent(event.alert.signature_id) | stats count(*) as cnt by sid, sig, act | sort cnt desc | limit ${RULE_HITS_PER_REGION_LIMIT}`),
         runMerged(alertTargets, 'alertTopSources', `fields event.src_ip as src | filter event.event_type = 'alert' | stats count(*) as cnt by src | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
         runMerged(alertTargets, 'alertTopDests', `fields concat(event.dest_ip, ':', event.dest_port) as dst | filter event.event_type = 'alert' | stats count(*) as cnt by dst | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
       ]);
@@ -451,8 +461,8 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
         ruleHits: (failed.includes('alertRuleHits') || failed.includes('alertTopNPartial') || alertDiscoveryUnknown)
           ? null
-          : [...hitMap.values()].sort((a, b) => b.hits - a.hits).slice(0, 100),
-        ruleHitsTruncated: hitMap.size >= 100,
+          : [...hitMap.values()].sort((a, b) => b.hits - a.hits).slice(0, RULE_HITS_JOIN_CUTOFF),
+        ruleHitsTruncated: hitMap.size >= RULE_HITS_JOIN_CUTOFF,
         topSources: merge(topSrc, 'src'),
         topDests: merge(topDst, 'dst'),
       };
