@@ -15,10 +15,10 @@ v2는 **Cognito Hosted-UI 인증을 CloudFront 엣지 앞단에 배치**하여 �
   - Verifies the ID token via **pure-python RS256** (RSASSA-PKCS1-v1_5 + SHA-256) against Cognito's **JWKS** (`/.well-known/jwks.json`, cached in a module global) — no extra deps, stays under the 1 MB viewer-request limit.
   - Validates claims: `iss`, `aud` (= client id), `token_use == 'id'`, `exp`/`iat`/`nbf`.
   - Enforces OAuth **`state`** + **PKCE** (S256 challenge; verifier stored in a short-lived HMAC-signed `awsops_flow` cookie) — CSRF defense, and no client secret is compiled into the edge code (HMAC `state_key` injected via `random_password` at apply).
-  - **Public-path bypass**: `/_next/static/*` (immutable assets) and `/api/health` (smoke target) skip auth.
+  - **Public-path bypass**: `/_next/static/*` (immutable assets), `/api/health` (smoke target), `/api/auth/signout` (expired-token escape hatch), `/login` + `/api/auth/login` (self-hosted login), `/icon.svg`, `/api/incidents/webhook` (HMAC/SNS-verified ingress carve-out), and the PWA assets (`/manifest.webmanifest`, `/apple-touch-icon.png`, `/icon-{192,512}.png`, `/icon-512-maskable.png` — iOS fetches these without the auth cookie) skip auth.
 - **Served at root path `/`** — v2 dropped the v1 `/awsops` basePath; callback is `/_callback`, post-login redirect is `/`.
 - **Admin user** `admin@awsops.local`, created from gitignored `terraform.tfvars` (`admin_email` / `admin_password`).
-- Cookie flags: `awsops_token=<id_token>; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600`.
+- Cookie flags: `awsops_token=<id_token>; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=43200`.
 
 ## Decisions (ADRs) / 결정
 
