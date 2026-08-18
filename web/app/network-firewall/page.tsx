@@ -333,9 +333,20 @@ export default function NetworkFirewallPage() {
     // 우리는 그 SID를 알 수 없다. rgKeys 부재만 보면 이 케이스를 놓친다 — 파싱 불가
     // (anfw.ts의 sidsUnparseable) 그룹을 참조하는 정책도 계정 전체 귀속 불안전으로 간주한다.
     const unparseableRgKeys = new Set(rgs.filter((rg) => rg.sidsUnparseable).map((rg) => `${rg.region}|${rg.name}`));
-    return policies.some((p) => p.statefulGroups.some((name) =>
-      !rgKeys.has(`${p.region}|${name}`) || unparseableRgKeys.has(`${p.region}|${name}`)));
-  }, [data, rgs, policies]);
+    if (policies.some((p) => p.statefulGroups.some((name) =>
+      !rgKeys.has(`${p.region}|${name}`) || unparseableRgKeys.has(`${p.region}|${name}`)))) return true;
+    // 리뷰 MAJOR(확정, PR #225 라운드19): 위 검사는 "현재" policy.statefulGroups 목록만
+    // 훑는다 — 정책이 range 도중 수정됐을 때 그 정책이 *지금* 참조하는 그룹들만 안전하지
+    // 않다고 표시했을 뿐, range 도중 그 정책에서 제거되거나
+    // (그 그룹 자체가 삭제됐을 수도 있는) 그룹은 현재 목록에 아예 없어 어떤 신호에도 걸리지
+    // 않는다 — 그런 그룹의 과거 히트는 sid로 전역 병합되며, 별개의 안 바뀐 룰 그룹에 같은
+    // sid가 있으면 sharedSid도 못 잡고 exact/확정idle로 오귀속된다. 정책이 range 도중
+    // 수정됐다는 사실 자체가 "그 시점의 statefulGroups 스냅샷을 알 수 없다"는 뜻이므로,
+    // round8과 동일한 논리(히트는 전역 병합 — 지역적 안전 판정은 성립 불가)로 계정 전체를
+    // 불안전 처리한다(제거된 그룹을 열거할 수 없어 로컬 taint로는 대체 불가).
+    const rangeStartMs = Date.now() - range * 1000;
+    return policies.some((p) => p.lastModified != null && Date.parse(p.lastModified) > rangeStartMs);
+  }, [data, rgs, policies, range]);
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();
     for (const rg of rgs) byKey.set(`${rg.region}|${rg.name}`, []);
@@ -358,20 +369,13 @@ export default function NetworkFirewallPage() {
   // "이 룰이 range 내내 이 방화벽에 배포돼 있었다"는 전제가 깨진다 — 정확히 이 기능이
   // 막으려는 거짓 정책 사각지대 경고다. AnfwPolicyRow.lastModified는 이미 있었지만
   // (round15까지) 이 검증에 쓰이지 않았다.
-  const policyModifiedByRgKey = useMemo(() => {
-    const rangeStartMs = Date.now() - range * 1000;
-    const m = new Map<string, boolean>();
-    for (const rg of rgs) m.set(`${rg.region}|${rg.name}`, false);
-    for (const policy of policies) {
-      const modified = policy.lastModified != null && Date.parse(policy.lastModified) > rangeStartMs;
-      if (!modified) continue;
-      for (const rgName of policy.statefulGroups) {
-        const rgKey = `${policy.region}|${rgName}`;
-        if (m.has(rgKey)) m.set(rgKey, true);
-      }
-    }
-    return m;
-  }, [rgs, policies, range]);
+  // 리뷰 MAJOR(확정, PR #225 라운드19): 라운드17-18의 "정책이 range 도중 수정되면 그
+  // 정책이 *지금* 참조하는 그룹만 taint"는 그룹이 그 수정으로 정책에서 제거됐거나 그 룰
+  // 그룹 자체가 삭제된 경우를 놓친다 — 그런 그룹은 지금의 policy.statefulGroups에 아예
+  // 없으므로 taint가 안 붙는다. attributionUnsafe가 이제 "어느 정책이든 range 도중
+  // 수정됐으면 계정 전체 불안전"으로 이 케이스를 상위 레벨에서 이미 흡수하므로(제거된
+  // 그룹은 로컬 taint로 열거 불가 — round8과 동일 논리), 정책 쪽 국지적 taint 맵은
+  // attributionUnsafe의 부분집합이 돼 중복이라 제거했다 — rg 자체의 lastModified만 남긴다.
 
   // Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
   // 설정 룰 1개당 1행 (region×rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는
@@ -412,13 +416,14 @@ export default function NetworkFirewallPage() {
      *  n/a인 'unobserved' 행이 실제 hits로 정렬돼) top-50 표시 슬롯을 정보 없는 행이
      *  차지해 진짜 신뢰 가능한 행을 밀어낸다 — 정렬은 항상 화면 표시와 같은 기준을 써야 한다. */
     hitsAttributable: boolean;
-    /** 이 룰 그룹 자체가, 또는 이 룰 그룹을 참조하는 정책이 조회 range 시작 이후 수정됐음 —
-     *  지금 있는 SID가 range 전체 동안 이 방화벽에 이 설정 그대로 배포돼 있었다고 보장할 수
-     *  없다(리뷰 MAJOR, PR #225 라운드15: 과거 히트가 현재 토폴로지에 조인되지만
-     *  rg.lastModified가 검증에 쓰이지 않았음; 라운드17: 정책 쪽 lastModified도 동일하게
-     *  검증 — 룰 그룹 자체는 안 바뀌었어도 그 룰 그룹이 range 중간에 정책에 추가/제거됐을
-     *  수 있다). true면 hits=0을 확정 idle로 표시하지 않고, 양수 히트도 이 행에 확정
-     *  귀속하지 않는다(hitsAttributable=false). */
+    /** 이 룰 그룹 자체가 조회 range 시작 이후 수정됐음 — 지금 있는 SID가 range 전체 동안
+     *  존재/동일했다고 보장할 수 없다(리뷰 MAJOR, PR #225 라운드15: 과거 히트가 현재
+     *  토폴로지에 조인되지만 rg.lastModified가 검증에 쓰이지 않았음). true면 hits=0을
+     *  확정 idle로 표시하지 않고, 양수 히트도 이 행에 확정 귀속하지 않는다
+     *  (hitsAttributable=false). 룰 그룹을 참조하는 "정책" 쪽 수정(라운드17)은 라운드19에서
+     *  attributionUnsafe(계정 전체)로 흡수됐다 — 정책에서 제거되거나 삭제된 룰 그룹은 현재
+     *  토폴로지에 없어 이 필드로는 열거할 수 없기 때문(round8과 동일 논리로 계정 전체 불신
+     *  쪽이 더 안전). */
     ruleGroupModifiedInRange: boolean;
   }
   const ruleHitRows = useMemo<RuleHitRow[]>(() => {
@@ -466,8 +471,7 @@ export default function NetworkFirewallPage() {
     const rows: RuleHitRow[] = [];
     const configuredSids = new Set<string>();
     for (const rg of rgs) {
-      const ruleGroupModifiedInRange = (rg.lastModified != null && Date.parse(rg.lastModified) > rangeStartMs)
-        || (policyModifiedByRgKey.get(`${rg.region}|${rg.name}`) ?? false);
+      const ruleGroupModifiedInRange = rg.lastModified != null && Date.parse(rg.lastModified) > rangeStartMs;
       for (const s of rg.statefulSids) {
         const isPass = s.action === 'pass' || s.noalert;
         if (!isPass) configuredSids.add(s.sid);
@@ -517,7 +521,7 @@ export default function NetworkFirewallPage() {
       const bv = b.hitsAttributable ? b.hits : 0;
       return bv - av || Number(a.sid) - Number(b.sid);
     });
-  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range, policyModifiedByRgKey]);
+  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range]);
   // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 계정 전체
   // 토폴로지 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
   // 리뷰 MAJOR(확정, PR #225 라운드14): observability는 "지금" 서빙 방화벽이 관측되는지만
@@ -1080,7 +1084,7 @@ export default function NetworkFirewallPage() {
                                           : r.unknown
                                             ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
                                             : r.attributionUnsafe
-                                              ? <span className="text-ink-300" title={tt('일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나 파싱할 수 없는 룰그룹이 있어 매칭 여부·귀속을 확정할 수 없음')}>?</span>
+                                              ? <span className="text-ink-300" title={tt('일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나, 파싱할 수 없는 룰그룹이 있거나, 어느 정책이 조회 기간 중 수정돼 그 시점 구성을 알 수 없어 매칭 여부·귀속을 확정할 수 없음')}>?</span>
                                               // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드16): 라운드15는 이 신호를
                                               // "0을 확정 idle로 보지 않는다"에만 썼는데, 대칭적으로 양수 히트도
                                               // 안전하지 않다 — SID가 range 도중 이 그룹으로 재정의/이동해왔다면
@@ -1101,8 +1105,12 @@ export default function NetworkFirewallPage() {
                                                   // 리뷰 MAJOR(확정, PR #225 라운드8): 리전별 상한(150)에 도달한 리전이
                                                   // 있으면(ruleHitsPartial), present인 sid의 hits도 그 리전 몫이 잘려
                                                   // 실제보다 적을 수 있다 — "정확한 수치"처럼 보이지 않게 하한 표기.
-                                                  : r.hits > 0 && (logsData.alert?.ruleHitsPartial ?? false)
-                                                    ? <span title={tt('리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한')}>{`≥${r.hits.toLocaleString()}`}</span>
+                                                  // 리뷰 MAJOR(확정, PR #225 라운드19): !alertCoverageComplete는
+                                                  // hits===0 분기에만 반영됐었다 — 양수 히트도 같은 종류의 결손이다.
+                                                  // 로깅이 range 도중 시작됐다면 range 앞쪽 구간의 매칭은 로그가
+                                                  // 없어 지금 보이는 hits는 실제보다 적을 수 있는 하한일 뿐이다.
+                                                  : r.hits > 0 && ((logsData.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete)
+                                                    ? <span title={tt(!alertCoverageComplete ? 'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한' : '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한')}>{`≥${r.hits.toLocaleString()}`}</span>
                                                     : r.hits.toLocaleString()}
                                     </td>
                                   </tr>

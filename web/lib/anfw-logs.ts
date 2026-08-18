@@ -115,7 +115,9 @@ export interface AnfwAlertAnalytics {
   byAction: { name: string; value: number }[];
   topSignatures: { sid: string; signature: string; value: number }[];
   /** Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
-   *  (sid, signature, action)별 매칭 수, 상위 100. 설정 룰 SID와 조인해 매칭 0 룰을 표면화.
+   *  sid 단위로 미리 합산된 매칭 수(리뷰 MAJOR, 라운드9 — 튜플(sid,signature,action) 단위로
+   *  자르면 컷오프 경계에서 한 sid의 부분합만 남는 문제가 있어, 합산 후가 아니라 합산 전에
+   *  sid로 먼저 묶는다), 상위 100(sid 개수 기준). 설정 룰 SID와 조인해 매칭 0 룰을 표면화.
    *  리뷰 MAJOR(확정): alertRuleHits 쿼리 자체가 실패/청크 truncation됐거나 발견이
    *  unknown이면 null — totalAlerts와 동일 계약. 이 게이트 없이는 조회 실패 리전의 설정
    *  룰이 "매칭 0(확정 idle)"로 오판되어 정책 사각지대 경고가 거짓 양성을 낸다. */
