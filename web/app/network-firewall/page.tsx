@@ -932,16 +932,22 @@ export default function NetworkFirewallPage() {
                                     <td className={TD}>{r.msg || dash}</td>
                                     <td className={MONO}>{r.actions.join(', ') || dash}</td>
                                     <td className={MONO}>{r.ruleGroups.join(', ') || <span title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>}</td>
-                                    <td className={`${TD} ${!r.sharedSid && !r.regionDegraded && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
+                                    <td className={`${TD} ${!r.sharedSid && !r.regionDegraded && r.observability !== 'unobserved' && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
                                       {/* 리뷰 확정(Codex stop-hook, PR #225 — 여러 라운드에 걸친 교정): 양수
-                                          히트는 값 자체가 "이 sid가 실제로 매칭됐다"는 로그 증거이므로,
-                                          우리가 추정한 토폴로지(observability)와 무관하게 원칙적으로 항상
-                                          신뢰한다 — 유일한 예외는 그 증거를 특정 룰에 귀속할 수 없는 경우
-                                          (sharedSid) 또는 sidGroupCount의 전제인 rgs 순회 자체가 불완전할
-                                          수 있는 경우(regionDegraded — 룰 그룹 목록도 List/Describe 부분
-                                          실패의 영향을 받을 수 있음)뿐이다. 반대로 "0(매칭 없음)"은 부재의
-                                          증거가 아니므로, 서빙 방화벽 전체가 관측됐다는 확신(observability
-                                          === 'observed')과 리전 토폴로지가 완전하다는 확신이 모두 있을 때만
+                                          히트는 값 자체가 "이 sid가 실제로 매칭됐다"는 로그 증거이므로
+                                          기본적으로 신뢰하지만, 예외가 세 가지다 — 그 증거를 특정 룰에
+                                          귀속할 수 없는 경우(sharedSid), sidGroupCount의 전제인 rgs 순회
+                                          자체가 불완전할 수 있는 경우(regionDegraded), 그리고 이 룰 그룹을
+                                          서빙하는 모든 방화벽의 ALERT 로깅이 확인상 꺼져 있다고 "확정"된
+                                          경우(observability === 'unobserved' — loggingKnown=false/discovered
+                                          같은 단순 불확실이 아니라 실제로 구성을 조회해서 로깅이 없다고
+                                          확인됨). 후자는 로그가 원천적으로 발생할 수 없다는 확정적 증거이므로,
+                                          그런데도 양수 히트가 보이면 그 자체가 우리 토폴로지 매핑의 오류일
+                                          가능성이 훨씬 높다 — 숫자를 그대로 보여주면 오귀속이다. 반대로
+                                          'unknown'(불확실, 확정 아님)은 로그가 안 보인 이유를 모를 뿐이므로
+                                          실제 히트 증거를 그대로 신뢰한다. "0(매칭 없음)"은 부재의 증거가
+                                          아니므로, 서빙 방화벽 전체가 관측됐다는 확신(observability ===
+                                          'observed')과 리전 토폴로지가 완전하다는 확신이 모두 있을 때만
                                           확정 idle로 표시한다 — 그 외엔 "?"로 불명 처리. */}
                                       {r.isPass
                                         ? <span className="text-ink-300" title={tt('pass 룰 — Alert 로그 미발생')}>n/a</span>
@@ -951,9 +957,11 @@ export default function NetworkFirewallPage() {
                                             ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
                                             : r.regionDegraded
                                               ? <span className="text-ink-300" title={tt('이 리전의 정책/방화벽/룰그룹 데이터가 불완전해 매칭 여부·귀속을 확정할 수 없음')}>?</span>
-                                              : r.hits === 0 && r.observability !== 'observed'
-                                                ? <span className="text-ink-300" title={tt('이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
-                                                : r.hits.toLocaleString()}
+                                              : r.observability === 'unobserved'
+                                                ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음')}>n/a</span>
+                                                : r.hits === 0 && r.observability !== 'observed'
+                                                  ? <span className="text-ink-300" title={tt('이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
+                                                  : r.hits.toLocaleString()}
                                     </td>
                                   </tr>
                                 ))}
