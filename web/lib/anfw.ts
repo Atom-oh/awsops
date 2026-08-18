@@ -110,6 +110,9 @@ export interface AnfwRuleGroupRow {
   /** 어느 정책에도 연결 안 됨 — 정리 후보. */
   unassociated: boolean;
   lastModified: string | null;
+  /** stateful 룰 SID 목록 (sid·msg·action만 — 룰 본문 아님). Alert 로그 히트와 조인해
+   *  "기간 내 매칭 0인 설정 룰"(정책 사각지대)을 표면화 — 2026-08 룰 히트 카운트 기능. */
+  statefulSids: StatefulSid[];
 }
 
 export interface AnfwAnalysis {
@@ -262,6 +265,42 @@ interface RawRgResp {
     Capacity?: number; ConsumedCapacity?: number; NumberOfAssociations?: number;
     LastModifiedTime?: string | Date;
   };
+  /** 룰 본문 — SID/msg/action 파싱에만 사용, 응답(row)에는 절대 싣지 않음. */
+  RuleGroup?: {
+    RulesSource?: {
+      RulesString?: string;
+      StatefulRules?: { Action?: string; RuleOptions?: { Keyword?: string; Settings?: string[] }[] }[];
+    };
+  };
+}
+
+/** Suricata 룰 텍스트/StatefulRules에서 SID·msg·action만 추출 (2026-08 룰 히트 카운트 조인용).
+ *  도메인 리스트(RulesSourceList)는 내부 생성 룰이라 사용자 SID가 없음 — 대상 아님. */
+export interface StatefulSid { sid: string; msg: string | null; action: string | null }
+export function parseStatefulSids(rs?: RawRgResp['RuleGroup']): StatefulSid[] {
+  const out = new Map<string, StatefulSid>();
+  const src = rs?.RulesSource;
+  for (const line of (src?.RulesString ?? '').split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    // content/pcre 등 따옴표 문자열 내부의 "sid:" 오탐 방지 — sid 추출 전에 문자열 리터럴 제거
+    // (Suricata는 문자열 내 따옴표를 \"로 강제 이스케이프 — escape-aware 패턴 필수)
+    const scan = t.replace(/"(?:\\.|[^"\\])*"/g, '""');
+    const sid = /\bsid\s*:\s*(\d+)\s*;/.exec(scan)?.[1];
+    if (!sid) continue;
+    out.set(sid, {
+      sid,
+      msg: /\bmsg\s*:\s*"([^"]*)"/.exec(t)?.[1] ?? null,
+      action: /^(pass|drop|reject|alert)\b/i.exec(t)?.[1]?.toLowerCase() ?? null,
+    });
+  }
+  for (const r of src?.StatefulRules ?? []) {
+    const sid = r.RuleOptions?.find((o) => o.Keyword === 'sid')?.Settings?.[0];
+    if (!sid || out.has(sid)) continue;
+    const msg = r.RuleOptions?.find((o) => o.Keyword === 'msg')?.Settings?.[0]?.replace(/^"|"$/g, '') ?? null;
+    out.set(sid, { sid, msg, action: r.Action?.toLowerCase() ?? null });
+  }
+  return [...out.values()];
 }
 interface RawLogging {
   LoggingConfiguration?: {
@@ -416,6 +455,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
                 : null,
               associations, unassociated: associations === 0,
               lastModified: resp.LastModifiedTime ? new Date(resp.LastModifiedTime).toISOString() : null,
+              statefulSids: (resp.Type ?? g.type) === 'STATEFUL' ? parseStatefulSids(d.RuleGroup) : [],
             };
           } catch { return null; }
         }));

@@ -239,6 +239,68 @@ export default function NetworkFirewallPage() {
       .slice(0, 10),
   [rgs]);
 
+  // Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
+  // 설정 룰 1개당 1행 (rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는 병합 오류),
+  // 로그 히트는 sid 단위로만 존재해 공유 SID는 그룹 귀속 불가(sharedSid 툴팁으로 명시).
+  // idle(매칭 0) 판정 제외: pass 룰(Alert 로그 미발생) · 미연결 룰 그룹(트래픽 관측 불가) ·
+  // 로그 히트가 top-100으로 잘린 경우(hits 0 ≠ 매칭 없음 — '불명' 처리).
+  interface RuleHitRow {
+    key: string; sid: string; msg: string; actions: string[]; hits: number;
+    ruleGroups: string[]; configured: boolean; isPass: boolean;
+    /** 룰 그룹이 정책에 연결되어 트래픽을 관측할 수 있는가. */
+    associated: boolean;
+    /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. */
+    sharedSid: boolean;
+    /** 로그 집계가 top-100으로 잘려 hits 0을 '매칭 없음'으로 단정 불가. */
+    unknown: boolean;
+  }
+  const ruleHitRows = useMemo<RuleHitRow[]>(() => {
+    const hits = logsData?.alert?.ruleHits ?? [];
+    const truncated = hits.length >= 100;
+    const hitsBySid = new Map<string, { hits: number; actions: Set<string>; sig: string }>();
+    for (const h of hits) {
+      const cur = hitsBySid.get(h.sid) ?? { hits: 0, actions: new Set<string>(), sig: h.signature };
+      cur.hits += h.hits;
+      if (h.action) cur.actions.add(h.action);
+      hitsBySid.set(h.sid, cur);
+    }
+    const sidGroupCount = new Map<string, number>();
+    for (const rg of rgs) for (const s of rg.statefulSids) sidGroupCount.set(s.sid, (sidGroupCount.get(s.sid) ?? 0) + 1);
+
+    const rows: RuleHitRow[] = [];
+    const configuredSids = new Set<string>();
+    for (const rg of rgs) {
+      for (const s of rg.statefulSids) {
+        configuredSids.add(s.sid);
+        const h = hitsBySid.get(s.sid);
+        rows.push({
+          key: `${rg.name}|${s.sid}`, sid: s.sid,
+          msg: s.msg ?? h?.sig ?? '',
+          actions: [...new Set([s.action, ...(h?.actions ?? [])].filter((x): x is string => !!x))],
+          hits: h?.hits ?? 0,
+          ruleGroups: [rg.name], configured: true,
+          isPass: s.action === 'pass',
+          associated: !rg.unassociated,
+          sharedSid: (sidGroupCount.get(s.sid) ?? 0) > 1,
+          unknown: truncated && !h, // 잘린 집계 밖 — 매칭 여부 불명
+        });
+      }
+    }
+    // 어느 설정 룰 그룹에도 없는 SID (관리형 룰 그룹 등)
+    for (const [sid, h] of hitsBySid) {
+      if (configuredSids.has(sid)) continue;
+      rows.push({
+        key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
+        ruleGroups: [], configured: false, isPass: false, associated: true, sharedSid: false, unknown: false,
+      });
+    }
+    return rows.sort((a, b) => b.hits - a.hits || Number(a.sid) - Number(b.sid));
+  }, [logsData, rgs]);
+  // 히트 산출 불가(n/a): pass 룰 · 미연결 그룹 · top-100 밖 불명 — idle(빨간 배지)에서 제외
+  const idleConfiguredRules = useMemo(
+    () => ruleHitRows.filter((r) => r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0).length,
+  [ruleHitRows]);
+
   // Flow 로그 시각화 — 프로토콜 도넛(플로우 수) + Top talker 바(HBarList는 정수 표시라 MB 단위).
   const flowProtoDist = useMemo(() => logsData?.flow?.byProto ?? [], [logsData]);
   const talkerBars = useMemo(() =>
@@ -580,8 +642,8 @@ export default function NetworkFirewallPage() {
 
             {/* ⑦ Alert 로그 분석 — stateful alert/drop 매칭 (Logs Insights, CWL 대상만) */}
             <Card
-              title="Alert 로그 분석"
-              subtitle="어떤 규칙(sid)이 어떤 트래픽을 차단/경고했는지 — CloudWatch Logs 대상 Insights 집계"
+              title="Alert 로그 분석 · Stateful 룰 히트 카운트"
+              subtitle="어떤 규칙(sid)이 얼마나 매칭됐는지 — Alert 로그 Insights 집계 (AWS 룰 히트 카운트 기능과 동일 소스), 설정 룰과 조인해 매칭 없는 룰 표면화"
               padded={false}
             >
               {logsErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('로그 분석 실패')}: {logsErr}</div>}
@@ -605,27 +667,56 @@ export default function NetworkFirewallPage() {
                             {`${a.name} ${a.value.toLocaleString()}`}
                           </Badge>
                         ))}
+                        <span>{tt('설정 stateful 룰')} {ruleHitRows.filter((r) => r.configured).length}</span>
+                        {idleConfiguredRules > 0 && (
+                          <Badge tone="negative" variant="soft">{tt('매칭 없는 설정 룰')} {idleConfiguredRules}</Badge>
+                        )}
                       </div>
-                      {logsData.alert.totalAlerts > 0 && (
-                        <div className="grid gap-4 px-4 pb-3 lg:grid-cols-2">
-                          <div className="overflow-x-auto">
+                      {ruleHitRows.length > 0 && (
+                        <>
+                          <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Stateful 룰 히트 카운트')}</div>
+                          <div className="px-4 pb-1 text-[12px] text-ink-500">
+                            {tt('Alert 로그 집계 기반 — pass 룰은 Alert 로그를 남기지 않아 집계할 수 없습니다 (매칭 없음으로 세지 않음)')}
+                          </div>
+                          {ruleHitRows.length > 50 && (
+                            <div className="px-4 pb-1 text-[12px] text-ink-500">{tt('히트 상위 50행 + 매칭 없는 설정 룰만 표시 (나머지 생략)')}</div>
+                          )}
+                          <div className="overflow-x-auto px-4 pb-3">
                             <table className="w-full">
                               <thead><tr className="border-b border-ink-100">
                                 <th className={TH}>SID</th>
-                                <th className={TH}>Signature</th>
-                                <th className={TH}>{tt('건수')}</th>
+                                <th className={TH}>Msg / Signature</th>
+                                <th className={TH}>Action</th>
+                                <th className={TH}>{tt('룰 그룹')}</th>
+                                <th className={TH}>{tt('히트')}</th>
                               </tr></thead>
                               <tbody>
-                                {logsData.alert.topSignatures.map((s) => (
-                                  <tr key={`${s.sid}|${s.signature}`} className="border-b border-ink-50 last:border-0">
-                                    <td className={MONO}>{s.sid}</td>
-                                    <td className={TD}>{s.signature || dash}</td>
-                                    <td className={TD}>{s.value.toLocaleString()}</td>
+                                {ruleHitRows
+                                  .filter((r, i) => i < 50 || (r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0))
+                                  .map((r) => (
+                                  <tr key={r.key} className={`border-b border-ink-50 last:border-0 ${r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0 ? 'opacity-60' : ''}`}>
+                                    <td className={MONO}>{r.sid}{r.sharedSid && <span className="ml-1 text-ink-400" title={tt('여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음')}>*</span>}</td>
+                                    <td className={TD}>{r.msg || dash}</td>
+                                    <td className={MONO}>{r.actions.join(', ') || dash}</td>
+                                    <td className={MONO}>{r.ruleGroups.join(', ') || <span title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>}</td>
+                                    <td className={`${TD} ${r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
+                                      {r.hits === 0 && r.isPass
+                                        ? <span className="text-ink-300" title={tt('pass 룰 — Alert 로그 미발생')}>n/a</span>
+                                        : r.hits === 0 && !r.associated
+                                          ? <span className="text-ink-300" title={tt('미연결 룰 그룹 — 트래픽에 매칭될 수 없음')}>n/a</span>
+                                          : r.unknown
+                                            ? <span className="text-ink-300" title={tt('상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
+                                            : r.hits.toLocaleString()}
+                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
                           </div>
+                        </>
+                      )}
+                      {logsData.alert.totalAlerts > 0 && (
+                        <div className="grid gap-4 px-4 pb-3">
                           <div className="overflow-x-auto">
                             <table className="w-full">
                               <thead><tr className="border-b border-ink-100">

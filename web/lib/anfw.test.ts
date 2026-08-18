@@ -91,7 +91,7 @@ const RG_LIST = [
 // RulesSource(룰 본문)는 응답에 실리면 안 됨 — DescribeRuleGroup 원형에 포함해 회귀 검증
 const RG_DESCRIBE: Record<string, unknown> = {
   'DMZVPC-stateful-default': {
-    RuleGroup: { RulesSource: { RulesString: 'drop tcp $SECRET_RULE_BODY any -> any any' } },
+    RuleGroup: { RulesSource: { RulesString: 'drop tcp $SECRET_RULE_BODY any -> any any\n# comment line\ndrop tcp $HOME_NET any -> any 23 (msg:"block outbound telnet"; sid:1000001; rev:1;)\nalert tcp any any -> any 80 (msg:"http watch"; sid:1000002;)' } },
     RuleGroupResponse: {
       RuleGroupName: 'DMZVPC-stateful-default', Type: 'STATEFUL', RuleGroupStatus: 'ACTIVE',
       Capacity: 100, ConsumedCapacity: 3, NumberOfAssociations: 0,
@@ -197,9 +197,24 @@ describe('anfwAnalysis', () => {
     const rg = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateful-default')!;
     expect(rg.unassociated).toBe(true);
     expect(rg.capacityPct).toBe(3);
-    const rg2 = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateless-allow-all')!;
-    expect(rg2.capacityPct).toBe(90);
-    expect(rg2.unassociated).toBe(false);
+    // 룰 히트 카운트 조인용 SID 파싱 — sid 없는 룰/주석은 제외, sid·msg·action만 추출
+    expect(rg.statefulSids).toEqual([
+      { sid: '1000001', msg: 'block outbound telnet', action: 'drop' },
+      { sid: '1000002', msg: 'http watch', action: 'alert' },
+    ]);
+    const rgStateless = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateless-allow-all')!;
+    expect(rgStateless.statefulSids).toEqual([]); // STATELESS는 대상 아님
+    expect(rgStateless.capacityPct).toBe(90);
+    expect(rgStateless.unassociated).toBe(false);
+  });
+
+  it('parseStatefulSids: content/pcre 내부의 "sid:" 문자열에 속지 않음', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert http any any -> any any (content:"sid: 999"; msg:"x"; sid:1234;)' } }))
+      .toEqual([{ sid: '1234', msg: 'x', action: 'alert' }]);
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'drop tcp any any -> any any (pcre:"/sid:55/"; sid:2000;)' } }))
+      .toEqual([{ sid: '2000', msg: null, action: 'drop' }]);
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"\\"; sid: 12;\\""; sid:4000;)' } })[0].sid).toBe('4000');
   });
 
   it('룰 본문(RulesSource)은 어떤 형태로도 응답에 실리지 않음', async () => {
