@@ -392,6 +392,11 @@ export default function NetworkFirewallPage() {
      *  n/a인 'unobserved' 행이 실제 hits로 정렬돼) top-50 표시 슬롯을 정보 없는 행이
      *  차지해 진짜 신뢰 가능한 행을 밀어낸다 — 정렬은 항상 화면 표시와 같은 기준을 써야 한다. */
     hitsAttributable: boolean;
+    /** 이 룰 그룹이 조회 range 시작 이후 수정됐음 — 지금 있는 SID가 range 전체 동안
+     *  존재/동일했다고 보장할 수 없다(리뷰 MAJOR, PR #225 라운드15: 과거 히트가 현재
+     *  토폴로지에 조인되지만 rg.lastModified가 검증에 쓰이지 않았음). true면 hits=0을
+     *  확정 idle로 표시하지 않는다 — SID가 range 중간에 추가/재정의됐을 수 있어서다. */
+    ruleGroupModifiedInRange: boolean;
   }
   const ruleHitRows = useMemo<RuleHitRow[]>(() => {
     const ruleHits = logsData?.alert?.ruleHits;
@@ -417,14 +422,31 @@ export default function NetworkFirewallPage() {
       for (const act of h.actions) cur.actions.add(act);
       hitsBySid.set(h.sid, cur);
     }
+    // 리뷰 MAJOR(확정, PR #225 라운드15): pass/noalert 룰은 Alert 로그를 원천적으로 남기지
+    // 못하므로 다른 룰의 SID 귀속을 방해할 수 없다 — sidGroupCount/configuredSids 계산에서
+    // 제외한다. 안 그러면 (a) pass 룰이 alert/drop 룰과 SID를 공유할 때 그 alert/drop 룰의
+    // 실제 히트가 sharedSid=true로 오판돼 n/a로 숨겨지고, (b) pass 룰의 SID가 관리형 룰그룹
+    // 등에서도 쓰이면 configuredSids가 그 SID를 "설정됨"으로 잘못 표시해 로그 전용 fallback
+    // 행(진짜 트래픽 증거)이 억제된다.
     const sidGroupCount = new Map<string, number>();
-    for (const rg of rgs) for (const s of rg.statefulSids) sidGroupCount.set(s.sid, (sidGroupCount.get(s.sid) ?? 0) + 1);
+    for (const rg of rgs) for (const s of rg.statefulSids) {
+      if (s.action === 'pass' || s.noalert) continue;
+      sidGroupCount.set(s.sid, (sidGroupCount.get(s.sid) ?? 0) + 1);
+    }
+
+    // 리뷰 MAJOR(확정, PR #225 라운드15): 과거 히트를 현재 룰 토폴로지에 조인하므로, 룰
+    // 그룹이 조회 range 시작 이후 수정됐으면 지금의 SID 목록이 range 전체에 걸쳐 동일했다고
+    // 보장할 수 없다(SID가 range 중간에 추가/재정의됐을 수 있음) — 그런 룰 그룹의 SID는
+    // hits=0이어도 확정 idle로 표시하지 않는다.
+    const rangeStartMs = Date.now() - range * 1000;
 
     const rows: RuleHitRow[] = [];
     const configuredSids = new Set<string>();
     for (const rg of rgs) {
+      const ruleGroupModifiedInRange = rg.lastModified != null && Date.parse(rg.lastModified) > rangeStartMs;
       for (const s of rg.statefulSids) {
-        configuredSids.add(s.sid);
+        const isPass = s.action === 'pass' || s.noalert;
+        if (!isPass) configuredSids.add(s.sid);
         const h = hitsBySid.get(s.sid);
         const observability = ruleGroupObservability.get(`${rg.region}|${rg.name}`) ?? 'unobserved';
         const sharedSid = (sidGroupCount.get(s.sid) ?? 0) > 1;
@@ -435,23 +457,25 @@ export default function NetworkFirewallPage() {
           actions: [...new Set([s.action, ...(h?.actions ?? [])].filter((x): x is string => !!x))],
           hits: h?.hits ?? 0,
           ruleGroups: [rg.name], configured: true,
-          isPass: s.action === 'pass' || s.noalert,
+          isPass,
           observability, attributionUnsafe, sharedSid, unknown,
           unknownReason: ruleHitsFailed ? 'failed' : ((truncated || partial) && !h) ? 'truncated' : null,
           // noalert 룰도 pass처럼 로그가 원천적으로 안 남으므로, 표시되는 양수 히트가 있다면
           // 그 자체가 오귀속 증거다(unobserved와 동일한 논리) — hitsAttributable에서 제외.
-          hitsAttributable: s.action !== 'pass' && !s.noalert && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved',
+          hitsAttributable: !isPass && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved',
+          ruleGroupModifiedInRange,
         });
       }
     }
-    // 어느 설정 룰 그룹에도 없는 SID (관리형 룰 그룹 등)
+    // 어느 설정 룰 그룹에도 없는 SID (관리형 룰 그룹 등) — pass 룰이 흡수했던 SID도
+    // configuredSids에서 빠졌으므로 여기서 진짜 트래픽 증거로 다시 드러난다.
     if (!ruleHitsFailed) {
       for (const [sid, h] of hitsBySid) {
         if (configuredSids.has(sid)) continue;
         rows.push({
           key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
           ruleGroups: [], configured: false, isPass: false, observability: 'observed', attributionUnsafe: false, sharedSid: false, unknown: false, unknownReason: null,
-          hitsAttributable: true,
+          hitsAttributable: true, ruleGroupModifiedInRange: false,
         });
       }
     }
@@ -463,7 +487,7 @@ export default function NetworkFirewallPage() {
       const bv = b.hitsAttributable ? b.hits : 0;
       return bv - av || Number(a.sid) - Number(b.sid);
     });
-  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe]);
+  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range]);
   // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 계정 전체
   // 토폴로지 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
   // 리뷰 MAJOR(확정, PR #225 라운드14): observability는 "지금" 서빙 방화벽이 관측되는지만
@@ -472,7 +496,7 @@ export default function NetworkFirewallPage() {
   // 실제 매칭은 로그가 없어 hits=0으로 보인다. 시간적 커버리지가 불완전하면 0을 확정
   // idle로 표시하지 않는다.
   const alertCoverageComplete = logsData?.alert?.alertCoverageComplete ?? false;
-  const zeroTrustworthy = (r: RuleHitRow) => r.configured && !r.isPass && r.observability === 'observed' && !r.attributionUnsafe && !r.sharedSid && !r.unknown && alertCoverageComplete;
+  const zeroTrustworthy = (r: RuleHitRow) => r.configured && !r.isPass && r.observability === 'observed' && !r.attributionUnsafe && !r.sharedSid && !r.unknown && alertCoverageComplete && !r.ruleGroupModifiedInRange;
   const idleConfiguredRules = useMemo(
     () => ruleHitRows.filter((r) => zeroTrustworthy(r) && r.hits === 0).length,
   [ruleHitRows]);
@@ -926,7 +950,9 @@ export default function NetworkFirewallPage() {
                         ))}
                         <span>{tt('설정 stateful 룰')} {ruleHitRows.filter((r) => r.configured).length}</span>
                         {idleConfiguredRules > 0 && (
-                          <Badge tone="negative" variant="soft">{tt('매칭 없는 설정 룰')} {idleConfiguredRules}</Badge>
+                          <span title={tt('로그 그룹 생성 시각/보존기간으로 기간 전체 커버리지를 추정한 것 — 로깅이 같은 그룹에서 껐다 켜졌다 했는지는 증명하지 않음')}>
+                            <Badge tone="negative" variant="soft">{tt('매칭 없는 설정 룰')} {idleConfiguredRules}</Badge>
+                          </span>
                         )}
                       </div>
                       {/* 리뷰 MAJOR(확정, PR #225 라운드3 — 라운드8에서 게이트 조건 수정): ruleHits가
@@ -1028,6 +1054,12 @@ export default function NetworkFirewallPage() {
                                                   // 확정 idle이 아니라 "커버리지 밖일 수 있음"이다.
                                                   : r.hits === 0 && !alertCoverageComplete
                                                     ? <span className="text-ink-300" title={tt('ALERT 로그가 선택한 기간 전체를 커버하지 않아 매칭 0을 확정할 수 없음 (로깅이 기간 중간에 시작됨)')}>?</span>
+                                                  // 리뷰 MAJOR(확정, PR #225 라운드15): 히트는 과거 로그를 지금의 룰
+                                                  // 토폴로지에 조인한 값이다 — 이 룰 그룹이 range 시작 이후 수정됐으면
+                                                  // 지금 있는 이 SID가 range 전체 동안 동일하게 존재했다는 보장이 없어
+                                                  // (range 중간에 추가/재정의됐을 수 있음) 0을 확정 idle로 볼 수 없다.
+                                                  : r.hits === 0 && r.ruleGroupModifiedInRange
+                                                    ? <span className="text-ink-300" title={tt('이 룰 그룹이 조회 기간 중에 수정됨 — 현재 SID가 기간 전체 동안 존재했다고 확정할 수 없어 매칭 0을 단정할 수 없음')}>?</span>
                                                   // 리뷰 MAJOR(확정, PR #225 라운드8): 리전별 상한(150)에 도달한 리전이
                                                   // 있으면(ruleHitsPartial), present인 sid의 hits도 그 리전 몫이 잘려
                                                   // 실제보다 적을 수 있다 — "정확한 수치"처럼 보이지 않게 하한 표기.
