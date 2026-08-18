@@ -1157,9 +1157,9 @@ export const TERMS: Record<string, Pair> = {
   'pass 룰 — Alert 로그 미발생': { en: 'pass rule — no alert log emitted', zh: 'pass 规则 — 不产生 Alert 日志', ja: 'pass ルール — Alert ログ非発生' },
   '히트 상위 50행 + 매칭 없는 설정 룰만 표시 (나머지 생략)': { en: 'Showing the top 50 rows by hits plus configured rules with no match (rest omitted)', zh: '仅显示命中前 50 行 + 无匹配的已配置规则（其余省略）', ja: 'ヒット上位 50 行 + マッチのない設定ルールのみ表示（残りは省略）' },
   '여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음': { en: 'Multiple rule groups use this SID — alert logs do not identify the rule group, so hits cannot be attributed per group', zh: '多个规则组使用同一 SID — Alert 日志无法识别规则组，命中无法按组归属', ja: '複数のルールグループが同じ SID を使用 — Alert ログはルールグループを識別できず、ヒットをグループ別に帰属できません' },
-  '관측 불가 룰 그룹 — 트래픽에 매칭될 수 없음 (표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음)': { en: 'Unobserved rule group — cannot match any traffic (any hit count shown cannot be attributed to this rule)', zh: '未被观测的规则组 — 无法匹配任何流量（即使显示命中数，也不能归属于该规则）', ja: '観測不可のルールグループ — トラフィックにマッチできません（ヒット数が表示されてもこのルールへの帰属とは見なせません）' },
+  '이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음': { en: 'Cannot confirm this rule group is being observed — a zero match count cannot be confirmed', zh: '无法确认该规则组是否被观测 — 无法确认零匹配', ja: 'このルールグループが観測されているか確認できないため、マッチ 0 を確定できません' },
   '여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다': { en: 'Multiple rule groups use this SID — which group the hits belong to is unknown, so the count is not shown', zh: '多个规则组使用同一 SID — 无法确定命中属于哪个规则组，因此不显示数字', ja: '複数のルールグループが同じ SID を使用 — どのグループのヒットか不明なため数値は表示しません' },
-  '이 리전의 정책/방화벽 데이터가 불완전해 매칭 여부·귀속을 확정할 수 없음': { en: 'This region\'s policy/firewall data is incomplete — match status and attribution cannot be confirmed', zh: '该区域的策略/防火墙数据不完整 — 无法确认匹配情况及归属', ja: 'このリージョンのポリシー/ファイアウォールデータが不完全なため、マッチ有無・帰属を確定できません' },
+  '이 리전의 정책/방화벽/룰그룹 데이터가 불완전해 매칭 여부·귀속을 확정할 수 없음': { en: 'This region\'s policy/firewall/rule-group data is incomplete — match status and attribution cannot be confirmed', zh: '该区域的策略/防火墙/规则组数据不完整 — 无法确认匹配情况及归属', ja: 'このリージョンのポリシー/ファイアウォール/ルールグループデータが不完全なため、マッチ有無・帰属を確定できません' },
   '상위 100 집계 밖 — 매칭 여부 불명': { en: 'Outside the top-100 aggregation — match status unknown', zh: '超出前 100 汇总范围 — 匹配情况未知', ja: '上位 100 集計の範囲外 — マッチ有無は不明' },
   '로그 집계 쿼리 실패 — 매칭 여부 불명': { en: 'Log aggregation query failed — match status unknown', zh: '日志汇总查询失败 — 匹配情况未知', ja: 'ログ集計クエリ失敗 — マッチ有無は不明' },
 
