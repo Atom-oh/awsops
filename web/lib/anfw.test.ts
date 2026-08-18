@@ -239,6 +239,44 @@ describe('anfwAnalysis', () => {
     })).toEqual([{ sid: '5001', msg: 'silent2', action: 'drop', noalert: true }]);
   });
 
+  it('parseStatefulSids: 구조화된 StatefulRules의 flowbits:noalert 레거시 별칭(Keyword="flowbits", Settings=["noalert"])도 noalert로 인식 (리뷰 MAJOR 확정, PR #225 라운드10)', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    expect(parseStatefulSids({
+      RulesSource: {
+        StatefulRules: [{
+          Action: 'ALERT',
+          RuleOptions: [
+            { Keyword: 'sid', Settings: ['5002'] },
+            { Keyword: 'flowbits', Settings: ['noalert'] },
+          ],
+        }],
+      },
+    })).toEqual([{ sid: '5002', msg: null, action: 'alert', noalert: true }]);
+    // 일반 flowbits 설정(콤마 인자가 있는 set/unset류)은 여전히 noalert가 아니어야 한다.
+    expect(parseStatefulSids({
+      RulesSource: {
+        StatefulRules: [{
+          Action: 'ALERT',
+          RuleOptions: [
+            { Keyword: 'sid', Settings: ['5003'] },
+            { Keyword: 'flowbits', Settings: ['set,seen'] },
+          ],
+        }],
+      },
+    })).toEqual([{ sid: '5003', msg: null, action: 'alert', noalert: false }]);
+  });
+
+  it('parseStatefulSids: msg 추출이 이스케이프된 따옴표에서 잘리지 않고, 다른 문자열 리터럴 사이 텍스트를 오추출하지 않음 (리뷰 MINOR 반복 지적, PR #225 라운드10)', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    // 이스케이프된 내부 따옴표 — 이전엔 첫 \" 에서 잘려 'a '만 남았다.
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (msg:"a \\"b\\" c"; sid:6000;)' } })[0].msg)
+      .toBe('a \\"b\\" c');
+    // content 옵션 안에 가짜 msg: 텍스트를 심어도, 실제 msg 리터럴만 추출돼야 한다
+    // (payload-stripped scan 없이 raw t에서 그냥 잘라내던 이전 로직은 리터럴 사이 텍스트를 오추출할 위험이 있었음).
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"msg:\\"decoy\\""; msg:"real"; sid:6001;)' } })[0].msg)
+      .toBe('real');
+  });
+
   it('TLS 수신 패킷도 recv/bytes와 동일하게 Engine=Stateless만 채택 — Stateful 재발행 이중 집계 방지 (리뷰 MAJOR 라운드8, 라운드10 되돌림)', async () => {
     mockDb([]);
     mockNfw();

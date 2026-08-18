@@ -344,7 +344,11 @@ export function parseStatefulSids(rs?: RawRgResp['RuleGroup']): StatefulSid[] {
     if (!sid) continue;
     out.set(sid, {
       sid,
-      msg: /\bmsg\s*:\s*"([^"]*)"/.exec(t)?.[1] ?? null,
+      // 리뷰 MINOR(확정, PR #225 라운드5/9/10 반복 지적): `[^"]*`는 이스케이프된 따옴표에서
+      // 잘리고(`msg:"a \"b\" c"` → "a "), sid와 달리 payload-stripped scan을 안 써서 다른
+      // 문자열 리터럴 사이의 텍스트를 msg로 오추출할 수 있었다. sid/noalert와 동일한
+      // escape-aware 패턴으로 완전한 따옴표 문자열 하나만 매칭한다.
+      msg: /\bmsg\s*:\s*"((?:\\.|[^"\\])*)"/.exec(t)?.[1] ?? null,
       action: /^(pass|drop|reject|alert)\b/i.exec(t)?.[1]?.toLowerCase() ?? null,
       noalert: /\bnoalert\s*;/.test(scan),
     });
@@ -353,7 +357,12 @@ export function parseStatefulSids(rs?: RawRgResp['RuleGroup']): StatefulSid[] {
     const sid = r.RuleOptions?.find((o) => o.Keyword === 'sid')?.Settings?.[0];
     if (!sid || out.has(sid)) continue;
     const msg = r.RuleOptions?.find((o) => o.Keyword === 'msg')?.Settings?.[0]?.replace(/^"|"$/g, '') ?? null;
-    const noalert = r.RuleOptions?.some((o) => o.Keyword === 'noalert') ?? false;
+    // 리뷰 MAJOR(확정, PR #225 라운드10): Suricata의 레거시 별칭 `flowbits:noalert;`는 구조화된
+    // StatefulRules에서 독립 키워드가 아니라 `{Keyword:"flowbits", Settings:["noalert"]}`로도
+    // 인코딩된다 — `Keyword === 'noalert'`만 보면 이 형태를 놓쳐, 실제로는 로그가 안 남는
+    // alert/drop 룰이 매칭 0을 확정 idle(정책 사각지대)로 오탐하게 만든다.
+    const noalert = r.RuleOptions?.some((o) =>
+      o.Keyword === 'noalert' || (o.Keyword === 'flowbits' && (o.Settings ?? []).includes('noalert'))) ?? false;
     out.set(sid, { sid, msg, action: r.Action?.toLowerCase() ?? null, noalert });
   }
   return [...out.values()];
