@@ -726,10 +726,16 @@ export const TERMS: Record<string, Pair> = {
   '히트': { en: 'Hits', zh: '命中', ja: 'ヒット' },
   '룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)': { en: 'SID not found in configured rule groups (managed rule groups, etc.)', zh: '在已配置的规则组中未找到该 SID（如托管规则组）', ja: '設定ルールグループに SID が見つかりません（マネージドルールグループ等）' },
   'pass 룰 — Alert 로그 미발생': { en: 'pass rule — no alert log emitted', zh: 'pass 规则 — 不产生 Alert 日志', ja: 'pass ルール — Alert ログ非発生' },
-  '히트 상위 50행 + 매칭 없는 설정 룰만 표시 (나머지 생략)': { en: 'Showing the top 50 rows by hits plus configured rules with no match (rest omitted)', zh: '仅显示命中前 50 行 + 无匹配的已配置规则（其余省略）', ja: 'ヒット上位 50 行 + マッチのない設定ルールのみ表示（残りは省略）' },
   '여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음': { en: 'Multiple rule groups use this SID — alert logs do not identify the rule group, so hits cannot be attributed per group', zh: '多个规则组使用同一 SID — Alert 日志无法识别规则组，命中无法按组归属', ja: '複数のルールグループが同じ SID を使用 — Alert ログはルールグループを識別できず、ヒットをグループ別に帰属できません' },
   '미연결 룰 그룹 — 트래픽에 매칭될 수 없음': { en: 'Unassociated rule group — cannot match any traffic', zh: '未关联的规则组 — 无法匹配任何流量', ja: '未関連付けのルールグループ — トラフィックにマッチできません' },
   '상위 100 집계 밖 — 매칭 여부 불명': { en: 'Outside the top-100 aggregation — match status unknown', zh: '超出前 100 汇总范围 — 匹配情况未知', ja: '上位 100 集計の範囲外 — マッチ有無は不明' },
+  '행 클릭 → 상세': { en: 'click a row → details', zh: '点击行 → 详情', ja: '行クリック → 詳細' },
+  'Top 소스 / 목적지': { en: 'Top sources / destinations', zh: 'Top 源 / 目标', ja: 'Top ソース / 宛先' },
+  '히트 액션 분포': { en: 'Hit action distribution', zh: '命中操作分布', ja: 'ヒットアクション分布' },
+  'Stateful 룰 히트 Top 10 (sid)': { en: 'Stateful rule hits Top 10 (sid)', zh: 'Stateful 规则命中 Top 10（sid）', ja: 'Stateful ルールヒット Top 10（sid）' },
+  '일부 행 생략 — 검색·정렬은 전체 행에서 동작합니다': { en: 'Some rows omitted — search and sort operate on the full set', zh: '部分行已省略 — 搜索与排序基于全部行', ja: '一部の行を省略 — 検索・ソートは全行に対して動作します' },
+  '상위 100 집계 기준 — 실제 합계와 다를 수 있음': { en: 'Based on the top-100 aggregation — may differ from actual totals', zh: '基于前 100 汇总 — 可能与实际合计不同', ja: '上位 100 集計ベース — 実際の合計と異なる場合があります' },
+  'Alert 로그 집계 기반 — pass 룰·미연결 그룹은 n/a, 상위 100 집계 밖은 ?': { en: 'Based on alert-log aggregation — pass rules and unassociated groups show n/a; outside the top-100 aggregation shows ?', zh: '基于 Alert 日志汇总 — pass 规则/未关联组显示 n/a；超出前 100 汇总显示 ?', ja: 'Alert ログ集計ベース — pass ルール・未関連付けグループは n/a、上位 100 集計外は ?' },
 
   // ---- Network Firewall (/network-firewall) ----
   '방화벽·정책·룰 그룹 인벤토리 + AWS/NetworkFirewall 메트릭 트래픽·드롭 집계 — 보호 설정·로깅 갭·전량 통과 기본 액션·룰 용량 분석': { en: 'Firewall / policy / rule group inventory + AWS/NetworkFirewall traffic & drop aggregation — protection settings, logging gaps, pass-through default actions, rule capacity analysis', zh: '防火墙·策略·规则组清单 + AWS/NetworkFirewall 指标流量·丢弃汇总 — 保护设置·日志缺口·全量放行默认操作·规则容量分析', ja: 'ファイアウォール・ポリシー・ルールグループのインベントリ + AWS/NetworkFirewall メトリクスのトラフィック・ドロップ集計 — 保護設定・ログギャップ・全量通過デフォルトアクション・ルール容量分析' },

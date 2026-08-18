@@ -7,7 +7,7 @@ import StatTile from '@/components/ui/StatTile';
 import Badge from '@/components/ui/Badge';
 import DetailPanel from '@/components/ui/DetailPanel';
 import MetricTable, { type MetricCol } from '@/components/inventory/metrics/MetricTable';
-import { RangePicker, TH, MONO, TD, DANGER, dash } from '@/components/inventory/metrics/shared';
+import { RangePicker, TH, MONO, TD, dash } from '@/components/inventory/metrics/shared';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import HBarList from '@/components/charts/HBarList';
 import DiagnosisGuide from '@/components/inventory/metrics/DiagnosisGuide';
@@ -162,7 +162,58 @@ function rgDetail(r: AnfwRuleGroupRow): Record<string, unknown> {
   });
 }
 
+// Stateful 룰 히트 카운트 행 — 설정 룰 1개당 1행 (rg×sid 키; SID는 룰 그룹 내에서만 유일).
+interface RuleHitRow {
+  key: string; sid: string; msg: string; actions: string[]; hits: number;
+  ruleGroups: string[]; configured: boolean; isPass: boolean;
+  /** 룰 그룹이 정책에 연결되어 트래픽을 관측할 수 있는가. */
+  associated: boolean;
+  /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. */
+  sharedSid: boolean;
+  /** 로그 집계가 top-100으로 잘려 hits 0을 '매칭 없음'으로 단정 불가. */
+  unknown: boolean;
+}
+
+// 매칭 0 설정 룰(idle) — pass 룰(로그 미발생)·미연결 그룹(관측 불가)·top-100 밖(불명)은 제외.
+const isIdleRule = (r: RuleHitRow) =>
+  r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0;
+
+const RULEHIT_DETAIL_SPEC: InvType = {
+  label: 'Stateful Rule Hit', group: 'Network',
+  columns: [
+    { key: 'sid', label: 'SID' }, { key: 'msg', label: 'Msg / Signature' },
+    { key: 'actions', label: 'Actions' }, { key: 'rule_groups', label: 'Rule Groups' },
+    { key: 'configured', label: 'Configured Rule' }, { key: 'pass_rule', label: 'Pass Rule' },
+    { key: 'associated', label: 'Rule Group Associated' }, { key: 'shared_sid', label: 'SID Shared Across Groups' },
+    { key: 'hits', label: 'Hits (range)' }, { key: 'hit_basis', label: 'Hit Basis' }, { key: 'hit_note', label: 'Hit Note' },
+  ],
+  sections: [
+    { label: 'Rule Identity', keys: ['sid', 'msg', 'actions', 'rule_groups', 'configured', 'pass_rule', 'associated', 'shared_sid'] },
+    { label: 'Hit Metrics', keys: ['hits', 'hit_basis', 'hit_note'] },
+  ],
+};
+
+function ruleHitDetail(r: RuleHitRow): Record<string, unknown> {
+  // 표의 3-state(n/a·?)와 동일 기준 — 상세에서는 사유를 문장으로 노출한다.
+  const na = r.hits === 0 && r.isPass ? 'n/a — pass rule emits no alert log'
+    : r.hits === 0 && !r.associated ? 'n/a — unassociated rule group cannot match traffic'
+      : r.unknown ? 'unknown — outside the top-100 log aggregation'
+        : undefined;
+  return compact({
+    sid: r.sid, msg: r.msg || undefined,
+    actions: r.actions.join(', ') || undefined,
+    rule_groups: r.ruleGroups.length ? r.ruleGroups : '(not found in configured rule groups — managed rule group?)',
+    configured: r.configured, pass_rule: r.isPass,
+    associated: r.configured ? r.associated : undefined,
+    shared_sid: r.sharedSid,
+    hits: na ? undefined : r.hits,
+    hit_basis: 'Alert-log Insights aggregation over CloudWatch Logs destinations (same source as the AWS rule hit counts feature)',
+    hit_note: na,
+  });
+}
+
 type Selected =
+  | { kind: 'rulehit'; row: RuleHitRow }
   | { kind: 'fw'; row: AnfwFirewallRow }
   | { kind: 'policy'; row: AnfwPolicyRow }
   | { kind: 'rg'; row: AnfwRuleGroupRow };
@@ -244,16 +295,6 @@ export default function NetworkFirewallPage() {
   // 로그 히트는 sid 단위로만 존재해 공유 SID는 그룹 귀속 불가(sharedSid 툴팁으로 명시).
   // idle(매칭 0) 판정 제외: pass 룰(Alert 로그 미발생) · 미연결 룰 그룹(트래픽 관측 불가) ·
   // 로그 히트가 top-100으로 잘린 경우(hits 0 ≠ 매칭 없음 — '불명' 처리).
-  interface RuleHitRow {
-    key: string; sid: string; msg: string; actions: string[]; hits: number;
-    ruleGroups: string[]; configured: boolean; isPass: boolean;
-    /** 룰 그룹이 정책에 연결되어 트래픽을 관측할 수 있는가. */
-    associated: boolean;
-    /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. */
-    sharedSid: boolean;
-    /** 로그 집계가 top-100으로 잘려 hits 0을 '매칭 없음'으로 단정 불가. */
-    unknown: boolean;
-  }
   const ruleHitRows = useMemo<RuleHitRow[]>(() => {
     const hits = logsData?.alert?.ruleHits ?? [];
     const truncated = hits.length >= 100;
@@ -297,9 +338,57 @@ export default function NetworkFirewallPage() {
     return rows.sort((a, b) => b.hits - a.hits || Number(a.sid) - Number(b.sid));
   }, [logsData, rgs]);
   // 히트 산출 불가(n/a): pass 룰 · 미연결 그룹 · top-100 밖 불명 — idle(빨간 배지)에서 제외
-  const idleConfiguredRules = useMemo(
-    () => ruleHitRows.filter((r) => r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0).length,
-  [ruleHitRows]);
+  const idleConfiguredRules = useMemo(() => ruleHitRows.filter(isIdleRule).length, [ruleHitRows]);
+
+  // 룰 히트 MetricTable 컬럼 — 헤더 클릭 정렬(num/str)·검색·facet은 MetricTable이 제공.
+  // hits의 정렬 value는 n/a(pass·미연결)·?(불명)를 null로 — MetricTable 규약상 항상 마지막 정렬.
+  const ruleHitColumns = useMemo<MetricCol<RuleHitRow>[]>(() => [
+    {
+      key: 'sid', label: 'SID', mono: true, type: 'num',
+      value: (r) => Number(r.sid),
+      render: (r) => (
+        <>
+          {r.sid}
+          {r.sharedSid && <span className="ml-1 text-ink-400" title={tt('여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음')}>*</span>}
+        </>
+      ),
+    },
+    { key: 'msg', label: 'Msg / Signature', value: (r) => r.msg || null },
+    // facet은 원소 단위(facetValues) — joined 표시값 exact-match면 'blocked' 선택 시 'drop, blocked' 행이 누락된다.
+    { key: 'action', label: tt('액션'), mono: true, facet: true, facetValues: (r) => (r.actions.length ? r.actions : ['—']), value: (r) => r.actions.join(', ') || null },
+    {
+      key: 'rg', label: tt('룰 그룹'), mono: true, facet: true,
+      value: (r) => r.ruleGroups.join(', ') || null,
+      render: (r) => r.ruleGroups.length
+        ? <>{r.ruleGroups.join(', ')}</>
+        : <span className="text-ink-300" title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>,
+    },
+    {
+      key: 'hits', label: tt('히트'), type: 'num',
+      title: tt('Alert 로그 집계 기반 — pass 룰·미연결 그룹은 n/a, 상위 100 집계 밖은 ?'),
+      value: (r) => ((r.hits === 0 && (r.isPass || !r.associated)) || r.unknown ? null : r.hits),
+      render: (r) => r.hits === 0 && r.isPass
+        ? <span className="text-ink-300" title={tt('pass 룰 — Alert 로그 미발생')}>n/a</span>
+        : r.hits === 0 && !r.associated
+          ? <span className="text-ink-300" title={tt('미연결 룰 그룹 — 트래픽에 매칭될 수 없음')}>n/a</span>
+          : r.unknown
+            ? <span className="text-ink-300" title={tt('상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
+            : <>{r.hits.toLocaleString()}</>,
+      danger: (r) => r.hits > 0 && r.actions.includes('blocked'),
+    },
+  ], [tt]);
+  // 히트 바 — 로그 원본(ruleHits)에서 sid 단위 집계: 공유 SID의 설정 행 중복 합산 방지.
+  // ruleHits는 (sid,sig,action) top-100 집계라 잘릴 수 있음 → 잘림 시 그래프에 고지.
+  const ruleHitsTruncated = (logsData?.alert?.ruleHits?.length ?? 0) >= 100;
+  const ruleHitBars = useMemo(() => {
+    const m = new Map<string, { rule: string; hits: number }>();
+    for (const h of logsData?.alert?.ruleHits ?? []) {
+      const cur = m.get(h.sid) ?? { rule: `${h.sid} · ${(h.signature || '').slice(0, 42) || '—'}`, hits: 0 };
+      cur.hits += h.hits;
+      m.set(h.sid, cur);
+    }
+    return [...m.values()].sort((a, b) => b.hits - a.hits).slice(0, 10);
+  }, [logsData]);
 
   // Flow 로그 시각화 — 프로토콜 도넛(플로우 수) + Top talker 바(HBarList는 정수 표시라 MB 단위).
   const flowProtoDist = useMemo(() => logsData?.flow?.byProto ?? [], [logsData]);
@@ -673,51 +762,30 @@ export default function NetworkFirewallPage() {
                         )}
                       </div>
                       {ruleHitRows.length > 0 && (
-                        <>
-                          <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Stateful 룰 히트 카운트')}</div>
+                        <div className="border-t border-ink-100">
+                          <div className="px-4 pt-3 text-[12px] font-medium text-ink-600">
+                            {tt('Stateful 룰 히트 카운트')} <span className="font-normal text-ink-400">— {tt('행 클릭 → 상세')}</span>
+                          </div>
                           <div className="px-4 pb-1 text-[12px] text-ink-500">
                             {tt('Alert 로그 집계 기반 — pass 룰은 Alert 로그를 남기지 않아 집계할 수 없습니다 (매칭 없음으로 세지 않음)')}
                           </div>
-                          {ruleHitRows.length > 50 && (
-                            <div className="px-4 pb-1 text-[12px] text-ink-500">{tt('히트 상위 50행 + 매칭 없는 설정 룰만 표시 (나머지 생략)')}</div>
-                          )}
-                          <div className="overflow-x-auto px-4 pb-3">
-                            <table className="w-full">
-                              <thead><tr className="border-b border-ink-100">
-                                <th className={TH}>SID</th>
-                                <th className={TH}>Msg / Signature</th>
-                                <th className={TH}>Action</th>
-                                <th className={TH}>{tt('룰 그룹')}</th>
-                                <th className={TH}>{tt('히트')}</th>
-                              </tr></thead>
-                              <tbody>
-                                {ruleHitRows
-                                  .filter((r, i) => i < 50 || (r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0))
-                                  .map((r) => (
-                                  <tr key={r.key} className={`border-b border-ink-50 last:border-0 ${r.configured && !r.isPass && r.associated && !r.unknown && r.hits === 0 ? 'opacity-60' : ''}`}>
-                                    <td className={MONO}>{r.sid}{r.sharedSid && <span className="ml-1 text-ink-400" title={tt('여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음')}>*</span>}</td>
-                                    <td className={TD}>{r.msg || dash}</td>
-                                    <td className={MONO}>{r.actions.join(', ') || dash}</td>
-                                    <td className={MONO}>{r.ruleGroups.join(', ') || <span title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>}</td>
-                                    <td className={`${TD} ${r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
-                                      {r.hits === 0 && r.isPass
-                                        ? <span className="text-ink-300" title={tt('pass 룰 — Alert 로그 미발생')}>n/a</span>
-                                        : r.hits === 0 && !r.associated
-                                          ? <span className="text-ink-300" title={tt('미연결 룰 그룹 — 트래픽에 매칭될 수 없음')}>n/a</span>
-                                          : r.unknown
-                                            ? <span className="text-ink-300" title={tt('상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
-                                            : r.hits.toLocaleString()}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </>
+                          <MetricTable
+                            columns={ruleHitColumns}
+                            items={ruleHitRows}
+                            rowKey={(r) => r.key}
+                            defaultSortKey="hits"
+                            emptyText="데이터 없음"
+                            onRowClick={(r) => setSelected({ kind: 'rulehit', row: r })}
+                            maxRender={1000}
+                            capKeep={isIdleRule}
+                            rowClass={(r) => (isIdleRule(r) ? 'opacity-60' : '')}
+                          />
+                        </div>
                       )}
                       {logsData.alert.totalAlerts > 0 && (
-                        <div className="grid gap-4 px-4 pb-3">
-                          <div className="overflow-x-auto">
+                        <div className="border-t border-ink-100">
+                          <div className="px-4 pt-3 text-[12px] font-medium text-ink-600">{tt('Top 소스 / 목적지')}</div>
+                          <div className="overflow-x-auto px-4 pb-3 pt-1">
                             <table className="w-full">
                               <thead><tr className="border-b border-ink-100">
                                 <th className={TH}>{tt('소스 IP')}</th>
@@ -744,6 +812,21 @@ export default function NetworkFirewallPage() {
                 </>
               )}
             </Card>
+
+            {/* ⑦-b 히트 시각화 — 도넛=byAction 완전 집계(카드 배지와 일치), 바=ruleHits sid 단위 집계(top-100 잘림 시 고지, 공유 SID 중복 합산 없음) */}
+            {(logsData?.alert?.ruleHits?.length ?? 0) > 0 && (
+              <div className="grid gap-6 lg:grid-cols-2">
+                <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
+                <HBarList
+                  title="Stateful 룰 히트 Top 10 (sid)"
+                  data={ruleHitBars}
+                  labelKey="rule"
+                  valueKey="hits"
+                  highlightMax
+                  right={ruleHitsTruncated ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준 — 실제 합계와 다를 수 있음')}</span> : undefined}
+                />
+              </div>
+            )}
 
             {/* ⑧ Flow 로그 분석 — stateful 엔진이 본 플로우, Top talker */}
             <Card
@@ -844,15 +927,20 @@ export default function NetworkFirewallPage() {
       </div>
 
       <DetailPanel
-        title={selected?.row.name}
+        title={selected == null ? undefined : selected.kind === 'rulehit' ? `SID ${selected.row.sid}` : selected.row.name}
         data={selected
           ? selected.kind === 'fw'
             ? fwDetail(selected.row)
             : selected.kind === 'policy'
               ? policyDetail(selected.row)
-              : rgDetail(selected.row)
+              : selected.kind === 'rulehit'
+                ? ruleHitDetail(selected.row)
+                : rgDetail(selected.row)
           : null}
-        spec={selected?.kind === 'fw' ? FW_DETAIL_SPEC : selected?.kind === 'policy' ? POLICY_DETAIL_SPEC : RG_DETAIL_SPEC}
+        spec={selected?.kind === 'fw' ? FW_DETAIL_SPEC
+          : selected?.kind === 'policy' ? POLICY_DETAIL_SPEC
+            : selected?.kind === 'rulehit' ? RULEHIT_DETAIL_SPEC
+              : RG_DETAIL_SPEC}
         onClose={() => setSelected(null)}
       />
     </>
