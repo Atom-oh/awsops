@@ -316,7 +316,7 @@ export default function DetailPanel({
         role="dialog"
         aria-modal={modal}
         aria-label={title ?? tt('리소스 상세')}
-        className="fixed inset-0 z-50 flex h-full w-full max-w-full flex-col bg-card shadow-pop lg:inset-y-0 lg:left-auto lg:right-0 lg:w-[var(--panel-w)] lg:border-l lg:border-ink-100"
+        className="fixed inset-0 z-50 flex h-full w-full max-w-full flex-col bg-card shadow-pop pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] lg:inset-y-0 lg:left-auto lg:right-0 lg:w-[var(--panel-w)] lg:border-l lg:border-ink-100 lg:p-0"
         style={{ ['--panel-w' as string]: `${width}px` } as CSSProperties}
       >
         <div onMouseDown={startResize} title={tt('드래그하여 폭 조절')} aria-label={tt('패널 폭 조절')} role="separator" className={`${RESIZE_GRIP_CLASS} hidden lg:block`}>

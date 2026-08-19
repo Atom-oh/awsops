@@ -24,13 +24,15 @@ export interface MetricCol<T> {
   render?: (item: T) => ReactNode;
   /** cell-level danger — rose text + the row counts for the '문제만' toggle. */
   danger?: (item: T) => boolean;
+  /** multi-value facet: 옵션 = 원소들의 합집합, 필터 = 행의 배열이 선택값을 포함 (joined 표시값에 exact-match하면 복합값 행이 누락됨). */
+  facetValues?: (item: T) => string[];
   mono?: boolean;
 }
 
 type Dir = 'asc' | 'desc' | null;
 
 export default function MetricTable<T>({
-  columns, items, rowKey, defaultSortKey, emptyText = '데이터 없음', onRowClick,
+  columns, items, rowKey, defaultSortKey, emptyText = '데이터 없음', onRowClick, maxRender, capKeep, rowClass,
 }: {
   columns: MetricCol<T>[];
   items: T[];
@@ -39,6 +41,12 @@ export default function MetricTable<T>({
   emptyText?: string;
   /** optional row drilldown — rows get pointer + hover affordance when set. */
   onRowClick?: (item: T) => void;
+  /** DOM 안전 상한 — 렌더 단계에서만 컷. 검색·facet·정렬·카운터는 전체 items에서 동작한다 (데이터 단계 컷은 정확 검색을 조용히 0건으로 만듦). */
+  maxRender?: number;
+  /** maxRender 컷에서도 보존할 행 (예: 매칭 0 설정 룰). */
+  capKeep?: (item: T) => boolean;
+  /** per-row class hook (예: idle 행 디밍). */
+  rowClass?: (item: T) => string;
 }) {
   const { tt } = useI18n();
   const [sortKey, setSortKey] = useState<string | null>(defaultSortKey ?? null);
@@ -53,7 +61,11 @@ export default function MetricTable<T>({
   const facetValues = useMemo(() => {
     const out: Record<string, string[]> = {};
     for (const c of facetCols) {
-      out[c.key] = [...new Set(items.map((it) => String(c.value(it) ?? '—')))].sort();
+      out[c.key] = [...new Set(items.flatMap((it) => {
+        if (!c.facetValues) return [String(c.value(it) ?? '—')];
+        const vs = c.facetValues(it);
+        return vs.length ? vs : ['—']; // empty array must stay selectable, or the row can never match any facet value
+      }))].sort();
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -69,7 +81,11 @@ export default function MetricTable<T>({
     for (const [k, v] of Object.entries(facets)) {
       if (!v) continue;
       const col = columns.find((c) => c.key === k);
-      if (col) rows = rows.filter((it) => String(col.value(it) ?? '—') === v);
+      if (col) rows = rows.filter((it) => {
+        if (!col.facetValues) return String(col.value(it) ?? '—') === v;
+        const vs = col.facetValues(it);
+        return (vs.length ? vs : ['—']).includes(v);
+      });
     }
     if (dangerOnly && hasDanger) {
       rows = rows.filter((it) => columns.some((c) => c.danger?.(it)));
@@ -90,6 +106,10 @@ export default function MetricTable<T>({
     }
     return rows;
   }, [items, columns, q, facets, dangerOnly, hasDanger, sortKey, dir]);
+
+  const rendered = maxRender != null && shown.length > maxRender
+    ? shown.filter((it, i) => i < maxRender || (capKeep?.(it) ?? false))
+    : shown;
 
   const cycle = (key: string) => {
     if (sortKey !== key) { setSortKey(key); setDir('asc'); return; }
@@ -149,11 +169,11 @@ export default function MetricTable<T>({
             ))}
           </tr></thead>
           <tbody>
-            {shown.map((it, i) => (
+            {rendered.map((it, i) => (
               <tr
                 key={rowKey(it, i)}
                 onClick={onRowClick ? () => onRowClick(it) : undefined}
-                className={`border-b border-ink-50 last:border-0 ${onRowClick ? 'cursor-pointer hover:bg-ink-50' : ''}`}
+                className={`border-b border-ink-50 last:border-0 ${onRowClick ? 'cursor-pointer hover:bg-ink-50' : ''} ${rowClass?.(it) ?? ''}`}
               >
                 {columns.map((c) => {
                   const hot = c.danger?.(it) ?? false;
@@ -172,6 +192,11 @@ export default function MetricTable<T>({
             )}
           </tbody>
         </table>
+        {rendered.length < shown.length && (
+          <div className="px-4 py-2 text-[12px] text-ink-400">
+            {tt('일부 행 생략 — 검색·정렬은 전체 행에서 동작합니다')} ({(shown.length - rendered.length).toLocaleString()})
+          </div>
+        )}
       </div>
     </div>
   );

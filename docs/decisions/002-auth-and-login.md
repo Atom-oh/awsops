@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22) — consolidated. consolidates: 020, 023, 042
+Accepted (2026-06-22) — consolidated. consolidates: 020, 023, 042. **Amended 2026-08-19 (PR #228): `is_public()`'s enumerated allowlist in §1 corrected to match the actual `cognito_edge.py.tftpl` code (adds `/api/health`, `/api/auth/signout`, `/api/incidents/webhook`, and 5 PWA static assets, none of which the prior text listed).**
 
 ## Context / 컨텍스트
 
@@ -28,9 +28,9 @@ Cognito User Pool이 신원을 관리한다(주 리전 `ap-northeast-2`). Python
 
 A Cognito User Pool holds identities (primary region `ap-northeast-2`). A Python Lambda@Edge function (`us-east-1` — the only region Lambda@Edge allows) is attached to the CloudFront `viewer-request` event and validates the `awsops_token` cookie on every request. Validation performs **RS256 JWKS signature verification + `iss`/`aud`/`token_use` claims + OAuth `state` + PKCE public client** (no client secret). The verified ID token rides the `awsops_token` cookie (`Path=/; Secure; HttpOnly; SameSite=Lax`) on every subsequent request. Because `viewer-request` fires before the CloudFront cache lookup, unauthenticated users never receive even cached HTML.
 
-미인증 요청은 엣지에서 자체 `/login` 페이지로 리다이렉트된다(`302 Location: /login?next={quoted uri}`, `Cache-Control: no-cache`). `next`는 오픈 리다이렉트에 대해 정제된다(`/`로 시작, 2번째 문자 ≠ `/`·`\`, `\` 미포함, ≤2048자; 브라우저 `\`→`/` 정규화 우회까지 차단; 기본값 `/`). `is_public()`은 `/login`·`/api/auth/login`·`/icon.svg`(로그인 페이지·인증 API·파비콘)를 미인증 허용한다.
+미인증 요청은 엣지에서 자체 `/login` 페이지로 리다이렉트된다(`302 Location: /login?next={quoted uri}`, `Cache-Control: no-cache`). `next`는 오픈 리다이렉트에 대해 정제된다(`/`로 시작, 2번째 문자 ≠ `/`·`\`, `\` 미포함, ≤2048자; 브라우저 `\`→`/` 정규화 우회까지 차단; 기본값 `/`). **개정(PR #228, 이전 서술이 이미 비완전했던 것을 이 시점에 실제 코드와 일치시킴):** `is_public()`은 `/login`·`/api/auth/login`·`/icon.svg`(로그인 페이지·인증 API·파비콘) 외에도 `/api/health`(헬스체크), `/api/auth/signout`(만료 토큰 탈출 경로), `/api/incidents/webhook`(ADR-013의 머신 인그레스 예외, HMAC-SHA256/SNS 검증), 그리고 PWA 정적 자산 5종(`/manifest.webmanifest`, `/apple-touch-icon.png`, `/icon-192.png`, `/icon-512.png`, `/icon-512-maskable.png` — iOS가 인증 쿠키 없이 fetch)까지 미인증 허용한다(`/_next/static/*` 프리픽스는 별도). 이 경로들 밖으로 새 경로를 추가하는 것은 그 자체로 리뷰 대상이다.
 
-Unauthenticated requests are redirected at the edge to the self-hosted `/login` page (`302 Location: /login?next={quoted uri}`, `Cache-Control: no-cache`). `next` is sanitized against open redirect (starts `/`, 2nd char ≠ `/`·`\`, no `\`, ≤2048 chars; the browser `\`→`/` normalization bypass is covered; defaults to `/`). `is_public()` allows `/login`, `/api/auth/login`, and `/icon.svg` (login page, auth API, favicon) unauthenticated.
+Unauthenticated requests are redirected at the edge to the self-hosted `/login` page (`302 Location: /login?next={quoted uri}`, `Cache-Control: no-cache`). `next` is sanitized against open redirect (starts `/`, 2nd char ≠ `/`·`\`, no `\`, ≤2048 chars; the browser `\`→`/` normalization bypass is covered; defaults to `/`). **Amended (PR #228, bringing an already-incomplete description in line with the actual code at this point):** beyond `/login`, `/api/auth/login`, and `/icon.svg` (login page, auth API, favicon), `is_public()` also allows `/api/health` (healthcheck), `/api/auth/signout` (expired-token escape hatch), `/api/incidents/webhook` (ADR-013's machine-ingress carve-out, HMAC-SHA256/SNS-verified), and 5 PWA static assets (`/manifest.webmanifest`, `/apple-touch-icon.png`, `/icon-192.png`, `/icon-512.png`, `/icon-512-maskable.png` — fetched by iOS without the auth cookie) unauthenticated (the `/_next/static/*` prefix is separate). Adding any path outside this list is itself review-worthy.
 
 ### 2. 로그인 — 자체 호스팅 `/login` 폼 (1차 경로) / Login — self-hosted `/login` form (primary path)
 

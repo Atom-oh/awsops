@@ -140,7 +140,7 @@ export default function ChatDrawer() {
       // edge with the persisted/maximized width applied as an inline style.
       // lg: dock immediately left of any open right-docked DetailPanel (--detail-panel-w,
       // 0 when none → flush right edge) so the two panels sit side-by-side instead of overlapping.
-      className="fixed inset-0 z-50 flex flex-col border-ink-100 bg-paper shadow-pop lg:inset-y-0 lg:left-auto lg:right-[var(--detail-panel-w,0px)] lg:h-screen lg:border-l"
+      className="fixed inset-0 z-50 flex flex-col border-ink-100 bg-paper shadow-pop pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] lg:inset-y-0 lg:left-auto lg:right-[var(--detail-panel-w,0px)] lg:h-screen lg:border-l lg:p-0"
       style={isDesktop ? { width: totalWidth } : undefined}
     >
       {/* resize grip — desktop only, and hidden while maximized */}

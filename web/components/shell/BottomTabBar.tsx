@@ -15,7 +15,7 @@ export default function BottomTabBar({ onMore }: { onMore: () => void }) {
   const { t } = useI18n();
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-chrome-border bg-chrome pb-[env(safe-area-inset-bottom)] lg:hidden">
+    <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-chrome-border bg-chrome pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] lg:hidden">
       {MOBILE_TABS.map((tab) => {
         const active = isTabActive(path, tab);
         const Icon = tab.icon;
