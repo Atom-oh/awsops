@@ -71,6 +71,60 @@ function hasPathIds(x: { pathIds?: string[] }): boolean {
 
 const byId = <T extends { id: string }>(a: T, b: T): number => a.id.localeCompare(b.id);
 
+interface PathCluster {
+  minPathId: string;
+  nodes: PolicyGraphNode[];
+  edges: PolicyGraphEdge[];
+}
+
+/**
+ * Groups path-tagged nodes/edges into connected clusters via union-find over shared `pathIds` —
+ * two path ids are the same cluster the moment any single node or edge is tagged with both (a
+ * shared segment between two equal-cost active paths). This is what lets `boundGraph` include or
+ * exclude a whole resolved path atomically: slicing an arbitrary subset of one path's nodes can
+ * leave a disconnected, misleadingly-plausible-looking fragment, but excluding/including an entire
+ * cluster never can.
+ */
+function buildPathClusters(pathNodes: PolicyGraphNode[], pathEdges: PolicyGraphEdge[]): PathCluster[] {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r) as string;
+    return r;
+  };
+  const ensure = (id: string) => { if (!parent.has(id)) parent.set(id, id); };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  for (const item of [...pathNodes, ...pathEdges]) {
+    const ids = item.pathIds ?? [];
+    ids.forEach(ensure);
+    for (let i = 1; i < ids.length; i++) union(ids[0], ids[i]);
+  }
+
+  const byRoot = new Map<string, PathCluster>();
+  const clusterFor = (anyPathId: string): PathCluster => {
+    const root = find(anyPathId);
+    let c = byRoot.get(root);
+    if (!c) { c = { minPathId: anyPathId, nodes: [], edges: [] }; byRoot.set(root, c); }
+    return c;
+  };
+
+  for (const n of pathNodes) clusterFor(n.pathIds![0]).nodes.push(n);
+  for (const e of pathEdges) clusterFor(e.pathIds![0]).edges.push(e);
+
+  const clusters = [...byRoot.values()];
+  for (const c of clusters) {
+    c.nodes.sort(byId);
+    c.edges.sort(byId);
+    c.minPathId = c.nodes[0]?.pathIds?.slice().sort()[0] ?? c.edges[0]?.pathIds?.slice().sort()[0] ?? c.minPathId;
+  }
+  return clusters.sort((a, b) => a.minPathId.localeCompare(b.minPathId));
+}
+
 /**
  * Deterministically caps a raw graph to the given node/edge limits and reports what was hidden.
  * `caps.nodes`/`caps.edges` are ALWAYS enforced as hard maximums (the returned graph never exceeds
@@ -78,38 +132,60 @@ const byId = <T extends { id: string }>(a: T, b: T): number => a.id.localeCompar
  * bounded browser canvas cost), and a shared function silently exceeding them under some inputs
  * would reopen exactly the unbounded-write risk the cap exists to prevent.
  *
- * Within that hard limit, nodes/edges tagged with an active resolved path (`pathIds` non-empty)
- * are preferred over decorative/candidate ones — a resolved-path graph's whole point is the path,
- * so decorative overflow is dropped first. But when path-tagged structure ALONE still exceeds the
- * cap, this function has no way to safely guess which path node is droppable without risking a
- * misrepresented result, so instead of guessing it cuts deterministically (by id) like everything
- * else AND sets `pathTruncated: true` — an explicit, un-ignorable signal that `omitted` this time
- * includes resolved-path structure, not just decoration. Callers own the consequence (e.g. treating
- * the run as failed/unknown rather than presenting a confidently-truncated path); this function's
- * job is only to never let that happen silently in either direction (unbounded growth, or a quietly
- * wrong path). In practice this should be rare — the caps are generous specifically because domain
- * builders are expected to have already collapsed repeated targets/candidate branches into typed
- * `+N` nodes before calling this (see `web/lib/sg-policy-graph.ts`).
+ * Within that hard limit, resolved-path structure (`pathIds` non-empty) is preferred over
+ * decorative/candidate structure — a resolved-path graph's whole point is the path, so decorative
+ * overflow is dropped first. Path structure is admitted in whole connected clusters (see
+ * `buildPathClusters`), never as an arbitrary node-by-node slice: a cluster is either included with
+ * ALL of its nodes and edges, or excluded entirely. Slicing partway through a path/cluster would
+ * leave disconnected fragments that can look like a complete, if smaller, valid result — which for
+ * a security decision graph is worse than an honest, visible gap. Clusters are tried in
+ * deterministic order (by their smallest `pathIds` value) and admitted greedily while both the node
+ * and edge budget allow; a cluster too big for the remaining budget is skipped for a later, smaller
+ * one rather than trying to fit part of it. Any cluster left out sets `pathTruncated: true` — an
+ * explicit, un-ignorable signal that `omitted` this time is resolved-path structure, not just
+ * decoration, so a caller can react distinctly (e.g. treat the run as failed/unknown) rather than
+ * present a confidently-truncated but incomplete path. In practice full exclusion should be rare —
+ * the caps are generous specifically because domain builders are expected to have already collapsed
+ * repeated targets/candidate branches into typed `+N` nodes before calling this (see
+ * `web/lib/sg-policy-graph.ts`).
  *
- * Nodes/edges are chosen for their budget by sorting on id, so repeated calls over the same input
- * are stable across polls. Dangling edges (referencing a node the node cap cut) are dropped and
- * counted as omitted the same as edges cut purely by the edge cap.
+ * Decorative nodes/edges are chosen for the remaining budget by sorting on id, so repeated calls
+ * over the same input are stable across polls. Dangling edges (referencing a node the node cap cut)
+ * are dropped and counted as omitted the same as edges cut purely by the edge cap.
  */
 export function boundGraph(
   graph: { version: 1; capturedAt: string; nodes: PolicyGraphNode[]; edges: PolicyGraphEdge[] },
   caps: GraphCaps,
 ): PolicyGraphDto {
-  const pathNodes = graph.nodes.filter(hasPathIds).sort(byId);
+  const pathNodes = graph.nodes.filter(hasPathIds);
+  const pathEdges = graph.edges.filter(hasPathIds);
   const looseNodes = graph.nodes.filter((n) => !hasPathIds(n)).sort(byId);
-  const keptPathNodes = pathNodes.slice(0, caps.nodes);
+  const looseEdges = graph.edges.filter((e) => !hasPathIds(e)).sort(byId);
+
+  const clusters = buildPathClusters(pathNodes, pathEdges);
+  const includedClusters: PathCluster[] = [];
+  let usedNodes = 0;
+  let usedEdges = 0;
+  for (const c of clusters) {
+    if (usedNodes + c.nodes.length <= caps.nodes && usedEdges + c.edges.length <= caps.edges) {
+      includedClusters.push(c);
+      usedNodes += c.nodes.length;
+      usedEdges += c.edges.length;
+    }
+    // else: the whole cluster is excluded — never a partial slice of it.
+  }
+
+  const keptPathNodes = includedClusters.flatMap((c) => c.nodes).sort(byId);
   const looseNodeBudget = Math.max(0, caps.nodes - keptPathNodes.length);
   const keptNodes = [...keptPathNodes, ...looseNodes.slice(0, looseNodeBudget)].sort(byId);
   const keptNodeIds = new Set(keptNodes.map((n) => n.id));
 
-  const pathEdges = graph.edges.filter(hasPathIds).sort(byId);
-  const looseEdges = graph.edges.filter((e) => !hasPathIds(e)).sort(byId);
-  const validPathEdges = pathEdges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target));
-  const keptPathEdges = validPathEdges.slice(0, caps.edges);
+  // Defensive re-check: an included cluster's own edges should already have both endpoints inside
+  // it, but never trust that blindly against a dangling edge in malformed input.
+  const keptPathEdges = includedClusters
+    .flatMap((c) => c.edges)
+    .filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target))
+    .sort(byId);
   const looseEdgeBudget = Math.max(0, caps.edges - keptPathEdges.length);
   const keptLooseEdges = looseEdges
     .filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target))
@@ -118,15 +194,13 @@ export function boundGraph(
 
   const omittedNodes = graph.nodes.length - keptNodes.length;
   const omittedEdges = graph.edges.length - keptEdges.length;
-  const pathNodesOmitted = pathNodes.length - keptPathNodes.length;
-  const pathEdgesOmitted = pathEdges.length - keptPathEdges.length;
 
   return {
     version: 1,
     capturedAt: graph.capturedAt,
     truncated: omittedNodes > 0 || omittedEdges > 0,
     omitted: { nodes: omittedNodes, edges: omittedEdges },
-    pathTruncated: pathNodesOmitted > 0 || pathEdgesOmitted > 0,
+    pathTruncated: includedClusters.length !== clusters.length,
     nodes: keptNodes,
     edges: keptEdges,
   };

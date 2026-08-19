@@ -101,12 +101,11 @@ describe('boundGraph', () => {
     expect(bounded.edges.some((e) => e.id === 'zz-source->zz-target')).toBe(true);
   });
 
-  it('enforces the hard cap even over path structure, but flags it distinctly via pathTruncated', () => {
-    // A 4-hop resolved path (4 nodes, 3 edges) with caps far below that. The cap is a persistence/
-    // rendering safety limit and must never be silently exceeded — so this MUST still cut down to
-    // 2 nodes/1 edge. What must NOT happen is presenting that as ordinary decorative truncation:
-    // pathTruncated must fire so a caller can react (e.g. fail the run) instead of quietly
-    // rendering a possibly-wrong path.
+  it('excludes an oversized resolved path WHOLLY rather than rendering a disconnected fragment', () => {
+    // A 4-hop resolved path (4 nodes, 3 edges) with caps far below that. A naive slice-to-cap would
+    // keep e.g. 2 of the 4 nodes with 0 or 1 surviving edges — a disconnected fragment that still
+    // LOOKS like a small complete result. That is worse than an honest gap for a security decision
+    // graph, so the whole cluster must be excluded together: either all of it renders, or none of it.
     const ids = ['path-a', 'path-b', 'path-c', 'path-d'];
     const pathNodes: PolicyGraphNode[] = ids.map((id) => ({ id, kind: 'hop', label: id, status: 'allowed', pathIds: ['path-01'] }));
     const pathEdges: PolicyGraphEdge[] = [0, 1, 2].map((i) => ({
@@ -116,11 +115,63 @@ describe('boundGraph', () => {
 
     const bounded = boundGraph(graph, { nodes: 2, edges: 1 });
 
-    expect(bounded.nodes).toHaveLength(2);
-    expect(bounded.edges).toHaveLength(1);
+    expect(bounded.nodes).toHaveLength(0);
+    expect(bounded.edges).toHaveLength(0);
     expect(bounded.truncated).toBe(true);
     expect(bounded.pathTruncated).toBe(true);
-    expect(bounded.omitted).toEqual({ nodes: 2, edges: 2 });
+    expect(bounded.omitted).toEqual({ nodes: 4, edges: 3 });
+  });
+
+  it('admits one whole independent path and excludes the other whole, never a mix of both', () => {
+    const path1Nodes: PolicyGraphNode[] = ['p1-a', 'p1-b'].map((id) => ({ id, kind: 'hop', label: id, status: 'allowed', pathIds: ['path-01'] }));
+    const path1Edges: PolicyGraphEdge[] = [{ id: 'p1-a->p1-b', source: 'p1-a', target: 'p1-b', relation: 'routed-to', status: 'allowed', pathIds: ['path-01'] }];
+    const path2Nodes: PolicyGraphNode[] = ['p2-a', 'p2-b', 'p2-c'].map((id) => ({ id, kind: 'hop', label: id, status: 'allowed', pathIds: ['path-02'] }));
+    const path2Edges: PolicyGraphEdge[] = [
+      { id: 'p2-a->p2-b', source: 'p2-a', target: 'p2-b', relation: 'routed-to', status: 'allowed', pathIds: ['path-02'] },
+      { id: 'p2-b->p2-c', source: 'p2-b', target: 'p2-c', relation: 'routed-to', status: 'allowed', pathIds: ['path-02'] },
+    ];
+    const graph = {
+      version: 1 as const, capturedAt: '2026-08-19T00:00:00Z',
+      nodes: [...path1Nodes, ...path2Nodes], edges: [...path1Edges, ...path2Edges],
+    };
+
+    // Room for exactly one of the two clusters (2 nodes/1 edge fits; 3 nodes/2 edges does not).
+    const bounded = boundGraph(graph, { nodes: 2, edges: 1 });
+
+    const keptIds = new Set(bounded.nodes.map((n) => n.id));
+    const path1Present = path1Nodes.every((n) => keptIds.has(n.id));
+    const path2Present = path2Nodes.every((n) => keptIds.has(n.id));
+    // exactly one path is present in full; the other is entirely absent — never a partial mix
+    expect(path1Present !== path2Present).toBe(true);
+    if (path1Present) {
+      expect(bounded.nodes).toHaveLength(2);
+      expect(bounded.edges.map((e) => e.id)).toEqual(['p1-a->p1-b']);
+    } else {
+      // path-02 doesn't fit the 2-node/1-edge budget either, so this branch shouldn't be reached
+      // by this fixture, but if caps changed, it must still be all-or-nothing.
+      expect(bounded.nodes.map((n) => n.id).sort()).toEqual(['p2-a', 'p2-b', 'p2-c']);
+    }
+    expect(bounded.pathTruncated).toBe(true);
+  });
+
+  it('treats two path ids sharing a node as one cluster (union-find over shared pathIds)', () => {
+    // A shared upstream node belongs to both path-01 and path-02 — they must be admitted/excluded
+    // together, never independently, since the shared node ties their fates.
+    const shared: PolicyGraphNode = { id: 'shared-hop', kind: 'hop', label: 'shared', status: 'allowed', pathIds: ['path-01', 'path-02'] };
+    const branch1: PolicyGraphNode = { id: 'branch-1', kind: 'hop', label: 'b1', status: 'allowed', pathIds: ['path-01'] };
+    const branch2: PolicyGraphNode = { id: 'branch-2', kind: 'hop', label: 'b2', status: 'allowed', pathIds: ['path-02'] };
+    const graph = {
+      version: 1 as const, capturedAt: '2026-08-19T00:00:00Z',
+      nodes: [shared, branch1, branch2], edges: [],
+    };
+
+    // Cap fits the shared node + exactly one branch (2 of the 3), which is NOT enough to admit the
+    // whole merged cluster (3 nodes) — so the cluster must be excluded entirely, not partially.
+    const bounded = boundGraph(graph, { nodes: 2, edges: 400 });
+
+    expect(bounded.nodes).toHaveLength(0);
+    expect(bounded.pathTruncated).toBe(true);
+    expect(bounded.omitted.nodes).toBe(3);
   });
 
   it('still drops decorative nodes in favor of the path when the path itself fits the cap', () => {
