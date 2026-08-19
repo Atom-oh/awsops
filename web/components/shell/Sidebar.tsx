@@ -87,7 +87,8 @@ const FEATURE_ICON: Record<string, LucideIcon> = {
   'eks-nodes': Server, 'eks-pods': Boxes, 'eks-deployments': Layers,
   'eks-services': Network, 'eks-explorer': Terminal, 'eks-cost': DollarSign,
   'network-flow': Activity, 'dns-query': FileSearch, 'ip-addresses': Locate, 'vpc-endpoints': Cable,
-  'direct-connect': Router, 'network-firewall': Flame,
+  'direct-connect': Router, 'network-firewall': Flame, 'network-paths': Waypoints,
+  'sg-rules': ListFilter, 'sg-usage': Activity,
 };
 
 const STORAGE_KEY = 'awsops:nav:expanded';
