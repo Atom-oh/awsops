@@ -1,6 +1,18 @@
 # Security Group Rules and Usage
 
-**Status:** Proposed 2026-08-13 — **not yet Approved.** The Feature Gate / IAM sections below classify the Athena write-capable path (StartQueryExecution/StopQueryExecution + result-prefix S3 write + a new cross-account role) as ADR-007-tier rather than ADR-005 FROZEN. That classification is this document's own reasoning, not a ratified decision — per BASELINE's own precedent (ADR-015 required a dedicated ADR + multi-AI panel + dated owner-override for a single narrowly-scoped `ecs:UpdateService` call), the instrument for settling this is a new ADR through that same process, not an Approved design spec. This document does not move to Approved, and the BASELINE §2 row it requires does not get written, until that ADR lands. Implementation must not start from this spec while it is Proposed.
+**Status:** Approved (2026-08-19). The Feature Gate / IAM sections below previously self-classified
+the Athena write-capable path (StartQueryExecution/StopQueryExecution + result-prefix S3 write + a
+new cross-account role) as ADR-007-tier — that classification was this document's own reasoning, not
+a ratified decision, and per BASELINE's own precedent (ADR-015) required a dedicated ADR + multi-AI
+panel to settle. That ADR now exists:
+[`docs/decisions/019-athena-flow-log-query-classification.md`](../../decisions/019-athena-flow-log-query-classification.md)
+(Accepted 2026-08-19) reclassifies this feature as falling inside the existing read-only invariant
+after a `/co-agent:consensus` multi-AI panel round (codex + kiro-cli/claude-fable-5) found, and this
+document + the ADR resolved, several MAJOR gaps — including reconciling ADR-019's cross-account IAM
+description with this document's own two-role design (§Feature gate, §IAM and multi-account
+behavior). `docs/decisions/BASELINE.md` §2 now carries the `sg_rule_activity_enabled` register row
+this document required. Owner: 오준석(Junseok Oh), who directed the ADR drafting and panel review
+and approved this Status change after reviewing the findings and fixes.
 
 ## Summary
 
