@@ -527,8 +527,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/whchoi98/awsops/compare/v0.7.0...v0.8.0
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
 [0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
@@ -1059,8 +1058,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/whchoi98/awsops/compare/v0.7.0...v0.8.0
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
 [0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
