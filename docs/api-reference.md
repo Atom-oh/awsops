@@ -1,8 +1,8 @@
 # API 레퍼런스 / API Reference
 
 ## 역할 / Role
-`web/app/api/**/route.ts` 전수(86개 라우트) 인덱스 — 경로·메서드·역할·인증.
-(Full index of all 86 `route.ts` files under `web/app/api` — path, methods, role, auth.)
+`web/app/api/**/route.ts` 전수(87개 라우트) 인덱스 — 경로·메서드·역할·인증.
+(Full index of all 87 `route.ts` files under `web/app/api` — path, methods, role, auth.)
 - 인증 컬럼: `verifyUser` = Cognito `awsops_token` 쿠키 검증(`@/lib/auth`). `없음` = 라우트 자체 비게이트(엣지 Lambda@Edge 게이트는 별도). 역할에 "admin"이 있으면 `isAdmin` 추가 게이트.
 - 모든 라우트는 루트 경로(`/api/*`) — basePath 없음. web은 thin-BFF: 무거운 작업은 `POST /api/jobs`로 enqueue.
 

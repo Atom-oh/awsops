@@ -6,7 +6,7 @@ Next.js 14 thin-BFF. Serves at the root path (`/`) — no basePath, fetch is `/a
 ## Layout
 | Directory | Contents | Size |
 |---|---|---|
-| `app/` | Pages + API routes (App Router) | 36 pages / 86 API routes |
+| `app/` | Pages + API routes (App Router) | 36 pages / 87 API routes |
 | `lib/` | Domain logic — mostly React-free | 118 modules |
 | `components/` | Client components | 89 files, 11 subdirs |
 

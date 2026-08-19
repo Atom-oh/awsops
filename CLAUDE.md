@@ -6,6 +6,19 @@
 ## Project Overview
 AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds v1's single-EC2 monolith as a **Terraform-based MSA**: private edge (CloudFront VPC Origin → internal ALB → Fargate), Cognito Lambda@Edge auth, Aurora persistent state, AgentCore section agents (live AWS queries), and an OOM-safe async worker tier.
 
+## Commands (web/, day-to-day dev)
+All app code/tests live under `web/` — there is no root `package.json`.
+```
+cd web && npm install
+npm run dev                              # next dev
+npm run build                            # next build (standalone, used by the deploy image)
+npm test                                 # vitest run — full suite (2000+ tests, ~10s)
+npx vitest run lib/anfw.test.ts          # a single test file
+npx vitest run -t "test name substring"  # filter by test name
+npx tsc --noEmit -p .                    # typecheck — no npm script wraps this; run directly
+```
+No lint script/config exists (no ESLint) — don't go looking for one. Integration tests for the migration/backfill scripts live outside `web/` as `scripts/v2/*.itest.mjs`, run directly with `node scripts/v2/<name>.itest.mjs` — each spins up a disposable `postgres:17` container via `sudo docker` (skips cleanly if Docker is unreachable), not the live Aurora instance.
+
 ## Architecture (v2)
 - **IaC**: **Terraform** (CDK retired). Single root at `terraform/v2/foundation/`, **partial S3 backend** (`backend.hcl`, `awsops-v2-tfstate`, `use_lockfile` — no DynamoDB). TF ≥1.15, provider `~>6.0`.
 - **Edge**: CloudFront (TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** The ALB SG allows 443 only from the CloudFront-managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only causes a 504).
@@ -144,5 +157,5 @@ make workers     # arm64 worker image push (after apply with workers_enabled=tru
 ## Implementation References
 <!-- AUTO-MANAGED:references — managed by the /project-init sync; do not hand-edit inside the markers. -->
 Per-layer implementation references live under `docs/reference/` (index: [README](docs/reference/README.md)) — [01 Edge Network](docs/reference/01-edge-network.md) · [02 Auth](docs/reference/02-auth.md) · [03 Aurora Data](docs/reference/03-data-aurora.md) · [04 Web BFF](docs/reference/04-web-bff.md) · [05 AgentCore](docs/reference/05-agentcore.md) · [06 Workers](docs/reference/06-workers.md) · [07 EKS](docs/reference/07-eks.md).
-Full overview: [docs/architecture.md](docs/architecture.md) (bilingual + mermaid) · New joiners: [docs/onboarding.md](docs/onboarding.md) · Full API index (86 routes): [docs/api-reference.md](docs/api-reference.md) · Operations: [docs/runbooks/](docs/runbooks/).
+Full overview: [docs/architecture.md](docs/architecture.md) (bilingual + mermaid) · New joiners: [docs/onboarding.md](docs/onboarding.md) · Full API index (87 routes): [docs/api-reference.md](docs/api-reference.md) · Operations: [docs/runbooks/](docs/runbooks/).
 <!-- /AUTO-MANAGED:references -->

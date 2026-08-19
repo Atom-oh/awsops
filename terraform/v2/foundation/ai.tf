@@ -691,7 +691,10 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
       },
       {
         # cost: cost-mcp (Cost Explorer + Pricing + Budgets) + finops-mcp (Compute Optimizer +
-        #       Savings Plans + Trusted Advisor via support).
+        #       Savings Plans + Cost Optimization Hub + Trusted Advisor via support).
+        # cost-optimization-hub:List/GetRecommendation* added here (ADR-019 fix): ADR-012 documented
+        # this grant as already present, but it was never in terraform, so aws_finops_mcp.py's
+        # get_cost_optimization_hub_recommendations tool has been AccessDenied at runtime since 012.
         Sid    = "CostRead"
         Effect = "Allow"
         Action = [
@@ -704,7 +707,10 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
           "budgets:View*",
           "compute-optimizer:Get*",
           "savingsplans:Describe*",
-          "support:Describe*"
+          "support:Describe*",
+          "cost-optimization-hub:ListRecommendations",
+          "cost-optimization-hub:GetRecommendation",
+          "cost-optimization-hub:ListRecommendationSummaries"
         ]
         Resource = "*"
       },

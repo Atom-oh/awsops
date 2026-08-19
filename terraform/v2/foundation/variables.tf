@@ -199,6 +199,16 @@ variable "ai_insights_enabled" {
   }
 }
 
+variable "finops_baseline_enabled" {
+  type        = bool
+  description = "Deterministic FinOps baseline-recommendations engine (ADR-019, extends ADR-012): a daily Fargate worker job evaluates a declarative rule catalog (scripts/v2/workers/finops/rules.yaml) against Cost Explorer usage-type/service grouping + inventory_resources + Compute Optimizer/Cost Optimization Hub/Budgets, writes priced findings to finops_findings (amounts are always derived from an API/SQL result, never LLM-generated), and /cost renders them read-only. No AWS-resource mutation (ADR-005 out of scope — this adds no write path). Requires workers_enabled only — its Compute Optimizer/Cost Optimization Hub/Budgets IAM is granted directly on the worker task/Lambda roles (see worker_finops_baseline/worker_lambda_finops_baseline in workers.tf), independent of agentcore_enabled/the agent Lambda role's CostRead Sid. false (default) = 0 resources/IAM, $0, no scheduled run, /cost shows only the existing spend-visibility section."
+  default     = false
+  validation {
+    condition     = !var.finops_baseline_enabled || var.workers_enabled
+    error_message = "finops_baseline_enabled requires workers_enabled (the rule engine runs on the Fargate worker)."
+  }
+}
+
 variable "worker_image_tag" {
   type        = string
   description = "Worker Fargate image tag in the worker ECR repo."

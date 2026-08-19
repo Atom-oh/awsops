@@ -188,6 +188,25 @@ def _insight(payload, dry_run):
             pass
 
 
+def _finops_baseline(payload, dry_run):
+    """ADR-019 FinOps baseline-recommendations engine (daily). Read-only Cost Explorer/Compute
+    Optimizer/Cost Optimization Hub calls + inventory_resources reads -> finops_findings. Fargate
+    runtime (matches the ADR's "same Fargate worker as diagnosis" framing; a full Compute Optimizer
+    + LLM-explanation pass can run longer than the lambda job's time budget)."""
+    if dry_run:
+        return {"dry_run": True, "would_run_finops_baseline": True}, None
+    import db as wdb
+    from finops import engine
+    conn = wdb.connect()
+    try:
+        return engine.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # type -> (handler, runtime). runtime drives SFN routing (lambda<15min / fargate long+heavy).
 REGISTRY = {
     "noop":             (_noop, "lambda"),
@@ -196,6 +215,7 @@ REGISTRY = {
     "compliance":       (_compliance, "fargate"),
     "datasource_index": (_datasource_index, "lambda"),
     "insight":          (_insight, "lambda"),
+    "finops_baseline":  (_finops_baseline, "fargate"),
 }
 
 

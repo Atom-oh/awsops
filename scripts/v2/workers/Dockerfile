@@ -38,6 +38,9 @@ COPY action_catalog.py remediation_executor.py remediation_executor_cli.py ./
 # AI Diagnosis (Plan 1): the `report` handler imports the diagnosis package (sources/sections/
 # report/db). Ship it in the worker image so handlers.REGISTRY["report"] resolves at runtime.
 COPY diagnosis/ ./diagnosis/
+# ADR-019 FinOps baseline engine: the `finops_baseline` handler imports the finops package
+# (catalog/rules/guards/engine/llm). Ship it so handlers.REGISTRY["finops_baseline"] resolves.
+COPY finops/ ./finops/
 # CMD (not ENTRYPOINT): the SFN ContainerOverrides command REPLACES CMD but is APPENDED to an
 # ENTRYPOINT. With ENTRYPOINT the effective argv would double ("python fargate_worker.py python
 # fargate_worker.py --job-id X") and argparse would reject the extra positionals → every Fargate

@@ -32,6 +32,11 @@ locals {
     HOST_ACCOUNT_ID          = local.acct
     PROJECT                  = var.project
   } : {}
+  # finops_baseline (ADR-019, extends ADR-012) — deterministic FinOps baseline-recommendations rule
+  # engine. Requires workers_enabled (validated in variables.tf); runs on the same Fargate worker as
+  # the diagnosis job but as its own job type (finops_baseline), not inside it. Default false → 0
+  # resources/IAM, $0.
+  fnb = var.workers_enabled && var.finops_baseline_enabled ? 1 : 0
   # graph_querygen (hybrid LLM fallback for non-standard ClickHouse schemas, registry-driven graph
   # sources design 2026-07-08) — requires datasource_diagnosis_enabled (runs INSIDE the same
   # datasource_index job, needs the same PROJECT/connector-invoke plumbing). bedrock:InvokeModel is
@@ -839,6 +844,34 @@ resource "aws_iam_role_policy" "worker_diagnosis" {
   })
 }
 
+# finops_baseline job (ADR-019, extends ADR-012) — read-only actions the rule engine calls beyond
+# what worker_diagnosis already grants (ce:GetCostAndUsage/ReservationCoverage/SavingsPlansCoverage
+# and cloudwatch:GetMetricData are already covered above; this Sid adds only what's new). No write
+# actions — the rule engine only reads and writes its own Aurora tables via the existing DB grant.
+resource "aws_iam_role_policy" "worker_finops_baseline" {
+  count = local.fnb
+  name  = "${var.project}-worker-finops-baseline-read"
+  role  = aws_iam_role.worker_task[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "FinopsBaselineReadOnly"
+        Effect = "Allow"
+        Action = [
+          "ce:GetDimensionValues",
+          "ce:GetTags",
+          "compute-optimizer:Get*",
+          "cost-optimization-hub:ListRecommendations",
+          "cost-optimization-hub:GetRecommendation",
+          "budgets:Describe*",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # The worker LAMBDA path runs as aws_iam_role.worker_lambda (not worker_task). The diagnosis report
 # job can run on either compute path, so grant the same read-only diagnosis actions there too.
 resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
@@ -879,6 +912,121 @@ resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
       }
     ]
   })
+}
+
+resource "aws_iam_role_policy" "worker_lambda_finops_baseline" {
+  count = local.fnb
+  name  = "${var.project}-worker-lambda-finops-baseline-read"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "FinopsBaselineReadOnly"
+        Effect = "Allow"
+        Action = [
+          "ce:GetDimensionValues",
+          "ce:GetTags",
+          "compute-optimizer:Get*",
+          "cost-optimization-hub:ListRecommendations",
+          "cost-optimization-hub:GetRecommendation",
+          "budgets:Describe*",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+############################################################
+# finops_baseline dispatcher — daily EventBridge -> Lambda that enqueues ONE `finops_baseline` job
+# (no per-row fan-out; the rule engine iterates its own catalog). Reuses the shared worker_lambda
+# role + pg8000 layer + VPC; adds ONLY sqs:SendMessage. Gated on local.fnb (workers_enabled &&
+# finops_baseline_enabled). Default off -> 0 resources, $0.
+############################################################
+resource "aws_cloudwatch_log_group" "finops_dispatcher" {
+  count             = local.fnb
+  name              = "/aws/lambda/${var.project}-finops-dispatcher"
+  retention_in_days = 14
+}
+
+data "archive_file" "finops_dispatcher_src" {
+  count       = local.fnb
+  type        = "zip"
+  output_path = "${path.module}/.build/finops_dispatcher.zip"
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/finops_dispatcher.py")
+    filename = "finops_dispatcher.py"
+  }
+}
+
+resource "aws_iam_role_policy" "finops_dispatcher_sqs" {
+  count = local.fnb
+  name  = "finops-dispatcher-enqueue"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "EnqueueFinopsBaselineJob"
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.jobs[0].arn
+    }]
+  })
+}
+
+resource "aws_lambda_function" "finops_dispatcher" {
+  count            = local.fnb
+  function_name    = "${var.project}-finops-dispatcher"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "finops_dispatcher.lambda_handler"
+  filename         = data.archive_file.finops_dispatcher_src[0].output_path
+  source_code_hash = data.archive_file.finops_dispatcher_src[0].output_base64sha256
+  timeout          = 60
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE = aws_rds_cluster.aurora.database_name
+      AURORA_USER     = "awsops_worker"
+      JOBS_QUEUE_URL  = aws_sqs_queue.jobs[0].url
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.finops_dispatcher, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_cloudwatch_event_rule" "finops_dispatcher" {
+  count               = local.fnb
+  name                = "${var.project}-finops-dispatcher"
+  description         = "Daily: enqueue one finops_baseline job (ADR-019)"
+  schedule_expression = "rate(24 hours)"
+}
+
+resource "aws_cloudwatch_event_target" "finops_dispatcher" {
+  count     = local.fnb
+  rule      = aws_cloudwatch_event_rule.finops_dispatcher[0].name
+  target_id = "finops-dispatcher"
+  arn       = aws_lambda_function.finops_dispatcher[0].arn
+}
+
+resource "aws_lambda_permission" "finops_dispatcher_events" {
+  count         = local.fnb
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.finops_dispatcher[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.finops_dispatcher[0].arn
 }
 
 # Datasource-diagnosis connector invoke (ADR-039/041 governed external egress) — GATED on

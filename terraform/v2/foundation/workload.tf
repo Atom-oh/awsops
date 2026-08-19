@@ -512,6 +512,12 @@ resource "aws_ecs_task_definition" "web" {
         # (default) means the interval never starts — concat(base, []) == base, byte-identical web
         # task def when off. The manual scripts/v2/graph-rebuild.mjs path is unaffected either way.
         { name = "GRAPH_REBUILD_INTERVAL_MINS", value = tostring(var.graph_rebuild_interval_mins) },
+        ] : [], var.finops_baseline_enabled ? [
+        # ADR-019: omit the env when off -> concat(base, []) == base (no web task-def diff/redeploy).
+        # /api/finops/findings + the /cost baseline-recommendations section read this and no-op/hide
+        # when it's absent — the underlying finops_findings table can exist (harmless) even with the
+        # flag off; this env is what actually gates the read path.
+        { name = "FINOPS_BASELINE_ENABLED", value = "true" },
         ] : [],
         # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
         # concat(base, []) == base → byte-identical web task def (no redeploy when off).
