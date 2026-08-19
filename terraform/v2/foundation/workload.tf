@@ -517,6 +517,11 @@ resource "aws_ecs_task_definition" "web" {
         # invoke the isolated Athena/Glue broker Lambda (Role B stays isolated — invoke-only, see
         # sg-rules.tf). Absent when off → concat(base, []) == base, byte-identical web task def.
         { name = "SG_RULE_ATHENA_BROKER_ARN", value = one(aws_lambda_function.sg_rule_athena_broker[*].arn) },
+        ] : [], local.npc == 1 ? [
+        # Network Path Check gate: /api/network-paths(+[id]/runs) and /api/network-path-runs/[id]
+        # read this at request time and fail closed (503) when absent — see network-path.tf's
+        # local.npc. Absent when off → concat(base, []) == base, byte-identical web task def.
+        { name = "NETWORK_PATH_CHECK_ENABLED", value = "true" },
         ] : [],
         # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
         # concat(base, []) == base → byte-identical web task def (no redeploy when off).

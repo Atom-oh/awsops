@@ -7,12 +7,15 @@ import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
-// Mirror scripts/v2/workers/handlers.py REGISTRY, minus 'report'/'compliance': those two trust
-// client-supplied payload.report_id/run_id/requested_by with no ownership check (handlers.py
-// _report/_compliance), so a generic authenticated caller could overwrite another user's report
-// artifact or forge one under someone else's identity (pentest-remediation follow-up, PR #195
-// review). They stay reachable only via /api/diagnosis and /api/compliance/run, which compute
-// requestedBy server-side and don't accept an attacker-controlled report_id/run_id.
+// Mirror scripts/v2/workers/handlers.py REGISTRY, minus 'report'/'compliance'/'sg_rule_scan'/
+// 'network_path': those trust client-supplied payload ids (report_id/run_id/requested_by) or must
+// only be enqueued from a trusted internal/dedicated path, so a generic authenticated caller could
+// overwrite another user's artifact, forge one under someone else's identity, or enqueue a run
+// nothing validated ownership for (pentest-remediation follow-up, PR #195 review; ADR-019 for
+// sg_rule_scan). `network_path` (Network Path Check, design spec
+// docs/superpowers/specs/2026-08-13-network-path-check-design.md) is enqueued ONLY via
+// POST /api/network-paths/[id]/runs, which validates check ownership/access and snapshots the
+// definition server-side before enqueueing — never through this generic route.
 const ALLOWED = new Set(['noop', 'noop-heavy']);
 
 // pentest-remediation P0-1: this generic job-submission endpoint had NO verifyUser() call — any

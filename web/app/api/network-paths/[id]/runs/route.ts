@@ -1,0 +1,34 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { verifyUser } from '@/lib/auth';
+import { EnqueueDeliveryError, IdempotencyKeyCollisionError } from '@/lib/jobs';
+import { NotFoundError, createRun } from '@/lib/network-path';
+import { networkPathCheckGate } from '@/lib/network-path-gate';
+
+export const dynamic = 'force-dynamic';
+
+/**
+ * Validates ownership/access via createRun() (check must exist and not be soft-deleted; any
+ * authenticated user may run a visible check per the spec), snapshots the definition, creates the
+ * run row, and enqueues the `network_path` job directly — this NEVER goes through the generic
+ * POST /api/jobs (ADR-009 dedicated-route pattern, same as /api/diagnosis and /api/compliance/run).
+ */
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const user = await verifyUser(req.headers.get('cookie'));
+  if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
+  const blocked = networkPathCheckGate();
+  if (blocked) return blocked;
+
+  try {
+    const run = await createRun(user, params.id);
+    return NextResponse.json({ run }, { status: 202 });
+  } catch (e) {
+    if (e instanceof NotFoundError) return NextResponse.json({ message: 'check not found or deleted' }, { status: 404 });
+    if (e instanceof EnqueueDeliveryError) {
+      return NextResponse.json({ run_id: e.job_id, enqueue: 'failed', message: e.message }, { status: 202 });
+    }
+    if (e instanceof IdempotencyKeyCollisionError) {
+      return NextResponse.json({ message: e.message }, { status: 409 });
+    }
+    return NextResponse.json({ message: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}

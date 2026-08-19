@@ -84,6 +84,27 @@ def lambda_handler(_event, _ctx):
             out["reaped_sg_rule_scan_runs_queued"] = len(sgr_q)
         else:
             out["reaped_sg_rule_scan_runs_queued"] = "skipped (dispatch ESM disabled)"
+
+        # Network Path Check (ADR-019 §2 register row, design spec "Error handling": "Stale run ->
+        # a dedicated reaper query added to scripts/v2/workers/reaper.py reconciles network_path_runs
+        # the same way it already does for worker_jobs/diagnosis_reports"). Extended additively —
+        # the sg_rule_scan_runs reaping above is untouched. Mirrors worker_jobs' own
+        # running/queued split (network_path_runs has no separate started_at column, so
+        # created_at is the staleness clock for both states, same as the schema's own
+        # idx_network_path_runs_stale partial index).
+        npc_run = conn.run(
+            "UPDATE network_path_runs SET status='failed', overall_status='failed', finished_at=now() "
+            "WHERE status='running' AND created_at < now() - make_interval(mins => :m) RETURNING id",
+            m=R)
+        out["reaped_network_path_runs_running"] = len(npc_run)
+        if _dispatch_enabled():
+            npc_q = conn.run(
+                "UPDATE network_path_runs SET status='failed', overall_status='failed', finished_at=now() "
+                "WHERE status='queued' AND created_at < now() - make_interval(mins => :m) RETURNING id",
+                m=Q)
+            out["reaped_network_path_runs_queued"] = len(npc_q)
+        else:
+            out["reaped_network_path_runs_queued"] = "skipped (dispatch ESM disabled)"
         return out
     finally:
         conn.close()

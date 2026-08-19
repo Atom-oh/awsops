@@ -510,7 +510,7 @@ resource "aws_ecs_task_definition" "worker" {
         # _compliance fails fast with a clear error.
         { name = "STEAMPIPE_HOST", value = "steampipe.${var.project}.internal" },
         { name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") }
-      ], local.ds_env_list, local.notify_worker_env_list, local.insight_env_list, local.sgr_env_list) # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled; + AWS_ACCOUNT_ID/SG_RULE_ATHENA_BROKER_ARN when sg_rule_activity_enabled
+      ], local.ds_env_list, local.notify_worker_env_list, local.insight_env_list, local.sgr_env_list, local.npc_env_list) # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled; + AWS_ACCOUNT_ID/SG_RULE_ATHENA_BROKER_ARN when sg_rule_activity_enabled; + NETWORK_PATH_CHECK_ENABLED when network_path_check_enabled
       logConfiguration = {
         logDriver = "awslogs"
         options = {

@@ -194,6 +194,29 @@ def _sg_rule_scan(payload, dry_run):
             pass
 
 
+def _network_path(payload, dry_run):
+    """Network Path Check (ADR-019 §2 register row, design spec
+    docs/superpowers/specs/2026-08-13-network-path-check-design.md). payload: {run_id, definition}
+    (definition = the run's immutable definition_snapshot). Read-only: resolve -> discover ->
+    verify -> conclude over cached topology + live SG/NACL/route/TGW/VPN/DX/Network Firewall/ELBv2/
+    K8s-policy reads (no Reachability Analyzer path creation, no mutation, no active probe).
+    Fargate runtime: Kubernetes policy evaluation and multi-account route analysis can exceed a
+    short lambda invocation budget (same reasoning as _sg_rule_scan)."""
+    run_id = payload.get("run_id")
+    if dry_run:
+        return {"dry_run": True, "would_run": run_id}, None
+    import db as wdb
+    import network_path as npc
+    conn = wdb.connect()
+    try:
+        return npc.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _insight(payload, dry_run):
     """AI Insights generation (K8s/CloudWatch/cost → LLM bullets → ai_insights). Short + read-only →
     lambda runtime. Runtime-gated on AI_INSIGHTS_ENABLED inside insight.job.run."""
@@ -220,6 +243,7 @@ REGISTRY = {
     "datasource_index": (_datasource_index, "lambda"),
     "insight":          (_insight, "lambda"),
     "sg_rule_scan":     (_sg_rule_scan, "fargate"),
+    "network_path":     (_network_path, "fargate"),
 }
 
 
