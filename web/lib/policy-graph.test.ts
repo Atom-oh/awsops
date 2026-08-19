@@ -69,6 +69,36 @@ describe('boundGraph', () => {
     expect(a.edges.map((e) => e.id)).toEqual(b.edges.map((e) => e.id));
   });
 
+  it('never drops a resolved-path node in favor of an unrelated node with an earlier id', () => {
+    // path-01's own nodes/edges sort AFTER the decorative candidate nodes alphabetically —
+    // a naive id-sort-then-slice would silently sever the resolved path while keeping unrelated
+    // exploration nodes, which for a security decision graph is actively misleading, not just lossy.
+    const pathNodes: PolicyGraphNode[] = [
+      { id: 'zz-source', kind: 'eni', label: 'source', status: 'allowed', pathIds: ['path-01'] },
+      { id: 'zz-target', kind: 'listener', label: 'destination', status: 'blocked', pathIds: ['path-01'] },
+    ];
+    const pathEdge: PolicyGraphEdge = {
+      id: 'zz-source->zz-target', source: 'zz-source', target: 'zz-target', relation: 'routed-to', status: 'blocked', pathIds: ['path-01'],
+    };
+    const decorativeNodes: PolicyGraphNode[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `aa-candidate-${i}`, kind: 'candidate', label: `candidate ${i}`, status: 'not_applicable',
+    }));
+    const graph = {
+      version: 1 as const,
+      capturedAt: '2026-08-19T00:00:00Z',
+      nodes: [...decorativeNodes, ...pathNodes],
+      edges: [pathEdge],
+    };
+
+    const bounded = boundGraph(graph, { nodes: 3, edges: 1 });
+
+    expect(bounded.nodes).toHaveLength(3);
+    expect(bounded.nodes.some((n) => n.id === 'zz-source')).toBe(true);
+    expect(bounded.nodes.some((n) => n.id === 'zz-target')).toBe(true);
+    // the resolved-path edge must survive intact, not be orphaned by a naive alphabetical cut
+    expect(bounded.edges.some((e) => e.id === 'zz-source->zz-target')).toBe(true);
+  });
+
   it('preserves capturedAt', () => {
     const graph = makeGraph(1, 0);
     const bounded = boundGraph(graph, { nodes: 250, edges: 400 });

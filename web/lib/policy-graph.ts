@@ -58,24 +58,43 @@ export function policyEdgeId(source: string, target: string, suffix?: string): s
   return suffix ? `${source}->${target}#${suffix}` : `${source}->${target}`;
 }
 
+function hasPathIds(x: { pathIds?: string[] }): boolean {
+  return Array.isArray(x.pathIds) && x.pathIds.length > 0;
+}
+
 /**
  * Deterministically caps a raw graph to the given node/edge limits and reports what was hidden.
- * Nodes and edges are sorted by id first so repeated calls over the same input are stable across
- * polls. Dangling edges (referencing a node cut by the node cap) are dropped and counted as
- * omitted, same as edges cut purely by the edge cap — the omitted count is a truthful "this many
- * hidden," not a distinction of reason. Does NOT collapse excess nodes into a typed `+N` node;
- * that is a domain-builder concern (e.g. `web/lib/sg-policy-graph.ts`) applied before this call.
+ *
+ * A resolved-path graph's whole point is the path — so truncation must never treat a node that is
+ * part of an active resolved path (`pathIds` non-empty) as equally droppable as an unrelated
+ * candidate/exploration node. Nodes and edges tagged with `pathIds` are kept ahead of untagged
+ * ones; only once that pool is exhausted does the cap start dropping path-tagged structure (which,
+ * given the generous caps this is meant to enforce, should only happen for pathologically large
+ * paths — this function still degrades deterministically rather than throwing, but callers should
+ * treat `truncated` firing on `pathIds`-bearing nodes as a signal worth surfacing distinctly).
+ * Within each tier, sorting is by id so repeated calls over the same input are stable across polls.
+ *
+ * Dangling edges (referencing a node cut by the node cap) are dropped and counted as omitted, same
+ * as edges cut purely by the edge cap — the omitted count is a truthful "this many hidden," not a
+ * distinction of reason. Does NOT collapse excess nodes into a typed `+N` node; that is a
+ * domain-builder concern (e.g. `web/lib/sg-policy-graph.ts`) applied before this call.
  */
 export function boundGraph(
   graph: { version: 1; capturedAt: string; nodes: PolicyGraphNode[]; edges: PolicyGraphEdge[] },
   caps: GraphCaps,
 ): PolicyGraphDto {
-  const sortedNodes = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
-  const keptNodes = sortedNodes.slice(0, caps.nodes);
+  const byPathThenId = <T extends { id: string; pathIds?: string[] }>(a: T, b: T): number => {
+    const pa = hasPathIds(a) ? 0 : 1;
+    const pb = hasPathIds(b) ? 0 : 1;
+    return pa !== pb ? pa - pb : a.id.localeCompare(b.id);
+  };
+
+  const prioritizedNodes = [...graph.nodes].sort(byPathThenId);
+  const keptNodes = prioritizedNodes.slice(0, caps.nodes);
   const keptNodeIds = new Set(keptNodes.map((n) => n.id));
 
-  const sortedEdges = [...graph.edges].sort((a, b) => a.id.localeCompare(b.id));
-  const validEdges = sortedEdges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target));
+  const prioritizedEdges = [...graph.edges].sort(byPathThenId);
+  const validEdges = prioritizedEdges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target));
   const keptEdges = validEdges.slice(0, caps.edges);
 
   const omittedNodes = graph.nodes.length - keptNodes.length;
@@ -86,7 +105,7 @@ export function boundGraph(
     capturedAt: graph.capturedAt,
     truncated: omittedNodes > 0 || omittedEdges > 0,
     omitted: { nodes: omittedNodes, edges: omittedEdges },
-    nodes: keptNodes,
-    edges: keptEdges,
+    nodes: keptNodes.sort((a, b) => a.id.localeCompare(b.id)),
+    edges: keptEdges.sort((a, b) => a.id.localeCompare(b.id)),
   };
 }
