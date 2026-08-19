@@ -252,6 +252,29 @@ describe('boundGraph', () => {
     expect(bounded.pathTruncated).toBe(true);
   });
 
+  it('does not double-charge a boundary node shared by two independent clusters against the cap', () => {
+    // Two independent resolved paths terminate at the SAME untagged boundary node. Each cluster's
+    // own required-node cost is 2 (its own source + the shared boundary), so a naive per-cluster
+    // sum would compute 2 + 2 = 4 and falsely conclude the true distinct total (3: two sources +
+    // one shared boundary) doesn't fit a cap of exactly 3.
+    const boundary: PolicyGraphNode = { id: 'zz-shared-boundary', kind: 'boundary', label: 'shared boundary', status: 'unknown' };
+    const src1: PolicyGraphNode = { id: 'path-01-src', kind: 'eni', label: 'src1', status: 'allowed', pathIds: ['path-01'] };
+    const src2: PolicyGraphNode = { id: 'path-02-src', kind: 'eni', label: 'src2', status: 'allowed', pathIds: ['path-02'] };
+    const edge1: PolicyGraphEdge = { id: 'path-01-src->zz-shared-boundary', source: 'path-01-src', target: 'zz-shared-boundary', relation: 'routed-to', status: 'unknown', pathIds: ['path-01'] };
+    const edge2: PolicyGraphEdge = { id: 'path-02-src->zz-shared-boundary', source: 'path-02-src', target: 'zz-shared-boundary', relation: 'routed-to', status: 'unknown', pathIds: ['path-02'] };
+    const graph = {
+      version: 1 as const, capturedAt: '2026-08-19T00:00:00Z',
+      nodes: [boundary, src1, src2], edges: [edge1, edge2],
+    };
+
+    const bounded = boundGraph(graph, { nodes: 3, edges: 2 });
+
+    expect(bounded.nodes.map((n) => n.id).sort()).toEqual(['path-01-src', 'path-02-src', 'zz-shared-boundary']);
+    expect(bounded.edges.map((e) => e.id).sort()).toEqual(['path-01-src->zz-shared-boundary', 'path-02-src->zz-shared-boundary']);
+    expect(bounded.truncated).toBe(false);
+    expect(bounded.pathTruncated).toBe(false);
+  });
+
   it('preserves capturedAt', () => {
     const graph = makeGraph(1, 0);
     const bounded = boundGraph(graph, { nodes: 250, edges: 400 });

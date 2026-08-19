@@ -196,7 +196,12 @@ function buildPathClusters(
  * left to compete for the ordinary decorative node budget, and `pathTruncated` also fires if an
  * admitted cluster's edge is still missing from the result for any reason — closing the gap where
  * a path edge could be silently dropped by decorative-budget competition while `pathTruncated`
- * stayed `false` because no whole cluster was ever excluded.
+ * stayed `false` because no whole cluster was ever excluded. That same boundary node can be shared
+ * by two DIFFERENT clusters (e.g. two equal-cost active paths both terminating at the same unknown
+ * boundary) — the admission loop below tracks the running set of already-admitted node/edge ids
+ * and only charges a cluster for the ids it actually ADDS, so a shared node is never double-counted
+ * against the budget (which would otherwise falsely report it exhausted and needlessly exclude an
+ * entire second path that would, counted correctly, have fit).
  */
 export function boundGraph(
   graph: { version: 1; capturedAt: string; nodes: PolicyGraphNode[]; edges: PolicyGraphEdge[] },
@@ -207,14 +212,21 @@ export function boundGraph(
   const pathEdges = graph.edges.filter(hasPathIds);
 
   const clusters = buildPathClusters(pathNodes, pathEdges, nodeById);
+  // Admission is decided against the running set of DISTINCT node/edge ids already included, not
+  // a per-cluster sum — a boundary node shared by two clusters (see buildPathClusters) must only
+  // count once against the budget. Summing c.nodes.length across clusters would double-charge that
+  // shared node, which can falsely report the budget exhausted and exclude a whole legitimate
+  // second path that would, in reality, have fit.
   const includedClusters: PathCluster[] = [];
-  let usedNodes = 0;
-  let usedEdges = 0;
+  const admittedNodeIds = new Set<string>();
+  const admittedEdgeIds = new Set<string>();
   for (const c of clusters) {
-    if (usedNodes + c.nodes.length <= caps.nodes && usedEdges + c.edges.length <= caps.edges) {
+    const newNodeCount = c.nodes.reduce((n, node) => n + (admittedNodeIds.has(node.id) ? 0 : 1), 0);
+    const newEdgeCount = c.edges.reduce((n, edge) => n + (admittedEdgeIds.has(edge.id) ? 0 : 1), 0);
+    if (admittedNodeIds.size + newNodeCount <= caps.nodes && admittedEdgeIds.size + newEdgeCount <= caps.edges) {
       includedClusters.push(c);
-      usedNodes += c.nodes.length;
-      usedEdges += c.edges.length;
+      c.nodes.forEach((n) => admittedNodeIds.add(n.id));
+      c.edges.forEach((e) => admittedEdgeIds.add(e.id));
     }
     // else: the whole cluster is excluded — never a partial slice of it.
   }
