@@ -1280,10 +1280,17 @@ export default function NetworkFirewallPage() {
                 0건이면 도넛이 통째로 사라져 이전엔 항상 보이던 "0" 도넛조차 못 보게 됐다. 실패 여부로만
                 게이트해야 진짜 0은 그대로 도넛(0)으로, 실패만 별도 문구로 구분된다. (b) 두 칸을 각자
                 다른 조건으로 껐다 켰다 하면 lg:grid-cols-2에서 한쪽만 비어 빈 칸이 남는다 — 항상 두
-                칸 모두 무언가(차트 또는 안내 문구)를 채워 그리드가 어긋나지 않게 한다. */}
+                칸 모두 무언가(차트 또는 안내 문구)를 채워 그리드가 어긋나지 않게 한다.
+                리뷰(Codex stop-hook, PR #229 라운드3 — 라운드2 수정도 여전히 불완전): byAction은
+                totalAlerts/ruleHits와 달리 discovery unknown(alertDiscoveryUnknown)이어도 null화되지
+                않고 그냥 빈 배열([])로 남는다 — failed.includes('alertByAction')만 보면 discovery
+                unknown 케이스(쿼리 자체가 "실패"로 기록되지 않음)를 놓쳐 여전히 "확정 0" 도넛으로
+                오판한다. totalAlerts==null은 이미 (failed.includes('alertTotals') ||
+                alertDiscoveryUnknown)로 계산돼 있어 이 셋을 전부 포함하는 신호다 — byAction도 같은
+                집계 파이프라인(Promise.all)에서 나오므로 이 신호를 그대로 재사용한다. */}
             <div className="grid gap-6 lg:grid-cols-2">
-              {(logsData?.failed?.includes('alertByAction') ?? false) ? (
-                <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 집계 실패')}</div>
+              {logsData?.alert?.totalAlerts == null ? (
+                <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
               ) : (
                 <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
               )}

@@ -1175,7 +1175,7 @@ export const TERMS: Record<string, Pair> = {
   'Stateful 룰 히트 Top 10 (sid)': { en: 'Stateful rule hits Top 10 (sid)', zh: 'Stateful 规则命中 Top 10（sid）', ja: 'Stateful ルールヒット Top 10（sid）' },
   '일부 행 생략 — 검색·정렬은 전체 행에서 동작합니다': { en: 'Some rows omitted — search and sort operate on the full set', zh: '部分行已省略 — 搜索与排序基于全部行', ja: '一部の行を省略 — 検索・ソートは全行に対して動作します' },
   '상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음': { en: 'Based on the top-100 aggregation, or some values may be undercounted — actual totals/ranking may differ', zh: '基于前 100 汇总，或部分数值可能被低估 — 实际合计/排名可能有所不同', ja: '上位 100 集計ベース、または一部の値が過小集計されている可能性があります — 実際の合計・順位と異なる場合があります' },
-  '액션 분포 집계 실패': { en: 'Action-distribution aggregation failed', zh: '操作分布汇总失败', ja: 'アクション分布の集計に失敗しました' },
+  '액션 분포 확인 불가': { en: 'Action distribution unavailable', zh: '操作分布不可用', ja: 'アクション分布は確認できません' },
   '룰 히트 없음': { en: 'No rule hits', zh: '无规则命中', ja: 'ルールヒットなし' },
   '룰 히트 집계 불명 — 위 원시 시그니처 표 참고': { en: 'Rule-hit aggregation unknown — see the raw signature table above', zh: '规则命中汇总未知 — 请参见上方的原始签名表', ja: 'ルールヒット集計は不明です — 上記の生シグネチャ表を参照してください' },
 
