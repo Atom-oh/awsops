@@ -1307,12 +1307,16 @@ export default function NetworkFirewallPage() {
                 찍힘) — 조용히 targets에서만 빠진다. 그런 방화벽이 섞여 있는 리전에서 다른(CWL)
                 방화벽의 표본만으로 만든 byAction이 "매칭 0"으로 보이면, 실제로는 "S3 대상이라 이
                 화면에서 집계 불가능한 ALERT 로그가 더 있을 수 있음"을 의미하는데 확정 0처럼
-                오독된다. 이 페이지 상단에 이미 있는 unsupportedDestinations 배너(리뷰 MINOR 취급되던
-                caveat)를 이 카드 판정에도 반영해, S3/Firehose 대상이 하나라도 있으면 "확인 불가"로
-                처리한다(ALERT/FLOW 구분 없는 계정 전체 카운트라 다소 보수적이지만, 이 코드베이스가
-                반복적으로 택한 "모르면 확정 0보다 과잉 보수"의 원칙과 일치). */}
+                오독된다.
+                리뷰(Codex stop-hook, PR #229 라운드7 — 라운드6 수정이 과도하게 넓었음):
+                unsupportedDestinations는 ALERT/FLOW 구분 없는 계정 전체 카운트다 — FLOW만
+                S3(ALERT는 정상 CWL)인 방화벽이 있으면, ALERT 도넛과 아무 관련 없는 FLOW 쪼개짐
+                때문에 정상적인 ALERT 도넛까지 "확인 불가"로 잘못 가려진다(round1~5가 고치려던
+                "무관한 신호로 유효한 결과 숨기기"를 이번엔 FLOW→ALERT 방향으로 재현). `fws`(현재
+                방화벽 목록, 이미 이 컴포넌트에 있음)에서 직접 alertLogging이 CWL 접두사가 아닌
+                방화벽이 있는지를 본다 — ALERT 전용이라 FLOW 쪼개짐과 무관하다. */}
             <div className="grid gap-6 lg:grid-cols-2">
-              {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || (logsData?.unsupportedDestinations ?? 0) > 0 ? (
+              {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:')) ? (
                 <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
               ) : (
                 <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
