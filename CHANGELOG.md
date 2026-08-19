@@ -15,8 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
 ## [0.8.0] - 2026-08-19
 
 ### Added
@@ -560,8 +558,6 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
-
-### Added
 
 ## [0.8.0] - 2026-08-19
 

@@ -210,6 +210,38 @@ interface RuleHitRow {
   ruleGroupModifiedInRange: boolean;
 }
 
+// 리뷰 MAJOR(확정, PR #229): 표의 hits 컬럼 render와 상세 패널(ruleHitDetail)이 각자 다른
+// 판정 기준을 썼다 — ruleHitDetail은 hitsAttributable만 봐서, hits===0인데 observability가
+// 'observed'가 아니거나 alertCoverageComplete=false인 행(표에서는 "?" 처리)에서도
+// hitsAttributable=true가 나와 "hits: 0"을 확정처럼 보여줬다(그 옆 hit_note는 "unknown"이라고
+// 말하는데도). 두 표시가 항상 같은 결론을 내도록 판정 로직을 하나로 합친다 — round8-27의 전체
+// 귀속 모델을 정확히 이 순서로 반영해야 한다(순서를 바꾸면 다른 판정이 나온다).
+type HitsDisplay =
+  | { kind: 'na' | 'unknown'; reason: string }
+  | { kind: 'lowerbound'; reason: string }
+  | { kind: 'exact' };
+function classifyHits(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean): HitsDisplay {
+  if (r.isPass) return { kind: 'na', reason: 'pass 또는 noalert 룰 — Alert 로그 미발생' };
+  if (r.sharedSid) return { kind: 'na', reason: '여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다' };
+  if (r.unknown) {
+    return { kind: 'unknown', reason: r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '집계 절단(상위 100 sid 초과 또는 리전별 상한 도달)으로 이 sid가 포함됐는지 불명' };
+  }
+  if (r.attributionUnsafe) return { kind: 'unknown', reason: '일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나, 파싱할 수 없는 룰그룹이 있거나, 어느 정책이 조회 기간 중 수정돼 그 시점 구성을 알 수 없어 매칭 여부·귀속을 확정할 수 없음' };
+  if (r.ruleGroupModifiedInRange) return { kind: 'unknown', reason: '이 룰 그룹이 조회 기간 중에 수정됨 — 현재 SID가 기간 전체 동안 이 설정 그대로였다고 확정할 수 없어 히트를 이 룰에 귀속할 수 없음' };
+  if (r.observability === 'unobserved') return { kind: 'na', reason: '이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음' };
+  if (r.hits === 0 && r.observability !== 'observed') return { kind: 'unknown', reason: '이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음' };
+  if (r.hits === 0 && !alertCoverageComplete) return { kind: 'unknown', reason: 'ALERT 로그가 선택한 기간 전체를 커버하지 않거나 커버 여부를 확인할 수 없어 매칭 0을 확정할 수 없음 (로깅이 기간 중간에 시작됐거나, 로그 그룹 조회가 거부/시간 초과됨)' };
+  if (r.hits > 0 && (ruleHitsPartial || !alertCoverageComplete || r.observability === 'unknown')) {
+    return {
+      kind: 'lowerbound',
+      reason: !alertCoverageComplete ? 'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한'
+        : ruleHitsPartial ? '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한'
+          : '일부 방화벽만 관측이 확인돼 실제 값이 더 클 수 있음 — 하한',
+    };
+  }
+  return { kind: 'exact' };
+}
+
 const RULEHIT_DETAIL_SPEC: InvType = {
   label: 'Stateful Rule Hit', group: 'Network',
   columns: [
@@ -225,19 +257,14 @@ const RULEHIT_DETAIL_SPEC: InvType = {
   ],
 };
 
-// 표의 3-state(n/a·?·≥N) 판정과 동일 기준 — 상세 패널에서는 사유를 문장으로 노출한다.
-// (round8-27의 전체 귀속 모델 — page.tsx의 hits 컬럼 render와 반드시 같은 순서로 유지)
+// 표의 hits 컬럼과 반드시 같은 classifyHits() 결과를 써야 한다 — 그래야 "hits: 0"과
+// hit_note가 서로 모순되는 조합(리뷰 MAJOR, PR #229)이 나오지 않는다.
 function ruleHitDetail(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean): Record<string, unknown> {
-  const note = r.isPass ? 'n/a — pass or noalert rule emits no alert log'
-    : r.sharedSid ? 'n/a — SID shared across multiple rule groups, cannot attribute to this one'
-      : r.unknown ? `unknown — ${r.unknownReason === 'failed' ? 'log aggregation query failed' : 'truncated by the top-100 join cutoff or a per-region cap'}`
-        : r.attributionUnsafe ? 'unknown — account-wide topology is incomplete or unverifiable in this range'
-          : r.ruleGroupModifiedInRange ? 'unknown — this rule group (or its policy) was modified during the range, so hits cannot be attributed to it'
-            : r.observability === 'unobserved' ? 'n/a — confirmed that no firewall serving this rule group has ALERT logging on'
-              : r.hits === 0 && r.observability !== 'observed' ? 'unknown — cannot confirm this rule group is observed, so a zero cannot be confirmed'
-                : r.hits === 0 && !alertCoverageComplete ? 'unknown — ALERT log coverage does not confirmably span the whole range'
-                  : r.hits > 0 && (ruleHitsPartial || !alertCoverageComplete || r.observability === 'unknown') ? 'lower bound — the true count may be higher (partial coverage or partial observability)'
-                    : undefined;
+  const d = classifyHits(r, alertCoverageComplete, ruleHitsPartial);
+  const note = d.kind === 'na' ? `n/a — ${d.reason}`
+    : d.kind === 'unknown' ? `unknown — ${d.reason}`
+      : d.kind === 'lowerbound' ? `lower bound — ${d.reason}`
+        : undefined;
   return compact({
     sid: r.sid, msg: r.msg || undefined,
     actions: r.actions.join(', ') || undefined,
@@ -245,7 +272,7 @@ function ruleHitDetail(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPa
     configured: r.configured, pass_rule: r.isPass,
     observability: r.configured ? r.observability : undefined,
     shared_sid: r.sharedSid,
-    hits: r.hitsAttributable ? r.hits : undefined,
+    hits: d.kind === 'na' || d.kind === 'unknown' ? undefined : r.hits,
     hit_basis: 'Alert-log Insights aggregation over CloudWatch Logs destinations (same source as the AWS rule hit counts feature)',
     hit_note: note,
   });
@@ -638,7 +665,9 @@ export default function NetworkFirewallPage() {
   const ruleHitColumns = useMemo<MetricCol<RuleHitRow>[]>(() => [
     {
       key: 'sid', label: 'SID', mono: true, type: 'num',
-      value: (r) => Number(r.sid),
+      // 리뷰 MINOR(확정): 비숫자 SID를 Number()에 넣으면 NaN — MetricTable의 null-정렬-마지막
+      // 규약이 깨지고 검색 시 'NaN' 문자열로 취급된다. 비숫자는 null로 표시한다.
+      value: (r) => { const n = Number(r.sid); return Number.isNaN(n) ? null : n; },
       render: (r) => (
         <>
           {r.sid}
@@ -658,39 +687,24 @@ export default function NetworkFirewallPage() {
     },
     {
       key: 'hits', label: tt('히트'), type: 'num',
-      // 리뷰 확정(Codex stop-hook, PR #225 — 여러 라운드에 걸친 교정): 양수 히트는 값 자체가
-      // "이 sid가 실제로 매칭됐다"는 로그 증거이므로 기본적으로 신뢰하지만, 예외가 있다 — 그
-      // 증거를 특정 룰에 귀속할 수 없는 경우(sharedSid), sidGroupCount의 전제인 rgs 순회
-      // 자체가 불완전할 수 있는 경우(attributionUnsafe), 이 룰 그룹이 range 도중 수정·재정의된
-      // 경우(ruleGroupModifiedInRange), 그리고 이 룰 그룹을 서빙하는 모든 방화벽의 ALERT
-      // 로깅이 확인상 꺼져 있다고 "확정"된 경우(observability === 'unobserved'). 반대로
-      // 'unknown'(불확실, 확정 아님)은 로그가 안 보인 이유를 모를 뿐이므로 실제 히트 증거를
-      // 신뢰하되 일부 방화벽만 관측 확인된 경우라 하한(≥N)으로 표기한다. "0(매칭 없음)"은
-      // 부재의 증거가 아니므로, 서빙 방화벽 전체가 관측됐다는 확신(observability ===
-      // 'observed')과 계정 전체 토폴로지가 완전하다는 확신, ALERT 로그가 range 시작부터
-      // 커버한다는 확신(alertCoverageComplete)이 모두 있을 때만 확정 idle로 표시한다 — 그
-      // 외엔 "?".
-      value: (r) => (r.hitsAttributable ? r.hits : null),
-      danger: (r) => r.hitsAttributable && r.hits > 0 && r.actions.includes('blocked'),
-      render: (r) => r.isPass
-        ? <span className="text-ink-300" title={tt('pass 또는 noalert 룰 — Alert 로그 미발생')}>n/a</span>
-        : r.sharedSid
-          ? <span className="text-ink-300" title={tt('여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다')}>n/a</span>
-          : r.unknown
-            ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '집계 절단(상위 100 sid 초과 또는 리전별 상한 도달)으로 이 sid가 포함됐는지 불명')}>?</span>
-            : r.attributionUnsafe
-              ? <span className="text-ink-300" title={tt('일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나, 파싱할 수 없는 룰그룹이 있거나, 어느 정책이 조회 기간 중 수정돼 그 시점 구성을 알 수 없어 매칭 여부·귀속을 확정할 수 없음')}>?</span>
-              : r.ruleGroupModifiedInRange
-                ? <span className="text-ink-300" title={tt('이 룰 그룹이 조회 기간 중에 수정됨 — 현재 SID가 기간 전체 동안 이 설정 그대로였다고 확정할 수 없어 히트를 이 룰에 귀속할 수 없음')}>?</span>
-                : r.observability === 'unobserved'
-                  ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음')}>n/a</span>
-                  : r.hits === 0 && r.observability !== 'observed'
-                    ? <span className="text-ink-300" title={tt('이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
-                    : r.hits === 0 && !alertCoverageComplete
-                      ? <span className="text-ink-300" title={tt('ALERT 로그가 선택한 기간 전체를 커버하지 않거나 커버 여부를 확인할 수 없어 매칭 0을 확정할 수 없음 (로깅이 기간 중간에 시작됐거나, 로그 그룹 조회가 거부/시간 초과됨)')}>?</span>
-                      : r.hits > 0 && ((logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete || r.observability === 'unknown')
-                        ? <span title={tt(!alertCoverageComplete ? 'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한' : (logsData?.alert?.ruleHitsPartial ?? false) ? '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한' : '일부 방화벽만 관측이 확인돼 실제 값이 더 클 수 있음 — 하한')}>{`≥${r.hits.toLocaleString()}`}</span>
-                        : <>{r.hits.toLocaleString()}</>,
+      // classifyHits()가 이 컬럼과 ruleHitDetail(상세 패널) 모두의 단일 판정 기준이다 —
+      // 리뷰 MAJOR(확정, PR #229): 이전엔 각자 다른 조건식을 써서 표는 "?"인데 상세 패널은
+      // hitsAttributable만 보고 "hits: 0"을 확정처럼 보여주는 모순이 있었다.
+      value: (r) => {
+        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false);
+        return d.kind === 'na' || d.kind === 'unknown' ? null : r.hits;
+      },
+      danger: (r) => {
+        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false);
+        return (d.kind === 'exact' || d.kind === 'lowerbound') && r.hits > 0 && r.actions.includes('blocked');
+      },
+      render: (r) => {
+        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false);
+        if (d.kind === 'na') return <span className="text-ink-300" title={tt(d.reason)}>n/a</span>;
+        if (d.kind === 'unknown') return <span className="text-ink-300" title={tt(d.reason)}>?</span>;
+        if (d.kind === 'lowerbound') return <span title={tt(d.reason)}>{`≥${r.hits.toLocaleString()}`}</span>;
+        return <>{r.hits.toLocaleString()}</>;
+      },
     },
   ], [tt, alertCoverageComplete, logsData]);
   // 히트 바 — 로그 원본(ruleHits)에서 sid 단위 집계: 공유 SID의 설정 행 중복 합산 방지.
@@ -1258,18 +1272,32 @@ export default function NetworkFirewallPage() {
               )}
             </Card>
 
-            {/* ⑦-b 히트 시각화 — 도넛=byAction 완전 집계(카드 배지와 일치), 바=ruleHits sid 단위 집계(top-100 잘림 시 고지, 공유 SID 중복 합산 없음) */}
-            {(logsData?.alert?.ruleHits?.length ?? 0) > 0 && (
+            {/* ⑦-b 히트 시각화 — 도넛=byAction 완전 집계(카드 배지와 일치), 바=ruleHits sid 단위 집계(top-100 잘림 시 고지, 공유 SID 중복 합산 없음).
+                리뷰 MAJOR(확정): 도넛(byAction)과 바(ruleHits)는 서로 독립적인 Insights 쿼리라 — 하나만
+                실패해도 다른 하나는 성공할 수 있다. 공유 게이트(ruleHits.length>0)로 묶으면 (a) byAction만
+                실패했을 때 바는 있는데 도넛이 실패를 "매칭 0"처럼(합계 0 도넛) 보여주고, (b) ruleHits만
+                실패했을 때 정상인 도넛까지 함께 숨겨진다 — 각자 자기 데이터/실패 키로 독립 게이트한다. */}
+            {((logsData?.alert?.byAction?.length ?? 0) > 0 || (logsData?.alert?.ruleHits?.length ?? 0) > 0) && (
               <div className="grid gap-6 lg:grid-cols-2">
-                <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
-                <HBarList
-                  title="Stateful 룰 히트 Top 10 (sid)"
-                  data={ruleHitBars}
-                  labelKey="rule"
-                  valueKey="hits"
-                  highlightMax
-                  right={ruleHitsTruncated ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준 — 실제 합계와 다를 수 있음')}</span> : undefined}
-                />
+                {(logsData?.alert?.byAction?.length ?? 0) > 0 ? (
+                  <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
+                ) : (logsData?.failed?.includes('alertByAction') ?? false) && (
+                  <div className="px-4 py-3 text-[12px] text-ink-400">{tt('액션 분포 집계 실패')}</div>
+                )}
+                {(logsData?.alert?.ruleHits?.length ?? 0) > 0 && (
+                  <HBarList
+                    title="Stateful 룰 히트 Top 10 (sid)"
+                    data={ruleHitBars}
+                    labelKey="rule"
+                    valueKey="hits"
+                    highlightMax
+                    // 리뷰 MAJOR(확정): ruleHitsTruncated(top-100 join 컷오프) 하나만 고지하면,
+                    // 리전별 상한(ruleHitsPartial)이나 시간적 커버리지 미확보(!alertCoverageComplete)로
+                    // present sid의 값 자체가 과소집계된 경우를 놓친다 — 이 top-10 "정확한 순위"처럼
+                    // 보이는 바 차트는 표의 ≥N/？ 판정과 같은 결손 신호를 모두 반영해야 한다.
+                    right={(ruleHitsTruncated || (logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete) ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음')}</span> : undefined}
+                  />
+                )}
               </div>
             )}
 
