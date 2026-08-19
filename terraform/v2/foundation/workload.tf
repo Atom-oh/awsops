@@ -512,6 +512,11 @@ resource "aws_ecs_task_definition" "web" {
         # (default) means the interval never starts — concat(base, []) == base, byte-identical web
         # task def when off. The manual scripts/v2/graph-rebuild.mjs path is unaffected either way.
         { name = "GRAPH_REBUILD_INTERVAL_MINS", value = tostring(var.graph_rebuild_interval_mins) },
+        ] : [], (var.sg_rule_activity_enabled && var.workers_enabled) ? [
+        # ADR-019 SG Rules & Usage: web/lib/sg-rules.ts's validateFlowSourceViaBroker reads this to
+        # invoke the isolated Athena/Glue broker Lambda (Role B stays isolated — invoke-only, see
+        # sg-rules.tf). Absent when off → concat(base, []) == base, byte-identical web task def.
+        { name = "SG_RULE_ATHENA_BROKER_ARN", value = one(aws_lambda_function.sg_rule_athena_broker[*].arn) },
         ] : [],
         # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
         # concat(base, []) == base → byte-identical web task def (no redeploy when off).

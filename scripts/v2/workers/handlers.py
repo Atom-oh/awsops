@@ -171,6 +171,29 @@ def _datasource_index(payload, dry_run):
             pass
 
 
+def _sg_rule_scan(payload, dry_run):
+    """SG Rules & Usage daily/manual scan (ADR-019, sg_rule_scan.py). payload:
+    {account_id, region, trigger}. Read-only (Role A DescribeSecurityGroupRules/
+    DescribeNetworkInterfaces via the reused AWSopsReadOnlyRole; Role B Athena query only via the
+    isolated broker Lambda — this handler never assumes AWSopsSgRuleAthenaRole itself). Fargate
+    runtime: pagination across every SGR/ENI in an account/region plus one-or-more Athena-broker
+    round-trips per day processed can comfortably exceed a lambda-tier budget."""
+    account_id = payload.get("account_id")
+    region = payload.get("region")
+    if dry_run:
+        return {"dry_run": True, "would_scan": account_id, "region": region}, None
+    import db as wdb
+    import sg_rule_scan as sgs
+    conn = wdb.connect()
+    try:
+        return sgs.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _insight(payload, dry_run):
     """AI Insights generation (K8s/CloudWatch/cost → LLM bullets → ai_insights). Short + read-only →
     lambda runtime. Runtime-gated on AI_INSIGHTS_ENABLED inside insight.job.run."""
@@ -196,6 +219,7 @@ REGISTRY = {
     "compliance":       (_compliance, "fargate"),
     "datasource_index": (_datasource_index, "lambda"),
     "insight":          (_insight, "lambda"),
+    "sg_rule_scan":     (_sg_rule_scan, "fargate"),
 }
 
 

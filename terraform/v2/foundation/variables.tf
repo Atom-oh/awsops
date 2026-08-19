@@ -293,3 +293,14 @@ variable "legacy_email_owner_match" {
   default     = true
   description = "Accept the legacy email-keyed ownership match on read. Set false only after the owner-sub backfill reports a clean run."
 }
+
+# ADR-019 / docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md — SG Rules &
+# Usage daily Athena flow-log evidence pipeline. false (default) = 0 scheduler/IAM/broker-Lambda
+# resources, $0; the Rules page still shows live DescribeSecurityGroupRules inventory with activity
+# permanently 'not_configured'. REQUIRES workers_enabled=true (reuses the worker role/pg8000
+# layer/VPC/jobs queue) — see sg-rules.tf's local.sgr gate.
+variable "sg_rule_activity_enabled" {
+  type        = bool
+  default     = false
+  description = "SG Rules & Usage: daily Athena flow-log evidence pipeline (ADR-019). false = 0 resources/cost. Requires workers_enabled."
+}

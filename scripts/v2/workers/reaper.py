@@ -63,6 +63,27 @@ def lambda_handler(_event, _ctx):
             "  OR updated_at < now() - make_interval(mins => :m)) RETURNING id",
             m=R)
         out["reaped_reports"] = len(dr)
+
+        # ADR-019 SG Rules & Usage: sg_rule_scan_runs has no unique constraint on
+        # (flow_source_id, partition_start, partition_end) — every scan attempt inserts a NEW row,
+        # and a partition's "current" status is whichever row for that partition has the latest
+        # started_at (design spec's Data model section). A run stuck 'running' (worker died mid-scan,
+        # e.g. OOM or a hard Fargate kill) or 'queued' (never dispatched) must still be reaped the
+        # same way worker_jobs rows are, so a stale run never blocks the next admin refresh/daily
+        # attempt from being visible as failed rather than eternally in-flight.
+        sgr_run = conn.run(
+            "UPDATE sg_rule_scan_runs SET status='failed', error_code='reaped: stale running' "
+            "WHERE status='running' AND started_at < now() - make_interval(mins => :m) RETURNING id",
+            m=R)
+        out["reaped_sg_rule_scan_runs_running"] = len(sgr_run)
+        if _dispatch_enabled():
+            sgr_q = conn.run(
+                "UPDATE sg_rule_scan_runs SET status='failed', error_code='reaped: stale queued' "
+                "WHERE status='queued' AND started_at < now() - make_interval(mins => :m) RETURNING id",
+                m=Q)
+            out["reaped_sg_rule_scan_runs_queued"] = len(sgr_q)
+        else:
+            out["reaped_sg_rule_scan_runs_queued"] = "skipped (dispatch ESM disabled)"
         return out
     finally:
         conn.close()
