@@ -19,7 +19,10 @@ import { getPool } from './db';
 // ③ 정책 보안 신호 — stateless 기본 액션 aws:pass = 스테이트풀 엔진 우회(전량 통과)
 // ④ 룰 그룹 — 용량 사용률(≥80% 증설 검토) + 미연결(association 0 = 정리 후보)
 // ⑤ 엔드포인트/동기화 — AZ 어태치먼트 READY 아님 / ConfigurationSync IN_SYNC 아님
-// 주의: 룰 그룹 **룰 본문(RulesSource)은 의도적으로 미탑재** — 메타데이터만 응답에 싣는다.
+// 주의: 룰 그룹 **룰 본문(RulesSource) 전체는 의도적으로 미탑재** — 메타데이터만 응답에 싣는다.
+// (2026-08 룰 히트 카운트 기능부터 sid/msg/action/noalert만 룰 본문에서 파싱해 예외적으로
+// 응답에 포함한다 — parseStatefulSids 참고. 그 외 매치 조건(RulesString 전체 등)은 여전히
+// 서버 밖으로 나가지 않는다.)
 // 메트릭 차원은 (AvailabilityZone, Engine, FirewallName) 3-dim만 채택 — EndpointName이
 // 포함된 4-dim 변형을 함께 합산하면 이중 집계가 된다(실측: 두 변형이 동시 발행).
 
