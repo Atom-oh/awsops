@@ -1299,9 +1299,20 @@ export default function NetworkFirewallPage() {
                 (독립 쿼리 원칙 위반, 이번엔 반대 방향). discovery-unknown 신호는 totalAlerts의 null
                 계산에 뒤섞여 있지 않고 `failed` 배열의 별도 키(firewallDiscovery/logDiscovery/
                 logDiscoveryEmpty:*:ALERT)로 이미 독립돼 있다 — 위 1157번째 줄의 ALERT 카드 "확인
-                불가" 판정과 동일한 키 셋을 직접 검사해 byAction 전용 실패 키와 OR로 합친다. */}
+                불가" 판정과 동일한 키 셋을 직접 검사해 byAction 전용 실패 키와 OR로 합친다.
+                리뷰(Codex stop-hook, PR #229 라운드6 — "ALERT 로그 대상 없음"이 "매칭 0"으로
+                오판되는 남은 경로): ALERT 목적지가 CWL이 아니라 S3/Firehose인 방화벽(anfw-logs.ts의
+                `unsupported` 카운트 — anyNonCwl)은 alertTargets에도, failed[] 키에도 전혀 나타나지
+                않는다(loggingKnown=true라 "unknown" 스캔 경로도 안 타고, 실패도 아니라 failed도 안
+                찍힘) — 조용히 targets에서만 빠진다. 그런 방화벽이 섞여 있는 리전에서 다른(CWL)
+                방화벽의 표본만으로 만든 byAction이 "매칭 0"으로 보이면, 실제로는 "S3 대상이라 이
+                화면에서 집계 불가능한 ALERT 로그가 더 있을 수 있음"을 의미하는데 확정 0처럼
+                오독된다. 이 페이지 상단에 이미 있는 unsupportedDestinations 배너(리뷰 MINOR 취급되던
+                caveat)를 이 카드 판정에도 반영해, S3/Firehose 대상이 하나라도 있으면 "확인 불가"로
+                처리한다(ALERT/FLOW 구분 없는 계정 전체 카운트라 다소 보수적이지만, 이 코드베이스가
+                반복적으로 택한 "모르면 확정 0보다 과잉 보수"의 원칙과 일치). */}
             <div className="grid gap-6 lg:grid-cols-2">
-              {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) ? (
+              {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || (logsData?.unsupportedDestinations ?? 0) > 0 ? (
                 <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
               ) : (
                 <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
