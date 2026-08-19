@@ -1167,7 +1167,7 @@ export const TERMS: Record<string, Pair> = {
   '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한': { en: 'A per-region limit was reached — the true value may be higher (lower bound)', zh: '已达到区域上限 — 实际值可能更高（下限）', ja: 'リージョン別の上限に達しました — 実際の値はこれより大きい可能性があります（下限）' },
   '일부 방화벽만 관측이 확인돼 실제 값이 더 클 수 있음 — 하한': { en: 'Only some of the serving firewalls have confirmed observability — the true value may be higher (lower bound)', zh: '仅部分防火墙确认可观测 — 实际值可能更高（下限）', ja: '一部のファイアウォールのみ観測が確認されています — 実際の値はこれより大きい可能性があります（下限）' },
   'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한': { en: 'ALERT logs do not cover the entire range — the true value may be higher (lower bound)', zh: 'ALERT 日志未覆盖整个时间段 — 实际值可能更高（下限）', ja: 'ALERT ログが期間全体をカバーしていないため、実際の値はこれより大きい可能性があります（下限）' },
-  '상위 100 집계 밖 — 매칭 여부 불명': { en: 'Outside the top-100 aggregation — match status unknown', zh: '超出前 100 汇总范围 — 匹配情况未知', ja: '上位 100 集計の範囲外 — マッチ有無は不明' },
+  '집계 절단(상위 100 sid 초과 또는 리전별 상한 도달)으로 이 sid가 포함됐는지 불명': { en: 'Aggregation truncation (over the top-100 SIDs, or a per-region cap was reached) — whether this SID was included is unknown', zh: '聚合被截断（超过前 100 个 SID，或达到区域上限）— 无法确定此 SID 是否被包含在内', ja: '集計が切り捨てられました（上位 100 SID 超過、またはリージョン別上限に到達）— この SID が含まれていたかは不明です' },
   '로그 집계 쿼리 실패 — 매칭 여부 불명': { en: 'Log aggregation query failed — match status unknown', zh: '日志汇总查询失败 — 匹配情况未知', ja: 'ログ集計クエリ失敗 — マッチ有無は不明' },
 
   // ---- Network Firewall (/network-firewall) ----

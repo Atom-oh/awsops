@@ -1123,7 +1123,7 @@ export default function NetworkFirewallPage() {
                                         : r.sharedSid
                                           ? <span className="text-ink-300" title={tt('여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다')}>n/a</span>
                                           : r.unknown
-                                            ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '상위 100 집계 밖 — 매칭 여부 불명')}>?</span>
+                                            ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '집계 절단(상위 100 sid 초과 또는 리전별 상한 도달)으로 이 sid가 포함됐는지 불명')}>?</span>
                                             : r.attributionUnsafe
                                               ? <span className="text-ink-300" title={tt('일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나, 파싱할 수 없는 룰그룹이 있거나, 어느 정책이 조회 기간 중 수정돼 그 시점 구성을 알 수 없어 매칭 여부·귀속을 확정할 수 없음')}>?</span>
                                               // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드16): 라운드15는 이 신호를
