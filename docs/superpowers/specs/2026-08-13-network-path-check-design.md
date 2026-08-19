@@ -2,14 +2,20 @@
 
 **Status:** Approved (2026-08-19). This feature stays read-only (no mutation, no active probe, per
 Explicit exclusions below), so it does not raise the ADR-005/ADR-007 governance question the
-SG-rules sibling spec does. Both remaining conditions from the 2026-08-13 draft are now satisfied:
-(1) `docs/decisions/BASELINE.md` §2 now carries a `network_path_check_enabled` register row (added
-alongside `docs/decisions/019-athena-flow-log-query-classification.md`). (2) The required adapter-
-safety/status-reduction review pass ran as a `/co-agent:consensus` multi-AI panel round (codex +
-kiro-cli/claude-fable-5, 2026-08-19) against this document; it found 2 MAJOR gaps — an
-omission-by-failure/omission-by-inapplicability conflation, and an unreachable `failed` reduction
-case caused by unstated rule precedence — both fixed in the "Result semantics" section below (see the
-inline 2026-08-19 review-fix notes). Owner: 오준석(Junseok Oh), who directed the panel review and
+SG-rules sibling spec does — **and is not covered by `docs/decisions/019-athena-flow-log-query-classification.md`
+at all** (that ADR is scoped entirely to the SG-Rules Athena pipeline; this spec's BASELINE §2 row
+records its 근거 ADR as "—"). Both remaining conditions from the 2026-08-13 draft are now satisfied:
+(1) `docs/decisions/BASELINE.md` §2 carries a `network_path_check_enabled` register row on its own
+authority (approved-but-unimplemented — no `network_path_check_enabled` exists in
+`terraform/v2/foundation` yet; the row will be replaced with a live-verified value in the
+implementation PR). (2) The required adapter-safety/status-reduction review pass ran as a
+`/co-agent:consensus` multi-AI panel, across two rounds: round 1/2 (codex + kiro-cli/claude-fable-5,
+2026-08-19) found and fixed 2 MAJOR gaps — an omission-by-failure/omission-by-inapplicability
+conflation, and an unreachable `failed` reduction case caused by unstated rule precedence. Round 3
+(PR #230's 5-lens panel) found the round-1/2 omission fix was prose without a mechanism (an adapter
+dying before enumerating any layer still produced zero rows, not `not_run`) and fixed it with a
+concrete pre-seeding mechanism instead — see the "Result semantics" section's inline 2026-08-19
+review-fix notes for both rounds. Owner: 오준석(Junseok Oh), who directed each panel round and
 approved this Status change after reviewing the findings and fixes.
 
 ## Summary
@@ -32,9 +38,15 @@ layers AWSops could inspect:
   one representative port) must not report `allowed` for a claim it cannot fully back — it reports
   `conditional` itself, and that propagates through candidate reduction the same as `unknown`/`not_run`
   (2026-08-19 review fix — see Result semantics)
-- `not_run` - the global deadline was reached before this layer executed; distinct from `?` (which means
-  the layer ran but couldn't be evaluated) — surfaced in per-layer results but never as a standalone
-  top-level status
+- `not_run` - this layer's evaluation did not complete — either the global deadline was reached
+  before it executed, **or** the adapter that owned it errored before finishing. Distinct from `?`
+  (which means the layer ran but couldn't be evaluated). **`not_run` is the pre-seeded default, not
+  an outcome an adapter has to actively report** (2026-08-19 review fix — see Result semantics'
+  discovery-completeness rule for why): every layer that `discover` determines COULD apply to a
+  candidate starts as `not_run` before any adapter runs, and only changes when that adapter
+  positively completes (with any status, including `unknown`). An adapter that dies mid-evaluation
+  therefore always leaves a `not_run` row behind — never a silently missing one. Surfaced in
+  per-layer results but never as a standalone top-level status.
 - `failed` - an execution-level failure (e.g. identity could not be resolved) prevented meaningful
   inspection; also the per-candidate status when every required layer is `not_run`
 
@@ -205,31 +217,37 @@ Each result uses:
 A layer is **required** if it sits on the path between source and destination for the candidate under
 evaluation — e.g. an ALB listener layer is required only for a candidate that actually routes through
 that ALB; a candidate that bypasses it (a different listener, a direct ENI-to-ENI path) never marks it
-required. Adapters determine which layers apply to their candidate during `discover`/`verify`; a layer
-that doesn't apply to a given candidate is omitted from that candidate's step list rather than marked
-`unknown`.
+required.
 
-> **2026-08-19 review fix (co-agent panel, codex + kiro-cli/claude-fable-5):** two MAJOR gaps closed
-> below. (1) **Omission-by-inapplicability vs. omission-by-failure** were indistinguishable: if an
-> adapter's own `discover`/`verify` is itself cut off by the deadline or errors before it can determine
-> whether a layer applies, that layer was simply *absent* from the step list — not present as
-> `not_run` — so the `not_run` safeguard below never fired and "every required layer `allowed`" could
-> evaluate over an under-populated, truncated set. **A layer must be omitted from the step list only on
-> a positive, completed determination that it does not apply to this candidate.** If an adapter's own
-> discovery of a layer's applicability is itself interrupted, that layer is NOT omitted — it materializes
-> with status `not_run`. A candidate may not reduce to `allowed` unless layer discovery/verification
-> completed for every adapter that could apply to it. (2) The reduction rules previously listed
-> `not_run` in both the general "conditional" rule and its own "all-`not_run` -> `failed`" rule with no
-> stated precedence, making the `failed` case literally unreachable if rules are read in order (an
-> all-`not_run` candidate also satisfies "at least one `not_run`"). Precedence is now explicit below.
+> **2026-08-19 review fix, revised 2026-08-19 round 3 (co-agent panel — round 1/2: codex +
+> kiro-cli/claude-fable-5; round 3: PR #230's 5-lens panel, codex-L2/kiro-opus-L2/kiro-opus-L4
+> converging).** Round 1/2 closed the omission-by-inapplicability-vs-failure gap in prose
+> ("materializes with status `not_run`") but round 3 found that prose has no mechanism: an adapter
+> that dies before enumerating *any* layer for a candidate writes zero rows — not even `not_run` —
+> so rule 4 below still matches vacuously over whatever did land. **Fixed with a concrete mechanism
+> instead of a guard implementers have to remember:** at `discover` time, before any adapter runs
+> for a candidate, the engine pre-seeds a `not_run` row for **every layer that could conceivably
+> apply to that candidate's endpoint/path shape** (this is knowable from the candidate's kind and
+> resolved topology — e.g. an ALB-routed candidate always pre-seeds the ALB-listener layer). Every
+> adapter's job is then to **overwrite its own pre-seeded row**, never to create one from nothing. A
+> layer is **omitted** from the required set (not just left `not_run`) only when an adapter
+> positively, completely determines it doesn't apply and removes its own pre-seeded row — an adapter
+> that errors, times out, or otherwise never reaches that determination simply leaves the row as
+> `not_run`, because it never got the chance to remove it. This makes "every layer materializes
+> unless positively ruled out" a data-model invariant (a row that must be explicitly deleted to
+> disappear), not a rule a future implementer has to separately remember to enforce. One consequence
+> worth stating explicitly: **a candidate's required-layer set is never actually empty** — pre-seeding
+> always seeds at least the source-identity layer, so rule 1 and rule 4 below never both vacuously
+> match an empty set; there is always at least one row to reduce over.
 
 **Per-candidate status** (computed independently for each candidate path; rules apply **in the order
 listed** — an earlier-listed rule that matches takes precedence over a later one):
 
-1. every required layer `not_run` (the deadline hit before this candidate's first layer even started,
-   so **zero** evidence was gathered for it) -> that candidate is `failed` — checked FIRST, before rule
-   2 below, precisely because "all not_run" would otherwise also match "at least one not_run" and make
-   this case unreachable.
+1. every required layer `not_run` (either the deadline hit before this candidate's first layer even
+   started, or every adapter that could have run for it errored/was cut off before overwriting its
+   pre-seeded row — either way **zero** evidence was gathered for it) -> that candidate is `failed`
+   — checked FIRST, before rule 2 below, precisely because "all not_run" would otherwise also match
+   "at least one not_run" and make this case unreachable.
 2. any `blocked` layer on that candidate -> that candidate is `blocked`
 3. no `blocked`, and at least one required layer is `unknown`, `not_run`, or itself `conditional` ->
    that candidate is `conditional` (a layer the deadline cut off before evaluation is exactly as

@@ -1,29 +1,46 @@
-# ADR-019: Athena/Glue Flow Log 조회는 기존 read-only 불변식 내부 / Athena/Glue Flow Log Queries Fall Inside the Existing Read-Only Invariant
+# ADR-019: SG Rules Athena 활동 파이프라인 — ADR-005에 대한 좁은 owner-override 예외 / SG Rules Athena Activity Pipeline — a Narrow Owner-Override Exception to ADR-005
 
 ## Status / 상태
 
-**Accepted (2026-08-19) — owner-directed, 멀티-AI 패널 리뷰 완료.**
+**Accepted (2026-08-19) — GATED(owner-override 예외), ADR-015 패턴, 멀티-AI 패널 리뷰 2라운드 완료.**
 
-- **Owner:** 오준석(Junseok Oh) — `/co-agent:consensus` 세션에서 이 ADR 초안 작성 및 패널 리뷰를 명시적으로 지시했고, 패널이 발견한 두 MAJOR 수정 내용을 확인한 뒤 2026-08-19 Accepted 전환을 명시적으로 승인했다("계속진행"). SG-Rules spec이 요구한 "새 ADR + 멀티-AI 패널" 절차를 이 방식으로 충족한다.
-- **패널 기록:** codex(openai.gpt-5.5) + kiro-cli(claude-fable-5) 2개 독립 라운드, `docs/decisions/BASELINE.md`+ADR-019 초안 diff 대상. **MAJOR 2건 발견 후 이 문서에서 해소**: (1) §Decision의 허용 목록이 Athena 실행에 필수적인 `s3:PutObject`(결과 prefix 한정)를 명시 승인 없이 배제 목록의 문구로만 암시하고 있던 모순 — §3b·§Decision에서 명시적으로 승인·스코프. (2) `athena:StartQueryExecution`을 본질적으로 read-only로 서술한 점(AWS 자체 분류는 Write 레벨) — §3b에서 read-only 속성이 3중 통제(SELECT-only 생성 SQL·Glue mutating 동사 배제·S3 write 스코프)에서 **도출**됨을 명시. `sts:AssumeRole` 확장(§4)은 양쪽 모두 CRITICAL/MAJOR 없음으로 확인. agy는 이번 라운드 `NO_INGEST`로 참여하지 못함(패널 상태 기록).
+> **2026-08-19 재검토(3라운드 패널, PR #230 리뷰) — 프레이밍 정정.** 최초 초안과 2라운드 수정은 "ADR-005 완화도 ADR-007 티어도 필요 없다"고 서술했다. 3라운드 패널(codex-L3/L5, kiro-gpt-L3/L5가 CRITICAL/MAJOR로 수렴, kiro-opus-L3는 반대)은 이 서술이 ADR-005 §Decision 3("조용한 default 토글, 코드 주석 완화, 또는 'clarification' 식 사후 재서술로는 해제할 수 없다")이 금지하는 정확히 그 모양이라고 지적했다 — 이 ADR이 "이 저장소 최초의 write-capable cross-account 신뢰 관계"를 비준하면서도 그것이 예외가 아니라고 주장하는 것은 자기모순이다. **정정: 이 ADR은 ADR-005를 반박·대체하지 않는다 — 대신 ADR-015가 이미 확립한 패턴을 따라, ADR-005 동결에 대한 좁고·명시적이고·날짜가 박힌 owner-override 예외를 하나 더 등록한다.** 예외 대상은 정확히 하나의 메커니즘(Role B의 `s3:PutObject`/`AbortMultipartUpload`, §3b 세 통제 조건부)뿐이다. Role A(rule 인벤토리의 `AWSopsReadOnlyRole` 재사용)는 예외가 필요 없다 — 이미 비준된 read 전용 패턴의 새 호출자일 뿐이다.
+
+- **Owner:** 오준석(Junseok Oh) — `/co-agent:consensus` 세션에서 이 ADR 초안 작성 및 패널 리뷰를 명시적으로 지시했고, 매 라운드 패널이 발견한 수정 내용을 확인한 뒤 Accepted 전환(그리고 이번 owner-override 예외로의 재프레이밍)을 명시적으로 승인했다("계속진행"). SG-Rules spec이 요구한 "새 ADR + 멀티-AI 패널 + 날짜박힌 owner-override"(ADR-015 절차) 전부를 이 방식으로 충족한다.
+- **패널 기록 (3라운드):** 1~2라운드 — codex(openai.gpt-5.5) + kiro-cli(claude-fable-5), IAM 스코프/read-only 속성 도출 관련 MAJOR 다수 해소(§3b 신설, S3 read/write 분리, 신뢰 정책·ACL 배제 추가). 3라운드 — PR #230의 5-lens 패널(codex/kiro-opus/kiro-gpt × L2~L5)이 이 ADR과 두 spec의 Approved 승격 자체를 리뷰: ADR-005 프레이밍 충돌(위에서 정정) 외에도 IAM 경계의 구현 불가능성(전용 결과 prefix·source/result 겹침 검사·`s3:prefix` 조건·workgroup ARN 스코프 미명시), 존재하지 않는 비용 통제 인용, BASELINE register의 라이브 컬럼 오용, spec §IAM과 이 ADR의 grant 목록 간 PR 내부 불일치, network-path spec의 `not_run` 어휘 모순을 MAJOR로 확인 — 모두 이 문서와 두 spec에서 해소(아래 각 섹션 참조).
 - 이 ADR은 `docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md`가 "새 ADR을 통해서만 해소된다"고 명시한 ADR-005/ADR-007 분류 질문을 다룬다.
 
-**Accepted (2026-08-19) — owner-directed, multi-AI panel review complete.**
+**Accepted (2026-08-19) — GATED(owner-override exception), ADR-015 pattern, 2 panel rounds complete.**
+
+> **2026-08-19 re-review (round 3 panel, PR #230) — framing correction.** The original draft and
+> round-2 fix stated "neither an ADR-005 relaxation nor an ADR-007-tier classification is needed."
+> Round 3's panel (codex-L3/L5 and kiro-gpt-L3/L5 converging on CRITICAL/MAJOR; kiro-opus-L3
+> dissenting) flagged that framing as exactly the shape ADR-005 §Decision 3 prohibits ("no silent
+> toggle/comment-softening/'clarification'-style post-hoc restatement") — this ADR ratifies "the
+> repo's first write-capable cross-account trust relationship" while simultaneously claiming that
+> isn't an exception, which is self-contradictory. **Correction: this ADR does not rebut or
+> supersede ADR-005 — it registers one more narrow, explicit, dated owner-override exception,
+> following the pattern ADR-015 already established.** The exception covers exactly one mechanism
+> (Role B's `s3:PutObject`/`AbortMultipartUpload`, conditioned on §3b's three controls). Role A (the
+> reused `AWSopsReadOnlyRole` for rule inventory) needs no exception — it is only a new caller of an
+> already-ratified read-only pattern.
 
 - **Owner:** 오준석(Junseok Oh) — explicitly directed drafting this ADR and running the panel review
-  inside a `/co-agent:consensus` session, then explicitly approved moving to Accepted on 2026-08-19
-  ("계속진행") after reviewing the panel's two MAJOR findings and their fixes. This satisfies the
-  "new ADR + multi-AI panel" instrument the SG-Rules spec required.
-- **Panel record:** two independent rounds — codex (openai.gpt-5.5) and kiro-cli (claude-fable-5) —
-  against this ADR draft + the `docs/decisions/BASELINE.md` diff. **2 MAJOR findings, resolved in
-  this document**: (1) the §Decision permitted-verb list omitted the `s3:PutObject` grant Athena
-  execution actually requires (implied only by the exclusion list's wording, never explicitly
-  ratified) — now explicitly approved and scoped in §3b/§Decision. (2) `athena:StartQueryExecution`
-  was described as intrinsically read-only (AWS's own classification is Write-level) — §3b now
-  states the read-only property is **derived** from three controls (SELECT-only generated SQL, Glue
-  mutating verbs excluded, S3 write scoped). The cross-account `sts:AssumeRole` extension (§4) was
-  confirmed CRITICAL/MAJOR-free by both. Agy was `NO_INGEST` this round (panel-status record, not a
-  finding).
+  inside a `/co-agent:consensus` session, and explicitly approved each round's Accepted transition
+  (and this owner-override reframing) after reviewing that round's findings ("계속진행"). This
+  satisfies the full "new ADR + multi-AI panel + dated owner-override" instrument (the ADR-015
+  procedure) the SG-Rules spec required.
+- **Panel record (3 rounds):** Rounds 1-2 — codex (openai.gpt-5.5) + kiro-cli (claude-fable-5) —
+  resolved several MAJORs on IAM scope and the derived read-only property (added §3b, split S3
+  read/write, added trust-policy and ACL exclusions). Round 3 — PR #230's 5-lens panel
+  (codex/kiro-opus/kiro-gpt × L2-L5) reviewed this ADR and both specs' Approved promotion itself:
+  confirmed MAJOR on the ADR-005 framing conflict (corrected above), the IAM boundary's
+  unimplementability as written (missing dedicated result-prefix requirement, source/result overlap
+  check, `s3:prefix` condition, workgroup-ARN scoping), a cited cost control that exists in no
+  document, BASELINE register misuse of the live-verified column, an intra-PR contradiction between
+  this ADR's ratified grants and the SG spec's own §IAM list, and a `not_run` vocabulary
+  contradiction in the network-path spec — all resolved in this document and the two specs (see the
+  relevant section below for each).
 - This ADR resolves the ADR-005/ADR-007 classification question that
   `docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md` states can only be
   settled by a new ADR.
@@ -42,11 +59,15 @@ the spec's own §IAM design, through a **new, isolated** role in the target acco
 write) but explicitly flagged that classification as unratified reasoning, not a decision, and
 required the ADR-015-style instrument (new ADR + multi-AI panel + dated owner-override) to settle it.
 
-이 ADR은 그 분류 질문 자체를 다시 검토한다. **결론: 이 두 능력 모두 ADR-007의 "외부 DATA" 범주에 속하지 않으며, ADR-005의 완화도 필요 없다 — 둘 다 이미 라이브인 기존 패턴의 새로운 인스턴스일 뿐이다.**
+이 ADR은 그 분류 질문 자체를 다시 검토한다. **결론(3라운드 정정): 두 능력 모두 ADR-007의 "외부 DATA" 범주에 속하지 않는다. 그러나 하나는 서로 다르게 처리된다 — 역할 A(rule 인벤토리, `AWSopsReadOnlyRole` 재사용)는 이미 라이브인 기존 패턴의 새 호출자일 뿐이라 예외가 필요 없다. 역할 B(Athena/S3 write, `AWSopsSgRuleAthenaRole`)는 이 저장소 최초의 write-capable cross-account 신뢰 관계이므로, ADR-005에 대한 좁고 명시적인 owner-override 예외로 등록한다(ADR-015 패턴) — "완화가 필요 없다"고 주장하지 않는다.**
 
-This ADR re-examines the classification question itself. **Conclusion: neither capability belongs
-to ADR-007's "external DATA" category, and neither requires relaxing ADR-005 — both are new
-instances of patterns already live in production.**
+This ADR re-examines the classification question itself. **Conclusion (round-3 correction): neither
+capability belongs to ADR-007's "external DATA" category. But the two are treated differently —
+Role A (rule inventory, reusing `AWSopsReadOnlyRole`) is only a new caller of an already-live
+pattern and needs no exception. Role B (Athena/S3 write, `AWSopsSgRuleAthenaRole`) is this
+repository's first write-capable cross-account trust relationship, so it is registered as a narrow,
+explicit owner-override exception to ADR-005 (the ADR-015 pattern) — not claimed to need no
+relaxation at all.**
 
 ### 1. Athena/Glue 는 "외부 DATA" 가 아니라 AWS-네이티브 데이터 서비스다 / Athena/Glue are AWS-native, not "external DATA"
 
@@ -60,15 +81,21 @@ or CloudWatch Logs Insights' `logs:StartQuery`.
 
 ### 2. 정확히 같은 형태의 패턴이 이미 라이브다 / The exact same shape of pattern is already live
 
-`web/lib/dns-logs.ts`, `web/lib/anfw-logs.ts`, `web/lib/nfm.ts`는 이미 CloudWatch Logs Insights의 `StartQueryCommand` → 폴링 → `GetQueryResultsCommand` (+ 데드라인 시 `StopQueryCommand`)를 사용해 로그 데이터를 비동기 조회한다 — 어떤 ADR-005/007 논쟁도 거치지 않고 라이브다. Athena의 `StartQueryExecution` → 폴링 → `GetQueryResults` (+ `StopQueryExecution`)는 **구조적으로 동일한 패턴**이다: 비동기 조회를 시작하고, 결과를 가져오고, 필요시 취소한다. 유일한 차이는 로그 저장소가 CloudWatch Logs가 아니라 S3(Athena/Glue 카탈로그 경유)라는 것뿐이며, 이는 조회 대상 데이터의 위치이지 조회 행위의 성격을 바꾸지 않는다.
+`web/lib/dns-logs.ts`, `web/lib/anfw-logs.ts`, `web/lib/sg-analysis.ts`는 이미 CloudWatch Logs Insights의 `StartQueryCommand` → 폴링 → `GetQueryResultsCommand` (+ 데드라인 시 `StopQueryCommand`)를 사용해 로그 데이터를 비동기 조회한다 — 어떤 ADR-005/007 논쟁도 거치지 않고 라이브다. **`sg-analysis.ts`(`web/lib/sg-analysis.ts:572-585`)가 가장 강한 선례다** — 바로 이 기능이 다루는 동일한 데이터(VPC Flow Logs)를 동일한 목적(SG rule 매칭)으로 조회하는, 지금 이미 라이브인 코드다. (**정정, 2026-08-19 3라운드 패널:** 이전 초안은 `web/lib/nfm.ts`를 예로 들었으나, 실측 결과 `nfm.ts`는 `@aws-sdk/client-networkflowmonitor`(`StartQueryMonitorTopContributorsCommand` 계열)를 쓰지 Logs Insights가 아니다 — 오인용이었다.) Athena의 `StartQueryExecution` → 폴링 → `GetQueryResults` (+ `StopQueryExecution`)는 **구조적으로 동일한 패턴**이다: 비동기 조회를 시작하고, 결과를 가져오고, 필요시 취소한다. 유일한 차이는 로그 저장소가 CloudWatch Logs가 아니라 S3(Athena/Glue 카탈로그 경유)라는 것뿐이며, 이는 조회 대상 데이터의 위치이지 조회 행위의 성격을 바꾸지 않는다.
 
-`web/lib/dns-logs.ts`, `web/lib/anfw-logs.ts`, and `web/lib/nfm.ts` already run CloudWatch Logs
-Insights' `StartQueryCommand` → poll → `GetQueryResultsCommand` (+ `StopQueryCommand` on deadline) to
-query log data asynchronously — live today, without any ADR-005/007 debate. Athena's
-`StartQueryExecution` → poll → `GetQueryResults` (+ `StopQueryExecution`) is **structurally the same
-pattern**: start an async query, fetch results, cancel if needed. The only difference is that the
-log store is S3 (via the Athena/Glue catalog) instead of CloudWatch Logs — a difference in where the
-queried data lives, not in the nature of the query action.
+`web/lib/dns-logs.ts`, `web/lib/anfw-logs.ts`, and `web/lib/sg-analysis.ts` already run CloudWatch
+Logs Insights' `StartQueryCommand` → poll → `GetQueryResultsCommand` (+ `StopQueryCommand` on
+deadline) to query log data asynchronously — live today, without any ADR-005/007 debate.
+**`sg-analysis.ts` (`web/lib/sg-analysis.ts:572-585`) is the strongest precedent** — it is live code
+today, querying the exact same data (VPC Flow Logs) for the exact same purpose (SG rule matching)
+this feature extends. (**Correction, 2026-08-19 round-3 panel:** an earlier draft cited
+`web/lib/nfm.ts` here — verified against source, `nfm.ts` actually uses
+`@aws-sdk/client-networkflowmonitor` (`StartQueryMonitorTopContributorsCommand` family), not Logs
+Insights; that was a misattribution.) Athena's `StartQueryExecution` → poll → `GetQueryResults` (+
+`StopQueryExecution`) is **structurally the same pattern**: start an async query, fetch results,
+cancel if needed. The only difference is that the log store is S3 (via the Athena/Glue catalog)
+instead of CloudWatch Logs — a difference in where the queried data lives, not in the nature of the
+query action.
 
 ### 3. Athena 의 결과-S3-write는 조회 서비스 자체의 내부 메커니즘이다 / Athena's result S3 write is an intrinsic mechanic of the query service, not a resource mutation
 
@@ -162,18 +189,20 @@ Two distinct cross-account grants exist, and they must not be conflated:
    to this one feature (see the spec's own §IAM — the choice between the two is still open at
    implementation time).
 
-The role being "new" does not, by itself, change the ADR-005/007 classification — §3/§3b's argument
+The role being "new" does not, by itself, change the ADR-007 classification — §3/§3b's argument
 (verb scope + prefix scope + SQL constraint) holds regardless of which role carries the grant. What this
-ADR corrects is only *which* role carries *what*; the conclusion that this sits inside the read-only
-invariant is unchanged.
+ADR corrects is only *which* role carries *what*. It does not change §Decision below: Role B's write
+grant is registered as an explicit ADR-005 owner-override exception, not waved through as "no
+relaxation needed."
 
 ## Decision / 결정
 
-**SG Rules & Usage의 일일 인벤토리 + Athena 기반 활동 파이프라인은 기존 read-only 불변식(BASELINE §1) 내부에 있다. ADR-005 완화도, ADR-007 티어 분류도 필요 없다.**
+**역할 A(rule 인벤토리, `AWSopsReadOnlyRole` 재사용)는 기존 read-only 불변식(BASELINE §1) 내부에 있으며 예외가 필요 없다. 역할 B(Athena/S3 write, `AWSopsSgRuleAthenaRole`)는 ADR-007 티어가 아니며, ADR-005 동결에 대한 좁고·명시적이고·날짜박힌 owner-override 예외로 등록한다(ADR-015 패턴) — §3b의 세 통제가 모두 유지되는 동안만 유효하다.**
 
-**The SG Rules & Usage daily inventory + Athena-based activity pipeline sits inside the existing
-read-only invariant (BASELINE §1). It needs neither an ADR-005 relaxation nor an ADR-007-tier
-classification.**
+**Role A (rule inventory, reusing `AWSopsReadOnlyRole`) sits inside the existing read-only invariant
+(BASELINE §1) and needs no exception. Role B (Athena/S3 write, `AWSopsSgRuleAthenaRole`) is not
+ADR-007-tier, and is registered as a narrow, explicit, dated owner-override exception to the ADR-005
+freeze (the ADR-015 pattern) — valid only while all three §3b controls hold.**
 
 > **2026-08-19 patch (panel review):** the list below now explicitly ratifies the one write-shaped
 > grant this feature actually needs (`s3:PutObject`/`AbortMultipartUpload`, scoped to the customer's
@@ -197,12 +226,14 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
 `AWSopsReadOnlyRole`):
 - `sts:AssumeRole` → 대상 계정의 `AWSopsSgRuleAthenaRole` (신규 role — spec §IAM 설계대로, 전용 task
   role/task definition 또는 broker Lambda로만 assume 가능, 공유 워커 task role은 assume 불가). **신뢰
-  정책 요구사항(spec §IAM "Trust policy" — 이 저장소 최초의 write-capable cross-account role이라
-  베낄 대상이 없다는 그 문단):** 대상 계정의 `AWSopsSgRuleAthenaRole` 신뢰 정책은 (a) 이 저장소의
-  기존 cross-account 관례(`terraform/v2/foundation/workload.tf`, read-only role)와 동일한
+  정책 요구사항(spec §IAM "Trust policy"):** 대상 계정의 `AWSopsSgRuleAthenaRole` 신뢰 정책은 (a)
   `ExternalId` 조건, (b) 호스트 계정의 Athena-worker identity(전용 task role 또는 broker Lambda)로
   제한된 명시적 principal ARN을 **모두** 요구한다 — wildcard principal 금지, `ExternalId` 누락 금지.
-  이 두 조건이 없으면 read-only sibling role은 겪지 않는 confused-deputy 위험이 생긴다.
+  **정정(2026-08-19, 3라운드 패널):** 이 저장소의 기존 cross-account read-only role은 오히려
+  `ExternalId`가 없는 경우가 있다(`steampipe.tf`, 1st-party 경로, ADR-011 완화) — 그러니 여기 요구는
+  "기존 관례 계승"이 아니라, **이 write-capable role 하나에 대해 그 완화를 명시적으로 되돌리는
+  더 엄격한 예외**다. 이 두 조건이 없으면 read-only sibling role은 겪지 않는 confused-deputy 위험이
+  생긴다.
 - `athena:StartQueryExecution`, `athena:GetQueryExecution`, `athena:GetQueryResults`, `athena:StopQueryExecution`, `athena:GetWorkGroup` — **§3b의 세 통제(SELECT-only 생성 SQL, mutating Glue 동사 배제, 아래 S3 read/write 스코프)가 모두 유지되는 조건 하에서만** read-only로 간주
 - `glue:GetDatabase`, `glue:GetTable`, `glue:GetPartitions`
 - `s3:GetBucketLocation`
@@ -221,13 +252,14 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
 - `sts:AssumeRole` → the target account's `AWSopsSgRuleAthenaRole` (a new role — per the spec's
   §IAM design, assumable only by a dedicated task role/task definition or a broker Lambda; the
   shared worker task role may not assume it). **Trust policy requirement (spec §IAM "Trust
-  policy" — the paragraph noting this is the first write-capable cross-account role in the repo,
-  so there's nothing to copy from):** the target account's `AWSopsSgRuleAthenaRole` trust policy
-  must require BOTH (a) an `ExternalId` condition matching this repo's existing cross-account
-  convention (`terraform/v2/foundation/workload.tf`, the read-only role) and (b) an explicit
-  principal ARN restriction to the host account's Athena-worker identity (the dedicated task role
-  or broker Lambda) — no wildcard principal, no missing `ExternalId`. Without both, this role
-  carries a confused-deputy risk its read-only sibling never had.
+  policy"):** the target account's `AWSopsSgRuleAthenaRole` trust policy must require BOTH (a) an
+  `ExternalId` condition and (b) an explicit principal ARN restriction to the host account's
+  Athena-worker identity (the dedicated task role or broker Lambda) — no wildcard principal, no
+  missing `ExternalId`. **Correction (2026-08-19, round-3 panel):** this repo's *existing*
+  cross-account read-only role sometimes has no `ExternalId` at all (`steampipe.tf`, the 1st-party
+  path, per ADR-011's relaxation) — so this requirement is not "inheriting existing convention," it
+  is a **stricter override reversing that relaxation for this one write-capable role specifically**.
+  Without both conditions, this role carries a confused-deputy risk its read-only sibling never had.
 - `athena:StartQueryExecution`, `athena:GetQueryExecution`, `athena:GetQueryResults`,
   `athena:StopQueryExecution`, `athena:GetWorkGroup` — treated as read-only **only while all three
   §3b controls hold** (SELECT-only generated SQL, mutating Glue verbs excluded, the S3 read/write
@@ -294,15 +326,18 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
   account-wide principal) or a missing `ExternalId` condition** — see the trust-policy requirement
   in Permitted above; either omission reopens a confused-deputy risk.
 
-이에 따라 `docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md`의 Feature Gate / IAM 절은 정정된다: `sg_rule_activity_enabled`는 ADR-007 티어가 아니라 **일반 GATED 항목**(`docs/decisions/BASELINE.md` §2, 다른 신규 기능 게이트와 동일한 취급 — default OFF, `workers_enabled` 선행 요구)이다. `docs/superpowers/specs/2026-08-13-network-path-check-design.md`(read-only 정적 분석만 사용, Athena/Reachability Analyzer 없음)는 이 ADR에 영향받지 않으며 자체 남은 조건(BASELINE §2 행 + adapter-safety 재검토 1회)만 충족하면 된다.
+이에 따라 `docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md`의 Feature Gate / IAM 절은 정정된다: `sg_rule_activity_enabled`는 ADR-007 티어가 아니며, "일반 GATED"도 아니다 — 이 ADR이 등록하는 **좁은 owner-override 예외**가 정확히 그 grant(역할 B, Athena/S3 write)에 적용되는 조건부 GATED 항목이다(`docs/decisions/BASELINE.md` §2, "GATED(owner-override 예외)" — ADR-015 행과 같은 표기, default OFF, `workers_enabled` 선행 요구). **이 ADR은 `docs/superpowers/specs/2026-08-13-network-path-check-design.md`나 `network_path_check_enabled`를 다루지 않는다** — 그 spec은 이 ADR과 무관하게 자체 남은 조건(BASELINE §2 행 + adapter-safety 재검토 1회)만으로 Approved 전환되었으며, BASELINE §2의 해당 행은 근거 ADR을 "—"로 표기한다.
 
 Accordingly, the Feature Gate / IAM section of
 `docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md` is corrected:
-`sg_rule_activity_enabled` is not ADR-007-tier — it is an **ordinary GATED entry**
-(`docs/decisions/BASELINE.md` §2, treated the same as any other new-feature gate: default OFF,
-requires `workers_enabled`). `docs/superpowers/specs/2026-08-13-network-path-check-design.md` (which
-uses only read-only static analysis, no Athena, no Reachability Analyzer) is unaffected by this ADR
-and needs only its own remaining conditions (a BASELINE §2 row + one adapter-safety review pass).
+`sg_rule_activity_enabled` is neither ADR-007-tier nor an ordinary GATED entry — it is a
+conditional GATED entry covered by this ADR's narrow owner-override exception (applying to exactly
+Role B's Athena/S3 write grant): `docs/decisions/BASELINE.md` §2, labeled "GATED(owner-override
+예외)" the same way as the ADR-015 row, default OFF, requires `workers_enabled`. **This ADR does
+not cover `docs/superpowers/specs/2026-08-13-network-path-check-design.md` or
+`network_path_check_enabled` at all** — that spec moved to Approved on its own remaining conditions
+(a BASELINE §2 row + one adapter-safety review pass), independent of this ADR, and its BASELINE §2
+row records its 근거 ADR as "—".
 
 ## Consequences / 결과
 
@@ -316,10 +351,19 @@ and needs only its own remaining conditions (a BASELINE §2 row + one adapter-sa
   mutating verb, or any blurring of the boundary between the two roles.
 
 ### Negative / Trade-offs
-- Athena 비용(스캔 바이트당 과금)은 read-only 이지만 예산에 영향을 준다 — spec의 `sg_rule_activity_max_query_bytes`(기본 100 GiB) 및 워크그룹 `BytesScannedCutoffPerQuery` 요구사항으로 통제된다(이 ADR이 신설하지 않음, spec이 이미 규정).
-- Athena cost (billed per byte scanned) is read-only but has budget impact — controlled by the
-  spec's own `sg_rule_activity_max_query_bytes` (default 100 GiB) and workgroup
-  `BytesScannedCutoffPerQuery` requirement (not introduced by this ADR; already specified).
+- Athena 비용(스캔 바이트당 과금)은 read-only 이지만 예산에 영향을 준다. **정정(2026-08-19, 3라운드
+  패널):** 이전 초안은 이 통제가 spec에 이미 명시돼 있다고 인용했으나, 그 시점의 spec에는 어디에도
+  존재하지 않았다(grep으로 확인). spec의 "Flow Log source configuration" §"Cost, result-location,
+  and workgroup validation preconditions"에 `sg_rule_activity_max_query_bytes`(기본 100 GiB) 변수와
+  워크그룹 `EnforceWorkGroupConfiguration`+`BytesScannedCutoffPerQuery` 요구사항을 이 PR에서 신설
+  추가했다 — "이미 규정됨"이 아니라 "이 PR에서 처음 규정함"이 맞는 서술이다.
+- Athena cost (billed per byte scanned) is read-only but has budget impact. **Correction (2026-08-19,
+  round-3 panel):** an earlier draft cited this control as already specified in the spec — it existed
+  nowhere at that point (grep-confirmed). The spec's "Flow Log source configuration" §"Cost,
+  result-location, and workgroup validation preconditions" now **introduces**
+  `sg_rule_activity_max_query_bytes` (default 100 GiB) and requires the workgroup's
+  `EnforceWorkGroupConfiguration` + `BytesScannedCutoffPerQuery` — added in this same PR, not
+  pre-existing.
 - **역할 A**(rule 인벤토리)는 이미 검증된 `AWSopsReadOnlyRole` 신뢰 경계에 새 호출자를 추가할 뿐이지만, **역할 B**(`AWSopsSgRuleAthenaRole`)는 이 저장소에서 **최초로 write-capable한 cross-account 신뢰 관계**다 — read-only로 명명된 기존 sibling role과 달리, 이 role 자체가 손상되면 (스코프된) write 능력이 노출된다. 완화책은 role의 좁은 스코프(prefix 한정 S3 write, 화이트리스트된 Athena/Glue 동사)와 assume 주체 격리(전용 task role 또는 broker Lambda, 공유 워커 task role 배제)뿐이며, "read-only sibling과 같은 수준의 잔여 리스크"라고 주장할 수 없다 — 이건 다른, 더 큰 범주의 신뢰다.
 - **Role A** (rule inventory) only adds a new caller to the already-vetted `AWSopsReadOnlyRole`
   trust boundary, but **Role B** (`AWSopsSgRuleAthenaRole`) is the **first write-capable
@@ -333,6 +377,6 @@ and needs only its own remaining conditions (a BASELINE §2 row + one adapter-sa
 ## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
 - **Security**: 역할 A는 read-only 동사만 화이트리스트. 역할 B는 read/query 동사 + 두 개의 독립적으로 스코프된 S3 영역만 화이트리스트 — Flow Log 소스 위치(read만)와 워크그룹 결과 prefix(read+write 둘 다, Athena 자신이 자기가 쓴 결과를 다시 읽기 때문). 두 영역은 서로 다른(계정이 다를 수도 있는) 위치이며 섞이지 않는다. mutating 동사 명시적 배제, assume 주체를 전용 task role/broker Lambda로 격리(공유 워커 task role 배제). 역할 A의 cross-account 확장은 기존 신뢰 경계 재사용이지만, 역할 B는 이 저장소 최초의 write-capable cross-account 신뢰 관계임을 명시(위 Negative 참조).
 - **Reliability**: CloudWatch Logs Insights와 동일한 폴링+타임아웃+`StopQueryExecution` 취소 패턴 재사용 — 새 실패 모드 없음.
-- **Operational Excellence**: 이 ADR + 멀티-AI 패널 리뷰로 spec이 요구한 governance 절차 충족. BASELINE §2에 `sg_rule_activity_enabled`를 일반 GATED 항목으로 등록(같은 PR).
-- **Cost**: 기본 OFF; 켜져도 스캔 바이트 상한 + 워크그룹 컷오프로 통제.
+- **Operational Excellence**: 이 ADR(3라운드 멀티-AI 패널 리뷰, ADR-015 패턴의 owner-override 예외로 재프레이밍) + owner 승인으로 spec이 요구한 "새 ADR + 패널 + 날짜박힌 owner-override" 절차 완전 충족. BASELINE §2에 `sg_rule_activity_enabled`를 GATED(owner-override 예외)로 등록(같은 PR) — 플래그 자체는 미구현이므로 승인됨·미구현으로 명시.
+- **Cost**: 기본 OFF; 켜져도 이 PR에서 spec에 신설한 `sg_rule_activity_max_query_bytes` 스캔 바이트 상한 + 워크그룹 `EnforceWorkGroupConfiguration`/`BytesScannedCutoffPerQuery` 검증으로 통제.
 - **Performance/Sustainability**: 일 1회 배치 쿼리(소스당), 상시 자원 추가 없음(워커 role IAM 정책 외).
