@@ -196,7 +196,13 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
 `AWSopsSgRuleAthenaRole`** (daily Athena activity pipeline, wholly separate from
 `AWSopsReadOnlyRole`):
 - `sts:AssumeRole` → 대상 계정의 `AWSopsSgRuleAthenaRole` (신규 role — spec §IAM 설계대로, 전용 task
-  role/task definition 또는 broker Lambda로만 assume 가능, 공유 워커 task role은 assume 불가)
+  role/task definition 또는 broker Lambda로만 assume 가능, 공유 워커 task role은 assume 불가). **신뢰
+  정책 요구사항(spec §IAM "Trust policy" — 이 저장소 최초의 write-capable cross-account role이라
+  베낄 대상이 없다는 그 문단):** 대상 계정의 `AWSopsSgRuleAthenaRole` 신뢰 정책은 (a) 이 저장소의
+  기존 cross-account 관례(`terraform/v2/foundation/workload.tf`, read-only role)와 동일한
+  `ExternalId` 조건, (b) 호스트 계정의 Athena-worker identity(전용 task role 또는 broker Lambda)로
+  제한된 명시적 principal ARN을 **모두** 요구한다 — wildcard principal 금지, `ExternalId` 누락 금지.
+  이 두 조건이 없으면 read-only sibling role은 겪지 않는 confused-deputy 위험이 생긴다.
 - `athena:StartQueryExecution`, `athena:GetQueryExecution`, `athena:GetQueryResults`, `athena:StopQueryExecution`, `athena:GetWorkGroup` — **§3b의 세 통제(SELECT-only 생성 SQL, mutating Glue 동사 배제, 아래 S3 read/write 스코프)가 모두 유지되는 조건 하에서만** read-only로 간주
 - `glue:GetDatabase`, `glue:GetTable`, `glue:GetPartitions`
 - `s3:GetBucketLocation`
@@ -214,7 +220,14 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
 
 - `sts:AssumeRole` → the target account's `AWSopsSgRuleAthenaRole` (a new role — per the spec's
   §IAM design, assumable only by a dedicated task role/task definition or a broker Lambda; the
-  shared worker task role may not assume it)
+  shared worker task role may not assume it). **Trust policy requirement (spec §IAM "Trust
+  policy" — the paragraph noting this is the first write-capable cross-account role in the repo,
+  so there's nothing to copy from):** the target account's `AWSopsSgRuleAthenaRole` trust policy
+  must require BOTH (a) an `ExternalId` condition matching this repo's existing cross-account
+  convention (`terraform/v2/foundation/workload.tf`, the read-only role) and (b) an explicit
+  principal ARN restriction to the host account's Athena-worker identity (the dedicated task role
+  or broker Lambda) — no wildcard principal, no missing `ExternalId`. Without both, this role
+  carries a confused-deputy risk its read-only sibling never had.
 - `athena:StartQueryExecution`, `athena:GetQueryExecution`, `athena:GetQueryResults`,
   `athena:StopQueryExecution`, `athena:GetWorkGroup` — treated as read-only **only while all three
   §3b controls hold** (SELECT-only generated SQL, mutating Glue verbs excluded, the S3 read/write
@@ -248,6 +261,12 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
 - **공유 Fargate worker task role에 `AWSopsSgRuleAthenaRole`로의 `sts:AssumeRole` 직접 부여** — 이 role은
   전용 task role/task definition 또는 broker Lambda로만 assume 가능해야 하며, 공유 role에 부여하면 이
   기능과 무관한 다른 모든 job 타입이 Athena 접근 범위에 들어간다(§4 참조)
+- **`s3:PutBucketPolicy`/`s3:PutBucketAcl`/`s3:PutObjectAcl`/`s3:DeleteBucketPolicy` 및 그 밖의 모든
+  bucket-policy·ACL write 동사** — spec §IAM이 명시적으로 배제한다. 이 role은 버킷의 접근 정책 자체를
+  건드리지 않으며, 오직 그 안의 객체를 화이트리스트된 prefix 안에서 read/write할 뿐이다.
+- **`AWSopsSgRuleAthenaRole`의 신뢰 정책에 wildcard principal(`"Principal": "*"` 또는 계정 전체)을
+  허용하거나 `ExternalId` 조건을 생략** — 위 Permitted 섹션의 신뢰 정책 요구사항 참조. 둘 중 하나라도
+  빠지면 confused-deputy 리스크가 생긴다.
 
 - `athena:CreateWorkGroup`/`UpdateWorkGroup`/`DeleteWorkGroup`, `glue:CreateTable`/`CreateDatabase`/`DeleteTable`/`DeleteDatabase`
 - **any path that executes user/operator-submitted SQL verbatim** — every submitted query must be
@@ -267,6 +286,13 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
   `AWSopsSgRuleAthenaRole`** — that role must be assumable only via a dedicated task role/task
   definition or a broker Lambda; granting it to the shared role would expose every other job type
   this worker fleet runs to Athena access it has no business needing (see §4)
+- **`s3:PutBucketPolicy`/`s3:PutBucketAcl`/`s3:PutObjectAcl`/`s3:DeleteBucketPolicy` and any other
+  bucket-policy/ACL write verb** — explicitly excluded per the spec's own §IAM. This role never
+  touches a bucket's access policy itself, only reads/writes objects within its allowlisted
+  prefixes.
+- **A trust policy on `AWSopsSgRuleAthenaRole` with a wildcard principal (`"Principal": "*"` or an
+  account-wide principal) or a missing `ExternalId` condition** — see the trust-policy requirement
+  in Permitted above; either omission reopens a confused-deputy risk.
 
 이에 따라 `docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md`의 Feature Gate / IAM 절은 정정된다: `sg_rule_activity_enabled`는 ADR-007 티어가 아니라 **일반 GATED 항목**(`docs/decisions/BASELINE.md` §2, 다른 신규 기능 게이트와 동일한 취급 — default OFF, `workers_enabled` 선행 요구)이다. `docs/superpowers/specs/2026-08-13-network-path-check-design.md`(read-only 정적 분석만 사용, Athena/Reachability Analyzer 없음)는 이 ADR에 영향받지 않으며 자체 남은 조건(BASELINE §2 행 + adapter-safety 재검토 1회)만 충족하면 된다.
 
