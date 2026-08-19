@@ -1286,10 +1286,17 @@ export default function NetworkFirewallPage() {
                 않고 그냥 빈 배열([])로 남는다 — failed.includes('alertByAction')만 보면 discovery
                 unknown 케이스(쿼리 자체가 "실패"로 기록되지 않음)를 놓쳐 여전히 "확정 0" 도넛으로
                 오판한다. totalAlerts==null은 이미 (failed.includes('alertTotals') ||
-                alertDiscoveryUnknown)로 계산돼 있어 이 셋을 전부 포함하는 신호다 — byAction도 같은
-                집계 파이프라인(Promise.all)에서 나오므로 이 신호를 그대로 재사용한다. */}
+                alertDiscoveryUnknown)로 계산돼 있어 이 둘을 포함하는 신호다.
+                리뷰(Codex stop-hook, PR #229 라운드4 — 라운드3 수정도 여전히 불완전): totalAlerts와
+                byAction은 Promise.all 안에서 서로 "독립된" runMerged 호출이다 — alertTotals 쿼리는
+                성공(totalAlerts != null)했는데 alertByAction 쿼리만 개별적으로 실패(스로틀/일시적
+                오류 등)할 수 있다. totalAlerts==null 단독으로는 이 케이스(불명 원인이 discovery가
+                아니라 alertByAction 자체 쿼리 실패)를 못 잡아 다시 "확정 0" 도넛으로 오판한다.
+                discovery-unknown 계열은 totalAlerts==null로, 쿼리 개별 실패 계열은
+                failed.includes('alertByAction')로 — 두 조건을 OR로 합쳐야 세 원인(쿼리 실패·discovery
+                unknown·진짜 0) 중 앞의 둘을 모두 잡고 진짜 0만 도넛(0)으로 남긴다. */}
             <div className="grid gap-6 lg:grid-cols-2">
-              {logsData?.alert?.totalAlerts == null ? (
+              {(logsData?.alert?.totalAlerts == null || (logsData?.failed?.includes('alertByAction') ?? false)) ? (
                 <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
               ) : (
                 <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
