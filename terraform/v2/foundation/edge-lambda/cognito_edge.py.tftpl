@@ -23,8 +23,12 @@ def is_public(uri):
     # - /api/incidents/webhook (ADR-013 ingress carve-out): external alarm sources cannot carry
     #   a Cognito cookie, so this exact path skips edge auth. The route itself verifies HMAC-SHA256 /
     #   SNS-subscription and is flag-gated on INCIDENT_LIFECYCLE_ENABLED (503 when off).
+    # PWA(홈 화면 설치) 자산: iOS는 manifest와 아이콘을 인증 쿠키 없이 fetch한다 —
+    # 미공개면 302→/login HTML이 내려가 설치가 조용히 깨진다 (web/app/manifest.test.ts가 lockstep 검증).
     return uri.startswith('/_next/static/') or uri in (
         '/api/health', '/api/auth/signout', '/login', '/api/auth/login', '/icon.svg',
+        '/manifest.webmanifest', '/apple-touch-icon.png',
+        '/icon-192.png', '/icon-512.png', '/icon-512-maskable.png',
         '/api/incidents/webhook')
 
 _JWKS = None
