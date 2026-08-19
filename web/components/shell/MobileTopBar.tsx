@@ -51,7 +51,7 @@ export default function MobileTopBar({ onMenu }: { onMenu: () => void }) {
   }
 
   return (
-    <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-chrome-border bg-chrome px-3 py-2 lg:hidden">
+    <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-chrome-border bg-chrome px-3 py-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] lg:hidden">
       <button
         type="button"
         onClick={onMenu}
