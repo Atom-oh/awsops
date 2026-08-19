@@ -23,7 +23,7 @@
     "@aws-sdk/client-eks": "^3.1062.0",
     "@aws-sdk/client-kafka": "^3.1090.0",
     "@aws-sdk/client-lambda": "^3.1063.0",
-    "@aws-sdk/client-network-firewall": "^3.1107.0",
+    "@aws-sdk/client-network-firewall": "^3.1112.0",
     "@aws-sdk/client-networkflowmonitor": "^3.1101.0",
     "@aws-sdk/client-pricing": "^3.1064.0",
     "@aws-sdk/client-route53resolver": "^3.1101.0",

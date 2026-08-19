@@ -66,6 +66,10 @@ describe('anfwLogsAnalysis', () => {
     mockInsights((group, query) => {
       if (group.endsWith('/alert')) {
         if (query.includes('by action')) return [{ action: 'blocked', cnt: 7 }, { action: 'allowed', cnt: 3 }];
+        if (query.includes('by sid, sig, act')) return [
+          { sid: '5', sig: 'block outbound telnet', act: 'blocked', cnt: 7 },
+          { sid: '9', sig: 'http watch', act: 'allowed', cnt: 3 },
+        ];
         if (query.includes('by sid')) return [{ sid: '5', sig: 'block outbound telnet', cnt: 7 }];
         if (query.includes('by src')) return [{ src: '10.11.1.111', cnt: 8 }];
         if (query.includes('by dst')) return [{ dst: '10.12.2.34:23', cnt: 7 }];
@@ -77,7 +81,13 @@ describe('anfwLogsAnalysis', () => {
       return [{ cnt: 9, bytes: 20000 }]; // totals
     });
     const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const before = Date.now();
     const a = await anfwLogsAnalysis(86400);
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드21): data(/api/anfw?range=)와 이 로그
+    // 분석은 서로 독립된 4분 TTL 캐시라 시차가 날 수 있다 — 페이지가 두 anchor 중 더
+    // 이른 쪽을 range 시작 기준으로 쓰려면 이 값이 응답에 있어야 한다.
+    expect(a.generatedAt).toBeGreaterThanOrEqual(before);
+    expect(a.generatedAt).toBeLessThanOrEqual(Date.now());
 
     expect(a.targets).toHaveLength(2);
     expect(a.targets.every((t) => !t.discovered)).toBe(true);
@@ -87,6 +97,11 @@ describe('anfwLogsAnalysis', () => {
     expect(a.alert!.totalAlerts).toBe(10);
     expect(a.alert!.byAction).toEqual([{ name: 'blocked', value: 7 }, { name: 'allowed', value: 3 }]);
     expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'block outbound telnet', value: 7 }]);
+    // 룰 히트 카운트 (sid+sig+action) — 2026-08 신기능과 동일한 Alert 로그 집계
+    expect(a.alert!.ruleHits).toEqual([
+      { sid: '5', signature: 'block outbound telnet', actions: ['blocked'], hits: 7 },
+      { sid: '9', signature: 'http watch', actions: ['allowed'], hits: 3 },
+    ]);
     expect(a.alert!.topSources[0]).toEqual({ name: '10.11.1.111', value: 8 });
     expect(a.alert!.topDests[0]).toEqual({ name: '10.12.2.34:23', value: 7 });
 
@@ -254,7 +269,10 @@ describe('anfwLogsAnalysis', () => {
     logsSend.mockImplementation(async (cmd: Cmd) => {
       if (cmd.constructor.name === 'StartQueryCommand') {
         const q = cmd.input.queryString as string;
-        if (q.includes('by sid, sig')) sigQuery = q;
+        // alertTopSignatures는 "by sid, sig |"로 끝나지만, alertRuleHits는 같은 접두사
+        // "by sid, sig"를 공유하면서 ", act"가 더 붙는다(자체 오버페치 헤드룸 — 별도 검증,
+        // 아래 alertRuleHits 전용 테스트) — 여기서는 시그니처 쿼리만 정확히 식별한다.
+        if (q.includes('by sid, sig |')) sigQuery = q;
         return { queryId: 'q' };
       }
       if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 1 })] };
@@ -263,6 +281,24 @@ describe('anfwLogsAnalysis', () => {
     const { anfwLogsAnalysis } = await import('./anfw-logs');
     await anfwLogsAnalysis(3600);
     expect(sigQuery).toContain('limit 100');
+  });
+
+  it('alertRuleHits는 join 컷오프(100)보다 큰 리전별 상한(150)으로 오버페치 — 리전별 상한=컷오프였던 여유 없음 문제 해소 (리뷰 MINOR, PR #225 라운드3)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw()] });
+    let ruleHitsQuery = '';
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const q = cmd.input.queryString as string;
+        if (q.includes('by sid, sig, act')) ruleHitsQuery = q;
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') return { status: 'Complete', results: [row({ cnt: 1 })] };
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    await anfwLogsAnalysis(3600);
+    expect(ruleHitsQuery).toContain("filter event.event_type = 'alert' and ispresent(event.alert.signature_id)");
+    expect(ruleHitsQuery).toContain('limit 150');
   });
 
   it('같은 리전의 여러 로그 그룹은 logGroupNames로 한 쿼리에 묶여 그룹별 limit이 진짜 전역 Top-N이 됨 (리뷰 MAJOR)', async () => {
@@ -670,6 +706,162 @@ describe('anfwLogsAnalysis', () => {
     // topSignatures 표는 살아 있어야 한다(totalAlerts>0 게이트였다면 여기서 숨겨졌을 것).
     expect(a.alert!.totalAlerts).toBeNull();
     expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'x', value: 3 }]);
+  });
+
+  it('alertRuleHits 쿼리가 실패하면 ruleHits는 빈 배열이 아니라 null — 실패한 리전의 설정 룰이 "매칭 0(확정 idle)"으로 오판되지 않아야 함 (리뷰 MAJOR, PR #225)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    logsSend.mockImplementation(async (cmd: Cmd) => {
+      if (cmd.constructor.name === 'StartQueryCommand') {
+        const q = cmd.input.queryString as string;
+        // alertRuleHits 쿼리(ispresent(event.alert.signature_id) 필터로 식별)만 실패시키고
+        // 나머지 alert 쿼리는 성공시킨다.
+        if (q.includes('ispresent(event.alert.signature_id)')) throw new Error('boom rule hits');
+        return { queryId: 'q' };
+      }
+      if (cmd.constructor.name === 'GetQueryResultsCommand') {
+        return { status: 'Complete', results: [row({ sid: '5', sig: 'x', cnt: 3 })] };
+      }
+      return {};
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.failed).toContain('alertRuleHits');
+    // ruleHits 쿼리만 실패했을 뿐 — 빈 배열(확정 매칭 0)이 아니라 null(불명)이어야 하고,
+    // 이미 받아온 topSignatures 등 다른 alert 결과는 살아 있어야 한다.
+    expect(a.alert!.ruleHits).toBeNull();
+    expect(a.alert!.topSignatures).toEqual([{ sid: '5', signature: 'x', value: 3 }]);
+  });
+
+  it('룰 히트가 정확히 join 컷오프(100)개면 잘린 게 아니므로 ruleHitsTruncated=false (리뷰 MINOR off-by-one, PR #225 라운드8)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) {
+        return Array.from({ length: 100 }, (_, i) => ({ sid: String(i), sig: `sig${i}`, act: 'blocked', cnt: 1 }));
+      }
+      return [{ cnt: 100 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // 정확히 100개 — slice(0, 100)이 아무것도 잘라내지 않았으므로 truncated가 아니다.
+    // >=였다면 여기서 잘못 true가 됐을 것.
+    expect(a.alert!.ruleHits).toHaveLength(100);
+    expect(a.alert!.ruleHitsTruncated).toBe(false);
+  });
+
+  it('같은 sid가 기간 내에 여러 (signature, action) 튜플로 나뉘어도 sid 단위로 먼저 합산 — 컷오프가 한 sid의 값을 부분합으로 쪼개지 않음 (리뷰 MAJOR, PR #225 라운드9)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) {
+        // 같은 sid=1이 라운드10에서 action이 alert→blocked로 바뀌어 두 개의 튜플로 집계됨.
+        // 튜플 단위로 자르는 이전 로직이었다면 이 중 하나가 top-N 밖으로 밀릴 수 있었다.
+        return [
+          { sid: '1', sig: 'old sig', act: 'allowed', cnt: 5 },
+          { sid: '1', sig: 'new sig', act: 'blocked', cnt: 7 },
+        ];
+      }
+      return [{ cnt: 12 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    // sid=1은 정확히 한 행으로 합산되어야 하고(12 = 5+7), 두 액션이 모두 보존돼야 한다.
+    expect(a.alert!.ruleHits).toEqual([
+      { sid: '1', signature: 'old sig', actions: ['allowed', 'blocked'], hits: 12 },
+    ]);
+  });
+
+  it('ALERT 로그 그룹 생성 시각이 range 시작보다 이전이면 alertCoverageComplete=true (리뷰 MAJOR, PR #225 라운드14)', async () => {
+    const now = 10_000_000_000; // 임의 고정 시각
+    const rangeSec = 3600;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+      logsSend.mockImplementation(async (cmd: Cmd) => {
+        switch (cmd.constructor.name) {
+          case 'DescribeLogGroupsCommand':
+            return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert', creationTime: now - rangeSec * 1000 - 1_000_000 }] };
+          case 'StartQueryCommand': return { queryId: 'q' };
+          case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 0 })] };
+          default: return {};
+        }
+      });
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(rangeSec);
+      expect(a.alert!.alertCoverageComplete).toBe(true);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it('ALERT 로그 그룹이 range 시작보다 늦게 생성됐으면(로깅이 기간 중간에 켜짐) alertCoverageComplete=false — hits=0을 확정 idle로 볼 수 없음 (리뷰 MAJOR 확정, PR #225 라운드14)', async () => {
+    const now = 10_000_000_000;
+    const rangeSec = 3600;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+      logsSend.mockImplementation(async (cmd: Cmd) => {
+        switch (cmd.constructor.name) {
+          case 'DescribeLogGroupsCommand':
+            // 로그 그룹이 range 시작(now - rangeSec*1000)보다 나중에 생성됨 — 로깅이 최근에야 켜졌을 가능성.
+            return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert', creationTime: now - (rangeSec * 1000) / 2 }] };
+          case 'StartQueryCommand': return { queryId: 'q' };
+          case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 0 })] };
+          default: return {};
+        }
+      });
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(rangeSec);
+      expect(a.alert!.alertCoverageComplete).toBe(false);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it('로그 그룹의 retentionInDays가 짧아 실제 보존 구간이 range 시작보다 늦게 시작되면 alertCoverageComplete=false (리뷰 MAJOR, PR #225 라운드14)', async () => {
+    const now = 10_000_000_000;
+    const rangeSec = 7 * 86400; // 7일
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+      logsSend.mockImplementation(async (cmd: Cmd) => {
+        switch (cmd.constructor.name) {
+          case 'DescribeLogGroupsCommand':
+            // 생성은 오래전이지만 보존기간이 1일뿐이라 7일 range의 앞쪽 6일은 이미 만료·삭제됨.
+            return { logGroups: [{ logGroupName: '/aws/network-firewall/DMZVPC/alert', creationTime: now - 365 * 86400_000, retentionInDays: 1 }] };
+          case 'StartQueryCommand': return { queryId: 'q' };
+          case 'GetQueryResultsCommand': return { status: 'Complete', results: [row({ cnt: 0 })] };
+          default: return {};
+        }
+      });
+      const { anfwLogsAnalysis } = await import('./anfw-logs');
+      const a = await anfwLogsAnalysis(rangeSec);
+      expect(a.alert!.alertCoverageComplete).toBe(false);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it('한 리전이 자기 상한(150)에 도달하면 ruleHitsPartial=true — present인 sid도 그 리전 몫이 잘려 과소집계됐을 수 있음 (리뷰 MAJOR, PR #225 라운드8)', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) {
+        return Array.from({ length: 150 }, (_, i) => ({ sid: String(i), sig: `sig${i}`, act: 'blocked', cnt: 1 }));
+      }
+      return [{ cnt: 150 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.alert!.ruleHitsPartial).toBe(true);
+  });
+
+  it('리전 상한에 못 미치면 ruleHitsPartial=false', async () => {
+    mockAnalysis.mockResolvedValue({ firewalls: [fw({ flowLogging: null })] });
+    mockInsights((group, query) => {
+      if (query.includes('by sid, sig, act')) return [{ sid: '1', sig: 'x', act: 'blocked', cnt: 1 }];
+      return [{ cnt: 1 }];
+    });
+    const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const a = await anfwLogsAnalysis(3600);
+    expect(a.alert!.ruleHitsPartial).toBe(false);
   });
 
   it('flowTotals 쿼리가 실패하면 totalFlows/totalBytes는 0이 아니라 null — byProto 등 다른 flow 쿼리 결과는 유지 (리뷰 MAJOR 라운드11)', async () => {

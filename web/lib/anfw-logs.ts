@@ -114,6 +114,27 @@ export interface AnfwAlertAnalytics {
   totalAlerts: number | null;
   byAction: { name: string; value: number }[];
   topSignatures: { sid: string; signature: string; value: number }[];
+  /** Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
+   *  sid 단위로 미리 합산된 매칭 수(리뷰 MAJOR, 라운드9 — 튜플(sid,signature,action) 단위로
+   *  자르면 컷오프 경계에서 한 sid의 부분합만 남는 문제가 있어, 합산 후가 아니라 합산 전에
+   *  sid로 먼저 묶는다), 상위 100(sid 개수 기준). 설정 룰 SID와 조인해 매칭 0 룰을 표면화.
+   *  리뷰 MAJOR(확정): alertRuleHits 쿼리 자체가 실패/청크 truncation됐거나 발견이
+   *  unknown이면 null — totalAlerts와 동일 계약. 이 게이트 없이는 조회 실패 리전의 설정
+   *  룰이 "매칭 0(확정 idle)"로 오판되어 정책 사각지대 경고가 거짓 양성을 낸다. */
+  ruleHits: { sid: string; signature: string; actions: string[]; hits: number }[] | null;
+  /** true면 히트 집계가 top-100으로 잘렸음(hits=0인 SID가 실제로는 잘린 구간에 있을 수 있음) —
+   *  소비자는 ruleHits에 없는 설정 SID를 "매칭 0"이 아니라 "불명"으로 표시해야 한다. */
+  ruleHitsTruncated: boolean;
+  /** true면 하나 이상의 리전이 자기 몫 조회에서 리전별 상한(RULE_HITS_PER_REGION_LIMIT)에
+   *  정확히 도달함 — 그 리전에 실제로 더 있었을 수 있다는 뜻이라, ruleHits에 present인
+   *  sid라도 hits가 그 리전의 몫만큼 과소집계됐을 수 있다(리뷰 MAJOR, 라운드8 — 병합
+   *  후 존재 여부만 보는 ruleHitsTruncated와 달리, 존재하는 sid의 "정확한 값" 신뢰도를
+   *  가리키는 별도 신호). 소비자는 양수 히트를 "≥N"(하한)으로 표시해야 한다. */
+  ruleHitsPartial: boolean;
+  /** false면 ALERT 로그 그룹 중 하나 이상이 range 시작 시점을 커버하지 못함(로깅이 range
+   *  중간에 켜졌거나 그룹이 늦게 생성됨/보존기간 만료) — 이 range 안에서 hits=0인 설정
+   *  룰이라도 "확정 idle"이 아니라 "커버리지 밖일 수 있음"이다(리뷰 MAJOR, 라운드14). */
+  alertCoverageComplete: boolean;
   topSources: { name: string; value: number }[];
   topDests: { name: string; value: number }[];
 }
@@ -138,6 +159,15 @@ export interface AnfwLogsAnalysis {
   /** 부분 실패한 분석 키 (해당 패널만 비움). */
   failed: string[];
   rangeSec: number;
+  /** 이 분석 실행이 시작된 서버 시각(ms epoch) — 리뷰 MAJOR(Codex stop-hook, PR #225
+   *  라운드21): AnfwAnalysis.generatedAt과 이 값은 서로 독립적인 4분 TTL 캐시를 가진
+   *  별도 fetch(/api/anfw?range= vs ?view=logs&range=)에서 나온다 — 토폴로지는 방금
+   *  갱신됐는데 로그 분석은 최대 4분 전 캐시일 수 있고(또는 반대), 그 시차 구간에 수정된
+   *  정책/룰그룹은 data.generatedAt 하나만 기준으로 계산한 rangeStartMs로는 놓친다.
+   *  실제 Insights 쿼리 startTime은 이 값 이후의 순간에서 샘플링되므로, 이 값은 "가능한
+   *  가장 이른" 로그 윈도우 시작의 보수적 상한이다 — data.generatedAt과 이 값 중 더 이른
+   *  쪽을 range 시작 기준으로 써야 두 캐시의 시차로 인한 fail-open을 막는다. */
+  generatedAt: number;
 }
 
 const num = (s: string | undefined): number => (s != null && s !== '' ? Number(s) || 0 : 0);
@@ -291,7 +321,8 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 데드라인은 anfwAnalysis()의 콜드 멀티 리전 fan-out을 기다리기 "전"에 계산 —
     // audit 경로(anfw/route.ts)와 동일 패턴. 앞단이 오래 걸렸으면 Insights 폴링에
     // 남는 시간이 그만큼 줄어들 뿐, 전체 예산은 항상 60s 안에 수렴한다.
-    const deadlineAt = Date.now() + LOGS_BUDGET_MS;
+    const generatedAt = Date.now();
+    const deadlineAt = generatedAt + LOGS_BUDGET_MS;
     const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownByType } = await resolveTargets(rangeSec, deadlineAt);
     const failed: string[] = [];
     // 로그 그룹 발견 자체가 실패(스로틀/거부)한 것과 "발견됐지만 로그가 없음"을 구분 —
@@ -383,6 +414,62 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       if (anyFail) failed.push(key);
       return rows;
     };
+    // 리뷰 MAJOR(확정, PR #225 라운드8): runMerged는 리전별 결과를 그냥 이어붙이기만 해서,
+    // 어느 리전이 자기 limit(perRegionLimit)에 정확히 도달했는지(= 그 리전에 더 있었을
+    // 수 있다는 뜻) 신호가 사라진다 — 병합된 sid가 present로 보여도 실제로는 그 리전의
+    // 몫이 잘려나가 총합이 실제보다 낮은데 "정확한 수치"처럼 표시된다. 리전별 결과
+    // 개수를 limit과 비교해 "어느 한 리전이라도 캡에 도달했는가"를 별도로 반환한다.
+    const runMergedWithCap = async (ts: AnfwLogTarget[], key: string, query: string, perRegionLimit: number): Promise<{ rows: Row[]; anyRegionAtCap: boolean }> => {
+      const rows: Row[] = [];
+      let anyFail = false;
+      let anyRegionAtCap = false;
+      await Promise.all(groupByRegion(ts).map(async ([region, groups]) => {
+        try {
+          const regionRows = await runInsights(region, groups, query, rangeSec, deadlineAt);
+          if (regionRows.length >= perRegionLimit) anyRegionAtCap = true;
+          rows.push(...regionRows);
+        } catch { anyFail = true; }
+      }));
+      if (anyFail) failed.push(key);
+      return { rows, anyRegionAtCap };
+    };
+
+    // 리뷰 MAJOR(확정, PR #225 라운드14): observability/zeroTrustworthy는 지금 이 순간의
+    // 로깅 구성 스냅샷이 선택한 range(최대 7일) "전체"를 커버했다고 가정한다 — ALERT
+    // 로깅이 range 중간에 켜졌거나 로그 그룹이 range 시작보다 늦게 생성됐으면, 그 이전
+    // 구간의 실제 매칭은 로그가 없어 hits=0으로 보이고 확정 idle로 오판된다. 이건 이
+    // 파일이 다른 곳에서 계속 고쳐온 "공간적 완전성"(리전/방화벽/룰그룹 커버리지)과는
+    // 다른 축인 "시간적 완전성" 문제다. 각 ALERT 로그 그룹의 creationTime(+retentionInDays로
+    // 실제 보존 구간까지 고려)을 조회해, range 시작 시점을 커버하지 못하는 그룹이 하나라도
+    // 있으면 전체 커버리지를 불명으로 표시한다 — 페이지는 이를 근거로 확정 idle 판정을
+    // 추가로 억제해야 한다.
+    async function alertCoverageComplete(ts: AnfwLogTarget[]): Promise<boolean> {
+      if (ts.length === 0) return true;
+      const rangeStartMs = Date.now() - rangeSec * 1000;
+      const byRegion = new Map<string, Set<string>>();
+      for (const t of ts) {
+        if (!byRegion.has(t.region)) byRegion.set(t.region, new Set());
+        byRegion.get(t.region)!.add(t.group);
+      }
+      try {
+        const perRegion = await Promise.all([...byRegion].map(async ([region, groups]) => {
+          const perGroup = await Promise.all([...groups].map(async (group) => {
+            if (Date.now() >= deadlineAt) throw new Error('coverage check deadline exceeded');
+            const r = await logs(region).send(new DescribeLogGroupsCommand({ logGroupNamePrefix: group }));
+            const lg = (r.logGroups ?? []).find((g) => g.logGroupName === group);
+            if (!lg || lg.creationTime == null) return false; // 못 찾음/필드 없음 — 커버리지 확정 불가
+            // retentionInDays가 설정돼 있으면 만료로 실제 보존 구간이 creationTime보다 늦게
+            // 시작될 수 있다 — 둘 중 더 늦은(더 짧게 남은) 쪽을 실질 커버리지 시작으로 본다.
+            const retentionStartMs = lg.retentionInDays != null ? Date.now() - lg.retentionInDays * 86_400_000 : -Infinity;
+            return Math.max(lg.creationTime, retentionStartMs) <= rangeStartMs;
+          }));
+          return perGroup.every(Boolean);
+        }));
+        return perRegion.every(Boolean);
+      } catch {
+        return false; // 조회 실패 — 커버리지를 확정할 수 없으므로 보수적으로 불명 처리
+      }
+    }
 
     // 리뷰 MAJOR(확정, 라운드6): 같은 리전의 그룹은 logGroupNames로 묶었지만, 리전이
     // 여럿이면 여전히 리전별로 `limit 10`까지 잘린 뒤 병합한다 — 모든 리전에서 11위인
@@ -390,6 +477,9 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 훨씬 크게(100) 잡아 오차 범위를 "리전 수 × (100-10)" 꼬리로 좁힌다(완전 제거는
     // 아니지만 실사용 규모에서 사실상 무시 가능한 수준으로 축소).
     const PER_REGION_OVERFETCH = 100;
+    // 룰 히트 조인 최종 컷오프(표시는 이보다 더 자름) — 리전별 상한은 이보다 커야 여유가 생긴다.
+    const RULE_HITS_JOIN_CUTOFF = 100;
+    const RULE_HITS_PER_REGION_LIMIT = 150;
     // 리뷰 MAJOR(라운드10): alertTargets는 flowTargets와 동일하게 50개 초과 시 리전별로
     // 여러 청크로 쪼개진다(위 groupByRegion) — flow 쪽만 anyRegionChunked로 신호를 남기고
     // alert 쪽은 없었다. 청크당 limit(PER_REGION_OVERFETCH)이 사실상 "리전 전체"가 아니라
@@ -397,13 +487,25 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     if (anyRegionChunked(alertTargets)) failed.push('alertTopNPartial');
     let alert: AnfwAlertAnalytics | null = null;
     if (alertTargets.length > 0) {
-      const [totals, byAction, topSig, topSrc, topDst] = await Promise.all([
+      const [totals, byAction, topSig, ruleHitsResult, topSrc, topDst, coverageComplete] = await Promise.all([
         runMerged(alertTargets, 'alertTotals', `filter event.event_type = 'alert' | stats count(*) as cnt`),
         runMerged(alertTargets, 'alertByAction', `fields event.alert.action as action | filter event.event_type = 'alert' | stats count(*) as cnt by action | sort cnt desc`),
         runMerged(alertTargets, 'alertTopSignatures', `fields event.alert.signature_id as sid, event.alert.signature as sig | filter event.event_type = 'alert' | stats count(*) as cnt by sid, sig | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
+        // 룰 히트 카운트 — owner 확인 쿼리와 동일 형태 (sid+sig+action, limit 100)
+        // 리뷰 MINOR(확정, PR #225 라운드3): (1) 형제 쿼리들은 `event.event_type = 'alert'`로
+        // 필터하는데 이 쿼리만 `ispresent(signature_id)`만 써서 합계가 totalAlerts와 어긋날
+        // 여지가 있었다 — 형제와 동일 필터를 추가한다(signature_id 존재 필터는 sid 없는
+        // 행을 배제하기 위해 유지). (2) 리전별 limit이 최종 join 컷오프(RULE_HITS_JOIN_CUTOFF,
+        // 아래 hitMap.size 판정과 동일 값)와 같아 여유가 전혀 없었다 — 리전별 상한을 join
+        // 컷오프보다 크게 잡아, 여러 리전이 각자 상한 근처인 SID를 합산해도 실제로는 더
+        // 높은 순위였던 SID가 통째로 누락되는 경우를 줄인다. runMergedWithCap으로 리전별
+        // 캡 도달 여부(ruleHitsPartial)까지 함께 반환한다(리뷰 MAJOR, 라운드8).
+        runMergedWithCap(alertTargets, 'alertRuleHits', `fields event.alert.signature_id as sid, event.alert.signature as sig, event.alert.action as act | filter event.event_type = 'alert' and ispresent(event.alert.signature_id) | stats count(*) as cnt by sid, sig, act | sort cnt desc | limit ${RULE_HITS_PER_REGION_LIMIT}`, RULE_HITS_PER_REGION_LIMIT),
         runMerged(alertTargets, 'alertTopSources', `fields event.src_ip as src | filter event.event_type = 'alert' | stats count(*) as cnt by src | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
         runMerged(alertTargets, 'alertTopDests', `fields concat(event.dest_ip, ':', event.dest_port) as dst | filter event.event_type = 'alert' | stats count(*) as cnt by dst | sort cnt desc | limit ${PER_REGION_OVERFETCH}`),
+        alertCoverageComplete(alertTargets),
       ]);
+      const ruleHitRows = ruleHitsResult.rows;
       const merge = (rows: Row[], nameField: string) => {
         const m = new Map<string, number>();
         for (const r of rows) {
@@ -420,6 +522,22 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         cur.value += num(r.cnt);
         sigMap.set(key, cur);
       }
+      // 리뷰 MAJOR(확정, PR #225 라운드9): 이전엔 (sid,sig,act) 튜플 단위로 맵을 만들고 그
+      // 튜플 맵을 top-100으로 자른 뒤 화면에서 sid로 재합산했다 — 같은 sid가 기간 내에
+      // action/signature가 바뀐 두 개 이상의 튜플로 나뉘어 있으면, 한 튜플만 top-100 안에
+      // 살아남고 나머지는 잘려나가도 그 sid는 여전히 "present"라서 무신호 부분합이 "정확한
+      // 값"처럼 표시된다(ruleHitsTruncated는 부재 sid만 잡고, ruleHitsPartial은 리전별
+      // 150-캡만 잡아 이 케이스를 못 잡는다). 컷오프를 적용하기 "전에" sid 단위로 먼저
+      // 합산해, 한 sid의 값이 컷오프 경계에서 쪼개지는 일이 없게 한다.
+      const hitMap = new Map<string, { sid: string; signature: string; actions: Set<string>; hits: number }>();
+      for (const r of ruleHitRows) {
+        if (!r.sid) continue;
+        const cur = hitMap.get(r.sid) ?? { sid: r.sid, signature: r.sig ?? '', actions: new Set<string>(), hits: 0 };
+        if (!cur.signature && r.sig) cur.signature = r.sig;
+        if (r.act) cur.actions.add(r.act);
+        cur.hits += num(r.cnt);
+        hitMap.set(r.sid, cur);
+      }
       alert = {
         // 리뷰 MAJOR(라운드10): alertTotals 쿼리 자체가 실패하면 totals=[]가 되고
         // reduce의 결과는 "0건 발생"과 구분 안 되는 0이 된다 — 이 페이지가 다른 모든
@@ -430,6 +548,18 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
         totalAlerts: (failed.includes('alertTotals') || alertDiscoveryUnknown) ? null : totals.reduce((s, r) => s + num(r.cnt), 0),
         byAction: merge(byAction, 'action'),
         topSignatures: [...sigMap.values()].sort((a, b) => b.value - a.value).slice(0, 10),
+        ruleHits: (failed.includes('alertRuleHits') || failed.includes('alertTopNPartial') || alertDiscoveryUnknown)
+          ? null
+          : [...hitMap.values()]
+            .map((h) => ({ sid: h.sid, signature: h.signature, actions: [...h.actions], hits: h.hits }))
+            .sort((a, b) => b.hits - a.hits)
+            .slice(0, RULE_HITS_JOIN_CUTOFF),
+        // 리뷰 MINOR(확정, PR #225 라운드8): >=면 정확히 컷오프 개수(예: 100개)인, 실제로는
+        // 아무것도 잘리지 않은 완전한 결과까지 truncated로 오표시해 확정 0을 "?"로 강등시켰다.
+        // slice(0, CUTOFF)가 실제로 무언가를 잘라내는 경우는 size가 CUTOFF보다 클 때뿐이다.
+        ruleHitsTruncated: hitMap.size > RULE_HITS_JOIN_CUTOFF,
+        ruleHitsPartial: ruleHitsResult.anyRegionAtCap,
+        alertCoverageComplete: coverageComplete,
         topSources: merge(topSrc, 'src'),
         topDests: merge(topDst, 'dst'),
       };
@@ -491,6 +621,6 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       };
     }
 
-    return { targets, unsupportedDestinations: unsupported, alert, flow, failed, rangeSec };
+    return { targets, unsupportedDestinations: unsupported, alert, flow, failed, rangeSec, generatedAt };
   });
 }

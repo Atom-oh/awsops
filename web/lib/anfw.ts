@@ -19,7 +19,10 @@ import { getPool } from './db';
 // ③ 정책 보안 신호 — stateless 기본 액션 aws:pass = 스테이트풀 엔진 우회(전량 통과)
 // ④ 룰 그룹 — 용량 사용률(≥80% 증설 검토) + 미연결(association 0 = 정리 후보)
 // ⑤ 엔드포인트/동기화 — AZ 어태치먼트 READY 아님 / ConfigurationSync IN_SYNC 아님
-// 주의: 룰 그룹 **룰 본문(RulesSource)은 의도적으로 미탑재** — 메타데이터만 응답에 싣는다.
+// 주의: 룰 그룹 **룰 본문(RulesSource) 전체는 의도적으로 미탑재** — 메타데이터만 응답에 싣는다.
+// (2026-08 룰 히트 카운트 기능부터 sid/msg/action/noalert만 룰 본문에서 파싱해 예외적으로
+// 응답에 포함한다 — parseStatefulSids 참고. 그 외 매치 조건(RulesString 전체 등)은 여전히
+// 서버 밖으로 나가지 않는다.)
 // 메트릭 차원은 (AvailabilityZone, Engine, FirewallName) 3-dim만 채택 — EndpointName이
 // 포함된 4-dim 변형을 함께 합산하면 이중 집계가 된다(실측: 두 변형이 동시 발행).
 
@@ -92,6 +95,13 @@ export interface AnfwPolicyRow {
   name: string; region: string; status: string;
   associations: number;
   statelessGroups: string[]; statefulGroups: string[];
+  /** statefulGroups와 같은 순서의 전체 ARN — 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27):
+   *  statefulGroups는 표시용으로 ARN 마지막 세그먼트(이름)만 남긴 값이라, `ListRuleGroups`
+   *  (Scope 미지정 — 계정 소유 그룹만 열거)로 만들어진 rgKeys와 이름만으로 대조하면 같은
+   *  리전에서 AWS 관리형 그룹과 계정 소유 그룹의 이름이 우연히 같을 때 관리형 그룹 참조를
+   *  "존재함(안전)"으로 오판한다. 계정 소유 그룹의 ARN과 정확히 일치해야만 안전하다고
+   *  판정하려면 전체 ARN이 필요하다. */
+  statefulGroupArns: string[];
   statelessDefaultActions: string[]; statelessFragmentDefaultActions: string[];
   statefulDefaultActions: string[];
   statefulRuleOrder: string | null; streamExceptionPolicy: string | null;
@@ -102,7 +112,7 @@ export interface AnfwPolicyRow {
 }
 
 export interface AnfwRuleGroupRow {
-  name: string; region: string; type: string; status: string;
+  name: string; arn: string; region: string; type: string; status: string;
   capacity: number | null; consumedCapacity: number | null;
   /** 소비 용량 ÷ 총 용량 ×100 (소수 1자리). */
   capacityPct: number | null;
@@ -110,6 +120,16 @@ export interface AnfwRuleGroupRow {
   /** 어느 정책에도 연결 안 됨 — 정리 후보. */
   unassociated: boolean;
   lastModified: string | null;
+  /** stateful 룰 SID 목록 (sid·msg·action만 — 룰 본문 아님). Alert 로그 히트와 조인해
+   *  "기간 내 매칭 0인 설정 룰"(정책 사각지대)을 표면화 — 2026-08 룰 히트 카운트 기능. */
+  statefulSids: StatefulSid[];
+  /** true면 이 STATEFUL 룰 그룹의 SID 집합을 파싱할 수 없음(도메인 리스트 `RulesSourceList`
+   *  등) — statefulSids가 완전한 목록이 아니라는 뜻. 리뷰 MAJOR(확정, PR #225 라운드11):
+   *  도메인 리스트도 AWS 생성 SID로 Alert 로그를 남길 수 있고, 그 SID가 사용자 설정 룰의
+   *  sid와 우연히 같으면 병합 시 구분이 안 된다 — statefulSids가 빈 배열이라 이 그룹은
+   *  rgs에는 "존재"하므로(attributionUnsafe의 "rgKeys에 없는 그룹" 판정을 통과), 소비처가
+   *  이 필드로 별도 판정해야 한다. */
+  sidsUnparseable: boolean;
 }
 
 export interface AnfwAnalysis {
@@ -153,6 +173,13 @@ export interface AnfwAnalysis {
     droppedPackets: number | null; rejectedPackets: number | null;
   };
   rangeSec: number;
+  /** 서버가 이 분석을 생성한 시각(ms epoch) — 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20):
+   *  range 시작 시점(now - rangeSec)을 클라이언트가 브라우저 Date.now()로 계산하면 클라이언트
+   *  시계가 서버보다 빠를 때 range 시작을 실제보다 늦은 시점으로 잘못 계산해, 그 사이(진짜
+   *  range 시작 ~ 잘못 계산된 range 시작)에 수정된 룰그룹/정책이 "range 밖에서 수정됨"으로
+   *  오판돼 attributionUnsafe/ruleGroupModifiedInRange 가드가 fail-open한다. 서버 시각을
+   *  응답에 실어 클라이언트가 자기 시계 대신 이 값을 기준으로 계산하게 한다. */
+  generatedAt: number;
 }
 
 async function regionsFromInventory(): Promise<string[]> {
@@ -313,6 +340,70 @@ interface RawRgResp {
     Capacity?: number; ConsumedCapacity?: number; NumberOfAssociations?: number;
     LastModifiedTime?: string | Date;
   };
+  /** 룰 본문 — SID/msg/action 파싱에만 사용, 응답(row)에는 절대 싣지 않음. */
+  RuleGroup?: {
+    RulesSource?: {
+      RulesString?: string;
+      StatefulRules?: { Action?: string; RuleOptions?: { Keyword?: string; Settings?: string[] }[] }[];
+      /** 도메인 리스트(계정 소유, AWS가 SID를 내부 생성) — 존재 유무만 확인, 내용은 안 씀. */
+      RulesSourceList?: unknown;
+    };
+  };
+}
+
+/** Suricata 룰 텍스트/StatefulRules에서 SID·msg·action만 추출 (2026-08 룰 히트 카운트 조인용).
+ *  도메인 리스트(RulesSourceList)는 내부 생성 룰이라 사용자 SID가 없음 — 대상 아님. */
+// 리뷰 MAJOR(PLAUSIBLE, PR #225 라운드9): noalert 룰(예: alert ... noalert; ...)은 액션이
+// alert/drop이어도 Suricata가 Alert 로그를 내지 않는다 — pass 룰과 동일하게 매칭 0을
+// 확정 idle로 잡으면 안 된다.
+export interface StatefulSid { sid: string; msg: string | null; action: string | null; noalert: boolean }
+export function parseStatefulSids(rs?: RawRgResp['RuleGroup']): StatefulSid[] {
+  const out = new Map<string, StatefulSid>();
+  const src = rs?.RulesSource;
+  for (const line of (src?.RulesString ?? '').split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    // content/pcre 등 따옴표 문자열 내부의 "sid:" 오탐 방지 — sid 추출 전에 문자열 리터럴 제거
+    // (Suricata는 문자열 내 따옴표를 \"로 강제 이스케이프 — escape-aware 패턴 필수)
+    const LITERAL = /"((?:\\.|[^"\\])*)"/g;
+    const scan = t.replace(LITERAL, '""');
+    const sid = /\bsid\s*:\s*(\d+)\s*;/.exec(scan)?.[1];
+    if (!sid) continue;
+    // 리뷰 MAJOR(확정, PR #225 라운드10·11 반복 지적): `[^"]*`는 이스케이프된 따옴표에서
+    // 잘렸다. 그래서 escape-aware 패턴으로 바꿨지만, sid와 달리 원문 `t`에서 그냥 처음
+    // 매칭되는 "msg:...""를 찾는 방식이라, 다른 옵션의 문자열 리터럴을 "닫는" 따옴표가
+    // 우연히 "msg:" 바로 뒤에 오면(예: `content:"foo msg:"; msg:"real";` — content 값
+    // 끝의 "가 가짜 msg 옵션의 시작 따옴표로 오인됨) 그 리터럴의 닫는 따옴표부터 실제 msg
+    // 리터럴의 여는 따옴표까지를 통째로 캡처해버린다 — 여전히 리터럴을 넘어간다. sid처럼
+    // "msg:" 뒤에 문자열이 오는지는 blank된 scan에서 판정하고(scan은 모든 리터럴을 ""로
+    // 지워버려 리터럴 *안*에 있던 가짜 "msg:" 텍스트도 함께 사라지므로 진짜 옵션 키워드
+    // 위치만 남는다), 그 위치가 원문 리터럴 등장 순서상 몇 번째인지 세어 원문에서 이스케
+    // 이프 그대로 보존된 실제 값을 되찾는다.
+    const literalsInOrder = [...t.matchAll(LITERAL)].map((m) => m[1]);
+    const msgKeyword = /\bmsg\s*:\s*"/.exec(scan);
+    const msg = msgKeyword
+      ? literalsInOrder[(scan.slice(0, msgKeyword.index + msgKeyword[0].length - 1).match(/""/g) ?? []).length] ?? null
+      : null;
+    out.set(sid, {
+      sid,
+      msg,
+      action: /^(pass|drop|reject|alert)\b/i.exec(t)?.[1]?.toLowerCase() ?? null,
+      noalert: /\bnoalert\s*;/.test(scan),
+    });
+  }
+  for (const r of src?.StatefulRules ?? []) {
+    const sid = r.RuleOptions?.find((o) => o.Keyword === 'sid')?.Settings?.[0];
+    if (!sid || out.has(sid)) continue;
+    const msg = r.RuleOptions?.find((o) => o.Keyword === 'msg')?.Settings?.[0]?.replace(/^"|"$/g, '') ?? null;
+    // 리뷰 MAJOR(확정, PR #225 라운드10): Suricata의 레거시 별칭 `flowbits:noalert;`는 구조화된
+    // StatefulRules에서 독립 키워드가 아니라 `{Keyword:"flowbits", Settings:["noalert"]}`로도
+    // 인코딩된다 — `Keyword === 'noalert'`만 보면 이 형태를 놓쳐, 실제로는 로그가 안 남는
+    // alert/drop 룰이 매칭 0을 확정 idle(정책 사각지대)로 오탐하게 만든다.
+    const noalert = r.RuleOptions?.some((o) =>
+      o.Keyword === 'noalert' || (o.Keyword === 'flowbits' && (o.Settings ?? []).includes('noalert'))) ?? false;
+    out.set(sid, { sid, msg, action: r.Action?.toLowerCase() ?? null, noalert });
+  }
+  return [...out.values()];
 }
 interface RawLogging {
   LoggingConfiguration?: {
@@ -468,6 +559,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
               associations: resp.NumberOfAssociations ?? 0,
               statelessGroups: (pol.StatelessRuleGroupReferences ?? []).map((g) => arnName(g.ResourceArn)),
               statefulGroups: (pol.StatefulRuleGroupReferences ?? []).map((g) => arnName(g.ResourceArn)),
+              statefulGroupArns: (pol.StatefulRuleGroupReferences ?? []).map((g) => g.ResourceArn ?? ''),
               statelessDefaultActions: statelessDefaults,
               statelessFragmentDefaultActions: fragmentDefaults,
               statefulDefaultActions: pol.StatefulDefaultActions ?? [],
@@ -488,8 +580,24 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
             const capacity = resp.Capacity ?? null;
             const consumed = resp.ConsumedCapacity ?? null;
             const associations = resp.NumberOfAssociations ?? 0;
+            const isStateful = resp.Type === 'STATEFUL';
+            const statefulSids = isStateful ? parseStatefulSids(d.RuleGroup) : [];
+            // 리뷰 MAJOR(확정, PR #225 라운드11 — 라운드12에서 자체 수정의 결함 재수정):
+            // 도메인 리스트 룰 그룹의 실제 API Type은 'STATEFUL'이 아니라 별도 값
+            // 'STATEFUL_DOMAIN'이다(이 파일의 다른 회귀 테스트가 이미 이 사실을 실측
+            // 검증해 두었다 — ARN 이분 추정이 STATEFUL로 오분류하던 걸 고친 그 케이스).
+            // 그런데 이 필드를 `isStateful &&`로 게이트해서, 정작 실제로 존재하는
+            // STATEFUL_DOMAIN 그룹에는 전혀 적용되지 않는 죽은 코드가 됐다 — isStateful이
+            // false라서 statefulSids가 원래도 []이지만, sidsUnparseable도 함께 false로
+            // 굳어버려 이 리뷰가 고치려던 attributionUnsafe 우회를 그대로 방치했다.
+            // STATEFUL_DOMAIN은 정의상 항상 파싱 불가이므로 무조건 true, 나머지
+            // STATEFUL 경우(RulesSourceList/용량 소비인데 파싱 0개)는 기존 로직 유지.
+            const sidsUnparseable = resp.Type === 'STATEFUL_DOMAIN'
+              || (isStateful
+                && (!!d.RuleGroup?.RulesSource?.RulesSourceList
+                  || (statefulSids.length === 0 && (consumed ?? 0) > 0)));
             return {
-              name: resp.RuleGroupName ?? g.name, region,
+              name: resp.RuleGroupName ?? g.name, arn: g.arn, region,
               type: resp.Type ?? '?',
               status: resp.RuleGroupStatus ?? '?',
               capacity, consumedCapacity: consumed,
@@ -498,6 +606,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
                 : null,
               associations, unassociated: associations === 0,
               lastModified: resp.LastModifiedTime ? new Date(resp.LastModifiedTime).toISOString() : null,
+              statefulSids, sidsUnparseable,
             };
           } catch { return null; }
         }));
@@ -551,6 +660,6 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
       droppedPackets: sum(firewalls.map((f) => f.droppedPackets ?? undefined)),
       rejectedPackets: sum(firewalls.map((f) => f.rejectedPackets ?? undefined)),
     };
-    return { firewalls, policies, ruleGroups, degradedRegions, firewallListDegradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec };
+    return { firewalls, policies, ruleGroups, degradedRegions, firewallListDegradedRegions, scannedRegions: regions, metricsDegradedRegions, totals, rangeSec, generatedAt: Date.now() };
   });
 }
