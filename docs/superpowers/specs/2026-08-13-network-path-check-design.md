@@ -1,12 +1,16 @@
 # Network Path Check
 
-**Status:** Proposed 2026-08-13 — **not yet Approved.** This feature stays read-only (no mutation, no
-active probe, per Explicit exclusions below), so it does not raise the ADR-005/ADR-007 governance
-question the SG-rules sibling spec does. It still needs a `docs/decisions/BASELINE.md` §2 register row
-for `network_path_check_enabled` in the same PR that introduces the flag (BASELINE's anti-drift rule) —
-that row does not exist yet, so this document does not move to Approved until it's added alongside the
-implementation PR. Separately, this document's own status-reduction rules and adapter-safety
-requirements (see review-driven revisions below) need one more pass before implementation starts.
+**Status:** Approved (2026-08-19). This feature stays read-only (no mutation, no active probe, per
+Explicit exclusions below), so it does not raise the ADR-005/ADR-007 governance question the
+SG-rules sibling spec does. Both remaining conditions from the 2026-08-13 draft are now satisfied:
+(1) `docs/decisions/BASELINE.md` §2 now carries a `network_path_check_enabled` register row (added
+alongside `docs/decisions/019-athena-flow-log-query-classification.md`). (2) The required adapter-
+safety/status-reduction review pass ran as a `/co-agent:consensus` multi-AI panel round (codex +
+kiro-cli/claude-fable-5, 2026-08-19) against this document; it found 2 MAJOR gaps — an
+omission-by-failure/omission-by-inapplicability conflation, and an unreachable `failed` reduction
+case caused by unstated rule precedence — both fixed in the "Result semantics" section below (see the
+inline 2026-08-19 review-fix notes). Owner: 오준석(Junseok Oh), who directed the panel review and
+approved this Status change after reviewing the findings and fixes.
 
 ## Summary
 
@@ -22,7 +26,12 @@ layers AWSops could inspect:
 - `X` (`blocked`) - inspected and blocked
 - `?` (`unknown`) - not observable or not supported
 - `conditional` - no known blocker, but at least one required segment remains unknown or was cut off
-  by the global deadline before it ran (`not_run`, see Result semantics)
+  by the global deadline before it ran (`not_run`, see Result semantics). A layer can also emit
+  `conditional` **directly**, not just as a candidate-level reduction outcome: an adapter that can
+  only assert a scoped, non-exhaustive verdict (e.g. the NACL ephemeral-port check below, which probes
+  one representative port) must not report `allowed` for a claim it cannot fully back — it reports
+  `conditional` itself, and that propagates through candidate reduction the same as `unknown`/`not_run`
+  (2026-08-19 review fix — see Result semantics)
 - `not_run` - the global deadline was reached before this layer executed; distinct from `?` (which means
   the layer ran but couldn't be evaluated) — surfaced in per-layer results but never as a standalone
   top-level status
@@ -169,7 +178,10 @@ built for ENI-to-ENI pairs only.
 
 Separately, the same adapter probes the NACL return path at a single representative ephemeral port; a
 verdict of `allowed` from that adapter is scoped to that probed port only, and the wrapper must not
-generalize it to "the real client's ephemeral port is also allowed" without a matching check.
+generalize it to "the real client's ephemeral port is also allowed" without a matching check. Concretely
+(2026-08-19 review fix): unless the adapter checks the *actual* ephemeral range in play, it emits layer
+status `conditional`, not `allowed`, for this layer — see Result semantics below for how `conditional`
+propagates through candidate reduction.
 
 ### Result semantics
 
@@ -197,17 +209,39 @@ required. Adapters determine which layers apply to their candidate during `disco
 that doesn't apply to a given candidate is omitted from that candidate's step list rather than marked
 `unknown`.
 
-**Per-candidate status** (computed independently for each candidate path):
+> **2026-08-19 review fix (co-agent panel, codex + kiro-cli/claude-fable-5):** two MAJOR gaps closed
+> below. (1) **Omission-by-inapplicability vs. omission-by-failure** were indistinguishable: if an
+> adapter's own `discover`/`verify` is itself cut off by the deadline or errors before it can determine
+> whether a layer applies, that layer was simply *absent* from the step list — not present as
+> `not_run` — so the `not_run` safeguard below never fired and "every required layer `allowed`" could
+> evaluate over an under-populated, truncated set. **A layer must be omitted from the step list only on
+> a positive, completed determination that it does not apply to this candidate.** If an adapter's own
+> discovery of a layer's applicability is itself interrupted, that layer is NOT omitted — it materializes
+> with status `not_run`. A candidate may not reduce to `allowed` unless layer discovery/verification
+> completed for every adapter that could apply to it. (2) The reduction rules previously listed
+> `not_run` in both the general "conditional" rule and its own "all-`not_run` -> `failed`" rule with no
+> stated precedence, making the `failed` case literally unreachable if rules are read in order (an
+> all-`not_run` candidate also satisfies "at least one `not_run`"). Precedence is now explicit below.
 
-- any `blocked` layer on that candidate -> that candidate is `blocked`
-- no `blocked`, at least one required layer `unknown` **or `not_run`** -> that candidate is `conditional`
-  (a layer the deadline cut off before evaluation is exactly as informative as one that returned
-  `unknown` — neither confirms the candidate works, and letting `not_run` silently drop out of the
-  reduction would let a deadline-truncated candidate report `allowed` on partial evidence)
-- every required layer `allowed` -> that candidate is `allowed`
-- every required layer `not_run` (the deadline hit before this candidate's first layer even started) ->
-  that candidate is `failed`, not `conditional` — zero evidence was gathered, which is a different case
-  from "some evidence, still uncertain"
+**Per-candidate status** (computed independently for each candidate path; rules apply **in the order
+listed** — an earlier-listed rule that matches takes precedence over a later one):
+
+1. every required layer `not_run` (the deadline hit before this candidate's first layer even started,
+   so **zero** evidence was gathered for it) -> that candidate is `failed` — checked FIRST, before rule
+   2 below, precisely because "all not_run" would otherwise also match "at least one not_run" and make
+   this case unreachable.
+2. any `blocked` layer on that candidate -> that candidate is `blocked`
+3. no `blocked`, and at least one required layer is `unknown`, `not_run`, or itself `conditional` ->
+   that candidate is `conditional` (a layer the deadline cut off before evaluation is exactly as
+   informative as one that returned `unknown`; a layer that only probed a non-exhaustive
+   representative case — e.g. the single-ephemeral-port NACL return-path check above — and so cannot
+   assert an unscoped verdict emits `conditional` itself, and it propagates here rather than being
+   silently generalized into `allowed`)
+4. every required layer `allowed` -> that candidate is `allowed`
+
+A layer's own status is never itself reduced or reinterpreted beyond rule 3 above — a layer emitting
+`conditional` always makes its candidate `conditional` (never `allowed`, never dropped), same as
+`unknown`/`not_run`.
 
 **Candidate kind** — `discover` tags each candidate `resolved` or `hypothesis` and writes one
 `network_path_run_candidates` row per candidate immediately (see Aurora, below); `conclude` fills in
