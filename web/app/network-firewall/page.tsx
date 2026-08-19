@@ -247,7 +247,7 @@ const RULEHIT_DETAIL_SPEC: InvType = {
   columns: [
     { key: 'sid', label: 'SID' }, { key: 'msg', label: 'Msg / Signature' },
     { key: 'actions', label: 'Actions' }, { key: 'rule_groups', label: 'Rule Groups' },
-    { key: 'configured', label: 'Configured Rule' }, { key: 'pass_rule', label: 'Pass Rule' },
+    { key: 'configured', label: 'Configured Rule' }, { key: 'pass_rule', label: 'Pass / No-Alert Rule' },
     { key: 'observability', label: 'ALERT Observability' }, { key: 'shared_sid', label: 'SID Shared Across Groups' },
     { key: 'hits', label: 'Hits (range)' }, { key: 'hit_basis', label: 'Hit Basis' }, { key: 'hit_note', label: 'Hit Note' },
   ],
@@ -259,11 +259,11 @@ const RULEHIT_DETAIL_SPEC: InvType = {
 
 // 표의 hits 컬럼과 반드시 같은 classifyHits() 결과를 써야 한다 — 그래야 "hits: 0"과
 // hit_note가 서로 모순되는 조합(리뷰 MAJOR, PR #229)이 나오지 않는다.
-function ruleHitDetail(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean): Record<string, unknown> {
+function ruleHitDetail(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean, tt: (s: string) => string): Record<string, unknown> {
   const d = classifyHits(r, alertCoverageComplete, ruleHitsPartial);
-  const note = d.kind === 'na' ? `n/a — ${d.reason}`
-    : d.kind === 'unknown' ? `unknown — ${d.reason}`
-      : d.kind === 'lowerbound' ? `lower bound — ${d.reason}`
+  const note = d.kind === 'na' ? `n/a — ${tt(d.reason)}`
+    : d.kind === 'unknown' ? `unknown — ${tt(d.reason)}`
+      : d.kind === 'lowerbound' ? `lower bound — ${tt(d.reason)}`
         : undefined;
   return compact({
     sid: r.sid, msg: r.msg || undefined,
@@ -1266,80 +1266,89 @@ export default function NetworkFirewallPage() {
                           </div>
                         </div>
                       )}
+
+                      {/* ⑦-b 히트 시각화 — 도넛=byAction 완전 집계(카드 배지와 일치), 바=ruleHits sid 단위 집계(top-100 잘림 시 고지, 공유 SID 중복 합산 없음).
+                          리뷰 MAJOR(확정): 도넛(byAction)과 바(ruleHits)는 서로 독립적인 Insights 쿼리라 — 하나만
+                          실패해도 다른 하나는 성공할 수 있다. 각자 자기 데이터/실패 키로 독립 게이트한다.
+                          리뷰(Codex stop-hook, PR #229 라운드2 — 위 라운드1 수정의 회귀 2건): (a) length 기준
+                          게이트는 "실패"와 "진짜 매칭 0(정상)"을 구분 못 해 — 실패가 아닌데도 byAction이 정말
+                          0건이면 도넛이 통째로 사라져 이전엔 항상 보이던 "0" 도넛조차 못 보게 됐다. 실패 여부로만
+                          게이트해야 진짜 0은 그대로 도넛(0)으로, 실패만 별도 문구로 구분된다. (b) 두 칸을 각자
+                          다른 조건으로 껐다 켰다 하면 lg:grid-cols-2에서 한쪽만 비어 빈 칸이 남는다 — 항상 두
+                          칸 모두 무언가(차트 또는 안내 문구)를 채워 그리드가 어긋나지 않게 한다.
+                          리뷰(Codex stop-hook, PR #229 라운드3 — 라운드2 수정도 여전히 불완전): byAction은
+                          totalAlerts/ruleHits와 달리 discovery unknown(alertDiscoveryUnknown)이어도 null화되지
+                          않고 그냥 빈 배열([])로 남는다 — failed.includes('alertByAction')만 보면 discovery
+                          unknown 케이스(쿼리 자체가 "실패"로 기록되지 않음)를 놓쳐 여전히 "확정 0" 도넛으로
+                          오판한다. totalAlerts==null은 이미 (failed.includes('alertTotals') ||
+                          alertDiscoveryUnknown)로 계산돼 있어 이 둘을 포함하는 신호다.
+                          리뷰(Codex stop-hook, PR #229 라운드4 — 라운드3 수정도 여전히 불완전): totalAlerts와
+                          byAction은 Promise.all 안에서 서로 "독립된" runMerged 호출이다 — alertTotals 쿼리는
+                          성공(totalAlerts != null)했는데 alertByAction 쿼리만 개별적으로 실패(스로틀/일시적
+                          오류 등)할 수 있다. totalAlerts==null 단독으로는 이 케이스(불명 원인이 discovery가
+                          아니라 alertByAction 자체 쿼리 실패)를 못 잡아 다시 "확정 0" 도넛으로 오판한다.
+                          리뷰(Codex stop-hook, PR #229 라운드5 — 라운드4 수정의 반대 방향 결함): OR의 한쪽을
+                          totalAlerts==null로 쓰면, "discovery unknown"뿐 아니라 "alertTotals 쿼리 자체의
+                          개별 실패"까지 함께 섞여 들어온다 — alertTotals만 실패하고 alertByAction은 성공했어도
+                          totalAlerts==null이 true라서 정상적으로 받아온 byAction 결과까지 "확인 불가"로 숨긴다
+                          (독립 쿼리 원칙 위반, 이번엔 반대 방향). discovery-unknown 신호는 totalAlerts의 null
+                          계산에 뒤섞여 있지 않고 `failed` 배열의 별도 키(firewallDiscovery/logDiscovery/
+                          logDiscoveryEmpty:*:ALERT)로 이미 독립돼 있다 — 위 1157번째 줄의 ALERT 카드 "확인
+                          불가" 판정과 동일한 키 셋을 직접 검사해 byAction 전용 실패 키와 OR로 합친다.
+                          리뷰(Codex stop-hook, PR #229 라운드6 — "ALERT 로그 대상 없음"이 "매칭 0"으로
+                          오판되는 남은 경로): ALERT 목적지가 CWL이 아니라 S3/Firehose인 방화벽(anfw-logs.ts의
+                          `unsupported` 카운트 — anyNonCwl)은 alertTargets에도, failed[] 키에도 전혀 나타나지
+                          않는다(loggingKnown=true라 "unknown" 스캔 경로도 안 타고, 실패도 아니라 failed도 안
+                          찍힘) — 조용히 targets에서만 빠진다. 그런 방화벽이 섞여 있는 리전에서 다른(CWL)
+                          방화벽의 표본만으로 만든 byAction이 "매칭 0"으로 보이면, 실제로는 "S3 대상이라 이
+                          화면에서 집계 불가능한 ALERT 로그가 더 있을 수 있음"을 의미하는데 확정 0처럼
+                          오독된다.
+                          리뷰(Codex stop-hook, PR #229 라운드7 — 라운드6 수정이 과도하게 넓었음):
+                          unsupportedDestinations는 ALERT/FLOW 구분 없는 계정 전체 카운트다 — FLOW만
+                          S3(ALERT는 정상 CWL)인 방화벽이 있으면, ALERT 도넛과 아무 관련 없는 FLOW 쪼개짐
+                          때문에 정상적인 ALERT 도넛까지 "확인 불가"로 잘못 가려진다(round1~5가 고치려던
+                          "무관한 신호로 유효한 결과 숨기기"를 이번엔 FLOW→ALERT 방향으로 재현). `fws`(현재
+                          방화벽 목록, 이미 이 컴포넌트에 있음)에서 직접 alertLogging이 CWL 접두사가 아닌
+                          방화벽이 있는지를 본다 — ALERT 전용이라 FLOW 쪼개짐과 무관하다.
+                          리뷰 MAJOR(라운드8): 이 그리드가 Alert Card의 `logsData &&`/`logsData.alert
+                          != null` 가드 바깥(Card와 Card 사이)에 있어, 로딩 중이거나 로그 조회 자체가
+                          실패했거나 alert==null인 상태에서도 내부 조건이 전부 false로 평가돼 빈 배열로
+                          도넛을 "확정 0"처럼 그렸다 — 이 블록을 Card 내부, 위 Top 소스/목적지 표 바로
+                          다음(즉 logsData && logsData.alert != null 분기 안)으로 이동해 로딩/에러/
+                          대상 없음 상태를 Alert Card 본문과 동일하게 상속받도록 한다. */}
+                      <div className="grid gap-6 lg:grid-cols-2">
+                        {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:')) ? (
+                          <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
+                        ) : (
+                          <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
+                        )}
+                        {(logsData?.alert?.ruleHits?.length ?? 0) > 0 ? (
+                          <HBarList
+                            title="Stateful 룰 히트 Top 10 (sid)"
+                            data={ruleHitBars}
+                            labelKey="rule"
+                            valueKey="hits"
+                            highlightMax
+                            // 리뷰 MAJOR(확정): ruleHitsTruncated(top-100 join 컷오프) 하나만 고지하면,
+                            // 리전별 상한(ruleHitsPartial)이나 시간적 커버리지 미확보(!alertCoverageComplete)로
+                            // present sid의 값 자체가 과소집계된 경우를 놓친다 — 이 top-10 "정확한 순위"처럼
+                            // 보이는 바 차트는 표의 ≥N/？ 판정과 같은 결손 신호를 모두 반영해야 한다.
+                            // 리뷰 MAJOR(라운드8): 도넛의 라운드7 수정(비-CWL ALERT 목적지 방화벽 존재
+                            // 여부)이 이 바 차트의 과소집계 고지에는 빠져 있었다 — 같은 fws 기반 체크를
+                            // 여기에도 추가해 도넛/바가 같은 신호로 과소집계 경고를 낸다.
+                            right={(ruleHitsTruncated || (logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:'))) ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음')}</span> : undefined}
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">
+                            {(logsData?.alert?.ruleHits == null) ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고') : tt('룰 히트 없음')}
+                          </div>
+                        )}
+                      </div>
                     </>
                   )}
                 </>
               )}
             </Card>
-
-            {/* ⑦-b 히트 시각화 — 도넛=byAction 완전 집계(카드 배지와 일치), 바=ruleHits sid 단위 집계(top-100 잘림 시 고지, 공유 SID 중복 합산 없음).
-                리뷰 MAJOR(확정): 도넛(byAction)과 바(ruleHits)는 서로 독립적인 Insights 쿼리라 — 하나만
-                실패해도 다른 하나는 성공할 수 있다. 각자 자기 데이터/실패 키로 독립 게이트한다.
-                리뷰(Codex stop-hook, PR #229 라운드2 — 위 라운드1 수정의 회귀 2건): (a) length 기준
-                게이트는 "실패"와 "진짜 매칭 0(정상)"을 구분 못 해 — 실패가 아닌데도 byAction이 정말
-                0건이면 도넛이 통째로 사라져 이전엔 항상 보이던 "0" 도넛조차 못 보게 됐다. 실패 여부로만
-                게이트해야 진짜 0은 그대로 도넛(0)으로, 실패만 별도 문구로 구분된다. (b) 두 칸을 각자
-                다른 조건으로 껐다 켰다 하면 lg:grid-cols-2에서 한쪽만 비어 빈 칸이 남는다 — 항상 두
-                칸 모두 무언가(차트 또는 안내 문구)를 채워 그리드가 어긋나지 않게 한다.
-                리뷰(Codex stop-hook, PR #229 라운드3 — 라운드2 수정도 여전히 불완전): byAction은
-                totalAlerts/ruleHits와 달리 discovery unknown(alertDiscoveryUnknown)이어도 null화되지
-                않고 그냥 빈 배열([])로 남는다 — failed.includes('alertByAction')만 보면 discovery
-                unknown 케이스(쿼리 자체가 "실패"로 기록되지 않음)를 놓쳐 여전히 "확정 0" 도넛으로
-                오판한다. totalAlerts==null은 이미 (failed.includes('alertTotals') ||
-                alertDiscoveryUnknown)로 계산돼 있어 이 둘을 포함하는 신호다.
-                리뷰(Codex stop-hook, PR #229 라운드4 — 라운드3 수정도 여전히 불완전): totalAlerts와
-                byAction은 Promise.all 안에서 서로 "독립된" runMerged 호출이다 — alertTotals 쿼리는
-                성공(totalAlerts != null)했는데 alertByAction 쿼리만 개별적으로 실패(스로틀/일시적
-                오류 등)할 수 있다. totalAlerts==null 단독으로는 이 케이스(불명 원인이 discovery가
-                아니라 alertByAction 자체 쿼리 실패)를 못 잡아 다시 "확정 0" 도넛으로 오판한다.
-                리뷰(Codex stop-hook, PR #229 라운드5 — 라운드4 수정의 반대 방향 결함): OR의 한쪽을
-                totalAlerts==null로 쓰면, "discovery unknown"뿐 아니라 "alertTotals 쿼리 자체의
-                개별 실패"까지 함께 섞여 들어온다 — alertTotals만 실패하고 alertByAction은 성공했어도
-                totalAlerts==null이 true라서 정상적으로 받아온 byAction 결과까지 "확인 불가"로 숨긴다
-                (독립 쿼리 원칙 위반, 이번엔 반대 방향). discovery-unknown 신호는 totalAlerts의 null
-                계산에 뒤섞여 있지 않고 `failed` 배열의 별도 키(firewallDiscovery/logDiscovery/
-                logDiscoveryEmpty:*:ALERT)로 이미 독립돼 있다 — 위 1157번째 줄의 ALERT 카드 "확인
-                불가" 판정과 동일한 키 셋을 직접 검사해 byAction 전용 실패 키와 OR로 합친다.
-                리뷰(Codex stop-hook, PR #229 라운드6 — "ALERT 로그 대상 없음"이 "매칭 0"으로
-                오판되는 남은 경로): ALERT 목적지가 CWL이 아니라 S3/Firehose인 방화벽(anfw-logs.ts의
-                `unsupported` 카운트 — anyNonCwl)은 alertTargets에도, failed[] 키에도 전혀 나타나지
-                않는다(loggingKnown=true라 "unknown" 스캔 경로도 안 타고, 실패도 아니라 failed도 안
-                찍힘) — 조용히 targets에서만 빠진다. 그런 방화벽이 섞여 있는 리전에서 다른(CWL)
-                방화벽의 표본만으로 만든 byAction이 "매칭 0"으로 보이면, 실제로는 "S3 대상이라 이
-                화면에서 집계 불가능한 ALERT 로그가 더 있을 수 있음"을 의미하는데 확정 0처럼
-                오독된다.
-                리뷰(Codex stop-hook, PR #229 라운드7 — 라운드6 수정이 과도하게 넓었음):
-                unsupportedDestinations는 ALERT/FLOW 구분 없는 계정 전체 카운트다 — FLOW만
-                S3(ALERT는 정상 CWL)인 방화벽이 있으면, ALERT 도넛과 아무 관련 없는 FLOW 쪼개짐
-                때문에 정상적인 ALERT 도넛까지 "확인 불가"로 잘못 가려진다(round1~5가 고치려던
-                "무관한 신호로 유효한 결과 숨기기"를 이번엔 FLOW→ALERT 방향으로 재현). `fws`(현재
-                방화벽 목록, 이미 이 컴포넌트에 있음)에서 직접 alertLogging이 CWL 접두사가 아닌
-                방화벽이 있는지를 본다 — ALERT 전용이라 FLOW 쪼개짐과 무관하다. */}
-            <div className="grid gap-6 lg:grid-cols-2">
-              {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:')) ? (
-                <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
-              ) : (
-                <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
-              )}
-              {(logsData?.alert?.ruleHits?.length ?? 0) > 0 ? (
-                <HBarList
-                  title="Stateful 룰 히트 Top 10 (sid)"
-                  data={ruleHitBars}
-                  labelKey="rule"
-                  valueKey="hits"
-                  highlightMax
-                  // 리뷰 MAJOR(확정): ruleHitsTruncated(top-100 join 컷오프) 하나만 고지하면,
-                  // 리전별 상한(ruleHitsPartial)이나 시간적 커버리지 미확보(!alertCoverageComplete)로
-                  // present sid의 값 자체가 과소집계된 경우를 놓친다 — 이 top-10 "정확한 순위"처럼
-                  // 보이는 바 차트는 표의 ≥N/？ 판정과 같은 결손 신호를 모두 반영해야 한다.
-                  right={(ruleHitsTruncated || (logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete) ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음')}</span> : undefined}
-                />
-              ) : (
-                <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">
-                  {(logsData?.alert?.ruleHits == null) ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고') : tt('룰 히트 없음')}
-                </div>
-              )}
-            </div>
 
             {/* ⑧ Flow 로그 분석 — stateful 엔진이 본 플로우, Top talker */}
             <Card
@@ -1485,7 +1494,7 @@ export default function NetworkFirewallPage() {
             : selected.kind === 'policy'
               ? policyDetail(selected.row)
               : selected.kind === 'rulehit'
-                ? ruleHitDetail(selected.row, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false)
+                ? ruleHitDetail(selected.row, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false, tt)
                 : rgDetail(selected.row)
           : null}
         spec={selected?.kind === 'fw' ? FW_DETAIL_SPEC
