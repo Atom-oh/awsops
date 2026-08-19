@@ -369,7 +369,17 @@ export default function NetworkFirewallPage() {
     // 항상 비어 있어 이 조인/귀속 판정과 무관하다 — stateless 그룹 수정(운영상 훨씬 잦음)
     // 까지 계정 전체를 불안전 처리하면 실제로는 안전한 대다수 케이스에서 과도하게 넓게
     // 발동해 유효한 양수 히트까지 불필요하게 가린다. STATEFUL·STATEFUL_DOMAIN만 본다.
-    return rgs.some((rg) => rg.type !== 'STATELESS' && modifiedOrUnknown(rg.lastModified));
+    if (rgs.some((rg) => rg.type !== 'STATELESS' && modifiedOrUnknown(rg.lastModified))) return true;
+    // 리뷰 MAJOR(확정, Codex stop-hook, PR #225 라운드24): 로깅 구성 조회가 거부된 리전은
+    // `/aws/network-firewall` 접두사 발견으로 로그 그룹을 찾는다(discovered=true) — 발견에
+    // 성공하면 ruleHits는 null화되지 않고 그 그룹의 히트가 다른 리전과 똑같이 sid로 전역
+    // 병합된다. 하지만 이 리전의 방화벽/룰그룹 서빙 관계는 조회가 거부된 상태라 확인할 수
+    // 없다 — round8의 원칙(히트는 전역 병합되므로 지역적 안전 판정은 성립 불가)이 여기도
+    // 적용된다: 이 리전에서 방화벽이나 룰 그룹이 range 도중 삭제됐다면 lastModified 흔적이
+    // 아예 안 남으므로 위의 모든 검사(rgs/policies)를 통과해도 그 리전이 발견한 로그의
+    // 히트가 무관한(observed) 다른 룰에 exact로 오귀속될 수 있다 — ALERT 발견 대상이
+    // 하나라도 있으면 계정 전체를 불안전 처리한다.
+    return (logsData?.targets ?? []).some((t) => t.type === 'ALERT' && t.discovered);
   }, [data, rgs, policies, range, logsData]);
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();
