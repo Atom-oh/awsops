@@ -1176,6 +1176,8 @@ export const TERMS: Record<string, Pair> = {
   '일부 행 생략 — 검색·정렬은 전체 행에서 동작합니다': { en: 'Some rows omitted — search and sort operate on the full set', zh: '部分行已省略 — 搜索与排序基于全部行', ja: '一部の行を省略 — 検索・ソートは全行に対して動作します' },
   '상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음': { en: 'Based on the top-100 aggregation, or some values may be undercounted — actual totals/ranking may differ', zh: '基于前 100 汇总，或部分数值可能被低估 — 实际合计/排名可能有所不同', ja: '上位 100 集計ベース、または一部の値が過小集計されている可能性があります — 実際の合計・順位と異なる場合があります' },
   '액션 분포 집계 실패': { en: 'Action-distribution aggregation failed', zh: '操作分布汇总失败', ja: 'アクション分布の集計に失敗しました' },
+  '룰 히트 없음': { en: 'No rule hits', zh: '无规则命中', ja: 'ルールヒットなし' },
+  '룰 히트 집계 불명 — 위 원시 시그니처 표 참고': { en: 'Rule-hit aggregation unknown — see the raw signature table above', zh: '规则命中汇总未知 — 请参见上方的原始签名表', ja: 'ルールヒット集計は不明です — 上記の生シグネチャ表を参照してください' },
 
   // ---- Network Firewall (/network-firewall) ----
   '방화벽·정책·룰 그룹 인벤토리 + AWS/NetworkFirewall 메트릭 트래픽·드롭 집계 — 보호 설정·로깅 갭·전량 통과 기본 액션·룰 용량 분석': { en: 'Firewall / policy / rule group inventory + AWS/NetworkFirewall traffic & drop aggregation — protection settings, logging gaps, pass-through default actions, rule capacity analysis', zh: '防火墙·策略·规则组清单 + AWS/NetworkFirewall 指标流量·丢弃汇总 — 保护设置·日志缺口·全量放行默认操作·规则容量分析', ja: 'ファイアウォール・ポリシー・ルールグループのインベントリ + AWS/NetworkFirewall メトリクスのトラフィック・ドロップ集計 — 保護設定・ログギャップ・全量通過デフォルトアクション・ルール容量分析' },

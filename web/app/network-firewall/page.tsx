@@ -1274,32 +1274,38 @@ export default function NetworkFirewallPage() {
 
             {/* ⑦-b 히트 시각화 — 도넛=byAction 완전 집계(카드 배지와 일치), 바=ruleHits sid 단위 집계(top-100 잘림 시 고지, 공유 SID 중복 합산 없음).
                 리뷰 MAJOR(확정): 도넛(byAction)과 바(ruleHits)는 서로 독립적인 Insights 쿼리라 — 하나만
-                실패해도 다른 하나는 성공할 수 있다. 공유 게이트(ruleHits.length>0)로 묶으면 (a) byAction만
-                실패했을 때 바는 있는데 도넛이 실패를 "매칭 0"처럼(합계 0 도넛) 보여주고, (b) ruleHits만
-                실패했을 때 정상인 도넛까지 함께 숨겨진다 — 각자 자기 데이터/실패 키로 독립 게이트한다. */}
-            {((logsData?.alert?.byAction?.length ?? 0) > 0 || (logsData?.alert?.ruleHits?.length ?? 0) > 0) && (
-              <div className="grid gap-6 lg:grid-cols-2">
-                {(logsData?.alert?.byAction?.length ?? 0) > 0 ? (
-                  <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
-                ) : (logsData?.failed?.includes('alertByAction') ?? false) && (
-                  <div className="px-4 py-3 text-[12px] text-ink-400">{tt('액션 분포 집계 실패')}</div>
-                )}
-                {(logsData?.alert?.ruleHits?.length ?? 0) > 0 && (
-                  <HBarList
-                    title="Stateful 룰 히트 Top 10 (sid)"
-                    data={ruleHitBars}
-                    labelKey="rule"
-                    valueKey="hits"
-                    highlightMax
-                    // 리뷰 MAJOR(확정): ruleHitsTruncated(top-100 join 컷오프) 하나만 고지하면,
-                    // 리전별 상한(ruleHitsPartial)이나 시간적 커버리지 미확보(!alertCoverageComplete)로
-                    // present sid의 값 자체가 과소집계된 경우를 놓친다 — 이 top-10 "정확한 순위"처럼
-                    // 보이는 바 차트는 표의 ≥N/？ 판정과 같은 결손 신호를 모두 반영해야 한다.
-                    right={(ruleHitsTruncated || (logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete) ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음')}</span> : undefined}
-                  />
-                )}
-              </div>
-            )}
+                실패해도 다른 하나는 성공할 수 있다. 각자 자기 데이터/실패 키로 독립 게이트한다.
+                리뷰(Codex stop-hook, PR #229 라운드2 — 위 라운드1 수정의 회귀 2건): (a) length 기준
+                게이트는 "실패"와 "진짜 매칭 0(정상)"을 구분 못 해 — 실패가 아닌데도 byAction이 정말
+                0건이면 도넛이 통째로 사라져 이전엔 항상 보이던 "0" 도넛조차 못 보게 됐다. 실패 여부로만
+                게이트해야 진짜 0은 그대로 도넛(0)으로, 실패만 별도 문구로 구분된다. (b) 두 칸을 각자
+                다른 조건으로 껐다 켰다 하면 lg:grid-cols-2에서 한쪽만 비어 빈 칸이 남는다 — 항상 두
+                칸 모두 무언가(차트 또는 안내 문구)를 채워 그리드가 어긋나지 않게 한다. */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              {(logsData?.failed?.includes('alertByAction') ?? false) ? (
+                <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 집계 실패')}</div>
+              ) : (
+                <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
+              )}
+              {(logsData?.alert?.ruleHits?.length ?? 0) > 0 ? (
+                <HBarList
+                  title="Stateful 룰 히트 Top 10 (sid)"
+                  data={ruleHitBars}
+                  labelKey="rule"
+                  valueKey="hits"
+                  highlightMax
+                  // 리뷰 MAJOR(확정): ruleHitsTruncated(top-100 join 컷오프) 하나만 고지하면,
+                  // 리전별 상한(ruleHitsPartial)이나 시간적 커버리지 미확보(!alertCoverageComplete)로
+                  // present sid의 값 자체가 과소집계된 경우를 놓친다 — 이 top-10 "정확한 순위"처럼
+                  // 보이는 바 차트는 표의 ≥N/？ 판정과 같은 결손 신호를 모두 반영해야 한다.
+                  right={(ruleHitsTruncated || (logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete) ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음')}</span> : undefined}
+                />
+              ) : (
+                <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">
+                  {(logsData?.alert?.ruleHits == null) ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고') : tt('룰 히트 없음')}
+                </div>
+              )}
+            </div>
 
             {/* ⑧ Flow 로그 분석 — stateful 엔진이 본 플로우, Top talker */}
             <Card
