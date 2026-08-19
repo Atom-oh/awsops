@@ -1,10 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { EnqueueDeliveryError, IdempotencyKeyCollisionError } from '@/lib/jobs';
-import { NotFoundError, createRun } from '@/lib/network-path';
+import { NotFoundError, createRun, getCheck, listRunsForCheck } from '@/lib/network-path';
 import { networkPathCheckGate } from '@/lib/network-path-gate';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Run history for one check (spec "UI and ownership": "Any authorized viewer may run the check
+ * and view its history") — most-recent-first, capped at 50. 404s only when the parent check row
+ * itself doesn't exist; a soft-deleted check's prior runs remain visible (softDeleteCheck never
+ * touches network_path_runs/*, so its evidence must stay reachable for audit/comparison).
+ */
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const user = await verifyUser(req.headers.get('cookie'));
+  if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
+  const blocked = networkPathCheckGate();
+  if (blocked) return blocked;
+
+  const check = await getCheck(params.id);
+  if (!check) return NextResponse.json({ message: 'not found' }, { status: 404 });
+  const runs = await listRunsForCheck(params.id);
+  return NextResponse.json({ runs });
+}
 
 /**
  * Validates ownership/access via createRun() (check must exist and not be soft-deleted; any

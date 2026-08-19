@@ -204,6 +204,24 @@ export async function createRun(user: User, checkId: string): Promise<NetworkPat
   return run;
 }
 
+/**
+ * Run history for one check — spec "Any authorized viewer may run the check and view its
+ * history." Ownership/account-scoping is intentionally NOT re-checked here (unlike listChecks()):
+ * a run row is immutable evidence of something that already happened, and the caller (the
+ * dedicated GET /api/network-paths/[id]/runs route) already resolves the parent check first, so a
+ * nonexistent/soft-deleted check_id simply yields an empty list rather than a second authorization
+ * decision duplicating listChecks()'s.
+ */
+export async function listRunsForCheck(checkId: string, limit = 50): Promise<NetworkPathRunRow[]> {
+  const r = await getPool().query(
+    `SELECT id, check_id, requested_by_sub, definition_snapshot, status, phase, overall_status,
+            validation_bundle, worker_job_id, created_at, finished_at
+     FROM network_path_runs WHERE check_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [checkId, Math.min(200, Math.max(1, Math.floor(limit)))],
+  );
+  return r.rows;
+}
+
 export interface NetworkPathRunDetail extends NetworkPathRunRow {
   candidates: Array<{ candidate_id: string; candidate_kind: string; status: string | null; first_blocker: string | null }>;
   steps: Array<{
