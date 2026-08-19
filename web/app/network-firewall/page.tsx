@@ -1292,11 +1292,16 @@ export default function NetworkFirewallPage() {
                 성공(totalAlerts != null)했는데 alertByAction 쿼리만 개별적으로 실패(스로틀/일시적
                 오류 등)할 수 있다. totalAlerts==null 단독으로는 이 케이스(불명 원인이 discovery가
                 아니라 alertByAction 자체 쿼리 실패)를 못 잡아 다시 "확정 0" 도넛으로 오판한다.
-                discovery-unknown 계열은 totalAlerts==null로, 쿼리 개별 실패 계열은
-                failed.includes('alertByAction')로 — 두 조건을 OR로 합쳐야 세 원인(쿼리 실패·discovery
-                unknown·진짜 0) 중 앞의 둘을 모두 잡고 진짜 0만 도넛(0)으로 남긴다. */}
+                리뷰(Codex stop-hook, PR #229 라운드5 — 라운드4 수정의 반대 방향 결함): OR의 한쪽을
+                totalAlerts==null로 쓰면, "discovery unknown"뿐 아니라 "alertTotals 쿼리 자체의
+                개별 실패"까지 함께 섞여 들어온다 — alertTotals만 실패하고 alertByAction은 성공했어도
+                totalAlerts==null이 true라서 정상적으로 받아온 byAction 결과까지 "확인 불가"로 숨긴다
+                (독립 쿼리 원칙 위반, 이번엔 반대 방향). discovery-unknown 신호는 totalAlerts의 null
+                계산에 뒤섞여 있지 않고 `failed` 배열의 별도 키(firewallDiscovery/logDiscovery/
+                logDiscoveryEmpty:*:ALERT)로 이미 독립돼 있다 — 위 1157번째 줄의 ALERT 카드 "확인
+                불가" 판정과 동일한 키 셋을 직접 검사해 byAction 전용 실패 키와 OR로 합친다. */}
             <div className="grid gap-6 lg:grid-cols-2">
-              {(logsData?.alert?.totalAlerts == null || (logsData?.failed?.includes('alertByAction') ?? false)) ? (
+              {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) ? (
                 <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
               ) : (
                 <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
