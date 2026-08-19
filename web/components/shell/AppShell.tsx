@@ -25,7 +25,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       {/* Mobile top bar — hidden at lg+. */}
       <MobileTopBar onMenu={() => setNavOpen(true)} />
 
-      <main className="flex-1 overflow-y-auto animate-fade-in pb-16 lg:pb-0">{children}</main>
+      <main className="flex-1 overflow-y-auto animate-fade-in pb-[calc(4rem+env(safe-area-inset-bottom))] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] lg:pb-0">{children}</main>
 
       {/* Mobile bottom tabs + drawer — hidden at lg+. */}
       <BottomTabBar onMore={() => setNavOpen(true)} />

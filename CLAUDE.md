@@ -6,6 +6,7 @@
 ## Project Overview
 AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds v1's single-EC2 monolith as a **Terraform-based MSA**: private edge (CloudFront VPC Origin → internal ALB → Fargate), Cognito Lambda@Edge auth, Aurora persistent state, AgentCore section agents (live AWS queries), and an OOM-safe async worker tier.
 
+
 ## Architecture (v2)
 - **IaC**: **Terraform** (CDK retired). Single root at `terraform/v2/foundation/`, **partial S3 backend** (`backend.hcl`, `awsops-v2-tfstate`, `use_lockfile` — no DynamoDB). TF ≥1.15, provider `~>6.0`.
 - **Edge**: CloudFront (TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** The ALB SG allows 443 only from the CloudFront-managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only causes a 504).
