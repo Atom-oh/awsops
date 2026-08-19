@@ -354,7 +354,18 @@ export default function NetworkFirewallPage() {
     // 수정된 정책은 data.generatedAt 하나만 기준으로 하면 range 밖으로 오판돼 fail-open
     // 한다. 두 anchor 중 더 이른(과거) 쪽을 써야 어느 쪽이 캐시로 오래됐어도 안전하다.
     const rangeStartMs = Math.min(data?.generatedAt ?? Date.now(), logsData?.generatedAt ?? Date.now()) - range * 1000;
-    return policies.some((p) => p.lastModified != null && Date.parse(p.lastModified) > rangeStartMs);
+    // lastModified가 null이면 "안 바뀜"이 아니라 "모름"이다 — fail-closed 원칙(unknown ≠
+    // 부재/확신)에 맞춰 null도 range 도중 수정된 것과 동일하게 불안전 처리한다.
+    const modifiedOrUnknown = (lm: string | null) => lm == null || Date.parse(lm) > rangeStartMs;
+    if (policies.some((p) => modifiedOrUnknown(p.lastModified))) return true;
+    // 리뷰 MAJOR(확정, Codex stop-hook, PR #225 라운드22): 라운드19는 "정책이 range 도중
+    // 수정되면 계정 전체 불안전"만 다뤘다 — 정책이 안 바뀌어도 룰 그룹 자체가 range 도중
+    // in-place로 수정(SID 추가/삭제)되면, 그 그룹의 *현재* 행만 ruleGroupModifiedInRange로
+    // 타인트되고, 삭제된 SID가 다른(안 바뀐) 룰 그룹에도 있었다면 그 SID는 sidGroupCount에서
+    // 이제 하나로만 보여 sharedSid=false로 오판돼 그 SID의 과거 히트가 그 다른 그룹에
+    // exact로 오귀속된다 — round19가 정책에 적용한 것과 동일한 논리(히트는 전역 병합 —
+    // 제거된 SID는 현재 토폴로지로 열거 불가)를 룰 그룹 자체의 수정에도 적용해야 한다.
+    return rgs.some((rg) => modifiedOrUnknown(rg.lastModified));
   }, [data, rgs, policies, range, logsData]);
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();
@@ -1125,8 +1136,14 @@ export default function NetworkFirewallPage() {
                                                   // hits===0 분기에만 반영됐었다 — 양수 히트도 같은 종류의 결손이다.
                                                   // 로깅이 range 도중 시작됐다면 range 앞쪽 구간의 매칭은 로그가
                                                   // 없어 지금 보이는 hits는 실제보다 적을 수 있는 하한일 뿐이다.
-                                                  : r.hits > 0 && ((logsData.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete)
-                                                    ? <span title={tt(!alertCoverageComplete ? 'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한' : '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한')}>{`≥${r.hits.toLocaleString()}`}</span>
+                                                  // 리뷰 MAJOR(확정, Codex stop-hook, PR #225 라운드22): observability
+                                                  // === 'unknown'(일부 방화벽만 관측 확인됨)인 룰 그룹의 양수 히트는
+                                                  // 관측되지 않은 다른 방화벽에서 발생한 매칭까지 포함한다는 보장이
+                                                  // 없다 — 공간적으로 부분적인 값인데도 지금까지는 temporal(coverage)/
+                                                  // per-region cap 절단에만 하한(≥N) 표기를 썼다. 같은 종류의 결손이므로
+                                                  // 동일하게 하한으로 표기해야 "정확한 수치"로 오독되지 않는다.
+                                                  : r.hits > 0 && ((logsData.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete || r.observability === 'unknown')
+                                                    ? <span title={tt(!alertCoverageComplete ? 'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한' : (logsData.alert?.ruleHitsPartial ?? false) ? '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한' : '일부 방화벽만 관측이 확인돼 실제 값이 더 클 수 있음 — 하한')}>{`≥${r.hits.toLocaleString()}`}</span>
                                                     : r.hits.toLocaleString()}
                                     </td>
                                   </tr>
