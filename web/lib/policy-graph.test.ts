@@ -99,6 +99,49 @@ describe('boundGraph', () => {
     expect(bounded.edges.some((e) => e.id === 'zz-source->zz-target')).toBe(true);
   });
 
+  it('keeps every resolved-path node/edge intact even when they alone exceed the node/edge cap', () => {
+    // A 4-hop resolved path (4 nodes, 3 edges) with a cap far below that — the earlier fix (sort
+    // path-tagged nodes first, then slice) would still have severed the path here, since slicing
+    // a *sorted* list to 2 still drops 2 of the 4 path nodes. There is no safe way for this
+    // domain-agnostic function to guess which path node is droppable, so it must keep all of them.
+    const ids = ['path-a', 'path-b', 'path-c', 'path-d'];
+    const pathNodes: PolicyGraphNode[] = ids.map((id) => ({ id, kind: 'hop', label: id, status: 'allowed', pathIds: ['path-01'] }));
+    const pathEdges: PolicyGraphEdge[] = [0, 1, 2].map((i) => ({
+      id: `${ids[i]}->${ids[i + 1]}`, source: ids[i], target: ids[i + 1], relation: 'routed-to', status: 'allowed', pathIds: ['path-01'],
+    }));
+    const graph = { version: 1 as const, capturedAt: '2026-08-19T00:00:00Z', nodes: pathNodes, edges: pathEdges };
+
+    const bounded = boundGraph(graph, { nodes: 2, edges: 1 });
+
+    expect(bounded.nodes).toHaveLength(4);
+    expect(bounded.edges).toHaveLength(3);
+    for (const id of ids) expect(bounded.nodes.some((n) => n.id === id)).toBe(true);
+    for (const e of pathEdges) expect(bounded.edges.some((k) => k.id === e.id)).toBe(true);
+    // nothing was actually dropped — exceeding the nominal cap to preserve the path is not truncation
+    expect(bounded.truncated).toBe(false);
+    expect(bounded.omitted).toEqual({ nodes: 0, edges: 0 });
+  });
+
+  it('still drops decorative nodes in favor of the path when the path itself already exceeds the cap', () => {
+    const pathNodes: PolicyGraphNode[] = ['path-a', 'path-b', 'path-c'].map((id) => ({
+      id, kind: 'hop', label: id, status: 'allowed', pathIds: ['path-01'],
+    }));
+    const decorativeNodes: PolicyGraphNode[] = ['aa-decor-0', 'aa-decor-1'].map((id) => ({
+      id, kind: 'candidate', label: id, status: 'not_applicable',
+    }));
+    const graph = {
+      version: 1 as const, capturedAt: '2026-08-19T00:00:00Z',
+      nodes: [...decorativeNodes, ...pathNodes], edges: [],
+    };
+
+    const bounded = boundGraph(graph, { nodes: 3, edges: 400 });
+
+    expect(bounded.nodes).toHaveLength(3);
+    for (const n of pathNodes) expect(bounded.nodes.some((k) => k.id === n.id)).toBe(true);
+    expect(bounded.omitted.nodes).toBe(2);
+    expect(bounded.truncated).toBe(true);
+  });
+
   it('preserves capturedAt', () => {
     const graph = makeGraph(1, 0);
     const bounded = boundGraph(graph, { nodes: 250, edges: 400 });
