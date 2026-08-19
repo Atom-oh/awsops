@@ -24,6 +24,7 @@ const FIXTURE: PolicyGraphDto = {
   version: 1,
   capturedAt: '2026-08-19T00:00:00Z',
   truncated: false,
+  pathTruncated: false,
   omitted: { nodes: 0, edges: 0 },
   nodes: [
     { id: 'eni:eni-08a', kind: 'eni', label: 'eni-08a', status: 'allowed' },

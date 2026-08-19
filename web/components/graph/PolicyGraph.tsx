@@ -140,10 +140,17 @@ export default function PolicyGraph({
       </div>
 
       {graph.truncated && (
-        <div className="absolute right-2 top-2 z-10 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+        <div
+          className={
+            graph.pathTruncated
+              ? 'absolute right-2 top-2 z-10 rounded-md border border-rose-400 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-800'
+              : 'absolute right-2 top-2 z-10 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-800'
+          }
+        >
+          {graph.pathTruncated ? '⚠ ' : ''}
           {graph.omitted.nodes > 0 && `+${graph.omitted.nodes} nodes `}
           {graph.omitted.edges > 0 && `+${graph.omitted.edges} edges `}
-          hidden by graph limits
+          {graph.pathTruncated ? 'hidden — resolved path is incomplete, result may be wrong' : 'hidden by graph limits'}
         </div>
       )}
 

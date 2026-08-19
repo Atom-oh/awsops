@@ -39,6 +39,13 @@ export interface PolicyGraphDto {
   capturedAt: string;
   truncated: boolean;
   omitted: { nodes: number; edges: number };
+  // True only when the node/edge cap had to cut into pathIds-tagged (resolved-path) structure —
+  // i.e. `omitted` is not just decorative overflow, and the returned graph may misrepresent the
+  // actual resolved path. Callers MUST treat this distinctly from ordinary decorative truncation:
+  // do not present the graph as a confidently-truncated-but-fine path (e.g. surface the run as
+  // failed/unknown per the design's own "execution-level failure -> failed" semantics) rather than
+  // silently rendering a path that might be missing its own blocking step.
+  pathTruncated: boolean;
   nodes: PolicyGraphNode[];
   edges: PolicyGraphEdge[];
 }
@@ -66,23 +73,27 @@ const byId = <T extends { id: string }>(a: T, b: T): number => a.id.localeCompar
 
 /**
  * Deterministically caps a raw graph to the given node/edge limits and reports what was hidden.
+ * `caps.nodes`/`caps.edges` are ALWAYS enforced as hard maximums (the returned graph never exceeds
+ * them) — they exist for real persistence/rendering safety reasons (bounded Aurora JSONB size,
+ * bounded browser canvas cost), and a shared function silently exceeding them under some inputs
+ * would reopen exactly the unbounded-write risk the cap exists to prevent.
  *
- * A resolved-path graph's whole point is the path, so this function treats `caps` as a hard limit
- * only for decorative/candidate structure (nodes and edges with no `pathIds`) and NEVER drops a
- * node or edge that is part of an active resolved path (`pathIds` non-empty) — not even when the
- * path-tagged structure alone exceeds `caps.nodes`/`caps.edges`. A shared, domain-agnostic function
- * has no way to pick *which* path node is safe to cut without breaking the path's meaning, so the
- * only honest behavior is to never guess: exceed the nominal cap rather than silently sever a
- * result a security decision might depend on. In practice this should be rare — the caps here are
- * generous specifically because domain builders are expected to have already collapsed repeated
- * targets/candidate branches into typed `+N` nodes before calling this (see
- * `web/lib/sg-policy-graph.ts`) — but if it does happen, `truncated`/`omitted` still report the
- * (decorative-only) count actually dropped, and the returned node/edge count can legitimately
- * exceed `caps` when path-tagged structure alone requires it.
+ * Within that hard limit, nodes/edges tagged with an active resolved path (`pathIds` non-empty)
+ * are preferred over decorative/candidate ones — a resolved-path graph's whole point is the path,
+ * so decorative overflow is dropped first. But when path-tagged structure ALONE still exceeds the
+ * cap, this function has no way to safely guess which path node is droppable without risking a
+ * misrepresented result, so instead of guessing it cuts deterministically (by id) like everything
+ * else AND sets `pathTruncated: true` — an explicit, un-ignorable signal that `omitted` this time
+ * includes resolved-path structure, not just decoration. Callers own the consequence (e.g. treating
+ * the run as failed/unknown rather than presenting a confidently-truncated path); this function's
+ * job is only to never let that happen silently in either direction (unbounded growth, or a quietly
+ * wrong path). In practice this should be rare — the caps are generous specifically because domain
+ * builders are expected to have already collapsed repeated targets/candidate branches into typed
+ * `+N` nodes before calling this (see `web/lib/sg-policy-graph.ts`).
  *
- * Decorative nodes/edges are chosen for the remaining budget by sorting on id, so repeated calls
- * over the same input are stable across polls. Dangling edges (referencing a node the node cap cut)
- * are dropped and counted as omitted the same as edges cut purely by the edge cap.
+ * Nodes/edges are chosen for their budget by sorting on id, so repeated calls over the same input
+ * are stable across polls. Dangling edges (referencing a node the node cap cut) are dropped and
+ * counted as omitted the same as edges cut purely by the edge cap.
  */
 export function boundGraph(
   graph: { version: 1; capturedAt: string; nodes: PolicyGraphNode[]; edges: PolicyGraphEdge[] },
@@ -90,13 +101,15 @@ export function boundGraph(
 ): PolicyGraphDto {
   const pathNodes = graph.nodes.filter(hasPathIds).sort(byId);
   const looseNodes = graph.nodes.filter((n) => !hasPathIds(n)).sort(byId);
-  const looseNodeBudget = Math.max(0, caps.nodes - pathNodes.length);
-  const keptNodes = [...pathNodes, ...looseNodes.slice(0, looseNodeBudget)].sort(byId);
+  const keptPathNodes = pathNodes.slice(0, caps.nodes);
+  const looseNodeBudget = Math.max(0, caps.nodes - keptPathNodes.length);
+  const keptNodes = [...keptPathNodes, ...looseNodes.slice(0, looseNodeBudget)].sort(byId);
   const keptNodeIds = new Set(keptNodes.map((n) => n.id));
 
   const pathEdges = graph.edges.filter(hasPathIds).sort(byId);
   const looseEdges = graph.edges.filter((e) => !hasPathIds(e)).sort(byId);
-  const keptPathEdges = pathEdges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target));
+  const validPathEdges = pathEdges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target));
+  const keptPathEdges = validPathEdges.slice(0, caps.edges);
   const looseEdgeBudget = Math.max(0, caps.edges - keptPathEdges.length);
   const keptLooseEdges = looseEdges
     .filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target))
@@ -105,12 +118,15 @@ export function boundGraph(
 
   const omittedNodes = graph.nodes.length - keptNodes.length;
   const omittedEdges = graph.edges.length - keptEdges.length;
+  const pathNodesOmitted = pathNodes.length - keptPathNodes.length;
+  const pathEdgesOmitted = pathEdges.length - keptPathEdges.length;
 
   return {
     version: 1,
     capturedAt: graph.capturedAt,
     truncated: omittedNodes > 0 || omittedEdges > 0,
     omitted: { nodes: omittedNodes, edges: omittedEdges },
+    pathTruncated: pathNodesOmitted > 0 || pathEdgesOmitted > 0,
     nodes: keptNodes,
     edges: keptEdges,
   };

@@ -31,10 +31,11 @@ describe('boundGraph', () => {
     expect(bounded.nodes).toHaveLength(3);
     expect(bounded.edges).toHaveLength(2);
     expect(bounded.truncated).toBe(false);
+    expect(bounded.pathTruncated).toBe(false);
     expect(bounded.omitted).toEqual({ nodes: 0, edges: 0 });
   });
 
-  it('caps persisted graphs and records omitted counts', () => {
+  it('caps persisted graphs and records omitted counts (decorative-only, not path-truncated)', () => {
     // 410 edges all reference only the first 250 nodes, so the node cap never orphans an edge —
     // the edge count below is driven purely by the edge cap, isolating the two limits.
     const graph = makeGraph(260, 410, 250);
@@ -42,6 +43,7 @@ describe('boundGraph', () => {
     expect(bounded.nodes).toHaveLength(250);
     expect(bounded.edges).toHaveLength(400);
     expect(bounded.truncated).toBe(true);
+    expect(bounded.pathTruncated).toBe(false);
     expect(bounded.omitted).toEqual({ nodes: 10, edges: 10 });
   });
 
@@ -99,11 +101,12 @@ describe('boundGraph', () => {
     expect(bounded.edges.some((e) => e.id === 'zz-source->zz-target')).toBe(true);
   });
 
-  it('keeps every resolved-path node/edge intact even when they alone exceed the node/edge cap', () => {
-    // A 4-hop resolved path (4 nodes, 3 edges) with a cap far below that — the earlier fix (sort
-    // path-tagged nodes first, then slice) would still have severed the path here, since slicing
-    // a *sorted* list to 2 still drops 2 of the 4 path nodes. There is no safe way for this
-    // domain-agnostic function to guess which path node is droppable, so it must keep all of them.
+  it('enforces the hard cap even over path structure, but flags it distinctly via pathTruncated', () => {
+    // A 4-hop resolved path (4 nodes, 3 edges) with caps far below that. The cap is a persistence/
+    // rendering safety limit and must never be silently exceeded — so this MUST still cut down to
+    // 2 nodes/1 edge. What must NOT happen is presenting that as ordinary decorative truncation:
+    // pathTruncated must fire so a caller can react (e.g. fail the run) instead of quietly
+    // rendering a possibly-wrong path.
     const ids = ['path-a', 'path-b', 'path-c', 'path-d'];
     const pathNodes: PolicyGraphNode[] = ids.map((id) => ({ id, kind: 'hop', label: id, status: 'allowed', pathIds: ['path-01'] }));
     const pathEdges: PolicyGraphEdge[] = [0, 1, 2].map((i) => ({
@@ -113,16 +116,14 @@ describe('boundGraph', () => {
 
     const bounded = boundGraph(graph, { nodes: 2, edges: 1 });
 
-    expect(bounded.nodes).toHaveLength(4);
-    expect(bounded.edges).toHaveLength(3);
-    for (const id of ids) expect(bounded.nodes.some((n) => n.id === id)).toBe(true);
-    for (const e of pathEdges) expect(bounded.edges.some((k) => k.id === e.id)).toBe(true);
-    // nothing was actually dropped — exceeding the nominal cap to preserve the path is not truncation
-    expect(bounded.truncated).toBe(false);
-    expect(bounded.omitted).toEqual({ nodes: 0, edges: 0 });
+    expect(bounded.nodes).toHaveLength(2);
+    expect(bounded.edges).toHaveLength(1);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.pathTruncated).toBe(true);
+    expect(bounded.omitted).toEqual({ nodes: 2, edges: 2 });
   });
 
-  it('still drops decorative nodes in favor of the path when the path itself already exceeds the cap', () => {
+  it('still drops decorative nodes in favor of the path when the path itself fits the cap', () => {
     const pathNodes: PolicyGraphNode[] = ['path-a', 'path-b', 'path-c'].map((id) => ({
       id, kind: 'hop', label: id, status: 'allowed', pathIds: ['path-01'],
     }));
@@ -140,6 +141,9 @@ describe('boundGraph', () => {
     for (const n of pathNodes) expect(bounded.nodes.some((k) => k.id === n.id)).toBe(true);
     expect(bounded.omitted.nodes).toBe(2);
     expect(bounded.truncated).toBe(true);
+    // the path itself fit within the cap — only decorative nodes were cut, so this is not a
+    // path-integrity emergency and callers should not treat it as one.
+    expect(bounded.pathTruncated).toBe(false);
   });
 
   it('preserves capturedAt', () => {
