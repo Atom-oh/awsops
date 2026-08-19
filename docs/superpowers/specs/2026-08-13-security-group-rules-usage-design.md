@@ -188,18 +188,24 @@ When false:
   aggregation are disabled
 - current Usage behavior remains unchanged
 
-**2026-08-19 update: resolved.** The Athena `StartQueryExecution`/`StopQueryExecution` calls, the S3
-write to the workgroup's results prefix, and the new cross-account `AWSopsSgRuleAthenaRole` (see IAM
-section) are not read-only in the literal sense, and whether they required an ADR-007-tier
-classification or fell under ADR-005's AWS-resource-mutation freeze was not this document's decision
-to make. That classification now has its dedicated ADR, per BASELINE's ADR-015 precedent (a new ADR
-+ multi-AI panel review, run inside a `/co-agent:consensus` session, 2026-08-19):
+**2026-08-19 update: resolved (revised 2026-08-19 round 3).** The Athena
+`StartQueryExecution`/`StopQueryExecution` calls, the S3 write to the workgroup's results prefix, and
+the new cross-account `AWSopsSgRuleAthenaRole` (see IAM section) are not read-only in the literal
+sense, and whether they required an ADR-007-tier classification or fell under ADR-005's
+AWS-resource-mutation freeze was not this document's decision to make. That classification now has
+its dedicated ADR, per BASELINE's ADR-015 precedent (a new ADR + multi-AI panel review, run inside a
+`/co-agent:consensus` session, 2026-08-19):
 [`docs/decisions/019-athena-flow-log-query-classification.md`](../../decisions/019-athena-flow-log-query-classification.md)
-(Accepted). It rules that this feature — including the two-role split this section and §IAM describe
-(the reused `AWSopsReadOnlyRole` for rule inventory; the new, isolated `AWSopsSgRuleAthenaRole` for
-the Athena/S3 write path) — sits inside the existing read-only invariant, needing neither an ADR-005
-relaxation nor an ADR-007-tier designation. `docs/decisions/BASELINE.md` §2 now carries the
-`sg_rule_activity_enabled` register row citing ADR-019.
+(Accepted). Its ruling, for the two-role split this section and §IAM describe: the reused
+`AWSopsReadOnlyRole` for rule inventory needs no exception (it sits inside the existing read-only
+invariant, no ADR-007-tier designation). The new, isolated `AWSopsSgRuleAthenaRole` for the
+Athena/S3 write path is **not** waved through as "needing no relaxation" — round 3's panel review
+flagged that framing as self-contradictory (this role is the repo's first write-capable
+cross-account trust relationship, which is exactly what ADR-005 §Decision 3 says may not be
+self-argued out of scope). It is instead registered as a narrow, explicit, dated owner-override
+exception to ADR-005 (the ADR-015 pattern), valid only while ADR-019 §3b's three controls hold.
+`docs/decisions/BASELINE.md` §2 now carries the `sg_rule_activity_enabled` register row, labeled
+GATED(owner-override 예외) and citing ADR-019.
 
 This separates the new recurring Athena cost from the existing SG analysis.
 

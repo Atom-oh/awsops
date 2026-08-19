@@ -97,19 +97,30 @@ cancel if needed. The only difference is that the log store is S3 (via the Athen
 instead of CloudWatch Logs — a difference in where the queried data lives, not in the nature of the
 query action.
 
-### 3. Athena 의 결과-S3-write는 조회 서비스 자체의 내부 메커니즘이다 / Athena's result S3 write is an intrinsic mechanic of the query service, not a resource mutation
+### 3. Athena 의 결과-S3-write는 조회 서비스 자체의 내부 메커니즘이다 — 그러나 이 분석은 exception 등록을 대체하지 않는다 / Athena's result S3 write is an intrinsic mechanic of the query service — but this analysis does not substitute for registering the exception
 
-Athena 워크그룹은 쿼리 결과를 S3에 쓰는 것이 서비스 설계 자체다 — 고객이 콘솔에서 직접 쿼리를 실행해도 동일하게 발생한다. 그 결과 위치는 **고객이 사전에 설정한 워크그룹 설정**이며, AWSops는 그 버킷이나 워크그룹을 생성·수정·삭제하지 않는다(spec의 소스 검증 절차는 read-only 확인만 수행 — `GetWorkGroup`/`GetTable`/`GetDatabase`, mutating 동사 없음). AWSops가 쓰는 것은 그 서비스가 이미 존재하는 고객 소유 위치에 남기는 임시 결과 객체이며, 이는 SG 규칙이나 EC2 인스턴스 같은 **식별 가능한 인프라 리소스의 상태**를 바꾸는 것이 아니다. `logs:StartQuery`가 CloudWatch 내부에 쿼리 실행 레코드를 만드는 것과 동일한 층위다 — 아무도 그것을 "AWS 리소스 변경"으로 취급하지 않는다.
+> **2026-08-19 재검토(3라운드) — §3/§3b는 맥락이며 허가의 근거가 아니다.** 아래 논거는 원래 "그러므로
+> ADR-005가 적용되지 않는다"는 결론으로 쓰였다. 이는 §Status/§Decision이 이제 등록하는 "ADR-005에 대한
+> owner-override 예외"와 논리적으로 충돌한다 — 정말로 ADR-005가 적용되지 않는다면 예외가 필요 없고,
+> 예외가 필요하다면 "적용되지 않는다"고 결론 내릴 수 없다. ADR-005 §Decision 3은 바로 이런 경계
+> 논쟁을 self-scoping 재해석으로 해소하는 것을 금지한다. **정정: 아래 논거는 owner가 이 예외를 승인할
+> 만큼 위험이 낮다고 판단하는 데 참고하는 맥락일 뿐, 그 자체로 "ADR-005 밖"이라는 결론을 내리지
+> 않는다.** 실제 허가는 오직 §Status의 owner-override 등록에서 나온다.
+
+Athena 워크그룹은 쿼리 결과를 S3에 쓰는 것이 서비스 설계 자체다 — 고객이 콘솔에서 직접 쿼리를 실행해도 동일하게 발생한다. 그 결과 위치는 **고객이 사전에 설정한 워크그룹 설정**이며, AWSops는 그 버킷이나 워크그룹을 생성·수정·삭제하지 않는다(spec의 소스 검증 절차는 read-only 확인만 수행 — `GetWorkGroup`/`GetTable`/`GetDatabase`, mutating 동사 없음). AWSops가 쓰는 것은 그 서비스가 이미 존재하는 고객 소유 위치에 남기는 임시 결과 객체이며, SG 규칙이나 EC2 인스턴스 같은 **식별 가능한 인프라 리소스의 상태**를 바꾸는 것과는 성격이 다르다. `logs:StartQuery`가 CloudWatch 내부에 쿼리 실행 레코드를 만드는 것과 유사한 층위다. **그러나 이것이 "그러므로 owner 승인이 필요 없다"는 뜻은 아니다** — 이 role이 이 저장소 최초의 write-capable cross-account 신뢰 관계라는 사실 자체가, 경계가 모호할 수 있는 신규 사례를 self-argument로 해소하지 말라는 ADR-005의 요구를 발동시킨다.
 
 An Athena workgroup writing query results to S3 is the query service's own design — the same thing
 happens if a customer runs the same query from the console. That result location is a
 **customer-pre-configured workgroup setting**; AWSops never creates, modifies, or deletes that
 bucket or workgroup (the spec's own source-validation procedure is read-only-only — `GetWorkGroup`/
 `GetTable`/`GetDatabase`, no mutating verb). What AWSops writes is an ephemeral result object into a
-pre-existing, customer-owned location the service already writes to regardless of caller — it does
-not change the **state of any identifiable infrastructure resource** (a security group, an EC2
-instance). This sits at the same layer as `logs:StartQuery` creating an internal query-execution
-record inside CloudWatch — nobody treats that as "AWS resource mutation" either.
+pre-existing, customer-owned location the service already writes to regardless of caller — its
+character differs from changing the **state of an identifiable infrastructure resource** (a security
+group, an EC2 instance). This sits at a similar layer to `logs:StartQuery` creating an internal
+query-execution record inside CloudWatch. **This does not mean owner sign-off is unnecessary,
+though** — the very fact that this role is the repo's first write-capable cross-account trust
+relationship is what triggers ADR-005's requirement not to resolve a boundary-ambiguous new case by
+self-argument.
 
 ### 3b. `athena:StartQueryExecution`의 read-only 속성은 도출된 것이며 세 가지 통제에 의존한다 (2026-08-19 패널 리뷰로 추가) / `athena:StartQueryExecution`'s read-only property is DERIVED, resting on three controls (added 2026-08-19 panel review)
 
@@ -170,9 +181,12 @@ any one of these three controls on this ADR's authority alone.
    않는다). 이 role은 공유 워커 task role이 assume해서는 안 되며, 전용 task role/task definition 또는
    broker Lambda로 assume 주체를 그 기능 하나로 격리한다(spec §IAM 참조 — 구현 시점에 둘 중 하나를 확정).
 
-이 role이 "새로운" 것이라는 사실 자체가 ADR-005/007 분류를 바꾸지는 않는다 — §3/§3b의 논거(동사 스코프 +
-prefix 스코프 + SQL 제약)는 role 이름과 무관하게 그대로 성립한다. 이 ADR이 정정하는 것은 오직 "어느
-role에 무엇이 붙는가"이며, "그것이 read-only 불변식 내부인가"라는 결론은 바뀌지 않는다.
+이 role이 "새로운" 것이라는 사실은 §3/§3b의 논거(동사 스코프 + prefix 스코프 + SQL 제약) 자체를 무효화하지
+않는다 — 그 논거는 role 이름과 무관하게 그대로 성립한다. 그러나 **결론은 역할에 따라 다르다**: 역할
+A(rule 인벤토리)는 이미 검증된 read-only 불변식 내부에 그대로 있다(예외 불필요). 역할 B(Athena/S3
+write)는 §3의 "정정" 각주가 명시하듯 그 논거가 "ADR-005 밖"을 증명하지 않는다 — 이 ADR이 정정하는 것은
+"어느 role에 무엇이 붙는가"뿐이며, 역할 B에 대해서는 owner-override 예외 등록이라는 결론 자체는
+바뀌지 않는다.
 
 Two distinct cross-account grants exist, and they must not be conflated:
 
