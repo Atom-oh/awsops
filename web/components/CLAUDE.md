@@ -6,7 +6,7 @@
 
 ## 주요 파일 / Key Files
 - `ui/DataTable.tsx` + `ui/DetailPanel.tsx` — 목록+상세 기본 조합. DetailPanel은 행이 이미 들고 있는 전체 데이터를 추가 fetch 없이 렌더 — `spec`(`InvType`)에 `sections`가 있으면 섹션 그룹 렌더, 없으면 flat key 목록(하위호환). 신규 인벤토리 타입은 `sections` 정의 필수 (renders the full row; grouped sections when the spec provides them)
-- `inventory/metrics/MetricTable.tsx` — 선언적 `MetricCol` 모델(`{value, render?, danger?, facet?, type}`)만 정의하면 정렬·전역 검색·facet 필터·'문제만' 토글이 무료 제공. 서비스별 테이블(Ec2/Rds/Alb/...)은 컬럼 정의로만 작성 (declarative column model — sort/search/facet/danger-only for free)
+- `inventory/metrics/MetricTable.tsx` — 선언적 `MetricCol` 모델(`{value, render?, danger?, facet?, facetValues?, type}`)만 정의하면 정렬·전역 검색·facet 필터·'문제만' 토글이 무료 제공. 서비스별 테이블(Ec2/Rds/Alb/...)은 컬럼 정의로만 작성. opt-in prop: `facetValues`(다중값 facet — joined 표시값 exact-match는 복합값 행 누락), `maxRender`+`capKeep`(렌더 단계 행 상한 — 데이터 단계 컷은 정확 검색을 조용히 0건으로 만듦), `rowClass`(행 단위 클래스 훅) (declarative column model — sort/search/facet/danger-only for free; opt-in multi-value facets, render-stage cap, per-row class)
 - `inventory/metrics/guides.tsx` + `guides.{en,zh,ja}.tsx` — 진단 가이드 언어별 본문. i18n lockstep — 4개 파일 동시 갱신 (per-language guide bodies, update all four together)
 - `nfm/FlowHopPath.tsx` — End-to-End 홉 스텝퍼 (로컬 엔드포인트 → traversedConstructs → 원격 엔드포인트). kind별 고유 글리프 + 색 — color-only 식별 금지 (E2E hop stepper; a glyph per kind, never color-only)
 - `eks/NodeDrilldownPanel.tsx` — 노드 드릴다운 (용량 카드 + Pod/ENI 섹션, nodes+pods 자체 라이브 조회). EKS 개요와 `/eks/nodes` 플릿 페이지(`FleetKindPage`)가 공유 (node drilldown shared by the EKS overview and the fleet page)

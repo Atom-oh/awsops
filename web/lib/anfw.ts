@@ -515,7 +515,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
                 : null,
               associations, unassociated: associations === 0,
               lastModified: resp.LastModifiedTime ? new Date(resp.LastModifiedTime).toISOString() : null,
-              statefulSids: (resp.Type ?? g.type) === 'STATEFUL' ? parseStatefulSids(d.RuleGroup) : [],
+              statefulSids: resp.Type === 'STATEFUL' ? parseStatefulSids(d.RuleGroup) : [],
             };
           } catch { return null; }
         }));
