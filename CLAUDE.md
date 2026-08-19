@@ -109,6 +109,10 @@ make agentcore   # arm64 agent 이미지 + 멱등 AgentCore provisioner (--smoke
 make workers     # arm64 worker 이미지 push (workers_enabled=true로 apply 후)
 ```
 
+## 버전 문자열 / Version strings
+릴리스 시 함께 올릴 곳 (사이드바 버전 칩은 `CHANGELOG.md` 최신 섹션을 `web/lib/changelog.ts`가 파싱 — 별도 하드코딩 없음):
+`CHANGELOG.md`(EN/KO Unreleased → 새 섹션 + compare 링크 — 링크 블록은 EN/KO 2곳) · `web/package.json` · `web/package-lock.json`(2곳) · `README.md` 버전 배지. 배포해야 인앱 버전이 갱신된다(deploy가 CHANGELOG를 이미지에 복사).
+
 ## v2 ↔ v1 핵심 차이
 | 항목 | v1 (`src/`) | v2 (`web/` + `terraform/v2/`) |
 |------|-------------|-------------------------------|

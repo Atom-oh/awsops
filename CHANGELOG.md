@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 
+## [0.8.0] - 2026-08-19
+
+### Added
+
 - Make the dashboard installable as an iPhone/iPad home-screen app (PWA): web app manifest (standalone display, root scope) + Apple meta tags (apple-touch-icon, apple-mobile-web-app-capable) + 4 generated icons (180 full-bleed apple-touch, 192/512 rounded, 512 maskable), all served without the auth cookie via new Lambda@Edge public-allowlist entries (iOS fetches manifest/icons credential-less — a 3-way lockstep test pins manifest ↔ public/ files ↔ edge allowlist). Safe-area handling for notch devices (viewport-fit=cover with top/bottom/left/right env() padding on the mobile shell, scroll-gap compensation for the grown tab bar), and the browser theme-color meta now tracks the runtime theme (cobalt/teal/dark) instead of tinting dark screens cobalt. No service worker by design: live authenticated ops data gains nothing from offline caching, and iOS install does not require one.
 - Rework the Network Firewall rule-hit table for readability and interactivity: the hand-rolled table is replaced with the shared MetricTable (header-click sort on every string/number column, text search, per-element action facets, danger-rows-only toggle), clicking a row opens the rule in the standard side detail panel (SID, rule groups, tri-state hit basis and why-n/a note), and two hit-count charts are added — an action-distribution donut fed by the untruncated per-action aggregation (matches the card badges) and a top-10 rule hits bar with an explicit notice when the top-100 SID aggregation is truncated. MetricTable itself gains three opt-in props reused here: multi-value facets (element-level matching so filtering 'blocked' also matches 'drop, blocked' rows), a render-stage row cap that keeps search/sort operating on the full set while preserving idle rules, and a per-row class hook (restores the idle-rule dimming).
 - Add stateful rule hit counts to the Network Firewall page (the 2026-08 AWS feature, which aggregates existing Alert logs rather than exposing a new API — verified against the API reference, latest botocore, and CloudWatch): the Alert-log card now aggregates hits per (SID, signature, action) over the CloudWatch Logs destination (limit 100) and joins them with the SIDs parsed server-side from configured stateful rule groups (sid/msg/action only — rule bodies still never leave the server), surfacing configured rules with zero matches in range (policy blind spots / shadow rules); pass rules are honestly rendered n/a since they emit no alert log entries, and unknown SIDs (managed rule groups) are labeled as such.
@@ -471,7 +475,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/whchoi98/awsops/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
@@ -501,6 +506,10 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
+
+## [0.8.0] - 2026-08-19
+
+### Added
 
 - 아이폰/아이패드 홈 화면 앱 설치(PWA) 지원: 웹 앱 manifest(standalone, 루트 스코프) + Apple 메타 태그(apple-touch-icon, apple-mobile-web-app-capable) + 생성 아이콘 4종(180 풀블리드 apple-touch, 192/512 라운드, 512 maskable). iOS는 manifest·아이콘을 인증 쿠키 없이 fetch하므로 Lambda@Edge 공개 allowlist에 등록(3자 lockstep 테스트로 manifest ↔ public/ 파일 ↔ edge allowlist 고정). 노치 기기 안전영역 처리(viewport-fit=cover + 모바일 셸 상/하/좌/우 env() 패딩, 커진 탭바만큼 스크롤 보정), 브라우저 theme-color meta가 런타임 테마(cobalt/teal/dark)를 추적(다크 화면 코발트 틴트 해소). Service Worker는 의도적으로 미도입 — 인증 쿠키 뒤 라이브 운영 데이터는 오프라인 캐시 이득이 없고 iOS 설치에 SW가 필요하지 않음.
 - Network Firewall 룰 히트 테이블을 가독성·상호작용 중심으로 재구성: 수제 테이블을 공용 MetricTable로 교체(모든 문자열/숫자 컬럼 헤더 클릭 정렬, 텍스트 검색, 액션 원소 단위 facet, 문제만 토글), 행 클릭 시 표준 사이드 상세 패널에서 룰 상세(SID·룰 그룹·3-state 히트 근거·n/a 사유) 표시, 히트 카운트 그래프 2종 추가 — 액션 분포 도넛은 잘림 없는 액션별 전량 집계 사용(카드 배지와 수치 일치), 룰별 히트 Top 10 바는 top-100 SID 집계 잘림 시 명시 고지. MetricTable에는 여기서 재사용하는 opt-in prop 3종 추가: 다중값 facet(원소 단위 매칭 — 'blocked' 필터가 'drop, blocked' 행도 포함), 렌더 단계 행 상한(검색·정렬은 전체 행에서 동작, idle 룰 보존), per-row 클래스 훅(idle 룰 디밍 복원).
@@ -955,7 +964,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/whchoi98/awsops/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
