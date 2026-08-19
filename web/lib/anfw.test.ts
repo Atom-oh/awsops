@@ -201,9 +201,14 @@ describe('anfwAnalysis', () => {
     const p = a.policies[0];
     expect(p.statelessGroups).toEqual(['DMZVPC-stateless-allow-all']);
     expect(p.statefulGroups).toEqual(['eksworkshop-container-attr-rg']);
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27): statefulGroups는 이름만(ARN 마지막
+    // 세그먼트) 남긴 표시용 값이다 — 계정 소유 그룹과 이름이 같은 관리형 그룹을 안전하게
+    // 구분하려면 전체 ARN이 필요하다. 이 필드가 실제로 채워지는지 확인.
+    expect(p.statefulGroupArns).toEqual(['arn:aws:network-firewall:r:1:stateful-rulegroup/eksworkshop-container-attr-rg']);
     expect(p.passthroughDefault).toBe(false); // forward_to_sfe
 
     const rg = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateful-default')!;
+    expect(rg.arn).toBe('arn:aws:network-firewall:r:1:stateful-rulegroup/DMZVPC-stateful-default');
     expect(rg.unassociated).toBe(true);
     expect(rg.capacityPct).toBe(3);
     // 룰 히트 카운트 조인용 SID 파싱 — sid 없는 룰/주석은 제외, sid·msg·action만 추출

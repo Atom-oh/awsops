@@ -95,6 +95,13 @@ export interface AnfwPolicyRow {
   name: string; region: string; status: string;
   associations: number;
   statelessGroups: string[]; statefulGroups: string[];
+  /** statefulGroups와 같은 순서의 전체 ARN — 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27):
+   *  statefulGroups는 표시용으로 ARN 마지막 세그먼트(이름)만 남긴 값이라, `ListRuleGroups`
+   *  (Scope 미지정 — 계정 소유 그룹만 열거)로 만들어진 rgKeys와 이름만으로 대조하면 같은
+   *  리전에서 AWS 관리형 그룹과 계정 소유 그룹의 이름이 우연히 같을 때 관리형 그룹 참조를
+   *  "존재함(안전)"으로 오판한다. 계정 소유 그룹의 ARN과 정확히 일치해야만 안전하다고
+   *  판정하려면 전체 ARN이 필요하다. */
+  statefulGroupArns: string[];
   statelessDefaultActions: string[]; statelessFragmentDefaultActions: string[];
   statefulDefaultActions: string[];
   statefulRuleOrder: string | null; streamExceptionPolicy: string | null;
@@ -105,7 +112,7 @@ export interface AnfwPolicyRow {
 }
 
 export interface AnfwRuleGroupRow {
-  name: string; region: string; type: string; status: string;
+  name: string; arn: string; region: string; type: string; status: string;
   capacity: number | null; consumedCapacity: number | null;
   /** 소비 용량 ÷ 총 용량 ×100 (소수 1자리). */
   capacityPct: number | null;
@@ -552,6 +559,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
               associations: resp.NumberOfAssociations ?? 0,
               statelessGroups: (pol.StatelessRuleGroupReferences ?? []).map((g) => arnName(g.ResourceArn)),
               statefulGroups: (pol.StatefulRuleGroupReferences ?? []).map((g) => arnName(g.ResourceArn)),
+              statefulGroupArns: (pol.StatefulRuleGroupReferences ?? []).map((g) => g.ResourceArn ?? ''),
               statelessDefaultActions: statelessDefaults,
               statelessFragmentDefaultActions: fragmentDefaults,
               statefulDefaultActions: pol.StatefulDefaultActions ?? [],
@@ -589,7 +597,7 @@ export async function anfwAnalysis(rangeSec: number): Promise<AnfwAnalysis> {
                 && (!!d.RuleGroup?.RulesSource?.RulesSourceList
                   || (statefulSids.length === 0 && (consumed ?? 0) > 0)));
             return {
-              name: resp.RuleGroupName ?? g.name, region,
+              name: resp.RuleGroupName ?? g.name, arn: g.arn, region,
               type: resp.Type ?? '?',
               status: resp.RuleGroupStatus ?? '?',
               capacity, consumedCapacity: consumed,

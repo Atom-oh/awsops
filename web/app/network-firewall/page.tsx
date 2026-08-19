@@ -327,14 +327,19 @@ export default function NetworkFirewallPage() {
   // 이 판정은 리전별이 아니라 계정(현재 조회 스코프) 전체 단위의 단일 boolean이다.
   const attributionUnsafe = useMemo(() => {
     if ((data?.degradedRegions ?? []).length > 0) return true;
-    const rgKeys = new Set(rgs.map((rg) => `${rg.region}|${rg.name}`));
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27): `ListRuleGroups`는 Scope 미지정이라
+    // 계정 소유 그룹만 열거한다 — 정책이 참조하는 그룹이 AWS 관리형이면 rgs에 나타나지
+    // 않아야 "관리형 참조"로 잡히는데, 이 판정을 이름(`region|name`)만으로 하면 같은
+    // 리전에서 관리형 그룹과 계정 소유 그룹의 이름이 우연히 같을 때 관리형 참조를
+    // "존재함(안전)"으로 오판한다 — 전체 ARN으로 정확히 일치해야만 안전하다고 판정한다.
+    const rgArns = new Set(rgs.map((rg) => rg.arn));
     // 리뷰 MAJOR(확정, PR #225 라운드11): 도메인 리스트(RulesSourceList) 룰 그룹은 rgs에
-    // "존재"하지만(rgKeys 통과) statefulSids가 항상 비어 있다 — AWS가 SID를 내부 생성하고
-    // 우리는 그 SID를 알 수 없다. rgKeys 부재만 보면 이 케이스를 놓친다 — 파싱 불가
+    // "존재"하지만(rgArns 통과) statefulSids가 항상 비어 있다 — AWS가 SID를 내부 생성하고
+    // 우리는 그 SID를 알 수 없다. rgArns 부재만 보면 이 케이스를 놓친다 — 파싱 불가
     // (anfw.ts의 sidsUnparseable) 그룹을 참조하는 정책도 계정 전체 귀속 불안전으로 간주한다.
-    const unparseableRgKeys = new Set(rgs.filter((rg) => rg.sidsUnparseable).map((rg) => `${rg.region}|${rg.name}`));
-    if (policies.some((p) => p.statefulGroups.some((name) =>
-      !rgKeys.has(`${p.region}|${name}`) || unparseableRgKeys.has(`${p.region}|${name}`)))) return true;
+    const unparseableRgArns = new Set(rgs.filter((rg) => rg.sidsUnparseable).map((rg) => rg.arn));
+    if (policies.some((p) => p.statefulGroupArns.some((arn) =>
+      !rgArns.has(arn) || unparseableRgArns.has(arn)))) return true;
     // 리뷰 MAJOR(확정, PR #225 라운드19): 위 검사는 "현재" policy.statefulGroups 목록만
     // 훑는다 — 정책이 range 도중 수정됐을 때 그 정책이 *지금* 참조하는 그룹들만 안전하지
     // 않다고 표시했을 뿐, range 도중 그 정책에서 제거되거나
@@ -381,15 +386,17 @@ export default function NetworkFirewallPage() {
     // 하나라도 있으면 계정 전체를 불안전 처리한다.
     return (logsData?.targets ?? []).some((t) => t.type === 'ALERT' && t.discovered);
   }, [data, rgs, policies, range, logsData]);
+  // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27): 이 맵도 attributionUnsafe와 동일한 이유로
+  // ARN 키를 쓴다 — 이름만으로 매칭하면 관리형 그룹과 이름이 같은 계정 소유 그룹에 관측성이
+  // 잘못 옮겨붙을 수 있다.
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();
-    for (const rg of rgs) byKey.set(`${rg.region}|${rg.name}`, []);
+    for (const rg of rgs) byKey.set(rg.arn, []);
     for (const policy of policies) {
-      for (const rgName of policy.statefulGroups) {
-        const rgKey = `${policy.region}|${rgName}`;
-        if (!byKey.has(rgKey)) continue;
+      for (const rgArn of policy.statefulGroupArns) {
+        if (!byKey.has(rgArn)) continue;
         for (const fw of fws) {
-          if (fw.region === policy.region && fw.policyName === policy.name) byKey.get(rgKey)!.push(firewallObservability(fw));
+          if (fw.region === policy.region && fw.policyName === policy.name) byKey.get(rgArn)!.push(firewallObservability(fw));
         }
       }
     }
@@ -517,7 +524,7 @@ export default function NetworkFirewallPage() {
         const isPass = s.action === 'pass' || s.noalert;
         if (!isPass) configuredSids.add(s.sid);
         const h = hitsBySid.get(s.sid);
-        const observability = ruleGroupObservability.get(`${rg.region}|${rg.name}`) ?? 'unobserved';
+        const observability = ruleGroupObservability.get(rg.arn) ?? 'unobserved';
         const sharedSid = (sidGroupCount.get(s.sid) ?? 0) > 1;
         const unknown = ruleHitsFailed || ((truncated || partial) && !h); // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
         rows.push({
