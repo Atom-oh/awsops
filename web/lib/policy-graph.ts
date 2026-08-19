@@ -72,7 +72,13 @@ function hasPathIds(x: { pathIds?: string[] }): boolean {
 const byId = <T extends { id: string }>(a: T, b: T): number => a.id.localeCompare(b.id);
 
 interface PathCluster {
+  pathIds: Set<string>;
   minPathId: string;
+  // Includes both pathIds-tagged nodes AND any node an edge in this cluster terminates at that is
+  // NOT itself tagged (e.g. an on-prem/unknown boundary node per the design's own "nodes beyond
+  // the AWS-visible boundary terminate at a dashed unknown boundary node" rule) — see the pull-in
+  // step below. Counting these "required" nodes as part of the cluster's own cost, before the
+  // admission decision, is what closes the gap where an edge could get silently dropped later.
   nodes: PolicyGraphNode[];
   edges: PolicyGraphEdge[];
 }
@@ -84,8 +90,20 @@ interface PathCluster {
  * exclude a whole resolved path atomically: slicing an arbitrary subset of one path's nodes can
  * leave a disconnected, misleadingly-plausible-looking fragment, but excluding/including an entire
  * cluster never can.
+ *
+ * `nodeById` resolves a cluster's edges' source/target ids even when the endpoint node itself
+ * carries no `pathIds` — those "required" boundary nodes are pulled into the cluster (deduplicated
+ * if two clusters share one) so its true node cost, and the admission decision that follows, both
+ * account for them. Without this, a path edge could reference an untagged boundary node that later
+ * loses out to unrelated decorative filler for the ordinary node budget, silently dropping the edge
+ * without `pathTruncated` ever firing (that node's absence wasn't attributed to any excluded
+ * cluster — it was just an accident of decorative competition).
  */
-function buildPathClusters(pathNodes: PolicyGraphNode[], pathEdges: PolicyGraphEdge[]): PathCluster[] {
+function buildPathClusters(
+  pathNodes: PolicyGraphNode[],
+  pathEdges: PolicyGraphEdge[],
+  nodeById: Map<string, PolicyGraphNode>,
+): PathCluster[] {
   const parent = new Map<string, string>();
   const find = (x: string): string => {
     let r = x;
@@ -109,18 +127,37 @@ function buildPathClusters(pathNodes: PolicyGraphNode[], pathEdges: PolicyGraphE
   const clusterFor = (anyPathId: string): PathCluster => {
     const root = find(anyPathId);
     let c = byRoot.get(root);
-    if (!c) { c = { minPathId: anyPathId, nodes: [], edges: [] }; byRoot.set(root, c); }
+    if (!c) { c = { pathIds: new Set(), minPathId: anyPathId, nodes: [], edges: [] }; byRoot.set(root, c); }
     return c;
   };
 
-  for (const n of pathNodes) clusterFor(n.pathIds![0]).nodes.push(n);
-  for (const e of pathEdges) clusterFor(e.pathIds![0]).edges.push(e);
+  for (const n of pathNodes) {
+    const c = clusterFor(n.pathIds![0]);
+    n.pathIds!.forEach((id) => c.pathIds.add(id));
+    c.nodes.push(n);
+  }
+  for (const e of pathEdges) {
+    const c = clusterFor(e.pathIds![0]);
+    e.pathIds!.forEach((id) => c.pathIds.add(id));
+    c.edges.push(e);
+  }
 
   const clusters = [...byRoot.values()];
   for (const c of clusters) {
+    const haveIds = new Set(c.nodes.map((n) => n.id));
+    for (const e of c.edges) {
+      for (const endpointId of [e.source, e.target]) {
+        if (haveIds.has(endpointId)) continue;
+        const boundary = nodeById.get(endpointId);
+        if (boundary) { c.nodes.push(boundary); haveIds.add(endpointId); }
+        // If the endpoint id resolves to no node at all, the input itself references a resource
+        // that doesn't exist — nothing to pull in; boundGraph's final endpoint re-check still
+        // drops that edge and (per its own contract) that now counts toward `pathTruncated` too.
+      }
+    }
     c.nodes.sort(byId);
     c.edges.sort(byId);
-    c.minPathId = c.nodes[0]?.pathIds?.slice().sort()[0] ?? c.edges[0]?.pathIds?.slice().sort()[0] ?? c.minPathId;
+    c.minPathId = [...c.pathIds].sort()[0];
   }
   return clusters.sort((a, b) => a.minPathId.localeCompare(b.minPathId));
 }
@@ -152,17 +189,24 @@ function buildPathClusters(pathNodes: PolicyGraphNode[], pathEdges: PolicyGraphE
  * Decorative nodes/edges are chosen for the remaining budget by sorting on id, so repeated calls
  * over the same input are stable across polls. Dangling edges (referencing a node the node cap cut)
  * are dropped and counted as omitted the same as edges cut purely by the edge cap.
+ *
+ * A path edge can terminate at a node that itself carries no `pathIds` — e.g. the design's own
+ * on-prem/unknown boundary node, which is genuinely outside the resolved AWS-visible path. Such a
+ * node is pulled into its cluster's own node cost up front (see `buildPathClusters`) rather than
+ * left to compete for the ordinary decorative node budget, and `pathTruncated` also fires if an
+ * admitted cluster's edge is still missing from the result for any reason — closing the gap where
+ * a path edge could be silently dropped by decorative-budget competition while `pathTruncated`
+ * stayed `false` because no whole cluster was ever excluded.
  */
 export function boundGraph(
   graph: { version: 1; capturedAt: string; nodes: PolicyGraphNode[]; edges: PolicyGraphEdge[] },
   caps: GraphCaps,
 ): PolicyGraphDto {
+  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
   const pathNodes = graph.nodes.filter(hasPathIds);
   const pathEdges = graph.edges.filter(hasPathIds);
-  const looseNodes = graph.nodes.filter((n) => !hasPathIds(n)).sort(byId);
-  const looseEdges = graph.edges.filter((e) => !hasPathIds(e)).sort(byId);
 
-  const clusters = buildPathClusters(pathNodes, pathEdges);
+  const clusters = buildPathClusters(pathNodes, pathEdges, nodeById);
   const includedClusters: PathCluster[] = [];
   let usedNodes = 0;
   let usedEdges = 0;
@@ -175,17 +219,26 @@ export function boundGraph(
     // else: the whole cluster is excluded — never a partial slice of it.
   }
 
-  const keptPathNodes = includedClusters.flatMap((c) => c.nodes).sort(byId);
+  // Dedupe: an untagged boundary node shared by two clusters (see buildPathClusters) would
+  // otherwise be pulled into each cluster's own `nodes` and appear twice once both are admitted.
+  const keptPathNodes = [...new Map(includedClusters.flatMap((c) => c.nodes).map((n) => [n.id, n])).values()].sort(byId);
+  const keptPathNodeIds = new Set(keptPathNodes.map((n) => n.id));
+
+  // Decorative candidates exclude anything already required by an included cluster (whether it's
+  // pathIds-tagged or a pulled-in untagged boundary node) — never let a node compete for both pools.
+  const looseNodes = graph.nodes.filter((n) => !hasPathIds(n) && !keptPathNodeIds.has(n.id)).sort(byId);
+  const looseEdges = graph.edges.filter((e) => !hasPathIds(e)).sort(byId);
+
   const looseNodeBudget = Math.max(0, caps.nodes - keptPathNodes.length);
   const keptNodes = [...keptPathNodes, ...looseNodes.slice(0, looseNodeBudget)].sort(byId);
   const keptNodeIds = new Set(keptNodes.map((n) => n.id));
 
-  // Defensive re-check: an included cluster's own edges should already have both endpoints inside
-  // it, but never trust that blindly against a dangling edge in malformed input.
-  const keptPathEdges = includedClusters
-    .flatMap((c) => c.edges)
-    .filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target))
-    .sort(byId);
+  const rawPathEdges = [...new Map(includedClusters.flatMap((c) => c.edges).map((e) => [e.id, e])).values()];
+  // Every endpoint of an included cluster's edge should already be in keptNodeIds — buildPathClusters
+  // pulled in exactly those nodes as part of the cluster's own cost. This re-check only fires for a
+  // genuinely malformed input (an edge endpoint that resolves to no node at all); when it does, that
+  // loss is resolved-path structure too, so it feeds `pathTruncated` below, not just `omitted`.
+  const keptPathEdges = rawPathEdges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target)).sort(byId);
   const looseEdgeBudget = Math.max(0, caps.edges - keptPathEdges.length);
   const keptLooseEdges = looseEdges
     .filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target))
@@ -194,13 +247,15 @@ export function boundGraph(
 
   const omittedNodes = graph.nodes.length - keptNodes.length;
   const omittedEdges = graph.edges.length - keptEdges.length;
+  const anyClusterExcluded = includedClusters.length !== clusters.length;
+  const admittedPathEdgeStillDropped = rawPathEdges.length !== keptPathEdges.length;
 
   return {
     version: 1,
     capturedAt: graph.capturedAt,
     truncated: omittedNodes > 0 || omittedEdges > 0,
     omitted: { nodes: omittedNodes, edges: omittedEdges },
-    pathTruncated: includedClusters.length !== clusters.length,
+    pathTruncated: anyClusterExcluded || admittedPathEdgeStillDropped,
     nodes: keptNodes,
     edges: keptEdges,
   };

@@ -197,6 +197,61 @@ describe('boundGraph', () => {
     expect(bounded.pathTruncated).toBe(false);
   });
 
+  it('never drops a resolved-path edge to an untagged boundary node without flagging pathTruncated', () => {
+    // The path's own edge terminates at an "unknown boundary" node that itself carries no pathIds
+    // (matches the design's own on-prem/unknown-boundary node). A pile of decorative candidates
+    // sorts ahead of that boundary node alphabetically — if the boundary node were left to compete
+    // for the ordinary decorative budget instead of being reserved as part of the path's own cost,
+    // it would lose, silently dropping the path's own edge while pathTruncated stayed false.
+    const pathNode: PolicyGraphNode = { id: 'zz-source', kind: 'eni', label: 'source', status: 'allowed', pathIds: ['path-01'] };
+    const boundaryNode: PolicyGraphNode = { id: 'zz-boundary', kind: 'boundary', label: 'unknown boundary', status: 'unknown' };
+    const pathEdge: PolicyGraphEdge = {
+      id: 'zz-source->zz-boundary', source: 'zz-source', target: 'zz-boundary', relation: 'routed-to', status: 'unknown', pathIds: ['path-01'],
+    };
+    const decorativeNodes: PolicyGraphNode[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `aa-candidate-${i}`, kind: 'candidate', label: `candidate ${i}`, status: 'not_applicable',
+    }));
+    const graph = {
+      version: 1 as const,
+      capturedAt: '2026-08-19T00:00:00Z',
+      nodes: [...decorativeNodes, pathNode, boundaryNode],
+      edges: [pathEdge],
+    };
+
+    // Enough total node budget for the path (2 nodes incl. boundary) + some decorative filler.
+    const bounded = boundGraph(graph, { nodes: 4, edges: 1 });
+
+    expect(bounded.nodes.some((n) => n.id === 'zz-source')).toBe(true);
+    expect(bounded.nodes.some((n) => n.id === 'zz-boundary')).toBe(true);
+    expect(bounded.edges.some((e) => e.id === 'zz-source->zz-boundary')).toBe(true);
+    expect(bounded.pathTruncated).toBe(false);
+  });
+
+  it('flags pathTruncated when a path plus its required boundary node cannot both fit', () => {
+    // Same shape as above, but the cap is only large enough for the path's OWN tagged node — not
+    // its required (untagged) boundary node too. The cluster's true cost is 2 nodes, so it must be
+    // excluded wholly (per the atomic-cluster rule), not admitted while losing just the boundary
+    // half of its one edge.
+    const pathNode: PolicyGraphNode = { id: 'zz-source', kind: 'eni', label: 'source', status: 'allowed', pathIds: ['path-01'] };
+    const boundaryNode: PolicyGraphNode = { id: 'zz-boundary', kind: 'boundary', label: 'unknown boundary', status: 'unknown' };
+    const pathEdge: PolicyGraphEdge = {
+      id: 'zz-source->zz-boundary', source: 'zz-source', target: 'zz-boundary', relation: 'routed-to', status: 'unknown', pathIds: ['path-01'],
+    };
+    const graph = {
+      version: 1 as const, capturedAt: '2026-08-19T00:00:00Z',
+      nodes: [pathNode, boundaryNode], edges: [pathEdge],
+    };
+
+    const bounded = boundGraph(graph, { nodes: 1, edges: 400 });
+
+    // The cluster (source + its required boundary node) doesn't fit and is excluded wholly, so
+    // the path's own source node and its edge must both be gone — a lone, edgeless boundary node
+    // may still surface as ordinary decorative filler (harmless on its own), but the path is not.
+    expect(bounded.nodes.some((n) => n.id === 'zz-source')).toBe(false);
+    expect(bounded.edges).toHaveLength(0);
+    expect(bounded.pathTruncated).toBe(true);
+  });
+
   it('preserves capturedAt', () => {
     const graph = makeGraph(1, 0);
     const bounded = boundGraph(graph, { nodes: 250, edges: 400 });
