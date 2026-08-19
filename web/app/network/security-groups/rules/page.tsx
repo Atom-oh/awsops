@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Download, RefreshCw, Settings2, Waypoints } from 'lucide-react';
@@ -134,7 +134,18 @@ function FlowSourceForm({ onDone }: { onDone: () => void }) {
   );
 }
 
+// useSearchParams() opts the page into client-side rendering for the part that reads the query
+// string (?sg=<id> deep link from Usage) — Next.js requires that read to be wrapped in its own
+// Suspense boundary or the whole page fails static prerendering (missing-suspense-with-csr-bailout).
 export default function SecurityGroupRulesPage() {
+  return (
+    <Suspense fallback={null}>
+      <SecurityGroupRulesPageInner />
+    </Suspense>
+  );
+}
+
+function SecurityGroupRulesPageInner() {
   const { tt } = useI18n();
   const searchParams = useSearchParams();
   const [filters, setFilters] = useState<Filters>({ accountId: '', region: '', sgId: '', direction: '', status: '', q: '', days: 90 });
