@@ -200,13 +200,17 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
 - `athena:StartQueryExecution`, `athena:GetQueryExecution`, `athena:GetQueryResults`, `athena:StopQueryExecution`, `athena:GetWorkGroup` — **§3b의 세 통제(SELECT-only 생성 SQL, mutating Glue 동사 배제, 아래 S3 read/write 스코프)가 모두 유지되는 조건 하에서만** read-only로 간주
 - `glue:GetDatabase`, `glue:GetTable`, `glue:GetPartitions`
 - `s3:GetBucketLocation`
-- **`s3:GetObject`, `s3:ListBucket` — spec §IAM이 규정한 "configured Flow Log table locations"(Glue
-  테이블이 가리키는 실제 소스 데이터 위치)에 한정. 이것이 SQL 쿼리가 실제로 읽는 데이터이며, 워크그룹의
-  결과 prefix와는 별개의(계정·버킷이 다를 수도 있는) 위치다 — 아래 write 항목과 절대 혼동하지 말 것.**
-- **`s3:PutObject`, `s3:AbortMultipartUpload` — 위와는 별개로, 고객 워크그룹의 사전 설정된 **결과** prefix에만
-  한정. Athena 쿼리 실행 자체가 요구하는 필수 동작이며, §3에서 서술한 "서비스 내부 메커니즘" 논거가 정확히
-  이 grant를 가리킨다. AWSops는 이 prefix 바깥으로는 결코 write하지 않으며, 그 버킷/워크그룹을
-  생성·삭제하지 않는다.**
+- **`s3:GetObject`, `s3:ListBucket` (소스 위치) — spec §IAM이 규정한 "configured Flow Log table
+  locations"(Glue 테이블이 가리키는 실제 소스 데이터 위치)에 한정. 이것이 SQL 쿼리가 실제로 읽는
+  데이터이며, 워크그룹의 결과 prefix와는 별개의(계정·버킷이 다를 수도 있는) 위치다.**
+- **`s3:GetObject`, `s3:ListBucket`, `s3:PutObject`, `s3:AbortMultipartUpload` (결과 prefix) — 고객
+  워크그룹의 사전 설정된 **결과** prefix에만 한정. write(`PutObject`/`AbortMultipartUpload`)는 Athena
+  쿼리 실행 자체가 요구하는 필수 동작이며(§3의 "서비스 내부 메커니즘" 논거가 정확히 이 grant를
+  가리킨다). **read(`GetObject`/`ListBucket`)도 이 prefix에 함께 필요하다** — Athena 자신이
+  `GetQueryResults` 처리와 (활성화된 경우) 쿼리 결과 재사용(result reuse) 판단을 위해 자신이 쓴 결과
+  객체를 다시 읽기 때문이다. 소스 위치와 결과 prefix는 여전히 서로 다른 위치이지만, 결과 prefix
+  **자체는** read+write 둘 다 필요하다 — write만 부여하면 실제로 동작하지 않는다. AWSops는 이 prefix
+  바깥으로는 결코 write하지 않으며, 그 버킷/워크그룹을 생성·삭제하지 않는다.**
 
 - `sts:AssumeRole` → the target account's `AWSopsSgRuleAthenaRole` (a new role — per the spec's
   §IAM design, assumable only by a dedicated task role/task definition or a broker Lambda; the
@@ -217,21 +221,28 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
   scope below)
 - `glue:GetDatabase`, `glue:GetTable`, `glue:GetPartitions`
 - `s3:GetBucketLocation`
-- **`s3:GetObject`, `s3:ListBucket` — scoped to the spec §IAM's "configured Flow Log table
-  locations" (the actual source data location the Glue table points at). This is the data the SQL
-  query actually reads, and it is a DISTINCT location from the workgroup's result prefix below
-  (potentially a different account/bucket entirely) — never conflate the two.**
-- **`s3:PutObject`, `s3:AbortMultipartUpload` — separately, scoped ONLY to the customer workgroup's
-  own pre-configured RESULT prefix. A required mechanic of running an Athena query at all; §3's
-  "the service's own internal mechanism" argument is precisely about this grant.** AWSops never
-  writes outside that result prefix and never creates or deletes that bucket/workgroup.
+- **`s3:GetObject`, `s3:ListBucket` (source location) — scoped to the spec §IAM's "configured Flow
+  Log table locations" (the actual source data location the Glue table points at). This is the
+  data the SQL query actually reads, and it is a distinct location from the result prefix below
+  (potentially a different account/bucket entirely).**
+- **`s3:GetObject`, `s3:ListBucket`, `s3:PutObject`, `s3:AbortMultipartUpload` (result prefix) —
+  scoped ONLY to the customer workgroup's own pre-configured result prefix. The write half
+  (`PutObject`/`AbortMultipartUpload`) is a required mechanic of running an Athena query at all
+  (§3's "the service's own internal mechanism" argument is precisely about this grant). **The read
+  half (`GetObject`/`ListBucket`) is ALSO required on this same prefix** — Athena itself reads back
+  the result objects it wrote, both to serve `GetQueryResults` and (when enabled) to evaluate query
+  result reuse. The source location and the result prefix remain distinct locations, but the result
+  prefix itself needs both read and write — write-only would not actually work.** AWSops never
+  writes outside this prefix and never creates or deletes that bucket/workgroup.
 
 명시적으로 금지되는 것 / Explicitly excluded:
 - `athena:CreateWorkGroup`/`UpdateWorkGroup`/`DeleteWorkGroup`, `glue:CreateTable`/`CreateDatabase`/`DeleteTable`/`DeleteDatabase`
 - **어떤 형태로도 사용자/운영자가 제출한 SQL을 그대로 실행하는 경로** — 제출되는 쿼리는 항상 검증된 스키마 위에서 워커가 자체 생성한 SELECT여야 한다(§3b 통제 1)
 - 고객 워크그룹 결과 prefix **바깥으로의** `s3:PutObject`/`s3:DeleteObject`, 그리고 어떤 prefix에서도 `s3:DeleteObject` — AWSops는 그 버킷의 소유자·관리자가 아니며 결과 정리는 고객의 워크그룹 lifecycle 설정에 맡긴다
-- 소스 설정에 등록된 **Flow Log table 위치 바깥으로의** `s3:GetObject`/`s3:ListBucket` — 읽기 범위도 결과
-  prefix의 write 범위만큼 좁게 스코프되어야 하며, 계정/버킷 전역 read 권한을 부여하지 않는다
+- 소스 설정에 등록된 **Flow Log table 위치**와 **워크그룹 결과 prefix**, 이 두 곳 **바깥으로의**
+  `s3:GetObject`/`s3:ListBucket` — 읽기 범위도 write 범위만큼 좁게 스코프되어야 하며, 계정/버킷 전역
+  read 권한을 부여하지 않는다. (결과 prefix 자체에 대한 `GetObject`/`ListBucket`은 §Decision 위에서
+  명시적으로 허용된다 — 이 항목이 금지하는 것은 그 두 위치를 벗어난 read다.)
 - `ec2:RevokeSecurityGroupIngress`/`Egress`, `ec2:AuthorizeSecurityGroupIngress`/`Egress` 및 그 어떤 mutating EC2 동사
 - `iam:CreateRole`/`PassRole`(역할 A·B 어느 쪽에 대해서도; 둘 다 기존 신뢰 관계 assume만)
 - **공유 Fargate worker task role에 `AWSopsSgRuleAthenaRole`로의 `sts:AssumeRole` 직접 부여** — 이 role은
@@ -244,8 +255,11 @@ the reused `AWSopsReadOnlyRole`** (daily rule inventory):
 - `s3:PutObject`/`s3:DeleteObject` **outside** the customer workgroup's own result prefix, and
   `s3:DeleteObject` in any prefix — AWSops is never that bucket's owner or administrator; result
   cleanup is left to the customer's own workgroup lifecycle configuration
-- `s3:GetObject`/`s3:ListBucket` **outside** the source's registered Flow Log table location — the
-  read scope must be as narrow as the write scope; no account-wide or bucket-wide read grant
+- `s3:GetObject`/`s3:ListBucket` **outside** both the source's registered Flow Log table location
+  AND the workgroup's result prefix — read scope must stay as narrow as write scope, no
+  account-wide or bucket-wide read grant. (`GetObject`/`ListBucket` ON the result prefix itself is
+  explicitly permitted above — this exclusion is about read leaking outside those two locations,
+  not about the result prefix's own read grant.)
 - `ec2:RevokeSecurityGroupIngress`/`Egress`, `ec2:AuthorizeSecurityGroupIngress`/`Egress`, and any
   other mutating EC2 verb
 - `iam:CreateRole`/`PassRole` for either role — both only assume an existing trust relationship
@@ -291,7 +305,7 @@ and needs only its own remaining conditions (a BASELINE §2 row + one adapter-sa
   larger category of trust.
 
 ## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
-- **Security**: 역할 A는 read-only 동사만 화이트리스트. 역할 B는 read/query 동사 + Flow Log 소스 위치에 스코프된 S3 read + 워크그룹 결과 prefix에만 스코프된 1건의 write — 이 둘은 서로 다른(계정이 다를 수도 있는) S3 위치이며 섞이지 않는다. mutating 동사 명시적 배제, assume 주체를 전용 task role/broker Lambda로 격리(공유 워커 task role 배제). 역할 A의 cross-account 확장은 기존 신뢰 경계 재사용이지만, 역할 B는 이 저장소 최초의 write-capable cross-account 신뢰 관계임을 명시(위 Negative 참조).
+- **Security**: 역할 A는 read-only 동사만 화이트리스트. 역할 B는 read/query 동사 + 두 개의 독립적으로 스코프된 S3 영역만 화이트리스트 — Flow Log 소스 위치(read만)와 워크그룹 결과 prefix(read+write 둘 다, Athena 자신이 자기가 쓴 결과를 다시 읽기 때문). 두 영역은 서로 다른(계정이 다를 수도 있는) 위치이며 섞이지 않는다. mutating 동사 명시적 배제, assume 주체를 전용 task role/broker Lambda로 격리(공유 워커 task role 배제). 역할 A의 cross-account 확장은 기존 신뢰 경계 재사용이지만, 역할 B는 이 저장소 최초의 write-capable cross-account 신뢰 관계임을 명시(위 Negative 참조).
 - **Reliability**: CloudWatch Logs Insights와 동일한 폴링+타임아웃+`StopQueryExecution` 취소 패턴 재사용 — 새 실패 모드 없음.
 - **Operational Excellence**: 이 ADR + 멀티-AI 패널 리뷰로 spec이 요구한 governance 절차 충족. BASELINE §2에 `sg_rule_activity_enabled`를 일반 GATED 항목으로 등록(같은 PR).
 - **Cost**: 기본 OFF; 켜져도 스캔 바이트 상한 + 워크그룹 컷오프로 통제.
