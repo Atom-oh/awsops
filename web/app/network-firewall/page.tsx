@@ -365,7 +365,11 @@ export default function NetworkFirewallPage() {
     // 이제 하나로만 보여 sharedSid=false로 오판돼 그 SID의 과거 히트가 그 다른 그룹에
     // exact로 오귀속된다 — round19가 정책에 적용한 것과 동일한 논리(히트는 전역 병합 —
     // 제거된 SID는 현재 토폴로지로 열거 불가)를 룰 그룹 자체의 수정에도 적용해야 한다.
-    return rgs.some((rg) => modifiedOrUnknown(rg.lastModified));
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드23): stateless 룰 그룹은 statefulSids가
+    // 항상 비어 있어 이 조인/귀속 판정과 무관하다 — stateless 그룹 수정(운영상 훨씬 잦음)
+    // 까지 계정 전체를 불안전 처리하면 실제로는 안전한 대다수 케이스에서 과도하게 넓게
+    // 발동해 유효한 양수 히트까지 불필요하게 가린다. STATEFUL·STATEFUL_DOMAIN만 본다.
+    return rgs.some((rg) => rg.type !== 'STATELESS' && modifiedOrUnknown(rg.lastModified));
   }, [data, rgs, policies, range, logsData]);
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();
