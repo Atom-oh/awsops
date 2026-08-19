@@ -159,6 +159,15 @@ export interface AnfwLogsAnalysis {
   /** 부분 실패한 분석 키 (해당 패널만 비움). */
   failed: string[];
   rangeSec: number;
+  /** 이 분석 실행이 시작된 서버 시각(ms epoch) — 리뷰 MAJOR(Codex stop-hook, PR #225
+   *  라운드21): AnfwAnalysis.generatedAt과 이 값은 서로 독립적인 4분 TTL 캐시를 가진
+   *  별도 fetch(/api/anfw?range= vs ?view=logs&range=)에서 나온다 — 토폴로지는 방금
+   *  갱신됐는데 로그 분석은 최대 4분 전 캐시일 수 있고(또는 반대), 그 시차 구간에 수정된
+   *  정책/룰그룹은 data.generatedAt 하나만 기준으로 계산한 rangeStartMs로는 놓친다.
+   *  실제 Insights 쿼리 startTime은 이 값 이후의 순간에서 샘플링되므로, 이 값은 "가능한
+   *  가장 이른" 로그 윈도우 시작의 보수적 상한이다 — data.generatedAt과 이 값 중 더 이른
+   *  쪽을 range 시작 기준으로 써야 두 캐시의 시차로 인한 fail-open을 막는다. */
+  generatedAt: number;
 }
 
 const num = (s: string | undefined): number => (s != null && s !== '' ? Number(s) || 0 : 0);
@@ -312,7 +321,8 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
     // 데드라인은 anfwAnalysis()의 콜드 멀티 리전 fan-out을 기다리기 "전"에 계산 —
     // audit 경로(anfw/route.ts)와 동일 패턴. 앞단이 오래 걸렸으면 Insights 폴링에
     // 남는 시간이 그만큼 줄어들 뿐, 전체 예산은 항상 60s 안에 수렴한다.
-    const deadlineAt = Date.now() + LOGS_BUDGET_MS;
+    const generatedAt = Date.now();
+    const deadlineAt = generatedAt + LOGS_BUDGET_MS;
     const { targets, unsupported, discoveryFailed, firewallDiscoveryDegraded, loggingUnknownByType } = await resolveTargets(rangeSec, deadlineAt);
     const failed: string[] = [];
     // 로그 그룹 발견 자체가 실패(스로틀/거부)한 것과 "발견됐지만 로그가 없음"을 구분 —
@@ -611,6 +621,6 @@ export async function anfwLogsAnalysis(rangeSec: number): Promise<AnfwLogsAnalys
       };
     }
 
-    return { targets, unsupportedDestinations: unsupported, alert, flow, failed, rangeSec };
+    return { targets, unsupportedDestinations: unsupported, alert, flow, failed, rangeSec, generatedAt };
   });
 }

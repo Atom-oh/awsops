@@ -81,7 +81,13 @@ describe('anfwLogsAnalysis', () => {
       return [{ cnt: 9, bytes: 20000 }]; // totals
     });
     const { anfwLogsAnalysis } = await import('./anfw-logs');
+    const before = Date.now();
     const a = await anfwLogsAnalysis(86400);
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드21): data(/api/anfw?range=)와 이 로그
+    // 분석은 서로 독립된 4분 TTL 캐시라 시차가 날 수 있다 — 페이지가 두 anchor 중 더
+    // 이른 쪽을 range 시작 기준으로 쓰려면 이 값이 응답에 있어야 한다.
+    expect(a.generatedAt).toBeGreaterThanOrEqual(before);
+    expect(a.generatedAt).toBeLessThanOrEqual(Date.now());
 
     expect(a.targets).toHaveLength(2);
     expect(a.targets.every((t) => !t.discovered)).toBe(true);

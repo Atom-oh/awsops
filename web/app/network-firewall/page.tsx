@@ -348,9 +348,14 @@ export default function NetworkFirewallPage() {
     // 계산하면 클라이언트 시계가 서버보다 빠를 때 실제보다 늦은 시점으로 잘못 계산돼, 그
     // 사이에 수정된 정책이 "range 밖"으로 오판돼 이 가드가 fail-open한다 — data.generatedAt
     // (서버가 이 분석을 만든 시각)을 기준으로 계산해 클라이언트 시계 왜곡을 배제한다.
-    const rangeStartMs = (data?.generatedAt ?? Date.now()) - range * 1000;
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드21): data(/api/anfw?range=)와
+    // logsData(?view=logs&range=)는 서로 독립된 4분 TTL 캐시를 가진 별도 fetch다 —
+    // 토폴로지가 방금 갱신됐어도 로그 분석은 최대 4분 전 캐시일 수 있어, 그 시차 구간에
+    // 수정된 정책은 data.generatedAt 하나만 기준으로 하면 range 밖으로 오판돼 fail-open
+    // 한다. 두 anchor 중 더 이른(과거) 쪽을 써야 어느 쪽이 캐시로 오래됐어도 안전하다.
+    const rangeStartMs = Math.min(data?.generatedAt ?? Date.now(), logsData?.generatedAt ?? Date.now()) - range * 1000;
     return policies.some((p) => p.lastModified != null && Date.parse(p.lastModified) > rangeStartMs);
-  }, [data, rgs, policies, range]);
+  }, [data, rgs, policies, range, logsData]);
   const ruleGroupObservability = useMemo(() => {
     const byKey = new Map<string, Observability[]>();
     for (const rg of rgs) byKey.set(`${rg.region}|${rg.name}`, []);
@@ -473,7 +478,11 @@ export default function NetworkFirewallPage() {
     // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20): 브라우저 Date.now() 대신 이 rgs가
     // 나온 data.generatedAt(서버 시각)을 기준으로 계산 — 클라이언트 시계가 빠르면 range
     // 시작을 실제보다 늦게 계산해 가드가 fail-open하는 것을 방지한다.
-    const rangeStartMs = (data?.generatedAt ?? Date.now()) - range * 1000;
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드21): 여기서 조인하는 히트는 logsData
+    // (독립된 4분 TTL 캐시)에서 온다 — rgs가 나온 data.generatedAt만 쓰면, logsData가
+    // 더 오래된 캐시일 때 그 시차 구간의 룰 그룹 수정을 놓친다. 두 anchor 중 더 이른
+    // 쪽을 쓴다(attributionUnsafe와 동일 논리).
+    const rangeStartMs = Math.min(data?.generatedAt ?? Date.now(), logsData?.generatedAt ?? Date.now()) - range * 1000;
 
     const rows: RuleHitRow[] = [];
     const configuredSids = new Set<string>();
