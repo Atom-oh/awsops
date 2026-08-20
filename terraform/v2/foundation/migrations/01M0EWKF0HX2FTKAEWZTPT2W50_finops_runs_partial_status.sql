@@ -1,5 +1,5 @@
 -- since: 0.8.0
--- ADR-019 follow-up (PR review): a rule inside a finops_baseline run can raise (e.g. a Compute
+-- ADR-020 follow-up (PR review): a rule inside a finops_baseline run can raise (e.g. a Compute
 -- Optimizer opt-in/permission error propagating, or ebs_unattached's own freshness check firing
 -- when steampipe_enabled=false) without failing the WHOLE run — engine.py's per-rule isolation
 -- deliberately keeps evaluating the rest of the catalog and never resolves the failed rule's

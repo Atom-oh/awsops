@@ -1,8 +1,8 @@
-"""ADR-019 rule catalog — the single registration point ("a rule = one file + one catalog line").
+"""ADR-020 rule catalog — the single registration point ("a rule = one file + one catalog line").
 
 Each entry: {id, title, category, status}. status='active' entries carry `fn` (see rules.py for the
 `(conn, ce_calls) -> list[dict]` contract) and are executed by engine.run(). status='requires_cur'
-entries are registered but never executed — the ADR-019 Context section is explicit that CUR/Athena/
+entries are registered but never executed — the ADR-020 Context section is explicit that CUR/Athena/
 FOCUS do not exist in this repo, so rules that need CUR 2.0 line-item detail must say so in the
 catalog rather than silently not existing (a reader diffing "what rules exist" against "what ran"
 would otherwise have no way to tell "not yet built" from "built and found nothing")."""

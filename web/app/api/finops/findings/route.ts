@@ -1,4 +1,4 @@
-// ADR-019 FinOps baseline-recommendations engine — read-only surface for /cost. Thin-BFF: reads
+// ADR-020 FinOps baseline-recommendations engine — read-only surface for /cost. Thin-BFF: reads
 // finops_findings + the latest finops_runs row (the daily worker owns all the writes; the request
 // path never calls a live AWS API). Gated on FINOPS_BASELINE_ENABLED (omitted from the web task def
 // when the feature flag is off — see workload.tf), matching the /api/insights pattern.

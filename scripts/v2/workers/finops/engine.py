@@ -1,4 +1,4 @@
-"""ADR-019 FinOps baseline engine — orchestrates the run: evaluate every active catalog rule,
+"""ADR-020 FinOps baseline engine — orchestrates the run: evaluate every active catalog rule,
 apply guards, upsert findings (dedupe key: rule_id + resource_id), resolve findings that stopped
 reproducing, and (best-effort) attach an LLM explanation to anything new or changed this run.
 

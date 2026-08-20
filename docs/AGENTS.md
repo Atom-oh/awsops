@@ -8,7 +8,7 @@ Project documentation, organized by purpose. This directory is an index; each su
 
 ### Layout (what lives where)
 - `architecture.md`, `onboarding.md` — single-file references.
-- `decisions/` — **decision source of truth = `decisions/BASELINE.md`** + consolidated ADRs 001–019 + `ADR-MAPPING.md`. Old ADR 001–046 bodies are NOT in the tree (git tag `adr-legacy-2026-06-22`) — don't read them unless explicitly asked.
+- `decisions/` — **decision source of truth = `decisions/BASELINE.md`** + consolidated ADRs 001–020 + `ADR-MAPPING.md`. Old ADR 001–046 bodies are NOT in the tree (git tag `adr-legacy-2026-06-22`) — don't read them unless explicitly asked.
 - `reference/` — current per-component v2 design; **one file per component is the single source of truth**.
 - `runbooks/` — per-scenario operational response guides.
 - `reviews/` — code-review / cross-review outputs.
@@ -19,7 +19,7 @@ Project documentation, organized by purpose. This directory is an index; each su
 
 ### Conventions a reviewer must enforce
 - **All new docs are bilingual** (Korean + English).
-- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing + 1 (currently 018; monotonic, no gaps/reuse). Same PR must update `decisions/BASELINE.md`.
+- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing + 1 (currently 020; monotonic, no gaps/reuse). Same PR must update `decisions/BASELINE.md`.
 - Runbooks must follow `docs/runbooks/AGENTS.md` rules.
 - Design content belongs in `reference/` (one component = one file). Edit the reference file rather than adding parallel docs or reviving archived ones.
 

@@ -1,0 +1,1187 @@
+"""Pipeline-level tests for sg_rule_scan.py — the design spec's "Pipeline" test list.
+Uses a lightweight FakeConn (pg8000.native.Connection-shaped `.run(sql, **kwargs)`) instead of a
+real Postgres — these test the ORCHESTRATION logic (idempotent delete-then-insert, watermark
+advance, one-query-per-day, rescan window, transaction rollback), not SQL correctness itself."""
+import datetime as dt
+import json
+
+import pytest
+
+import sg_rule_scan as scan
+import sg_rule_matching as sm
+
+
+class FakeConn:
+    """Records every `.run()` call; BEGIN/COMMIT/ROLLBACK are tracked, not executed against a real
+    DB. `responses` is a dict of substring -> list of rows (popped in FIFO order per substring) for
+    SELECT-shaped calls; INSERT/UPDATE/DELETE calls just get recorded and return []."""
+
+    def __init__(self, responses=None):
+        self.calls = []
+        self.responses = {k: list(v) for k, v in (responses or {}).items()}
+        self.in_txn = False
+        self.committed = 0
+        self.rolled_back = 0
+
+    def run(self, sql, **kwargs):
+        self.calls.append((sql, kwargs))
+        if sql.strip() == "BEGIN":
+            self.in_txn = True
+            return []
+        if sql.strip() == "COMMIT":
+            self.in_txn = False
+            self.committed += 1
+            return []
+        if sql.strip() == "ROLLBACK":
+            self.in_txn = False
+            self.rolled_back += 1
+            return []
+        for key, rows in self.responses.items():
+            if key in sql:
+                return rows.pop(0) if rows else []
+        return []
+
+    def sql_calls(self, substring):
+        return [c for c in self.calls if substring in c[0]]
+
+
+def utc(y, mo, d, h=0):
+    return dt.datetime(y, mo, d, h, tzinfo=dt.timezone.utc)
+
+
+# ── source validation ────────────────────────────────────────────────────────────────────────────
+
+def test_load_source_raises_when_not_configured():
+    conn = FakeConn({"FROM sg_flow_sources": [[]]})
+    with pytest.raises(scan.SourceNotConfigured):
+        scan.load_source(conn, "123456789012", "ap-northeast-2")
+
+
+def test_load_source_raises_when_disabled():
+    conn = FakeConn({"FROM sg_flow_sources": [[
+        (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", False, "{}", utc(2026, 1, 1)),
+    ]]})
+    with pytest.raises(scan.SourceNotConfigured):
+        scan.load_source(conn, "123456789012", "ap-northeast-2")
+
+
+def test_load_source_raises_when_validation_invalid():
+    conn = FakeConn({"FROM sg_flow_sources": [[
+        (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "invalid"}), utc(2026, 1, 1)),
+    ]]})
+    with pytest.raises(scan.SourceInvalid):
+        scan.load_source(conn, "123456789012", "ap-northeast-2")
+
+
+def test_load_source_ok_when_pending_or_valid():
+    conn = FakeConn({"FROM sg_flow_sources": [[
+        (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2026, 1, 1)),
+    ]]})
+    row = scan.load_source(conn, "123456789012", "ap-northeast-2")
+    assert row["id"] == 1
+    assert row["workgroup"] == "wg"
+
+
+# ── round-4 CI-review finding (L3, item 2): `account_external_id` (Role A / AWSopsReadOnlyRole
+#    assume) must apply the SAME confused-deputy/enabled guard as the Athena broker's
+#    `_resolve_external_id` — a disabled or unregistered account must be refused outright, never
+#    silently assumed with no ExternalId. ──────────────────────────────────────────────────────────
+
+def test_account_external_id_refuses_a_disabled_account():
+    conn = FakeConn({"FROM accounts": [[]]})  # `AND enabled` predicate means a disabled row -> no match
+    with pytest.raises(scan.AccountNotRegistered, match="registered"):
+        scan.account_external_id(conn, "999999999999")
+
+
+def test_account_external_id_refuses_an_unregistered_account():
+    conn = FakeConn({"FROM accounts": [[]]})  # no row at all
+    with pytest.raises(scan.AccountNotRegistered, match="registered"):
+        scan.account_external_id(conn, "888888888888")
+
+
+def test_account_external_id_returns_value_for_a_registered_enabled_account():
+    conn = FakeConn({"FROM accounts": [[("ext-abc",)]]})
+    assert scan.account_external_id(conn, "123456789012") == "ext-abc"
+
+
+def test_run_refuses_disabled_account_before_any_assume_role(monkeypatch):
+    """A disabled/unregistered target account must never reach `_assumed_session` — `run()` must
+    propagate `AccountNotRegistered` rather than falling through to a guard-less AssumeRole with no
+    ExternalId."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[]],  # disabled/unregistered — no enabled row
+    })
+
+    def must_never_be_called(*a, **k):
+        raise AssertionError("must never assume a role for a disabled/unregistered account")
+
+    monkeypatch.setattr(scan, "readonly_ec2_client", must_never_be_called)
+    with pytest.raises(scan.AccountNotRegistered):
+        scan.run({"account_id": "123456789012", "region": "ap-northeast-2"}, conn)
+
+
+# ── watermark ─────────────────────────────────────────────────────────────────────────────────────
+
+def test_last_committed_day_none_when_no_succeeded_runs():
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(None,)]]})
+    assert scan.last_committed_day(conn, 1) is None
+
+
+def test_last_committed_day_returns_max_succeeded_partition():
+    import datetime
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(datetime.date(2026, 3, 5),)]]})
+    assert scan.last_committed_day(conn, 1) == datetime.date(2026, 3, 5)
+
+
+# ── L2 finding #2: IPv6 ENI addresses must be captured too ───────────────────────────────────────
+
+class FakeEc2Eni:
+    def __init__(self, enis, truncate=False):
+        self._enis = enis
+        self._truncate = truncate
+
+    def describe_network_interfaces(self, **kwargs):
+        if self._truncate:
+            return {"NetworkInterfaces": self._enis, "NextToken": "more"}
+        return {"NetworkInterfaces": self._enis}
+
+
+def test_snapshot_eni_membership_captures_ipv6_addresses():
+    ec2 = FakeEc2Eni([{
+        "VpcId": "vpc-1", "NetworkInterfaceId": "eni-1",
+        "Groups": [{"GroupId": "sg-1"}],
+        "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}],
+        "Ipv6Addresses": [{"Ipv6Address": "2001:db8::1"}],
+    }])
+    memberships, truncated = scan.snapshot_eni_membership_via_describe(ec2)
+    assert truncated is False
+    assert memberships[0]["private_ips"] == ["10.0.0.5", "2001:db8::1"]
+
+
+def test_snapshot_eni_membership_ipv6_only_eni_still_captured():
+    ec2 = FakeEc2Eni([{
+        "VpcId": "vpc-1", "NetworkInterfaceId": "eni-2",
+        "Groups": [{"GroupId": "sg-1"}],
+        "PrivateIpAddresses": [],
+        "Ipv6Addresses": [{"Ipv6Address": "2001:db8::2"}],
+    }])
+    memberships, _ = scan.snapshot_eni_membership_via_describe(ec2)
+    assert memberships[0]["private_ips"] == ["2001:db8::2"]
+
+
+def test_snapshot_eni_membership_marks_truncated_at_cap(monkeypatch):
+    """L4 finding #9: the silent 20,000-ENI describe cap must surface a coverage marker instead of
+    being indistinguishable from a genuinely-complete snapshot."""
+    enis = [{"VpcId": "vpc-1", "NetworkInterfaceId": f"eni-{i}", "Groups": [], "PrivateIpAddresses": []}
+            for i in range(1000)]
+
+    class CappingEc2:
+        def __init__(self):
+            self.calls = 0
+
+        def describe_network_interfaces(self, **kwargs):
+            self.calls += 1
+            # 20 pages of 1000 = 20,000, hitting the cap; always claim more remain.
+            return {"NetworkInterfaces": enis, "NextToken": "more"}
+
+    memberships, truncated = scan.snapshot_eni_membership_via_describe(CappingEc2())
+    assert truncated is True
+    assert len(memberships) == 20000
+
+
+def test_snapshot_eni_membership_not_truncated_when_pages_exhaust_before_cap():
+    ec2 = FakeEc2Eni([{"VpcId": "vpc-1", "NetworkInterfaceId": "eni-1", "Groups": [],
+                        "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.1"}]}], truncate=False)
+    _, truncated = scan.snapshot_eni_membership_via_describe(ec2)
+    assert truncated is False
+
+
+# ── inventory versioning (upsert_inventory_and_versions) ────────────────────────────────────────
+
+def test_upsert_inventory_opens_first_version_when_none_open():
+    conn = FakeConn({"sg_rule_inventory_versions": [[]]})  # no open version
+    rules = [{"rule_id": "sgr-1", "group_id": "sg-1", "is_egress": False, "protocol": "tcp",
+              "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
+              "description": None}]
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5))
+    inserts = [c for c in conn.calls if "INSERT INTO sg_rule_inventory_versions" in c[0]]
+    assert len(inserts) == 1
+    # No fingerprint-change close for the one rule that's present (it's a fresh first version).
+    fp_closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0] and "rule_id=:rid" in c[0]]
+    assert len(fp_closes) == 0
+    # The disappeared-rules sweep still always runs (MAJOR fix, see below) — harmless here since
+    # sgr-1 is in `seen`, so it closes nothing in a real DB, but the statement is always issued.
+    sweep_closes = [c for c in conn.calls if "rule_id <> ALL(:seen)" in c[0] and "sg_rule_inventory_versions" in c[0]]
+    assert len(sweep_closes) == 1
+
+
+def test_upsert_inventory_closes_and_opens_new_version_on_fingerprint_change():
+    old_fp = sm.rule_fingerprint({"group_id": "sg-1", "is_egress": False, "protocol": "tcp",
+                                   "from_port": 80, "to_port": 80, "peer_kind": "cidr", "peer_value": "10.0.0.0/8"})
+    conn = FakeConn({"sg_rule_inventory_versions": [[(old_fp,)]]})  # currently-open version has the OLD fingerprint
+    rules = [{"rule_id": "sgr-1", "group_id": "sg-1", "is_egress": False, "protocol": "tcp",
+              "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
+              "description": None}]  # NEW shape (443, not 80)
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5))
+    fp_closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0] and "rule_id=:rid" in c[0]]
+    opens = [c for c in conn.calls if "INSERT INTO sg_rule_inventory_versions" in c[0]]
+    assert len(fp_closes) == 1
+    assert len(opens) == 1
+
+
+def test_upsert_inventory_no_new_version_when_fingerprint_unchanged():
+    fp = sm.rule_fingerprint({"group_id": "sg-1", "is_egress": False, "protocol": "tcp",
+                               "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8"})
+    conn = FakeConn({"sg_rule_inventory_versions": [[(fp,)]]})
+    rules = [{"rule_id": "sgr-1", "group_id": "sg-1", "is_egress": False, "protocol": "tcp",
+              "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
+              "description": None}]  # SAME shape
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5))
+    fp_closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0] and "rule_id=:rid" in c[0]]
+    opens = [c for c in conn.calls if "INSERT INTO sg_rule_inventory_versions" in c[0]]
+    assert len(fp_closes) == 0
+    assert len(opens) == 0
+
+
+# ── disappeared-rule sweep (MAJOR fix: open version rows must close when a rule disappears, even
+#    on an empty snapshot — the old `if seen_ids:` guard skipped the sweep entirely when empty) ──
+
+def test_disappeared_rule_marks_inactive_and_closes_open_version():
+    conn = FakeConn()
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", [], utc(2026, 3, 5))
+    inactive = [c for c in conn.calls if c[0].startswith("UPDATE sg_rule_inventory SET active=false")]
+    assert len(inactive) == 1
+    assert inactive[0][1]["seen"] == []
+    sweep_closes = [c for c in conn.calls if "rule_id <> ALL(:seen)" in c[0] and "sg_rule_inventory_versions" in c[0]]
+    assert len(sweep_closes) == 1
+    assert sweep_closes[0][1]["seen"] == []
+
+
+def test_empty_snapshot_still_sweeps_all_disappeared_rules():
+    """An empty snapshot for a source that previously had rules means ALL of them disappeared —
+    the sweep must still run (not be skipped as 'nothing to update')."""
+    conn = FakeConn()
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", [], utc(2026, 3, 5))
+    # Both statements were issued even though `rules` was empty.
+    assert any(c[0].startswith("UPDATE sg_rule_inventory SET active=false") for c in conn.calls)
+    assert any("rule_id <> ALL(:seen)" in c[0] and "sg_rule_inventory_versions" in c[0] for c in conn.calls)
+
+
+# ── build_day_select: uses validation's resolved column map / optional fields / partition keys ──
+
+def _source(validation=None, **overrides):
+    base = {"id": 1, "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "primary",
+            "database_name": "flowlogsdb", "table_name": "flow_logs", "validation": validation or {}}
+    base.update(overrides)
+    return base
+
+
+def test_build_day_select_uses_hyphenated_column_map():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface-id", "log_status": "log-status", "start": "start"},
+        "optionalFields": ["bytes"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert '"interface-id"' in sql
+    assert '"log-status"' in sql
+    assert sql.count("SELECT") == 1
+
+
+def test_build_day_select_omits_bytes_when_not_optional_present():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": [],  # validated, and bytes was NOT found on this table
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "sum(\"bytes\")" not in sql
+    assert '"bytes"' not in sql.split("FROM")[0]
+
+
+def test_build_day_select_includes_bytes_when_optional_present():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes", "packets"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert 'sum("bytes") as bytes' in sql
+
+
+def test_build_day_select_adds_hive_style_partition_predicate():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes"],
+        "partitionKeys": ["year", "month", "day"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "\"year\" = '2026'" in sql
+    assert "\"month\" = '03'" in sql
+    assert "\"day\" = '05'" in sql
+
+
+def test_build_day_select_adds_single_date_partition_predicate():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes"],
+        "partitionKeys": ["dt"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "\"dt\" = '2026-03-05'" in sql
+
+
+def test_build_day_select_falls_back_to_underscore_names_when_no_column_map():
+    """Pending (not-yet-validated) sources have no columnMap yet — must not crash, and must
+    preserve the pre-existing underscore-name assumption as the fallback."""
+    source = _source(validation={"status": "pending"})
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert '"interface_id"' in sql
+    assert '"log_status"' in sql
+
+
+# ── MINOR fix: invoke_broker_query must surface a FunctionError/malformed-body Lambda crash ──────
+
+class FakeLambdaRaw:
+    """Like FakeLambda in the run() section below, but lets the test control FunctionError/body."""
+    def __init__(self, payload_bytes, function_error=None):
+        self.payload_bytes = payload_bytes
+        self.function_error = function_error
+
+    def invoke(self, FunctionName, Payload):
+        resp = {"Payload": type("R", (), {"read": lambda self: self._b})()}
+        resp["Payload"]._b = self.payload_bytes
+        if self.function_error:
+            resp["FunctionError"] = self.function_error
+        return resp
+
+
+def test_invoke_broker_query_surfaces_function_error():
+    lam = FakeLambdaRaw(b'{"errorMessage": "boom"}', function_error="Unhandled")
+    body = scan.invoke_broker_query(
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker", 1, dt.date(2026, 3, 5))
+    assert body["ok"] is False
+    assert "FunctionError" in body["reason"]
+
+
+def test_invoke_broker_query_surfaces_malformed_body_without_ok_key():
+    lam = FakeLambdaRaw(b'{"unexpected": "shape"}')
+    body = scan.invoke_broker_query(
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker", 1, dt.date(2026, 3, 5))
+    assert body["ok"] is False
+
+
+# ── invoke_broker_query: L3 finding #6 (opaque flow_source_id + day, never raw SQL/account) ──────
+
+def test_invoke_broker_query_sends_only_flow_source_id_and_day():
+    """The caller must never send account_id/region/workgroup/database/query text — only the
+    opaque flow_source_id + day (the broker resolves everything else from Aurora itself)."""
+    lam = FakeLambdaRaw(json.dumps({"ok": True, "rows": [], "done": True}).encode("utf-8"))
+    scan.invoke_broker_query(lam, "arn:...:function:broker", 42, dt.date(2026, 3, 5))
+    # FakeLambdaRaw doesn't record invocations; use FakeLambda (below) instead for that assertion.
+
+
+def test_invoke_broker_query_loops_pagination_until_done():
+    """L2 finding #4: the broker returns ONE bounded page + a continuation token; the caller must
+    loop, accumulating rows, until the broker reports `done`."""
+    calls = []
+
+    class PagingLambda:
+        def invoke(self, FunctionName, Payload):
+            evt = json.loads(Payload)
+            calls.append(evt)
+            if "continuation" not in evt:
+                body = {"ok": True, "rows": [{"n": 1}], "query_execution_id": "q1",
+                         "next_token": "tok1", "done": False, "columns": ["n"]}
+            else:
+                body = {"ok": True, "rows": [{"n": 2}], "next_token": None, "done": True}
+            payload = type("P", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()
+            return {"Payload": payload}
+
+    lam = PagingLambda()
+    result = scan.invoke_broker_query(lam, "arn:...:function:broker", 7, dt.date(2026, 3, 5))
+    assert result["ok"] is True
+    assert [r["n"] for r in result["rows"]] == [1, 2]
+    assert len(calls) == 2
+    assert calls[0]["flow_source_id"] == 7
+    assert calls[0]["day"] == "2026-03-05"
+    assert "account_id" not in calls[0] and "query" not in calls[0]
+    assert calls[1]["continuation"]["query_execution_id"] == "q1"
+
+
+def test_invoke_broker_query_marks_truncated_when_accumulation_cap_hit(monkeypatch):
+    """L4 finding #9(i): if accumulated rows reach ROW_LIMIT before the broker reports `done`, the
+    day must be marked truncated rather than trusted as a complete result."""
+    monkeypatch.setattr(sm, "ROW_LIMIT", 2)
+
+    class NeverDoneLambda:
+        def invoke(self, FunctionName, Payload):
+            body = {"ok": True, "rows": [{"n": 1}, {"n": 2}], "query_execution_id": "q1",
+                    "next_token": "tok", "done": False, "columns": ["n"]}
+            payload = type("P", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()
+            return {"Payload": payload}
+
+    result = scan.invoke_broker_query(NeverDoneLambda(), "arn:...:function:broker", 1, dt.date(2026, 3, 5))
+    assert result["ok"] is True
+    assert result["truncated"] is True
+
+
+# ── round-3 finding #7: skipdata_count must actually be propagated through this wrapper ──────────
+
+def test_invoke_broker_query_propagates_skipdata_count():
+    """The broker's `skipdata_count` (L4 finding #9(iv)) was computed correctly server-side but this
+    wrapper's return dict never carried it, so `run()`'s `coverage_flags["skipdata_count"]` was
+    always None. A single-page response with `skipdata_count` must surface it unchanged."""
+    lam = FakeLambdaRaw(json.dumps(
+        {"ok": True, "rows": [], "done": True, "skipdata_count": 42}).encode("utf-8"))
+    result = scan.invoke_broker_query(
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker", 1, dt.date(2026, 3, 5))
+    assert result["skipdata_count"] == 42
+
+
+def test_invoke_broker_query_propagates_skipdata_count_across_pagination():
+    """`skipdata_count` is only computed on the FIRST page (describes the whole day) — a later
+    continuation page's body naturally omits the key, and the wrapper must still carry the
+    first-page value through to the final return, not reset it to None."""
+    class PagingLambda:
+        def __init__(self):
+            self.n = 0
+
+        def invoke(self, FunctionName, Payload):
+            evt = json.loads(Payload)
+            if "continuation" not in evt:
+                body = {"ok": True, "rows": [{"n": 1}], "query_execution_id": "q1",
+                         "next_token": "tok1", "done": False, "columns": ["n"], "skipdata_count": 7}
+            else:
+                body = {"ok": True, "rows": [{"n": 2}], "next_token": None, "done": True}
+            payload = type("P", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()
+            return {"Payload": payload}
+
+    result = scan.invoke_broker_query(PagingLambda(), "arn:...:function:broker", 7, dt.date(2026, 3, 5))
+    assert result["ok"] is True
+    assert result["skipdata_count"] == 7
+
+
+def test_invoke_broker_query_truncated_return_also_carries_skipdata_count(monkeypatch):
+    """The accumulation-cap `truncated` early-return path must also carry `skipdata_count` — not
+    just the normal `done` path."""
+    monkeypatch.setattr(sm, "ROW_LIMIT", 2)
+
+    class NeverDoneLambda:
+        def invoke(self, FunctionName, Payload):
+            body = {"ok": True, "rows": [{"n": 1}, {"n": 2}], "query_execution_id": "q1",
+                    "next_token": "tok", "done": False, "columns": ["n"], "skipdata_count": 3}
+            payload = type("P", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()
+            return {"Payload": payload}
+
+    result = scan.invoke_broker_query(NeverDoneLambda(), "arn:...:function:broker", 1, dt.date(2026, 3, 5))
+    assert result["truncated"] is True
+    assert result["skipdata_count"] == 3
+
+
+def test_invoke_broker_query_skipdata_count_defaults_to_none_when_absent():
+    """Regression guard: a broker body that never sets skipdata_count at all must not crash and
+    must surface None (not some stale/garbage value)."""
+    lam = FakeLambdaRaw(json.dumps({"ok": True, "rows": [], "done": True}).encode("utf-8"))
+    result = scan.invoke_broker_query(
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker", 1, dt.date(2026, 3, 5))
+    assert result.get("skipdata_count") is None
+
+
+# ── process_day: idempotent delete-then-insert, transaction, one row per rule/day ────────────────
+
+def _versions(rule_id="sgr-1", **overrides):
+    base = {"rule_id": rule_id, "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+            "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+            "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": None}
+    base.update(overrides)
+    return {rule_id: [base]}
+
+
+def _membership(vpc_id="vpc-1", eni_id="eni-1", group_ids=("sg-1",), private_ips=("10.2.2.2",)):
+    """The ENI carries `sg-1` and owns `10.2.2.2` — the flow fixtures below (dstaddr=10.2.2.2) log
+    an INGRESS flow to this ENI, matching `_versions()`'s default ingress cidr rule on sg-1."""
+    return {vpc_id: [{"eni_id": eni_id, "group_ids": list(group_ids), "private_ips": list(private_ips)}]}
+
+
+def test_process_day_deletes_before_inserting_that_day_rows():
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None)
+    deletes = [c for c in conn.calls if c[0].startswith("DELETE FROM sg_rule_activity_daily")]
+    inserts = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")]
+    assert len(deletes) == 1
+    assert len(inserts) == 1  # one row for the one rule
+    assert conn.committed == 1
+    assert conn.rolled_back == 0
+
+
+def test_process_day_is_idempotent_on_reprocessing_the_same_day():
+    """Calling process_day twice for the same day must not accumulate counts — each call
+    delete-then-inserts, so the second call's row replaces (not adds to) the first's."""
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "100", "cnt": "1"},
+                      ], _versions(), _membership(), None)
+    conn2_calls_first = len(conn.calls)
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "100", "cnt": "1"},
+                      ], _versions(), _membership(), None)
+    deletes = [c for c in conn.calls if c[0].startswith("DELETE FROM sg_rule_activity_daily")]
+    assert len(deletes) == 2  # one delete per call — never skipped on a re-run
+    assert conn.committed == 2
+
+
+def test_process_day_rolls_back_on_failure():
+    class ExplodingConn(FakeConn):
+        def run(self, sql, **kwargs):
+            if sql.startswith("INSERT INTO sg_rule_activity_daily"):
+                raise RuntimeError("boom")
+            return super().run(sql, **kwargs)
+    conn = ExplodingConn()
+    with pytest.raises(RuntimeError):
+        scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                          dt.date(2026, 3, 5), [], _versions(), {}, None)
+    assert conn.rolled_back == 1
+    assert conn.committed == 0
+
+
+def test_process_day_crossing_day_downgrades_to_unassessable_and_no_lower_bound():
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 3, 5, 14), "valid_to": None},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2", "dstport": "443",
+                                 "protocol": "6", "bytes": "999", "cnt": "5"},
+                            ], versions, {}, None)
+    assert res["any_crossing"] is True
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0  # no flows counted against an unassessable rule/day
+
+
+def test_process_day_matches_compatible_flow():
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 3
+    assert insert_call[1]["cb"] == 500
+    assert insert_call[1]["ue"] == 1  # one ENI (interface_id), not one destination-IP string
+
+
+# ── CRITICAL fix: ENI -> SG membership check (a flow on an ENI NOT in the rule's SG must NOT
+#    classify that rule observed_compatible — this is the fabricated-usage-attribution bug) ──────
+
+def test_flow_on_eni_not_in_rules_sg_is_not_credited():
+    """Same flow/rule shape as test_process_day_matches_compatible_flow, but the ENI that actually
+    carries the traffic (eni-2) is NOT a member of sg-1 — it must NOT be credited as compatible."""
+    conn = FakeConn()
+    membership = {"vpc-1": [{"eni_id": "eni-2", "group_ids": ["sg-OTHER"], "private_ips": ["10.2.2.2"]}]}
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-2", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), membership, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0
+    assert insert_call[1]["cb"] == 0
+
+
+def test_flow_with_unresolvable_eni_membership_is_not_credited():
+    """The flow's own interface_id has no membership snapshot at all — never fabricate membership;
+    the rule stays at zero evidence rather than being guessed into observed_compatible."""
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-unknown", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0
+
+
+# ── MAJOR fix: direction must be derived from which side of the flow is the local ENI, not
+#    hardcoded "ingress" — an egress rule must be matchable ─────────────────────────────────────
+
+def test_egress_rule_is_matchable():
+    """The local ENI (eni-1) is the SOURCE of this flow (srcaddr matches its own private_ips) ->
+    egress. An egress-only rule must now be able to match (previously always no_observed_evidence
+    because direction was hardcoded to 'ingress')."""
+    conn = FakeConn()
+    egress_versions = _versions(is_egress=True)
+    membership = {"vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.1.1.1"]}]}
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], egress_versions, membership, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 3
+
+
+def test_ingress_rule_not_matched_by_egress_flow_on_same_eni():
+    """Same ENI/traffic as the egress test above, but the rule is ingress-only — direction mismatch
+    must produce no_observed_evidence, proving direction is genuinely being checked both ways."""
+    conn = FakeConn()
+    ingress_versions = _versions(is_egress=False)
+    membership = {"vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.1.1.1"]}]}
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], ingress_versions, membership, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0
+
+
+# ── L2 finding #1: overlap counter must actually increment when a flow matches >1 eligible rule ──
+
+def test_flow_matching_two_rules_increments_overlap_for_the_second():
+    """Two rules on the same SG, both allowing the exact same peer/protocol/port — a single flow
+    that satisfies both must credit BOTH rules as `compatible` (each one genuinely had a compatible
+    flow) AND both as `overlap` (round-3 finding #4: the overlap signal applies to the whole matched
+    set, not just "everyone but an arbitrary first pick" — the pre-fix behavior credited only the
+    first-iterated rule as compatible and only the rest as overlap, undercounting the first rule's
+    compatible traffic and making the "first" pick non-deterministic)."""
+    conn = FakeConn()
+    versions = {
+        "sgr-1": [{"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+                    "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+        "sgr-2": [{"rule_id": "sgr-2", "fingerprint": "fp2", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 1, "to_port": 65535, "peer_kind": "cidr",
+                    "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, _membership(), None)
+    inserts = {c[1]["rid"]: c[1] for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")}
+    # BOTH rules get their own compatible credit AND their own overlap credit — neither is treated
+    # as "the first, unaffected pick."
+    assert inserts["sgr-1"]["cm"] == 3
+    assert inserts["sgr-1"]["om"] == 3
+    assert inserts["sgr-2"]["cm"] == 3
+    assert inserts["sgr-2"]["om"] == 3
+    cov1 = json.loads(inserts["sgr-1"]["cov"])
+    cov2 = json.loads(inserts["sgr-2"]["cov"])
+    assert cov1["status"] == "overlapping"
+    assert cov2["status"] == "overlapping"
+
+
+def test_flow_matching_three_rules_credits_all_three_deterministically():
+    """N>2 matched rules: every rule gets its own compatible AND overlap credit, and the crediting
+    result must not depend on dict iteration order (regression guard for the `sorted(matched_rule_ids)`
+    determinism fix)."""
+    conn = FakeConn()
+    versions = {
+        rid: [{"rule_id": rid, "fingerprint": f"fp-{rid}", "group_id": "sg-1", "is_egress": False,
+               "protocol": "tcp", "from_port": 1, "to_port": 65535, "peer_kind": "cidr",
+               "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": None}]
+        for rid in ("sgr-c", "sgr-a", "sgr-b")  # deliberately out-of-lexical-order insertion
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "900", "cnt": "5"},
+                      ], versions, _membership(), None)
+    inserts = {c[1]["rid"]: c[1] for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")}
+    for rid in ("sgr-a", "sgr-b", "sgr-c"):
+        assert inserts[rid]["cm"] == 5
+        assert inserts[rid]["om"] == 5
+        assert inserts[rid]["cb"] == 900
+
+
+def test_flow_matching_one_rule_leaves_overlap_at_zero():
+    """Sanity check: a flow matching exactly one rule must not spuriously credit overlap anywhere."""
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["om"] == 0
+
+
+# ── round-3 finding #8: unresolved/unorientable flows must be counted, never vanish silently ─────
+
+def test_unresolved_eni_flow_downgrades_zero_match_rule_to_unassessable():
+    """A flow whose ENI isn't in ANY membership snapshot must not just vanish — it must be counted
+    (`unresolved_flow_count`) and the day's zero-match rule must be downgraded from a confident
+    `no_observed_evidence` to `unassessable` (a real, unattributable flow existed)."""
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-UNKNOWN", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], _versions(), _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["unresolved_flow_count"] == 1
+    assert coverage["status"] == "unassessable"
+    assert coverage["unassessable"] is True
+    run_insert = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_scan_runs")][0]
+    run_cov = json.loads(run_insert[1]["cov"])
+    assert run_cov["unresolved_flow_count"] == 1
+
+
+def test_unorientable_flow_is_counted_and_downgrades_zero_match_rule():
+    """A flow whose tuple endpoints match NEITHER of the ENI's known private IPs (direction can't be
+    inferred) must also be counted as unresolved and downgrade the day's zero-match rule."""
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "192.0.2.1", "dstaddr": "198.51.100.1",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], _versions(), _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["unresolved_flow_count"] == 1
+    assert coverage["status"] == "unassessable"
+
+
+def test_zero_unresolved_flows_stays_a_genuinely_confident_zero():
+    """Sanity/regression guard: when every flow resolves cleanly and none match, the day's zero
+    stays a confident `no_observed_evidence` — the new counter must not falsely trigger."""
+    conn = FakeConn()
+    versions = _versions(peer_value="10.9.0.0/16")  # a CIDR the fixture flow's peer never matches
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["unresolved_flow_count"] == 0
+    assert coverage["status"] == "no_observed_evidence"
+
+
+# ── round-3 finding #9: SG-reference resolution must scope to the flow's VPC + peered/RAM-shared ─
+
+def test_sg_reference_hit_in_an_unscoped_other_vpc_is_unassessable_not_no_match():
+    """An SG-reference rule whose referenced group_id is carried by an ENI in a DIFFERENT vpc that
+    is NOT in the known peered/RAM-shared scope must resolve `unassessable` — not a confident
+    `no_observed_evidence` (the pre-fix behavior: the resolver only ever looked inside the flow's
+    own VPC, so a genuinely cross-VPC-referenced SG always looked unused)."""
+    conn = FakeConn()
+    versions = {
+        "sgr-1": [{"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "sg",
+                    "peer_value": "sg-peer", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+    }
+    memberships = {
+        "vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.2.2.2"]}],
+        "vpc-OTHER": [{"eni_id": "eni-2", "group_ids": ["sg-peer"], "private_ips": ["10.1.1.1"]}],
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, memberships, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["match_unassessable"] is True
+
+
+def test_sg_reference_hit_in_a_known_peered_vpc_is_a_confident_match():
+    """The SAME cross-VPC SG-reference scenario, but with the peering relationship supplied via
+    `peered_or_shared_vpc_ids_by_vpc` — the match must now resolve confidently, not unassessable."""
+    conn = FakeConn()
+    versions = {
+        "sgr-1": [{"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "sg",
+                    "peer_value": "sg-peer", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+    }
+    memberships = {
+        "vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.2.2.2"]}],
+        "vpc-OTHER": [{"eni_id": "eni-2", "group_ids": ["sg-peer"], "private_ips": ["10.1.1.1"]}],
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, memberships, None,
+                      peered_or_shared_vpc_ids_by_vpc={"vpc-1": {"vpc-OTHER"}})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "observed_compatible"
+    assert insert_call[1]["cm"] == 3
+
+
+def test_sg_reference_same_vpc_match_unaffected_by_new_scoping_logic():
+    """Regression guard: the common same-VPC SG-reference case must be unaffected by the new
+    cross-VPC scoping logic."""
+    conn = FakeConn()
+    versions = {
+        "sgr-1": [{"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "sg",
+                    "peer_value": "sg-peer", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+    }
+    memberships = {
+        "vpc-1": [
+            {"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.2.2.2"]},
+            {"eni_id": "eni-2", "group_ids": ["sg-peer"], "private_ips": ["10.1.1.1"]},
+        ],
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, memberships, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "observed_compatible"
+
+
+# ── L4 finding #11: a `stale` membership snapshot must downgrade matches to unassessable ─────────
+
+def test_stale_membership_snapshot_downgrades_match_to_unassessable():
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None, stale_vpcs={"vpc-1"})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0  # never credited as confident evidence
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["match_unassessable"] is True
+
+
+def test_non_stale_vpc_unaffected_by_stale_vpcs_set():
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None, stale_vpcs={"vpc-OTHER"})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 3
+
+
+# ── L4 finding #9: a truncated day must never settle on a confident `no_observed_evidence` ───────
+
+def test_truncated_day_downgrades_no_observed_evidence_to_unassessable():
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None,
+                      coverage_flags={"flow_result_truncated": True})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["flow_result_truncated"] is True
+
+
+def test_truncated_day_does_not_downgrade_a_real_compatible_match():
+    """Truncation must not invalidate GENUINE evidence a rule already has — only the ambiguous
+    zero-match case is downgraded."""
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], _versions(), _membership(), None,
+                      coverage_flags={"eni_snapshot_truncated": True})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "observed_compatible"
+    assert insert_call[1]["cm"] == 3
+
+
+# ── MAJOR fix: UNASSESSABLE (e.g. prefix-list peer) must downgrade to `unassessable`, never be
+#    silently treated as `no_observed_evidence` ──────────────────────────────────────────────────
+
+def test_prefix_list_rule_with_no_resolver_is_unassessable_not_no_evidence():
+    conn = FakeConn()
+    pl_versions = _versions(peer_kind="pl", peer_value="pl-12345")
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], pl_versions, _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["match_unassessable"] is True
+    assert insert_call[1]["cm"] == 0
+
+
+# ── MAJOR fix: the persisted fingerprint must be the version covering the scanned day, not
+#    whichever version happens to be last in the list ────────────────────────────────────────────
+
+def test_persisted_fingerprint_is_the_day_covering_version_not_the_latest():
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp-old", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 4)},
+            {"rule_id": "sgr-1", "fingerprint": "fp-new", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 22, "to_port": 22, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 4, 1), "valid_to": None},
+        ],
+    }
+    conn = FakeConn()
+    # The scanned day (2026-03-05) is covered by neither version cleanly at its very end (fp-old
+    # closes 2026-03-04, before the scanned day even starts) — so this day resolves to NO version
+    # at all -> epoch-crossing/unassessable, and the fallback fingerprint must be the LATEST known
+    # version ("fp-new"), never a version that happens to cover some earlier day.
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["fp"] == "fp-new"
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["fingerprint_epoch_crossing"] is True
+
+
+def test_persisted_fingerprint_is_the_exact_version_covering_the_day():
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp-old", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 2, 1)},
+            {"rule_id": "sgr-1", "fingerprint": "fp-covers-day", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 22, "to_port": 22, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 2, 1), "valid_to": None},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["fp"] == "fp-covers-day"
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["fingerprint_epoch_crossing"] is False
+
+
+def test_process_day_no_uniqueness_conflict_on_concurrent_retry():
+    """Two process_day calls for the SAME partition must both succeed (no unique index on
+    sg_rule_scan_runs beyond the primary key `id`, which is a fresh uuid every call)."""
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None)
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None)
+    runs = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_scan_runs")]
+    assert len(runs) == 2
+    assert runs[0][1]["id"] != runs[1][1]["id"]  # distinct run ids, no conflict
+
+
+# ── load_membership_by_vpc: L4 finding #11 — outcome must actually be used, earliest_snapshot_at
+#    must be threaded through (not discarded/None) ────────────────────────────────────────────────
+
+class FakeMembershipConn:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def run(self, sql, **kwargs):
+        if "FROM sg_eni_membership_snapshots" in sql:
+            return self._rows
+        return []
+
+
+def test_load_membership_by_vpc_flags_stale_vpc():
+    conn = FakeMembershipConn([
+        ("vpc-1", utc(2026, 1, 1), "eni-1", json.dumps(["sg-1"]), json.dumps(["10.0.0.1"])),
+    ])
+    # Day is FAR beyond the staleness window (staleness_days=3) from the only snapshot's observed_at.
+    resolved, stale_vpcs = scan.load_membership_by_vpc(
+        conn, "123456789012", "ap-northeast-2", dt.date(2026, 6, 1), staleness_days=3)
+    assert "vpc-1" in stale_vpcs
+    assert "vpc-1" in resolved  # still resolved (credited, but downgraded downstream by process_day)
+
+
+def test_load_membership_by_vpc_in_window_is_not_flagged_stale():
+    conn = FakeMembershipConn([
+        ("vpc-1", utc(2026, 3, 4), "eni-1", json.dumps(["sg-1"]), json.dumps(["10.0.0.1"])),
+    ])
+    resolved, stale_vpcs = scan.load_membership_by_vpc(
+        conn, "123456789012", "ap-northeast-2", dt.date(2026, 3, 5), staleness_days=3)
+    assert stale_vpcs == set()
+    assert "vpc-1" in resolved
+
+
+def test_load_membership_by_vpc_pins_to_global_earliest_across_all_vpcs():
+    """L4 finding #11: earliest_snapshot_at must be computed ONCE across every vpc for this
+    source, and threaded into EVERY vpc's resolution — not left as `None` (which would defeat the
+    pre-snapshotting-backfill pinning rule for a vpc whose own snapshots all postdate another
+    vpc's earlier one)."""
+    conn = FakeMembershipConn([
+        ("vpc-1", utc(2026, 1, 1), "eni-1", json.dumps(["sg-1"]), json.dumps(["10.0.0.1"])),
+        ("vpc-2", utc(2026, 5, 1), "eni-2", json.dumps(["sg-2"]), json.dumps(["10.0.0.2"])),
+    ])
+    # A day BEFORE vpc-2's own earliest snapshot (2026-05-01) but AFTER the GLOBAL earliest
+    # (vpc-1's 2026-01-01) must resolve via vpc-2's own nearest-prior logic, not
+    # pre_snapshotting_backfill (which only applies when the day predates the GLOBAL earliest).
+    resolved, stale_vpcs = scan.load_membership_by_vpc(
+        conn, "123456789012", "ap-northeast-2", dt.date(2026, 3, 1), staleness_days=400)
+    # vpc-2 has no snapshot at or before 2026-03-01 at all -> no_snapshot -> not resolved.
+    assert "vpc-2" not in resolved
+    assert "vpc-1" in resolved
+
+
+# ── run() orchestration: one query per account/region/day, rescan window wiring ─────────────────
+
+class FakeLambda:
+    def __init__(self, response):
+        self.response = response
+        self.invocations = []
+
+    def invoke(self, FunctionName, Payload):
+        self.invocations.append(json.loads(Payload))
+        class R:
+            def __init__(self, body):
+                self._body = body
+            def get(self, k, default=None):
+                return self if k == "Payload" else default
+            def read(self):
+                return json.dumps(self.response_body).encode("utf-8")
+        r = R(None)
+        r.response_body = self.response
+        return {"Payload": r}
+
+
+class FakeEc2:
+    def describe_security_group_rules(self, **kwargs):
+        return {"SecurityGroupRules": []}
+
+    def describe_network_interfaces(self, **kwargs):
+        return {"NetworkInterfaces": []}
+
+
+def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],  # no watermark yet -> first run starts at source created day
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = FakeLambda({"ok": True, "rows": []})
+    monkeypatch.setattr(scan.dt, "datetime", scan.dt.datetime)  # no-op, keeps real clock behavior visible
+    # Force "now" far enough past the source's created day that the delivery-lag grace period has cleared.
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "ok"
+    assert len(fake_lambda.invocations) >= 1
+    # L3 finding #6: the caller sends ONLY an opaque flow_source_id + day — never raw SQL/account.
+    assert fake_lambda.invocations[0]["action"] == "query_by_source"
+    assert fake_lambda.invocations[0]["flow_source_id"] == 1
+    assert "query" not in fake_lambda.invocations[0]
+    assert "account_id" not in fake_lambda.invocations[0]
+
+
+def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):
+    monkeypatch.delenv("SG_RULE_ATHENA_BROKER_ARN", raising=False)
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "sg_rule_inventory_versions": [[]],
+    })
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+    )
+    assert result["status"] == "inventory_only"
+
+
+# ── L3 finding #8a: a 'pending' source must never reach the broker at all ────────────────────────
+
+def test_run_short_circuits_pending_source_without_invoking_broker(monkeypatch):
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "pending"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "sg_rule_inventory_versions": [[]],
+    })
+    fake_lambda = FakeLambda({"ok": True, "rows": []})
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "awaiting_validation"
+    assert fake_lambda.invocations == []
+
+
+# ── MAJOR fix: failure invisibility — a failed Athena day must write a real, terminal `failed`
+#    sg_rule_scan_runs row, not just an in-memory note that run()'s "status": "ok" return discards ─
+
+def test_run_writes_failed_run_row_on_athena_query_failure(monkeypatch):
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = FakeLambda({"ok": False, "reason": "workgroup budget exceeded"})
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "ok"
+    failed_runs = [c for c in conn.calls
+                   if c[0].startswith("INSERT INTO sg_rule_scan_runs") and c[1].get("id") is not None
+                   and "'failed'" in c[0]]
+    assert len(failed_runs) >= 1
+    assert failed_runs[0][1]["ec"] == "athena_query_failed"
+
+
+def test_run_writes_failed_run_row_on_process_day_exception(monkeypatch):
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+
+    def boom(*a, **k):
+        raise RuntimeError("db exploded")
+    monkeypatch.setattr(scan, "process_day", boom)
+    fake_lambda = FakeLambda({"ok": True, "rows": []})
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "ok"  # run() itself must not crash — one day's failure is isolated
+    failed_runs = [c for c in conn.calls
+                   if c[0].startswith("INSERT INTO sg_rule_scan_runs") and "'failed'" in c[0]]
+    assert len(failed_runs) >= 1
+    assert failed_runs[0][1]["ec"] == "process_day_failed"

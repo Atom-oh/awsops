@@ -1,14 +1,14 @@
 -- since: 0.8.0
--- ADR-019: FinOps baseline-recommendations engine (extends ADR-012). Three tables:
+-- ADR-020: FinOps baseline-recommendations engine (extends ADR-012). Three tables:
 --   finops_runs      — one row per daily batch invocation (status/timing/CE API-call metering).
 --   finops_findings  — the deterministic rule engine's output. Upserted on (rule_id, resource_id) so
 --     a daily re-run of a still-true finding updates last_seen_at instead of duplicating; a finding
 --     that stops reproducing is NOT deleted (silently vanishing "was this fixed?" is worse than a
 --     stale row) — the engine marks it resolved_at instead (see engine.py).
 --   finops_exceptions — user-reported false positives, accumulated read-only signal for future rule
---     tuning (ADR-019 Positive consequence). Never consulted to suppress findings automatically in
+--     tuning (ADR-020 Positive consequence). Never consulted to suppress findings automatically in
 --     this version — a human still has to look.
--- monthly_savings_usd is nullable BY DESIGN (ADR-019 invariant: "can't be computed" is NULL, never 0 —
+-- monthly_savings_usd is nullable BY DESIGN (ADR-020 invariant: "can't be computed" is NULL, never 0 —
 -- 0 would silently pollute a SUM()).
 CREATE TABLE finops_runs (
   id            BIGSERIAL PRIMARY KEY,

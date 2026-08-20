@@ -201,7 +201,7 @@ variable "ai_insights_enabled" {
 
 variable "finops_baseline_enabled" {
   type        = bool
-  description = "Deterministic FinOps baseline-recommendations engine (ADR-019, extends ADR-012): a daily Fargate worker job evaluates a Python rule catalog (scripts/v2/workers/finops/catalog.py) against inventory_resources (EBS unattached-volume rate card) + Compute Optimizer EC2/RDS instance recommendations, writes priced findings to finops_findings (amounts are always derived from an API result or a published rate card, never LLM-generated), and /cost renders them read-only. Cost Explorer/Cost Optimization Hub/Budgets-based rules are catalogued as future work, not called by this version. No AWS-resource mutation (ADR-005 out of scope — this adds no write path). Requires workers_enabled only at the Terraform level — its Compute Optimizer IAM (GetEC2InstanceRecommendations/GetRDSDatabaseRecommendations only) is granted directly on the worker task role (see worker_finops_baseline in workers.tf; the job runs on Fargate only, no Lambda-side grant), independent of agentcore_enabled/the agent Lambda role's CostRead Sid. NOTE: the EC2/RDS rules run fine with steampipe_enabled=false, but the EBS-unattached rule requires a succeeded, fresh inventory_sync_runs row for 'ebs_volume' — with steampipe_enabled=false that rule raises on every run (honestly surfaced as finops_runs.status='partial', not a silent failure), so the minimal workers_enabled-only config is a real but permanently-partial deployment for the EBS rule specifically. false (default) = 0 resources/IAM, $0, no scheduled run, /cost shows only the existing spend-visibility section."
+  description = "Deterministic FinOps baseline-recommendations engine (ADR-020, extends ADR-012): a daily Fargate worker job evaluates a Python rule catalog (scripts/v2/workers/finops/catalog.py) against inventory_resources (EBS unattached-volume rate card) + Compute Optimizer EC2/RDS instance recommendations, writes priced findings to finops_findings (amounts are always derived from an API result or a published rate card, never LLM-generated), and /cost renders them read-only. Cost Explorer/Cost Optimization Hub/Budgets-based rules are catalogued as future work, not called by this version. No AWS-resource mutation (ADR-005 out of scope — this adds no write path). Requires workers_enabled only at the Terraform level — its Compute Optimizer IAM (GetEC2InstanceRecommendations/GetRDSDatabaseRecommendations only) is granted directly on the worker task role (see worker_finops_baseline in workers.tf; the job runs on Fargate only, no Lambda-side grant), independent of agentcore_enabled/the agent Lambda role's CostRead Sid. NOTE: the EC2/RDS rules run fine with steampipe_enabled=false, but the EBS-unattached rule requires a succeeded, fresh inventory_sync_runs row for 'ebs_volume' — with steampipe_enabled=false that rule raises on every run (honestly surfaced as finops_runs.status='partial', not a silent failure), so the minimal workers_enabled-only config is a real but permanently-partial deployment for the EBS rule specifically. false (default) = 0 resources/IAM, $0, no scheduled run, /cost shows only the existing spend-visibility section."
   default     = false
   validation {
     condition     = !var.finops_baseline_enabled || var.workers_enabled
@@ -302,4 +302,34 @@ variable "legacy_email_owner_match" {
   type        = bool
   default     = true
   description = "Accept the legacy email-keyed ownership match on read. Set false only after the owner-sub backfill reports a clean run."
+}
+
+# ADR-019 / docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md — SG Rules &
+# Usage daily Athena flow-log evidence pipeline. false (default) = 0 scheduler/IAM/broker-Lambda
+# resources, $0; the Rules page still shows live DescribeSecurityGroupRules inventory with activity
+# permanently 'not_configured'. REQUIRES workers_enabled=true (reuses the worker role/pg8000
+# layer/VPC/jobs queue) — see sg-rules.tf's local.sgr gate.
+variable "sg_rule_activity_enabled" {
+  type        = bool
+  default     = false
+  description = "SG Rules & Usage: daily Athena flow-log evidence pipeline (ADR-019). false = 0 resources/cost. Requires workers_enabled."
+}
+
+# BASELINE.md §2 register row — Network Path Check: saveable, async, read-only path-policy checklist
+# (`network_path` job, docs/superpowers/specs/2026-08-13-network-path-check-design.md, Approved).
+# false (default) = 0 IAM widening/resources, $0 — the routes/enqueue/dispatcher branch/worker
+# environment all fail closed (see network-path.tf's local.npc gate). REQUIRES workers_enabled=true.
+# Read-only static analysis only (SG/NACL/route/TGW/K8s-policy/L7 describe) — no Reachability
+# Analyzer path creation/execution (no ec2:CreateNetworkInsightsPath/DeleteNetworkInsightsPath
+# grant). The worker role's FIRST extension to sts:AssumeRole -> AWSopsReadOnlyRole is added when
+# this is the only network_path_check-style feature to need it; it reuses the existing web/
+# Steampipe/agent pattern, not a new trust relationship (BASELINE.md's own wording).
+variable "network_path_check_enabled" {
+  type        = bool
+  default     = false
+  description = "Network Path Check: saveable async read-only network path policy checklist (BASELINE.md §2 register row; approved on the design spec 2026-08-13's own remaining conditions — ADR-019 §Decision explicitly excludes this flag from its scope, so no ADR sponsors it). false = 0 resources/IAM, $0. Requires workers_enabled."
+  validation {
+    condition     = !var.network_path_check_enabled || var.workers_enabled
+    error_message = "network_path_check_enabled requires workers_enabled=true (reuses the worker role/pg8000 layer/VPC + jobs queue)."
+  }
 }

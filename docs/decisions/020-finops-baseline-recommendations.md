@@ -1,4 +1,4 @@
-# ADR-019: FinOps 기본 권장 엔진 (결정론적 룰 + LLM 설명) / FinOps Baseline Recommendations (Deterministic Rules + LLM Explanation)
+# ADR-020: FinOps 기본 권장 엔진 (결정론적 룰 + LLM 설명) / FinOps Baseline Recommendations (Deterministic Rules + LLM Explanation)
 
 ## Status / 상태
 

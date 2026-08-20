@@ -32,7 +32,7 @@ locals {
     HOST_ACCOUNT_ID          = local.acct
     PROJECT                  = var.project
   } : {}
-  # finops_baseline (ADR-019, extends ADR-012) — deterministic FinOps baseline-recommendations rule
+  # finops_baseline (ADR-020, extends ADR-012) — deterministic FinOps baseline-recommendations rule
   # engine. Requires workers_enabled (validated in variables.tf); runs on the same Fargate worker as
   # the diagnosis job but as its own job type (finops_baseline), not inside it. Default false → 0
   # resources/IAM, $0.
@@ -515,7 +515,7 @@ resource "aws_ecs_task_definition" "worker" {
         # _compliance fails fast with a clear error.
         { name = "STEAMPIPE_HOST", value = "steampipe.${var.project}.internal" },
         { name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") }
-      ], local.ds_env_list, local.notify_worker_env_list, local.insight_env_list) # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled
+      ], local.ds_env_list, local.notify_worker_env_list, local.insight_env_list, local.sgr_env_list, local.npc_env_list) # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled; + AWS_ACCOUNT_ID/SG_RULE_ATHENA_BROKER_ARN when sg_rule_activity_enabled; + NETWORK_PATH_CHECK_ENABLED when network_path_check_enabled
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -844,12 +844,12 @@ resource "aws_iam_role_policy" "worker_diagnosis" {
   })
 }
 
-# finops_baseline job (ADR-019, extends ADR-012) — EXACTLY the two Compute Optimizer read actions
+# finops_baseline job (ADR-020, extends ADR-012) — EXACTLY the two Compute Optimizer read actions
 # the two shipped rules call (ec2_rightsizing/rds_rightsizing in finops/rules.py). A prior version
 # of this policy also granted ce:GetDimensionValues/ce:GetTags/cost-optimization-hub:*/
 # budgets:Describe* and a wildcard compute-optimizer:Get* — none of which any shipped rule calls;
 # CE/COH/Budgets-backed rules are catalog.py `requires_cur` stubs (not implemented yet, per
-# ADR-019's CUR-absence scoping) and must not carry IAM ahead of code that uses it — this repo's
+# ADR-020's CUR-absence scoping) and must not carry IAM ahead of code that uses it — this repo's
 # `worker_diagnosis` policy sets the "exactly the actions the worker calls" precedent this follows.
 # Add CE/COH/Budgets actions here ONLY when a rule that actually calls them ships.
 resource "aws_iam_role_policy" "worker_finops_baseline" {
@@ -990,7 +990,7 @@ resource "aws_lambda_function" "finops_dispatcher" {
 resource "aws_cloudwatch_event_rule" "finops_dispatcher" {
   count               = local.fnb
   name                = "${var.project}-finops-dispatcher"
-  description         = "Daily: enqueue one finops_baseline job (ADR-019)"
+  description         = "Daily: enqueue one finops_baseline job (ADR-020)"
   schedule_expression = "rate(24 hours)"
 }
 

@@ -1,4 +1,4 @@
-"""EventBridge-scheduled (daily). Enqueues ONE `finops_baseline` job (ADR-019) — unlike
+"""EventBridge-scheduled (daily). Enqueues ONE `finops_baseline` job (ADR-020) — unlike
 datasource_index_dispatcher/schedule_dispatcher there is no per-row fan-out; the rule engine itself
 iterates the catalog against the whole account in a single run.
 

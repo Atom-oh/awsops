@@ -1,6 +1,6 @@
-"""ADR-019 active rule implementations. Each rule is `(conn, ce_calls) -> list[dict]`, where
+"""ADR-020 active rule implementations. Each rule is `(conn, ce_calls) -> list[dict]`, where
 ce_calls is a single-element list used as a mutable int counter (this PR ships no CE-calling rule
-yet, so it stays 0 for now — see catalog.py / ADR-019 for the current vs. planned source list).
+yet, so it stays 0 for now — see catalog.py / ADR-020 for the current vs. planned source list).
 Each item dict has: resource_id, title, category, monthly_savings_usd (float or None — NEVER 0 as
 a stand-in for "unknown"), evidence (dict, JSON-serializable), tags (dict or None), lookback_days
 (int or None, passed to guards.insufficient_observation — the real Compute Optimizer signal for
@@ -22,10 +22,10 @@ import boto3
 _REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 
 # Published AWS EBS $/GB-month list prices — **ap-northeast-2 (Seoul) only**, on-demand. This is a
-# deterministic constant, not a CUR-derived actual — see the ADR-019 Context section: CUR/Athena
+# deterministic constant, not a CUR-derived actual — see the ADR-020 Context section: CUR/Athena
 # don't exist in this repo, so an unattached volume's cost is estimated from its type+size against
 # the published rate card, not read back from a bill line item. Kept IDENTICAL to
-# diagnosis/sources.py's collect_idle() CASE table (the ADR-019 Context section names this exact
+# diagnosis/sources.py's collect_idle() CASE table (the ADR-020 Context section names this exact
 # duplication as one of the "three scattered places" it exists to eventually consolidate — this
 # rule reuses the same numbers rather than adding a fourth, slightly different rate table to the
 # pile). A PR review caught that this table was being applied to EVERY synced account/region
@@ -67,7 +67,7 @@ def _co_client():
 
 
 # inventory_resources is populated by the Steampipe inv_sync Lambda on a 15-min cadence when
-# steampipe_enabled=true — but ADR-019 deliberately requires only workers_enabled, so
+# steampipe_enabled=true — but ADR-020 deliberately requires only workers_enabled, so
 # finops_baseline can run with steampipe_enabled=false, or with a sync that has stopped updating.
 # Either way, that must not be treated as "confirmed zero unattached volumes" (see
 # _require_fresh_inventory below). NOTE: this must NOT be judged from inventory_resources row

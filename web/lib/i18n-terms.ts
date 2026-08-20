@@ -1317,7 +1317,7 @@ export const TERMS: Record<string, Pair> = {
   'ENI 50개까지만 집계 — 히트 수는 부분 집계이며 매칭 0 룰이 실제 유휴가 아닐 수 있습니다': { en: 'Aggregated over at most 50 ENIs — hit counts are partial and a zero-match rule may not actually be idle', zh: '最多汇总 50 个 ENI — 命中数为部分统计，匹配为 0 的规则未必真正闲置', ja: '最大 50 ENI までの集計 — ヒット数は部分集計であり、マッチ 0 のルールが実際に未使用とは限りません' },
   'VPC Flow Logs 미설정 — NFM은 트래픽 상대만 식별하며 특정 룰 히트로 귀속하지 못합니다 (룰 매칭은 Flow Logs 필요, 최근 1시간)': { en: 'No VPC Flow Logs — NFM only identifies traffic peers and cannot attribute hits to specific rules (rule matching needs Flow Logs; last 1 hour)', zh: '未配置 VPC Flow Logs — NFM 仅识别流量对端，无法归因到具体规则（规则匹配需要 Flow Logs；最近 1 小时）', ja: 'VPC Flow Logs 未設定 — NFM はトラフィックの相手のみ識別し、特定ルールへのヒット帰属はできません（ルールマッチングには Flow Logs が必要、直近 1 時間）' },
 
-  // ---- FinOps baseline card (ADR-019) ----
+  // ---- FinOps baseline card (ADR-020) ----
   'FinOps 기본 권장': { en: 'FinOps Baseline', zh: 'FinOps 基线建议', ja: 'FinOps ベースライン推奨' },
   '배치 기준': { en: 'as of batch', zh: '批次基准', ja: 'バッチ基準' },
   '월간 절감 가능': { en: 'Potential monthly savings', zh: '每月可节省', ja: '月間節減可能額' },

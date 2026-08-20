@@ -530,7 +530,9 @@ export type SgHitNote =
 export interface SgHitsResult {
   source: 'flowlogs' | 'nfm' | 'none';
   note: SgHitNote;
-  /** 인바운드 룰별 매칭 — flowlogs만 산출(정확). NFM 폴백에선 전부 hits=null(룰 귀속 불가). */
+  /** 인바운드 룰별 매칭 — flowlogs만 산출(compatible traffic matching, 룰-레벨 exact 아님 —
+   *  docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md Correctness constraint).
+   *  NFM 폴백에선 전부 hits=null(룰 귀속 불가). */
   ruleHits: SgRuleHit[];
   /** 기간 내 매칭 0인 인바운드 룰 수 (hits=null 룰은 제외). */
   idleIngressRules: number;
@@ -617,7 +619,7 @@ export async function sgHits(sgId: string, rangeSec: number, scopeRegions?: stri
     // 발견 실패를 query_failed로 미리 표시해 둔다(NFM이 성공하면 상대 식별은 그대로 쓴다).
     let flowQueryFailed = detail.flowDiscoveryFailed;
 
-    // ① VPC Flow Logs (CWL) — 룰-레벨 정확 매칭 (인바운드만)
+    // ① VPC Flow Logs (CWL) — 룰-레벨 compatible traffic matching (exact 아님, 인바운드만)
     if (detail.flowLogGroup) {
       try {
         // 기본 포맷 space-separated 원문 — parse로 14필드 추출 (커스텀 포맷이면 0행 → 정직 폴백).

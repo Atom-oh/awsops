@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { useActiveAccount, ALL_ACCOUNTS } from '@/lib/account-context';
 
-// ADR-019 FinOps baseline-recommendations engine — self-fetching card (mirrors InsightCard's
+// ADR-020 FinOps baseline-recommendations engine — self-fetching card (mirrors InsightCard's
 // enabled/loaded/empty-state shape). Read-only: no action button here, ever — the ADR's own
 // invariant is that this domain adds zero AWS-mutation paths (a card showing an IaC-change EXAMPLE
 // as text would be allowed by the ADR, but this version doesn't even do that).

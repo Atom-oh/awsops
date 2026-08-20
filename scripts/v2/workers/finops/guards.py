@@ -1,4 +1,4 @@
-"""ADR-019 false-positive guards. A guard hit does NOT drop a finding — it demotes status to
+"""ADR-020 false-positive guards. A guard hit does NOT drop a finding — it demotes status to
 'needs_review' and records the reason in guard_hits, so the finding stays visible (the ADR's
 explicit "does not hide" invariant) instead of silently vanishing.
 

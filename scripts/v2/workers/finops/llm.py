@@ -1,4 +1,4 @@
-"""ADR-019 LLM explanation layer — Korean-language prose ONLY, never numbers. The rule engine has
+"""ADR-020 LLM explanation layer — Korean-language prose ONLY, never numbers. The rule engine has
 already decided status/monthly_savings_usd/evidence before this module ever runs; this module's
 sole job is to phrase that decision for a human, and its output is discarded (not stored) whenever
 it disagrees with the finding it was asked to explain. A Bedrock outage/throttle/malformed response
@@ -111,6 +111,6 @@ def explain(title, category, monthly_savings_usd, evidence):
         if not text or _contradicts(text, monthly_savings_usd):
             return None
         return text
-    except Exception as e:  # noqa: BLE001 — this layer is best-effort by ADR-019 design
+    except Exception as e:  # noqa: BLE001 — this layer is best-effort by ADR-020 design
         print(f"[finops] LLM explanation skipped: {e}")
         return None
