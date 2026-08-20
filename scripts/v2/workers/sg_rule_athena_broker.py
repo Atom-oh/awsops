@@ -18,7 +18,10 @@ Two actions:
     day partition: StartQueryExecution -> poll GetQueryExecution -> GetQueryResults (paginated) ->
     StopQueryExecution on deadline/budget-exceeded. Structurally the same shape as CloudWatch Logs
     Insights' StartQuery/poll/GetQueryResults/StopQuery pattern already live in web/lib/dns-logs.ts
-    / anfw-logs.ts / nfm.ts (ADR-019 §2).
+    / anfw-logs.ts / nfm.ts (ADR-019's OWN §2 section — "the exact same shape of pattern is already
+    live" — distinct from the unrelated "ADR-019 §2 register row" phrasing used for
+    docs/decisions/BASELINE.md's flag-gate register in network_path.py/reaper.py/handlers.py; see
+    network_path.py's module docstring for that disambiguation, L5 docs-consistency fix).
 
 Never executes a caller-supplied WHERE/column list, never runs anything but SELECT (the query
 string is validated defense-in-depth here too — see _reject_non_select), never touches
@@ -48,8 +51,41 @@ _FORBIDDEN_RE = re.compile(
 )
 
 
+# Defense-in-depth (L3 trust-boundary finding): re-apply the SAME strict allowlist regexes
+# web/lib/sg-rules.ts already enforces at PUT time, HERE too, on every caller-supplied identifier
+# before it is used in an AssumeRole ARN or an AWS API call — the broker must not blindly trust that
+# a caller's account_id/region/workgroup/database are shaped correctly just because a legitimate
+# caller (sg_rule_scan.py / the web BFF) is expected to have validated them upstream. A full
+# resolve-by-source-id redesign (looking up the caller's config from Aurora instead of trusting the
+# event payload at all) is a deeper trust-boundary fix and remains a follow-up — this is the
+# minimum-viable second check in a different process, mirroring `_reject_non_select` below.
+_GLUE_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,127}$')
+_WORKGROUP_RE = re.compile(r'^[A-Za-z0-9._-]{1,128}$')
+_ACCOUNT_ID_RE = re.compile(r'^\d{12}$')
+_REGION_RE = re.compile(r'^[a-z]{2,4}(-[a-z]+)+-\d$')
+
+
 class BrokerError(Exception):
     pass
+
+
+def _validate_identifiers(event, require_table=False):
+    account_id = event.get("account_id")
+    region = event.get("region")
+    workgroup = event.get("workgroup")
+    database = event.get("database")
+    if not isinstance(account_id, str) or not _ACCOUNT_ID_RE.match(account_id):
+        raise BrokerError("account_id must be a 12-digit AWS account id")
+    if not isinstance(region, str) or not _REGION_RE.match(region):
+        raise BrokerError("region must be a valid AWS region name")
+    if not isinstance(workgroup, str) or not _WORKGROUP_RE.match(workgroup):
+        raise BrokerError("workgroup must match the Athena workgroup-name charset")
+    if not isinstance(database, str) or not _GLUE_IDENT_RE.match(database):
+        raise BrokerError("database must be a valid Glue identifier")
+    if require_table:
+        table = event.get("table")
+        if not isinstance(table, str) or not _GLUE_IDENT_RE.match(table):
+            raise BrokerError("table must be a valid Glue identifier")
 
 
 def _reject_non_select(sql):
@@ -74,6 +110,7 @@ def _assumed_session(account_id, external_id, region):
 
 
 def _validate(event):
+    _validate_identifiers(event, require_table=True)
     account_id = event["account_id"]
     region = event["region"]
     external_id = event.get("external_id")
@@ -122,10 +159,16 @@ def _validate(event):
     return {
         "ok": True, "schemaFields": sorted(resolved.values()), "partitionStrategy": strategy,
         "optionalFields": optional_present,
+        # MAJOR fix (build_day_select divergence): the canonical -> actual-alias mapping AND the
+        # actual partition key names, persisted by web/lib/sg-rules.ts into
+        # sg_flow_sources.validation so sg_rule_scan.py's build_day_select can use the REAL resolved
+        # schema instead of hardcoding underscore names / an unbounded scan.
+        "columnMap": resolved, "partitionKeys": partition_keys,
     }
 
 
 def _query(event):
+    _validate_identifiers(event, require_table=False)
     account_id = event["account_id"]
     region = event["region"]
     external_id = event.get("external_id")

@@ -136,6 +136,18 @@ export interface ValidationResult {
   reason?: string;
   schemaFields?: string[];
   partitionStrategy?: string;
+  /** Canonical Flow Log field name -> the ACTUAL column alias present on this table (e.g.
+   * `interface_id` -> `interface-id`) — resolved once by the broker's `_validate` (Glue
+   * DescribeTable) and persisted so scripts/v2/workers/sg_rule_scan.py's build_day_select can query
+   * using the real schema instead of assuming underscore names (fixes the MAJOR "build_day_select
+   * ignores what _validate resolved" finding). */
+  columnMap?: Record<string, string>;
+  /** Actual Glue partition key names (Hive-style year/month/day, or a single date-typed key) —
+   * lets the worker add a real partition predicate instead of relying on the `start` filter alone. */
+  partitionKeys?: string[];
+  /** Optional Flow Log fields actually present on this table (e.g. `bytes` may be absent on a
+   * custom-format table) — lets the worker make `sum(bytes)` conditional instead of assuming it. */
+  optionalFields?: string[];
   checkedAt: string;
 }
 
@@ -174,6 +186,7 @@ export async function validateFlowSourceViaBroker(input: FlowSourceInput): Promi
     }
     return {
       ok: true, status: 'valid', schemaFields: body.schemaFields, partitionStrategy: body.partitionStrategy,
+      columnMap: body.columnMap, partitionKeys: body.partitionKeys, optionalFields: body.optionalFields,
       checkedAt,
     };
   } catch (e) {

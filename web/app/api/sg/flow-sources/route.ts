@@ -54,6 +54,11 @@ export async function PUT(req: NextRequest) {
     const row = await upsertFlowSource(input, user.sub, {
       status: validation.status, reason: validation.reason ?? null,
       schemaFields: validation.schemaFields ?? null, partitionStrategy: validation.partitionStrategy ?? null,
+      // Persisted so scripts/v2/workers/sg_rule_scan.py's build_day_select can use the actually
+      // resolved column aliases / partition keys / optional-field presence instead of hardcoded
+      // assumptions (MAJOR fix — see sg-rules.ts's ValidationResult doc comments).
+      columnMap: validation.columnMap ?? null, partitionKeys: validation.partitionKeys ?? null,
+      optionalFields: validation.optionalFields ?? null,
       checkedAt: validation.checkedAt,
     });
     return NextResponse.json({ row, validation }, { status: 200 });
