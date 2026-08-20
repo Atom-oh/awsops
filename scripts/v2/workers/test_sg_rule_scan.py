@@ -105,8 +105,13 @@ def test_upsert_inventory_opens_first_version_when_none_open():
     scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5))
     inserts = [c for c in conn.calls if "INSERT INTO sg_rule_inventory_versions" in c[0]]
     assert len(inserts) == 1
-    updates = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0]]
-    assert len(updates) == 0
+    # No fingerprint-change close for the one rule that's present (it's a fresh first version).
+    fp_closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0] and "rule_id=:rid" in c[0]]
+    assert len(fp_closes) == 0
+    # The disappeared-rules sweep still always runs (MAJOR fix, see below) — harmless here since
+    # sgr-1 is in `seen`, so it closes nothing in a real DB, but the statement is always issued.
+    sweep_closes = [c for c in conn.calls if "rule_id <> ALL(:seen)" in c[0] and "sg_rule_inventory_versions" in c[0]]
+    assert len(sweep_closes) == 1
 
 
 def test_upsert_inventory_closes_and_opens_new_version_on_fingerprint_change():
@@ -117,9 +122,9 @@ def test_upsert_inventory_closes_and_opens_new_version_on_fingerprint_change():
               "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
               "description": None}]  # NEW shape (443, not 80)
     scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5))
-    closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0]]
+    fp_closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0] and "rule_id=:rid" in c[0]]
     opens = [c for c in conn.calls if "INSERT INTO sg_rule_inventory_versions" in c[0]]
-    assert len(closes) == 1
+    assert len(fp_closes) == 1
     assert len(opens) == 1
 
 
@@ -131,10 +136,137 @@ def test_upsert_inventory_no_new_version_when_fingerprint_unchanged():
               "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
               "description": None}]  # SAME shape
     scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5))
-    closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0]]
+    fp_closes = [c for c in conn.calls if "UPDATE sg_rule_inventory_versions" in c[0] and "rule_id=:rid" in c[0]]
     opens = [c for c in conn.calls if "INSERT INTO sg_rule_inventory_versions" in c[0]]
-    assert len(closes) == 0
+    assert len(fp_closes) == 0
     assert len(opens) == 0
+
+
+# ── disappeared-rule sweep (MAJOR fix: open version rows must close when a rule disappears, even
+#    on an empty snapshot — the old `if seen_ids:` guard skipped the sweep entirely when empty) ──
+
+def test_disappeared_rule_marks_inactive_and_closes_open_version():
+    conn = FakeConn()
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", [], utc(2026, 3, 5))
+    inactive = [c for c in conn.calls if c[0].startswith("UPDATE sg_rule_inventory SET active=false")]
+    assert len(inactive) == 1
+    assert inactive[0][1]["seen"] == []
+    sweep_closes = [c for c in conn.calls if "rule_id <> ALL(:seen)" in c[0] and "sg_rule_inventory_versions" in c[0]]
+    assert len(sweep_closes) == 1
+    assert sweep_closes[0][1]["seen"] == []
+
+
+def test_empty_snapshot_still_sweeps_all_disappeared_rules():
+    """An empty snapshot for a source that previously had rules means ALL of them disappeared —
+    the sweep must still run (not be skipped as 'nothing to update')."""
+    conn = FakeConn()
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", [], utc(2026, 3, 5))
+    # Both statements were issued even though `rules` was empty.
+    assert any(c[0].startswith("UPDATE sg_rule_inventory SET active=false") for c in conn.calls)
+    assert any("rule_id <> ALL(:seen)" in c[0] and "sg_rule_inventory_versions" in c[0] for c in conn.calls)
+
+
+# ── build_day_select: uses validation's resolved column map / optional fields / partition keys ──
+
+def _source(validation=None, **overrides):
+    base = {"id": 1, "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "primary",
+            "database_name": "flowlogsdb", "table_name": "flow_logs", "validation": validation or {}}
+    base.update(overrides)
+    return base
+
+
+def test_build_day_select_uses_hyphenated_column_map():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface-id", "log_status": "log-status", "start": "start"},
+        "optionalFields": ["bytes"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert '"interface-id"' in sql
+    assert '"log-status"' in sql
+    assert sql.count("SELECT") == 1
+
+
+def test_build_day_select_omits_bytes_when_not_optional_present():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": [],  # validated, and bytes was NOT found on this table
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "sum(\"bytes\")" not in sql
+    assert '"bytes"' not in sql.split("FROM")[0]
+
+
+def test_build_day_select_includes_bytes_when_optional_present():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes", "packets"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert 'sum("bytes") as bytes' in sql
+
+
+def test_build_day_select_adds_hive_style_partition_predicate():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes"],
+        "partitionKeys": ["year", "month", "day"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "\"year\" = '2026'" in sql
+    assert "\"month\" = '03'" in sql
+    assert "\"day\" = '05'" in sql
+
+
+def test_build_day_select_adds_single_date_partition_predicate():
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes"],
+        "partitionKeys": ["dt"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "\"dt\" = '2026-03-05'" in sql
+
+
+def test_build_day_select_falls_back_to_underscore_names_when_no_column_map():
+    """Pending (not-yet-validated) sources have no columnMap yet — must not crash, and must
+    preserve the pre-existing underscore-name assumption as the fallback."""
+    source = _source(validation={"status": "pending"})
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert '"interface_id"' in sql
+    assert '"log_status"' in sql
+
+
+# ── MINOR fix: invoke_broker_query must surface a FunctionError/malformed-body Lambda crash ──────
+
+class FakeLambdaRaw:
+    """Like FakeLambda in the run() section below, but lets the test control FunctionError/body."""
+    def __init__(self, payload_bytes, function_error=None):
+        self.payload_bytes = payload_bytes
+        self.function_error = function_error
+
+    def invoke(self, FunctionName, Payload):
+        resp = {"Payload": type("R", (), {"read": lambda self: self._b})()}
+        resp["Payload"]._b = self.payload_bytes
+        if self.function_error:
+            resp["FunctionError"] = self.function_error
+        return resp
+
+
+def test_invoke_broker_query_surfaces_function_error():
+    lam = FakeLambdaRaw(b'{"errorMessage": "boom"}', function_error="Unhandled")
+    body = scan.invoke_broker_query(
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker",
+        "123456789012", "ap-northeast-2", None, _source(), dt.date(2026, 3, 5))
+    assert body["ok"] is False
+    assert "FunctionError" in body["reason"]
+
+
+def test_invoke_broker_query_surfaces_malformed_body_without_ok_key():
+    lam = FakeLambdaRaw(b'{"unexpected": "shape"}')
+    body = scan.invoke_broker_query(
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker",
+        "123456789012", "ap-northeast-2", None, _source(), dt.date(2026, 3, 5))
+    assert body["ok"] is False
 
 
 # ── process_day: idempotent delete-then-insert, transaction, one row per rule/day ────────────────
@@ -145,6 +277,12 @@ def _versions(rule_id="sgr-1", **overrides):
             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": None}
     base.update(overrides)
     return {rule_id: [base]}
+
+
+def _membership(vpc_id="vpc-1", eni_id="eni-1", group_ids=("sg-1",), private_ips=("10.2.2.2",)):
+    """The ENI carries `sg-1` and owns `10.2.2.2` — the flow fixtures below (dstaddr=10.2.2.2) log
+    an INGRESS flow to this ENI, matching `_versions()`'s default ingress cidr rule on sg-1."""
+    return {vpc_id: [{"eni_id": eni_id, "group_ids": list(group_ids), "private_ips": list(private_ips)}]}
 
 
 def test_process_day_deletes_before_inserting_that_day_rows():
@@ -165,15 +303,15 @@ def test_process_day_is_idempotent_on_reprocessing_the_same_day():
     conn = FakeConn()
     scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
                       dt.date(2026, 3, 5), [
-                          {"srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2", "dstport": "443",
-                           "protocol": "6", "bytes": "100", "cnt": "1"},
-                      ], _versions(), {}, None)
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "100", "cnt": "1"},
+                      ], _versions(), _membership(), None)
     conn2_calls_first = len(conn.calls)
     scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
                       dt.date(2026, 3, 5), [
-                          {"srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2", "dstport": "443",
-                           "protocol": "6", "bytes": "100", "cnt": "1"},
-                      ], _versions(), {}, None)
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "100", "cnt": "1"},
+                      ], _versions(), _membership(), None)
     deletes = [c for c in conn.calls if c[0].startswith("DELETE FROM sg_rule_activity_daily")]
     assert len(deletes) == 2  # one delete per call — never skipped on a re-run
     assert conn.committed == 2
@@ -216,12 +354,143 @@ def test_process_day_matches_compatible_flow():
     conn = FakeConn()
     res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
                             dt.date(2026, 3, 5), [
-                                {"srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2", "dstport": "443",
-                                 "protocol": "6", "bytes": "500", "cnt": "3"},
-                            ], _versions(), {}, None)
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None)
     insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
     assert insert_call[1]["cm"] == 3
     assert insert_call[1]["cb"] == 500
+    assert insert_call[1]["ue"] == 1  # one ENI (interface_id), not one destination-IP string
+
+
+# ── CRITICAL fix: ENI -> SG membership check (a flow on an ENI NOT in the rule's SG must NOT
+#    classify that rule observed_compatible — this is the fabricated-usage-attribution bug) ──────
+
+def test_flow_on_eni_not_in_rules_sg_is_not_credited():
+    """Same flow/rule shape as test_process_day_matches_compatible_flow, but the ENI that actually
+    carries the traffic (eni-2) is NOT a member of sg-1 — it must NOT be credited as compatible."""
+    conn = FakeConn()
+    membership = {"vpc-1": [{"eni_id": "eni-2", "group_ids": ["sg-OTHER"], "private_ips": ["10.2.2.2"]}]}
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-2", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), membership, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0
+    assert insert_call[1]["cb"] == 0
+
+
+def test_flow_with_unresolvable_eni_membership_is_not_credited():
+    """The flow's own interface_id has no membership snapshot at all — never fabricate membership;
+    the rule stays at zero evidence rather than being guessed into observed_compatible."""
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-unknown", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0
+
+
+# ── MAJOR fix: direction must be derived from which side of the flow is the local ENI, not
+#    hardcoded "ingress" — an egress rule must be matchable ─────────────────────────────────────
+
+def test_egress_rule_is_matchable():
+    """The local ENI (eni-1) is the SOURCE of this flow (srcaddr matches its own private_ips) ->
+    egress. An egress-only rule must now be able to match (previously always no_observed_evidence
+    because direction was hardcoded to 'ingress')."""
+    conn = FakeConn()
+    egress_versions = _versions(is_egress=True)
+    membership = {"vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.1.1.1"]}]}
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], egress_versions, membership, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 3
+
+
+def test_ingress_rule_not_matched_by_egress_flow_on_same_eni():
+    """Same ENI/traffic as the egress test above, but the rule is ingress-only — direction mismatch
+    must produce no_observed_evidence, proving direction is genuinely being checked both ways."""
+    conn = FakeConn()
+    ingress_versions = _versions(is_egress=False)
+    membership = {"vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.1.1.1"]}]}
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], ingress_versions, membership, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0
+
+
+# ── MAJOR fix: UNASSESSABLE (e.g. prefix-list peer) must downgrade to `unassessable`, never be
+#    silently treated as `no_observed_evidence` ──────────────────────────────────────────────────
+
+def test_prefix_list_rule_with_no_resolver_is_unassessable_not_no_evidence():
+    conn = FakeConn()
+    pl_versions = _versions(peer_kind="pl", peer_value="pl-12345")
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], pl_versions, _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["match_unassessable"] is True
+    assert insert_call[1]["cm"] == 0
+
+
+# ── MAJOR fix: the persisted fingerprint must be the version covering the scanned day, not
+#    whichever version happens to be last in the list ────────────────────────────────────────────
+
+def test_persisted_fingerprint_is_the_day_covering_version_not_the_latest():
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp-old", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 4)},
+            {"rule_id": "sgr-1", "fingerprint": "fp-new", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 22, "to_port": 22, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 4, 1), "valid_to": None},
+        ],
+    }
+    conn = FakeConn()
+    # The scanned day (2026-03-05) is covered by neither version cleanly at its very end (fp-old
+    # closes 2026-03-04, before the scanned day even starts) — so this day resolves to NO version
+    # at all -> epoch-crossing/unassessable, and the fallback fingerprint must be the LATEST known
+    # version ("fp-new"), never a version that happens to cover some earlier day.
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["fp"] == "fp-new"
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["fingerprint_epoch_crossing"] is True
+
+
+def test_persisted_fingerprint_is_the_exact_version_covering_the_day():
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp-old", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 2, 1)},
+            {"rule_id": "sgr-1", "fingerprint": "fp-covers-day", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 22, "to_port": 22, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 2, 1), "valid_to": None},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["fp"] == "fp-covers-day"
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["fingerprint_epoch_crossing"] is False
 
 
 def test_process_day_no_uniqueness_conflict_on_concurrent_retry():
@@ -306,3 +575,59 @@ def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):
         ec2_client_factory=lambda *a, **k: FakeEc2(),
     )
     assert result["status"] == "inventory_only"
+
+
+# ── MAJOR fix: failure invisibility — a failed Athena day must write a real, terminal `failed`
+#    sg_rule_scan_runs row, not just an in-memory note that run()'s "status": "ok" return discards ─
+
+def test_run_writes_failed_run_row_on_athena_query_failure(monkeypatch):
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = FakeLambda({"ok": False, "reason": "workgroup budget exceeded"})
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "ok"
+    failed_runs = [c for c in conn.calls
+                   if c[0].startswith("INSERT INTO sg_rule_scan_runs") and c[1].get("id") is not None
+                   and "'failed'" in c[0]]
+    assert len(failed_runs) >= 1
+    assert failed_runs[0][1]["ec"] == "athena_query_failed"
+
+
+def test_run_writes_failed_run_row_on_process_day_exception(monkeypatch):
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+
+    def boom(*a, **k):
+        raise RuntimeError("db exploded")
+    monkeypatch.setattr(scan, "process_day", boom)
+    fake_lambda = FakeLambda({"ok": True, "rows": []})
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "ok"  # run() itself must not crash — one day's failure is isolated
+    failed_runs = [c for c in conn.calls
+                   if c[0].startswith("INSERT INTO sg_rule_scan_runs") and "'failed'" in c[0]]
+    assert len(failed_runs) >= 1
+    assert failed_runs[0][1]["ec"] == "process_day_failed"

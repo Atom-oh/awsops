@@ -229,11 +229,23 @@ def upsert_inventory_and_versions(conn, account_id, region, rules, now):
                 a=account_id, r=region, rid=rule["rule_id"], fp=fp, gid=rule["group_id"],
                 eg=rule["is_egress"], proto=rule["protocol"], fp_=rule.get("from_port"),
                 tp=rule.get("to_port"), pk=rule["peer_kind"], pv=rule["peer_value"], now=now)
-    if seen_ids:
-        conn.run(
-            "UPDATE sg_rule_inventory SET active=false "
-            "WHERE account_id=:a AND region=:r AND rule_id <> ALL(:seen)",
-            a=account_id, r=region, seen=seen_ids)
+    # Sweep disappeared rules — ALWAYS runs, even when `rules` (this snapshot) is empty (fix for the
+    # MAJOR "disappeared rules' open version rows never closed" finding: an empty snapshot for a
+    # source that previously had rules means ALL of them disappeared, not "no update needed" — the
+    # old `if seen_ids:` guard skipped this sweep entirely on an empty snapshot, which is exactly
+    # backwards). `rule_id <> ALL(:seen)` with an empty `seen` array is vacuously true for every row,
+    # which is the correct behavior here (every previously-known rule has disappeared).
+    conn.run(
+        "UPDATE sg_rule_inventory SET active=false "
+        "WHERE account_id=:a AND region=:r AND rule_id <> ALL(:seen)",
+        a=account_id, r=region, seen=seen_ids)
+    # Close the open version epoch for any rule that disappeared from this snapshot — a rule that no
+    # longer exists can never re-open its own version row, and leaving valid_to NULL would let it
+    # keep matching flows forever (the same MAJOR finding).
+    conn.run(
+        "UPDATE sg_rule_inventory_versions SET valid_to=:now "
+        "WHERE account_id=:a AND region=:r AND valid_to IS NULL AND rule_id <> ALL(:seen)",
+        a=account_id, r=region, now=now, seen=seen_ids)
 
 
 def write_eni_snapshot(conn, account_id, region, memberships, now):
@@ -258,18 +270,80 @@ def last_committed_day(conn, flow_source_id):
 
 # ── Step 4-6: Athena query + matching for one day ─────────────────────────────────────────────────
 
+def _safe_ident(name, fallback):
+    """Defense-in-depth re-validation (MAJOR L3 finding) of a column-name identifier that
+    ultimately came from web/lib/sg-rules.ts's persisted `validation.columnMap` (itself sourced
+    from a Glue DescribeTable response the broker already re-validated against a strict alias
+    allowlist in `_validate`). Never trust a stored value blindly when it's about to be
+    string-interpolated into SQL — re-check the same shape (Glue/Athena identifier charset) here,
+    a second, structurally different check in a different process, same pattern as the broker's
+    own `_reject_non_select`."""
+    import re
+    # Allows '-' too: AWS's own default VPC Flow Log Athena tables name columns like
+    # "interface-id"/"log-status" (hyphenated) — the broker's own alias allowlist (`_validate`)
+    # accepts exactly this same charset.
+    candidate = name if isinstance(name, str) and re.match(r'^[A-Za-z_][A-Za-z0-9_-]{0,127}$', name) else fallback
+    return candidate
+
+
 def build_day_select(source, day):
-    """Validated SELECT for one account/region/day — every identifier here (workgroup/database/
-    table already passed strict allowlist regexes at PUT time, web/lib/sg-rules.ts) is quoted, and
-    the only literals are ISO day boundaries the worker itself computed (never user input)."""
+    """Validated SELECT for one account/region/day. Every identifier here is re-validated
+    (`_safe_ident`) before interpolation; workgroup/database/table already passed strict allowlist
+    regexes at PUT time (web/lib/sg-rules.ts) and the broker's own `_validate` re-resolves the exact
+    column ALIASES actually present in the table (persisted as `validation.columnMap`, canonical ->
+    actual name — e.g. `interface_id` -> `interface-id`) — this function must use THAT resolved
+    mapping instead of assuming underscore names (MAJOR finding: the old version hardcoded
+    `interface_id`/`log_status` even though validation deliberately accepts hyphenated aliases too).
+    `bytes` is conditional on `validation.optionalFields` (validation classifies it optional, not
+    guaranteed present) and a partition predicate is added whenever validation resolved partition
+    key names (validation refuses to certify a table it cannot bound — this function must actually
+    use that bound, not just rely on the `start` filter alone, which doesn't prune partitions).
+    The only literals interpolated below are ISO day boundaries the worker itself computed (never
+    user input) and identifiers that passed `_safe_ident`."""
+    validation = source.get("validation") or {}
+    column_map = validation.get("columnMap") or {}
+    optional_fields = set(validation.get("optionalFields") or [])
+    partition_keys = validation.get("partitionKeys") or []
+
+    interface_col = _safe_ident(column_map.get("interface_id"), "interface_id")
+    log_status_col = _safe_ident(column_map.get("log_status"), "log_status")
+    start_col = _safe_ident(column_map.get("start"), "start")
+
     start, end = sm.day_bounds_utc(day)
     table = f'"{source["database_name"]}"."{source["table_name"]}"'
+
+    # `bytes` is an OPTIONAL Flow Log field (custom-format tables may omit it) — only select/sum it
+    # when validation actually found the column; never assume it unconditionally (MAJOR finding).
+    # When validation hasn't run yet (a 'pending' source, no columnMap/optionalFields at all) fall
+    # back to the pre-existing assume-present behavior rather than silently dropping bytes evidence.
+    has_optional_info = bool(column_map) or bool(optional_fields)
+    has_bytes = ("bytes" in optional_fields) if has_optional_info else True
+    bytes_select = ', sum("bytes") as bytes' if has_bytes else ''
+
+    # Partition predicate: bound the scan to this UTC day's partition whenever validation resolved
+    # actual partition key names (never emit an unbounded full-table scan when a bound is knowable).
+    # Recognizes the two common Glue/Athena VPC Flow Log partitioning conventions: Hive-style
+    # year/month/day pseudo-columns, or a single date-typed partition key.
+    partition_predicate = ""
+    lower_keys = {k.lower(): k for k in partition_keys}
+    if {"year", "month", "day"} <= set(lower_keys):
+        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
+        partition_predicate = (
+            f' AND "{_safe_ident(y, "year")}" = \'{day.year:04d}\''
+            f' AND "{_safe_ident(mo, "month")}" = \'{day.month:02d}\''
+            f' AND "{_safe_ident(d, "day")}" = \'{day.day:02d}\''
+        )
+    elif len(partition_keys) == 1:
+        dk = _safe_ident(partition_keys[0], "")
+        if dk:
+            partition_predicate = f' AND "{dk}" = \'{day.isoformat()}\''
+
     return (
-        f"SELECT interface_id, srcaddr, dstaddr, srcport, dstport, protocol, action, "
-        f"sum(bytes) as bytes, count(*) as cnt FROM {table} "
-        f"WHERE start >= {int(start.timestamp())} AND start < {int(end.timestamp())} "
-        f"AND action = 'ACCEPT' AND log_status = 'OK' "
-        f"GROUP BY interface_id, srcaddr, dstaddr, srcport, dstport, protocol, action "
+        f'SELECT "{interface_col}" as interface_id, srcaddr, dstaddr, srcport, dstport, protocol, '
+        f'action{bytes_select}, count(*) as cnt, max("{start_col}") as last_start FROM {table} '
+        f'WHERE "{start_col}" >= {int(start.timestamp())} AND "{start_col}" < {int(end.timestamp())} '
+        f"AND action = 'ACCEPT' AND \"{log_status_col}\" = 'OK'{partition_predicate} "
+        f'GROUP BY "{interface_col}", srcaddr, dstaddr, srcport, dstport, protocol, action '
         f"LIMIT 200000"
     )
 
@@ -282,6 +356,11 @@ def invoke_broker_query(lambda_client, broker_arn, account_id, region, external_
     }
     resp = lambda_client.invoke(FunctionName=broker_arn, Payload=json.dumps(payload).encode("utf-8"))
     body = json.loads((resp.get("Payload").read() if hasattr(resp.get("Payload"), "read") else resp.get("Payload")) or b"{}")
+    # MINOR fix: surface an unhandled broker crash (FunctionError set, or a body that isn't the
+    # broker's own {"ok": ...} shape) as a diagnosable failure instead of a bare
+    # {"status":"failed","reason":None} the caller can't act on.
+    if resp.get("FunctionError") or "ok" not in body:
+        return {"ok": False, "reason": f"broker invocation error: FunctionError={resp.get('FunctionError')!r}, body={body!r}"}
     return body
 
 
@@ -299,7 +378,19 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     """Matches `flows` (already-aggregated Athena rows) against every rule for this account/region,
     classifies the whole day per rule, and commits sg_rule_activity_daily + sg_rule_scan_runs in
     ONE transaction (delete-then-insert for the day — idempotent regardless of how many times this
-    day is reprocessed). Returns the coverage summary dict."""
+    day is reprocessed). Returns the coverage summary dict.
+
+    CRITICAL fix: a flow may only be credited to a rule whose `group_id` is actually carried by the
+    flow's OWN ENI (`flow["interface_id"]`, selected by the Athena query but previously never read)
+    — resolved via an eni_id -> {group_ids, private_ips, vpc_id} index built once from
+    `memberships_by_vpc` (also fixes the MINOR "VPC lookup inside the innermost loop" complexity
+    note, and the MINOR "unique_eni_count counts destination IP strings, not ENIs" — it now counts
+    the flow's own interface_id). Direction ("ingress"/"egress") and which side of the flow tuple is
+    the local peer are derived from whether the ENI's own private_ips contain srcaddr or dstaddr —
+    never guessed from dstaddr alone (fixes the MAJOR "direction hardcoded ingress" finding; every
+    egress rule is now matchable). A flow whose ENI cannot be resolved (no membership snapshot
+    covers it) contributes no evidence to any rule — it is never fabricated.
+    """
     account_id, region = source["account_id"], source["region"]
     day_str = day.isoformat()
     run_id = str(uuid.uuid4())
@@ -308,11 +399,31 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     per_rule = {}
     any_crossing = False
     for rule_id, versions in rule_versions_by_id.items():
-        cov = sm.day_coverage(versions, day)
-        per_rule[rule_id] = {"compatible": 0, "overlap": 0, "bytes": 0, "unassessable": cov["crossing"],
-                              "last_observed_at": None, "eni_ids": set()}
-        if cov["crossing"]:
+        day_cov = sm.day_coverage(versions, day)
+        per_rule[rule_id] = {
+            "compatible": 0, "overlap": 0, "bytes": 0,
+            "unassessable": day_cov["crossing"],  # fingerprint-epoch-crossing (day-level)
+            "match_unassessable": False,          # any flow evaluated UNASSESSABLE (pl/icmp/etc.)
+            "version": day_cov["version"],        # the day-covering version (None when crossing) —
+                                                   # fixes the "wrong fingerprint persisted" MAJOR
+                                                   # finding (was rule_versions_by_id[rule_id][-1]).
+            "last_observed_at": None, "eni_ids": set(),
+        }
+        if day_cov["crossing"]:
             any_crossing = True
+
+    # Hoisted once per call (not per flow/rule): eni_id -> {group_ids, private_ips, vpc_id}.
+    eni_index = {}
+    for vpc_id, snap in memberships_by_vpc.items():
+        for m in snap:
+            eni_id = m.get("eni_id")
+            if not eni_id:
+                continue
+            eni_index[eni_id] = {
+                "group_ids": set(m.get("group_ids") or []),
+                "private_ips": set(m.get("private_ips") or []),
+                "vpc_id": vpc_id,
+            }
 
     def sg_resolver_factory(vpc_id):
         snap = memberships_by_vpc.get(vpc_id)
@@ -328,43 +439,67 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
         return _resolve
 
     for flow in flows:
+        interface_id = flow.get("interface_id")
         dst = flow.get("dstaddr")
         src = flow.get("srcaddr")
         port = int(flow["dstport"]) if flow.get("dstport") not in (None, "") else None
         proto = flow.get("protocol")
         bytes_ = int(flow.get("bytes") or 0)
         cnt = int(flow.get("cnt") or 1)
-        if not dst or not src:
+        last_start = None
+        if flow.get("last_start") not in (None, ""):
+            try:
+                last_start = dt.datetime.fromtimestamp(int(flow["last_start"]), tz=dt.timezone.utc)
+            except (TypeError, ValueError):
+                last_start = None
+        if not dst or not src or not interface_id:
             continue
-        for rule_id, versions in rule_versions_by_id.items():
+        eni = eni_index.get(interface_id)
+        if eni is None or not eni["group_ids"]:
+            # This flow's own ENI membership cannot be resolved (no snapshot covers it, or it
+            # carries no SGs) — never fabricate membership; the flow contributes no evidence.
+            continue
+        if src in eni["private_ips"]:
+            direction, peer_ip = "egress", dst
+        elif dst in eni["private_ips"]:
+            direction, peer_ip = "ingress", src
+        else:
+            # Neither tuple endpoint matches this ENI's own known private IPs (stale/incomplete
+            # membership snapshot, secondary IP not captured, NAT/ELB-rewritten flow, ...) —
+            # direction and local/peer orientation cannot be safely inferred; skip rather than guess.
+            continue
+        vpc_id = eni["vpc_id"]
+        resolver = sg_resolver_factory(vpc_id)
+
+        for rule_id in rule_versions_by_id:
             cov = per_rule[rule_id]
             if cov["unassessable"]:
                 continue
-            version = None
-            for v in versions:
-                vf, vt = v["valid_from"], v.get("valid_to")
-                if vf <= start and (vt is None or end <= vt):
-                    version = v
-                    break
+            version = cov["version"]
             if version is None:
+                continue
+            # ENI -> SG membership check (the CRITICAL fix): only a rule whose group_id this flow's
+            # OWN ENI actually carries can be credited with this flow's traffic.
+            if version["group_id"] not in eni["group_ids"]:
                 continue
             rule = {"protocol": version["protocol"], "from_port": version.get("from_port"),
                     "to_port": version.get("to_port"), "peer_kind": version["peer_kind"],
                     "peer_value": version["peer_value"], "is_egress": version["is_egress"],
                     "group_id": version["group_id"]}
-            vpc_id = None
-            for vid, snap in memberships_by_vpc.items():
-                if any(dst in (m.get("private_ips") or []) for m in snap):
-                    vpc_id = vid
-                    break
-            resolver = sg_resolver_factory(vpc_id) if vpc_id else None
             outcome = sm.match_flow_against_rule(
-                rule, {"peer_ip": src, "port": port, "protocol": proto, "direction": "ingress"},
-                sg_peer_ip_resolver=resolver)
+                rule, {"peer_ip": peer_ip, "port": port, "protocol": proto, "direction": direction},
+                sg_peer_ip_resolver=resolver, prefix_list_resolver=None)
             if outcome == sm.MatchOutcome.MATCH:
                 cov["compatible"] += cnt
                 cov["bytes"] += bytes_
-                cov["eni_ids"].add(dst)
+                cov["eni_ids"].add(interface_id)
+                if last_start and (cov["last_observed_at"] is None or last_start > cov["last_observed_at"]):
+                    cov["last_observed_at"] = last_start
+            elif outcome == sm.MatchOutcome.UNASSESSABLE:
+                # MAJOR fix: UNASSESSABLE (prefix-list peer, ICMP, unresolvable SG reference) must
+                # never be silently discarded — it downgrades this rule/day to `unassessable` unless
+                # a confident MATCH is also found (classify_rule_day already gives MATCH priority).
+                cov["match_unassessable"] = True
 
     conn.run("BEGIN")
     try:
@@ -372,17 +507,31 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
             "DELETE FROM sg_rule_activity_daily WHERE account_id=:a AND region=:r AND observed_on=:d",
             a=account_id, r=region, d=day_str)
         for rule_id, cov in per_rule.items():
-            fp = rule_versions_by_id[rule_id][-1]["fingerprint"] if rule_versions_by_id[rule_id] else ""
-            status = sm.classify_rule_day(cov["compatible"], cov["overlap"], True, cov["unassessable"])
-            coverage = {"unassessable": cov["unassessable"], "fingerprint_epoch_crossing": cov["unassessable"],
-                        "status": status}
+            if cov["version"] is not None:
+                fp = cov["version"]["fingerprint"]
+            elif rule_versions_by_id[rule_id]:
+                # Epoch-crossing day: no single version covers the whole day. Fall back to the
+                # latest known version's fingerprint purely as a display reference — the `coverage`
+                # JSON's `fingerprint_epoch_crossing: true` is the authoritative signal that this
+                # fingerprint must NOT be trusted as "the" shape for this day.
+                fp = rule_versions_by_id[rule_id][-1]["fingerprint"]
+            else:
+                fp = ""
+            final_unassessable = cov["unassessable"] or cov["match_unassessable"]
+            status = sm.classify_rule_day(cov["compatible"], cov["overlap"], True, final_unassessable)
+            coverage = {
+                "unassessable": final_unassessable,
+                "fingerprint_epoch_crossing": cov["unassessable"],
+                "match_unassessable": cov["match_unassessable"],
+                "status": status,
+            }
             conn.run(
                 "INSERT INTO sg_rule_activity_daily "
                 "(account_id, region, rule_id, rule_fingerprint, observed_on, compatible_match_count, "
                 " compatible_bytes, overlap_match_count, unique_eni_count, last_observed_at, coverage) "
                 "VALUES (:a,:r,:rid,:fp,:d,:cm,:cb,:om,:ue,:lo,:cov::jsonb)",
                 a=account_id, r=region, rid=rule_id, fp=fp, d=day_str, cm=cov["compatible"],
-                cb=cov["bytes"], om=cov["overlap"], ue=len(cov["eni_ids"]), lo=None,
+                cb=cov["bytes"], om=cov["overlap"], ue=len(cov["eni_ids"]), lo=cov["last_observed_at"],
                 cov=json.dumps(coverage),
             )
         conn.run(
@@ -443,6 +592,22 @@ def load_membership_by_vpc(conn, account_id, region, day, staleness_days):
     return resolved
 
 
+def _write_failed_run(conn, source, day, reason, error_code):
+    """Write a terminal `failed` sg_rule_scan_runs row (MAJOR "failure invisibility" fix) — so the
+    reaper's stale-run reconciliation and any downstream API/UI caller see a real failed row
+    instead of silence (previously only an in-memory list entry that run()'s top-level
+    `{"status": "ok"}` return discarded)."""
+    start, end = sm.day_bounds_utc(day)
+    conn.run(
+        "INSERT INTO sg_rule_scan_runs "
+        "(id, flow_source_id, status, partition_start, partition_end, rows_processed, coverage, "
+        " error_code, started_at, finished_at) "
+        "VALUES (:id,:fid,'failed',:ps,:pe,0,:cov::jsonb,:ec,now(),now())",
+        id=str(uuid.uuid4()), fid=source["id"], ps=start, pe=end,
+        cov=json.dumps({"reason": str(reason or "")[:2000]}), ec=error_code,
+    )
+
+
 def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
     """Top-level entry point for handlers.py's `sg_rule_scan` handler.
 
@@ -484,9 +649,21 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
             continue
         body = invoke_broker_query(lam, broker_arn, account_id, region, ext_id, source, day)
         if not body.get("ok"):
+            # MAJOR fix ("failure invisibility"): a failed Athena day must not be invisible to the
+            # reaper/API/UI — write a terminal `failed` sg_rule_scan_runs row, not just an in-memory
+            # note that the top-level `run()` result silently drops on the floor.
+            _write_failed_run(conn, source, day, body.get("reason"), "athena_query_failed")
             results.append({"day": day.isoformat(), "status": "failed", "reason": body.get("reason")})
             continue
         memberships_by_vpc = load_membership_by_vpc(conn, account_id, region, day, MEMBERSHIP_STALENESS_DAYS)
-        res = process_day(conn, source, day, body.get("rows", []), rule_versions, memberships_by_vpc, None)
+        try:
+            res = process_day(conn, source, day, body.get("rows", []), rule_versions, memberships_by_vpc, None)
+        except Exception as e:  # noqa: BLE001 — one day's transaction failure must not crash run()
+            # process_day() itself still raises on internal failure (its own rollback contract is
+            # unchanged, see test_process_day_rolls_back_on_failure) — this is the caller-side
+            # translation into a visible, terminal run row for THIS day, so other days keep going.
+            _write_failed_run(conn, source, day, str(e), "process_day_failed")
+            results.append({"day": day.isoformat(), "status": "failed", "reason": str(e)})
+            continue
         results.append(res)
     return {"status": "ok", "days": results}
