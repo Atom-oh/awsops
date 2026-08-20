@@ -58,6 +58,15 @@ export default function FinopsBaselineCard() {
     // late-arriving response for an account the user has since navigated away from is dropped
     // instead of clobbering the current view.
     let cancelled = false;
+    // A stop-time review caught a SEPARATE bug from the stale-response race above: dropping the
+    // late response stopped it from being wrongly APPLIED, but did nothing about the previous
+    // account's already-applied `data` staying on screen, unlabeled as stale, for the entire
+    // window between an account switch and the new fetch resolving — the user could sit looking
+    // at account A's findings while account B was selected. Reset to the loading state up front,
+    // on every account change (not just mount), so a switch never renders with stale data.
+    setLoaded(false);
+    setData(null);
+    setFetchError(false);
     async function load() {
       try {
         // ebs_unattached spans every synced account/region in one pass, so unlike single-account

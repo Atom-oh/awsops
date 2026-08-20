@@ -233,4 +233,47 @@ describe('FinopsBaselineCard', () => {
     expect(screen.getByText('Second account finding')).toBeTruthy();
     setActiveAccount('self');
   });
+
+  it('shows a loading state instead of the previous account\'s data during a switch', async () => {
+    // A SEPARATE bug from the stale-response race above: dropping a late response stops it from
+    // being wrongly applied, but does nothing about the PREVIOUS account's already-rendered data
+    // staying on screen — unlabeled as stale — for the entire window between the switch and the
+    // new fetch resolving. A user selecting account B must never keep seeing account A's findings
+    // displayed as if they belonged to B.
+    const selfBody = {
+      enabled: true, accountFilter: 'self', lastRun: null,
+      findings: [{ id: 1, ruleId: 'ebs_unattached', accountId: 'self', region: 'ap-northeast-2',
+        resourceId: 'vol-1', title: 'First account finding', category: 'storage', status: 'active',
+        monthlySavingsUsd: 9.12, evidence: {}, guardHits: [], explanationKo: null, firstSeenAt: 'a', lastSeenAt: 'b' }],
+    };
+    let resolveOther!: (v: { ok: boolean; status: number; json: () => Promise<unknown> }) => void;
+    const otherPromise = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((res) => {
+      resolveOther = res;
+    });
+    const fetchSpy = vi.fn(async (url: string) => {
+      if (url.includes('account=self')) return { ok: true, status: 200, json: async () => selfBody };
+      return otherPromise; // the new account's fetch hangs
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<FinopsBaselineCard />);
+    await waitFor(() => screen.getByText('First account finding'));
+
+    setActiveAccount('222222222222');
+    // Immediately after the switch — before the new account's (hanging) fetch resolves — the
+    // previous account's finding must be gone, not still displayed as account 222222222222's data.
+    await waitFor(() => expect(screen.queryByText('First account finding')).toBeNull());
+    expect(screen.getByText('로딩 중…')).toBeTruthy();
+
+    resolveOther({
+      ok: true, status: 200,
+      json: async () => ({
+        enabled: true, accountFilter: '222222222222', lastRun: null,
+        findings: [{ id: 2, ruleId: 'ebs_unattached', accountId: '222222222222', region: 'us-east-1',
+          resourceId: 'vol-2', title: 'Second account finding', category: 'storage', status: 'active',
+          monthlySavingsUsd: 5, evidence: {}, guardHits: [], explanationKo: null, firstSeenAt: 'a', lastSeenAt: 'b' }],
+      }),
+    });
+    await waitFor(() => screen.getByText('Second account finding'));
+    setActiveAccount('self');
+  });
 });
