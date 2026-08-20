@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '@/components/shell/LanguageProvider';
-import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
+import { useActiveAccount, ALL_ACCOUNTS } from '@/lib/account-context';
 
 // ADR-019 FinOps baseline-recommendations engine — self-fetching card (mirrors InsightCard's
 // enabled/loaded/empty-state shape). Read-only: no action button here, ever — the ADR's own
@@ -53,10 +53,14 @@ export default function FinopsBaselineCard() {
   const load = useCallback(async () => {
     try {
       // ebs_unattached spans every synced account/region in one pass, so unlike single-account
-      // routes this scoping is a genuine filter, not a fan-out trigger — '전체 계정' passes no
-      // account param and gets the fleet-wide view (each finding still labeled below).
-      const acct = active !== ALL_ACCOUNTS ? accountParam(active) : '';
-      const qs = active !== ALL_ACCOUNTS && acct ? `?${acct}` : '';
+      // routes this scoping is a genuine filter, not a fan-out trigger — '전체 계정' omits the
+      // account param entirely for the fleet-wide view (each finding still labeled below).
+      // NOTE: unlike accountParam()'s '' -> host-defaults-server-side convention used by other
+      // routes, the DEFAULT active account here is 'self' and must be sent EXPLICITLY as
+      // `account=self` — omitting it would (and, before this fix, did) fall through to the
+      // route's "no account param -> fleet-wide" branch, silently showing every account's
+      // findings on the default/never-touched-the-selector view instead of just the host's.
+      const qs = active === ALL_ACCOUNTS ? '' : `?account=${encodeURIComponent(active || 'self')}`;
       const r = await fetch(`/api/finops/findings${qs}`);
       if (r.ok) { setData(await r.json()); setFetchError(false); }
       else { setFetchError(true); }

@@ -156,6 +156,18 @@ describe('FinopsBaselineCard', () => {
     expect(screen.queryByText(/호스트 계정/)).toBeNull();
   });
 
+  it('sends an explicit account=self on the default view instead of silently going fleet-wide', async () => {
+    // A stop-time review caught that the never-touched-the-selector default (active === 'self')
+    // omitted the account param entirely, which the route treats as "no filter" — the host's own
+    // dashboard was showing every synced account's findings by default. accountParam('self')
+    // itself returns '' (the convention other routes use to mean "server defaults to host
+    // creds"), so this route must NOT reuse that helper — it needs 'self' sent literally.
+    const fetchSpy = mockFetch({ enabled: true, accountFilter: 'self', findings: [], lastRun: null });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<FinopsBaselineCard />);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/finops/findings?account=self'));
+  });
+
   it('passes the active account as a query param when a specific account is selected', async () => {
     setActiveAccount('222222222222');
     const fetchSpy = mockFetch({ enabled: true, accountFilter: '222222222222', findings: [], lastRun: null });
@@ -172,8 +184,9 @@ describe('FinopsBaselineCard', () => {
     const fetchSpy = mockFetch({ enabled: true, accountFilter: null, findings: [], lastRun: null });
     vi.stubGlobal('fetch', fetchSpy);
     render(<FinopsBaselineCard />);
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
-    expect(fetchSpy.mock.calls[0][0]).toBe('/api/finops/findings');
+    // Same mount-effect correction as above: the initial render fetches with the default 'self'
+    // state before useActiveAccount's effect corrects it to ALL_ACCOUNTS — assert the final call.
+    await waitFor(() => expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/finops/findings'));
     setActiveAccount('self');
   });
 });
