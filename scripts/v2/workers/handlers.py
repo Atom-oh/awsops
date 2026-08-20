@@ -195,7 +195,9 @@ def _sg_rule_scan(payload, dry_run):
 
 
 def _network_path(payload, dry_run):
-    """Network Path Check (ADR-019 §2 register row, design spec
+    """Network Path Check (BASELINE.md §2 register row, governed under ADR-019's Decision — NOT
+    "ADR-019's own §2 section", which is unrelated CloudWatch-pattern text; see network_path.py's
+    module docstring for the L5 docs-consistency disambiguation), design spec
     docs/superpowers/specs/2026-08-13-network-path-check-design.md). payload: {run_id, definition}
     (definition = the run's immutable definition_snapshot). Read-only: resolve -> discover ->
     verify -> conclude over cached topology + live SG/NACL/route/TGW/VPN/DX/Network Firewall/ELBv2/
@@ -205,6 +207,14 @@ def _network_path(payload, dry_run):
     run_id = payload.get("run_id")
     if dry_run:
         return {"dry_run": True, "would_run": run_id}, None
+    # [L5 docs-consistency + safety fix] A second, structurally independent fail-closed gate at the
+    # dispatch site itself — the web BFF gate (web/lib/network-path-gate.ts) and the Terraform count
+    # gate (network-path.tf's `local.npc`, which controls whether this env var is even set on the
+    # task) are the primary gates, but this handler must not blindly trust that a `network_path`
+    # message reaching the worker implies the feature is actually enabled (defense-in-depth,
+    # matching _sg_rule_scan's own `SG_RULE_ATHENA_BROKER_ARN` short-circuit pattern above).
+    if os.environ.get("NETWORK_PATH_CHECK_ENABLED") != "true":
+        return {"status": "disabled", "reason": "NETWORK_PATH_CHECK_ENABLED is not set (feature flag off)"}, None
     import db as wdb
     import network_path as npc
     conn = wdb.connect()
