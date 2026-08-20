@@ -78,6 +78,40 @@ def test_ebs_unattached_unknown_volume_type_gets_null_savings_not_an_invented_ra
     assert f["evidence"]["unpriced_volume_type"] == "weird"
 
 
+def test_ebs_unattached_demotes_io1_io2_to_null_since_iops_charges_are_unpriced():
+    # A review round caught that the GB-rate alone materially understates io1/io2 cost — the
+    # provisioned-IOPS charge (unpriced here — sync_lambda.py has no published-rate table for it)
+    # routinely dominates. Presenting the GB-only figure as confident violates the "amounts are
+    # never invented/misleading" invariant just as surely as inventing a number would.
+    conn = FakeConn([
+        ("vol-io1", "self", "ap-northeast-2",
+         {"state": "available", "size": 100, "volume_type": "io1", "iops": 5000}, _NOW),
+        ("vol-io2", "self", "ap-northeast-2",
+         {"state": "available", "size": 100, "volume_type": "io2", "iops": 5000}, _NOW),
+    ])
+    out = rules.ebs_unattached(conn, [0])
+    for vid in ("vol-io1", "vol-io2"):
+        f = next(f for f in out if f["resource_id"] == vid)
+        assert f["monthly_savings_usd"] is None
+        assert "provisioned IOPS" in f["evidence"]["partial_rate"]
+
+
+def test_ebs_unattached_demotes_gp3_only_when_iops_exceeds_the_free_baseline():
+    conn = FakeConn([
+        ("vol-gp3-low", "self", "ap-northeast-2",
+         {"state": "available", "size": 100, "volume_type": "gp3", "iops": 3000}, _NOW),
+        ("vol-gp3-high", "self", "ap-northeast-2",
+         {"state": "available", "size": 100, "volume_type": "gp3", "iops": 8000}, _NOW),
+    ])
+    out = rules.ebs_unattached(conn, [0])
+    low = next(f for f in out if f["resource_id"] == "vol-gp3-low")
+    high = next(f for f in out if f["resource_id"] == "vol-gp3-high")
+    assert low["monthly_savings_usd"] == round(100 * 0.0912, 2)   # at baseline — fully priced
+    assert "partial_rate" not in low["evidence"]
+    assert high["monthly_savings_usd"] is None                    # above baseline — demoted
+    assert "partial_rate" in high["evidence"]
+
+
 def test_ebs_unattached_flags_a_per_row_stale_captured_at_even_though_the_job_succeeded():
     # The job-level inventory_sync_runs row says 'succeeded' just now (sync_run='ok' default), but
     # THIS row's own captured_at is weeks old — exactly sync_lambda.py's M5 scenario: one account's
@@ -262,6 +296,20 @@ def test_ec2_rightsizing_uses_top_option_and_skips_optimized(monkeypatch):
     assert f["lookback_days"] == 14
     assert f["account_id"] == "self"
     assert f["region"] == rules._REGION
+
+
+def test_ec2_rightsizing_skips_an_overprovisioned_row_with_no_recommendation_option(monkeypatch):
+    # A review round caught this asymmetric with rds_rightsizing (which already skips a
+    # no-option row) — an option-less row has nothing actionable and previously produced a
+    # "? -> ?" title with no savings figure instead of being skipped like its RDS counterpart.
+    fake = FakeCOPaged(ec2_pages=[{
+        "instanceRecommendations": [
+            {"instanceArn": "arn:aws:ec2:3", "currentInstanceType": "m5.large", "finding": "Overprovisioned",
+             "recommendationOptions": []},
+        ],
+    }])
+    monkeypatch.setattr(rules, "_co_client", lambda: fake)
+    assert rules.ec2_rightsizing(None, [0]) == []
 
 
 def test_ec2_rightsizing_sorts_by_rank_and_picks_the_top_option(monkeypatch):

@@ -692,9 +692,14 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
       {
         # cost: cost-mcp (Cost Explorer + Pricing + Budgets) + finops-mcp (Compute Optimizer +
         #       Savings Plans + Cost Optimization Hub + Trusted Advisor via support).
-        # cost-optimization-hub:List/GetRecommendation* added here (ADR-019 fix): ADR-012 documented
+        # cost-optimization-hub:ListRecommendations added here (ADR-019 fix): ADR-012 documented
         # this grant as already present, but it was never in terraform, so aws_finops_mcp.py's
         # get_cost_optimization_hub_recommendations tool has been AccessDenied at runtime since 012.
+        # Only ListRecommendations is granted — aws_finops_mcp.py calls exactly that one COH action
+        # (list_recommendations); GetRecommendation/ListRecommendationSummaries were pre-granted
+        # with no caller in an earlier revision, which a PR review flagged as violating this same
+        # file's own "no IAM ahead of code" precedent (see worker_finops_baseline in workers.tf) —
+        # add them back only once a tool actually calls them.
         Sid    = "CostRead"
         Effect = "Allow"
         Action = [
@@ -708,9 +713,7 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
           "compute-optimizer:Get*",
           "savingsplans:Describe*",
           "support:Describe*",
-          "cost-optimization-hub:ListRecommendations",
-          "cost-optimization-hub:GetRecommendation",
-          "cost-optimization-hub:ListRecommendationSummaries"
+          "cost-optimization-hub:ListRecommendations"
         ]
         Resource = "*"
       },

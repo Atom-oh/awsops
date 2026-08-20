@@ -144,12 +144,29 @@ def ebs_unattached(conn, ce_calls):
     for resource_id, account_id, region, data, captured_at in rows or []:
         size = data.get("size")
         vtype = (data.get("volume_type") or "").lower()
+        iops = data.get("iops")
         rate = _EBS_GB_MONTH_USD.get(vtype) if region in _PRICED_REGIONS else None
+        # A PR review caught that the GB-rate alone materially understates io1/io2 cost — the
+        # provisioned-IOPS charge routinely dominates it (e.g. a 100 GiB io2 volume at 5,000 IOPS:
+        # storage ~$12.50/mo vs. IOPS in the hundreds/mo) — and gp3 IOPS/throughput above the free
+        # baseline (3,000 IOPS / 125 MiB/s) bills too. `sync_lambda.py` captures `iops` but not
+        # gp3's throughput, so there is no way to price either type completely without inventing a
+        # number this ADR's own invariant forbids. Rather than present a materially incomplete
+        # figure as confident (io1/io2), or one that's silently wrong whenever a gp3 volume happens
+        # to exceed the free baseline, demote both to NULL + a `partial_rate` evidence marker —
+        # same treatment as an unpriced region/type, and for the same reason.
+        needs_iops_pricing_not_available = vtype in ("io1", "io2") or (
+            vtype == "gp3" and isinstance(iops, (int, float)) and iops > 3000
+        )
+        if needs_iops_pricing_not_available:
+            rate = None
         savings = round(size * rate, 2) if (rate is not None and size) else None
         evidence = {"account_id": account_id, "region": region, "size_gib": size, "volume_type": vtype,
                     "rate_usd_per_gb_month": rate, "captured_at": str(captured_at)}
         if region not in _PRICED_REGIONS:
             evidence["unpriced_region"] = region
+        elif needs_iops_pricing_not_available:
+            evidence["partial_rate"] = "provisioned IOPS/throughput charges not priced"
         elif rate is None:
             evidence["unpriced_volume_type"] = vtype
         out.append({
@@ -291,7 +308,13 @@ def ec2_rightsizing(conn, ce_calls):
             if finding not in ("Overprovisioned", "NotOptimized"):
                 continue  # Underprovisioned / Optimized are not cost-saving opportunities
             options = sorted(r.get("recommendationOptions") or [], key=lambda o: o.get("rank", 999))
-            top = options[0] if options else {}
+            if not options:
+                # A review round caught this asymmetric with rds_rightsizing (which already
+                # skips a no-option row below) — a Finding of Overprovisioned/NotOptimized with
+                # no recommendation option has nothing actionable to show, and previously produced
+                # a "? -> ?" title with no savings figure at all.
+                continue
+            top = options[0]
             savings = (top.get("savingsOpportunity") or {}).get("estimatedMonthlySavings", {}).get("value")
             arn = r.get("instanceArn", "")
             out.append({
