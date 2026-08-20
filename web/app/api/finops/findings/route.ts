@@ -18,14 +18,28 @@ export async function GET(request: Request) {
   if (process.env.FINOPS_BASELINE_ENABLED !== 'true') {
     return json({ enabled: false, findings: [], lastRun: null }, 200);
   }
+  // `/cost` is account-scoped (useActiveAccount) but ebs_unattached deliberately spans every
+  // synced account/region in one pass, so unlike single-account routes this filter is optional:
+  // omitted or '__all__' -> fleet-wide (every finding still carries its own accountId/region so
+  // the UI can label it), 'self' or a specific id -> scoped to that account only. A review round
+  // caught that the card ignored the page's account selection entirely.
+  const account = new URL(request.url).searchParams.get('account');
+  const scoped = account && account !== '__all__';
   try {
     const [findingsRes, runRes] = await Promise.all([
       getPool().query(
-        `SELECT id, rule_id, account_id, region, resource_id, title, category, status, monthly_savings_usd,
-                evidence, guard_hits, explanation_ko, first_seen_at, last_seen_at
-           FROM finops_findings
-          WHERE status != 'resolved'
-          ORDER BY (monthly_savings_usd IS NULL), monthly_savings_usd DESC NULLS LAST, first_seen_at DESC`,
+        scoped
+          ? `SELECT id, rule_id, account_id, region, resource_id, title, category, status, monthly_savings_usd,
+                    evidence, guard_hits, explanation_ko, first_seen_at, last_seen_at
+               FROM finops_findings
+              WHERE status != 'resolved' AND account_id = $1
+              ORDER BY (monthly_savings_usd IS NULL), monthly_savings_usd DESC NULLS LAST, first_seen_at DESC`
+          : `SELECT id, rule_id, account_id, region, resource_id, title, category, status, monthly_savings_usd,
+                    evidence, guard_hits, explanation_ko, first_seen_at, last_seen_at
+               FROM finops_findings
+              WHERE status != 'resolved'
+              ORDER BY (monthly_savings_usd IS NULL), monthly_savings_usd DESC NULLS LAST, first_seen_at DESC`,
+        scoped ? [account] : [],
       ),
       getPool().query(
         `SELECT id, started_at, finished_at, status, rules_evaluated, findings_count, ce_api_calls, error
@@ -62,7 +76,7 @@ export async function GET(request: Request) {
           error: runRes.rows[0].error,
         }
       : null;
-    return json({ enabled: true, findings, lastRun }, 200);
+    return json({ enabled: true, findings, lastRun, accountFilter: scoped ? account : null }, 200);
   } catch (e) {
     return json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, 500);
   }

@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 400564e09737 · generated-at: 2026-08-19 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 6f229192ac04 · generated-at: 2026-08-20 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -6,7 +6,7 @@
 
 **v2 is live on `main`** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is decommissioned per ADR-016 — its code left the tree 2026-07-12 (`git tag v1-pre-code-removal-20260712`); only stopped AWS infra remains until final teardown. v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2.
 
-**ADR numbering:** current truth = `docs/decisions/BASELINE.md` + consolidated ADRs **001–018** (new ADR = highest+1, BASELINE updated in the same PR). Legacy ADRs 001–046 are out of tree (tag `adr-legacy-2026-06-22`); docs cite them as `ADR-0NN[legacy 0XX]` — the live number is authoritative, resolve via `docs/decisions/ADR-MAPPING.md`, never read the tag bodies.
+**ADR numbering:** current truth = `docs/decisions/BASELINE.md` + consolidated ADRs **001–019** (new ADR = highest+1, BASELINE updated in the same PR). Legacy ADRs 001–046 are out of tree (tag `adr-legacy-2026-06-22`); docs cite them as `ADR-0NN[legacy 0XX]` — the live number is authoritative, resolve via `docs/decisions/ADR-MAPPING.md`, never read the tag bodies.
 
 ## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
 v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *proposal* (read-only).**
@@ -58,7 +58,7 @@ No repo-root `package.json` — the only one outside `web/`/`docs-site/` is `scr
 - **Fargate worker Dockerfiles use `CMD`, not exec-form `ENTRYPOINT`** (SFN `containerOverrides.command` appends to ENTRYPOINT → argv doubles).
 - **ECS `secrets` valueFrom needs execution-role perms** (not task role) — else `ResourceInitializationError`.
 - **No `-auto-approve` on shared infra** — saved `tfplan` only; long applies run by the controller.
-- **Flag-gate large new features** (`agentcore_enabled`, `workers_enabled`, `steampipe_enabled`, `hybrid_routing_enabled` — default false → `plan` = No changes, $0).
+- **Flag-gate large new features** (`agentcore_enabled`, `workers_enabled`, `steampipe_enabled`, `hybrid_routing_enabled`, `finops_baseline_enabled` — default false → `plan` = No changes, $0).
 
 ## Naming / conventions
 - Components `export default`. Resources `awsops-v2-*`; gateways `awsops-v2-{key}-gateway`; SSM under `/ops/awsops-v2/...` (`aws...` prefix is SSM-reserved).

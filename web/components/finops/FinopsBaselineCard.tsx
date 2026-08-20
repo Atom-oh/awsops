@@ -1,13 +1,15 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
 
 // ADR-019 FinOps baseline-recommendations engine — self-fetching card (mirrors InsightCard's
 // enabled/loaded/empty-state shape). Read-only: no action button here, ever — the ADR's own
 // invariant is that this domain adds zero AWS-mutation paths (a card showing an IaC-change EXAMPLE
 // as text would be allowed by the ADR, but this version doesn't even do that).
 interface Finding {
-  id: number; ruleId: string; resourceId: string; title: string; category: string;
+  id: number; ruleId: string; accountId: string; region: string; resourceId: string; title: string;
+  category: string;
   status: 'active' | 'needs_review' | 'resolved';
   monthlySavingsUsd: number | null;
   evidence: Record<string, unknown>;
@@ -19,7 +21,7 @@ interface LastRun {
   id: number; startedAt: string; finishedAt: string | null; status: string;
   rulesEvaluated: number | null; findingsCount: number | null; ceApiCalls: number; error: string | null;
 }
-interface Findings { enabled: boolean; findings: Finding[]; lastRun: LastRun | null }
+interface Findings { enabled: boolean; findings: Finding[]; lastRun: LastRun | null; accountFilter: string | null }
 
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -39,6 +41,7 @@ function ago(ts: string | null, tt: (s: string) => string): string {
 
 export default function FinopsBaselineCard() {
   const { tt } = useI18n();
+  const [active] = useActiveAccount();
   const [data, setData] = useState<Findings | null>(null);
   const [loaded, setLoaded] = useState(false);
   // Distinct from "no batch has run yet" (data === null with no error) — a failed/non-200 fetch
@@ -49,11 +52,16 @@ export default function FinopsBaselineCard() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch('/api/finops/findings');
+      // ebs_unattached spans every synced account/region in one pass, so unlike single-account
+      // routes this scoping is a genuine filter, not a fan-out trigger — '전체 계정' passes no
+      // account param and gets the fleet-wide view (each finding still labeled below).
+      const acct = active !== ALL_ACCOUNTS ? accountParam(active) : '';
+      const qs = active !== ALL_ACCOUNTS && acct ? `?${acct}` : '';
+      const r = await fetch(`/api/finops/findings${qs}`);
       if (r.ok) { setData(await r.json()); setFetchError(false); }
       else { setFetchError(true); }
     } catch { setFetchError(true); } finally { setLoaded(true); }
-  }, []);
+  }, [active]);
   useEffect(() => { load(); }, [load]);
 
   if (loaded && data?.enabled === false) return null; // feature off -> render nothing (no-op)
@@ -144,6 +152,15 @@ export default function FinopsBaselineCard() {
                     {f.monthlySavingsUsd === null ? tt('금액 산출 불가') : `${usd(f.monthlySavingsUsd)}/mo`}
                   </p>
                 </div>
+                {!data?.accountFilter && (
+                  // Fleet-wide view (no account selected, or '전체 계정') — label the scope per
+                  // finding so a cross-account/region total is never mistaken for a single-account
+                  // one (a review round caught the card summing accounts B/C into a total shown
+                  // while account A was selected, with no way to tell).
+                  <p className="text-[11px] text-ink-400">
+                    {f.accountId === 'self' ? tt('호스트 계정') : f.accountId} · {f.region || tt('알 수 없음')}
+                  </p>
+                )}
                 {f.explanationKo && <p className="text-[12px] text-ink-500">{f.explanationKo}</p>}
                 {f.guardHits.length > 0 && (
                   <p className="text-[11px] text-amber-600">{tt('주의')}: {f.guardHits.join(', ')}</p>

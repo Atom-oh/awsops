@@ -2,12 +2,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import FinopsBaselineCard from './FinopsBaselineCard';
+import { setActiveAccount, ALL_ACCOUNTS } from '@/lib/account-context';
 
 function mockFetch(body: unknown) {
-  return vi.fn(async () => ({ ok: true, status: 200, json: async () => body }));
+  return vi.fn(async (_url: string) => ({ ok: true, status: 200, json: async () => body }));
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.localStorage.clear(); });
 
 describe('FinopsBaselineCard', () => {
   it('renders nothing when the feature is disabled (enabled:false)', async () => {
@@ -121,5 +122,58 @@ describe('FinopsBaselineCard', () => {
     const total = screen.getByTestId('finops-baseline-total');
     expect(total.textContent).not.toContain('$0.00');
     expect(total.textContent).toContain('금액 산출 불가');
+  });
+
+  it('labels each finding with account/region in the fleet-wide (unscoped) view', async () => {
+    // A review round caught the card summing cross-account findings into one total with no way
+    // to tell they came from different accounts/regions when no account filter is applied.
+    vi.stubGlobal('fetch', mockFetch({
+      enabled: true, accountFilter: null,
+      lastRun: { id: 1, startedAt: 'a', finishedAt: new Date().toISOString(), status: 'succeeded', rulesEvaluated: 1, findingsCount: 1, ceApiCalls: 0, error: null },
+      findings: [
+        { id: 1, ruleId: 'ebs_unattached', accountId: '222222222222', region: 'us-east-1', resourceId: 'vol-1',
+          title: 'Unattached EBS vol-1', category: 'storage', status: 'active', monthlySavingsUsd: 9.12,
+          evidence: {}, guardHits: [], explanationKo: null, firstSeenAt: 'a', lastSeenAt: 'b' },
+      ],
+    }));
+    render(<FinopsBaselineCard />);
+    await waitFor(() => screen.getByText('Unattached EBS vol-1'));
+    expect(screen.getByText('222222222222 · us-east-1')).toBeTruthy();
+  });
+
+  it('omits the per-finding account/region label when the view is already account-scoped', async () => {
+    vi.stubGlobal('fetch', mockFetch({
+      enabled: true, accountFilter: 'self',
+      lastRun: { id: 1, startedAt: 'a', finishedAt: new Date().toISOString(), status: 'succeeded', rulesEvaluated: 1, findingsCount: 1, ceApiCalls: 0, error: null },
+      findings: [
+        { id: 1, ruleId: 'ebs_unattached', accountId: 'self', region: 'ap-northeast-2', resourceId: 'vol-1',
+          title: 'Unattached EBS vol-1', category: 'storage', status: 'active', monthlySavingsUsd: 9.12,
+          evidence: {}, guardHits: [], explanationKo: null, firstSeenAt: 'a', lastSeenAt: 'b' },
+      ],
+    }));
+    render(<FinopsBaselineCard />);
+    await waitFor(() => screen.getByText('Unattached EBS vol-1'));
+    expect(screen.queryByText(/호스트 계정/)).toBeNull();
+  });
+
+  it('passes the active account as a query param when a specific account is selected', async () => {
+    setActiveAccount('222222222222');
+    const fetchSpy = mockFetch({ enabled: true, accountFilter: '222222222222', findings: [], lastRun: null });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<FinopsBaselineCard />);
+    // useActiveAccount's own mount effect corrects the initial 'self' state to the value already
+    // in localStorage, re-running load() a second time — assert the FINAL call, not the first.
+    await waitFor(() => expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/finops/findings?account=222222222222'));
+    setActiveAccount('self');
+  });
+
+  it('omits the account query param entirely when "전체 계정" is selected', async () => {
+    setActiveAccount(ALL_ACCOUNTS);
+    const fetchSpy = mockFetch({ enabled: true, accountFilter: null, findings: [], lastRun: null });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<FinopsBaselineCard />);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/finops/findings');
+    setActiveAccount('self');
   });
 });

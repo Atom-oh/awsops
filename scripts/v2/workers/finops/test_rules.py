@@ -95,6 +95,25 @@ def test_ebs_unattached_scopes_each_row_to_its_own_account_and_region():
     assert scopes == {("111111111111", "ap-northeast-2"), ("222222222222", "us-east-1")}
 
 
+def test_ebs_unattached_only_prices_the_supported_region_and_leaves_others_null():
+    # _EBS_GB_MONTH_USD is an ap-northeast-2-only rate card — a review round caught it being
+    # applied fleet-wide, pricing e.g. a us-east-1 volume at Seoul rates as a confident amount.
+    # A row outside the priced region set must still surface (never silently hidden) but with
+    # monthly_savings_usd=NULL rather than an invented number.
+    conn = FakeConn([
+        ("vol-kr", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp3"}, _NOW),
+        ("vol-us", "self", "us-east-1", {"state": "available", "size": 100, "volume_type": "gp3"}, _NOW),
+    ])
+    out = rules.ebs_unattached(conn, [0])
+    assert len(out) == 2
+    kr = next(f for f in out if f["resource_id"] == "vol-kr")
+    us = next(f for f in out if f["resource_id"] == "vol-us")
+    assert kr["monthly_savings_usd"] == round(100 * 0.0912, 2)
+    assert "unpriced_region" not in kr["evidence"]
+    assert us["monthly_savings_usd"] is None
+    assert us["evidence"]["unpriced_region"] == "us-east-1"
+
+
 def test_ebs_unattached_raises_when_sync_never_ran():
     # steampipe_enabled=false (or inv_sync never ran for this type) -> no inventory_sync_runs row
     # at all, not "confirmed none unattached". Must raise so engine.run() skips resolve_stale.
@@ -233,10 +252,17 @@ def test_ec2_rightsizing_stops_at_the_page_safety_bound(monkeypatch):
     assert len(fake.ec2_calls) == rules._CO_MAX_PAGES
 
 
-def test_ec2_rightsizing_degrades_to_empty_on_not_opted_in(monkeypatch):
+def test_ec2_rightsizing_reraises_on_not_opted_in_instead_of_degrading(monkeypatch):
+    # An opt-out (or a support-plan lapse) is a data-availability state, not evidence that
+    # yesterday's real findings were fixed — must raise (engine.py marks the run partial and
+    # preserves prior findings) rather than return [] (which would let resolve_stale wipe them).
     fake = FakeCOPaged(ec2_exc=Exception("An error occurred (OptInRequiredException) ..."))
     monkeypatch.setattr(rules, "_co_client", lambda: fake)
-    assert rules.ec2_rightsizing(None, [0]) == []
+    try:
+        rules.ec2_rightsizing(None, [0])
+        assert False, "expected the exception to propagate"
+    except Exception as e:
+        assert "OptInRequiredException" in str(e)
 
 
 def test_ec2_rightsizing_reraises_unexpected_errors_instead_of_degrading(monkeypatch):
@@ -306,10 +332,14 @@ def test_rds_rightsizing_reraises_access_denied_instead_of_degrading(monkeypatch
         assert "AccessDeniedException" in str(e)
 
 
-def test_rds_rightsizing_degrades_to_empty_on_not_opted_in(monkeypatch):
+def test_rds_rightsizing_reraises_on_not_opted_in_instead_of_degrading(monkeypatch):
     fake = FakeCOPaged(rds_exc=Exception("An error occurred (SubscriptionRequiredException) ..."))
     monkeypatch.setattr(rules, "_co_client", lambda: fake)
-    assert rules.rds_rightsizing(None, [0]) == []
+    try:
+        rules.rds_rightsizing(None, [0])
+        assert False, "expected the exception to propagate"
+    except Exception as e:
+        assert "SubscriptionRequiredException" in str(e)
 
 
 def test_rds_rightsizing_reraises_unexpected_errors(monkeypatch):

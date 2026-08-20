@@ -5,7 +5,7 @@ const query = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 
-const req = () => new Request('http://x/api/finops/findings', { headers: { cookie: 'awsops_token=t' } });
+const req = (qs = '') => new Request(`http://x/api/finops/findings${qs}`, { headers: { cookie: 'awsops_token=t' } });
 
 beforeEach(() => {
   verifyUser.mockReset();
@@ -70,7 +70,31 @@ describe('GET /api/finops/findings', () => {
     query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
     const { GET } = await import('./route');
     const body = await (await GET(req())).json();
-    expect(body).toEqual({ enabled: true, findings: [], lastRun: null });
+    expect(body).toEqual({ enabled: true, findings: [], lastRun: null, accountFilter: null });
+  });
+
+  it('?account=<id> scopes the SQL WHERE clause and echoes accountFilter', async () => {
+    process.env.FINOPS_BASELINE_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { GET } = await import('./route');
+    const body = await (await GET(req('?account=222222222222'))).json();
+    expect(body.accountFilter).toBe('222222222222');
+    const [findingsSql, findingsParams] = query.mock.calls[0];
+    expect(findingsSql).toMatch(/account_id = \$1/);
+    expect(findingsParams).toEqual(['222222222222']);
+  });
+
+  it('?account=__all__ is treated as fleet-wide, not a literal filter value', async () => {
+    process.env.FINOPS_BASELINE_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { GET } = await import('./route');
+    const body = await (await GET(req('?account=__all__'))).json();
+    expect(body.accountFilter).toBeNull();
+    const [findingsSql, findingsParams] = query.mock.calls[0];
+    expect(findingsSql).not.toMatch(/account_id = \$1/);
+    expect(findingsParams).toEqual([]);
   });
 
   it('null monthly_savings_usd stays null (never coerced to 0)', async () => {
