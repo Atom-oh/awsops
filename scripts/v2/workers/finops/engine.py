@@ -36,11 +36,18 @@ def _upsert_finding(conn, run_id, rule_id, item, status, guard_hits):
         # A stale explanation_ko sitting next to a changed amount ("월 $9.12 절감" next to today's
         # $12.40) is exactly the kind of confident-looking-but-wrong text the LLM layer's
         # discard-on-contradiction check exists to prevent — except this path bypasses that check
-        # entirely, since the OLD explanation was never re-evaluated against the NEW number. Clear
-        # it only when the amount actually changed (IS DISTINCT FROM handles the NULL-to-NULL and
-        # NULL-to-value cases correctly); an unchanged finding keeps its explanation instead of
-        # needlessly re-prompting the LLM every day.
+        # entirely, since the OLD explanation was never re-evaluated against the NEW number. The
+        # LLM prompt (llm.explain) is built from title + category + evidence + monthly_savings_usd
+        # together, so checking amount alone is not enough: a rule can change the CURRENT/RECOMMENDED
+        # instance type or the underlying evidence (region, size, rate) while the dollar figure
+        # happens to stay the same, leaving an explanation that quotes the right number next to now-
+        # wrong specifics. Clear it whenever ANY of the fields the prompt was built from changed
+        # (IS DISTINCT FROM handles the NULL-to-NULL and NULL-to-value cases correctly); an
+        # unchanged finding keeps its explanation instead of needlessly re-prompting the LLM every day.
         "  explanation_ko = CASE WHEN finops_findings.monthly_savings_usd IS DISTINCT FROM EXCLUDED.monthly_savings_usd "
+        "                          OR finops_findings.title IS DISTINCT FROM EXCLUDED.title "
+        "                          OR finops_findings.category IS DISTINCT FROM EXCLUDED.category "
+        "                          OR finops_findings.evidence IS DISTINCT FROM EXCLUDED.evidence "
         "                        THEN NULL ELSE finops_findings.explanation_ko END, "
         "  evidence = EXCLUDED.evidence, guard_hits = EXCLUDED.guard_hits, "
         "  last_seen_at = now(), resolved_at = NULL "

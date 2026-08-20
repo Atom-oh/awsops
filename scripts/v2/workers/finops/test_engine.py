@@ -24,13 +24,20 @@ class FakeConn:
             key = (kw["rule_id"], kw["acct"], kw["region"], kw["rid"])
             row = self.findings.get(key)
             if row is None:
-                row = {"id": self._next_finding_id}
+                row = {"id": self._next_finding_id, "explanation_ko": None}
                 self._next_finding_id += 1
                 self.findings[key] = row
+            else:
+                # Mirrors the real CASE in engine.py's ON CONFLICT DO UPDATE: the LLM prompt is
+                # built from title/category/evidence/monthly_savings_usd together, so the stored
+                # explanation is only still valid if NONE of those changed.
+                changed = (row["monthly_savings_usd"] != kw["savings"] or row["title"] != kw["title"]
+                           or row["category"] != kw["cat"] or row["evidence"] != kw["ev"])
+                if changed:
+                    row["explanation_ko"] = None
             row.update(title=kw["title"], category=kw["cat"], status=kw["status"],
                        monthly_savings_usd=kw["savings"], evidence=kw["ev"], guard_hits=kw["guards"],
                        resolved_at=None)
-            row.setdefault("explanation_ko", None)
             return [[row["id"]]]
         if "SET status='resolved'" in s:
             rid, seen = kw["rid"], set(kw["seen"])
@@ -162,3 +169,56 @@ def test_explain_pending_attaches_llm_text_and_skips_contradicting_output(monkey
     engine.run({}, conn)
     assert conn.findings[("r1", "self", "", "res-a")]["explanation_ko"] == "설명 A"
     assert conn.findings[("r1", "self", "", "res-b")]["explanation_ko"] is None
+
+
+def test_explanation_survives_a_rerun_with_no_change(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(catalog, "active_rules", lambda: [_rule("r1", [_item("res-a", savings=10.0)])])
+    monkeypatch.setattr(llm, "explain", lambda *a, **kw: "설명 A")
+    engine.run({}, conn)
+    assert conn.findings[("r1", "self", "", "res-a")]["explanation_ko"] == "설명 A"
+
+    # _explain_pending only re-prompts rows with explanation_ko IS NULL — if a rerun with an
+    # identical finding wrongly cleared it, this second run would try to overwrite it and this
+    # assertion would catch a regression back to the SQL checking amount alone.
+    monkeypatch.setattr(llm, "explain", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("should not re-prompt an unchanged finding")))
+    engine.run({}, conn)
+    assert conn.findings[("r1", "self", "", "res-a")]["explanation_ko"] == "설명 A"
+
+
+def test_explanation_is_cleared_when_the_amount_changes(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(catalog, "active_rules", lambda: [_rule("r1", [_item("res-a", savings=10.0)])])
+    monkeypatch.setattr(llm, "explain", lambda *a, **kw: "설명 A (월 $10.00)")
+    engine.run({}, conn)
+    assert conn.findings[("r1", "self", "", "res-a")]["explanation_ko"] == "설명 A (월 $10.00)"
+
+    monkeypatch.setattr(catalog, "active_rules", lambda: [_rule("r1", [_item("res-a", savings=25.0)])])
+    monkeypatch.setattr(llm, "explain", lambda *a, **kw: None)  # simulate a Bedrock hiccup this run
+    engine.run({}, conn)
+    # The stale explanation, which now cites a wrong dollar figure, must not survive just because
+    # this run's re-prompt happened to fail — leaving the wrong number would be worse than blank.
+    assert conn.findings[("r1", "self", "", "res-a")]["explanation_ko"] is None
+
+
+def test_explanation_is_cleared_when_evidence_changes_but_the_amount_does_not(monkeypatch):
+    # A rule can revise its evidence/title (e.g. a different recommended instance type) while the
+    # dollar figure coincidentally stays identical — checking amount alone would leave an
+    # explanation that quotes the right number next to now-wrong specifics.
+    conn = FakeConn()
+    monkeypatch.setattr(catalog, "active_rules", lambda: [_rule(
+        "r1", [{"resource_id": "res-a", "account_id": "self", "region": "", "title": "m5.xlarge -> m5.large",
+                "category": "test", "monthly_savings_usd": 10.0, "evidence": {"to": "m5.large"}, "tags": None,
+                "lookback_days": None}])])
+    monkeypatch.setattr(llm, "explain", lambda *a, **kw: "m5.large로 축소 권장")
+    engine.run({}, conn)
+    assert conn.findings[("r1", "self", "", "res-a")]["explanation_ko"] == "m5.large로 축소 권장"
+
+    monkeypatch.setattr(catalog, "active_rules", lambda: [_rule(
+        "r1", [{"resource_id": "res-a", "account_id": "self", "region": "", "title": "m5.xlarge -> m5.medium",
+                "category": "test", "monthly_savings_usd": 10.0, "evidence": {"to": "m5.medium"}, "tags": None,
+                "lookback_days": None}])])
+    monkeypatch.setattr(llm, "explain", lambda *a, **kw: None)  # simulate a Bedrock hiccup this run
+    engine.run({}, conn)
+    assert conn.findings[("r1", "self", "", "res-a")]["explanation_ko"] is None
