@@ -21,7 +21,11 @@ interface LastRun {
   id: number; startedAt: string; finishedAt: string | null; status: string;
   rulesEvaluated: number | null; findingsCount: number | null; ceApiCalls: number; error: string | null;
 }
-interface Findings { enabled: boolean; findings: Finding[]; lastRun: LastRun | null; accountFilter: string | null }
+interface CoRightsizingScope { accountId: string; region: string }
+interface Findings {
+  enabled: boolean; findings: Finding[]; lastRun: LastRun | null; accountFilter: string | null;
+  coRightsizingScope: CoRightsizingScope;
+}
 
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -116,6 +120,16 @@ export default function FinopsBaselineCard() {
   const total = knownConfident.reduce((s, f) => s + (f.monthlySavingsUsd as number), 0);
   const unknownCount = confident.length - knownConfident.length;
 
+  // ec2_rightsizing/rds_rightsizing only ever evaluate the host account's own Compute-Optimizer
+  // region — a review round caught that filtering to a different account, or a different region
+  // of the host account, silently rendered "no waste found" as if rightsizing had been checked
+  // there too, when it was never queried at all. `accountFilter` is null in the fleet-wide view,
+  // where per-finding account/region labels already disambiguate this — the notice only applies
+  // to an explicitly account-scoped view that isn't the evaluated scope.
+  const coScope = data?.coRightsizingScope;
+  const rightsizingUnevaluatedForThisScope =
+    !!data?.accountFilter && !!coScope && data.accountFilter !== coScope.accountId;
+
   return (
     <section className="rounded-xl border border-ink-200 bg-card p-4" data-testid="finops-baseline-card">
       <div className="flex items-center justify-between mb-3">
@@ -144,6 +158,11 @@ export default function FinopsBaselineCard() {
           </span>
         )}
       </div>
+      {rightsizingUnevaluatedForThisScope && (
+        <p className="text-[11px] text-ink-400 mb-2" data-testid="finops-baseline-rightsizing-unevaluated">
+          {tt('EC2/RDS 리사이징은 호스트 계정의 Compute Optimizer 리전만 평가합니다 — 이 계정에서는 평가되지 않았습니다.')}
+        </p>
+      )}
       {!loaded ? (
         <p className="text-[13px] text-ink-400">{tt('로딩 중…')}</p>
       ) : fetchError ? (
@@ -153,6 +172,15 @@ export default function FinopsBaselineCard() {
       ) : data?.lastRun?.status === 'failed' ? (
         <p className="text-[13px] text-rose-600" data-testid="finops-baseline-error">
           {tt('최근 배치 실행이 실패했습니다')}{data.lastRun.error ? `: ${data.lastRun.error}` : ''}
+        </p>
+      ) : data?.lastRun?.status === 'running' && findings.length === 0 ? (
+        // A review round caught that a `running` last-run (the row engine.run() inserts BEFORE
+        // evaluating anything) with no prior findings fell through to the "no waste found" clean
+        // empty-state below — a batch that's still executing (or, if Fargate was OOM-killed
+        // mid-run, one that died stuck in `running` forever, since the reaper reconciles
+        // worker_jobs, not finops_runs) must never look like a confirmed-clean result.
+        <p className="text-[13px] text-ink-400" data-testid="finops-baseline-running">
+          {tt('배치가 실행 중입니다 — 잠시 후 다시 확인해주세요.')}
         </p>
       ) : findings.length === 0 ? (
         <p className="text-[13px] text-ink-400" data-testid="finops-baseline-empty">

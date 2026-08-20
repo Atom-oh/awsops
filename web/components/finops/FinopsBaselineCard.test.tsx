@@ -34,6 +34,20 @@ describe('FinopsBaselineCard', () => {
     expect(screen.getByText('현재 발견된 상시 낭비 항목이 없습니다.')).toBeTruthy();
   });
 
+  it('shows an in-progress state instead of "no waste found" while the batch is running', async () => {
+    // A review round caught that finops_runs.status='running' (the row engine.run() inserts
+    // BEFORE evaluating anything) with no prior findings fell through to the clean-empty branch —
+    // a batch that is still executing (or one stuck forever because the worker died mid-run) must
+    // never look like a confirmed-clean result.
+    vi.stubGlobal('fetch', mockFetch({
+      enabled: true, findings: [],
+      lastRun: { id: 1, startedAt: 'a', finishedAt: null, status: 'running', rulesEvaluated: null, findingsCount: null, ceApiCalls: 0, error: null },
+    }));
+    render(<FinopsBaselineCard />);
+    await waitFor(() => screen.getByTestId('finops-baseline-running'));
+    expect(screen.queryByTestId('finops-baseline-empty')).toBeNull();
+  });
+
   it('shows a failed-batch error instead of an empty state', async () => {
     vi.stubGlobal('fetch', mockFetch({
       enabled: true, findings: [],
@@ -274,6 +288,47 @@ describe('FinopsBaselineCard', () => {
       }),
     });
     await waitFor(() => screen.getByText('Second account finding'));
+    setActiveAccount('self');
+  });
+
+  it('warns that EC2/RDS rightsizing was never evaluated for a non-host account view', async () => {
+    // ec2_rightsizing/rds_rightsizing only ever query the host account's own Compute Optimizer
+    // region — a review round caught that filtering to a different account silently showed "no
+    // waste found" as if rightsizing had been checked there too. accountFilter !== 'self' (the
+    // evaluated scope from coRightsizingScope) must surface the gap explicitly.
+    setActiveAccount('222222222222');
+    vi.stubGlobal('fetch', mockFetch({
+      enabled: true, accountFilter: '222222222222', findings: [],
+      lastRun: { id: 1, startedAt: 'a', finishedAt: 'b', status: 'succeeded', rulesEvaluated: 1, findingsCount: 0, ceApiCalls: 0, error: null },
+      coRightsizingScope: { accountId: 'self', region: 'ap-northeast-2' },
+    }));
+    render(<FinopsBaselineCard />);
+    await waitFor(() => screen.getByTestId('finops-baseline-rightsizing-unevaluated'));
+    setActiveAccount('self');
+  });
+
+  it('omits the rightsizing-unevaluated warning when scoped to the host account itself', async () => {
+    setActiveAccount('self');
+    vi.stubGlobal('fetch', mockFetch({
+      enabled: true, accountFilter: 'self', findings: [],
+      lastRun: { id: 1, startedAt: 'a', finishedAt: 'b', status: 'succeeded', rulesEvaluated: 1, findingsCount: 0, ceApiCalls: 0, error: null },
+      coRightsizingScope: { accountId: 'self', region: 'ap-northeast-2' },
+    }));
+    render(<FinopsBaselineCard />);
+    await waitFor(() => screen.getByTestId('finops-baseline-empty'));
+    expect(screen.queryByTestId('finops-baseline-rightsizing-unevaluated')).toBeNull();
+  });
+
+  it('omits the rightsizing-unevaluated warning in the fleet-wide (unscoped) view', async () => {
+    setActiveAccount(ALL_ACCOUNTS);
+    vi.stubGlobal('fetch', mockFetch({
+      enabled: true, accountFilter: null, findings: [],
+      lastRun: { id: 1, startedAt: 'a', finishedAt: 'b', status: 'succeeded', rulesEvaluated: 1, findingsCount: 0, ceApiCalls: 0, error: null },
+      coRightsizingScope: { accountId: 'self', region: 'ap-northeast-2' },
+    }));
+    render(<FinopsBaselineCard />);
+    await waitFor(() => screen.getByTestId('finops-baseline-empty'));
+    expect(screen.queryByTestId('finops-baseline-rightsizing-unevaluated')).toBeNull();
     setActiveAccount('self');
   });
 });

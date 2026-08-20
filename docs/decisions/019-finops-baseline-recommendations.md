@@ -15,7 +15,7 @@ ADR-012 does not describe an always-on "what is leaking right now" surface. Exis
 
 ## Decision / 결정
 
-- **결정론적 룰 엔진이 판정·금액·우선순위를 소유한다.** LLM은 이미 확정된 finding에 대한 한국어 설명만 덧붙이며, 계산·추정·순위 재조정을 하지 않는다. 설명이 finding의 확정 숫자와 불일치하면 그 설명은 폐기되고 `null`로 남는다 — LLM 계층이 죽어도 기능은 완전히 동작한다.
+- **결정론적 룰 엔진이 판정·금액을 소유한다** (별도 엔진 소유 `priority` 필드는 아직 없음 — §"엔진이 소유하는 우선순위는 없다" 참조). LLM은 이미 확정된 finding에 대한 한국어 설명만 덧붙이며, 계산·추정·순위 재조정을 하지 않는다. 설명이 finding의 확정 숫자와 불일치하면 그 설명은 폐기되고 `null`로 남는다 — LLM 계층이 죽어도 기능은 완전히 동작한다.
 - **금액 근거는 `inventory_resources`의 published rate card(EBS) + Compute Optimizer 자체 추정(EC2/RDS)으로 한정 — 이번 PR에 Cost Explorer/Cost Optimization Hub/Budgets 호출은 없다.** ADR 초안은 CE/COH/Budgets까지 포괄하는 것으로 서술했으나, PR #232 리뷰에서 실제 구현이 그보다 좁다는 드리프트가 지적되어 이 절을 실제 범위로 좁혔다 — CE/COH/Budgets 기반 룰과 `ce_api_calls` 계측은 **향후 확장**으로 남기고, 착수 시 이 ADR을 갱신한다. CUR을 전제로 하는 룰(태그 커버리지 지출 상세, Bedrock 토큰 라인아이템 등)은 룰 카탈로그에 `status: requires_cur`로만 등록하고 실행하지 않는다 — 산출 불가를 조용히 감추지 않는다.
 - **절감액을 산출할 수 없으면 `NULL`이며 `0`으로 채우지 않는다.** 합계 오염을 막기 위한 불변식.
 - **read-only.** 이 도메인은 AWS 리소스를 변경하는 경로를 하나도 추가하지 않는다 — ADR-005(FROZEN)는 이 결정과 무관하다. 권장 카드에 IaC 변경 예시를 텍스트로 표시하는 것은 허용되나 실행 버튼은 존재하지 않는다.

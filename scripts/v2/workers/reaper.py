@@ -63,6 +63,22 @@ def lambda_handler(_event, _ctx):
             "  OR updated_at < now() - make_interval(mins => :m)) RETURNING id",
             m=R)
         out["reaped_reports"] = len(dr)
+
+        # ADR-019 parity with the diagnosis_reports reconciliation above: engine.run() writes the
+        # finops_runs row 'running' BEFORE evaluating anything and only reaches its own 'failed'/
+        # 'succeeded'/'partial' write via a Python return or `except` — a hard kill (Fargate OOM,
+        # exactly the risk class ADR-019 puts this job on Fargate to survive for the *rule*
+        # evaluation, not for the run-row write itself) leaves it 'running' forever. finops_runs
+        # has no updated_at/heartbeat column (unlike diagnosis_reports), so staleness is judged
+        # from started_at directly — a review round caught that nothing reconciled this at all
+        # (the reaper only touches worker_jobs), so the card showed no in-progress or failed
+        # indicator, just an indefinitely stale 'running' row.
+        fr = conn.run(
+            "UPDATE finops_runs SET status='failed', finished_at=now(), "
+            "error='reaped: stale running (worker likely killed before finishing)' "
+            "WHERE status='running' AND started_at < now() - make_interval(mins => :m) RETURNING id",
+            m=R)
+        out["reaped_finops_runs"] = len(fr)
         return out
     finally:
         conn.close()

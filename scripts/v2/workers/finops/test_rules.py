@@ -23,6 +23,13 @@ class FakeConn:
                 return [('failed', datetime.now(timezone.utc))]
             finished_at = self.sync_run if isinstance(self.sync_run, datetime) else datetime.now(timezone.utc)
             return [('succeeded', finished_at)]
+        if "GROUP BY account_id, region" in sql:
+            latest = {}
+            for resource_id, account_id, region, data, captured_at in self.rows:
+                key = (account_id, region)
+                if key not in latest or captured_at > latest[key]:
+                    latest[key] = captured_at
+            return [(acct, region, ts) for (acct, region), ts in latest.items()]
         return self.rows
 
 
@@ -52,11 +59,17 @@ def test_ebs_unattached_null_savings_when_size_missing():
     assert out[0]["monthly_savings_usd"] is None
 
 
-def test_ebs_unattached_unknown_volume_type_falls_back_to_default_rate():
+def test_ebs_unattached_unknown_volume_type_gets_null_savings_not_an_invented_rate():
+    # An unrecognized volume type has no published rate — a review round caught this falling back
+    # to an invented $0.10/GB "default" (inherited from diagnosis/sources.py, which predates this
+    # ADR's invariant), producing a confident dollar amount for something genuinely unpriced. It
+    # must degrade to NULL + an evidence marker, mirroring the unpriced-region treatment.
     conn = FakeConn([("vol-3", "self", "ap-northeast-2",
                        {"state": "available", "size": 50, "volume_type": "weird"}, _NOW)])
     out = rules.ebs_unattached(conn, [0])
-    assert out[0]["monthly_savings_usd"] == round(50 * 0.10, 2)
+    f = next(f for f in out if f["resource_id"] == "vol-3")
+    assert f["monthly_savings_usd"] is None
+    assert f["evidence"]["unpriced_volume_type"] == "weird"
 
 
 def test_ebs_unattached_flags_a_per_row_stale_captured_at_even_though_the_job_succeeded():
@@ -64,14 +77,18 @@ def test_ebs_unattached_flags_a_per_row_stale_captured_at_even_though_the_job_su
     # THIS row's own captured_at is weeks old — exactly sync_lambda.py's M5 scenario: one account's
     # connection failed that cycle, so its old rows were preserved (not pruned) rather than
     # refreshed. Must be demoted (stale_inventory_data guard), not trusted as confirmed-current,
-    # and — because it's still returned — protected from being wrongly resolved.
+    # and — because it's still returned — protected from being wrongly resolved. Since this is the
+    # ONLY row for this account/region, the account-level coverage-gap check also fires (its own
+    # scope's newest data is equally stale) — both signals are expected together.
     old = _NOW - timedelta(hours=25)
     conn = FakeConn([("vol-4", "self", "ap-northeast-2",
                        {"state": "available", "size": 20, "volume_type": "gp3"}, old)])
     out = rules.ebs_unattached(conn, [0])
-    assert len(out) == 1
-    assert out[0]["stale"] is True
-    assert out[0]["resource_id"] == "vol-4"  # still returned (protected from resolve_stale)
+    vol = next(f for f in out if f["resource_id"] == "vol-4")
+    assert vol["stale"] is True  # still returned (protected from resolve_stale)
+    gap = next(f for f in out if f["evidence"].get("coverage_gap"))
+    assert gap["stale"] is True
+    assert gap["monthly_savings_usd"] is None
 
 
 def test_ebs_unattached_row_within_threshold_is_not_flagged_stale():
@@ -250,6 +267,21 @@ def test_ec2_rightsizing_stops_at_the_page_safety_bound(monkeypatch):
     except RuntimeError:
         pass
     assert len(fake.ec2_calls) == rules._CO_MAX_PAGES
+
+
+def test_ec2_rightsizing_raises_on_a_non_empty_errors_array_instead_of_trusting_the_result(monkeypatch):
+    # A review round caught that Compute Optimizer's in-band `errors` field (per-object/per-account
+    # failures that don't fail the HTTP call itself) was ignored — an incomplete result must not be
+    # trusted as "confirmed none found" (resolve_stale would otherwise wipe real prior findings).
+    page = _ec2_page("arn:aws:ec2:1")
+    page["errors"] = [{"identifier": "arn:aws:ec2:1", "code": "AccessDenied", "message": "denied"}]
+    fake = FakeCOPaged(ec2_pages=[page])
+    monkeypatch.setattr(rules, "_co_client", lambda: fake)
+    try:
+        rules.ec2_rightsizing(None, [0])
+        assert False, "expected RuntimeError"
+    except RuntimeError as e:
+        assert "AccessDenied" in str(e)
 
 
 def test_ec2_rightsizing_reraises_on_not_opted_in_instead_of_degrading(monkeypatch):

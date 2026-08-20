@@ -30,9 +30,15 @@ _REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 # rule reuses the same numbers rather than adding a fourth, slightly different rate table to the
 # pile). A PR review caught that this table was being applied to EVERY synced account/region
 # (inventory_resources spans all of them) as if it were a universal rate — see _PRICED_REGIONS.
+# NOTE: no "default" key — a later review round caught that falling back to an invented rate for
+# an unrecognized/future volume type (inherited from diagnosis/sources.py's ELSE 0.10 CASE, which
+# predates this ADR's "amounts are never invented" invariant) produced a confident dollar amount
+# for something genuinely unpriced, exactly the failure mode _PRICED_REGIONS exists to prevent for
+# regions. An unlisted type now gets the same NULL + evidence-marker treatment as an unpriced
+# region (see the lookup below), never a guessed number.
 _EBS_GB_MONTH_USD = {
     "gp3": 0.0912, "gp2": 0.114, "io1": 0.125, "io2": 0.125,
-    "st1": 0.045, "sc1": 0.025, "default": 0.10,
+    "st1": 0.045, "sc1": 0.025,
 }
 
 # Only ap-northeast-2 has a published rate in _EBS_GB_MONTH_USD above — pricing a us-east-1 (or any
@@ -138,9 +144,14 @@ def ebs_unattached(conn, ce_calls):
     for resource_id, account_id, region, data, captured_at in rows or []:
         size = data.get("size")
         vtype = (data.get("volume_type") or "").lower()
-        priced = region in _PRICED_REGIONS
-        rate = _EBS_GB_MONTH_USD.get(vtype, _EBS_GB_MONTH_USD["default"]) if priced else None
-        savings = round(size * rate, 2) if (priced and size) else None
+        rate = _EBS_GB_MONTH_USD.get(vtype) if region in _PRICED_REGIONS else None
+        savings = round(size * rate, 2) if (rate is not None and size) else None
+        evidence = {"account_id": account_id, "region": region, "size_gib": size, "volume_type": vtype,
+                    "rate_usd_per_gb_month": rate, "captured_at": str(captured_at)}
+        if region not in _PRICED_REGIONS:
+            evidence["unpriced_region"] = region
+        elif rate is None:
+            evidence["unpriced_volume_type"] = vtype
         out.append({
             "resource_id": resource_id,
             "account_id": account_id,
@@ -148,12 +159,48 @@ def ebs_unattached(conn, ce_calls):
             "title": f"Unattached EBS volume {resource_id} ({size or '?'} GiB, {vtype})",
             "category": "storage",
             "monthly_savings_usd": savings,
-            "evidence": {"account_id": account_id, "region": region, "size_gib": size, "volume_type": vtype,
-                         "rate_usd_per_gb_month": rate, "captured_at": str(captured_at),
-                         **({} if priced else {"unpriced_region": region})},
+            "evidence": evidence,
             "tags": data.get("tags") or {},
             "lookback_days": None,  # not a Compute Optimizer finding — this guard never applies here
             "stale": _is_stale(captured_at, _INVENTORY_STALE_AFTER_HOURS),
+        })
+    out.extend(_ebs_stale_account_coverage_gaps(conn))
+    return out
+
+
+def _ebs_stale_account_coverage_gaps(conn):
+    """A review round caught a false-negative class the per-row stale guard above cannot see:
+    `WHERE data->>'state' = 'available'` is evaluated against a SNAPSHOT — if an account's whole
+    ebs_volume snapshot is stale (sync_lambda.py's M5 guard preserves an unreachable account's rows
+    rather than pruning them), a volume that was `in-use` at snapshot time and has since become
+    genuinely unattached produces NO row here at all: no finding, no guard, no coverage signal,
+    while the run still records `succeeded`. That can never be fixed by re-deriving "is it
+    unattached now" from stale data — the only honest fix is to surface the coverage gap itself,
+    so a viewer can tell "confirmed no waste" apart from "this account's data is too old to know."
+    Scans ALL ebs_volume rows (any state) per (account_id, region), and for any scope whose most
+    recent captured_at is stale, emits one coverage-gap item (NULL amount, `stale=True` so the
+    existing stale_inventory_data guard covers it, never counted as `active` savings)."""
+    rows = conn.run(
+        "SELECT account_id, region, MAX(captured_at) FROM inventory_resources "
+        "WHERE resource_type = 'ebs_volume' GROUP BY account_id, region"
+    )
+    out = []
+    for account_id, region, latest_captured_at in rows or []:
+        if not _is_stale(latest_captured_at, _INVENTORY_STALE_AFTER_HOURS):
+            continue
+        out.append({
+            "resource_id": f"__coverage_gap__:{account_id}:{region}",
+            "account_id": account_id,
+            "region": region,
+            "title": f"EBS inventory data for {account_id}/{region} is stale — unattached-volume "
+                     f"coverage may be incomplete",
+            "category": "storage",
+            "monthly_savings_usd": None,
+            "evidence": {"account_id": account_id, "region": region,
+                         "latest_captured_at": str(latest_captured_at), "coverage_gap": True},
+            "tags": {},
+            "lookback_days": None,
+            "stale": True,
         })
     return out
 
@@ -174,13 +221,28 @@ _CO_MAX_PAGES = 5
 
 def _co_page(get_fn, list_key):
     """Shared pagination helper: yields each page's raw response dict. Raises RuntimeError if the
-    page bound is hit with a nextToken still present (truncated, not exhausted) — see _CO_MAX_PAGES."""
+    page bound is hit with a nextToken still present (truncated, not exhausted) — see _CO_MAX_PAGES.
+
+    Also raises on a non-empty `errors` array (verified present on both GetEC2InstanceRecommendations
+    and GetRDSDatabaseRecommendations via botocore's service model: `GetRecommendationError` with
+    identifier/code/message). A review round caught that this in-band per-object/per-account failure
+    channel was silently ignored — the HTTP call succeeds, some resources are missing from the
+    result for a reason the response itself reports, and without this check that missing coverage
+    reads as "confirmed none found" and resolve_stale wipes real prior findings for it — the exact
+    failure class this file's exception-propagation-over-degrading design otherwise prevents."""
     token = None
     for i in range(_CO_MAX_PAGES):
         kwargs = {"maxResults": 100}
         if token:
             kwargs["nextToken"] = token
         resp = get_fn(**kwargs)
+        errors = resp.get("errors") or []
+        if errors:
+            raise RuntimeError(
+                f"{list_key} response reported {len(errors)} in-band error(s) — e.g. "
+                f"{errors[0].get('code')}: {errors[0].get('message')} — treating the result as "
+                f"incomplete rather than a confirmed full list"
+            )
         yield resp
         token = resp.get("nextToken")
         if not token:

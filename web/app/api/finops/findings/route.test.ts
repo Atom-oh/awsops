@@ -70,7 +70,10 @@ describe('GET /api/finops/findings', () => {
     query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
     const { GET } = await import('./route');
     const body = await (await GET(req())).json();
-    expect(body).toEqual({ enabled: true, findings: [], lastRun: null, accountFilter: null });
+    expect(body).toEqual({
+      enabled: true, findings: [], lastRun: null, accountFilter: null,
+      coRightsizingScope: { accountId: 'self', region: 'ap-northeast-2' },
+    });
   });
 
   it('?account=<id> scopes the SQL WHERE clause and echoes accountFilter', async () => {

@@ -1317,10 +1317,29 @@ export const TERMS: Record<string, Pair> = {
   'ENI 50개까지만 집계 — 히트 수는 부분 집계이며 매칭 0 룰이 실제 유휴가 아닐 수 있습니다': { en: 'Aggregated over at most 50 ENIs — hit counts are partial and a zero-match rule may not actually be idle', zh: '最多汇总 50 个 ENI — 命中数为部分统计，匹配为 0 的规则未必真正闲置', ja: '最大 50 ENI までの集計 — ヒット数は部分集計であり、マッチ 0 のルールが実際に未使用とは限りません' },
   'VPC Flow Logs 미설정 — NFM은 트래픽 상대만 식별하며 특정 룰 히트로 귀속하지 못합니다 (룰 매칭은 Flow Logs 필요, 최근 1시간)': { en: 'No VPC Flow Logs — NFM only identifies traffic peers and cannot attribute hits to specific rules (rule matching needs Flow Logs; last 1 hour)', zh: '未配置 VPC Flow Logs — NFM 仅识别流量对端，无法归因到具体规则（规则匹配需要 Flow Logs；最近 1 小时）', ja: 'VPC Flow Logs 未設定 — NFM はトラフィックの相手のみ識別し、特定ルールへのヒット帰属はできません（ルールマッチングには Flow Logs が必要、直近 1 時間）' },
 
+  // ---- FinOps baseline card (ADR-019) ----
+  'FinOps 기본 권장': { en: 'FinOps Baseline', zh: 'FinOps 基线建议', ja: 'FinOps ベースライン推奨' },
+  '배치 기준': { en: 'as of batch', zh: '批次基准', ja: 'バッチ基準' },
+  '월간 절감 가능': { en: 'Potential monthly savings', zh: '每月可节省', ja: '月間節減可能額' },
+  '금액 산출 불가': { en: 'amount unavailable', zh: '金额无法计算', ja: '金額算出不可' },
+  '아직 배치가 실행되지 않았습니다 — 다음 일일 배치를 기다려주세요.': { en: 'No batch has run yet — the next daily batch will run soon.', zh: '尚未执行任何批处理 — 请等待下一次每日批处理。', ja: 'まだバッチが実行されていません — 次回の日次バッチをお待ちください。' },
+  '일부 룰이 실패해 결과가 불완전합니다 — 표시된 항목 외에 추가 낭비가 있을 수 있습니다.': { en: 'Some rules failed, so this result is incomplete — there may be more waste beyond what is shown.', zh: '部分规则执行失败，结果不完整 — 除已显示项目外可能还有其他浪费。', ja: '一部のルールが失敗したため結果が不完全です — 表示された項目以外にも無駄がある可能性があります。' },
+  '현재 발견된 상시 낭비 항목이 없습니다.': { en: 'No ongoing waste found right now.', zh: '当前未发现持续性浪费项目。', ja: '現在検出された恒常的な無駄はありません。' },
+  '데이터를 불러올 수 없습니다 — 잠시 후 다시 시도해주세요.': { en: 'Could not load the data — please try again shortly.', zh: '无法加载数据 — 请稍后重试。', ja: 'データを読み込めませんでした — しばらくしてから再度お試しください。' },
+  '최근 배치 실행이 실패했습니다': { en: 'The latest batch run failed', zh: '最近一次批处理执行失败', ja: '直近のバッチ実行が失敗しました' },
+  '일부 룰이 이번 배치에서 실패했습니다 — 아래 목록은 불완전할 수 있습니다.': { en: 'Some rules failed in this batch — the list below may be incomplete.', zh: '本次批处理中部分规则失败 — 以下列表可能不完整。', ja: '一部のルールが今回のバッチで失敗しました — 以下のリストは不完全な場合があります。' },
+  '확인 필요': { en: 'Needs review', zh: '需确认', ja: '確認要' },
+  '호스트 계정': { en: 'Host account', zh: '主机账号', ja: 'ホストアカウント' },
+  '알 수 없음': { en: 'Unknown', zh: '未知', ja: '不明' },
+  '주의': { en: 'Note', zh: '注意', ja: '注意' },
+  'EC2/RDS 리사이징은 호스트 계정의 Compute Optimizer 리전만 평가합니다 — 이 계정에서는 평가되지 않았습니다.': { en: 'EC2/RDS rightsizing only evaluates the host account’s own Compute Optimizer region — it was not evaluated for this account.', zh: 'EC2/RDS 调整规模仅评估主机账号自身的 Compute Optimizer 区域 — 该账号未被评估。', ja: 'EC2/RDS のライトサイジングはホストアカウント自身の Compute Optimizer リージョンのみを評価します — このアカウントでは評価されていません。' },
+  '배치가 실행 중입니다 — 잠시 후 다시 확인해주세요.': { en: 'A batch is currently running — please check back shortly.', zh: '批处理正在执行中 — 请稍后再查看。', ja: 'バッチが実行中です — しばらくしてから再度確認してください。' },
+
 };
 
 // Parameterized patterns — matched AFTER an exact TERMS hit fails.
 const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMatchArray) => string; ja: (m: RegExpMatchArray) => string }[] = [
+  { re: /^\(\+(\d+)건 금액 산출 불가\)$/, en: (m) => `(+${m[1]} amount unavailable)`, zh: (m) => `（+${m[1]} 项金额无法计算）`, ja: (m) => `（+${m[1]} 件 金額算出不可）` },
   { re: /^의도 대비 실제 \(intended vs actual\) — 위반 (\d+)건$/, en: (m) => `Intended vs actual — ${m[1]} violations`, zh: (m) => `意图与实际 (intended vs actual) — ${m[1]} 项违规`, ja: (m) => `意図と実際 (intended vs actual) — 違反 ${m[1]} 件` },
   { re: /^요청 실패 \((\d+)\)$/, en: (m) => `Request failed (${m[1]})`, zh: (m) => `请求失败 (${m[1]})`, ja: (m) => `リクエスト失敗 (${m[1]})` },
   { re: /^진단 결과 메일링 \((\d+)\)$/, en: (m) => `Diagnosis Result Mailing List (${m[1]})`, zh: (m) => `诊断结果邮件列表 (${m[1]})`, ja: (m) => `診断結果メール配信リスト (${m[1]})` },

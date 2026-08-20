@@ -189,10 +189,11 @@ def _insight(payload, dry_run):
 
 
 def _finops_baseline(payload, dry_run):
-    """ADR-019 FinOps baseline-recommendations engine (daily). Read-only Cost Explorer/Compute
-    Optimizer/Cost Optimization Hub calls + inventory_resources reads -> finops_findings. Fargate
-    runtime (matches the ADR's "same Fargate worker as diagnosis" framing; a full Compute Optimizer
-    + LLM-explanation pass can run longer than the lambda job's time budget)."""
+    """ADR-019 FinOps baseline-recommendations engine (daily). Read-only Compute Optimizer calls +
+    inventory_resources reads -> finops_findings (Cost Explorer/Cost Optimization Hub/Budgets-based
+    rules are catalogued as future work — this version calls neither). Fargate runtime (matches the
+    ADR's "same Fargate worker as diagnosis" framing; a full Compute Optimizer + LLM-explanation
+    pass can run longer than the lambda job's time budget)."""
     if dry_run:
         return {"dry_run": True, "would_run_finops_baseline": True}, None
     import db as wdb

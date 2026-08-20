@@ -76,7 +76,16 @@ export async function GET(request: Request) {
           error: runRes.rows[0].error,
         }
       : null;
-    return json({ enabled: true, findings, lastRun, accountFilter: scoped ? account : null }, 200);
+    return json({
+      enabled: true, findings, lastRun, accountFilter: scoped ? account : null,
+      // ec2_rightsizing/rds_rightsizing call Compute Optimizer bound to the host account's own
+      // region only (rules.py's `_co_client()` — CO has no cross-account/cross-region query mode
+      // this worker uses) — a review round caught that filtering to a DIFFERENT account, or the
+      // host account's OTHER regions, silently renders "no waste found" as if rightsizing had
+      // been evaluated there, when it was never queried at all. Echo the actually-evaluated scope
+      // so the client can tell "confirmed clean" apart from "not evaluated for this view".
+      coRightsizingScope: { accountId: 'self', region: process.env.AWS_REGION || 'ap-northeast-2' },
+    }, 200);
   } catch (e) {
     return json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, 500);
   }
