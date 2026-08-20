@@ -712,6 +712,13 @@ export default function NetworkFirewallPage() {
   // length>=100 같은 로컬 재추정은 병합 후 sid 개수만 보고 리전별 상한(ruleHitsPartial)으로
   // 인한 별도 절단을 못 잡는다).
   const ruleHitsTruncated = logsData?.alert?.ruleHitsTruncated ?? false;
+  // 리뷰(Codex stop-hook, PR #229 라운드10): 라운드7~9의 `f.alertLogging != null &&
+  // !startsWith('CloudWatchLogs:')` 체크는 "ALERT 목적지가 CWL이 아닌" 방화벽만 잡고,
+  // "ALERT 로깅 자체가 꺼져 있는"(alertLogging === null) 방화벽은 조건의 `!= null`에서
+  // 걸려 빠져나간다 — 그 방화벽도 Insights 쿼리 대상이 아니므로 똑같이 관측 불가다.
+  // 도넛 게이트/바 차트의 과소집계 고지/빈 상태 판정이 모두 같은 신호를 써야 하므로
+  // 한 곳에서 계산해 공유한다.
+  const alertObservabilityIncomplete = fws.some((f) => !(f.alertLogging?.startsWith('CloudWatchLogs:') ?? false));
   const ruleHitBars = useMemo(() => {
     const m = new Map<string, { rule: string; hits: number }>();
     for (const h of logsData?.alert?.ruleHits ?? []) {
@@ -1309,7 +1316,8 @@ export default function NetworkFirewallPage() {
                           때문에 정상적인 ALERT 도넛까지 "확인 불가"로 잘못 가려진다(round1~5가 고치려던
                           "무관한 신호로 유효한 결과 숨기기"를 이번엔 FLOW→ALERT 방향으로 재현). `fws`(현재
                           방화벽 목록, 이미 이 컴포넌트에 있음)에서 직접 alertLogging이 CWL 접두사가 아닌
-                          방화벽이 있는지를 본다 — ALERT 전용이라 FLOW 쪼개짐과 무관하다.
+                          방화벽이 있는지를 본다 — ALERT 전용이라 FLOW 쪼개짐과 무관하다(라운드10에서
+                          alertLogging===null인 방화벽도 포함하도록 확장 — 아래 alertObservabilityIncomplete 참고).
                           리뷰 MAJOR(라운드8): 이 그리드가 Alert Card의 `logsData &&`/`logsData.alert
                           != null` 가드 바깥(Card와 Card 사이)에 있어, 로딩 중이거나 로그 조회 자체가
                           실패했거나 alert==null인 상태에서도 내부 조건이 전부 false로 평가돼 빈 배열로
@@ -1317,7 +1325,7 @@ export default function NetworkFirewallPage() {
                           다음(즉 logsData && logsData.alert != null 분기 안)으로 이동해 로딩/에러/
                           대상 없음 상태를 Alert Card 본문과 동일하게 상속받도록 한다. */}
                       <div className="grid gap-6 lg:grid-cols-2">
-                        {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:')) ? (
+                        {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || alertObservabilityIncomplete ? (
                           <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
                         ) : (
                           <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
@@ -1336,15 +1344,16 @@ export default function NetworkFirewallPage() {
                             // 리뷰 MAJOR(라운드8): 도넛의 라운드7 수정(비-CWL ALERT 목적지 방화벽 존재
                             // 여부)이 이 바 차트의 과소집계 고지에는 빠져 있었다 — 같은 fws 기반 체크를
                             // 여기에도 추가해 도넛/바가 같은 신호로 과소집계 경고를 낸다.
-                            right={(ruleHitsTruncated || (logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:'))) ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음')}</span> : undefined}
+                            right={(ruleHitsTruncated || (logsData?.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete || alertObservabilityIncomplete) ? <span className="text-[12px] text-ink-400">{tt('상위 100 집계 기준이거나 일부 값이 과소집계됐을 수 있음 — 실제 합계·순위와 다를 수 있음')}</span> : undefined}
                           />
                         ) : (
                           <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">
-                            {/* 리뷰(Codex stop-hook): ruleHits가 null이 아니라 빈 배열([])이어도, 비-CWL
-                                ALERT 목적지 방화벽이 섞여 있으면 그 방화벽의 히트는 Insights 쿼리 대상
-                                자체가 아니라서 "0건 확인"이 아니라 "일부 방화벽은 집계 불가"다 — null
-                                체크만으로는 이 케이스를 "룰 히트 없음"(확정 0)으로 오판한다. */}
-                            {(logsData?.alert?.ruleHits == null || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:')))
+                            {/* 리뷰(Codex stop-hook, 라운드9~10): ruleHits가 null이 아니라 빈 배열([])
+                                이어도, ALERT 로깅이 CWL이 아니거나(비-CWL) 아예 꺼져 있는(null) 방화벽이
+                                섞여 있으면 그 방화벽의 히트는 Insights 쿼리 대상 자체가 아니라서 "0건
+                                확인"이 아니라 "일부 방화벽은 집계 불가"다 — null 체크만으로는 이 케이스를
+                                "룰 히트 없음"(확정 0)으로 오판한다. */}
+                            {(logsData?.alert?.ruleHits == null || alertObservabilityIncomplete)
                               ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고')
                               : tt('룰 히트 없음')}
                           </div>
