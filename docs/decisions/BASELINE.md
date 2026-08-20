@@ -85,7 +85,7 @@
 | ADR | 토픽 | 한 줄 | 6기둥 |
 |---|---|---|---|
 | [001](001-v2-foundation.md) | v2 파운데이션 | Terraform MSA·비공개 엣지·Aurora·thin-BFF·이중 ECR (CDK·라이브 Steampipe 폐기) | 운영우수성·안정성·비용 |
-| [002](002-auth-and-login.md) | 인증·로그인 | Cognito+Lambda@Edge RS256 + 인앱 `/login`(USER_PASSWORD_AUTH), Hosted UI 다크폴백 + Aurora `session_revocations` 기반 서버측 로그아웃 무효화(revocation, **live** — BFF-side에서 검사, edge는 JWT-only) | 보안 |
+| [002](002-auth-and-login.md) | 인증·로그인 | Cognito+Lambda@Edge RS256 + 인앱 `/login`(USER_PASSWORD_AUTH), Hosted UI 다크폴백 + Aurora `session_revocations` 기반 서버측 로그아웃 무효화(revocation, **live** — BFF-side에서 검사, edge는 JWT-only). Amended 2026-08-19(PR #228): `is_public()` 허용목록이 11개 정확매치(PWA 정적 자산 5종 포함)로 실제 코드와 일치하도록 정정 | 보안 |
 | [003](003-ai-agent-routing.md) | AI 에이전트 라우팅 | 하이브리드(정규식+Haiku 분류기) + 교차도메인 자동합성 (LIVE) | 운영우수성 |
 | [004](004-agentcore-gateways-runtime.md) | AgentCore 게이트웨이·런타임 | **9 게이트웨이 프로비저닝 / 9 섹션 에이전트 라우트** (external-obs 승격 2026-06-24: Prometheus+ClickHouse) + Memory + Code Interpreter. **§7(2026-07-31 amendment, 사실 기록): Aurora Data API agent Lambda는 master secret 대신 최소권한 `awsops_sql_reader`로 인증하고, `sql_reader` 스키마의 명시적 컬럼 VIEW에만 SELECT를 부여(`public`에는 table/column grant 0). 테이블 allowlist는 컬럼 단위 fail-open으로 `eks_registrations.auth`, 이어 `worker_jobs.task_token`(SFN capability token)을 누출해 폐기. host 계정 PostgreSQL 전용이며 권한 제거이므로 신규 capability 아님** | 운영우수성 |
 | [005](005-aws-mutation-autonomy-frozen.md) | AWS 변경·자율 **FROZEN** | do-not-enable; 재활성화=새 ADR+패널+owner-override | 보안·운영우수성 |

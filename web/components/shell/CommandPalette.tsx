@@ -106,7 +106,7 @@ export default function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center bg-ink-900/30 px-4 pt-[18vh]"
+      className="fixed inset-0 z-[100] flex items-start justify-center bg-ink-900/30 pb-[env(safe-area-inset-bottom)] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[calc(18vh+env(safe-area-inset-top))]"
       onMouseDown={close}
       role="presentation"
     >

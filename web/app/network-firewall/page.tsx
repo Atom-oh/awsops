@@ -268,6 +268,321 @@ export default function NetworkFirewallPage() {
       .slice(0, 10),
   [rgs]);
 
+  // 룰 그룹이 실제로 ALERT 로그를 관측할 수 있는가: 룰 그룹 → (같은 리전) 정책의
+  // statefulGroups에 포함 → 그 정책을 쓰는 방화벽 → 그 방화벽이 logsData.targets에 ALERT
+  // CWL 타깃으로 존재. 리뷰 MAJOR(확정): `!rg.unassociated`(정책 연결 개수>0)만으로는
+  // 관측 가능성이 서지 않는다 — 그 정책을 쓰는 방화벽이 하나도 없거나, 있어도 ALERT
+  // 로깅이 꺼짐/unknown/S3·Firehose 대상이면 여전히 트래픽을 볼 수 없다.
+  // 리뷰 MAJOR(확정): targets는 로깅 구성 조회가 거부된 리전에서 `/aws/network-firewall`
+  // 접두사 발견 폴백으로 `firewall: '(discovered)'` 항목을 낸다(anfw-logs.ts 리뷰 라운드12
+  // 계약) — 실제 방화벽 이름이 아니라서 region|firewall 키가 절대 매칭되지 않고, 그 결과
+  // 폴백이 도는 리전의 모든 설정 룰이 "관측 불가"로 오판되어 실제 히트가 있어도 숨겨진다.
+  // '(discovered)'는 리전 단위 신호로 별도 처리해 해당 리전 방화벽을 'unknown'(확정도
+  // 부정도 아님)으로 분류한다. 리뷰 MAJOR(확정): 룰 그룹이 여러 방화벽에 서빙되면 그중
+  // 하나만 관측돼도(some()) "관측됨"으로 쳐서, 나머지 관측 불가 방화벽을 지나는 트래픽이
+  // 안 보이는데도 hits=0을 확정 idle로 표시했다 — "관측됨"(0을 신뢰)엔 전체 커버리지
+  // (every)가 필요하다. 3상태(observed/unknown/unobserved)로 모델링: 전부 observed면
+  // observed(0 신뢰 가능), 하나라도 unknown/observed가 섞이면 unknown(0 불신, 히트값은
+  // 그래도 실측이라 표시), 전부 확정 미관측(로깅이 확인상 꺼짐)이거나 서빙 방화벽이 전혀
+  // 없으면 unobserved(어떤 히트가 보이더라도 이 룰 귀속으로 볼 수 없음 — 숫자 자체를 숨김).
+  type Observability = 'observed' | 'unknown' | 'unobserved';
+  const firewallObservability = useMemo(() => {
+    const observed = new Set<string>();
+    const unknownRegions = new Set<string>();
+    for (const t of logsData?.targets ?? []) {
+      if (t.type !== 'ALERT') continue;
+      if (t.discovered) unknownRegions.add(t.region);
+      else observed.add(`${t.region}|${t.firewall}`);
+    }
+    return (fw: AnfwFirewallRow): Observability => {
+      if (observed.has(`${fw.region}|${fw.name}`)) return 'observed';
+      if (!fw.loggingKnown || unknownRegions.has(fw.region)) return 'unknown';
+      return 'unobserved';
+    };
+  }, [logsData]);
+  const combineObservability = (states: Observability[]): Observability => {
+    if (states.length === 0) return 'unobserved';
+    if (states.every((s) => s === 'observed')) return 'observed';
+    if (states.some((s) => s === 'observed' || s === 'unknown')) return 'unknown';
+    return 'unobserved';
+  };
+  // 리뷰 확정(Codex stop-hook, PR #225 — 두 방향의 과오 교정): 룰 그룹의 리전이
+  // degradedRegions에 있으면(정책/방화벽/룰그룹 셋 중 하나라도 부분 실패) 두 가지가
+  // 동시에 위협받는다 — (1) 서빙 방화벽 목록이 불완전할 수 있어 firewall observability의
+  // every()가 과신할 수 있고, (2) 룰 그룹 목록 자체가 불완전할 수 있어 sidGroupCount(전체
+  // rgs 순회 전제)가 "공유 SID 아님"을 잘못 결론 내릴 수 있다. 이 둘은 "0을 신뢰해도
+  // 되는가"와 "양수 히트를 이 룰에 귀속해도 되는가"라는 서로 다른 질문에 서로 다르게
+  // 영향을 준다 — 전자는 리전이 degraded면 항상 불신, 후자는 sharedSid처럼 귀속 자체가
+  // 근본적으로 불가능한 경우에만 불신해야 한다(단순 loggingKnown=false 같은 흔한 firewall
+  // 단위 unknown은 그 방화벽이 실제로 관측하지 못했다는 뜻일 뿐 — 그런데도 로그에 진짜
+  // 매칭이 찍혔다면 그 자체가 우리 토폴로지 추정이 틀렸다는 더 강한 증거이므로 숫자를
+  // 숨길 이유가 없다). 그래서 firewall 기반 observability는 순수하게 유지하고,
+  // attributionUnsafe는 별도 신호로 노출해 0-신뢰·양수-귀속 판정에 결합한다.
+  // 리뷰 MAJOR(확정, PR #225 라운드8): 히트는 sid로 리전 불문 전역 병합되므로, "이 룰의
+  // 리전만 degraded가 아니면 안전하다"는 전제 자체가 틀렸다 — 다른 리전의 룰그룹 목록이
+  // 불완전해도, 그 리전에 있는(놓친) 룰그룹의 sid가 이 룰의 sidGroupCount 판정에 안 잡힌
+  // 채로 계정 전체 어느 설정 룰에든 잘못 귀속될 수 있다. 같은 이유로 우리가 파싱하지
+  // 못하는(AWS 관리형 등) stateful 룰그룹을 정책이 참조하고 있으면 — 그 그룹은 rgs에
+  // 전혀 나타나지 않으므로 리전 degraded 여부와 무관하게 동일한 위험이 있다. 그래서
+  // 이 판정은 리전별이 아니라 계정(현재 조회 스코프) 전체 단위의 단일 boolean이다.
+  const attributionUnsafe = useMemo(() => {
+    if ((data?.degradedRegions ?? []).length > 0) return true;
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27): `ListRuleGroups`는 Scope 미지정이라
+    // 계정 소유 그룹만 열거한다 — 정책이 참조하는 그룹이 AWS 관리형이면 rgs에 나타나지
+    // 않아야 "관리형 참조"로 잡히는데, 이 판정을 이름(`region|name`)만으로 하면 같은
+    // 리전에서 관리형 그룹과 계정 소유 그룹의 이름이 우연히 같을 때 관리형 참조를
+    // "존재함(안전)"으로 오판한다 — 전체 ARN으로 정확히 일치해야만 안전하다고 판정한다.
+    const rgArns = new Set(rgs.map((rg) => rg.arn));
+    // 리뷰 MAJOR(확정, PR #225 라운드11): 도메인 리스트(RulesSourceList) 룰 그룹은 rgs에
+    // "존재"하지만(rgArns 통과) statefulSids가 항상 비어 있다 — AWS가 SID를 내부 생성하고
+    // 우리는 그 SID를 알 수 없다. rgArns 부재만 보면 이 케이스를 놓친다 — 파싱 불가
+    // (anfw.ts의 sidsUnparseable) 그룹을 참조하는 정책도 계정 전체 귀속 불안전으로 간주한다.
+    const unparseableRgArns = new Set(rgs.filter((rg) => rg.sidsUnparseable).map((rg) => rg.arn));
+    if (policies.some((p) => p.statefulGroupArns.some((arn) =>
+      !rgArns.has(arn) || unparseableRgArns.has(arn)))) return true;
+    // 리뷰 MAJOR(확정, PR #225 라운드19): 위 검사는 "현재" policy.statefulGroups 목록만
+    // 훑는다 — 정책이 range 도중 수정됐을 때 그 정책이 *지금* 참조하는 그룹들만 안전하지
+    // 않다고 표시했을 뿐, range 도중 그 정책에서 제거되거나
+    // (그 그룹 자체가 삭제됐을 수도 있는) 그룹은 현재 목록에 아예 없어 어떤 신호에도 걸리지
+    // 않는다 — 그런 그룹의 과거 히트는 sid로 전역 병합되며, 별개의 안 바뀐 룰 그룹에 같은
+    // sid가 있으면 sharedSid도 못 잡고 exact/확정idle로 오귀속된다. 정책이 range 도중
+    // 수정됐다는 사실 자체가 "그 시점의 statefulGroups 스냅샷을 알 수 없다"는 뜻이므로,
+    // round8과 동일한 논리(히트는 전역 병합 — 지역적 안전 판정은 성립 불가)로 계정 전체를
+    // 불안전 처리한다(제거된 그룹을 열거할 수 없어 로컬 taint로는 대체 불가).
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20): range 시작을 브라우저 Date.now()로
+    // 계산하면 클라이언트 시계가 서버보다 빠를 때 실제보다 늦은 시점으로 잘못 계산돼, 그
+    // 사이에 수정된 정책이 "range 밖"으로 오판돼 이 가드가 fail-open한다 — data.generatedAt
+    // (서버가 이 분석을 만든 시각)을 기준으로 계산해 클라이언트 시계 왜곡을 배제한다.
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드21): data(/api/anfw?range=)와
+    // logsData(?view=logs&range=)는 서로 독립된 4분 TTL 캐시를 가진 별도 fetch다 —
+    // 토폴로지가 방금 갱신됐어도 로그 분석은 최대 4분 전 캐시일 수 있어, 그 시차 구간에
+    // 수정된 정책은 data.generatedAt 하나만 기준으로 하면 range 밖으로 오판돼 fail-open
+    // 한다. 두 anchor 중 더 이른(과거) 쪽을 써야 어느 쪽이 캐시로 오래됐어도 안전하다.
+    const rangeStartMs = Math.min(data?.generatedAt ?? Date.now(), logsData?.generatedAt ?? Date.now()) - range * 1000;
+    // lastModified가 null이면 "안 바뀜"이 아니라 "모름"이다 — fail-closed 원칙(unknown ≠
+    // 부재/확신)에 맞춰 null도 range 도중 수정된 것과 동일하게 불안전 처리한다.
+    const modifiedOrUnknown = (lm: string | null) => lm == null || Date.parse(lm) > rangeStartMs;
+    if (policies.some((p) => modifiedOrUnknown(p.lastModified))) return true;
+    // 리뷰 MAJOR(확정, Codex stop-hook, PR #225 라운드22): 라운드19는 "정책이 range 도중
+    // 수정되면 계정 전체 불안전"만 다뤘다 — 정책이 안 바뀌어도 룰 그룹 자체가 range 도중
+    // in-place로 수정(SID 추가/삭제)되면, 그 그룹의 *현재* 행만 ruleGroupModifiedInRange로
+    // 타인트되고, 삭제된 SID가 다른(안 바뀐) 룰 그룹에도 있었다면 그 SID는 sidGroupCount에서
+    // 이제 하나로만 보여 sharedSid=false로 오판돼 그 SID의 과거 히트가 그 다른 그룹에
+    // exact로 오귀속된다 — round19가 정책에 적용한 것과 동일한 논리(히트는 전역 병합 —
+    // 제거된 SID는 현재 토폴로지로 열거 불가)를 룰 그룹 자체의 수정에도 적용해야 한다.
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드23): stateless 룰 그룹은 statefulSids가
+    // 항상 비어 있어 이 조인/귀속 판정과 무관하다 — stateless 그룹 수정(운영상 훨씬 잦음)
+    // 까지 계정 전체를 불안전 처리하면 실제로는 안전한 대다수 케이스에서 과도하게 넓게
+    // 발동해 유효한 양수 히트까지 불필요하게 가린다. STATEFUL·STATEFUL_DOMAIN만 본다.
+    if (rgs.some((rg) => rg.type !== 'STATELESS' && modifiedOrUnknown(rg.lastModified))) return true;
+    // 리뷰 MAJOR(확정, Codex stop-hook, PR #225 라운드24): 로깅 구성 조회가 거부된 리전은
+    // `/aws/network-firewall` 접두사 발견으로 로그 그룹을 찾는다(discovered=true) — 발견에
+    // 성공하면 ruleHits는 null화되지 않고 그 그룹의 히트가 다른 리전과 똑같이 sid로 전역
+    // 병합된다. 하지만 이 리전의 방화벽/룰그룹 서빙 관계는 조회가 거부된 상태라 확인할 수
+    // 없다 — round8의 원칙(히트는 전역 병합되므로 지역적 안전 판정은 성립 불가)이 여기도
+    // 적용된다: 이 리전에서 방화벽이나 룰 그룹이 range 도중 삭제됐다면 lastModified 흔적이
+    // 아예 안 남으므로 위의 모든 검사(rgs/policies)를 통과해도 그 리전이 발견한 로그의
+    // 히트가 무관한(observed) 다른 룰에 exact로 오귀속될 수 있다 — ALERT 발견 대상이
+    // 하나라도 있으면 계정 전체를 불안전 처리한다.
+    return (logsData?.targets ?? []).some((t) => t.type === 'ALERT' && t.discovered);
+  }, [data, rgs, policies, range, logsData]);
+  // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27): 이 맵도 attributionUnsafe와 동일한 이유로
+  // ARN 키를 쓴다 — 이름만으로 매칭하면 관리형 그룹과 이름이 같은 계정 소유 그룹에 관측성이
+  // 잘못 옮겨붙을 수 있다.
+  const ruleGroupObservability = useMemo(() => {
+    const byKey = new Map<string, Observability[]>();
+    for (const rg of rgs) byKey.set(rg.arn, []);
+    for (const policy of policies) {
+      for (const rgArn of policy.statefulGroupArns) {
+        if (!byKey.has(rgArn)) continue;
+        for (const fw of fws) {
+          if (fw.region === policy.region && fw.policyName === policy.name) byKey.get(rgArn)!.push(firewallObservability(fw));
+        }
+      }
+    }
+    const m = new Map<string, Observability>();
+    for (const [k, states] of byKey) m.set(k, combineObservability(states));
+    return m;
+  }, [rgs, policies, fws, firewallObservability]);
+  // 리뷰 MAJOR(확정, Codex/kiro-gpt, PR #225 라운드17): ruleGroupModifiedInRange는 룰 그룹
+  // 자체의 lastModified만 봤다 — 룰 그룹을 참조하는 정책이 range 시작 이후 수정됐다면(그
+  // 룰 그룹이 그 시점에 정책에 새로 추가/제거됐을 수 있음), 룰 그룹 자체는 안 바뀌었어도
+  // "이 룰이 range 내내 이 방화벽에 배포돼 있었다"는 전제가 깨진다 — 정확히 이 기능이
+  // 막으려는 거짓 정책 사각지대 경고다. AnfwPolicyRow.lastModified는 이미 있었지만
+  // (round15까지) 이 검증에 쓰이지 않았다.
+  // 리뷰 MAJOR(확정, PR #225 라운드19): 라운드17-18의 "정책이 range 도중 수정되면 그
+  // 정책이 *지금* 참조하는 그룹만 taint"는 그룹이 그 수정으로 정책에서 제거됐거나 그 룰
+  // 그룹 자체가 삭제된 경우를 놓친다 — 그런 그룹은 지금의 policy.statefulGroups에 아예
+  // 없으므로 taint가 안 붙는다. attributionUnsafe가 이제 "어느 정책이든 range 도중
+  // 수정됐으면 계정 전체 불안전"으로 이 케이스를 상위 레벨에서 이미 흡수하므로(제거된
+  // 그룹은 로컬 taint로 열거 불가 — round8과 동일 논리), 정책 쪽 국지적 taint 맵은
+  // attributionUnsafe의 부분집합이 돼 중복이라 제거했다 — rg 자체의 lastModified만 남긴다.
+
+  // Stateful 룰 히트 카운트 (2026-08 신기능과 동일 소스 — Alert 로그 집계):
+  // 설정 룰 1개당 1행 (region×rg×sid 키 — SID는 룰 그룹 내에서만 유일하므로 sid 단독 키는
+  // 병합 오류이고, 룰 그룹 이름은 여러 리전에 동일하게 배포될 수 있어 region도 필요 —
+  // 리뷰 MAJOR: region 없는 키는 멀티 리전에서 React key 충돌을 낸다). 로그 히트는 sid
+  // 단위로만 집계되고 리전을 구분하지 않아 같은 sid가 여러 룰 그룹(리전 불문)에 있으면
+  // 그 그룹들 사이에 귀속 불가 — sharedSid 툴팁으로 명시하고 hits를 신뢰 가능한 숫자로
+  // 취급하지 않는다. idle(매칭 0) 판정 제외: pass 룰(Alert 로그 미발생) · 관측 불가 룰
+  // 그룹(정책 미연결/방화벽 없음/ALERT 로깅 꺼짐-unknown-S3대상) · 로그 히트 집계 자체가
+  // 실패/청크 truncation됐거나(ruleHits=null) top-100으로 잘린 경우(hits 0 ≠ 매칭 없음).
+  interface RuleHitRow {
+    key: string; sid: string; msg: string; actions: string[]; hits: number;
+    ruleGroups: string[]; configured: boolean;
+    /** pass 룰 또는 noalert 룰 — 둘 다 Alert 로그를 남기지 않으므로 매칭 0을 idle로 볼 수 없다.
+     *  리뷰 MAJOR(PLAUSIBLE, PR #225 라운드9): noalert는 action이 alert/drop이어도 로그가
+     *  안 남으므로 pass와 동일하게 취급해야 한다. */
+    isPass: boolean;
+    /** 이 룰 그룹을 서빙하는 방화벽들의 ALERT 관측 가능성(3상태) — 'observed'만 0을 신뢰.
+     *  양수 히트는 이 값과 무관하게 항상 표시(실제 로그 매칭은 토폴로지 추정보다 강한
+     *  증거) — attributionUnsafe/sharedSid만 양수 여부와 무관하게 숫자를 숨긴다. */
+    observability: Observability;
+    /** 계정(조회 스코프) 전체 단위 신호 — 어느 리전이든 firewalls/policies/ruleGroups
+     *  List·Describe가 부분 실패했거나, 어느 정책이든 파싱 못한(관리형 등) stateful 룰
+     *  그룹을 참조한다. true면 이 룰의 리전과 무관하게 sidGroupCount(rgs 전체 순회 전제)
+     *  자체를 못 믿으므로, 0과 양수 모두 이 룰에 확정 귀속할 수 없다(히트는 sid로 리전
+     *  불문 전역 병합되므로 "이 룰의 리전만 안전하면 된다"는 국지적 판정은 성립하지 않음). */
+    attributionUnsafe: boolean;
+    /** 같은 SID가 여러 룰 그룹에 존재 — 로그 히트를 특정 그룹에 귀속 불가. 리뷰 MAJOR(확정):
+     *  숫자를 그대로 보여주면 그 그룹의 실제 트래픽처럼 오독된다 — 표시를 숨긴다(CLAUDE.md의
+     *  "flagged in UI rather than counted" 서술을 실제로 구현). */
+    sharedSid: boolean;
+    /** 로그 집계 자체가 실패/잘렸거나(ruleHits=null) top-100 밖 — 매칭 여부 불명. */
+    unknown: boolean;
+    /** unknown=true인 이유 — 툴팁 문구 분기용(리뷰 MINOR: 원인이 서로 다른데 문구가 같았음). */
+    unknownReason: 'failed' | 'truncated' | null;
+    /** 화면에 실제 hits 숫자를 보여주는 행인가 — n/a/"?"로 숨기는 행과 동일한 조건.
+     *  리뷰 확정(Codex stop-hook, PR #225): 정렬 키가 이 값과 다르면(예: 화면엔 항상
+     *  n/a인 'unobserved' 행이 실제 hits로 정렬돼) top-50 표시 슬롯을 정보 없는 행이
+     *  차지해 진짜 신뢰 가능한 행을 밀어낸다 — 정렬은 항상 화면 표시와 같은 기준을 써야 한다. */
+    hitsAttributable: boolean;
+    /** 이 룰 그룹 자체가 조회 range 시작 이후 수정됐음 — 지금 있는 SID가 range 전체 동안
+     *  존재/동일했다고 보장할 수 없다(리뷰 MAJOR, PR #225 라운드15: 과거 히트가 현재
+     *  토폴로지에 조인되지만 rg.lastModified가 검증에 쓰이지 않았음). true면 hits=0을
+     *  확정 idle로 표시하지 않고, 양수 히트도 이 행에 확정 귀속하지 않는다
+     *  (hitsAttributable=false). 룰 그룹을 참조하는 "정책" 쪽 수정(라운드17)은 라운드19에서
+     *  attributionUnsafe(계정 전체)로 흡수됐다 — 정책에서 제거되거나 삭제된 룰 그룹은 현재
+     *  토폴로지에 없어 이 필드로는 열거할 수 없기 때문(round8과 동일 논리로 계정 전체 불신
+     *  쪽이 더 안전). */
+    ruleGroupModifiedInRange: boolean;
+  }
+  const ruleHitRows = useMemo<RuleHitRow[]>(() => {
+    const ruleHits = logsData?.alert?.ruleHits;
+    // 리뷰 MAJOR(확정): 쿼리 실패/청크 truncation을 null로 신호받으면 "매칭 0"이 아니라
+    // 전체를 불명으로 처리 — 실패를 확정 idle로 오판하면 정책 사각지대 경고가 거짓 양성.
+    const ruleHitsFailed = ruleHits == null;
+    const hits = ruleHits ?? [];
+    const truncated = logsData?.alert?.ruleHitsTruncated ?? false;
+    // 리뷰 확정(Codex stop-hook, PR #225 라운드10): ruleHitsTruncated는 병합 "후" 전체 sid
+    // 개수가 join 컷오프를 넘었는지만 본다 — 어느 한 리전이 자기 상한(150)에 걸려 그
+    // 리전에만 있던 sid가 병합 전 단계에서 통째로 빠지면(다른 리전에 전혀 없던 sid), 전체
+    // sid 개수는 여전히 100 이하일 수 있어 ruleHitsTruncated=false인 채로 이 sid가
+    // hitsBySid에서 완전히 부재(undefined)해 확정 0(idle)으로 오판된다. ruleHitsPartial
+    // (리전별 상한 도달 신호)도 "부재 sid를 0으로 확정할 수 없다" 판정에 반영해야 한다.
+    const partial = logsData?.alert?.ruleHitsPartial ?? false;
+    // 리뷰 MAJOR(확정, PR #225 라운드9): 백엔드가 이제 sid 단위로 이미 합산해서 넘겨주므로
+    // (컷오프 적용 전에 sid로 먼저 합산 — 튜플 단위 컷오프의 부분합 문제 해소), 여기서는
+    // sid당 행이 하나뿐이다. 그래도 병합 로직은 그대로 둬 방어적으로 안전하게 유지한다.
+    const hitsBySid = new Map<string, { hits: number; actions: Set<string>; sig: string }>();
+    for (const h of hits) {
+      const cur = hitsBySid.get(h.sid) ?? { hits: 0, actions: new Set<string>(), sig: h.signature };
+      cur.hits += h.hits;
+      for (const act of h.actions) cur.actions.add(act);
+      hitsBySid.set(h.sid, cur);
+    }
+    // 리뷰 MAJOR(확정, PR #225 라운드15): pass/noalert 룰은 Alert 로그를 원천적으로 남기지
+    // 못하므로 다른 룰의 SID 귀속을 방해할 수 없다 — sidGroupCount/configuredSids 계산에서
+    // 제외한다. 안 그러면 (a) pass 룰이 alert/drop 룰과 SID를 공유할 때 그 alert/drop 룰의
+    // 실제 히트가 sharedSid=true로 오판돼 n/a로 숨겨지고, (b) pass 룰의 SID가 관리형 룰그룹
+    // 등에서도 쓰이면 configuredSids가 그 SID를 "설정됨"으로 잘못 표시해 로그 전용 fallback
+    // 행(진짜 트래픽 증거)이 억제된다.
+    const sidGroupCount = new Map<string, number>();
+    for (const rg of rgs) for (const s of rg.statefulSids) {
+      if (s.action === 'pass' || s.noalert) continue;
+      sidGroupCount.set(s.sid, (sidGroupCount.get(s.sid) ?? 0) + 1);
+    }
+
+    // 리뷰 MAJOR(확정, PR #225 라운드15): 과거 히트를 현재 룰 토폴로지에 조인하므로, 룰
+    // 그룹이 조회 range 시작 이후 수정됐으면 지금의 SID 목록이 range 전체에 걸쳐 동일했다고
+    // 보장할 수 없다(SID가 range 중간에 추가/재정의됐을 수 있음) — 그런 룰 그룹의 SID는
+    // hits=0이어도 확정 idle로 표시하지 않는다.
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20): 브라우저 Date.now() 대신 이 rgs가
+    // 나온 data.generatedAt(서버 시각)을 기준으로 계산 — 클라이언트 시계가 빠르면 range
+    // 시작을 실제보다 늦게 계산해 가드가 fail-open하는 것을 방지한다.
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드21): 여기서 조인하는 히트는 logsData
+    // (독립된 4분 TTL 캐시)에서 온다 — rgs가 나온 data.generatedAt만 쓰면, logsData가
+    // 더 오래된 캐시일 때 그 시차 구간의 룰 그룹 수정을 놓친다. 두 anchor 중 더 이른
+    // 쪽을 쓴다(attributionUnsafe와 동일 논리).
+    const rangeStartMs = Math.min(data?.generatedAt ?? Date.now(), logsData?.generatedAt ?? Date.now()) - range * 1000;
+
+    const rows: RuleHitRow[] = [];
+    const configuredSids = new Set<string>();
+    for (const rg of rgs) {
+      const ruleGroupModifiedInRange = rg.lastModified != null && Date.parse(rg.lastModified) > rangeStartMs;
+      for (const s of rg.statefulSids) {
+        const isPass = s.action === 'pass' || s.noalert;
+        if (!isPass) configuredSids.add(s.sid);
+        const h = hitsBySid.get(s.sid);
+        const observability = ruleGroupObservability.get(rg.arn) ?? 'unobserved';
+        const sharedSid = (sidGroupCount.get(s.sid) ?? 0) > 1;
+        const unknown = ruleHitsFailed || ((truncated || partial) && !h); // 쿼리 실패/잘린 집계 밖 — 매칭 여부 불명
+        rows.push({
+          key: `${rg.region}|${rg.name}|${s.sid}`, sid: s.sid,
+          msg: s.msg ?? h?.sig ?? '',
+          actions: [...new Set([s.action, ...(h?.actions ?? [])].filter((x): x is string => !!x))],
+          hits: h?.hits ?? 0,
+          ruleGroups: [rg.name], configured: true,
+          isPass,
+          observability, attributionUnsafe, sharedSid, unknown,
+          unknownReason: ruleHitsFailed ? 'failed' : ((truncated || partial) && !h) ? 'truncated' : null,
+          // noalert 룰도 pass처럼 로그가 원천적으로 안 남으므로, 표시되는 양수 히트가 있다면
+          // 그 자체가 오귀속 증거다(unobserved와 동일한 논리) — hitsAttributable에서 제외.
+          // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드16): ruleGroupModifiedInRange는 처음엔
+          // "0을 확정 idle로 볼 수 없다"에만 반영했지만, 대칭적으로 양수 히트도 이 룰그룹에
+          // 안전하게 귀속할 수 없다 — SID가 range 도중 이 그룹으로 옮겨왔거나 재정의됐다면,
+          // 지금 보이는 양수 히트 중 일부는 실제로 range 앞쪽에서 "다른" 룰/그룹 설정이
+          // 만든 것일 수 있다. 그런데도 hitsAttributable=true로 두면 DANGER(차단 트래픽)
+          // 강조와 exact 표시가 잘못된 룰그룹에 확정 귀속되는 오귀속을 그대로 만든다.
+          hitsAttributable: !isPass && !sharedSid && !unknown && !attributionUnsafe && observability !== 'unobserved' && !ruleGroupModifiedInRange,
+          ruleGroupModifiedInRange,
+        });
+      }
+    }
+    // 어느 설정 룰 그룹에도 없는 SID (관리형 룰 그룹 등) — pass 룰이 흡수했던 SID도
+    // configuredSids에서 빠졌으므로 여기서 진짜 트래픽 증거로 다시 드러난다.
+    if (!ruleHitsFailed) {
+      for (const [sid, h] of hitsBySid) {
+        if (configuredSids.has(sid)) continue;
+        rows.push({
+          key: `log|${sid}`, sid, msg: h.sig, actions: [...h.actions], hits: h.hits,
+          ruleGroups: [], configured: false, isPass: false, observability: 'observed', attributionUnsafe: false, sharedSid: false, unknown: false, unknownReason: null,
+          hitsAttributable: true, ruleGroupModifiedInRange: false,
+        });
+      }
+    }
+    // 리뷰 확정(Codex stop-hook, PR #225): 정렬은 화면에 실제로 보여주는 값(hitsAttributable일
+    // 때만 hits, 아니면 0)을 기준으로 해야 — 안 그러면 표시상 n/a/"?"인 행이 큰 hits로
+    // 정렬돼 top-50 표시 슬롯을 정보 없는 행이 차지하고 진짜 신뢰 가능한 행을 밀어낸다.
+    return rows.sort((a, b) => {
+      const av = a.hitsAttributable ? a.hits : 0;
+      const bv = b.hitsAttributable ? b.hits : 0;
+      return bv - av || Number(a.sid) - Number(b.sid);
+    });
+  }, [logsData, rgs, ruleGroupObservability, attributionUnsafe, range, data]);
+  // 0을 확정 idle로 신뢰 가능한 행만 — pass 룰 · 관측 불가/불확실 룰 그룹 · 계정 전체
+  // 토폴로지 불완전 · 공유 SID · 로그 집계 자체 불명은 제외(빨간 배지에서 제외).
+  // 리뷰 MAJOR(확정, PR #225 라운드14): observability는 "지금" 서빙 방화벽이 관측되는지만
+  // 보는 공간적 신호다 — 로깅이 선택한 range 중간에 켜졌거나 로그 그룹이 range 시작보다
+  // 늦게 생성됐으면(alertCoverageComplete=false), 지금 관측되고 있어도 range 앞쪽 구간의
+  // 실제 매칭은 로그가 없어 hits=0으로 보인다. 시간적 커버리지가 불완전하면 0을 확정
+  // idle로 표시하지 않는다.
+  const alertCoverageComplete = logsData?.alert?.alertCoverageComplete ?? false;
+  const zeroTrustworthy = (r: RuleHitRow) => r.configured && !r.isPass && r.observability === 'observed' && !r.attributionUnsafe && !r.sharedSid && !r.unknown && alertCoverageComplete && !r.ruleGroupModifiedInRange;
+  const idleConfiguredRules = useMemo(
+    () => ruleHitRows.filter((r) => zeroTrustworthy(r) && r.hits === 0).length,
+  [ruleHitRows]);
+
   // Flow 로그 시각화 — 프로토콜 도넛(플로우 수) + Top talker 바(HBarList는 정수 표시라 MB 단위).
   const flowProtoDist = useMemo(() => logsData?.flow?.byProto ?? [], [logsData]);
   const talkerBars = useMemo(() =>
@@ -671,8 +986,8 @@ export default function NetworkFirewallPage() {
 
             {/* ⑦ Alert 로그 분석 — stateful alert/drop 매칭 (Logs Insights, CWL 대상만) */}
             <Card
-              title="Alert 로그 분석"
-              subtitle="어떤 규칙(sid)이 어떤 트래픽을 차단/경고했는지 — CloudWatch Logs 대상 Insights 집계"
+              title="Alert 로그 분석 · Stateful 룰 히트 카운트"
+              subtitle="어떤 규칙(sid)이 얼마나 매칭됐는지 — Alert 로그 Insights 집계 (AWS 룰 히트 카운트 기능과 동일 소스), 설정 룰과 조인해 매칭 없는 룰 표면화"
               padded={false}
             >
               {logsErr && <div className="px-4 py-3 text-[13px] text-rose-600">{tt('로그 분석 실패')}: {logsErr}</div>}
@@ -715,56 +1030,175 @@ export default function NetworkFirewallPage() {
                             {`${a.name} ${a.value.toLocaleString()}`}
                           </Badge>
                         ))}
+                        <span>{tt('설정 stateful 룰')} {ruleHitRows.filter((r) => r.configured).length}</span>
+                        {idleConfiguredRules > 0 && (
+                          <span title={tt('로그 그룹 생성 시각/보존기간으로 기간 전체 커버리지를 추정한 것 — 로깅이 같은 그룹에서 껐다 켜졌다 했는지는 증명하지 않음')}>
+                            <Badge tone="negative" variant="soft">{tt('매칭 없는 설정 룰')} {idleConfiguredRules}</Badge>
+                          </span>
+                        )}
                       </div>
-                      {/* 리뷰 MAJOR(라운드10, stop-hook 재수정): totalAlerts>0 게이트를
-                          topSignatures.length>0 하나로 바꿨더니, 시그니처 표만 실패하고
-                          소스/목적지 표는 성공한 경우 그 표까지 숨는 동일 계급의 버그가
-                          그대로 자리만 옮겼다 — 두 표를 각자 자기 데이터 유무로 독립
-                          게이트해 한쪽 실패가 다른 쪽의 로드된 결과를 가리지 않게 한다. */}
-                      {(logsData.alert.topSignatures.length > 0 || logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
-                        <div className="grid gap-4 px-4 pb-3 lg:grid-cols-2">
-                          {logsData.alert.topSignatures.length > 0 && (
-                            <div className="overflow-x-auto">
-                              <table className="w-full">
-                                <thead><tr className="border-b border-ink-100">
-                                  <th className={TH}>SID</th>
-                                  <th className={TH}>Signature</th>
-                                  <th className={TH}>{tt('건수')}</th>
-                                </tr></thead>
-                                <tbody>
-                                  {logsData.alert.topSignatures.map((s) => (
-                                    <tr key={`${s.sid}|${s.signature}`} className="border-b border-ink-50 last:border-0">
-                                      <td className={MONO}>{s.sid}</td>
-                                      <td className={TD}>{s.signature || dash}</td>
-                                      <td className={TD}>{s.value.toLocaleString()}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
+                      {/* 리뷰 MAJOR(확정, PR #225 라운드3 — 라운드8에서 게이트 조건 수정): ruleHits가
+                          null(쿼리 실패/discovery unknown)이면 이 카드에서 "어떤 SID가 있었는지" 조인된
+                          정보 자체가 사라진다. topSignatures는 이 경로들과 독립적으로 채워지므로
+                          (alertTotals/ruleHits 실패와 무관), ruleHits가 null일 때 최소한의 SID 표면
+                          (설정 룰과 조인 없는 원시 Top 시그니처)으로 폴백한다. 리뷰 MAJOR(확정, 라운드8 —
+                          라운드3 자체 수정의 결함): 게이트를 ruleHitRows.length===0으로 잡으면, ruleHits가
+                          null이어도 rgs(설정 룰 그룹)가 있는 한 ruleHitRows는 전부 "?" 행으로 채워져
+                          비지 않으므로(라운드3/4에서 만든 unknown 행들) 이 폴백이 절대 안 뜬다 — 정확히
+                          ruleHits==null 여부로만 게이트해야 한다. */}
+                      {logsData.alert.ruleHits == null && (logsData.alert.topSignatures.length > 0) && (
+                        <>
+                          <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Top 시그니처 (룰 그룹 정보 없음)')}</div>
+                          <div className="px-4 pb-1 text-[12px] text-ink-500">
+                            {tt('설정 룰과 조인할 수 없어 히트 카운트 대신 원시 Alert 시그니처만 표시합니다')}
+                          </div>
+                          <div className="overflow-x-auto px-4 pb-3">
+                            <table className="w-full">
+                              <thead><tr className="border-b border-ink-100">
+                                <th className={TH}>SID</th>
+                                <th className={TH}>Signature</th>
+                                <th className={TH}>{tt('건수')}</th>
+                              </tr></thead>
+                              <tbody>
+                                {logsData.alert.topSignatures.map((s) => (
+                                  <tr key={`${s.sid}|${s.signature}`} className="border-b border-ink-50 last:border-0">
+                                    <td className={MONO}>{s.sid}</td>
+                                    <td className={TD}>{s.signature || dash}</td>
+                                    <td className={TD}>{s.value.toLocaleString()}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                      {/* ruleHits===null이면 조인된 표는 전부 "?" 행뿐이라 위 원시 시그니처 폴백과
+                          중복·혼란만 준다 — 이때는 이 표를 건너뛴다. */}
+                      {logsData.alert.ruleHits != null && ruleHitRows.length > 0 && (
+                        <>
+                          <div className="px-4 text-[12px] font-medium text-ink-600">{tt('Stateful 룰 히트 카운트')}</div>
+                          <div className="px-4 pb-1 text-[12px] text-ink-500">
+                            {tt('Alert 로그 집계 기반 — pass 룰은 Alert 로그를 남기지 않아 집계할 수 없습니다 (매칭 없음으로 세지 않음)')}
+                          </div>
+                          {ruleHitRows.length > 50 && (
+                            <div className="px-4 pb-1 text-[12px] text-ink-500">{tt('히트 상위 50행 + 실제 매칭 있는 행 + 매칭 없는 설정 룰만 표시 (나머지 생략)')}</div>
                           )}
-                          {(logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
-                            <div className="overflow-x-auto">
-                              <table className="w-full">
-                                <thead><tr className="border-b border-ink-100">
-                                  <th className={TH}>{tt('소스 IP')}</th>
-                                  <th className={TH}>{tt('건수')}</th>
-                                  <th className={TH}>{tt('목적지')}</th>
-                                  <th className={TH}>{tt('건수')}</th>
-                                </tr></thead>
-                                <tbody>
-                                  {Array.from({ length: Math.max(logsData.alert.topSources.length, logsData.alert.topDests.length) }).map((_, i) => (
-                                    <tr key={i} className="border-b border-ink-50 last:border-0">
-                                      <td className={MONO}>{logsData.alert?.topSources[i]?.name ?? ''}</td>
-                                      <td className={TD}>{logsData.alert?.topSources[i]?.value.toLocaleString() ?? ''}</td>
-                                      <td className={MONO}>{logsData.alert?.topDests[i]?.name ?? ''}</td>
-                                      <td className={TD}>{logsData.alert?.topDests[i]?.value.toLocaleString() ?? ''}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
+                          <div className="overflow-x-auto px-4 pb-3">
+                            <table className="w-full">
+                              <thead><tr className="border-b border-ink-100">
+                                <th className={TH}>SID</th>
+                                <th className={TH}>Msg / Signature</th>
+                                <th className={TH}>Action</th>
+                                <th className={TH}>{tt('룰 그룹')}</th>
+                                <th className={TH}>{tt('히트')}</th>
+                              </tr></thead>
+                              <tbody>
+                                {ruleHitRows
+                                  // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드17): 정렬은 hitsAttributable
+                                  // 기준(불확실한 귀속은 0으로 취급)이라, ruleGroupModifiedInRange 등으로
+                                  // 귀속이 불확실해진 "실제 양수 히트가 있는" 행이 정렬상 0으로 밀려
+                                  // top-50 밖으로 나가면 — hits===0이 아니므로 idle 예외 조건도 못 만족해
+                                  // 화면에서 통째로 사라진다(실제 로그 증거의 무음 누락). 실제 히트가 있는
+                                  // 행은 top-50 여부와 무관하게 항상 표시한다("?"/n/a로 표기되더라도 행
+                                  // 자체는 보여야 함 — 귀속 불확실 ≠ 증거 없음).
+                                  .filter((r, i) => i < 50 || r.hits > 0 || (zeroTrustworthy(r) && r.hits === 0))
+                                  .map((r) => (
+                                  <tr key={r.key} className={`border-b border-ink-50 last:border-0 ${zeroTrustworthy(r) && r.hits === 0 ? 'opacity-60' : ''}`}>
+                                    <td className={MONO}>{r.sid}{r.sharedSid && <span className="ml-1 text-ink-400" title={tt('여러 룰 그룹이 같은 SID 사용 — Alert 로그는 룰 그룹을 식별하지 못해 히트를 그룹별로 귀속할 수 없음')}>*</span>}</td>
+                                    <td className={TD}>{r.msg || dash}</td>
+                                    <td className={MONO}>{r.actions.join(', ') || dash}</td>
+                                    <td className={MONO}>{r.ruleGroups.join(', ') || <span title={tt('룰 그룹에서 SID를 찾지 못함 (관리형 룰 그룹 등)')}>{dash}</span>}</td>
+                                    <td className={`${TD} ${r.hitsAttributable && r.hits > 0 && r.actions.includes('blocked') ? DANGER : ''}`}>
+                                      {/* 리뷰 확정(Codex stop-hook, PR #225 — 여러 라운드에 걸친 교정): 양수
+                                          히트는 값 자체가 "이 sid가 실제로 매칭됐다"는 로그 증거이므로
+                                          기본적으로 신뢰하지만, 예외가 세 가지다 — 그 증거를 특정 룰에
+                                          귀속할 수 없는 경우(sharedSid), sidGroupCount의 전제인 rgs 순회
+                                          자체가 불완전할 수 있는 경우(attributionUnsafe), 그리고 이 룰 그룹을
+                                          서빙하는 모든 방화벽의 ALERT 로깅이 확인상 꺼져 있다고 "확정"된
+                                          경우(observability === 'unobserved' — loggingKnown=false/discovered
+                                          같은 단순 불확실이 아니라 실제로 구성을 조회해서 로깅이 없다고
+                                          확인됨). 후자는 로그가 원천적으로 발생할 수 없다는 확정적 증거이므로,
+                                          그런데도 양수 히트가 보이면 그 자체가 우리 토폴로지 매핑의 오류일
+                                          가능성이 훨씬 높다 — 숫자를 그대로 보여주면 오귀속이다. 반대로
+                                          'unknown'(불확실, 확정 아님)은 로그가 안 보인 이유를 모를 뿐이므로
+                                          실제 히트 증거를 그대로 신뢰한다. "0(매칭 없음)"은 부재의 증거가
+                                          아니므로, 서빙 방화벽 전체가 관측됐다는 확신(observability ===
+                                          'observed')과 리전 토폴로지가 완전하다는 확신이 모두 있을 때만
+                                          확정 idle로 표시한다 — 그 외엔 "?"로 불명 처리. */}
+                                      {r.isPass
+                                        ? <span className="text-ink-300" title={tt('pass 또는 noalert 룰 — Alert 로그 미발생')}>n/a</span>
+                                        : r.sharedSid
+                                          ? <span className="text-ink-300" title={tt('여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다')}>n/a</span>
+                                          : r.unknown
+                                            ? <span className="text-ink-300" title={tt(r.unknownReason === 'failed' ? '로그 집계 쿼리 실패 — 매칭 여부 불명' : '집계 절단(상위 100 sid 초과 또는 리전별 상한 도달)으로 이 sid가 포함됐는지 불명')}>?</span>
+                                            : r.attributionUnsafe
+                                              ? <span className="text-ink-300" title={tt('일부 리전의 정책/방화벽/룰그룹 데이터가 불완전하거나, 파싱할 수 없는 룰그룹이 있거나, 어느 정책이 조회 기간 중 수정돼 그 시점 구성을 알 수 없어 매칭 여부·귀속을 확정할 수 없음')}>?</span>
+                                              // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드16): 라운드15는 이 신호를
+                                              // "0을 확정 idle로 보지 않는다"에만 썼는데, 대칭적으로 양수 히트도
+                                              // 안전하지 않다 — SID가 range 도중 이 그룹으로 재정의/이동해왔다면
+                                              // 지금 보이는 양수 히트 중 일부는 실제로 range 앞쪽의 "다른" 룰/그룹
+                                              // 설정이 만든 것일 수 있다. hits 값과 무관하게 항상 불명 처리한다.
+                                              : r.ruleGroupModifiedInRange
+                                                ? <span className="text-ink-300" title={tt('이 룰 그룹이 조회 기간 중에 수정됨 — 현재 SID가 기간 전체 동안 이 설정 그대로였다고 확정할 수 없어 히트를 이 룰에 귀속할 수 없음')}>?</span>
+                                                : r.observability === 'unobserved'
+                                                ? <span className="text-ink-300" title={tt('이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음')}>n/a</span>
+                                                : r.hits === 0 && r.observability !== 'observed'
+                                                  ? <span className="text-ink-300" title={tt('이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음')}>?</span>
+                                                  // 리뷰 MAJOR(확정, PR #225 라운드14): observability만으로는 "지금
+                                                  // 관측 중"만 확인될 뿐, 그 관측이 선택한 range 시작부터 있었다는
+                                                  // 보장이 없다 — 로그 그룹이 range 도중 생성/활성화됐으면 0이
+                                                  // 확정 idle이 아니라 "커버리지 밖일 수 있음"이다.
+                                                  : r.hits === 0 && !alertCoverageComplete
+                                                    ? <span className="text-ink-300" title={tt('ALERT 로그가 선택한 기간 전체를 커버하지 않거나 커버 여부를 확인할 수 없어 매칭 0을 확정할 수 없음 (로깅이 기간 중간에 시작됐거나, 로그 그룹 조회가 거부/시간 초과됨)')}>?</span>
+                                                  // 리뷰 MAJOR(확정, PR #225 라운드8): 리전별 상한(150)에 도달한 리전이
+                                                  // 있으면(ruleHitsPartial), present인 sid의 hits도 그 리전 몫이 잘려
+                                                  // 실제보다 적을 수 있다 — "정확한 수치"처럼 보이지 않게 하한 표기.
+                                                  // 리뷰 MAJOR(확정, PR #225 라운드19): !alertCoverageComplete는
+                                                  // hits===0 분기에만 반영됐었다 — 양수 히트도 같은 종류의 결손이다.
+                                                  // 로깅이 range 도중 시작됐다면 range 앞쪽 구간의 매칭은 로그가
+                                                  // 없어 지금 보이는 hits는 실제보다 적을 수 있는 하한일 뿐이다.
+                                                  // 리뷰 MAJOR(확정, Codex stop-hook, PR #225 라운드22): observability
+                                                  // === 'unknown'(일부 방화벽만 관측 확인됨)인 룰 그룹의 양수 히트는
+                                                  // 관측되지 않은 다른 방화벽에서 발생한 매칭까지 포함한다는 보장이
+                                                  // 없다 — 공간적으로 부분적인 값인데도 지금까지는 temporal(coverage)/
+                                                  // per-region cap 절단에만 하한(≥N) 표기를 썼다. 같은 종류의 결손이므로
+                                                  // 동일하게 하한으로 표기해야 "정확한 수치"로 오독되지 않는다.
+                                                  : r.hits > 0 && ((logsData.alert?.ruleHitsPartial ?? false) || !alertCoverageComplete || r.observability === 'unknown')
+                                                    ? <span title={tt(!alertCoverageComplete ? 'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한' : (logsData.alert?.ruleHitsPartial ?? false) ? '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한' : '일부 방화벽만 관측이 확인돼 실제 값이 더 클 수 있음 — 하한')}>{`≥${r.hits.toLocaleString()}`}</span>
+                                                    : r.hits.toLocaleString()}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                      {/* 리뷰 MAJOR(라운드10, stop-hook 재수정): totalAlerts>0 게이트를 단일 조건으로
+                          바꿨더니, 한쪽 표만 실패해도 성공한 다른 표까지 가려지는 동일 계급의
+                          버그가 자리만 옮겼다 — 이 표는 자기 데이터 유무로 독립 게이트한다. */}
+                      {(logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
+                        <div className="grid gap-4 px-4 pb-3">
+                          <div className="overflow-x-auto">
+                            <table className="w-full">
+                              <thead><tr className="border-b border-ink-100">
+                                <th className={TH}>{tt('소스 IP')}</th>
+                                <th className={TH}>{tt('건수')}</th>
+                                <th className={TH}>{tt('목적지')}</th>
+                                <th className={TH}>{tt('건수')}</th>
+                              </tr></thead>
+                              <tbody>
+                                {Array.from({ length: Math.max(logsData.alert.topSources.length, logsData.alert.topDests.length) }).map((_, i) => (
+                                  <tr key={i} className="border-b border-ink-50 last:border-0">
+                                    <td className={MONO}>{logsData.alert?.topSources[i]?.name ?? ''}</td>
+                                    <td className={TD}>{logsData.alert?.topSources[i]?.value.toLocaleString() ?? ''}</td>
+                                    <td className={MONO}>{logsData.alert?.topDests[i]?.name ?? ''}</td>
+                                    <td className={TD}>{logsData.alert?.topDests[i]?.value.toLocaleString() ?? ''}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       )}
                     </>

@@ -91,7 +91,7 @@ const RG_LIST = [
 // RulesSource(룰 본문)는 응답에 실리면 안 됨 — DescribeRuleGroup 원형에 포함해 회귀 검증
 const RG_DESCRIBE: Record<string, unknown> = {
   'DMZVPC-stateful-default': {
-    RuleGroup: { RulesSource: { RulesString: 'drop tcp $SECRET_RULE_BODY any -> any any' } },
+    RuleGroup: { RulesSource: { RulesString: 'drop tcp $SECRET_RULE_BODY any -> any any\n# comment line\ndrop tcp $HOME_NET any -> any 23 (msg:"block outbound telnet"; sid:1000001; rev:1;)\nalert tcp any any -> any 80 (msg:"http watch"; sid:1000002;)' } },
     RuleGroupResponse: {
       RuleGroupName: 'DMZVPC-stateful-default', Type: 'STATEFUL', RuleGroupStatus: 'ACTIVE',
       Capacity: 100, ConsumedCapacity: 3, NumberOfAssociations: 0,
@@ -169,7 +169,13 @@ describe('anfwAnalysis', () => {
       recv_i1: 900, pass_i1: 880, drop_i1: 10, rej_i1: 10,
     });
     const { anfwAnalysis } = await import('./anfw');
+    const before = Date.now();
     const a = await anfwAnalysis(86400);
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드20): 클라이언트가 range 시작을 자기 시계로
+    // 계산하면 시계 왜곡에 취약하다 — 서버가 이 분석을 생성한 실제 시각을 응답에 실어야
+    // 클라이언트가 그 값을 기준으로 계산할 수 있다.
+    expect(a.generatedAt).toBeGreaterThanOrEqual(before);
+    expect(a.generatedAt).toBeLessThanOrEqual(Date.now());
 
     expect(a.totals).toMatchObject({
       firewalls: 1, firewallsDown: 0,
@@ -195,14 +201,125 @@ describe('anfwAnalysis', () => {
     const p = a.policies[0];
     expect(p.statelessGroups).toEqual(['DMZVPC-stateless-allow-all']);
     expect(p.statefulGroups).toEqual(['eksworkshop-container-attr-rg']);
+    // 리뷰 MAJOR(Codex stop-hook, PR #225 라운드27): statefulGroups는 이름만(ARN 마지막
+    // 세그먼트) 남긴 표시용 값이다 — 계정 소유 그룹과 이름이 같은 관리형 그룹을 안전하게
+    // 구분하려면 전체 ARN이 필요하다. 이 필드가 실제로 채워지는지 확인.
+    expect(p.statefulGroupArns).toEqual(['arn:aws:network-firewall:r:1:stateful-rulegroup/eksworkshop-container-attr-rg']);
     expect(p.passthroughDefault).toBe(false); // forward_to_sfe
 
     const rg = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateful-default')!;
+    expect(rg.arn).toBe('arn:aws:network-firewall:r:1:stateful-rulegroup/DMZVPC-stateful-default');
     expect(rg.unassociated).toBe(true);
     expect(rg.capacityPct).toBe(3);
-    const rg2 = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateless-allow-all')!;
-    expect(rg2.capacityPct).toBe(90);
-    expect(rg2.unassociated).toBe(false);
+    // 룰 히트 카운트 조인용 SID 파싱 — sid 없는 룰/주석은 제외, sid·msg·action만 추출
+    expect(rg.statefulSids).toEqual([
+      { sid: '1000001', msg: 'block outbound telnet', action: 'drop', noalert: false },
+      { sid: '1000002', msg: 'http watch', action: 'alert', noalert: false },
+    ]);
+    const rgStateless = a.ruleGroups.find((r) => r.name === 'DMZVPC-stateless-allow-all')!;
+    expect(rgStateless.statefulSids).toEqual([]); // STATELESS는 대상 아님
+    expect(rgStateless.capacityPct).toBe(90);
+    expect(rgStateless.unassociated).toBe(false);
+  });
+
+  it('STATEFUL_DOMAIN(도메인 리스트) 룰 그룹은 sidsUnparseable=true — AWS가 SID를 내부 생성해 statefulSids로 알 수 없음 (리뷰 MAJOR 확정, PR #225 라운드11)', async () => {
+    mockDb([]);
+    mockNfw({
+      rgs: [{ Name: 'domain-deny-list', Arn: 'arn:aws:network-firewall:r:1:stateful-rulegroup/domain-deny-list' }],
+    });
+    // 리뷰 확정(PR #225 라운드12): 도메인 리스트의 실제 API Type은 'STATEFUL'이 아니라
+    // 별도 값 'STATEFUL_DOMAIN'이다(이 파일의 다른 테스트가 실측 검증). isStateful로
+    // 게이트한 첫 수정은 이 실제 Type에는 전혀 안 걸리는 죽은 코드였다 — 이 테스트는
+    // 반드시 실제 Type 문자열로 검증해야 그 회귀를 잡는다.
+    RG_DESCRIBE['domain-deny-list'] = {
+      // RulesSourceList의 GeneratedRulesType(ALLOWLIST|DENYLIST)은 실제 API에서 필수
+      // 필드 — 이게 빠진 응답은 AWS가 실제로 반환할 수 없는 형태였다(리뷰 확정, 라운드13).
+      RuleGroup: { RulesSource: { RulesSourceList: { Targets: ['evil.example'], TargetTypes: ['TLS_SNI'], GeneratedRulesType: 'DENYLIST' } } },
+      RuleGroupResponse: {
+        RuleGroupName: 'domain-deny-list', Type: 'STATEFUL_DOMAIN', RuleGroupStatus: 'ACTIVE',
+        Capacity: 100, ConsumedCapacity: 10, NumberOfAssociations: 1,
+      },
+    };
+    const { anfwAnalysis } = await import('./anfw');
+    const a = await anfwAnalysis(86400);
+    const rg = a.ruleGroups.find((r) => r.name === 'domain-deny-list')!;
+    expect(rg.type).toBe('STATEFUL_DOMAIN');
+    expect(rg.statefulSids).toEqual([]); // 사용자 SID 없음 — 파싱 대상 아님
+    expect(rg.sidsUnparseable).toBe(true); // 그런데도 SID 집합을 안다고 확정할 수 없음
+    delete RG_DESCRIBE['domain-deny-list'];
+  });
+
+  it('parseStatefulSids: content/pcre 내부의 "sid:" 문자열에 속지 않음', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert http any any -> any any (content:"sid: 999"; msg:"x"; sid:1234;)' } }))
+      .toEqual([{ sid: '1234', msg: 'x', action: 'alert', noalert: false }]);
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'drop tcp any any -> any any (pcre:"/sid:55/"; sid:2000;)' } }))
+      .toEqual([{ sid: '2000', msg: null, action: 'drop', noalert: false }]);
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"\\"; sid: 12;\\""; sid:4000;)' } })[0].sid).toBe('4000');
+  });
+
+  it('parseStatefulSids: noalert 룰은 action이 alert/drop이어도 Alert 로그를 안 남기므로 별도 플래그로 표시 (리뷰 MAJOR PLAUSIBLE, PR #225 라운드9)', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (msg:"silent"; flowbits:set,seen; noalert; sid:5000;)' } }))
+      .toEqual([{ sid: '5000', msg: 'silent', action: 'alert', noalert: true }]);
+    // 구조화된 StatefulRules 형태도 동일하게 처리
+    expect(parseStatefulSids({
+      RulesSource: {
+        StatefulRules: [{
+          Action: 'DROP',
+          RuleOptions: [
+            { Keyword: 'sid', Settings: ['5001'] },
+            { Keyword: 'msg', Settings: ['"silent2"'] },
+            { Keyword: 'noalert' },
+          ],
+        }],
+      },
+    })).toEqual([{ sid: '5001', msg: 'silent2', action: 'drop', noalert: true }]);
+  });
+
+  it('parseStatefulSids: 구조화된 StatefulRules의 flowbits:noalert 레거시 별칭(Keyword="flowbits", Settings=["noalert"])도 noalert로 인식 (리뷰 MAJOR 확정, PR #225 라운드10)', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    expect(parseStatefulSids({
+      RulesSource: {
+        StatefulRules: [{
+          Action: 'ALERT',
+          RuleOptions: [
+            { Keyword: 'sid', Settings: ['5002'] },
+            { Keyword: 'flowbits', Settings: ['noalert'] },
+          ],
+        }],
+      },
+    })).toEqual([{ sid: '5002', msg: null, action: 'alert', noalert: true }]);
+    // 일반 flowbits 설정(콤마 인자가 있는 set/unset류)은 여전히 noalert가 아니어야 한다.
+    expect(parseStatefulSids({
+      RulesSource: {
+        StatefulRules: [{
+          Action: 'ALERT',
+          RuleOptions: [
+            { Keyword: 'sid', Settings: ['5003'] },
+            { Keyword: 'flowbits', Settings: ['set,seen'] },
+          ],
+        }],
+      },
+    })).toEqual([{ sid: '5003', msg: null, action: 'alert', noalert: false }]);
+  });
+
+  it('parseStatefulSids: msg 추출이 이스케이프된 따옴표에서 잘리지 않고, 다른 문자열 리터럴을 넘어가며 오추출하지 않음 (리뷰 MAJOR 확정, PR #225 라운드10·11)', async () => {
+    const { parseStatefulSids } = await import('./anfw');
+    // 이스케이프된 내부 따옴표 — 이전엔 첫 \" 에서 잘려 'a '만 남았다.
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (msg:"a \\"b\\" c"; sid:6000;)' } })[0].msg)
+      .toBe('a \\"b\\" c');
+    // content 리터럴 "안"에 백슬래시로 이스케이프된 가짜 msg: 텍스트를 심어도, 실제 msg
+    // 리터럴만 추출돼야 한다.
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"msg:\\"decoy\\""; msg:"real"; sid:6001;)' } })[0].msg)
+      .toBe('real');
+    // 리뷰 MAJOR(확정, 라운드11 — 라운드10 자체 수정의 결함): content 리터럴이 "msg:"로
+    // *끝나면*, 그 리터럴을 닫는 따옴표가 가짜 msg 옵션의 여는 따옴표로 오인되어 그
+    // 지점부터 진짜 msg 리터럴의 여는 따옴표까지("; msg:")를 통째로 캡처해버렸다 —
+    // 여전히 리터럴 경계를 넘어간 것. 순서 기반 대응(literalsInOrder)으로 고쳐 'real2'만
+    // 나와야 한다.
+    expect(parseStatefulSids({ RulesSource: { RulesString: 'alert tcp any any -> any any (content:"foo msg:"; msg:"real2"; sid:6002;)' } })[0].msg)
+      .toBe('real2');
   });
 
   it('TLS 수신 패킷도 recv/bytes와 동일하게 Engine=Stateless만 채택 — Stateful 재발행 이중 집계 방지 (리뷰 MAJOR 라운드8, 라운드10 되돌림)', async () => {
