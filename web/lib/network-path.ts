@@ -48,6 +48,9 @@ export interface NetworkPathRunRow {
   worker_job_id: string | null;
   created_at: string;
   finished_at: string | null;
+  // MINOR fix (pr-review round 2): the worker now persists WHY a run failed (migration
+  // 01M0CZS7GZJJJ7S050Y9Z04964) — nullable, never set on a non-failed run.
+  error: string | null;
 }
 
 export class NotFoundError extends Error {
@@ -215,7 +218,7 @@ export async function createRun(user: User, checkId: string): Promise<NetworkPat
 export async function listRunsForCheck(checkId: string, limit = 50): Promise<NetworkPathRunRow[]> {
   const r = await getPool().query(
     `SELECT id, check_id, requested_by_sub, definition_snapshot, status, phase, overall_status,
-            validation_bundle, worker_job_id, created_at, finished_at
+            validation_bundle, worker_job_id, created_at, finished_at, error
      FROM network_path_runs WHERE check_id = $1 ORDER BY created_at DESC LIMIT $2`,
     [checkId, Math.min(200, Math.max(1, Math.floor(limit)))],
   );
@@ -233,7 +236,7 @@ export interface NetworkPathRunDetail extends NetworkPathRunRow {
 export async function getRunDetail(runId: string): Promise<NetworkPathRunDetail | null> {
   const runRes = await getPool().query(
     `SELECT id, check_id, requested_by_sub, definition_snapshot, status, phase, overall_status,
-            validation_bundle, worker_job_id, created_at, finished_at
+            validation_bundle, worker_job_id, created_at, finished_at, error
      FROM network_path_runs WHERE id = $1`,
     [runId],
   );

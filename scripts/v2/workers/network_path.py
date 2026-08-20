@@ -40,6 +40,20 @@ AI boundary (spec): this module never calls a model. It only computes the determ
 This module deliberately never imports or calls `agent/lambda/datasource_diag_mcp.py`'s
 `_test_http_connectivity` (grep-verified by test_network_path.py) — see network_path_adapters.py's
 module docstring for why.
+
+Known structural gap, documented rather than silently implied (L4 finding #13): every layer this
+module evaluates is still primarily a SOURCE-side check — `sg`/`nacl`/`route` read the source ENI's
+own SG union/NACL/route table. A full bidirectional rewrite (independently evaluating the
+destination's own ingress SG/NACL, and return routing for an `aws_resource` destination, as a
+first-class part of every candidate) is a larger effort out of scope this round. The cheap
+mitigation shipped instead: when the topology fetcher can resolve the destination's OWN describable
+ENI (`dest_eni_known` on a candidate's topology hint — see `_layer_plan_for`), a SECOND pass reusing
+the exact same `sg`/`nacl` adapters (`eval_security_group`/`eval_nacl`, just given the destination
+ENI's own rules/peer identity) runs under the `sg-dst`/`nacl-dst` layer names. This covers the most
+common case (a describable destination ENI) but NOT: peering/TGW/VPN/DX-fronted destinations whose
+own ENI isn't resolved, ALB/NLB-fronted targets (the target's OWN SG is not independently checked
+past `target-group`), or return-path routing on the destination side. A path can still report
+`allowed` based on less than the full bidirectional policy surface in those cases.
 """
 import json
 import time
@@ -130,6 +144,13 @@ def resolve_identities(definition):
 
 # ── Phase 2: discover ────────────────────────────────────────────────────────────────────────────
 
+# Calico / Cilium / Istio — bounded stubs (single source of truth for both `_layer_plan_for`'s
+# L4 finding #12 wiring below AND `_ADAPTER_BY_LAYER`'s registration loop further down).
+_MESH_KINDS = ("calico", "cilium", "istio-virtualservice", "istio-destinationrule", "istio-gateway",
+               "istio-authorizationpolicy", "istio-peerauthentication")
+_MESH_LAYERS = [f"k8s-{_kind}" for _kind in _MESH_KINDS]
+
+
 def _layer_plan_for(destination_kind, topology_hint):
     """Which layers apply to a candidate, in evaluation order — a layer irrelevant to this
     candidate's destination kind is simply never in this list (never persisted as `unknown`, per
@@ -143,6 +164,15 @@ def _layer_plan_for(destination_kind, topology_hint):
             plan.append("tgw")
         if topology_hint.get("via") == "alb":
             plan += ["alb-listener", "target-group"]
+        # L4 finding #13 (cheap mitigation): every layer above evaluates the SOURCE ENI's own
+        # SG/NACL/route only — the destination side's ingress SG/NACL (and return routing for an
+        # aws_resource destination) is a real, documented structural gap (a full bidirectional
+        # rewrite is out of scope this round — see the report). When the topology fetcher DOES know
+        # the destination's own describable ENI (`dest_eni_known`), add a second pass reusing the
+        # SAME sg/nacl adapters, just evaluated against the destination ENI's own data (peer/local
+        # roles swapped) — cheap because it's the same functions, not a new evaluation engine.
+        if topology_hint.get("dest_eni_known"):
+            plan += ["sg-dst", "nacl-dst"]
     elif destination_kind == "internet":
         if topology_hint.get("network_firewall"):
             plan.append("network-firewall")
@@ -152,6 +182,18 @@ def _layer_plan_for(destination_kind, topology_hint):
         plan.append("onprem-segment")  # always `unknown` past the AWS boundary
     if topology_hint.get("k8s_network_policy"):
         plan.insert(0, "k8s-networkpolicy")
+        # L4 finding #12: the mesh-policy layers (Calico/Cilium/Istio) were registered in
+        # `_ADAPTER_BY_LAYER` but never inserted into any candidate's plan — a real mesh policy
+        # that would block the path was never even checked (not even to record `unknown`), so a
+        # candidate could reach `allowed` with an empty `unknown_layers` list, silently omitting a
+        # policy surface that might actually be the one blocking it. No mesh-CRD-presence signal
+        # exists in the topology hint yet, so the conservative, honest fix (per the report) is:
+        # whenever the destination is a Kubernetes Pod/Service at all (the same `k8s_network_policy`
+        # hint that gates k8s-networkpolicy itself), unconditionally include every mesh layer too —
+        # each one is still a bounded stub (`eval_mesh_policy_stub`) that only ever returns
+        # `unknown`, so this never fabricates a confident allowed/blocked, it just makes the
+        # unevaluated surface VISIBLE instead of silently absent.
+        plan += _MESH_LAYERS
     return plan
 
 
@@ -200,6 +242,16 @@ _ADAPTER_BY_LAYER = {
         data.get("nacl_forward", []), data.get("nacl_return", []), req["protocol"], req.get("port"),
         peer_ip=data.get("peer_ip")),
     "route": lambda data, req: ad.eval_route(data.get("route_table", []), data.get("dest_cidr")),
+    # L4 finding #13: destination-side SG/NACL pass for an aws_resource destination whose own ENI
+    # is describable (`dest_eni_known` hint) — the SAME adapters as "sg"/"nacl" above, just given
+    # the destination ENI's own attached rules/peer identity (source and destination roles
+    # swapped), under a distinct layer name so both passes' steps are independently visible.
+    "sg-dst": lambda data, req: ad.eval_security_group(
+        data.get("sg_rules", []), req["protocol"], req.get("port"),
+        peer_ip=data.get("peer_ip"), peer_sg_ids=data.get("peer_sg_ids"), layer="sg-dst"),
+    "nacl-dst": lambda data, req: ad.eval_nacl(
+        data.get("nacl_forward", []), data.get("nacl_return", []), req["protocol"], req.get("port"),
+        peer_ip=data.get("peer_ip"), layer="nacl-dst"),
     "tgw": lambda data, req: ad.eval_tgw(
         data.get("attachment_state"), data.get("associated", False),
         data.get("propagation_enabled", False), data.get("route_entry")),
@@ -213,7 +265,13 @@ _ADAPTER_BY_LAYER = {
         data.get("healthy_target_count", 0), data.get("total_target_count", 0)),
     "k8s-networkpolicy": lambda data, req: ad.eval_k8s_network_policy(
         data.get("policies", []), data.get("pod_labels", {}), data.get("direction", "egress"),
-        peer_labels=data.get("peer_labels"), peer_ip=data.get("peer_ip")),
+        peer_labels=data.get("peer_labels"), peer_ip=data.get("peer_ip"),
+        protocol=req.get("protocol"), port=req.get("port"),
+        # L4 finding #10c: the topology fetcher (once implemented) must set `policies_fetched:
+        # False` explicitly when it could not actually retrieve NetworkPolicy data for this pod/
+        # namespace — an empty `policies` list defaults to "fetched, genuinely none" (`True`) since
+        # that's the correct interpretation for every fixture-driven test today.
+        data_available=data.get("policies_fetched", True)),
     "dns": lambda data, req: {
         "layer": "dns", "status": "unknown", "resource": None,
         "summary": "DNS/L7 resolution not evaluated in this release", "evidence": [],
@@ -226,8 +284,7 @@ _ADAPTER_BY_LAYER = {
 }
 
 # Layers that are true bounded stubs (K8s mesh policy) route through the same shared stub evaluator.
-for _kind in ("calico", "cilium", "istio-virtualservice", "istio-destinationrule", "istio-gateway",
-              "istio-authorizationpolicy", "istio-peerauthentication"):
+for _kind in _MESH_KINDS:
     _ADAPTER_BY_LAYER[f"k8s-{_kind}"] = (
         lambda data, req, _k=_kind: ad.eval_mesh_policy_stub(
             _k, data.get("api_version"), data.get("crd_present", False)))
@@ -339,12 +396,17 @@ def _update_candidate_result(conn, run_id, candidate_id, status, first_blocker):
         s=status, fb=first_blocker, r=run_id, c=candidate_id)
 
 
-def _finish_run(conn, run_id, status, overall_status=None, validation_bundle=None):
+def _finish_run(conn, run_id, status, overall_status=None, validation_bundle=None, error=None):
+    """MINOR fix (round-2 report): `error` is now persisted (network_path_runs.error, added by
+    migration 01M0CZS7GZJJJ7S050Y9Z04964) — a failed run previously left no trace of WHY it failed
+    anywhere the API/UI could read, even though `run()`'s own in-memory return value always had
+    the string."""
     conn.run(
         "UPDATE network_path_runs SET status=:s, overall_status=:os, validation_bundle=:vb::jsonb, "
-        "finished_at=now() WHERE id=:id",
+        "error=:err, finished_at=now() WHERE id=:id",
         s=status, os=overall_status,
-        vb=(json.dumps(validation_bundle) if validation_bundle is not None else None), id=run_id)
+        vb=(json.dumps(validation_bundle) if validation_bundle is not None else None),
+        err=error, id=run_id)
 
 
 def fetch_live_topology(resolved):  # pragma: no cover — thin AWS-calling boundary, not unit tested
@@ -369,7 +431,7 @@ def run(payload, conn, topology_fetcher=fetch_live_topology, deadline_s=GLOBAL_D
     try:
         resolved = resolve_identities(definition)
     except NetworkPathError as e:
-        _finish_run(conn, run_id, "failed", overall_status="failed")
+        _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
         return {"run_id": run_id, "status": "failed", "error": str(e)}
 
     _update_phase(conn, run_id, "discover")
@@ -377,14 +439,15 @@ def run(payload, conn, topology_fetcher=fetch_live_topology, deadline_s=GLOBAL_D
         topology = topology_fetcher(resolved)
         candidates = discover_candidates(resolved, topology)
     except NetworkPathError as e:
-        _finish_run(conn, run_id, "failed", overall_status="failed")
+        _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
         return {"run_id": run_id, "status": "failed", "error": str(e)}
     except Exception as e:  # noqa: BLE001 — MAJOR fix: fetch_live_topology is unimplemented in
         # this pass (raises NotImplementedError) and any other unexpected fetcher failure must also
         # terminate the run visibly rather than crash uncaught and leave network_path_runs stuck at
         # running/discover until the reaper eventually flips it minutes later.
-        _finish_run(conn, run_id, "failed", overall_status="failed")
-        return {"run_id": run_id, "status": "failed", "error": f"{type(e).__name__}: {e}"}
+        error_text = f"{type(e).__name__}: {e}"
+        _finish_run(conn, run_id, "failed", overall_status="failed", error=error_text)
+        return {"run_id": run_id, "status": "failed", "error": error_text}
 
     for c in candidates:
         _insert_candidate(conn, run_id, c["candidate_id"], c["kind"])

@@ -17,3 +17,31 @@ export function networkPathCheckGate(): NextResponse | null {
   }
   return null;
 }
+
+/**
+ * Capability probe (L2 finding #3, round 2): `scripts/v2/workers/network_path.py`'s
+ * `fetch_live_topology()` is not implemented in this release — it unconditionally raises
+ * `NotImplementedError`, so every enabled, non-fixture-driven Network Path run deterministically
+ * ends `failed`. Rather than ship a feature that is guaranteed to fail once enabled, this route
+ * refuses to create a NEW run at all while the capability is absent — existing checks/definitions
+ * and prior run history remain fully viewable (this only blocks `createRun`, per the design
+ * discussion in the round-2 report). Flip `LIVE_TOPOLOGY_IMPLEMENTED` to `true` in the SAME commit
+ * that gives `fetch_live_topology()` a real implementation — this is a code-level fact, not an
+ * environment toggle, so it is not read from `process.env`.
+ */
+const LIVE_TOPOLOGY_IMPLEMENTED = false;
+
+export function networkPathLiveTopologyCapabilityGate(): NextResponse | null {
+  if (!LIVE_TOPOLOGY_IMPLEMENTED) {
+    return NextResponse.json(
+      {
+        status: 'unimplemented',
+        message: 'Network Path Check cannot start a new run yet — live topology discovery ' +
+          '(fetch_live_topology) is not implemented in this release. Existing checks and prior ' +
+          'run history remain viewable.',
+      },
+      { status: 503 },
+    );
+  }
+  return null;
+}

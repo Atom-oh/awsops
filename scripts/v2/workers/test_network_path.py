@@ -87,6 +87,10 @@ class TestResolve:
         finishes = conn.run_finishes()
         assert finishes[-1]["s"] == "failed"
         assert finishes[-1]["os"] == "failed"
+        # MINOR fix: the error text must actually be persisted to network_path_runs.error, not
+        # just returned in run()'s in-memory result (which the caller/reaper never see again).
+        assert finishes[-1]["err"] == result["error"]
+        assert "account_id" in finishes[-1]["err"]
 
 
 # ── discover ─────────────────────────────────────────────────────────────────────────────────────
@@ -118,6 +122,78 @@ class TestDiscover:
         candidates = np.discover_candidates(resolved, topo)
         assert "dx" in candidates[0]["layer_plan"]
         assert "onprem-segment" in candidates[0]["layer_plan"]
+
+    def test_k8s_destination_wires_in_every_mesh_stub_layer(self):
+        """L4 finding #12: the mesh-policy layers (Calico/Cilium/Istio) were registered in
+        `_ADAPTER_BY_LAYER` but `_layer_plan_for` never inserted them into any candidate's plan —
+        they could never even run (not even to record `unknown`). Whenever the k8s_network_policy
+        hint is set, every mesh layer must now appear in the plan too."""
+        resolved = np.resolve_identities(_definition())
+        topo = _topology_one_candidate()
+        topo["candidates"][0]["k8s_network_policy"] = True
+        candidates = np.discover_candidates(resolved, topo)
+        plan = candidates[0]["layer_plan"]
+        assert "k8s-networkpolicy" in plan
+        for layer in np._MESH_LAYERS:
+            assert layer in plan
+
+    # ── L4 finding #13 (cheap mitigation): destination-side SG/NACL second pass ──────────────────
+
+    def test_dest_eni_known_adds_destination_side_sg_and_nacl_layers(self):
+        resolved = np.resolve_identities(_definition(dest_kind="aws_resource"))
+        topo = _topology_one_candidate()
+        topo["candidates"][0]["dest_eni_known"] = True
+        candidates = np.discover_candidates(resolved, topo)
+        plan = candidates[0]["layer_plan"]
+        assert "sg-dst" in plan
+        assert "nacl-dst" in plan
+
+    def test_dest_eni_unknown_omits_destination_side_layers(self):
+        resolved = np.resolve_identities(_definition(dest_kind="aws_resource"))
+        candidates = np.discover_candidates(resolved, _topology_one_candidate())
+        plan = candidates[0]["layer_plan"]
+        assert "sg-dst" not in plan
+        assert "nacl-dst" not in plan
+
+    def test_dest_side_sg_block_produces_a_distinct_blocked_step(self):
+        """A destination-side SG that denies the traffic must surface as its OWN `sg-dst` blocked
+        step — independent from (and even when) the source-side `sg` step is allowed."""
+        resolved = np.resolve_identities(_definition(dest_kind="aws_resource"))
+        topo = _topology_one_candidate(sg_allowed=True)  # source-side sg: allowed
+        topo["candidates"][0]["dest_eni_known"] = True
+        topo["candidates"][0]["data"]["sg-dst"] = {
+            "sg_rules": [{"sg_id": "sg-dst-1", "protocol": "tcp", "from_port": 22, "to_port": 22,
+                          "cidr": "0.0.0.0/0"}],
+            "peer_ip": "10.0.1.5",
+        }
+        topo["candidates"][0]["data"]["nacl-dst"] = topo["candidates"][0]["data"]["nacl"]
+        candidates = np.discover_candidates(resolved, topo)
+        deadline_at = np.time.monotonic() + 60
+        steps = np.verify_candidate(candidates[0], resolved["request"], deadline_at)
+        sg_step = next(s for s in steps if s["layer"] == "sg")
+        sg_dst_step = next(s for s in steps if s["layer"] == "sg-dst")
+        assert sg_step["status"] == "allowed"
+        assert sg_dst_step["status"] == "blocked"  # port 443 not in the dest-side sg-dst-1 rule (22 only)
+
+    def test_non_k8s_destination_never_gets_mesh_layers(self):
+        resolved = np.resolve_identities(_definition())
+        candidates = np.discover_candidates(resolved, _topology_one_candidate())
+        plan = candidates[0]["layer_plan"]
+        for layer in np._MESH_LAYERS:
+            assert layer not in plan
+
+    def test_mesh_layers_run_as_unknown_never_fabricating_allowed_or_blocked(self):
+        """Each mesh layer is still a bounded stub (`eval_mesh_policy_stub`) — wiring it in must
+        make it VISIBLE as `unknown`, never a confident allowed/blocked."""
+        resolved = np.resolve_identities(_definition())
+        topo = _topology_one_candidate()
+        topo["candidates"][0]["k8s_network_policy"] = True
+        candidates = np.discover_candidates(resolved, topo)
+        deadline_at = np.time.monotonic() + 60
+        steps = np.verify_candidate(candidates[0], resolved["request"], deadline_at)
+        mesh_steps = [s for s in steps if s["layer"] in np._MESH_LAYERS]
+        assert len(mesh_steps) == len(np._MESH_LAYERS)
+        assert all(s["status"] == "unknown" for s in mesh_steps)
 
 
 # ── verify: deadline / adapter isolation ────────────────────────────────────────────────────────
@@ -279,6 +355,7 @@ class TestFullRun:
         assert finishes[-1]["s"] == "failed"
         assert finishes[-1]["os"] == "failed"
         assert conn.inserted_candidates() == []  # discovery never got far enough to write candidates
+        assert finishes[-1]["err"] == result["error"]  # MINOR fix: error text is now persisted
 
 
 # ── grep-verifiable: never calls the SSRF-risk active-probe helper ─────────────────────────────

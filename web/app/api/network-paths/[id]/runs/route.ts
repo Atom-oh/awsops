@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { EnqueueDeliveryError, IdempotencyKeyCollisionError } from '@/lib/jobs';
 import { NotFoundError, createRun, getCheck, listRunsForCheck } from '@/lib/network-path';
-import { networkPathCheckGate } from '@/lib/network-path-gate';
+import { networkPathCheckGate, networkPathLiveTopologyCapabilityGate } from '@/lib/network-path-gate';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,12 +29,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
  * authenticated user may run a visible check per the spec), snapshots the definition, creates the
  * run row, and enqueues the `network_path` job directly — this NEVER goes through the generic
  * POST /api/jobs (ADR-009 dedicated-route pattern, same as /api/diagnosis and /api/compliance/run).
+ *
+ * L2 finding #3 (round 2): a NEW run is refused outright while `fetch_live_topology()` remains
+ * unimplemented (networkPathLiveTopologyCapabilityGate) — every such run would deterministically
+ * end `failed`, so this route no longer enqueues jobs that are guaranteed to fail.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
   const blocked = networkPathCheckGate();
   if (blocked) return blocked;
+  const capabilityBlocked = networkPathLiveTopologyCapabilityGate();
+  if (capabilityBlocked) return capabilityBlocked;
 
   try {
     const run = await createRun(user, params.id);

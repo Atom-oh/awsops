@@ -281,11 +281,83 @@ class TestAlbListener:
         r = ad.eval_alb_listener(rules, {})
         assert r["status"] == "conditional"
 
-    def test_no_match_no_default_blocks(self):
+    def test_no_match_and_no_default_action_present_is_unknown_not_blocked(self):
+        """L2 finding #5a: a real ALB listener ALWAYS has a default action — an input rule set
+        that omits one entirely is missing data, not a confirmed deny. Must be `unknown`, never a
+        confident `blocked` (the same "missing data never yields a confident deny" fix already
+        applied to eval_security_group/eval_route)."""
         rules = [{"priority": 1, "conditions": [{"field": "path-pattern", "values": ["/api/*"]}],
                   "action": {"type": "forward"}}]
         r = ad.eval_alb_listener(rules, {"path-pattern": "/other"})
+        assert r["status"] == "unknown"
+
+    def test_no_match_but_default_action_present_blocks(self):
+        """When the rule set DOES include the always-present default action (priority literal
+        "default", ELBv2's own value) and it also fails to match, `blocked` is the correct,
+        confident verdict."""
+        rules = [
+            {"priority": 1, "conditions": [{"field": "path-pattern", "values": ["/api/*"]}],
+             "action": {"type": "forward"}},
+            {"priority": "default", "conditions": [{"field": "path-pattern", "values": ["/never/*"]}],
+             "action": {"type": "forward"}},
+        ]
+        r = ad.eval_alb_listener(rules, {"path-pattern": "/other"})
         assert r["status"] == "blocked"
+
+    def test_default_priority_string_does_not_crash_sort(self):
+        """L2 finding #5b: `sorted(rules, key=priority)` raised TypeError on ELBv2's literal
+        `"default"` priority value (int vs str comparison) — must sort last instead of crashing."""
+        rules = [
+            {"priority": "default", "conditions": [], "action": {"type": "forward", "target_group_arn": "tg-default"}},
+            {"priority": 5, "conditions": [{"field": "path-pattern", "values": ["/api/*"]}],
+             "action": {"type": "forward", "target_group_arn": "tg-api"}},
+        ]
+        r = ad.eval_alb_listener(rules, {"path-pattern": "/api/orders"})
+        assert r["status"] == "allowed"
+        assert "tg-api" in r["summary"]  # the numbered rule, not the default, wins
+
+    def test_host_header_wildcard_matches(self):
+        """L2 finding #5c: host-header wildcards (`*.example.com`) must match, mirroring ALB's own
+        glob semantics — previously only path-pattern implemented `*`."""
+        rules = [{"priority": 1, "conditions": [{"field": "host-header", "values": ["*.example.com"]}],
+                  "action": {"type": "forward", "target_group_arn": "tg-wild"}}]
+        r = ad.eval_alb_listener(rules, {"host-header": "api.example.com"})
+        assert r["status"] == "allowed"
+        assert "tg-wild" in r["summary"]
+
+    def test_host_header_wildcard_does_not_match_unrelated_host(self):
+        rules = [{"priority": 1, "conditions": [{"field": "host-header", "values": ["*.example.com"]}],
+                  "action": {"type": "forward", "target_group_arn": "tg-wild"}},
+                 {"priority": "default", "conditions": [], "action": {"type": "fixed-response", "status_code": 404}}]
+        r = ad.eval_alb_listener(rules, {"host-header": "api.other.com"})
+        assert r["status"] == "blocked"
+
+
+class TestNaclLayerParam:
+    def test_default_layer_is_nacl(self):
+        r = ad.eval_nacl([{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                          [{"rule_number": 100, "protocol": "-1", "action": "allow"}], "tcp", 443)
+        assert r["layer"] == "nacl"
+
+    def test_custom_layer_name_is_threaded_through_every_branch(self):
+        """L4 finding #13: eval_nacl must be reusable for a second (destination-side) pass under a
+        distinct layer name — every returned dict (blocked-forward, blocked-return, allowed,
+        conditional) must carry the CALLER's layer name, not a hardcoded "nacl"."""
+        blocked_fwd = ad.eval_nacl([], [], "tcp", 443, layer="nacl-dst")
+        assert blocked_fwd["layer"] == "nacl-dst"
+        blocked_ret = ad.eval_nacl([{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                                    [], "tcp", 443, layer="nacl-dst")
+        assert blocked_ret["layer"] == "nacl-dst"
+        allowed = ad.eval_nacl([{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                                [{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                                "tcp", 443, layer="nacl-dst")
+        assert allowed["layer"] == "nacl-dst"
+        conditional = ad.eval_nacl(
+            [{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+            [{"rule_number": 100, "protocol": "tcp", "action": "allow",
+              "from_port": ad.EPHEMERAL_PROBE_PORT, "to_port": ad.EPHEMERAL_PROBE_PORT}],
+            "tcp", 443, layer="nacl-dst")
+        assert conditional["layer"] == "nacl-dst"
 
 
 class TestTargetGroupHealth:
@@ -351,6 +423,74 @@ class TestK8sNetworkPolicy:
         policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["Ingress"],
                      "ingress": [{"from": [{"pod_selector": {"app": "gateway"}}]}]}]
         r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"})
+        assert r["status"] == "allowed"
+
+    # ── L4 finding #10a: policyTypes OMITTED entirely must still apply K8s' real defaulting ──────
+
+    def test_omitted_policy_types_still_selects_pod_for_ingress_default_deny(self):
+        """A policy with NO `policy_types` key at all still selects the pod for Ingress (K8s
+        default: [Ingress], or [Ingress, Egress] if `egress` is present) — previously this policy
+        was silently invisible (no key present -> never selected -> fail-open to `allowed`)."""
+        policies = [{"pod_selector": {"app": "orders"},
+                     "ingress": [{"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "other"})
+        assert r["status"] == "blocked"  # genuinely selected + default-deny, not fail-open allowed
+
+    def test_omitted_policy_types_does_not_select_pod_for_egress_without_egress_key(self):
+        """The same omitted-policyTypes policy must NOT apply to Egress unless the `egress` key is
+        itself present — Ingress-only defaulting must not overreach into Egress."""
+        policies = [{"pod_selector": {"app": "orders"},
+                     "ingress": [{"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "egress", peer_ip="10.0.0.1")
+        assert r["status"] == "allowed"  # not selected for egress -> genuinely default-allow
+
+    def test_omitted_policy_types_with_egress_key_present_selects_for_egress_too(self):
+        policies = [{"pod_selector": {"app": "orders"},
+                     "egress": [{"to": [{"ip_block": {"cidr": "10.0.0.0/8"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "egress", peer_ip="192.168.1.1")
+        assert r["status"] == "blocked"  # selected via `egress` key presence, peer doesn't match
+
+    # ── L4 finding #10b: a rule's own `ports` restriction must actually be evaluated ────────────
+
+    def test_port_restricted_rule_blocks_a_different_port(self):
+        policies = [{"pod_selector": {"app": "dns"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "client"}}], "ports": [{"protocol": "UDP", "port": 53}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "dns"}, "ingress",
+                                        peer_labels={"app": "client"}, protocol="tcp", port=8080)
+        assert r["status"] == "blocked"
+
+    def test_port_restricted_rule_allows_the_matching_port(self):
+        policies = [{"pod_selector": {"app": "dns"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "client"}}], "ports": [{"protocol": "UDP", "port": 53}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "dns"}, "ingress",
+                                        peer_labels={"app": "client"}, protocol="udp", port=53)
+        assert r["status"] == "allowed"
+
+    def test_rule_with_no_ports_field_allows_any_port(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress",
+                                        peer_labels={"app": "gateway"}, protocol="tcp", port=9999)
+        assert r["status"] == "allowed"
+
+    def test_port_range_via_end_port_matches(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "gateway"}}],
+             "ports": [{"protocol": "TCP", "port": 8000, "endPort": 8100}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress",
+                                        peer_labels={"app": "gateway"}, protocol="tcp", port=8050)
+        assert r["status"] == "allowed"
+
+    # ── L4 finding #10c: data_available=False must yield `unknown`, never a fail-open `allowed` ──
+
+    def test_data_unavailable_is_unknown_not_allowed(self):
+        r = ad.eval_k8s_network_policy([], {"app": "orders"}, "ingress", data_available=False)
+        assert r["status"] == "unknown"
+
+    def test_data_available_true_with_empty_policies_is_genuinely_allowed(self):
+        """The pre-existing, correct behavior: when the fetch DID happen and genuinely found zero
+        policies, that's a real default-allow — must not regress to `unknown`."""
+        r = ad.eval_k8s_network_policy([], {"app": "orders"}, "ingress", data_available=True)
         assert r["status"] == "allowed"
 
 

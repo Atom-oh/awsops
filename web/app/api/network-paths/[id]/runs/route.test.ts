@@ -4,6 +4,7 @@ const verifyUser = vi.fn();
 const createRun = vi.fn();
 const getCheck = vi.fn();
 const listRunsForCheck = vi.fn();
+const networkPathLiveTopologyCapabilityGate = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/network-path', async () => {
@@ -15,6 +16,14 @@ vi.mock('@/lib/network-path', async () => {
     listRunsForCheck: (...a: unknown[]) => listRunsForCheck(...a),
   };
 });
+// L2 finding #3: the real capability gate is unconditionally 503 today (fetch_live_topology is
+// unimplemented) — mocked here so the OTHER pre-existing route tests (auth/404/flag-off) keep
+// exercising exactly what they say they exercise; the gate's own blocking behavior is tested
+// separately below by NOT stubbing it to pass.
+vi.mock('@/lib/network-path-gate', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/network-path-gate')>('@/lib/network-path-gate');
+  return { ...actual, networkPathLiveTopologyCapabilityGate: (...a: unknown[]) => networkPathLiveTopologyCapabilityGate(...a) };
+});
 
 const params = { id: 'chk-1' };
 const req = () =>
@@ -25,6 +34,8 @@ beforeEach(() => {
   createRun.mockReset();
   getCheck.mockReset();
   listRunsForCheck.mockReset();
+  networkPathLiveTopologyCapabilityGate.mockReset();
+  networkPathLiveTopologyCapabilityGate.mockReturnValue(null); // unblocked by default in this suite
   process.env.NETWORK_PATH_CHECK_ENABLED = 'true';
 });
 
@@ -63,6 +74,36 @@ describe('POST /api/network-paths/[id]/runs', () => {
     expect(res.status).toBe(202);
     const body = await res.json();
     expect(body.run.id).toBe('run-1');
+  });
+
+  it('503 unimplemented when the live-topology capability gate blocks (L2 finding #3)', async () => {
+    // Capability probe: creating a NEW run is refused while the worker's fetch_live_topology()
+    // is a guaranteed-fail stub — every such run would deterministically end `failed`, so this
+    // route must not enqueue one.
+    verifyUser.mockResolvedValue({ sub: 'viewer-not-creator' });
+    networkPathLiveTopologyCapabilityGate.mockReturnValue(
+      new Response(JSON.stringify({ status: 'unimplemented' }), { status: 503 }) as any,
+    );
+    const { POST } = await import('./route');
+    const res = await POST(req() as any, { params });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.status).toBe('unimplemented');
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it('the REAL (unmocked) capability gate is 503 today — fetch_live_topology is unimplemented', async () => {
+    vi.doUnmock('@/lib/network-path-gate');
+    vi.resetModules();
+    verifyUser.mockReset();
+    process.env.NETWORK_PATH_CHECK_ENABLED = 'true';
+    vi.doMock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+    verifyUser.mockResolvedValue({ sub: 'u-1' });
+    const { POST } = await import('./route');
+    const res = await POST(req() as any, { params });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.status).toBe('unimplemented');
   });
 });
 
