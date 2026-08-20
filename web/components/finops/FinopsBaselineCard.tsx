@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { useActiveAccount, ALL_ACCOUNTS } from '@/lib/account-context';
 
@@ -50,23 +50,44 @@ export default function FinopsBaselineCard() {
   // in this same release applies elsewhere).
   const [fetchError, setFetchError] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      // ebs_unattached spans every synced account/region in one pass, so unlike single-account
-      // routes this scoping is a genuine filter, not a fan-out trigger — '전체 계정' omits the
-      // account param entirely for the fleet-wide view (each finding still labeled below).
-      // NOTE: unlike accountParam()'s '' -> host-defaults-server-side convention used by other
-      // routes, the DEFAULT active account here is 'self' and must be sent EXPLICITLY as
-      // `account=self` — omitting it would (and, before this fix, did) fall through to the
-      // route's "no account param -> fleet-wide" branch, silently showing every account's
-      // findings on the default/never-touched-the-selector view instead of just the host's.
-      const qs = active === ALL_ACCOUNTS ? '' : `?account=${encodeURIComponent(active || 'self')}`;
-      const r = await fetch(`/api/finops/findings${qs}`);
-      if (r.ok) { setData(await r.json()); setFetchError(false); }
-      else { setFetchError(true); }
-    } catch { setFetchError(true); } finally { setLoaded(true); }
+  useEffect(() => {
+    // A stop-time review caught a race here: switching the active account fires a new fetch, but
+    // nothing stopped an OLDER, slower request from resolving after the newer one and overwriting
+    // the just-selected account's data with a previous (now stale) account's findings. `cancelled`
+    // is scoped to THIS effect run — the cleanup flips it before the next run's fetch starts, so a
+    // late-arriving response for an account the user has since navigated away from is dropped
+    // instead of clobbering the current view.
+    let cancelled = false;
+    async function load() {
+      try {
+        // ebs_unattached spans every synced account/region in one pass, so unlike single-account
+        // routes this scoping is a genuine filter, not a fan-out trigger — '전체 계정' omits the
+        // account param entirely for the fleet-wide view (each finding still labeled below).
+        // NOTE: unlike accountParam()'s '' -> host-defaults-server-side convention used by other
+        // routes, the DEFAULT active account here is 'self' and must be sent EXPLICITLY as
+        // `account=self` — omitting it would (and, before this fix, did) fall through to the
+        // route's "no account param -> fleet-wide" branch, silently showing every account's
+        // findings on the default/never-touched-the-selector view instead of just the host's.
+        const qs = active === ALL_ACCOUNTS ? '' : `?account=${encodeURIComponent(active || 'self')}`;
+        const r = await fetch(`/api/finops/findings${qs}`);
+        if (cancelled) return;
+        if (r.ok) {
+          const body = await r.json();
+          if (cancelled) return;
+          setData(body);
+          setFetchError(false);
+        } else {
+          setFetchError(true);
+        }
+      } catch {
+        if (!cancelled) setFetchError(true);
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
   }, [active]);
-  useEffect(() => { load(); }, [load]);
 
   if (loaded && data?.enabled === false) return null; // feature off -> render nothing (no-op)
   const findings = data?.findings ?? [];

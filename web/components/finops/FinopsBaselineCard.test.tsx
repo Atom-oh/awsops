@@ -189,4 +189,48 @@ describe('FinopsBaselineCard', () => {
     await waitFor(() => expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/finops/findings'));
     setActiveAccount('self');
   });
+
+  it('drops a stale response that resolves after the account has already changed', async () => {
+    // A stop-time review caught a race: nothing stopped an older, slower request from resolving
+    // after a newer one and overwriting the just-selected account's data with a previous
+    // account's findings. Simulate the 'self' fetch hanging while the user switches to another
+    // account, whose (faster) response lands first — then resolve the stale 'self' response and
+    // confirm it never displaces the current view.
+    let resolveSelf!: (v: { ok: boolean; status: number; json: () => Promise<unknown> }) => void;
+    const selfPromise = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((res) => {
+      resolveSelf = res;
+    });
+    const fetchSpy = vi.fn(async (url: string) => {
+      if (url.includes('account=self')) return selfPromise;
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          enabled: true, accountFilter: '222222222222', lastRun: null,
+          findings: [{ id: 2, ruleId: 'ebs_unattached', accountId: '222222222222', region: 'us-east-1',
+            resourceId: 'vol-2', title: 'Second account finding', category: 'storage', status: 'active',
+            monthlySavingsUsd: 5, evidence: {}, guardHits: [], explanationKo: null, firstSeenAt: 'a', lastSeenAt: 'b' }],
+        }),
+      };
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<FinopsBaselineCard />);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled()); // the initial (hanging) 'self' fetch fired
+    setActiveAccount('222222222222');
+    await waitFor(() => screen.getByText('Second account finding'));
+
+    // Now let the stale 'self' response land, well after the current view has moved on.
+    resolveSelf({
+      ok: true, status: 200,
+      json: async () => ({
+        enabled: true, accountFilter: 'self', lastRun: null,
+        findings: [{ id: 99, ruleId: 'ebs_unattached', accountId: 'self', region: 'ap-northeast-2',
+          resourceId: 'vol-stale', title: 'Stale self finding', category: 'storage', status: 'active',
+          monthlySavingsUsd: 1, evidence: {}, guardHits: [], explanationKo: null, firstSeenAt: 'a', lastSeenAt: 'b' }],
+      }),
+    });
+    await new Promise((r) => setTimeout(r, 10)); // flush microtasks the stale promise resolution queues
+    expect(screen.queryByText('Stale self finding')).toBeNull();
+    expect(screen.getByText('Second account finding')).toBeTruthy();
+    setActiveAccount('self');
+  });
 });
