@@ -105,28 +105,26 @@ def test_ebs_unattached_row_within_threshold_is_not_flagged_stale():
     assert out[0]["stale"] is False
 
 
-def test_ebs_unattached_flags_an_enabled_account_that_has_never_synced_any_ebs_data():
-    # Second false-clean coverage path a stop-time review caught: an enabled account whose
-    # Steampipe connection has never once succeeded has ZERO ebs_volume rows, which by row
-    # absence alone is indistinguishable from "confirmed zero EBS volumes." Only cross-referencing
-    # the accounts registry (rows that SHOULD exist) surfaces it — the stale-timestamp check has
-    # no timestamp to compare against.
+def test_ebs_unattached_does_not_invent_a_coverage_gap_for_a_volume_less_account():
+    # A stop-time review caught a previous revision cross-referencing the `accounts` registry and
+    # flagging any enabled account with zero ebs_volume rows as "never synced" — a false
+    # coverage-failure generator, and the same mistake _require_fresh_inventory's own comment warns
+    # against: row absence is NOT a sync-failure signal. An account that genuinely owns no EBS
+    # volumes produces zero rows on a perfectly healthy sync, and inventory_sync_runs is a
+    # JOB-level ledger (keyed 'self'), so there is no per-account row to tell the two apart.
     conn = FakeConn(
         [("vol-1", "111111111111", "ap-northeast-2",
           {"state": "available", "size": 10, "volume_type": "gp3"}, _NOW)],
         enabled_accounts=[("111111111111", "ap-northeast-2"), ("999999999999", "us-west-2")],
     )
     out = rules.ebs_unattached(conn, [0])
-    gaps = [f for f in out if f["evidence"].get("never_synced")]
-    assert len(gaps) == 1
-    assert gaps[0]["account_id"] == "999999999999"   # the synced account is NOT flagged
-    assert gaps[0]["monthly_savings_usd"] is None
-    assert gaps[0]["stale"] is True                  # demoted via the stale_inventory_data guard
+    assert [f for f in out if f["evidence"].get("coverage_gap")] == []
+    assert {f["resource_id"] for f in out} == {"vol-1"}
 
 
-def test_ebs_unattached_does_not_flag_never_synced_for_an_account_with_data():
-    # A healthy, recently-synced enabled account must not produce a coverage-gap item — that would
-    # make the honest-degradation signal meaningless noise on every run.
+def test_ebs_unattached_no_coverage_gap_for_a_healthy_recently_synced_account():
+    # A healthy, recently-synced account must not produce a coverage-gap item — that would make
+    # the honest-degradation signal meaningless noise on every run.
     conn = FakeConn(
         [("vol-1", "self", "ap-northeast-2",
           {"state": "available", "size": 10, "volume_type": "gp3"}, _NOW)],
