@@ -1,6 +1,8 @@
 -- since: 2.2.0
 -- Network Path Check (docs/superpowers/specs/2026-08-13-network-path-check-design.md, Approved
--- 2026-08-19; flag `network_path_check_enabled`, default false — ADR-019 §2 register row).
+-- 2026-08-19; flag `network_path_check_enabled`, default false — BASELINE.md §2 register row,
+-- governed under ADR-019's Decision, not "ADR-019's own §2 section" [unrelated CloudWatch-pattern
+-- text] — see scripts/v2/workers/network_path.py's module docstring for the disambiguation).
 --
 -- Saved definitions are versioned by snapshotting the full request into every run
 -- (`network_path_runs.definition_snapshot`); editing a definition never rewrites prior results.

@@ -85,7 +85,9 @@ def lambda_handler(_event, _ctx):
         else:
             out["reaped_sg_rule_scan_runs_queued"] = "skipped (dispatch ESM disabled)"
 
-        # Network Path Check (ADR-019 §2 register row, design spec "Error handling": "Stale run ->
+        # Network Path Check (BASELINE.md §2 register row, governed under ADR-019's Decision — not
+        # "ADR-019's own §2 section"; see network_path.py's module docstring for the L5
+        # docs-consistency disambiguation. design spec "Error handling": "Stale run ->
         # a dedicated reaper query added to scripts/v2/workers/reaper.py reconciles network_path_runs
         # the same way it already does for worker_jobs/diagnosis_reports"). Extended additively —
         # the sg_rule_scan_runs reaping above is untouched. Mirrors worker_jobs' own

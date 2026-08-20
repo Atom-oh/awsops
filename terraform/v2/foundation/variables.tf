@@ -317,7 +317,7 @@ variable "sg_rule_activity_enabled" {
 variable "network_path_check_enabled" {
   type        = bool
   default     = false
-  description = "Network Path Check: saveable async read-only network path policy checklist (ADR-019 §2 register row / design spec 2026-08-13). false = 0 resources/IAM, $0. Requires workers_enabled."
+  description = "Network Path Check: saveable async read-only network path policy checklist (BASELINE.md §2 register row, governed under ADR-019's Decision / design spec 2026-08-13). false = 0 resources/IAM, $0. Requires workers_enabled."
   validation {
     condition     = !var.network_path_check_enabled || var.workers_enabled
     error_message = "network_path_check_enabled requires workers_enabled=true (reuses the worker role/pg8000 layer/VPC + jobs queue)."

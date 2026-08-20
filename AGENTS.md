@@ -6,7 +6,7 @@
 
 **v2 is live on `main`** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is decommissioned per ADR-016 — its code left the tree 2026-07-12 (`git tag v1-pre-code-removal-20260712`); only stopped AWS infra remains until final teardown. v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2.
 
-**ADR numbering:** current truth = `docs/decisions/BASELINE.md` + consolidated ADRs **001–018** (new ADR = highest+1, BASELINE updated in the same PR). Legacy ADRs 001–046 are out of tree (tag `adr-legacy-2026-06-22`); docs cite them as `ADR-0NN[legacy 0XX]` — the live number is authoritative, resolve via `docs/decisions/ADR-MAPPING.md`, never read the tag bodies.
+**ADR numbering:** current truth = `docs/decisions/BASELINE.md` + consolidated ADRs **001–019** (new ADR = highest+1, BASELINE updated in the same PR). Legacy ADRs 001–046 are out of tree (tag `adr-legacy-2026-06-22`); docs cite them as `ADR-0NN[legacy 0XX]` — the live number is authoritative, resolve via `docs/decisions/ADR-MAPPING.md`, never read the tag bodies.
 
 ## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
 v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *proposal* (read-only).**
