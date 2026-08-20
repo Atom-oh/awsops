@@ -9,7 +9,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 |---|---|
 | [architecture.md](architecture.md) | 시스템 아키텍처 (단일 파일) |
 | [onboarding.md](onboarding.md) | 신규 팀원 온보딩 |
-| [decisions/](decisions/) | **결정 단일 진실 = `BASELINE.md`** + 통합 ADR 001~018 + `ADR-MAPPING.md` (옛 ADR 001~046 본문은 git tag `adr-legacy-2026-06-22`) |
+| [decisions/](decisions/) | **결정 단일 진실 = `BASELINE.md`** + 통합 ADR 001~019 + `ADR-MAPPING.md` (옛 ADR 001~046 본문은 git tag `adr-legacy-2026-06-22`) |
 | [reference/](reference/) | v2 컴포넌트별 현행 설계 레퍼런스 (컴포넌트당 단일 출처) / current v2 design, one file per component |
 | [runbooks/](runbooks/) | 운영 시나리오별 대응 가이드 |
 | [reviews/](reviews/) | 코드 리뷰 / 교차 리뷰 결과 |
@@ -26,7 +26,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
   구현용 설계 스펙(주 독자가 AI 에이전트/구현자인 기술 문서)은 **영어 단일**로 작성한다 — 컨텍스트
   크기 절감이 목적. `docs/runbooks/`·`docs/decisions/`(BASELINE 본문)·기타 사용자/운영자 대상 문서는
   병기 규칙 그대로 유지.
-- 결정 현행 진실 = `docs/decisions/BASELINE.md`. 새 ADR = 통합 ADR 최고번호 + 1 (현재 **018**), 같은 PR에서 BASELINE 갱신
+- 결정 현행 진실 = `docs/decisions/BASELINE.md`. 새 ADR = 통합 ADR 최고번호 + 1 (현재 **019**), 같은 PR에서 BASELINE 갱신
 - ADR 파일명: `NNN-kebab-case-title.md`
 - **현행 진실(decisions/BASELINE + superpowers/reference)과 옛 계획/이력을 섞지 않는다.** `superpowers/plans|specs`·`superpowers/archive`엔 reversed/frozen-era·승계된 문서가 섞여 있으니 live guidance로 단정 말 것 — 변경·자율 관련은 ADR-005 FROZEN이 최종.
 - 런북은 `docs/runbooks/CLAUDE.md` 규칙 준수
