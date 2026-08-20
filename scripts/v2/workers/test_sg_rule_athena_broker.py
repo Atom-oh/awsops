@@ -24,7 +24,7 @@ def test_validate_rejects_malformed_table():
         broker._validate({
             "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
             "database": "db", "table": "tbl; DROP",
-        })
+        }, None)
 
 
 def test_validate_rejects_malformed_account_id_before_any_aws_call():
@@ -33,7 +33,7 @@ def test_validate_rejects_malformed_account_id_before_any_aws_call():
         broker._validate({
             "account_id": "12345", "region": "ap-northeast-2", "workgroup": "wg",
             "database": "db", "table": "tbl",
-        })
+        }, None)
 
 
 def test_validate_rejects_malformed_region():
@@ -41,7 +41,7 @@ def test_validate_rejects_malformed_region():
         broker._validate({
             "account_id": "123456789012", "region": "; DROP TABLE x", "workgroup": "wg",
             "database": "db", "table": "tbl",
-        })
+        }, None)
 
 
 def test_validate_rejects_malformed_workgroup():
@@ -49,7 +49,7 @@ def test_validate_rejects_malformed_workgroup():
         broker._validate({
             "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg; DROP",
             "database": "db", "table": "tbl",
-        })
+        }, None)
 
 
 def test_validate_rejects_malformed_database():
@@ -57,7 +57,7 @@ def test_validate_rejects_malformed_database():
         broker._validate({
             "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
             "database": "db-with-hyphen", "table": "tbl",
-        })
+        }, None)
 
 
 def test_lambda_handler_shapes_identifier_rejection_as_ok_false():
@@ -154,6 +154,44 @@ def test_query_by_source_refuses_unbounded_scan_without_partition_strategy():
     assert "partition" in result["reason"]
 
 
+# ── round-3 finding #6: `validate` must resolve external_id from the `accounts` table server-side ─
+
+def test_validate_resolves_external_id_from_accounts_table_ignoring_caller_supplied_value(monkeypatch):
+    """A caller-supplied `external_id` in the event must be completely ignored — the value actually
+    used to assume Role B must come from the `accounts` table, exactly like `_load_source_row`."""
+    conn = FakeConn({"FROM accounts": [[("ext-real-from-table",)]]})
+    captured = {}
+
+    def fake_assumed_session(account_id, external_id, region):
+        captured["account_id"] = account_id
+        captured["external_id"] = external_id
+        raise broker.BrokerError("stop before any real AWS call")
+
+    monkeypatch.setattr(broker, "_assumed_session", fake_assumed_session)
+    with pytest.raises(broker.BrokerError, match="stop before"):
+        broker._validate({
+            "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+            "database": "db", "table": "tbl",
+            "external_id": "attacker-controlled-ext-id",  # must be ignored entirely
+        }, conn)
+    assert captured["external_id"] == "ext-real-from-table"
+    assert captured["account_id"] == "123456789012"
+
+
+def test_validate_rejects_an_unregistered_account_id(monkeypatch):
+    """`validate` must not assume a role into an account_id with no enabled row in `accounts` —
+    inverting the confused-deputy guard by trusting the caller entirely was the bug (bypassing the
+    accounts table this same module resolves external_id from everywhere else)."""
+    conn = FakeConn({"FROM accounts": [[]]})  # no matching enabled row
+    monkeypatch.setattr(broker, "_assumed_session",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must never be called")))
+    with pytest.raises(broker.BrokerError, match="registered"):
+        broker._validate({
+            "account_id": "999999999999", "region": "ap-northeast-2", "workgroup": "wg",
+            "database": "db", "table": "tbl", "external_id": "attacker-ext",
+        }, conn)
+
+
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):
     """Even if a caller tries to smuggle account_id/query/database into the event, they are simply
     ignored — the broker only ever uses what it resolved from Aurora via flow_source_id."""
@@ -178,3 +216,140 @@ def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkey
     # The resolved account (from Aurora), never the caller-supplied one, is what gets assumed.
     assert captured["account_id"] == "123456789012"
     assert captured["external_id"] == "ext-123"
+
+
+# ── round-3 finding #5: a continuation's query_execution_id must be bound back to the resolved ───
+#    source/day — never trusted as a bare caller-supplied Athena identifier.
+
+class FakeAthenaForContinuation:
+    def __init__(self, exec_workgroup, exec_query, rows=None):
+        self.exec_workgroup = exec_workgroup
+        self.exec_query = exec_query
+        self.rows = rows if rows is not None else []
+        self.get_query_execution_calls = []
+
+    def get_query_execution(self, QueryExecutionId):
+        self.get_query_execution_calls.append(QueryExecutionId)
+        return {"QueryExecution": {"WorkGroup": self.exec_workgroup, "Query": self.exec_query}}
+
+    def get_query_results(self, **kwargs):
+        return {"ResultSet": {"Rows": [{"Data": [{"VarCharValue": v} for v in row]} for row in self.rows]},
+                "NextToken": None}
+
+
+def _continuation_setup(monkeypatch, athena):
+    conn = FakeConn(_source_row({
+        "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                          "start": "start"}, "partitionKeys": ["dt"],
+        "partitionStrategy": "partition_keys",
+    }))
+    monkeypatch.setattr(broker.sm, "build_day_select", lambda source, day: "SELECT 1 AS x")
+
+    class FakeSessionContinuation:
+        def client(self, name):
+            return athena
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionContinuation())
+    return conn
+
+
+def test_continuation_rejects_a_query_execution_id_for_a_foreign_query(monkeypatch):
+    """A query_execution_id whose real WorkGroup/QueryString does NOT match what this resolved
+    flow_source_id+day would itself build server-side must be rejected — this is exactly the hole
+    (paging through ANY Athena query reachable by the assumed role) round-3 finding #5 closes."""
+    athena = FakeAthenaForContinuation(exec_workgroup="some-other-wg", exec_query="SELECT * FROM secrets")
+    conn = _continuation_setup(monkeypatch, athena)
+    with pytest.raises(broker.BrokerError, match="does not match"):
+        broker._query_by_source({
+            "flow_source_id": 1, "day": "2026-03-05",
+            "continuation": {"query_execution_id": "q-foreign", "next_token": "tok", "columns": ["a"]},
+        }, conn)
+    assert athena.get_query_execution_calls == ["q-foreign"]
+
+
+def test_continuation_accepts_a_query_execution_id_matching_the_resolved_source(monkeypatch):
+    """The SAME resolved flow_source_id+day's own query_execution_id, whose real WorkGroup/Query
+    match the server-rebuilt SQL exactly, is accepted and pages through normally."""
+    athena = FakeAthenaForContinuation(exec_workgroup="wg", exec_query="SELECT 1 AS x",
+                                        rows=[["v1"]])
+    conn = _continuation_setup(monkeypatch, athena)
+    result = broker._query_by_source({
+        "flow_source_id": 1, "day": "2026-03-05",
+        "continuation": {"query_execution_id": "q-real", "next_token": "tok", "columns": ["a"]},
+    }, conn)
+    assert result["ok"] is True
+    assert result["done"] is True
+    assert result["rows"] == [{"a": "v1"}]
+
+
+def test_continuation_still_refuses_a_pending_source():
+    """The re-validation of validation.status must apply on the continuation path too (it used to
+    be skipped entirely there)."""
+    conn = FakeConn(_source_row({"status": "pending"}))
+    result = broker._query_by_source({
+        "flow_source_id": 1, "day": "2026-03-05",
+        "continuation": {"query_execution_id": "q-1", "next_token": "tok", "columns": ["a"]},
+    }, conn)
+    assert result["ok"] is False
+    assert "valid" in result["reason"]
+
+
+# ── round-3 finding #3: the Glue-partition-existence check must be skipped entirely for a ────────
+#    partition-projection source — it has no enumerable Glue partitions to check.
+
+class FakeSession:
+    def __init__(self):
+        self.clients = {}
+
+    def client(self, name):
+        return self.clients.setdefault(name, object())
+
+
+def _empty_query_by_source_setup(monkeypatch, validation):
+    """Common wiring: an empty-result Athena query (no rows, no next_token) against a source whose
+    `validation` is under test, with `_partition_exists` instrumented to record whether it was
+    called at all."""
+    conn = FakeConn(_source_row(validation))
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSession())
+    monkeypatch.setattr(broker, "_run_athena_query",
+                         lambda *a, **k: {"ok": True, "athena": object(), "query_execution_id": "q1"})
+    monkeypatch.setattr(broker, "_fetch_page", lambda *a, **k: (["c1"], [], None))
+    called = {"n": 0}
+
+    def fake_partition_exists(*a, **k):
+        called["n"] += 1
+        return False  # would trigger zero_partition_match if actually invoked
+
+    monkeypatch.setattr(broker, "_partition_exists", fake_partition_exists)
+    return conn, called
+
+
+def test_projection_strategy_skips_glue_partition_check(monkeypatch):
+    """A `projection`-strategy source (partitionKeys still non-empty — Glue keeps declaring the
+    partition columns even with projection enabled — plus a non-None optionalFields list, exactly
+    what `_validate` always emits) must NOT run the Glue GetPartitions check on an empty result: a
+    projection table has no enumerable Glue partitions, so the check would always report
+    `zero_partition_match` and permanently stall a legitimate zero-traffic day."""
+    conn, called = _empty_query_by_source_setup(monkeypatch, {
+        "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                          "start": "start"},
+        "partitionKeys": ["dt"], "optionalFields": [], "partitionStrategy": "projection",
+    })
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert called["n"] == 0
+    assert result["ok"] is True
+    assert "zero_partition_match" not in result
+
+
+def test_partition_keys_strategy_still_runs_glue_partition_check(monkeypatch):
+    """The real, enumerable `partition_keys` strategy must still run the check (regression guard —
+    the restriction above must not accidentally disable the check for the case it exists for)."""
+    conn, called = _empty_query_by_source_setup(monkeypatch, {
+        "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                          "start": "start"},
+        "partitionKeys": ["dt"], "optionalFields": [], "partitionStrategy": "partition_keys",
+    })
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert called["n"] == 1
+    assert result["ok"] is False
+    assert result.get("zero_partition_match") is True

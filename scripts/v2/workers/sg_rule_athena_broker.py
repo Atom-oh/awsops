@@ -122,14 +122,33 @@ def _assumed_session(account_id, external_id, region):
     )
 
 
-def _validate(event):
+def _resolve_external_id(conn, account_id):
+    """round-3 finding #6: resolve `external_id` from the trusted `accounts` table for `account_id`
+    — the SAME server-side resolution `_load_source_row`/`query_by_source` already use — instead of
+    trusting a caller-supplied value. Requires an `enabled` row; an unregistered/disabled account_id
+    is rejected outright rather than silently assuming a role with no confused-deputy guard bound to
+    a row this system actually trusts."""
+    rows = conn.run("SELECT external_id FROM accounts WHERE account_id=:a AND enabled", a=account_id)
+    if not rows:
+        raise BrokerError(
+            f"account_id {account_id!r} is not a registered, enabled account in the accounts "
+            "table — refusing to assume a role for an unregistered account")
+    return rows[0][0]
+
+
+def _validate(event, conn):
     account_id = event.get("account_id")
     region = event.get("region")
     workgroup = event.get("workgroup")
     database = event.get("database")
     table = event.get("table")
     _validate_identifiers(account_id, region, workgroup, database, table, require_table=True)
-    external_id = event.get("external_id")
+    # round-3 finding #6: NEVER trust a caller-supplied `external_id` — every other action in this
+    # module (per the round-2 redesign) resolves it server-side from the `accounts` table; `validate`
+    # was the one holdout that still assumed Role B with a caller-chosen account_id AND a
+    # caller-chosen external_id, bypassing the accounts table (and its confused-deputy guard)
+    # entirely. `event.get("external_id")` is deliberately never read here anymore.
+    external_id = _resolve_external_id(conn, account_id)
     session = _assumed_session(account_id, external_id, region)
     athena = session.client("athena")
     glue = session.client("glue")
@@ -224,11 +243,19 @@ def _partition_exists(glue, database, table, day, validation):
     partition_keys = validation.get("partitionKeys") or []
     lower_keys = {k.lower(): k for k in partition_keys}
     try:
+        # MINOR fix: re-apply the SAME identifier-safety helper this module's own SQL builders
+        # (`sg_rule_matching.build_day_select`/`build_day_skipdata_count_select`) use before ever
+        # interpolating a stored partition-key name into a Glue `Expression` string.
         if {"year", "month", "day"} <= set(lower_keys):
-            y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
+            y = sm._safe_ident(lower_keys["year"], "year")
+            mo = sm._safe_ident(lower_keys["month"], "month")
+            d = sm._safe_ident(lower_keys["day"], "day")
             expr = (f"{y} = '{day.year:04d}' AND {mo} = '{day.month:02d}' AND {d} = '{day.day:02d}'")
         elif len(partition_keys) == 1:
-            expr = f"{partition_keys[0]} = '{day.isoformat()}'"
+            dk = sm._safe_ident(partition_keys[0], "")
+            if not dk:
+                return True  # unsafe identifier — not checkable, do not block on it
+            expr = f"{dk} = '{day.isoformat()}'"
         else:
             return True  # not a checkable single/hive-style scheme — do not block on it
         resp = glue.get_partitions(DatabaseName=database, TableName=table, Expression=expr, MaxResults=1)
@@ -308,20 +335,6 @@ def _query_by_source(event, conn):
     _validate_identifiers(source["account_id"], source["region"], source["workgroup"],
                            source["database_name"], source["table_name"], require_table=True)
 
-    continuation = event.get("continuation")
-    if continuation:
-        qid = continuation.get("query_execution_id")
-        columns = continuation.get("columns")
-        if not qid:
-            raise BrokerError("continuation.query_execution_id is required")
-        session = _assumed_session(source["account_id"], source["external_id"], source["region"])
-        athena = session.client("athena")
-        _, raw_rows, next_token = _fetch_page(athena, qid, continuation.get("next_token"), first_page=False)
-        return {
-            "ok": True, "rows": _rows_as_dicts(columns, raw_rows), "columns": columns,
-            "query_execution_id": qid, "next_token": next_token, "done": next_token is None,
-        }
-
     validation = source["validation"]
     status = validation.get("status")
     if status != "valid":
@@ -339,6 +352,43 @@ def _query_by_source(event, conn):
         raise BrokerError(f"unsafe identifier in resolved source config: {e}")
     _reject_non_select(sql)
 
+    continuation = event.get("continuation")
+    if continuation:
+        # round-3 finding #5: a caller-supplied query_execution_id/next_token/columns used to be
+        # trusted with NO binding back to the source/day/workgroup/broker-origin, and skipped every
+        # validation-status/partition/byte-budget check the initial call enforces — any principal
+        # with lambda:InvokeFunction on this broker could page through the results of ANY Athena
+        # query reachable by AWSopsSgRuleAthenaRole, not just one this broker itself started
+        # (re-opening the same class of hole the L3 finding #6 redesign closed). Fix (option (a) from
+        # the review): re-validate status/partition-strategy above (now shared with the fresh-query
+        # path), rebuild the EXACT SQL this flow_source_id+day would produce server-side, and require
+        # the caller's query_execution_id to belong to a REAL Athena execution whose own WorkGroup +
+        # QueryString match that rebuilt SQL exactly — a continuation token for a foreign query (any
+        # other query reachable by the assumed role) fails this comparison and is rejected before any
+        # data is ever paged out.
+        qid = continuation.get("query_execution_id")
+        columns = continuation.get("columns")
+        if not qid:
+            raise BrokerError("continuation.query_execution_id is required")
+        session = _assumed_session(source["account_id"], source["external_id"], source["region"])
+        athena = session.client("athena")
+        try:
+            exec_ = athena.get_query_execution(QueryExecutionId=qid)["QueryExecution"]
+        except Exception as e:  # noqa: BLE001 — an unresolvable qid is a rejection, not a crash
+            raise BrokerError(f"continuation.query_execution_id could not be resolved: {e}")
+        if exec_.get("WorkGroup") != source["workgroup"] or exec_.get("Query") != sql:
+            # The execution this qid actually points to is NOT the query this resolved
+            # flow_source_id+day would itself produce — refuse to page it out, regardless of who's
+            # asking or what they claim `columns`/`next_token` should be.
+            raise BrokerError(
+                "continuation.query_execution_id does not match the resolved source's own query — "
+                "refusing to page results of a foreign Athena query")
+        _, raw_rows, next_token = _fetch_page(athena, qid, continuation.get("next_token"), first_page=False)
+        return {
+            "ok": True, "rows": _rows_as_dicts(columns, raw_rows), "columns": columns,
+            "query_execution_id": qid, "next_token": next_token, "done": next_token is None,
+        }
+
     session = _assumed_session(source["account_id"], source["external_id"], source["region"])
     result = _run_athena_query(session, source["workgroup"], source["database_name"], sql, max_bytes)
     if not result.get("ok"):
@@ -347,11 +397,17 @@ def _query_by_source(event, conn):
     columns, raw_rows, next_token = _fetch_page(athena, result["query_execution_id"], None, first_page=True)
 
     if not raw_rows and not next_token:
-        # L4 finding #9(iii): before trusting an empty result as "no traffic", verify the partition
-        # predicate actually matched something (only meaningful for the enumerable partition_keys
-        # strategy — partition projection has no Glue partitions to check).
-        if validation.get("partitionStrategy") == "partition_keys" or (
-                validation.get("partitionKeys") and not (validation.get("optionalFields") is None)):
+        # L4 finding #9(iii)/round-3 finding #3: before trusting an empty result as "no traffic",
+        # verify the partition predicate actually matched something — but ONLY for the enumerable
+        # `partition_keys` strategy. A partition-projection table has no enumerable Glue partitions
+        # at all (Athena computes candidate partitions from the projection config, not from a Glue
+        # catalog listing), so this check can never find anything for it — the old OR-clause below
+        # (`partitionKeys and optionalFields is not None`) was always true for a projection table too
+        # (`_validate` always emits both), so every legitimate zero-traffic day on a
+        # projection-configured source failed with `zero_partition_match` and the watermark never
+        # advanced. Restrict strictly to `partition_keys` — trust the query's own predicate for
+        # projection tables, there is nothing to enumerate.
+        if validation.get("partitionStrategy") == "partition_keys":
             glue = session.client("glue")
             if not _partition_exists(glue, source["database_name"], source["table_name"], day, validation):
                 return {
@@ -385,11 +441,20 @@ def lambda_handler(event, _ctx, conn_factory=None):
     action = event.get("action")
     try:
         if action == "validate":
-            return _validate(event)
-        if action == "query_by_source":
-            import db  # deferred: only this action needs Aurora/pg8000 connectivity
+            # Cheap identifier re-validation BEFORE opening any Aurora connection — a malformed
+            # request must fail fast without ever touching the DB (matches the pre-existing,
+            # test-enforced contract that a bad identifier never reaches an AWS/DB call).
+            _validate_identifiers(event.get("account_id"), event.get("region"), event.get("workgroup"),
+                                   event.get("database"), event.get("table"), require_table=True)
+        if action in ("validate", "query_by_source"):
+            # round-3 finding #6: `validate` now also needs Aurora connectivity (to resolve
+            # external_id from the `accounts` table) — the same rds-db IAM-auth pattern as
+            # `query_by_source` already uses.
+            import db  # deferred: only these actions need Aurora/pg8000 connectivity
             conn = (conn_factory or db.connect)()
             try:
+                if action == "validate":
+                    return _validate(event, conn)
                 return _query_by_source(event, conn)
             finally:
                 try:
@@ -400,4 +465,6 @@ def lambda_handler(event, _ctx, conn_factory=None):
     except BrokerError as e:
         return {"ok": False, "reason": str(e)}
     except Exception as e:  # noqa: BLE001 — never let a raw AWS exception leak un-shaped
-        return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
+        # MINOR fix: this reason can be persisted into an operator-readable field downstream
+        # (sg_rule_scan_runs.coverage) — redact common leaky shapes (ARN/account id/query id).
+        return {"ok": False, "reason": sm.redact_sensitive(f"{type(e).__name__}: {e}")}
