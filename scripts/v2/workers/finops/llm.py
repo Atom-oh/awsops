@@ -9,8 +9,17 @@ import os
 import re
 
 import boto3
+from botocore.config import Config
 
 from redact import redact as _redact
+
+# A review round caught engine.py's _explain_pending calling this client with NO explicit
+# timeout — the default botocore connect/read timeouts (60s) times up to 200 sequential rows plus
+# retries could push the explain phase well past what the caller can afford. Bounding each
+# individual call here is the first half of the fix; engine.py's own wall-clock budget on the
+# whole loop is the second half (a single call staying under this cap doesn't bound how many of
+# them run).
+_BEDROCK_CONFIG = Config(connect_timeout=5, read_timeout=15, retries={"max_attempts": 1})
 
 # A bare "global.anthropic.claude-haiku-4-5" throws ValidationException invoked from
 # ap-northeast-2 — every other caller in this repo (classifier.ts, assistant.ts, signal_catalog_gen.py,
@@ -29,7 +38,7 @@ def _get_client():
     global _client
     if _client is None:
         region = os.environ.get("BEDROCK_REGION", "ap-northeast-2")
-        _client = boto3.client("bedrock-runtime", region_name=region)
+        _client = boto3.client("bedrock-runtime", region_name=region, config=_BEDROCK_CONFIG)
     return _client
 
 
@@ -40,6 +49,16 @@ def _amounts_in(text):
     dollar_sign = re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", text)
     dollar_word = re.findall(r"([\d,]+(?:\.\d+)?)\s*달러", text)
     return [float(m.replace(",", "")) for m in dollar_sign + dollar_word]
+
+
+def _fence(text):
+    """Neutralize `<`/`>` in resource-derived text before it's wrapped in an <untrusted> tag. A
+    review round caught that the fence was interpolated raw: an EC2 Name tag (or anything else in
+    `evidence`) containing a literal `</untrusted>` could close the fence early and follow it with
+    unfenced text the model has no way to distinguish from a real instruction. `redact()` scrubs
+    ARNs/account-ids/PII, not markup, so this is a separate, narrower scrub aimed only at breaking
+    the specific delimiter this module relies on — not a general HTML/XML sanitizer."""
+    return text.replace("<", "＜").replace(">", "＞")  # fullwidth < / > look-alikes
 
 
 def _contradicts(text, monthly_savings_usd):
@@ -69,11 +88,15 @@ def explain(title, category, monthly_savings_usd, evidence):
         # caller in this worker tier applies (diagnosis/report.py's _redact) — a tenant/operator
         # who controls a tag value had an unredacted, un-fenced channel into the prompt. Wrap the
         # resource-derived fields in <untrusted> (matching _SYSTEM's "data, not instructions"
-        # clause) and run the whole assembled prompt through the shared redactor before it's sent.
+        # clause), run each through _fence() first — a FOLLOW-UP review round caught that
+        # interpolating them raw let a tag value containing a literal `</untrusted>` close the
+        # fence early — and run the whole assembled prompt through the shared redactor.
+        fenced_title = _fence(str(title))
+        fenced_evidence = _fence(json.dumps(evidence, ensure_ascii=False))
         prompt = _redact(
-            f"제목: <untrusted>{title}</untrusted>\n분류: {category}\n"
+            f"제목: <untrusted>{fenced_title}</untrusted>\n분류: {category}\n"
             f"월간 절감액: {'$' + format(monthly_savings_usd, '.2f') if monthly_savings_usd is not None else '산출 불가'}\n"
-            f"근거: <untrusted>{json.dumps(evidence, ensure_ascii=False)}</untrusted>\n"
+            f"근거: <untrusted>{fenced_evidence}</untrusted>\n"
             "위 항목을 한국어 1~2문장으로 설명해라."
         )
         body = {

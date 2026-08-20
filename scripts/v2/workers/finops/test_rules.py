@@ -43,7 +43,9 @@ _NOW = datetime.now(timezone.utc)
 
 
 def test_ebs_unattached_computes_savings_from_rate_card():
-    conn = FakeConn([("vol-1", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp3",
+    # gp2 (not gp3): gp2 has no separate provisioned-IOPS/throughput purchase (IOPS scales with
+    # size), so it's one of the types this rule can price completely from the GB-rate alone.
+    conn = FakeConn([("vol-1", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp2",
                                                            "tags": {"Name": "old"}}, _NOW)])
     out = rules.ebs_unattached(conn, [0])
     assert len(out) == 1
@@ -52,7 +54,7 @@ def test_ebs_unattached_computes_savings_from_rate_card():
     assert f["account_id"] == "self"
     assert f["region"] == "ap-northeast-2"
     assert f["category"] == "storage"
-    assert f["monthly_savings_usd"] == round(100 * 0.0912, 2)
+    assert f["monthly_savings_usd"] == round(100 * 0.114, 2)
     assert f["tags"] == {"Name": "old"}
     assert f["lookback_days"] is None
     assert f["stale"] is False
@@ -60,7 +62,7 @@ def test_ebs_unattached_computes_savings_from_rate_card():
 
 def test_ebs_unattached_null_savings_when_size_missing():
     conn = FakeConn([("vol-2", "self", "ap-northeast-2",
-                       {"state": "available", "size": None, "volume_type": "gp3"}, _NOW)])
+                       {"state": "available", "size": None, "volume_type": "gp2"}, _NOW)])
     out = rules.ebs_unattached(conn, [0])
     assert out[0]["monthly_savings_usd"] is None
 
@@ -78,38 +80,44 @@ def test_ebs_unattached_unknown_volume_type_gets_null_savings_not_an_invented_ra
     assert f["evidence"]["unpriced_volume_type"] == "weird"
 
 
-def test_ebs_unattached_demotes_io1_io2_to_null_since_iops_charges_are_unpriced():
+def test_ebs_unattached_demotes_io1_io2_gp3_to_null_since_iops_or_throughput_is_unpriced():
     # A review round caught that the GB-rate alone materially understates io1/io2 cost — the
     # provisioned-IOPS charge (unpriced here — sync_lambda.py has no published-rate table for it)
-    # routinely dominates. Presenting the GB-only figure as confident violates the "amounts are
-    # never invented/misleading" invariant just as surely as inventing a number would.
+    # routinely dominates. A follow-up round then caught that gating gp3's demotion on
+    # `iops > 3000` was itself unsound: gp3's PROVISIONED THROUGHPUT (above the free 125 MiB/s) is
+    # never synced at all, so a baseline-IOPS gp3 volume with above-baseline throughput would still
+    # get a confident-but-wrong figure with no signal to catch it. All three types now demote
+    # unconditionally — presenting any of these GB-only figures as confident violates the "amounts
+    # are never invented/misleading" invariant just as surely as inventing a number would.
     conn = FakeConn([
         ("vol-io1", "self", "ap-northeast-2",
          {"state": "available", "size": 100, "volume_type": "io1", "iops": 5000}, _NOW),
         ("vol-io2", "self", "ap-northeast-2",
          {"state": "available", "size": 100, "volume_type": "io2", "iops": 5000}, _NOW),
+        ("vol-gp3", "self", "ap-northeast-2",
+         {"state": "available", "size": 100, "volume_type": "gp3", "iops": 3000}, _NOW),
     ])
     out = rules.ebs_unattached(conn, [0])
-    for vid in ("vol-io1", "vol-io2"):
+    for vid in ("vol-io1", "vol-io2", "vol-gp3"):
         f = next(f for f in out if f["resource_id"] == vid)
         assert f["monthly_savings_usd"] is None
-        assert "provisioned IOPS" in f["evidence"]["partial_rate"]
+        assert "partial_rate" in f["evidence"]
 
 
-def test_ebs_unattached_demotes_gp3_only_when_iops_exceeds_the_free_baseline():
+def test_ebs_unattached_still_prices_gp2_st1_sc1_which_have_no_separate_performance_charge():
+    # gp2 (IOPS scales with size, no separate purchase) and st1/sc1 (throughput-capacity billing,
+    # no provisioned-throughput purchase option) have no unaccounted performance dimension — the
+    # GB-rate alone IS the complete price for these, unlike io1/io2/gp3.
     conn = FakeConn([
-        ("vol-gp3-low", "self", "ap-northeast-2",
-         {"state": "available", "size": 100, "volume_type": "gp3", "iops": 3000}, _NOW),
-        ("vol-gp3-high", "self", "ap-northeast-2",
-         {"state": "available", "size": 100, "volume_type": "gp3", "iops": 8000}, _NOW),
+        ("vol-gp2", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp2"}, _NOW),
+        ("vol-st1", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "st1"}, _NOW),
     ])
     out = rules.ebs_unattached(conn, [0])
-    low = next(f for f in out if f["resource_id"] == "vol-gp3-low")
-    high = next(f for f in out if f["resource_id"] == "vol-gp3-high")
-    assert low["monthly_savings_usd"] == round(100 * 0.0912, 2)   # at baseline — fully priced
-    assert "partial_rate" not in low["evidence"]
-    assert high["monthly_savings_usd"] is None                    # above baseline — demoted
-    assert "partial_rate" in high["evidence"]
+    gp2 = next(f for f in out if f["resource_id"] == "vol-gp2")
+    st1 = next(f for f in out if f["resource_id"] == "vol-st1")
+    assert gp2["monthly_savings_usd"] == round(100 * 0.114, 2)
+    assert st1["monthly_savings_usd"] == round(100 * 0.045, 2)
+    assert "partial_rate" not in gp2["evidence"] and "partial_rate" not in st1["evidence"]
 
 
 def test_ebs_unattached_flags_a_per_row_stale_captured_at_even_though_the_job_succeeded():
@@ -187,14 +195,14 @@ def test_ebs_unattached_only_prices_the_supported_region_and_leaves_others_null(
     # A row outside the priced region set must still surface (never silently hidden) but with
     # monthly_savings_usd=NULL rather than an invented number.
     conn = FakeConn([
-        ("vol-kr", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp3"}, _NOW),
-        ("vol-us", "self", "us-east-1", {"state": "available", "size": 100, "volume_type": "gp3"}, _NOW),
+        ("vol-kr", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp2"}, _NOW),
+        ("vol-us", "self", "us-east-1", {"state": "available", "size": 100, "volume_type": "gp2"}, _NOW),
     ])
     out = rules.ebs_unattached(conn, [0])
     assert len(out) == 2
     kr = next(f for f in out if f["resource_id"] == "vol-kr")
     us = next(f for f in out if f["resource_id"] == "vol-us")
-    assert kr["monthly_savings_usd"] == round(100 * 0.0912, 2)
+    assert kr["monthly_savings_usd"] == round(100 * 0.114, 2)
     assert "unpriced_region" not in kr["evidence"]
     assert us["monthly_savings_usd"] is None
     assert us["evidence"]["unpriced_region"] == "us-east-1"
@@ -310,6 +318,36 @@ def test_ec2_rightsizing_skips_an_overprovisioned_row_with_no_recommendation_opt
     }])
     monkeypatch.setattr(rules, "_co_client", lambda: fake)
     assert rules.ec2_rightsizing(None, [0]) == []
+
+
+def test_ec2_rightsizing_prefers_the_after_discounts_savings_when_present(monkeypatch):
+    # A review round caught both rightsizing rules reading only the on-demand-basis
+    # savingsOpportunity — for an RI/Savings-Plans-covered fleet that materially overstates the
+    # real dollar impact. savingsOpportunityAfterDiscounts must be preferred when CO provides it.
+    page = {"instanceRecommendations": [
+        {"instanceArn": "arn:aws:ec2:1", "currentInstanceType": "m5.xlarge", "finding": "Overprovisioned",
+         "recommendationOptions": [{"instanceType": "m5.large", "rank": 1,
+                                    "savingsOpportunity": {"estimatedMonthlySavings": {"value": 100.0}},
+                                    "savingsOpportunityAfterDiscounts": {"estimatedMonthlySavings": {"value": 30.0}}}]},
+    ]}
+    fake = FakeCOPaged(ec2_pages=[page])
+    monkeypatch.setattr(rules, "_co_client", lambda: fake)
+    out = rules.ec2_rightsizing(None, [0])
+    assert out[0]["monthly_savings_usd"] == 30.0
+    assert out[0]["evidence"]["savings_basis"] == "after_discounts"
+
+
+def test_ec2_rightsizing_falls_back_to_on_demand_savings_when_after_discounts_is_absent(monkeypatch):
+    page = {"instanceRecommendations": [
+        {"instanceArn": "arn:aws:ec2:1", "currentInstanceType": "m5.xlarge", "finding": "Overprovisioned",
+         "recommendationOptions": [{"instanceType": "m5.large", "rank": 1,
+                                    "savingsOpportunity": {"estimatedMonthlySavings": {"value": 100.0}}}]},
+    ]}
+    fake = FakeCOPaged(ec2_pages=[page])
+    monkeypatch.setattr(rules, "_co_client", lambda: fake)
+    out = rules.ec2_rightsizing(None, [0])
+    assert out[0]["monthly_savings_usd"] == 100.0
+    assert out[0]["evidence"]["savings_basis"] == "on_demand"
 
 
 def test_ec2_rightsizing_sorts_by_rank_and_picks_the_top_option(monkeypatch):

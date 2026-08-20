@@ -78,15 +78,35 @@ def _resolve_stale(conn, rule_id, seen_scoped_ids):
     )
 
 
+_EXPLAIN_BUDGET_SECONDS = 300  # wall-clock cap on the whole explain phase — see docstring below
+
+
 def _explain_pending(conn):
     """Best-effort: attach an LLM explanation to any finding missing one. Bounded per run (a
     daily batch, not a chat request) — a slow/throttled Bedrock call degrades that one row to
-    explanation_ko=NULL, never blocks the others or fails the run."""
+    explanation_ko=NULL, never blocks the others or fails the run.
+
+    A review round caught this loop running BEFORE `_finish_run`, with no bound on total time: up
+    to 200 sequential `invoke_model` calls, each able to take the full botocore timeout×retries,
+    ran inside the SFN Fargate task's TimeoutSeconds budget (3600s in base sfn.asl.json). A
+    hanging/slow Bedrock endpoint could burn that whole budget AFTER the deterministic findings
+    were already upserted, killing the task and landing the run `failed` (via the reaper) over a
+    batch that was otherwise materially successful — the exact "looks broken but wasn't" outcome
+    this ADR's honest-degradation design exists to avoid. `_BEDROCK_CONFIG` in llm.py bounds each
+    individual call; this wall-clock check bounds how many of them run in total. Remaining
+    NULL-explanation rows are simply picked up by tomorrow's run — explanations are cosmetic, not
+    load-bearing (per this module's own docstring, the feature works fully without this layer)."""
+    import time
+    deadline = time.monotonic() + _EXPLAIN_BUDGET_SECONDS
     rows = conn.run(
         "SELECT id, title, category, monthly_savings_usd, evidence FROM finops_findings "
         "WHERE status != 'resolved' AND explanation_ko IS NULL LIMIT 200"
     )
     for fid, title, category, savings, evidence in rows or []:
+        if time.monotonic() >= deadline:
+            print(f"[finops] _explain_pending hit its {_EXPLAIN_BUDGET_SECONDS}s budget — "
+                  f"leaving remaining rows for the next run")
+            break
         text = llm.explain(title, category, savings, evidence)
         if text:
             conn.run("UPDATE finops_findings SET explanation_ko=:t WHERE id=:id", t=text, id=fid)

@@ -43,6 +43,15 @@ def test_ec2_recommendation_option_savings_is_nested_under_savings_opportunity()
     assert "value" in savings_fields
 
 
+def test_ec2_recommendation_option_also_carries_an_after_discounts_savings_field():
+    # rules.py's _preferred_savings() prefers this over the on-demand-basis savingsOpportunity
+    # when Compute Optimizer provides it (a review round caught the on-demand figure overstating
+    # savings for an RI/Savings-Plans-covered fleet).
+    list_shape = _CO.shape_for("RecommendationOptions")
+    opt_fields = _members(list_shape.member.name)
+    assert "savingsOpportunityAfterDiscounts" in opt_fields
+
+
 def test_rds_finding_enum_matches_what_rules_py_filters_on():
     assert set(_CO.shape_for("RDSInstanceFinding").enum) == {
         "Optimized", "Underprovisioned", "Overprovisioned",
@@ -67,3 +76,10 @@ def test_rds_recommendation_option_savings_is_also_nested():
     opt_fields = _members(opt_shape_name)
     assert "savingsOpportunity" in opt_fields
     assert "dbInstanceClass" in opt_fields
+
+
+def test_rds_recommendation_option_also_carries_an_after_discounts_savings_field():
+    rec = _CO.shape_for("RDSDBRecommendation")
+    opt_shape_name = rec.members["instanceRecommendationOptions"].member.name
+    opt_fields = _members(opt_shape_name)
+    assert "savingsOpportunityAfterDiscounts" in opt_fields

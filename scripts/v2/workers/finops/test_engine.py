@@ -171,6 +171,35 @@ def test_explain_pending_attaches_llm_text_and_skips_contradicting_output(monkey
     assert conn.findings[("r1", "self", "", "res-b")]["explanation_ko"] is None
 
 
+def test_explain_pending_stops_once_the_wall_clock_budget_is_exhausted(monkeypatch):
+    # A review round caught this loop running unbounded, inside the run's critical section, before
+    # _finish_run — up to 200 sequential Bedrock calls could burn the whole SFN task timeout AFTER
+    # the deterministic findings were already upserted, landing the run 'failed' over a batch that
+    # was otherwise materially successful. A budget must stop the loop and leave the run to finish
+    # normally, with the remaining rows simply picked up next time.
+    import time as time_module
+    conn = FakeConn()
+    monkeypatch.setattr(catalog, "active_rules", lambda: [_rule(
+        "r1", [_item("res-a"), _item("res-b"), _item("res-c")])])
+    calls = []
+
+    def fake_explain(title, category, savings, evidence):
+        calls.append(title)
+        return f"설명 for {title}"
+    monkeypatch.setattr(llm, "explain", fake_explain)
+
+    # First call computes the deadline (t=0 -> deadline=BUDGET); every call after that reports
+    # time already far past it, so the very first in-loop check trips — proving the check
+    # actually gates the loop rather than merely existing.
+    clock = iter([0.0] + [10_000_000.0] * 10)
+    monkeypatch.setattr(time_module, "monotonic", lambda: next(clock))
+    out = engine.run({}, conn)
+    assert calls == []
+    assert out["status"] == "succeeded"  # the batch itself is unaffected — only explanations skip
+    for key in (("r1", "self", "", "res-a"), ("r1", "self", "", "res-b"), ("r1", "self", "", "res-c")):
+        assert conn.findings[key]["explanation_ko"] is None
+
+
 def test_explanation_survives_a_rerun_with_no_change(monkeypatch):
     conn = FakeConn()
     monkeypatch.setattr(catalog, "active_rules", lambda: [_rule("r1", [_item("res-a", savings=10.0)])])

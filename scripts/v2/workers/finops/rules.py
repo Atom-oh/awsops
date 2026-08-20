@@ -144,20 +144,19 @@ def ebs_unattached(conn, ce_calls):
     for resource_id, account_id, region, data, captured_at in rows or []:
         size = data.get("size")
         vtype = (data.get("volume_type") or "").lower()
-        iops = data.get("iops")
         rate = _EBS_GB_MONTH_USD.get(vtype) if region in _PRICED_REGIONS else None
-        # A PR review caught that the GB-rate alone materially understates io1/io2 cost — the
-        # provisioned-IOPS charge routinely dominates it (e.g. a 100 GiB io2 volume at 5,000 IOPS:
-        # storage ~$12.50/mo vs. IOPS in the hundreds/mo) — and gp3 IOPS/throughput above the free
-        # baseline (3,000 IOPS / 125 MiB/s) bills too. `sync_lambda.py` captures `iops` but not
-        # gp3's throughput, so there is no way to price either type completely without inventing a
-        # number this ADR's own invariant forbids. Rather than present a materially incomplete
-        # figure as confident (io1/io2), or one that's silently wrong whenever a gp3 volume happens
-        # to exceed the free baseline, demote both to NULL + a `partial_rate` evidence marker —
-        # same treatment as an unpriced region/type, and for the same reason.
-        needs_iops_pricing_not_available = vtype in ("io1", "io2") or (
-            vtype == "gp3" and isinstance(iops, (int, float)) and iops > 3000
-        )
+        # A PR review caught that the GB-rate alone materially understates io1/io2/gp3 cost — the
+        # provisioned-IOPS charge routinely dominates io1/io2 (e.g. a 100 GiB io2 volume at 5,000
+        # IOPS: storage ~$12.50/mo vs. IOPS in the hundreds/mo), and gp3 bills for IOPS/throughput
+        # above its free baseline (3,000 IOPS / 125 MiB/s) too. `sync_lambda.py` captures `iops`
+        # but NOT gp3's throughput at all — a follow-up review round correctly caught that an
+        # earlier version of this fix only demoted gp3 when `iops > 3000`, which is unsound:
+        # a gp3 volume can sit at baseline IOPS while still having PROVISIONED THROUGHPUT above
+        # the free tier, and that charge is entirely invisible with no signal to gate on. Since
+        # there is no way to price ANY of io1/io2/gp3 completely without inventing a number this
+        # ADR's own invariant forbids, all three demote to NULL + a `partial_rate` evidence marker
+        # unconditionally — same treatment as an unpriced region/type, and for the same reason.
+        needs_iops_pricing_not_available = vtype in ("io1", "io2", "gp3")
         if needs_iops_pricing_not_available:
             rate = None
         savings = round(size * rate, 2) if (rate is not None and size) else None
@@ -282,6 +281,24 @@ def _co_page(get_fn, list_key):
     )
 
 
+def _preferred_savings(option):
+    """Returns (value, basis) from a Compute Optimizer recommendation option. A review round
+    caught both rightsizing rules reading only `savingsOpportunity` (Compute Optimizer's
+    on-demand-rate estimate) — for a fleet covered by Reserved Instances/Savings Plans, the actual
+    dollar impact of following the recommendation is `savingsOpportunityAfterDiscounts`, which can
+    differ materially from the on-demand figure. That's the same "confident but misleading amount"
+    class this file demotes rate-card figures for elsewhere, just via a wrong basis instead of a
+    missing rate. Prefers the after-discounts value when Compute Optimizer provides one; falls
+    back to the on-demand estimate otherwise (both fields verified present on both EC2's and RDS's
+    option shapes via botocore's service model)."""
+    after_discounts = (option.get("savingsOpportunityAfterDiscounts") or {}).get(
+        "estimatedMonthlySavings", {}).get("value")
+    if isinstance(after_discounts, (int, float)):
+        return after_discounts, "after_discounts"
+    on_demand = (option.get("savingsOpportunity") or {}).get("estimatedMonthlySavings", {}).get("value")
+    return on_demand, "on_demand"
+
+
 def ec2_rightsizing(conn, ce_calls):
     """EC2 rightsizing via Compute Optimizer, paginated (a single maxResults=100 page silently
     truncated large accounts). Registered as ITS OWN catalog rule (not merged with RDS) so that an
@@ -315,7 +332,7 @@ def ec2_rightsizing(conn, ce_calls):
                 # a "? -> ?" title with no savings figure at all.
                 continue
             top = options[0]
-            savings = (top.get("savingsOpportunity") or {}).get("estimatedMonthlySavings", {}).get("value")
+            savings, savings_basis = _preferred_savings(top)
             arn = r.get("instanceArn", "")
             out.append({
                 "resource_id": arn,
@@ -327,7 +344,7 @@ def ec2_rightsizing(conn, ce_calls):
                 "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
                 "evidence": {"current_type": r.get("currentInstanceType"), "recommended_type": top.get("instanceType"),
                              "finding": finding, "performance_risk": top.get("performanceRisk"),
-                             "lookback_days": r.get("lookBackPeriodInDays")},
+                             "lookback_days": r.get("lookBackPeriodInDays"), "savings_basis": savings_basis},
                 "tags": {t.get("key"): t.get("value") for t in (r.get("tags") or [])},
                 "lookback_days": r.get("lookBackPeriodInDays"),
             })
@@ -355,7 +372,7 @@ def rds_rightsizing(conn, ce_calls):
             if not options:
                 continue  # no recommendation option -> nothing actionable to show
             top = options[0]
-            savings = (top.get("savingsOpportunity") or {}).get("estimatedMonthlySavings", {}).get("value")
+            savings, savings_basis = _preferred_savings(top)
             arn = r.get("resourceArn", "")
             out.append({
                 "resource_id": arn,
@@ -367,7 +384,8 @@ def rds_rightsizing(conn, ce_calls):
                 "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
                 "evidence": {"current_class": r.get("currentDBInstanceClass"),
                              "recommended_class": top.get("dbInstanceClass"), "engine": r.get("engine"),
-                             "finding": finding, "lookback_days": r.get("lookbackPeriodInDays")},
+                             "finding": finding, "lookback_days": r.get("lookbackPeriodInDays"),
+                             "savings_basis": savings_basis},
                 "tags": {t.get("key"): t.get("value") for t in (r.get("tags") or [])},
                 "lookback_days": r.get("lookbackPeriodInDays"),
             })
