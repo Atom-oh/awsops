@@ -36,6 +36,12 @@ class TestSecurityGroup:
         r = ad.eval_security_group(rules, "tcp", 5432, peer_sg_ids=["sg-db"])
         assert r["status"] == "allowed"
 
+    def test_missing_peer_identity_is_unknown_not_blocked(self):
+        # MAJOR fix: missing/unparseable peer identity must never invent a confident `blocked`.
+        rules = [{"sg_id": "sg-1", "protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "0.0.0.0/0"}]
+        r = ad.eval_security_group(rules, "tcp", 443, peer_ip=None, peer_sg_ids=None)
+        assert r["status"] == "unknown"
+
     def test_multi_sg_union(self):
         # Second SG's rule is the one that actually allows — union across all attached SGs.
         rules = [
@@ -59,10 +65,13 @@ class TestNacl:
     def test_forward_allow_first_match_lower_rule_number_wins(self):
         fwd = [{"rule_number": 100, "protocol": "-1", "action": "allow"},
                {"rule_number": 200, "protocol": "tcp", "from_port": 443, "to_port": 443, "action": "deny"}]
-        ret = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        # Return rule is scoped to just the probed ephemeral port (not the full range) so this test
+        # stays focused on forward first-match-wins, independent of the unrestricted-return case.
+        ret = [{"rule_number": 100, "protocol": "tcp", "from_port": ad.EPHEMERAL_PROBE_PORT,
+                 "to_port": ad.EPHEMERAL_PROBE_PORT, "action": "allow"}]
         r = ad.eval_nacl(fwd, ret, "tcp", 443)
-        # Forward allowed at rule 100 (evaluated before rule 200); return also allowed -> conditional
-        # (ephemeral probe only), not a flat allow.
+        # Forward allowed at rule 100 (evaluated before rule 200); return also allowed but scoped ->
+        # conditional (ephemeral probe only), not a flat allow.
         assert r["status"] == "conditional"
 
     def test_implicit_deny_default(self):
@@ -78,12 +87,55 @@ class TestNacl:
         r = ad.eval_nacl(fwd, ret, "tcp", 443)
         assert r["status"] == "blocked"
 
-    def test_both_allow_is_conditional_not_allowed(self):
-        # 2026-08-19 review fix: scoped ephemeral-probe verdict never generalizes to a flat allow.
+    def test_scoped_return_range_stays_conditional_not_allowed(self):
+        # 2026-08-19 review fix: a return rule scoped to a NARROW range (here: exactly the probed
+        # ephemeral port, not the full ephemeral space) never generalizes to a flat allow.
+        fwd = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        ret = [{"rule_number": 100, "protocol": "tcp", "from_port": ad.EPHEMERAL_PROBE_PORT,
+                 "to_port": ad.EPHEMERAL_PROBE_PORT, "action": "allow"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443)
+        assert r["status"] == "conditional"
+
+    def test_genuinely_unrestricted_return_range_is_allowed(self):
+        # 2026-08-19 review fix, PART 2 (this PR): when the return rule set is genuinely,
+        # unambiguously unrestricted (protocol -1 / wildcard, no port scoping at all — covering the
+        # FULL ephemeral range, not just the one probed port), the scoped-verdict caveat does not
+        # apply and candidate-level `allowed` must be reachable.
         fwd = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
         ret = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
         r = ad.eval_nacl(fwd, ret, "tcp", 443)
-        assert r["status"] == "conditional"
+        assert r["status"] == "allowed"
+
+    def test_unrestricted_wide_port_range_return_is_allowed(self):
+        fwd = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        ret = [{"rule_number": 100, "protocol": "tcp", "from_port": 0, "to_port": 65535, "action": "allow"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443)
+        assert r["status"] == "allowed"
+
+    # ── CIDR scoping (MAJOR fix: _first_match ignored CIDR scope entirely) ─────────────────────
+
+    def test_allow_rule_scoped_to_unrelated_cidr_does_not_match(self):
+        fwd = [{"rule_number": 100, "protocol": "-1", "cidr": "192.168.0.0/16", "action": "allow"},
+               {"rule_number": 32767, "action": "deny"}]
+        r = ad.eval_nacl(fwd, [], "tcp", 443, peer_ip="10.1.2.3")
+        # The only allow rule is scoped to an unrelated CIDR — the peer doesn't match it, so the
+        # implicit deny is what actually applies. Must NOT be a false "not blocked".
+        assert r["status"] == "blocked"
+
+    def test_allow_rule_scoped_to_matching_cidr_does_match(self):
+        fwd = [{"rule_number": 100, "protocol": "-1", "cidr": "10.0.0.0/8", "action": "allow"}]
+        ret = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443, peer_ip="10.1.2.3")
+        assert r["status"] == "allowed"
+
+    def test_deny_rule_scoped_to_unrelated_cidr_does_not_block(self):
+        fwd = [{"rule_number": 50, "protocol": "-1", "cidr": "192.168.0.0/16", "action": "deny"},
+               {"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        ret = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443, peer_ip="10.1.2.3")
+        # A narrow deny scoped to an unrelated CIDR must not falsely block a peer it doesn't cover —
+        # the peer falls through to the broader allow rule at 100.
+        assert r["status"] == "allowed"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────────────────────────
@@ -117,6 +169,17 @@ class TestRoute:
         rt = [{"destination_cidr": "203.0.113.0/24", "target": "vgw-1", "state": "active"}]
         r = ad.eval_route(rt, "203.0.113.0/24")
         assert r["status"] == "allowed"
+
+    def test_missing_destination_is_unknown_not_blocked(self):
+        # MAJOR fix: missing destination must never invent a confident `blocked`.
+        rt = [{"destination_cidr": "0.0.0.0/0", "target": "igw-1", "state": "active"}]
+        r = ad.eval_route(rt, None)
+        assert r["status"] == "unknown"
+
+    def test_malformed_destination_is_unknown_not_blocked(self):
+        rt = [{"destination_cidr": "0.0.0.0/0", "target": "igw-1", "state": "active"}]
+        r = ad.eval_route(rt, "not-an-ip-or-cidr")
+        assert r["status"] == "unknown"
 
 
 # ── TGW ───────────────────────────────────────────────────────────────────────────────────────────
@@ -267,6 +330,27 @@ class TestK8sNetworkPolicy:
     def test_empty_peer_list_allows_all(self):
         policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [{}]}]
         r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress")
+        assert r["status"] == "allowed"
+
+    # ── MAJOR fail-open fix: the docstring's OWN documented shape uses canonical K8s casing ──────
+
+    def test_canonical_cased_policy_types_select_the_pod(self):
+        """The docstring's documented input shape is `"policy_types": ["Ingress","Egress"]`
+        (Kubernetes canonical casing) — with that EXACT shape, a policy selecting the pod for
+        ingress must actually select it (previously: lowercase-only comparison meant no policy
+        ever selected the pod under the documented shape, so a default-deny pod fail-opened to
+        `allowed`)."""
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["Ingress", "Egress"],
+                     "ingress": [{"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "other"})
+        # Selected (canonical-cased policy_types matched) + no rule matches the actual peer -> blocked
+        # (default-deny), NOT allowed — proving the pod is genuinely selected, not fail-open.
+        assert r["status"] == "blocked"
+
+    def test_canonical_cased_policy_types_matching_peer_allows(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["Ingress"],
+                     "ingress": [{"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"})
         assert r["status"] == "allowed"
 
 

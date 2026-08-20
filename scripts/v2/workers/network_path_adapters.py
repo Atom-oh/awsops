@@ -70,6 +70,17 @@ def eval_security_group(rules, protocol, port, peer_ip=None, peer_sg_ids=None, l
     `peer_sg_ids`: SG ids attached to the peer ENI — matches a rule's `referenced_group_id`.
     """
     peer_sg_ids = set(peer_sg_ids or [])
+    if peer_ip is None and not peer_sg_ids:
+        # MAJOR fix: missing/unparseable peer identity must map to `unknown`, never a confident
+        # `blocked` — the module's own docstring gives exactly this reasoning for not reusing
+        # `check_reachability`'s boolean-only return (never invent a false verdict). Without ANY
+        # peer identity, cidr rules can't be evaluated (peer_ip needed) and sg-reference rules
+        # can't be evaluated (peer_sg_ids needed) — there is structurally no basis for a verdict.
+        return {
+            "layer": layer, "status": "unknown", "resource": None,
+            "summary": "peer identity (peer_ip/peer_sg_ids) is missing; cannot evaluate SG rules",
+            "evidence": [],
+        }
     matched = None
     for rule in rules:
         if not _proto_matches(rule.get("protocol", "-1"), protocol):
@@ -99,8 +110,14 @@ def eval_security_group(rules, protocol, port, peer_ip=None, peer_sg_ids=None, l
 
 # ── AWS L3/L4: NACL (first-match, forward + ephemeral return) ───────────────────────────────────
 
-def _first_match(entries, protocol, port):
-    """First-match-wins by ascending rule_number, mirroring EC2 NACL evaluation order."""
+def _first_match(entries, protocol, port, peer_ip=None):
+    """First-match-wins by ascending rule_number, mirroring EC2 NACL evaluation order.
+
+    MAJOR fix: entries carrying a `cidr` field are now scoped to `peer_ip` — a NACL entry allowing
+    (or denying) only an unrelated CIDR must not be treated as matching every peer. An entry with NO
+    `cidr` field at all is treated as unrestricted (preserves prior behavior for callers/tests that
+    don't model CIDR scope), matching how EC2 NACL entries with `0.0.0.0/0` behave.
+    """
     for entry in sorted(entries, key=lambda e: e["rule_number"]):
         if entry["rule_number"] >= 32767:  # implicit default-deny catch-all
             return entry
@@ -108,19 +125,27 @@ def _first_match(entries, protocol, port):
             continue
         if not _port_in_range(entry, port):
             continue
+        cidr = entry.get("cidr")
+        if cidr and peer_ip and not _cidr_contains(cidr, peer_ip):
+            continue
         return entry
     return None
 
 
-def eval_nacl(forward_entries, return_entries, protocol, port):
+def eval_nacl(forward_entries, return_entries, protocol, port, peer_ip=None):
     """Forward NACL rules are evaluated at the ACTUAL requested port (a definite verdict is
     possible). The return path is evaluated at a single REPRESENTATIVE ephemeral port
     (EPHEMERAL_PROBE_PORT) — per the design spec's 2026-08-19 review fix, a verdict built on that
-    probe is scoped to the probed port only, so even when both directions allow, the overall NACL
-    layer status is `conditional` (never generalized to "allowed for the real client's ephemeral
-    port"), not `allowed`.
+    probe is scoped to the probed port only UNLESS the matched return rule's own port range already
+    covers the full 0-65535 span (an unrestricted/wildcard rule) — in that case ANY ephemeral port
+    is genuinely, unambiguously allowed, and the caveat about generalizing a narrow probe simply
+    does not apply, so this can correctly return `allowed` (MAJOR fix: candidate-level `allowed`
+    was structurally unreachable before this, since this layer could never emit anything but
+    `blocked`/`conditional`). A return rule scoped to a narrower range (e.g. only the probed port,
+    or a sub-range of the ephemeral space) still yields `conditional` — the scoped-verdict caveat
+    is preserved for exactly that narrower case.
     """
-    fwd = _first_match(forward_entries, protocol, port)
+    fwd = _first_match(forward_entries, protocol, port, peer_ip)
     if fwd is None or fwd.get("action") != "allow":
         return {
             "layer": "nacl", "status": "blocked",
@@ -128,13 +153,24 @@ def eval_nacl(forward_entries, return_entries, protocol, port):
             "summary": f"NACL forward rule denies {protocol}/{port}",
             "evidence": [fwd] if fwd else [],
         }
-    ret = _first_match(return_entries, protocol, EPHEMERAL_PROBE_PORT)
+    ret = _first_match(return_entries, protocol, EPHEMERAL_PROBE_PORT, peer_ip)
     if ret is None or ret.get("action") != "allow":
         return {
             "layer": "nacl", "status": "blocked",
             "resource": ret.get("resource") if ret else None,
             "summary": f"NACL return rule denies the ephemeral probe port {EPHEMERAL_PROBE_PORT}",
             "evidence": [ret] if ret else [],
+        }
+    unrestricted_return = _port_in_range(ret, 0) and _port_in_range(ret, 65535)
+    if unrestricted_return:
+        return {
+            "layer": "nacl", "status": "allowed",
+            "resource": fwd.get("resource"),
+            "summary": (
+                f"NACL forward {protocol}/{port} allowed; return rule covers the full 0-65535 "
+                "range (genuinely unrestricted, not just the probed port) — generalized allow"
+            ),
+            "evidence": [fwd, ret],
         }
     return {
         "layer": "nacl", "status": "conditional",
@@ -159,6 +195,13 @@ def eval_route(route_table, dest_cidr, layer="route"):
     destinations (no destination ENI needed), and is exactly the same function used for an
     ENI-to-ENI candidate's source-side route check. No wrapping of any ENI-to-ENI-only helper.
     """
+    if dest_cidr is None:
+        # MAJOR fix: missing destination must map to `unknown`, never a confident `blocked` — same
+        # "never invent a false verdict" reasoning as eval_security_group's missing-peer fix.
+        return {
+            "layer": layer, "status": "unknown", "resource": None,
+            "summary": "destination CIDR/IP is missing; cannot evaluate route coverage", "evidence": [],
+        }
     # Normalize the destination once: a bare IP checks membership directly; a CIDR checks that it
     # is fully contained in the candidate route's network (a route can only claim a destination
     # network it fully covers).
@@ -168,6 +211,14 @@ def eval_route(route_table, dest_cidr, layer="route"):
         dest_ip = None if is_dest_network else ipaddress.ip_address(dest_cidr)
     except ValueError:
         dest_net = dest_ip = None
+    if dest_net is None and dest_ip is None:
+        # MAJOR fix: malformed/unparseable destination -> `unknown`, distinct from "a genuinely
+        # valid destination with no covering route" (that IS a real `blocked`, handled below).
+        return {
+            "layer": layer, "status": "unknown", "resource": None,
+            "summary": f"destination {dest_cidr!r} is not a parseable IP/CIDR; cannot evaluate route coverage",
+            "evidence": [],
+        }
 
     best = None
     best_prefixlen = -1
@@ -365,8 +416,13 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
     direction; it is `allowed` only if at least one rule across the selecting policies matches.
     """
     key = "ingress" if direction == "ingress" else "egress"
+    # MAJOR fix (fail-open bug): the docstring's OWN documented input shape uses Kubernetes
+    # canonical casing ("Ingress"/"Egress"), but this used to compare against the lowercase `key`
+    # directly — with the documented shape, no policy ever selected the pod, so a default-deny pod
+    # always returned `allowed`. Normalize case on both sides so canonical-cased input (the
+    # documented shape) AND lowercase input are both handled correctly.
     selecting = [p for p in policies if _labels_match(p.get("pod_selector"), pod_labels)
-                 and key in (p.get("policy_types") or [])]
+                 and key in {str(t).lower() for t in (p.get("policy_types") or [])}]
     if not selecting:
         return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                 "summary": "no NetworkPolicy selects this pod for this direction (default allow)",

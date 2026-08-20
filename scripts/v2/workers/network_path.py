@@ -3,11 +3,37 @@ why: Kubernetes policy evaluation + multi-account route analysis can exceed a sh
 budget). Implements the design spec's 4 phases: resolve -> discover -> verify -> conclude
 (docs/superpowers/specs/2026-08-13-network-path-check-design.md, "Worker" section).
 
-Gated at the call site (handlers.py checks NETWORK_PATH_CHECK_ENABLED before importing this module
-at all — see the REGISTRY entry) — this module itself has no runtime flag check, matching how
-_sg_rule_scan/_compliance are written (the flag lives in whether the job is ever dispatched at all,
-per the design spec's "route, enqueue, dispatcher branch, worker environment ... all fail closed
-while disabled").
+Gating, honestly stated (L5 docs-consistency fix — the previous version of this paragraph claimed a
+safety property `handlers.py` does not implement): `handlers.py`'s REGISTRY entry for
+`network_path` is NOT conditional on `NETWORK_PATH_CHECK_ENABLED` — it is an unconditional
+dict row, and `_network_path()` used to call straight into this module regardless of the flag.
+The REAL fail-closed gates today are (a) Terraform: `network-path.tf`'s `local.npc` count is 0
+unless both `workers_enabled` and `network_path_check_enabled` are true, so the worker task only
+gets the `NETWORK_PATH_CHECK_ENABLED=true` env var when the feature is actually on, and (b) the web
+BFF: every Network Path route calls `web/lib/network-path-gate.ts`'s fail-closed gate before a run
+can even be created/enqueued. `handlers.py`'s `_network_path()` now ALSO checks the
+`NETWORK_PATH_CHECK_ENABLED` env var itself before calling into this module (a second, structurally
+independent gate at the dispatch site, closing the gap this docstring used to falsely claim was
+already closed) — see handlers.py for that check.
+
+`fetch_live_topology()` below is NOT implemented in this pass (raises `NotImplementedError`) — see
+its own docstring. Because of that, `run()` treats ANY exception during discovery (not just
+`NetworkPathError`) as a terminal `failed` run, so a real invocation — should one ever reach this
+module while the feature is enabled but the fetcher is still a stub — ends in a visible `failed`
+row instead of crashing uncaught and leaving `network_path_runs` stuck at `running`/`discover`.
+
+"ADR-019 §2" citation ambiguity (L5 docs-consistency fix): code across this feature (this module,
+handlers.py, reaper.py, the network_path_check migration, variables.tf) previously cited
+"ADR-019 §2 register row" for `network_path_check_enabled`'s flag-gate entry. That phrase is
+ambiguous — `docs/decisions/019-athena-flow-log-query-classification.md`'s OWN §2 section
+("the exact same shape of pattern is already live") is about the SG-Rules Athena/CloudWatch-Logs-
+Insights pattern and has nothing to do with Network Path Check. The "§2 register row" being cited
+here is actually `docs/decisions/BASELINE.md`'s §2 gate/freeze register — `network_path_check_enabled`
+IS one of its rows, and BASELINE.md's own ADR-019 index entry confirms ADR-019's Decision is what
+classifies this flag as ordinary GATED (not FROZEN) reasoning, so ADR-019 is still the correct
+GOVERNING decision — only the "§2" shorthand was pointing at the wrong document's section. Every
+citation of this shape in the network-path code now reads "BASELINE.md §2 register row, governed
+under ADR-019's Decision".
 
 AI boundary (spec): this module never calls a model. It only computes the deterministic checklist.
 
@@ -171,7 +197,8 @@ _ADAPTER_BY_LAYER = {
         data.get("sg_rules", []), req["protocol"], req.get("port"),
         peer_ip=data.get("peer_ip"), peer_sg_ids=data.get("peer_sg_ids")),
     "nacl": lambda data, req: ad.eval_nacl(
-        data.get("nacl_forward", []), data.get("nacl_return", []), req["protocol"], req.get("port")),
+        data.get("nacl_forward", []), data.get("nacl_return", []), req["protocol"], req.get("port"),
+        peer_ip=data.get("peer_ip")),
     "route": lambda data, req: ad.eval_route(data.get("route_table", []), data.get("dest_cidr")),
     "tgw": lambda data, req: ad.eval_tgw(
         data.get("attachment_state"), data.get("associated", False),
@@ -352,6 +379,12 @@ def run(payload, conn, topology_fetcher=fetch_live_topology, deadline_s=GLOBAL_D
     except NetworkPathError as e:
         _finish_run(conn, run_id, "failed", overall_status="failed")
         return {"run_id": run_id, "status": "failed", "error": str(e)}
+    except Exception as e:  # noqa: BLE001 — MAJOR fix: fetch_live_topology is unimplemented in
+        # this pass (raises NotImplementedError) and any other unexpected fetcher failure must also
+        # terminate the run visibly rather than crash uncaught and leave network_path_runs stuck at
+        # running/discover until the reaper eventually flips it minutes later.
+        _finish_run(conn, run_id, "failed", overall_status="failed")
+        return {"run_id": run_id, "status": "failed", "error": f"{type(e).__name__}: {e}"}
 
     for c in candidates:
         _insert_candidate(conn, run_id, c["candidate_id"], c["kind"])

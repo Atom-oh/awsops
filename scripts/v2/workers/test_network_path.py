@@ -252,12 +252,33 @@ class TestFullRun:
         result = np.run({"run_id": "run-2", "definition": _definition()}, conn,
                          topology_fetcher=lambda r: _topology_one_candidate())
         assert result["status"] == "succeeded"
-        # The fixture's NACL layer is scoped-conditional by design (ephemeral-probe rule), which
-        # correctly keeps the candidate — and therefore the overall result — at `conditional`.
-        assert result["overall_status"] == "conditional"
+        # MAJOR fix (2026-08-19+ review): the fixture's NACL forward+return rules are genuinely
+        # unrestricted (protocol "-1", no port scoping at all) — with eval_nacl's fix, this is no
+        # longer force-capped at `conditional`; it correctly reaches `allowed`. This is the
+        # end-to-end proof that candidate-level `allowed` (and the validation bundle) ARE reachable
+        # through the real run() path — not just hand-fed into build_validation_bundle() directly.
+        assert result["overall_status"] == "allowed"
         finishes = conn.run_finishes()
         assert finishes[-1]["s"] == "succeeded"
-        assert finishes[-1]["os"] == "conditional"
+        assert finishes[-1]["os"] == "allowed"
+        assert finishes[-1]["vb"] is not None  # validation bundle is populated, not dead code
+        bundle = json.loads(finishes[-1]["vb"])
+        assert bundle["unknown_layers"] == []  # sg/nacl/route are all inspectable and allowed here
+
+
+    def test_unimplemented_topology_fetcher_ends_in_terminal_failed_not_a_crash(self):
+        """MAJOR fix: fetch_live_topology() (the real default) raises NotImplementedError — run()
+        must not let that escape uncaught (which would leave network_path_runs stuck at
+        running/discover); it must be caught and turned into a terminal `failed` run, same as a
+        NetworkPathError."""
+        conn = FakeConn()
+        result = np.run({"run_id": "run-3", "definition": _definition()}, conn)  # default fetcher
+        assert result["status"] == "failed"
+        assert "NotImplementedError" in result["error"]
+        finishes = conn.run_finishes()
+        assert finishes[-1]["s"] == "failed"
+        assert finishes[-1]["os"] == "failed"
+        assert conn.inserted_candidates() == []  # discovery never got far enough to write candidates
 
 
 # ── grep-verifiable: never calls the SSRF-risk active-probe helper ─────────────────────────────
