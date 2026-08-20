@@ -1340,7 +1340,13 @@ export default function NetworkFirewallPage() {
                           />
                         ) : (
                           <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">
-                            {(logsData?.alert?.ruleHits == null) ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고') : tt('룰 히트 없음')}
+                            {/* 리뷰(Codex stop-hook): ruleHits가 null이 아니라 빈 배열([])이어도, 비-CWL
+                                ALERT 목적지 방화벽이 섞여 있으면 그 방화벽의 히트는 Insights 쿼리 대상
+                                자체가 아니라서 "0건 확인"이 아니라 "일부 방화벽은 집계 불가"다 — null
+                                체크만으로는 이 케이스를 "룰 히트 없음"(확정 0)으로 오판한다. */}
+                            {(logsData?.alert?.ruleHits == null || fws.some((f) => f.alertLogging != null && !f.alertLogging.startsWith('CloudWatchLogs:')))
+                              ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고')
+                              : tt('룰 히트 없음')}
                           </div>
                         )}
                       </div>
