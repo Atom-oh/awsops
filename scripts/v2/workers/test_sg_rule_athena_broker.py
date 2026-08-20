@@ -118,13 +118,49 @@ class FakeConn:
         pass
 
 
-def _source_row(validation, account_id="123456789012", region="ap-northeast-2"):
+def _source_row(validation, account_id="123456789012", region="ap-northeast-2", enabled=True,
+                 accounts_rows=(("ext-123",),)):
     return {
         "FROM sg_flow_sources": [[
-            (account_id, region, "wg", "db", "tbl", json.dumps(validation)),
+            (account_id, region, "wg", "db", "tbl", json.dumps(validation), enabled),
         ]],
-        "FROM accounts": [[("ext-123",)]],
+        "FROM accounts": [list(accounts_rows)],
     }
+
+
+# ── round-4 CI-review finding (L3, items 1 + 3): `_load_source_row` must apply the SAME
+#    enabled-required confused-deputy guard `validate`'s `_resolve_external_id` already enforces,
+#    and must refuse a disabled `sg_flow_sources` row — even when `query_by_source` is invoked
+#    directly, bypassing the dispatcher's own `WHERE enabled` filter. ─────────────────────────────
+
+def test_query_by_source_refuses_a_disabled_account(monkeypatch):
+    """item 1(a): an `accounts` row with `enabled=false` (modeled here as no matching row, since the
+    real query carries `AND enabled`) must refuse the scan rather than assume with no ExternalId."""
+    conn = FakeConn(_source_row({"status": "valid"}, accounts_rows=()))
+    monkeypatch.setattr(broker, "_assumed_session",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must never be called")))
+    with pytest.raises(broker.BrokerError, match="registered"):
+        broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+
+
+def test_query_by_source_refuses_an_unregistered_account(monkeypatch):
+    """item 1(b): an account_id with no `accounts` row at all gets the same refusal."""
+    conn = FakeConn(_source_row({"status": "valid"}, accounts_rows=()))
+    monkeypatch.setattr(broker, "_assumed_session",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must never be called")))
+    with pytest.raises(broker.BrokerError, match="registered"):
+        broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+
+
+def test_query_by_source_refuses_a_disabled_flow_source(monkeypatch):
+    """item 3: a disabled `sg_flow_sources` row must be refused by `query_by_source` even when
+    invoked directly (bypassing the dispatcher's own `WHERE enabled` filter) — any principal with
+    `lambda:InvokeFunction` on this broker must not be able to drive a scan of a disabled source."""
+    conn = FakeConn(_source_row({"status": "valid"}, enabled=False))
+    monkeypatch.setattr(broker, "_assumed_session",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must never be called")))
+    with pytest.raises(broker.BrokerError, match="disabled"):
+        broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
 
 
 def test_query_by_source_rejects_non_int_flow_source_id():
@@ -222,15 +258,19 @@ def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkey
 #    source/day — never trusted as a bare caller-supplied Athena identifier.
 
 class FakeAthenaForContinuation:
-    def __init__(self, exec_workgroup, exec_query, rows=None):
+    def __init__(self, exec_workgroup, exec_query, rows=None, data_scanned_bytes=0):
         self.exec_workgroup = exec_workgroup
         self.exec_query = exec_query
         self.rows = rows if rows is not None else []
+        self.data_scanned_bytes = data_scanned_bytes
         self.get_query_execution_calls = []
 
     def get_query_execution(self, QueryExecutionId):
         self.get_query_execution_calls.append(QueryExecutionId)
-        return {"QueryExecution": {"WorkGroup": self.exec_workgroup, "Query": self.exec_query}}
+        return {"QueryExecution": {
+            "WorkGroup": self.exec_workgroup, "Query": self.exec_query,
+            "Statistics": {"DataScannedInBytes": self.data_scanned_bytes},
+        }}
 
     def get_query_results(self, **kwargs):
         return {"ResultSet": {"Rows": [{"Data": [{"VarCharValue": v} for v in row]} for row in self.rows]},
@@ -280,6 +320,27 @@ def test_continuation_accepts_a_query_execution_id_matching_the_resolved_source(
     assert result["ok"] is True
     assert result["done"] is True
     assert result["rows"] == [{"a": "v1"}]
+
+
+# ── round-4 CI-review finding (L3, item 4): scan-bytes budget must be re-checked on the
+#    continuation path too — a query that WAS over-budget must not have its results paged out
+#    just because the workgroup/SQL-identity check alone passes. ───────────────────────────────────
+
+def test_continuation_refuses_a_query_execution_over_the_bytes_budget(monkeypatch):
+    """Even though the workgroup+SQL identity matches the resolved source's own query exactly, an
+    execution whose `Statistics.DataScannedInBytes` exceeds the budget must be refused — proving the
+    continuation path can no longer be used to page out results Athena flagged as over-budget."""
+    over_budget = broker._DEFAULT_MAX_BYTES + 1
+    athena = FakeAthenaForContinuation(exec_workgroup="wg", exec_query="SELECT 1 AS x",
+                                        rows=[["v1"]], data_scanned_bytes=over_budget)
+    conn = _continuation_setup(monkeypatch, athena)
+    result = broker._query_by_source({
+        "flow_source_id": 1, "day": "2026-03-05",
+        "continuation": {"query_execution_id": "q-real", "next_token": "tok", "columns": ["a"]},
+    }, conn)
+    assert result["ok"] is False
+    assert "budget" in result["reason"]
+    assert result["data_scanned_bytes"] == over_budget
 
 
 def test_continuation_still_refuses_a_pending_source():

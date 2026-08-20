@@ -124,10 +124,12 @@ def _assumed_session(account_id, external_id, region):
 
 def _resolve_external_id(conn, account_id):
     """round-3 finding #6: resolve `external_id` from the trusted `accounts` table for `account_id`
-    — the SAME server-side resolution `_load_source_row`/`query_by_source` already use — instead of
-    trusting a caller-supplied value. Requires an `enabled` row; an unregistered/disabled account_id
-    is rejected outright rather than silently assuming a role with no confused-deputy guard bound to
-    a row this system actually trusts."""
+    instead of trusting a caller-supplied value. Requires an `enabled` row; an unregistered/disabled
+    account_id is rejected outright rather than silently assuming a role with no confused-deputy
+    guard bound to a row this system actually trusts. Round-4 CI-review finding (L3, item 1):
+    `_load_source_row` now also calls this helper (it used to have its own separate, guard-less
+    `SELECT external_id FROM accounts WHERE account_id=:a` with no `enabled` predicate) — every
+    external_id resolution in this module goes through the ONE enabled-required path."""
     rows = conn.run("SELECT external_id FROM accounts WHERE account_id=:a AND enabled", a=account_id)
     if not rows:
         raise BrokerError(
@@ -209,14 +211,25 @@ def _validate(event, conn):
 #    db.py/sg_rule_dispatcher.py's rds-db IAM-auth pattern — never a cached credential. ────────────
 
 def _load_source_row(conn, flow_source_id):
+    """Round-4 CI-review finding (L3, items 1 + 3): this used to (a) resolve `external_id` via a
+    bare `SELECT external_id FROM accounts WHERE account_id=:a` — no `AND enabled` — falling back to
+    `None` on a miss, so `_assumed_session` would still attempt a guard-less `sts:AssumeRole` for a
+    disabled or unregistered account; and (b) never look at `sg_flow_sources.enabled` at all, so a
+    disabled flow source (the same disable switch the daily dispatcher's `WHERE enabled` and
+    `sg_rule_scan.load_source`'s explicit raise both already honor) could still be scanned by calling
+    this broker's `query_by_source` action directly, bypassing the dispatcher entirely. Both gaps are
+    closed here: `external_id` is now resolved via `_resolve_external_id` (the SAME enabled-required
+    helper `validate` uses), and the `enabled` column is selected and enforced."""
     rows = conn.run(
-        "SELECT account_id, region, workgroup, database_name, table_name, validation "
+        "SELECT account_id, region, workgroup, database_name, table_name, validation, enabled "
         "FROM sg_flow_sources WHERE id=:id", id=flow_source_id)
     if not rows:
         raise BrokerError(f"no sg_flow_sources row for id={flow_source_id!r}")
     r = rows[0]
-    account_id, region, workgroup, database_name, table_name, validation = (
-        r[0], r[1], r[2], r[3], r[4], r[5])
+    account_id, region, workgroup, database_name, table_name, validation, enabled = (
+        r[0], r[1], r[2], r[3], r[4], r[5], r[6])
+    if not enabled:
+        raise BrokerError(f"sg_flow_sources id={flow_source_id!r} is disabled — refusing to scan")
     if isinstance(validation, str):
         import json as _json
         try:
@@ -224,8 +237,7 @@ def _load_source_row(conn, flow_source_id):
         except (ValueError, TypeError):
             validation = {}
     validation = validation or {}
-    ext_rows = conn.run("SELECT external_id FROM accounts WHERE account_id=:a", a=account_id)
-    external_id = ext_rows[0][0] if ext_rows else None
+    external_id = _resolve_external_id(conn, account_id)
     return {
         "account_id": account_id, "region": region, "workgroup": workgroup,
         "database_name": database_name, "table_name": table_name, "validation": validation,
@@ -383,6 +395,21 @@ def _query_by_source(event, conn):
             raise BrokerError(
                 "continuation.query_execution_id does not match the resolved source's own query — "
                 "refusing to page results of a foreign Athena query")
+        # Round-4 CI-review finding (L3, item 4): the initial `_run_athena_query` call rejects an
+        # over-budget execution ONLY after it completes (Athena has already run it — cost is
+        # already incurred), but that rejection response still includes `query_execution_id`. Before
+        # this fix, a continuation call re-verified workgroup+SQL identity (round-3 finding #5) but
+        # never rechecked `DataScannedInBytes`, so a query that WAS rejected as over-budget could
+        # still have its results paged out via `continuation` — the byte-budget control only ever
+        # gated the FIRST page. Reuse the SAME `get_query_execution` response already fetched above
+        # (no extra API call) to re-check the scanned bytes against this source's own resolved
+        # budget before paging any further.
+        scanned_bytes = int((exec_.get("Statistics") or {}).get("DataScannedInBytes") or 0)
+        if scanned_bytes > max_bytes:
+            return {
+                "ok": False, "reason": "scan-bytes budget exceeded", "query_execution_id": qid,
+                "data_scanned_bytes": scanned_bytes,
+            }
         _, raw_rows, next_token = _fetch_page(athena, qid, continuation.get("next_token"), first_page=False)
         return {
             "ok": True, "rows": _rows_as_dicts(columns, raw_rows), "columns": columns,

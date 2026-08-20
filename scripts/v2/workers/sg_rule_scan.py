@@ -48,6 +48,17 @@ class SourceInvalid(Exception):
     pass
 
 
+class AccountNotRegistered(Exception):
+    """Round-4 CI-review finding (L3, item 2): raised by `account_external_id` when `account_id`
+    has no enabled row in the `accounts` table — the SAME confused-deputy guard
+    `sg_rule_athena_broker.py`'s `_resolve_external_id` already enforces for Role B. Before this
+    fix, `account_external_id` resolved external_id with a bare `SELECT ... WHERE account_id=:a`
+    (no `AND enabled`) and fell back to `None` on a miss, so `_assumed_session` below would still
+    attempt `sts:AssumeRole` into `AWSopsReadOnlyRole` with NO ExternalId for a disabled or
+    unregistered account — disabling an account never revoked Role A access."""
+    pass
+
+
 # ── Source metadata + cross-account clients (Role A) ─────────────────────────────────────────────
 
 def load_source(conn, account_id, region):
@@ -98,8 +109,21 @@ def readonly_ec2_client(account_id, region, external_id=None):
 
 
 def account_external_id(conn, account_id):
-    rows = conn.run("SELECT external_id FROM accounts WHERE account_id=:a", a=account_id)
-    return rows[0][0] if rows else None
+    """Resolve `external_id` from the trusted `accounts` table for `account_id`, requiring an
+    `enabled` row — identical enforcement to `sg_rule_athena_broker.py`'s `_resolve_external_id`
+    (round-4 CI-review finding: this Role A path used to omit the `enabled` predicate and fall back
+    to `None`, letting a disabled/unregistered account still get a guard-less AssumeRole). Duplicated
+    (rather than imported from the broker module) to keep the Fargate worker's deployable code
+    independent of the isolated broker Lambda's (ADR-019 §4 draws that isolation at the IAM-grant
+    boundary, but there's no reason to add a cross-deployable Python import for a pure SQL lookup) —
+    the SAME logic, kept in lockstep by test coverage in both test_sg_rule_scan.py and
+    test_sg_rule_athena_broker.py."""
+    rows = conn.run("SELECT external_id FROM accounts WHERE account_id=:a AND enabled", a=account_id)
+    if not rows:
+        raise AccountNotRegistered(
+            f"account_id {account_id!r} is not a registered, enabled account in the accounts "
+            "table — refusing to assume a role for an unregistered account")
+    return rows[0][0]
 
 
 # ── Step 2: SGR + ENI-membership snapshot ─────────────────────────────────────────────────────────
@@ -709,7 +733,11 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
     account_id = payload["account_id"]
     region = payload["region"]
     source = load_source(conn, account_id, region)
-    ext_id = account_external_id(conn, account_id)
+    # The host account never assumes a role at all (see `_assumed_session`'s own bypass below) —
+    # the confused-deputy `accounts.enabled` guard exists to gate cross-account AssumeRole, not the
+    # host's own in-account calls, so it is skipped only in that one case, exactly mirroring
+    # `_assumed_session`'s existing bypass condition.
+    ext_id = None if account_id == HOST_ACCOUNT_ID else account_external_id(conn, account_id)
 
     ec2 = (ec2_client_factory or readonly_ec2_client)(account_id, region, ext_id)
     now = dt.datetime.now(dt.timezone.utc)

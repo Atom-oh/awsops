@@ -82,6 +82,48 @@ def test_load_source_ok_when_pending_or_valid():
     assert row["workgroup"] == "wg"
 
 
+# ── round-4 CI-review finding (L3, item 2): `account_external_id` (Role A / AWSopsReadOnlyRole
+#    assume) must apply the SAME confused-deputy/enabled guard as the Athena broker's
+#    `_resolve_external_id` — a disabled or unregistered account must be refused outright, never
+#    silently assumed with no ExternalId. ──────────────────────────────────────────────────────────
+
+def test_account_external_id_refuses_a_disabled_account():
+    conn = FakeConn({"FROM accounts": [[]]})  # `AND enabled` predicate means a disabled row -> no match
+    with pytest.raises(scan.AccountNotRegistered, match="registered"):
+        scan.account_external_id(conn, "999999999999")
+
+
+def test_account_external_id_refuses_an_unregistered_account():
+    conn = FakeConn({"FROM accounts": [[]]})  # no row at all
+    with pytest.raises(scan.AccountNotRegistered, match="registered"):
+        scan.account_external_id(conn, "888888888888")
+
+
+def test_account_external_id_returns_value_for_a_registered_enabled_account():
+    conn = FakeConn({"FROM accounts": [[("ext-abc",)]]})
+    assert scan.account_external_id(conn, "123456789012") == "ext-abc"
+
+
+def test_run_refuses_disabled_account_before_any_assume_role(monkeypatch):
+    """A disabled/unregistered target account must never reach `_assumed_session` — `run()` must
+    propagate `AccountNotRegistered` rather than falling through to a guard-less AssumeRole with no
+    ExternalId."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[]],  # disabled/unregistered — no enabled row
+    })
+
+    def must_never_be_called(*a, **k):
+        raise AssertionError("must never assume a role for a disabled/unregistered account")
+
+    monkeypatch.setattr(scan, "readonly_ec2_client", must_never_be_called)
+    with pytest.raises(scan.AccountNotRegistered):
+        scan.run({"account_id": "123456789012", "region": "ap-northeast-2"}, conn)
+
+
 # ── watermark ─────────────────────────────────────────────────────────────────────────────────────
 
 def test_last_committed_day_none_when_no_succeeded_runs():
@@ -1030,7 +1072,7 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
         "FROM sg_flow_sources": [[
             (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
         ]],
-        "FROM accounts": [[]],
+        "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],  # no watermark yet -> first run starts at source created day
         "sg_rule_inventory_versions": [[]],
         "FROM sg_eni_membership_snapshots": [[]],
@@ -1058,7 +1100,7 @@ def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):
         "FROM sg_flow_sources": [[
             (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
         ]],
-        "FROM accounts": [[]],
+        "FROM accounts": [[("ext-abc",)]],
         "sg_rule_inventory_versions": [[]],
     })
     result = scan.run(
@@ -1076,7 +1118,7 @@ def test_run_short_circuits_pending_source_without_invoking_broker(monkeypatch):
         "FROM sg_flow_sources": [[
             (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "pending"}), utc(2020, 1, 1)),
         ]],
-        "FROM accounts": [[]],
+        "FROM accounts": [[("ext-abc",)]],
         "sg_rule_inventory_versions": [[]],
     })
     fake_lambda = FakeLambda({"ok": True, "rows": []})
@@ -1098,7 +1140,7 @@ def test_run_writes_failed_run_row_on_athena_query_failure(monkeypatch):
         "FROM sg_flow_sources": [[
             (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
         ]],
-        "FROM accounts": [[]],
+        "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],
         "sg_rule_inventory_versions": [[]],
         "FROM sg_eni_membership_snapshots": [[]],
@@ -1123,7 +1165,7 @@ def test_run_writes_failed_run_row_on_process_day_exception(monkeypatch):
         "FROM sg_flow_sources": [[
             (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
         ]],
-        "FROM accounts": [[]],
+        "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],
         "sg_rule_inventory_versions": [[]],
         "FROM sg_eni_membership_snapshots": [[]],
