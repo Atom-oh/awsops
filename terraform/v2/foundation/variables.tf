@@ -293,3 +293,33 @@ variable "legacy_email_owner_match" {
   default     = true
   description = "Accept the legacy email-keyed ownership match on read. Set false only after the owner-sub backfill reports a clean run."
 }
+
+# ADR-019 / docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md — SG Rules &
+# Usage daily Athena flow-log evidence pipeline. false (default) = 0 scheduler/IAM/broker-Lambda
+# resources, $0; the Rules page still shows live DescribeSecurityGroupRules inventory with activity
+# permanently 'not_configured'. REQUIRES workers_enabled=true (reuses the worker role/pg8000
+# layer/VPC/jobs queue) — see sg-rules.tf's local.sgr gate.
+variable "sg_rule_activity_enabled" {
+  type        = bool
+  default     = false
+  description = "SG Rules & Usage: daily Athena flow-log evidence pipeline (ADR-019). false = 0 resources/cost. Requires workers_enabled."
+}
+
+# BASELINE.md §2 register row — Network Path Check: saveable, async, read-only path-policy checklist
+# (`network_path` job, docs/superpowers/specs/2026-08-13-network-path-check-design.md, Approved).
+# false (default) = 0 IAM widening/resources, $0 — the routes/enqueue/dispatcher branch/worker
+# environment all fail closed (see network-path.tf's local.npc gate). REQUIRES workers_enabled=true.
+# Read-only static analysis only (SG/NACL/route/TGW/K8s-policy/L7 describe) — no Reachability
+# Analyzer path creation/execution (no ec2:CreateNetworkInsightsPath/DeleteNetworkInsightsPath
+# grant). The worker role's FIRST extension to sts:AssumeRole -> AWSopsReadOnlyRole is added when
+# this is the only network_path_check-style feature to need it; it reuses the existing web/
+# Steampipe/agent pattern, not a new trust relationship (BASELINE.md's own wording).
+variable "network_path_check_enabled" {
+  type        = bool
+  default     = false
+  description = "Network Path Check: saveable async read-only network path policy checklist (BASELINE.md §2 register row, governed under ADR-019's Decision / design spec 2026-08-13). false = 0 resources/IAM, $0. Requires workers_enabled."
+  validation {
+    condition     = !var.network_path_check_enabled || var.workers_enabled
+    error_message = "network_path_check_enabled requires workers_enabled=true (reuses the worker role/pg8000 layer/VPC + jobs queue)."
+  }
+}

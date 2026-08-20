@@ -38,6 +38,15 @@ COPY action_catalog.py remediation_executor.py remediation_executor_cli.py ./
 # AI Diagnosis (Plan 1): the `report` handler imports the diagnosis package (sources/sections/
 # report/db). Ship it in the worker image so handlers.REGISTRY["report"] resolves at runtime.
 COPY diagnosis/ ./diagnosis/
+# SG Rules & Usage (ADR-019): the `sg_rule_scan` handler (fargate runtime, handlers.REGISTRY)
+# imports sg_rule_scan.py, which imports sg_rule_matching.py. sg_rule_athena_broker.py does not run
+# in this image (it's its own isolated Lambda, sg-rules.tf) but ships here too for local/manual
+# runs and so the module set stays byte-identical to the source tree.
+COPY sg_rule_scan.py sg_rule_matching.py sg_rule_athena_broker.py ./
+# Network Path Check (BASELINE.md §2 register row): the `network_path` handler (fargate runtime,
+# handlers.REGISTRY) imports network_path.py, which imports network_path_adapters.py and
+# network_path_reduce.py.
+COPY network_path.py network_path_adapters.py network_path_reduce.py ./
 # CMD (not ENTRYPOINT): the SFN ContainerOverrides command REPLACES CMD but is APPENDED to an
 # ENTRYPOINT. With ENTRYPOINT the effective argv would double ("python fargate_worker.py python
 # fargate_worker.py --job-id X") and argparse would reject the extra positionals → every Fargate

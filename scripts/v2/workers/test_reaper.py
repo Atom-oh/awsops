@@ -44,3 +44,51 @@ def test_reaper_reports_zero_when_none_stale(monkeypatch):
     monkeypatch.setattr(reaper.db, "connect", lambda: conn)
     out = reaper.lambda_handler(None, None)
     assert out["reaped_reports"] == 0
+
+
+class FakeConnWithNetworkPathRows:
+    """Network Path Check reaper coverage (design spec "Error handling": "Stale run -> a dedicated
+    reaper query added to scripts/v2/workers/reaper.py reconciles network_path_runs the same way it
+    already does for worker_jobs/diagnosis_reports")."""
+
+    def __init__(self, running_rows, queued_rows):
+        self.calls = []
+        self.running_rows = running_rows
+        self.queued_rows = queued_rows
+
+    def run(self, sql, **kw):
+        self.calls.append((sql, kw))
+        if "network_path_runs" in sql and "status='running'" in sql:
+            return self.running_rows
+        if "network_path_runs" in sql and "status='queued'" in sql:
+            return self.queued_rows
+        return []
+
+    def close(self):
+        pass
+
+
+def test_reaper_reaps_stale_network_path_runs(monkeypatch):
+    import reaper
+    conn = FakeConnWithNetworkPathRows(running_rows=[["r1"], ["r2"]], queued_rows=[["r3"]])
+    monkeypatch.setattr(reaper.db, "connect", lambda: conn)
+
+    out = reaper.lambda_handler(None, None)
+
+    assert out["reaped_network_path_runs_running"] == 2
+    assert out["reaped_network_path_runs_queued"] == 1
+    run_calls = [c for c in conn.calls if "network_path_runs" in c[0]]
+    assert any("overall_status='failed'" in c[0] for c in run_calls)
+    assert any("finished_at=now()" in c[0] for c in run_calls)
+    assert any("make_interval" in c[0] for c in run_calls)
+
+
+def test_reaper_skips_network_path_queued_reap_when_dispatch_disabled(monkeypatch):
+    import reaper
+    conn = FakeConnWithNetworkPathRows(running_rows=[], queued_rows=[["r4"]])
+    monkeypatch.setattr(reaper.db, "connect", lambda: conn)
+    monkeypatch.setattr(reaper, "_dispatch_enabled", lambda: False)
+
+    out = reaper.lambda_handler(None, None)
+
+    assert out["reaped_network_path_runs_queued"] == "skipped (dispatch ESM disabled)"
