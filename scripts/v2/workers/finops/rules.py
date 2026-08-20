@@ -169,27 +169,38 @@ def ebs_unattached(conn, ce_calls):
 
 
 def _ebs_stale_account_coverage_gaps(conn):
-    """A review round caught a false-negative class the per-row stale guard above cannot see:
-    `WHERE data->>'state' = 'available'` is evaluated against a SNAPSHOT — if an account's whole
-    ebs_volume snapshot is stale (sync_lambda.py's M5 guard preserves an unreachable account's rows
-    rather than pruning them), a volume that was `in-use` at snapshot time and has since become
-    genuinely unattached produces NO row here at all: no finding, no guard, no coverage signal,
-    while the run still records `succeeded`. That can never be fixed by re-deriving "is it
-    unattached now" from stale data — the only honest fix is to surface the coverage gap itself,
-    so a viewer can tell "confirmed no waste" apart from "this account's data is too old to know."
-    Scans ALL ebs_volume rows (any state) per (account_id, region), and for any scope whose most
-    recent captured_at is stale, emits one coverage-gap item (NULL amount, `stale=True` so the
-    existing stale_inventory_data guard covers it, never counted as `active` savings)."""
+    """Covers TWO false-clean coverage gaps a review round caught the per-row stale guard above
+    cannot see — both leave an account looking "confirmed no waste" when the truth is "never
+    checked":
+
+    1. STALE scope: `WHERE data->>'state' = 'available'` is evaluated against a SNAPSHOT — if an
+       account's whole ebs_volume snapshot is stale (sync_lambda.py's M5 guard preserves an
+       unreachable account's rows rather than pruning them), a volume that was `in-use` at
+       snapshot time and has since become genuinely unattached produces NO row here at all: no
+       finding, no guard, no coverage signal, while the run still records `succeeded`.
+    2. NEVER-SYNCED scope: an `enabled` account in the `accounts` registry whose Steampipe
+       connection has never once succeeded has ZERO ebs_volume rows in inventory_resources —
+       indistinguishable, by row absence alone, from "confirmed zero EBS volumes." Only
+       cross-referencing the account registry (rows that SHOULD exist) can surface this; the
+       stale-timestamp check above sees nothing to compare against.
+
+    Neither can be fixed by re-deriving "is it unattached now" from data that was never captured
+    or is too old — the only honest fix is to surface the coverage gap itself, so a viewer can
+    tell "confirmed no waste" apart from "this account's data is missing or too old to know."
+    Emits one coverage-gap item per gap (NULL amount, `stale=True` so the existing
+    stale_inventory_data guard covers it, never counted as `active` savings)."""
     rows = conn.run(
         "SELECT account_id, region, MAX(captured_at) FROM inventory_resources "
         "WHERE resource_type = 'ebs_volume' GROUP BY account_id, region"
     )
+    seen_accounts = set()
     out = []
     for account_id, region, latest_captured_at in rows or []:
+        seen_accounts.add(account_id)
         if not _is_stale(latest_captured_at, _INVENTORY_STALE_AFTER_HOURS):
             continue
         out.append({
-            "resource_id": f"__coverage_gap__:{account_id}:{region}",
+            "resource_id": f"__coverage_gap__:stale:{account_id}:{region}",
             "account_id": account_id,
             "region": region,
             "title": f"EBS inventory data for {account_id}/{region} is stale — unattached-volume "
@@ -198,6 +209,23 @@ def _ebs_stale_account_coverage_gaps(conn):
             "monthly_savings_usd": None,
             "evidence": {"account_id": account_id, "region": region,
                          "latest_captured_at": str(latest_captured_at), "coverage_gap": True},
+            "tags": {},
+            "lookback_days": None,
+            "stale": True,
+        })
+    for account_id, region in conn.run("SELECT account_id, region FROM accounts WHERE enabled = true") or []:
+        if account_id in seen_accounts:
+            continue
+        out.append({
+            "resource_id": f"__coverage_gap__:never_synced:{account_id}",
+            "account_id": account_id,
+            "region": region,
+            "title": f"No EBS inventory data has ever been synced for account {account_id} — "
+                     f"unattached-volume coverage is entirely unavailable",
+            "category": "storage",
+            "monthly_savings_usd": None,
+            "evidence": {"account_id": account_id, "region": region, "coverage_gap": True,
+                         "never_synced": True},
             "tags": {},
             "lookback_days": None,
             "stale": True,

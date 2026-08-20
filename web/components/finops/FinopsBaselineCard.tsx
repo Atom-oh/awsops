@@ -121,11 +121,13 @@ export default function FinopsBaselineCard() {
   const unknownCount = confident.length - knownConfident.length;
 
   // ec2_rightsizing/rds_rightsizing only ever evaluate the host account's own Compute-Optimizer
-  // region — a review round caught that filtering to a different account, or a different region
-  // of the host account, silently rendered "no waste found" as if rightsizing had been checked
-  // there too, when it was never queried at all. `accountFilter` is null in the fleet-wide view,
-  // where per-finding account/region labels already disambiguate this — the notice only applies
-  // to an explicitly account-scoped view that isn't the evaluated scope.
+  // region. A review round caught that a cross-account filter rendered "no waste found" as if
+  // rightsizing had been checked there; a stop-time review then caught the REMAINING half of the
+  // same false-clean path — even the host-account view never disclosed that only ONE region was
+  // queried, so a host account with resources in other regions still read as fully clean. The
+  // coverage scope is therefore stated unconditionally (the page has no region selector to
+  // compare against, so the honest move is to name what was actually evaluated), with a stronger
+  // wording when the selected account isn't the evaluated one at all.
   const coScope = data?.coRightsizingScope;
   const rightsizingUnevaluatedForThisScope =
     !!data?.accountFilter && !!coScope && data.accountFilter !== coScope.accountId;
@@ -158,11 +160,16 @@ export default function FinopsBaselineCard() {
           </span>
         )}
       </div>
-      {rightsizingUnevaluatedForThisScope && (
-        <p className="text-[11px] text-ink-400 mb-2" data-testid="finops-baseline-rightsizing-unevaluated">
+      {rightsizingUnevaluatedForThisScope ? (
+        <p className="text-[11px] text-amber-600 mb-2" data-testid="finops-baseline-rightsizing-unevaluated">
           {tt('EC2/RDS 리사이징은 호스트 계정의 Compute Optimizer 리전만 평가합니다 — 이 계정에서는 평가되지 않았습니다.')}
         </p>
-      )}
+      ) : coScope ? (
+        <p className="text-[11px] text-ink-400 mb-2" data-testid="finops-baseline-rightsizing-scope">
+          {tt('EC2/RDS 리사이징 평가 범위')}: {coScope.accountId === 'self' ? tt('호스트 계정') : coScope.accountId} · {coScope.region}
+          {' '}({tt('다른 리전은 평가되지 않았습니다')})
+        </p>
+      ) : null}
       {!loaded ? (
         <p className="text-[13px] text-ink-400">{tt('로딩 중…')}</p>
       ) : fetchError ? (

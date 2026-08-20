@@ -307,7 +307,10 @@ describe('FinopsBaselineCard', () => {
     setActiveAccount('self');
   });
 
-  it('omits the rightsizing-unevaluated warning when scoped to the host account itself', async () => {
+  it('discloses the single-region rightsizing coverage even on the host-account view', async () => {
+    // A stop-time review caught the remaining half of the same false-clean path: the cross-account
+    // warning covered a different ACCOUNT, but the host-account view still never disclosed that
+    // only ONE region was queried — a host account with resources elsewhere read as fully clean.
     setActiveAccount('self');
     vi.stubGlobal('fetch', mockFetch({
       enabled: true, accountFilter: 'self', findings: [],
@@ -315,7 +318,9 @@ describe('FinopsBaselineCard', () => {
       coRightsizingScope: { accountId: 'self', region: 'ap-northeast-2' },
     }));
     render(<FinopsBaselineCard />);
-    await waitFor(() => screen.getByTestId('finops-baseline-empty'));
+    await waitFor(() => screen.getByTestId('finops-baseline-rightsizing-scope'));
+    expect(screen.getByText(/ap-northeast-2/)).toBeTruthy();
+    // The stronger cross-account variant must NOT also fire for the evaluated account.
     expect(screen.queryByTestId('finops-baseline-rightsizing-unevaluated')).toBeNull();
   });
 

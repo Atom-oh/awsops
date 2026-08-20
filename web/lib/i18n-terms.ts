@@ -1334,6 +1334,8 @@ export const TERMS: Record<string, Pair> = {
   '주의': { en: 'Note', zh: '注意', ja: '注意' },
   'EC2/RDS 리사이징은 호스트 계정의 Compute Optimizer 리전만 평가합니다 — 이 계정에서는 평가되지 않았습니다.': { en: 'EC2/RDS rightsizing only evaluates the host account’s own Compute Optimizer region — it was not evaluated for this account.', zh: 'EC2/RDS 调整规模仅评估主机账号自身的 Compute Optimizer 区域 — 该账号未被评估。', ja: 'EC2/RDS のライトサイジングはホストアカウント自身の Compute Optimizer リージョンのみを評価します — このアカウントでは評価されていません。' },
   '배치가 실행 중입니다 — 잠시 후 다시 확인해주세요.': { en: 'A batch is currently running — please check back shortly.', zh: '批处理正在执行中 — 请稍后再查看。', ja: 'バッチが実行中です — しばらくしてから再度確認してください。' },
+  'EC2/RDS 리사이징 평가 범위': { en: 'EC2/RDS rightsizing coverage', zh: 'EC2/RDS 调整规模评估范围', ja: 'EC2/RDS ライトサイジング評価範囲' },
+  '다른 리전은 평가되지 않았습니다': { en: 'other regions were not evaluated', zh: '其他区域未被评估', ja: '他のリージョンは評価されていません' },
 
 };
 

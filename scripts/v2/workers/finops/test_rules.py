@@ -11,9 +11,13 @@ class FakeConn:
     sync that found nothing); 'missing' -> no inventory_sync_runs row at all; 'failed' -> a row with
     status='failed'; a datetime -> a succeeded run that finished at that timestamp (used to simulate
     staleness)."""
-    def __init__(self, rows, sync_run='ok'):
+    def __init__(self, rows, sync_run='ok', enabled_accounts=None):
         self.rows = rows
         self.sync_run = sync_run
+        # (account_id, region) pairs the 'accounts' registry reports as enabled — defaults to []
+        # so existing fixtures (which never populated this table) don't spuriously trigger the
+        # never-synced coverage-gap check.
+        self.enabled_accounts = enabled_accounts or []
 
     def run(self, sql, **kw):
         if "FROM inventory_sync_runs" in sql:
@@ -23,6 +27,8 @@ class FakeConn:
                 return [('failed', datetime.now(timezone.utc))]
             finished_at = self.sync_run if isinstance(self.sync_run, datetime) else datetime.now(timezone.utc)
             return [('succeeded', finished_at)]
+        if "FROM accounts" in sql:
+            return self.enabled_accounts
         if "GROUP BY account_id, region" in sql:
             latest = {}
             for resource_id, account_id, region, data, captured_at in self.rows:
@@ -97,6 +103,37 @@ def test_ebs_unattached_row_within_threshold_is_not_flagged_stale():
                        {"state": "available", "size": 20, "volume_type": "gp3"}, recent)])
     out = rules.ebs_unattached(conn, [0])
     assert out[0]["stale"] is False
+
+
+def test_ebs_unattached_flags_an_enabled_account_that_has_never_synced_any_ebs_data():
+    # Second false-clean coverage path a stop-time review caught: an enabled account whose
+    # Steampipe connection has never once succeeded has ZERO ebs_volume rows, which by row
+    # absence alone is indistinguishable from "confirmed zero EBS volumes." Only cross-referencing
+    # the accounts registry (rows that SHOULD exist) surfaces it — the stale-timestamp check has
+    # no timestamp to compare against.
+    conn = FakeConn(
+        [("vol-1", "111111111111", "ap-northeast-2",
+          {"state": "available", "size": 10, "volume_type": "gp3"}, _NOW)],
+        enabled_accounts=[("111111111111", "ap-northeast-2"), ("999999999999", "us-west-2")],
+    )
+    out = rules.ebs_unattached(conn, [0])
+    gaps = [f for f in out if f["evidence"].get("never_synced")]
+    assert len(gaps) == 1
+    assert gaps[0]["account_id"] == "999999999999"   # the synced account is NOT flagged
+    assert gaps[0]["monthly_savings_usd"] is None
+    assert gaps[0]["stale"] is True                  # demoted via the stale_inventory_data guard
+
+
+def test_ebs_unattached_does_not_flag_never_synced_for_an_account_with_data():
+    # A healthy, recently-synced enabled account must not produce a coverage-gap item — that would
+    # make the honest-degradation signal meaningless noise on every run.
+    conn = FakeConn(
+        [("vol-1", "self", "ap-northeast-2",
+          {"state": "available", "size": 10, "volume_type": "gp3"}, _NOW)],
+        enabled_accounts=[("self", "ap-northeast-2")],
+    )
+    out = rules.ebs_unattached(conn, [0])
+    assert [f for f in out if f["evidence"].get("coverage_gap")] == []
 
 
 def test_ebs_unattached_scopes_each_row_to_its_own_account_and_region():
