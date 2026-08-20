@@ -137,6 +137,29 @@ class TestNacl:
         # the peer falls through to the broader allow rule at 100.
         assert r["status"] == "allowed"
 
+    # ── L4 finding #10: deny-side asymmetry — a probe-scoped return DENY must not generalize ──────
+
+    def test_return_deny_scoped_to_probed_port_only_is_conditional_not_blocked(self):
+        """A return-path deny that matches ONLY because it covers the single probed ephemeral port
+        (49152) must NOT generalize to a confident `blocked` — a different ephemeral port might
+        still be allowed. Before this fix, ANY matched deny (however narrowly scoped) produced a
+        confident `blocked`, asymmetric with the allow-side scoping fix."""
+        fwd = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        ret = [{"rule_number": 50, "protocol": "tcp", "from_port": ad.EPHEMERAL_PROBE_PORT,
+                 "to_port": ad.EPHEMERAL_PROBE_PORT, "action": "deny"},
+               {"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443)
+        assert r["status"] == "conditional"
+
+    def test_return_deny_covering_full_ephemeral_range_is_confidently_blocked(self):
+        """A deny that genuinely spans the full 0-65535 ephemeral range (unrestricted) legitimately
+        blocks every ephemeral port, so a confident `blocked` remains correct."""
+        fwd = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        ret = [{"rule_number": 50, "protocol": "tcp", "from_port": 0, "to_port": 65535,
+                 "action": "deny"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443)
+        assert r["status"] == "blocked"
+
 
 # ── Routes ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -492,6 +515,49 @@ class TestK8sNetworkPolicy:
         policies, that's a real default-allow — must not regress to `unknown`."""
         r = ad.eval_k8s_network_policy([], {"app": "orders"}, "ingress", data_available=True)
         assert r["status"] == "allowed"
+
+    # ── L2 finding #2: ipBlock.except must carve the excluded sub-range back OUT of the allow ────
+
+    def test_ip_block_except_excludes_peer_inside_the_exception(self):
+        """A peer matching the main `cidr` but ALSO matching an `except` sub-CIDR must NOT be
+        reported allowed by that rule — before this fix, `except` was never read at all, so this
+        peer was a false-allow."""
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"ip_block": {"cidr": "10.0.0.0/8", "except": ["10.1.0.0/16"]}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_ip="10.1.2.3")
+        assert r["status"] == "blocked"
+
+    def test_ip_block_except_still_allows_peer_outside_the_exception(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"ip_block": {"cidr": "10.0.0.0/8", "except": ["10.1.0.0/16"]}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_ip="10.2.2.3")
+        assert r["status"] == "allowed"
+
+    # ── L2 finding #2: namespaceSelector with insufficient data -> unknown, never allowed/blocked ─
+
+    def test_namespace_selector_without_namespace_data_is_unknown(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"namespace_selector": {"team": "platform"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "other"})
+        assert r["status"] == "unknown"
+
+    def test_namespace_selector_matching_with_namespace_data_allows(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"namespace_selector": {"team": "platform"}}]}]}]
+        r = ad.eval_k8s_network_policy(
+            policies, {"app": "orders"}, "ingress",
+            peer_namespace_labels={"team": "platform"},
+        )
+        assert r["status"] == "allowed"
+
+    def test_namespace_selector_non_matching_with_namespace_data_blocks(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"namespace_selector": {"team": "platform"}}]}]}]
+        r = ad.eval_k8s_network_policy(
+            policies, {"app": "orders"}, "ingress",
+            peer_namespace_labels={"team": "other-team"},
+        )
+        assert r["status"] == "blocked"
 
 
 # ── Calico / Cilium / Istio bounded stubs ───────────────────────────────────────────────────────

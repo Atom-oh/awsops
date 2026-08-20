@@ -159,12 +159,41 @@ def eval_nacl(forward_entries, return_entries, protocol, port, peer_ip=None, lay
             "evidence": [fwd] if fwd else [],
         }
     ret = _first_match(return_entries, protocol, EPHEMERAL_PROBE_PORT, peer_ip)
-    if ret is None or ret.get("action") != "allow":
+    if ret is None:
         return {
             "layer": layer, "status": "blocked",
-            "resource": ret.get("resource") if ret else None,
+            "resource": None,
             "summary": f"NACL return rule denies the ephemeral probe port {EPHEMERAL_PROBE_PORT}",
-            "evidence": [ret] if ret else [],
+            "evidence": [],
+        }
+    if ret.get("action") != "allow":
+        # MAJOR fix (L4 finding #10, asymmetric with the allow-side fix above): a DENY that matched
+        # only because it happened to cover the single probed ephemeral port must not generalize to
+        # a confident `blocked` — a different ephemeral port might still be allowed. Only a deny
+        # whose OWN port range already spans the full 0-65535 ephemeral space (genuinely
+        # unrestricted — e.g. the implicit default-deny catch-all, or an explicit wildcard deny)
+        # can confidently produce `blocked`; a deny scoped to a narrower range yields `conditional`,
+        # matching the allow side's "generalize only when genuinely unrestricted" rule.
+        unrestricted_deny = _port_in_range(ret, 0) and _port_in_range(ret, 65535)
+        if unrestricted_deny:
+            return {
+                "layer": layer, "status": "blocked",
+                "resource": ret.get("resource"),
+                "summary": (
+                    f"NACL return rule denies the ephemeral probe port {EPHEMERAL_PROBE_PORT}; "
+                    "deny covers the full 0-65535 range (genuinely unrestricted) — generalized deny"
+                ),
+                "evidence": [ret],
+            }
+        return {
+            "layer": layer, "status": "conditional",
+            "resource": ret.get("resource"),
+            "summary": (
+                f"NACL return rule denies only the probed ephemeral port {EPHEMERAL_PROBE_PORT} "
+                "(not the full ephemeral range) — a different ephemeral port may still be allowed; "
+                "scoped verdict, not a generalized block"
+            ),
+            "evidence": [fwd, ret],
         }
     unrestricted_return = _port_in_range(ret, 0) and _port_in_range(ret, 65535)
     if unrestricted_return:
@@ -515,7 +544,8 @@ def _k8s_port_matches(rule, protocol, port):
 
 
 def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, peer_ip=None,
-                             protocol=None, port=None, data_available=True):
+                             protocol=None, port=None, data_available=True,
+                             peer_namespace_labels=None):
     """`policies`: list of {"pod_selector": {...}, "policy_types": ["Ingress","Egress"] (optional —
     see `_policy_type_applies` for the real K8s defaulting semantics when omitted),
     "ingress"/"egress": [{"from"/"to": [...], "ports": [...]}]}.
@@ -532,6 +562,16 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
     NetworkPolicies, and that legitimately means default-allow) must stay distinguishable from "we
     don't actually know." Defaults to `True` so existing "no policy found, and we know it" callers
     are unaffected.
+
+    MAJOR fix (L2 finding #2): an `ipBlock` peer with an `except` list of CIDRs must NOT match a
+    peer whose IP falls inside one of those excluded CIDRs, even though it also falls inside the
+    rule's main `cidr` — `except` carves that sub-range back OUT of the allow. Also, a peer entry
+    using `namespaceSelector` (alone or combined with `podSelector`) selects pods by NAMESPACE
+    labels this function has no way to evaluate unless the caller supplies `peer_namespace_labels`
+    — silently skipping such a peer would let a real match fall through to a confident `blocked`
+    (a false-deny), so when at least one candidate rule/peer could only be resolved by
+    `namespaceSelector` data the caller didn't provide, the verdict is downgraded to `unknown`
+    rather than `blocked` (never invent a confident verdict from data we don't have).
     """
     if not data_available:
         return {"layer": "k8s-networkpolicy", "status": "unknown", "resource": None,
@@ -550,6 +590,7 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
         return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                 "summary": "no NetworkPolicy selects this pod for this direction (default allow)",
                 "evidence": []}
+    saw_unresolvable_namespace_selector = False
     for policy in selecting:
         for rule in policy.get(key, []):
             if not _k8s_port_matches(rule, protocol, port):
@@ -559,12 +600,36 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
                 return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                         "summary": "matching NetworkPolicy rule allows all peers", "evidence": [rule]}
             for peer in peers:
+                has_ns_selector = "namespace_selector" in peer
+                if has_ns_selector and peer_namespace_labels is None:
+                    # Can't evaluate a namespaceSelector peer without namespace label data — do
+                    # NOT fall through to a confident blocked; remember it and keep scanning other
+                    # peers/rules in case one of THEM produces a confident allow.
+                    saw_unresolvable_namespace_selector = True
+                    continue
+                if has_ns_selector and not _labels_match(peer["namespace_selector"], peer_namespace_labels):
+                    continue  # namespace doesn't match this peer's namespaceSelector — not this peer
+                if "pod_selector" in peer and not (peer_labels and _labels_match(peer["pod_selector"], peer_labels)):
+                    continue
+                if "pod_selector" not in peer and has_ns_selector:
+                    # namespaceSelector alone (no podSelector): matches every pod in that namespace.
+                    return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
+                            "summary": "matched namespaceSelector peer rule", "evidence": [peer]}
                 if "pod_selector" in peer and peer_labels and _labels_match(peer["pod_selector"], peer_labels):
                     return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                             "summary": "matched pod_selector peer rule", "evidence": [peer]}
                 if "ip_block" in peer and peer_ip and _cidr_contains(peer["ip_block"].get("cidr"), peer_ip):
+                    excepts = peer["ip_block"].get("except") or []
+                    if any(_cidr_contains(ex, peer_ip) for ex in excepts):
+                        continue  # excluded sub-range carves this peer back OUT of the allow
                     return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                             "summary": "matched ipBlock peer rule", "evidence": [peer]}
+    if saw_unresolvable_namespace_selector:
+        return {
+            "layer": "k8s-networkpolicy", "status": "unknown", "resource": None,
+            "summary": "a candidate NetworkPolicy rule uses namespaceSelector but the caller did "
+                       "not supply peer namespace labels — cannot confidently evaluate", "evidence": [],
+        }
     return {"layer": "k8s-networkpolicy", "status": "blocked", "resource": None,
             "summary": "pod is selected by >=1 NetworkPolicy for this direction; no rule matched the peer",
             "evidence": []}
