@@ -342,3 +342,34 @@ def test_build_day_skipdata_count_select_filters_on_skipdata():
 
 def test_rescan_window_empty_before_first_commit():
     assert m.rescan_window_days(None, window_days=2) == []
+
+
+# ── redact_sensitive (MINOR fix) ───────────────────────────────────────────────────────────────
+
+def test_redact_sensitive_strips_an_arn():
+    text = m.redact_sensitive("AccessDenied on arn:aws:iam::123456789012:role/AWSopsSgRuleAthenaRole")
+    assert "123456789012" not in text
+    assert "AWSopsSgRuleAthenaRole" not in text
+    assert "<arn-redacted>" in text
+
+
+def test_redact_sensitive_strips_a_bare_account_id():
+    text = m.redact_sensitive("could not assume role in account 123456789012")
+    assert "123456789012" not in text
+    assert "<account-redacted>" in text
+
+
+def test_redact_sensitive_strips_a_query_execution_id():
+    text = m.redact_sensitive("query abcd1234-ab12-cd34-ef56-1234567890ab failed")
+    assert "abcd1234-ab12-cd34-ef56-1234567890ab" not in text
+    assert "<id-redacted>" in text
+
+
+def test_redact_sensitive_passes_through_ordinary_text():
+    assert m.redact_sensitive("workgroup does not enforce a byte cutoff") == \
+        "workgroup does not enforce a byte cutoff"
+
+
+def test_redact_sensitive_handles_none_and_empty():
+    assert m.redact_sensitive(None) is None
+    assert m.redact_sensitive("") == ""

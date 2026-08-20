@@ -16,6 +16,24 @@ from datetime import datetime, timedelta, timezone
 
 PROTO_NAME = {"6": "tcp", "17": "udp", "1": "icmp", "58": "icmpv6"}
 
+# MINOR fix: a raw AWS exception message persisted verbatim into an operator-readable field
+# (`sg_rule_scan_runs.coverage`'s `reason`, etc.) can embed an ARN/account id/Athena
+# QueryExecutionId — strip those common leaky shapes (never a full redaction framework) before
+# persisting. Shared here since both sg_rule_scan.py and sg_rule_athena_broker.py already import
+# this boto3-free module.
+_ARN_RE = re.compile(r'arn:aws[a-zA-Z0-9-]*:[a-zA-Z0-9-]+:[a-zA-Z0-9-]*:\d{12}:[^\s\'"]+')
+_UUID_RE = re.compile(r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b')
+_ACCOUNT_ID_RE = re.compile(r'(?<!\d)\d{12}(?!\d)')
+
+
+def redact_sensitive(text):
+    if not text:
+        return text
+    text = _ARN_RE.sub("<arn-redacted>", text)
+    text = _UUID_RE.sub("<id-redacted>", text)
+    text = _ACCOUNT_ID_RE.sub("<account-redacted>", text)
+    return text
+
 # Row cap shared by the day-SELECT's own `LIMIT` and the caller-side pagination-accumulation cap
 # (L2 finding #4 / L4 finding #9(i)) — if a day's accumulated row count reaches this exact number,
 # the result MUST be treated as possibly-truncated (the LIMIT may have cut off real data), never as

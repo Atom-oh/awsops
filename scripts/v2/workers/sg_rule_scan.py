@@ -292,6 +292,13 @@ def invoke_broker_query(lambda_client, broker_arn, flow_source_id, day):
     rows = []
     continuation = None
     data_scanned_bytes = 0
+    # round-3 finding #7: the broker's `skipdata_count` describes the WHOLE day (it's only computed
+    # on the first page, alongside the main query) and was never threaded through this wrapper's
+    # return value at all — `run()`'s `coverage_flags["skipdata_count"] = body.get("skipdata_count")`
+    # therefore always read `None` from THIS function's own return dict, making the entire SKIPDATA
+    # signal dead plumbing. Carry it across the whole pagination loop (a later page's body simply
+    # won't have the key, so `body.get("skipdata_count")` naturally leaves it unchanged).
+    skipdata_count = None
     while True:
         payload = {"action": "query_by_source", "flow_source_id": flow_source_id, "day": day_str,
                     "max_bytes": MAX_QUERY_BYTES}
@@ -309,12 +316,14 @@ def invoke_broker_query(lambda_client, broker_arn, flow_source_id, day):
             return body
         rows.extend(body.get("rows") or [])
         data_scanned_bytes = body.get("data_scanned_bytes") or data_scanned_bytes
+        if body.get("skipdata_count") is not None:
+            skipdata_count = body.get("skipdata_count")
         if len(rows) >= sm.ROW_LIMIT:
             return {"ok": True, "rows": rows[:sm.ROW_LIMIT], "data_scanned_bytes": data_scanned_bytes,
-                    "truncated": True}
+                    "truncated": True, "skipdata_count": skipdata_count}
         if body.get("done", True):
             return {"ok": True, "rows": rows, "data_scanned_bytes": data_scanned_bytes,
-                    "truncated": False}
+                    "truncated": False, "skipdata_count": skipdata_count}
         continuation = {
             "query_execution_id": body.get("query_execution_id"),
             "next_token": body.get("next_token"),
@@ -333,7 +342,7 @@ def eni_group_ids_for_ip(memberships, ip):
 
 
 def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vpc, earliest_snapshot_at,
-                 stale_vpcs=None, coverage_flags=None):
+                 stale_vpcs=None, coverage_flags=None, peered_or_shared_vpc_ids_by_vpc=None):
     """Matches `flows` (already-aggregated Athena rows) against every rule for this account/region,
     classifies the whole day per rule, and commits sg_rule_activity_daily + sg_rule_scan_runs in
     ONE transaction (delete-then-insert for the day — idempotent regardless of how many times this
@@ -361,12 +370,32 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     A day flagged truncated can never commit a confident `no_observed_evidence` for a rule with zero
     matches — it is downgraded to `unassessable` instead (an incomplete scan must never look
     identical to a genuinely-clean rule).
+
+    `peered_or_shared_vpc_ids_by_vpc` (round-3 finding #9, dict `vpc_id -> set[vpc_id]`, optional):
+    for each VPC, the set of OTHER vpc ids known to be able to legally reference an SG in it (VPC
+    peering / RAM shared-VPC). Threaded into `sg_resolver_factory` via `sm.eni_matches_vpc_scope` so
+    SG-reference resolution considers that VPC's peered/shared partners, not just the flow's own
+    VPC. When the caller has no peering/RAM topology data at all (the common case today — no
+    describe-vpc-peering-connections/RAM data source exists yet), this defaults to empty scope per
+    VPC, which is the SAFE direction: a cross-VPC SG-reference hit then resolves `unassessable`
+    (see `sg_resolver_factory`) rather than either a false `no_observed_evidence` (old behavior) or
+    a false confident match across VPCs with coincidental RFC1918 overlap.
+
+    Round-3 finding #8: flows whose ENI can't be resolved against any membership snapshot, or whose
+    direction can't be oriented (neither flow-tuple endpoint matches the ENI's own known private
+    IPs), are counted in `unresolved_flow_count` (persisted into every rule's `coverage` jsonb, and
+    into the run's own `coverage`) — a non-trivial count of such flows means real traffic existed
+    that could not be attributed to any rule, so per-rule zero-match `no_observed_evidence` is
+    downgraded to `unassessable` for that day exactly like `flow_result_truncated`/
+    `eni_snapshot_truncated` already are (an unattributed flow must not look identical to a
+    genuinely-clean, fully-evidenced zero).
     """
     stale_vpcs = stale_vpcs or set()
     coverage_flags = coverage_flags or {}
+    peered_or_shared_vpc_ids_by_vpc = peered_or_shared_vpc_ids_by_vpc or {}
     flow_result_truncated = bool(coverage_flags.get("flow_result_truncated"))
     eni_snapshot_truncated = bool(coverage_flags.get("eni_snapshot_truncated"))
-    day_truncated = flow_result_truncated or eni_snapshot_truncated
+    unresolved_flow_count = 0
 
     account_id, region = source["account_id"], source["region"]
     day_str = day.isoformat()
@@ -404,16 +433,32 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
             }
 
     def sg_resolver_factory(vpc_id):
-        snap = memberships_by_vpc.get(vpc_id)
-        if snap is None:
+        """round-3 finding #9: SG-reference resolution must scope to `vpc_id` PLUS any VPC known
+        (via `peered_or_shared_vpc_ids_by_vpc`) to be able to legally reference an SG in it — not
+        `vpc_id` alone. A group_id hit found ONLY in a VPC outside that whole scope means the SG is
+        genuinely referenced cross-VPC but this call has no way to confirm the peering/RAM
+        relationship is legitimate — that must resolve `unassessable` (return None), never a
+        confident `no_observed_evidence`-producing empty set."""
+        peered_or_shared = peered_or_shared_vpc_ids_by_vpc.get(vpc_id) or set()
+        if vpc_id not in memberships_by_vpc and not any(
+                sm.eni_matches_vpc_scope(vpc_id, other_vpc, peered_or_shared)
+                for other_vpc in memberships_by_vpc):
             return None
 
         def _resolve(group_id):
-            gids_ips = set()
-            for m in snap:
-                if group_id in (m.get("group_ids") or []):
-                    gids_ips.update(m.get("private_ips") or [])
-            return gids_ips
+            in_scope_ips = set()
+            out_of_scope_hit = False
+            for other_vpc, snap in memberships_by_vpc.items():
+                in_scope = sm.eni_matches_vpc_scope(vpc_id, other_vpc, peered_or_shared)
+                for m in snap:
+                    if group_id in (m.get("group_ids") or []):
+                        if in_scope:
+                            in_scope_ips.update(m.get("private_ips") or [])
+                        else:
+                            out_of_scope_hit = True
+            if not in_scope_ips and out_of_scope_hit:
+                return None  # cross-VPC hit outside the known-legal scope -> unassessable
+            return in_scope_ips
         return _resolve
 
     for flow in flows:
@@ -431,11 +476,14 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
             except (TypeError, ValueError):
                 last_start = None
         if not dst or not src or not interface_id:
+            unresolved_flow_count += 1
             continue
         eni = eni_index.get(interface_id)
         if eni is None or not eni["group_ids"]:
             # This flow's own ENI membership cannot be resolved (no snapshot covers it, or it
             # carries no SGs) — never fabricate membership; the flow contributes no evidence.
+            # round-3 finding #8: count it — it must not silently vanish from coverage.
+            unresolved_flow_count += 1
             continue
         if src in eni["private_ips"]:
             direction, peer_ip = "egress", dst
@@ -445,6 +493,8 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
             # Neither tuple endpoint matches this ENI's own known private IPs (stale/incomplete
             # membership snapshot, secondary IP not captured, NAT/ELB-rewritten flow, ...) —
             # direction and local/peer orientation cannot be safely inferred; skip rather than guess.
+            # round-3 finding #8: count it — it must not silently vanish from coverage.
+            unresolved_flow_count += 1
             continue
         vpc_id = eni["vpc_id"]
         resolver = sg_resolver_factory(vpc_id)
@@ -485,19 +535,30 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
                 cov["match_unassessable"] = True
 
         if matched_rule_ids:
-            primary_id = matched_rule_ids[0]
-            primary = per_rule[primary_id]
-            primary["compatible"] += cnt
-            primary["bytes"] += bytes_
-            primary["eni_ids"].add(interface_id)
-            if last_start and (primary["last_observed_at"] is None or last_start > primary["last_observed_at"]):
-                primary["last_observed_at"] = last_start
-            for extra_id in matched_rule_ids[1:]:
-                extra = per_rule[extra_id]
-                extra["overlap"] += cnt
-                extra["eni_ids"].add(interface_id)
-                if last_start and (extra["last_observed_at"] is None or last_start > extra["last_observed_at"]):
-                    extra["last_observed_at"] = last_start
+            # round-3 finding #4: EVERY matched rule gets its own `compatible` credit (each one
+            # legitimately had a compatible flow) — crediting only the arbitrary dict-iteration-order
+            # "first" rule undercounted every later rule's genuinely compatible traffic. When N>1
+            # rules match the SAME flow, that IS an overlap signal, so ALL of them (not just the
+            # ones after some arbitrary first pick) also get an `overlap` credit — the overlap
+            # applies to the whole matched set, not to "everyone but the first." Iterate in a
+            # deterministic (sorted by rule_id) order for reproducibility, independent of dict order.
+            is_overlap = len(matched_rule_ids) > 1
+            for rid in sorted(matched_rule_ids):
+                cov = per_rule[rid]
+                cov["compatible"] += cnt
+                cov["bytes"] += bytes_
+                cov["eni_ids"].add(interface_id)
+                if is_overlap:
+                    cov["overlap"] += cnt
+                if last_start and (cov["last_observed_at"] is None or last_start > cov["last_observed_at"]):
+                    cov["last_observed_at"] = last_start
+
+    # round-3 finding #8: any unresolved/unorientable flow is material enough on its own — a real
+    # flow existed for this account/region/day that could not be attributed to any rule, so it must
+    # not be indistinguishable from a genuinely evidenced, confident zero. Folded into the SAME
+    # downgrade path as the pre-existing truncation flags.
+    unresolved_flows_present = unresolved_flow_count > 0
+    day_truncated = flow_result_truncated or eni_snapshot_truncated or unresolved_flows_present
 
     conn.run("BEGIN")
     try:
@@ -532,6 +593,7 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
                 "status": status,
                 "flow_result_truncated": flow_result_truncated,
                 "eni_snapshot_truncated": eni_snapshot_truncated,
+                "unresolved_flow_count": unresolved_flow_count,
                 "skipdata_count": coverage_flags.get("skipdata_count"),
             }
             conn.run(
@@ -548,7 +610,8 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
             "(id, flow_source_id, status, partition_start, partition_end, rows_processed, coverage, started_at, finished_at) "
             "VALUES (:id,:fid,'succeeded',:ps,:pe,:rows,:cov::jsonb,now(),now())",
             id=run_id, fid=source["id"], ps=start, pe=end, rows=len(flows),
-            cov=json.dumps({"fingerprint_epoch_crossing_any": any_crossing}),
+            cov=json.dumps({"fingerprint_epoch_crossing_any": any_crossing,
+                             "unresolved_flow_count": unresolved_flow_count}),
         )
         conn.run("COMMIT")
     except Exception:
@@ -622,7 +685,9 @@ def _write_failed_run(conn, source, day, reason, error_code):
     """Write a terminal `failed` sg_rule_scan_runs row (MAJOR "failure invisibility" fix) — so the
     reaper's stale-run reconciliation and any downstream API/UI caller see a real failed row
     instead of silence (previously only an in-memory list entry that run()'s top-level
-    `{"status": "ok"}` return discarded)."""
+    `{"status": "ok"}` return discarded). MINOR fix: `reason` is redacted (sm.redact_sensitive)
+    before persisting — it can be a raw AWS exception message embedding an ARN/account id/query
+    id, and this `coverage` jsonb is operator-readable."""
     start, end = sm.day_bounds_utc(day)
     conn.run(
         "INSERT INTO sg_rule_scan_runs "
@@ -630,7 +695,7 @@ def _write_failed_run(conn, source, day, reason, error_code):
         " error_code, started_at, finished_at) "
         "VALUES (:id,:fid,'failed',:ps,:pe,0,:cov::jsonb,:ec,now(),now())",
         id=str(uuid.uuid4()), fid=source["id"], ps=start, pe=end,
-        cov=json.dumps({"reason": str(reason or "")[:2000]}), ec=error_code,
+        cov=json.dumps({"reason": sm.redact_sensitive(str(reason or ""))[:2000]}), ec=error_code,
     )
 
 
