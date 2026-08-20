@@ -43,7 +43,7 @@ COPY diagnosis/ ./diagnosis/
 # in this image (it's its own isolated Lambda, sg-rules.tf) but ships here too for local/manual
 # runs and so the module set stays byte-identical to the source tree.
 COPY sg_rule_scan.py sg_rule_matching.py sg_rule_athena_broker.py ./
-# Network Path Check (ADR-019 §2 register row): the `network_path` handler (fargate runtime,
+# Network Path Check (BASELINE.md §2 register row): the `network_path` handler (fargate runtime,
 # handlers.REGISTRY) imports network_path.py, which imports network_path_adapters.py and
 # network_path_reduce.py.
 COPY network_path.py network_path_adapters.py network_path_reduce.py ./

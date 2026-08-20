@@ -212,7 +212,8 @@ def _network_path(payload, dry_run):
     # gate (network-path.tf's `local.npc`, which controls whether this env var is even set on the
     # task) are the primary gates, but this handler must not blindly trust that a `network_path`
     # message reaching the worker implies the feature is actually enabled (defense-in-depth,
-    # matching _sg_rule_scan's own `SG_RULE_ATHENA_BROKER_ARN` short-circuit pattern above).
+    # matching the SAME KIND of short-circuit `sg_rule_scan.run()` itself does on
+    # `SG_RULE_ATHENA_BROKER_ARN` — that check lives inside sg_rule_scan.py, not in this file).
     if os.environ.get("NETWORK_PATH_CHECK_ENABLED") != "true":
         return {"status": "disabled", "reason": "NETWORK_PATH_CHECK_ENABLED is not set (feature flag off)"}, None
     import db as wdb

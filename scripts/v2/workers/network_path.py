@@ -56,11 +56,28 @@ past `target-group`), or return-path routing on the destination side. A path can
 `allowed` based on less than the full bidirectional policy surface in those cases.
 """
 import json
+import re
 import time
 import uuid
 
 import network_path_adapters as ad
 import network_path_reduce as reduce
+
+# MINOR fix: a raw AWS exception message persisted verbatim into the operator-readable
+# `network_path_runs.error` column can embed an ARN/account id/Athena-style UUID identifier — strip
+# those patterns (never a full redaction framework, just the common leaky shapes) before persisting.
+_ARN_RE = re.compile(r'arn:aws[a-zA-Z0-9-]*:[a-zA-Z0-9-]+:[a-zA-Z0-9-]*:\d{12}:[^\s\'"]+')
+_UUID_RE = re.compile(r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b')
+_ACCOUNT_ID_RE = re.compile(r'(?<!\d)\d{12}(?!\d)')
+
+
+def _redact_sensitive(text):
+    if not text:
+        return text
+    text = _ARN_RE.sub("<arn-redacted>", text)
+    text = _UUID_RE.sub("<id-redacted>", text)
+    text = _ACCOUNT_ID_RE.sub("<account-redacted>", text)
+    return text
 
 # Global deadline for one run's verify phase. Kept well under typical Fargate task/SFN timeouts.
 GLOBAL_DEADLINE_S = 90
@@ -445,7 +462,7 @@ def run(payload, conn, topology_fetcher=fetch_live_topology, deadline_s=GLOBAL_D
         # this pass (raises NotImplementedError) and any other unexpected fetcher failure must also
         # terminate the run visibly rather than crash uncaught and leave network_path_runs stuck at
         # running/discover until the reaper eventually flips it minutes later.
-        error_text = f"{type(e).__name__}: {e}"
+        error_text = _redact_sensitive(f"{type(e).__name__}: {e}")
         _finish_run(conn, run_id, "failed", overall_status="failed", error=error_text)
         return {"run_id": run_id, "status": "failed", "error": error_text}
 
