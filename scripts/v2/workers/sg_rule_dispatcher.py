@@ -25,9 +25,18 @@ def _enqueue_one(conn, source_row, trigger):
     job_id = str(uuid.uuid4())
     payload = {"account_id": account_id, "region": region, "trigger": trigger}
     db.insert_job(conn, job_id, "sg_rule_scan", payload, requested_by=None)
-    _sqs.send_message(QueueUrl=QUEUE_URL, MessageBody=json.dumps({
-        "job_id": job_id, "type": "sg_rule_scan", "payload": payload, "dry_run": False,
-    }))
+    try:
+        _sqs.send_message(QueueUrl=QUEUE_URL, MessageBody=json.dumps({
+            "job_id": job_id, "type": "sg_rule_scan", "payload": payload, "dry_run": False,
+        }))
+    except Exception as e:  # noqa: BLE001
+        # MINOR fix: an SQS send failure AFTER db.insert_job must not leave the ledger row
+        # orphaned as `queued` forever (EventBridge won't retry this Lambda invocation on its own
+        # schedule for another 24h, and nothing else would ever mark this specific row terminal) —
+        # mark it `failed` immediately so the reaper/API/UI see a real terminal state instead of a
+        # silently-stuck queued row.
+        db.finish_job(conn, job_id, "failed", error=f"sqs send_message failed: {e}")
+        raise
     return job_id
 
 

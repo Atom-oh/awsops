@@ -278,5 +278,67 @@ def test_rescan_window_never_moves_watermark_itself():
     assert watermark == date(2026, 3, 5)  # untouched
 
 
+# ── L3 finding #7: database_name/table_name must be re-validated (no fallback -> raise) ──────────
+
+def _src(database_name="flowlogsdb", table_name="flow_logs", validation=None):
+    return {"account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "primary",
+            "database_name": database_name, "table_name": table_name, "validation": validation or {}}
+
+
+def test_safe_ident_raises_without_fallback_on_unsafe_name():
+    with pytest.raises(m.UnsafeIdentifier):
+        m._safe_ident('db"; DROP TABLE x; --')
+
+
+def test_safe_ident_falls_back_when_fallback_given():
+    assert m._safe_ident("bad name!", "fallback") == "fallback"
+
+
+def test_build_day_select_raises_on_unsafe_database_name():
+    source = _src(database_name='evil"; DROP TABLE x; --')
+    with pytest.raises(m.UnsafeIdentifier):
+        m.build_day_select(source, date(2026, 3, 5))
+
+
+def test_build_day_select_raises_on_unsafe_table_name():
+    source = _src(table_name='evil"; DROP TABLE x; --')
+    with pytest.raises(m.UnsafeIdentifier):
+        m.build_day_select(source, date(2026, 3, 5))
+
+
+def test_build_day_select_never_selects_or_groups_by_srcport():
+    """L4 finding #9(i): srcport is unused downstream and inflates group cardinality — must not
+    appear in the query at all."""
+    sql = m.build_day_select(_src(), date(2026, 3, 5))
+    assert "srcport" not in sql
+
+
+# ── has_resolved_partition_strategy (L3 finding #8b) ──────────────────────────────────────────────
+
+def test_has_resolved_partition_strategy_true_for_hive_style():
+    assert m.has_resolved_partition_strategy({"partitionKeys": ["year", "month", "day"]}) is True
+
+
+def test_has_resolved_partition_strategy_true_for_single_date_key():
+    assert m.has_resolved_partition_strategy({"partitionKeys": ["dt"]}) is True
+
+
+def test_has_resolved_partition_strategy_false_when_empty():
+    assert m.has_resolved_partition_strategy({"partitionKeys": []}) is False
+    assert m.has_resolved_partition_strategy({}) is False
+
+
+def test_has_resolved_partition_strategy_false_for_ambiguous_multi_key():
+    assert m.has_resolved_partition_strategy({"partitionKeys": ["region", "tier"]}) is False
+
+
+# ── build_day_skipdata_count_select (L4 finding #9(iv)) ───────────────────────────────────────────
+
+def test_build_day_skipdata_count_select_filters_on_skipdata():
+    sql = m.build_day_skipdata_count_select(_src(), date(2026, 3, 5))
+    assert "SKIPDATA" in sql
+    assert "count(*)" in sql
+
+
 def test_rescan_window_empty_before_first_commit():
     assert m.rescan_window_days(None, window_days=2) == []

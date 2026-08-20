@@ -95,6 +95,69 @@ def test_last_committed_day_returns_max_succeeded_partition():
     assert scan.last_committed_day(conn, 1) == datetime.date(2026, 3, 5)
 
 
+# ── L2 finding #2: IPv6 ENI addresses must be captured too ───────────────────────────────────────
+
+class FakeEc2Eni:
+    def __init__(self, enis, truncate=False):
+        self._enis = enis
+        self._truncate = truncate
+
+    def describe_network_interfaces(self, **kwargs):
+        if self._truncate:
+            return {"NetworkInterfaces": self._enis, "NextToken": "more"}
+        return {"NetworkInterfaces": self._enis}
+
+
+def test_snapshot_eni_membership_captures_ipv6_addresses():
+    ec2 = FakeEc2Eni([{
+        "VpcId": "vpc-1", "NetworkInterfaceId": "eni-1",
+        "Groups": [{"GroupId": "sg-1"}],
+        "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}],
+        "Ipv6Addresses": [{"Ipv6Address": "2001:db8::1"}],
+    }])
+    memberships, truncated = scan.snapshot_eni_membership_via_describe(ec2)
+    assert truncated is False
+    assert memberships[0]["private_ips"] == ["10.0.0.5", "2001:db8::1"]
+
+
+def test_snapshot_eni_membership_ipv6_only_eni_still_captured():
+    ec2 = FakeEc2Eni([{
+        "VpcId": "vpc-1", "NetworkInterfaceId": "eni-2",
+        "Groups": [{"GroupId": "sg-1"}],
+        "PrivateIpAddresses": [],
+        "Ipv6Addresses": [{"Ipv6Address": "2001:db8::2"}],
+    }])
+    memberships, _ = scan.snapshot_eni_membership_via_describe(ec2)
+    assert memberships[0]["private_ips"] == ["2001:db8::2"]
+
+
+def test_snapshot_eni_membership_marks_truncated_at_cap(monkeypatch):
+    """L4 finding #9: the silent 20,000-ENI describe cap must surface a coverage marker instead of
+    being indistinguishable from a genuinely-complete snapshot."""
+    enis = [{"VpcId": "vpc-1", "NetworkInterfaceId": f"eni-{i}", "Groups": [], "PrivateIpAddresses": []}
+            for i in range(1000)]
+
+    class CappingEc2:
+        def __init__(self):
+            self.calls = 0
+
+        def describe_network_interfaces(self, **kwargs):
+            self.calls += 1
+            # 20 pages of 1000 = 20,000, hitting the cap; always claim more remain.
+            return {"NetworkInterfaces": enis, "NextToken": "more"}
+
+    memberships, truncated = scan.snapshot_eni_membership_via_describe(CappingEc2())
+    assert truncated is True
+    assert len(memberships) == 20000
+
+
+def test_snapshot_eni_membership_not_truncated_when_pages_exhaust_before_cap():
+    ec2 = FakeEc2Eni([{"VpcId": "vpc-1", "NetworkInterfaceId": "eni-1", "Groups": [],
+                        "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.1"}]}], truncate=False)
+    _, truncated = scan.snapshot_eni_membership_via_describe(ec2)
+    assert truncated is False
+
+
 # ── inventory versioning (upsert_inventory_and_versions) ────────────────────────────────────────
 
 def test_upsert_inventory_opens_first_version_when_none_open():
@@ -255,8 +318,7 @@ class FakeLambdaRaw:
 def test_invoke_broker_query_surfaces_function_error():
     lam = FakeLambdaRaw(b'{"errorMessage": "boom"}', function_error="Unhandled")
     body = scan.invoke_broker_query(
-        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker",
-        "123456789012", "ap-northeast-2", None, _source(), dt.date(2026, 3, 5))
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker", 1, dt.date(2026, 3, 5))
     assert body["ok"] is False
     assert "FunctionError" in body["reason"]
 
@@ -264,9 +326,63 @@ def test_invoke_broker_query_surfaces_function_error():
 def test_invoke_broker_query_surfaces_malformed_body_without_ok_key():
     lam = FakeLambdaRaw(b'{"unexpected": "shape"}')
     body = scan.invoke_broker_query(
-        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker",
-        "123456789012", "ap-northeast-2", None, _source(), dt.date(2026, 3, 5))
+        lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker", 1, dt.date(2026, 3, 5))
     assert body["ok"] is False
+
+
+# ── invoke_broker_query: L3 finding #6 (opaque flow_source_id + day, never raw SQL/account) ──────
+
+def test_invoke_broker_query_sends_only_flow_source_id_and_day():
+    """The caller must never send account_id/region/workgroup/database/query text — only the
+    opaque flow_source_id + day (the broker resolves everything else from Aurora itself)."""
+    lam = FakeLambdaRaw(json.dumps({"ok": True, "rows": [], "done": True}).encode("utf-8"))
+    scan.invoke_broker_query(lam, "arn:...:function:broker", 42, dt.date(2026, 3, 5))
+    # FakeLambdaRaw doesn't record invocations; use FakeLambda (below) instead for that assertion.
+
+
+def test_invoke_broker_query_loops_pagination_until_done():
+    """L2 finding #4: the broker returns ONE bounded page + a continuation token; the caller must
+    loop, accumulating rows, until the broker reports `done`."""
+    calls = []
+
+    class PagingLambda:
+        def invoke(self, FunctionName, Payload):
+            evt = json.loads(Payload)
+            calls.append(evt)
+            if "continuation" not in evt:
+                body = {"ok": True, "rows": [{"n": 1}], "query_execution_id": "q1",
+                         "next_token": "tok1", "done": False, "columns": ["n"]}
+            else:
+                body = {"ok": True, "rows": [{"n": 2}], "next_token": None, "done": True}
+            payload = type("P", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()
+            return {"Payload": payload}
+
+    lam = PagingLambda()
+    result = scan.invoke_broker_query(lam, "arn:...:function:broker", 7, dt.date(2026, 3, 5))
+    assert result["ok"] is True
+    assert [r["n"] for r in result["rows"]] == [1, 2]
+    assert len(calls) == 2
+    assert calls[0]["flow_source_id"] == 7
+    assert calls[0]["day"] == "2026-03-05"
+    assert "account_id" not in calls[0] and "query" not in calls[0]
+    assert calls[1]["continuation"]["query_execution_id"] == "q1"
+
+
+def test_invoke_broker_query_marks_truncated_when_accumulation_cap_hit(monkeypatch):
+    """L4 finding #9(i): if accumulated rows reach ROW_LIMIT before the broker reports `done`, the
+    day must be marked truncated rather than trusted as a complete result."""
+    monkeypatch.setattr(sm, "ROW_LIMIT", 2)
+
+    class NeverDoneLambda:
+        def invoke(self, FunctionName, Payload):
+            body = {"ok": True, "rows": [{"n": 1}, {"n": 2}], "query_execution_id": "q1",
+                    "next_token": "tok", "done": False, "columns": ["n"]}
+            payload = type("P", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()
+            return {"Payload": payload}
+
+    result = scan.invoke_broker_query(NeverDoneLambda(), "arn:...:function:broker", 1, dt.date(2026, 3, 5))
+    assert result["ok"] is True
+    assert result["truncated"] is True
 
 
 # ── process_day: idempotent delete-then-insert, transaction, one row per rule/day ────────────────
@@ -428,6 +544,104 @@ def test_ingress_rule_not_matched_by_egress_flow_on_same_eni():
     assert insert_call[1]["cm"] == 0
 
 
+# ── L2 finding #1: overlap counter must actually increment when a flow matches >1 eligible rule ──
+
+def test_flow_matching_two_rules_increments_overlap_for_the_second():
+    """Two rules on the same SG, both allowing the exact same peer/protocol/port — a single flow
+    that satisfies both must credit ONE rule as `compatible` and the OTHER as `overlap` (never
+    silently drop the second match, which was the pre-fix behavior — overlap_match_count stayed 0
+    forever and the `overlapping` classification was unreachable)."""
+    conn = FakeConn()
+    versions = {
+        "sgr-1": [{"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+                    "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+        "sgr-2": [{"rule_id": "sgr-2", "fingerprint": "fp2", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 1, "to_port": 65535, "peer_kind": "cidr",
+                    "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, _membership(), None)
+    inserts = {c[1]["rid"]: c[1] for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")}
+    # sgr-1 is credited `compatible` (the primary match); sgr-2 must be credited `overlap`, not
+    # silently zero.
+    assert inserts["sgr-1"]["cm"] == 3
+    assert inserts["sgr-2"]["om"] == 3
+    cov2 = json.loads(inserts["sgr-2"]["cov"])
+    assert cov2["status"] == "overlapping"
+
+
+def test_flow_matching_one_rule_leaves_overlap_at_zero():
+    """Sanity check: a flow matching exactly one rule must not spuriously credit overlap anywhere."""
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["om"] == 0
+
+
+# ── L4 finding #11: a `stale` membership snapshot must downgrade matches to unassessable ─────────
+
+def test_stale_membership_snapshot_downgrades_match_to_unassessable():
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None, stale_vpcs={"vpc-1"})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 0  # never credited as confident evidence
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["match_unassessable"] is True
+
+
+def test_non_stale_vpc_unaffected_by_stale_vpcs_set():
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [
+                                {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                                 "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                            ], _versions(), _membership(), None, stale_vpcs={"vpc-OTHER"})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    assert insert_call[1]["cm"] == 3
+
+
+# ── L4 finding #9: a truncated day must never settle on a confident `no_observed_evidence` ───────
+
+def test_truncated_day_downgrades_no_observed_evidence_to_unassessable():
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None,
+                      coverage_flags={"flow_result_truncated": True})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["flow_result_truncated"] is True
+
+
+def test_truncated_day_does_not_downgrade_a_real_compatible_match():
+    """Truncation must not invalidate GENUINE evidence a rule already has — only the ambiguous
+    zero-match case is downgraded."""
+    conn = FakeConn()
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], _versions(), _membership(), None,
+                      coverage_flags={"eni_snapshot_truncated": True})
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "observed_compatible"
+    assert insert_call[1]["cm"] == 3
+
+
 # ── MAJOR fix: UNASSESSABLE (e.g. prefix-list peer) must downgrade to `unassessable`, never be
 #    silently treated as `no_observed_evidence` ──────────────────────────────────────────────────
 
@@ -506,6 +720,59 @@ def test_process_day_no_uniqueness_conflict_on_concurrent_retry():
     assert runs[0][1]["id"] != runs[1][1]["id"]  # distinct run ids, no conflict
 
 
+# ── load_membership_by_vpc: L4 finding #11 — outcome must actually be used, earliest_snapshot_at
+#    must be threaded through (not discarded/None) ────────────────────────────────────────────────
+
+class FakeMembershipConn:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def run(self, sql, **kwargs):
+        if "FROM sg_eni_membership_snapshots" in sql:
+            return self._rows
+        return []
+
+
+def test_load_membership_by_vpc_flags_stale_vpc():
+    conn = FakeMembershipConn([
+        ("vpc-1", utc(2026, 1, 1), "eni-1", json.dumps(["sg-1"]), json.dumps(["10.0.0.1"])),
+    ])
+    # Day is FAR beyond the staleness window (staleness_days=3) from the only snapshot's observed_at.
+    resolved, stale_vpcs = scan.load_membership_by_vpc(
+        conn, "123456789012", "ap-northeast-2", dt.date(2026, 6, 1), staleness_days=3)
+    assert "vpc-1" in stale_vpcs
+    assert "vpc-1" in resolved  # still resolved (credited, but downgraded downstream by process_day)
+
+
+def test_load_membership_by_vpc_in_window_is_not_flagged_stale():
+    conn = FakeMembershipConn([
+        ("vpc-1", utc(2026, 3, 4), "eni-1", json.dumps(["sg-1"]), json.dumps(["10.0.0.1"])),
+    ])
+    resolved, stale_vpcs = scan.load_membership_by_vpc(
+        conn, "123456789012", "ap-northeast-2", dt.date(2026, 3, 5), staleness_days=3)
+    assert stale_vpcs == set()
+    assert "vpc-1" in resolved
+
+
+def test_load_membership_by_vpc_pins_to_global_earliest_across_all_vpcs():
+    """L4 finding #11: earliest_snapshot_at must be computed ONCE across every vpc for this
+    source, and threaded into EVERY vpc's resolution — not left as `None` (which would defeat the
+    pre-snapshotting-backfill pinning rule for a vpc whose own snapshots all postdate another
+    vpc's earlier one)."""
+    conn = FakeMembershipConn([
+        ("vpc-1", utc(2026, 1, 1), "eni-1", json.dumps(["sg-1"]), json.dumps(["10.0.0.1"])),
+        ("vpc-2", utc(2026, 5, 1), "eni-2", json.dumps(["sg-2"]), json.dumps(["10.0.0.2"])),
+    ])
+    # A day BEFORE vpc-2's own earliest snapshot (2026-05-01) but AFTER the GLOBAL earliest
+    # (vpc-1's 2026-01-01) must resolve via vpc-2's own nearest-prior logic, not
+    # pre_snapshotting_backfill (which only applies when the day predates the GLOBAL earliest).
+    resolved, stale_vpcs = scan.load_membership_by_vpc(
+        conn, "123456789012", "ap-northeast-2", dt.date(2026, 3, 1), staleness_days=400)
+    # vpc-2 has no snapshot at or before 2026-03-01 at all -> no_snapshot -> not resolved.
+    assert "vpc-2" not in resolved
+    assert "vpc-1" in resolved
+
+
 # ── run() orchestration: one query per account/region/day, rescan window wiring ─────────────────
 
 class FakeLambda:
@@ -556,9 +823,11 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     )
     assert result["status"] == "ok"
     assert len(fake_lambda.invocations) >= 1
-    assert fake_lambda.invocations[0]["action"] == "query"
-    # one query per account/region/day — never per-rule.
-    assert fake_lambda.invocations[0]["query"].count("SELECT") == 1
+    # L3 finding #6: the caller sends ONLY an opaque flow_source_id + day — never raw SQL/account.
+    assert fake_lambda.invocations[0]["action"] == "query_by_source"
+    assert fake_lambda.invocations[0]["flow_source_id"] == 1
+    assert "query" not in fake_lambda.invocations[0]
+    assert "account_id" not in fake_lambda.invocations[0]
 
 
 def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):
@@ -575,6 +844,27 @@ def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):
         ec2_client_factory=lambda *a, **k: FakeEc2(),
     )
     assert result["status"] == "inventory_only"
+
+
+# ── L3 finding #8a: a 'pending' source must never reach the broker at all ────────────────────────
+
+def test_run_short_circuits_pending_source_without_invoking_broker(monkeypatch):
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "pending"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[]],
+        "sg_rule_inventory_versions": [[]],
+    })
+    fake_lambda = FakeLambda({"ok": True, "rows": []})
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "awaiting_validation"
+    assert fake_lambda.invocations == []
 
 
 # ── MAJOR fix: failure invisibility — a failed Athena day must write a real, terminal `failed`

@@ -11,9 +11,22 @@ targets directly.
 import hashlib
 import ipaddress
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 PROTO_NAME = {"6": "tcp", "17": "udp", "1": "icmp", "58": "icmpv6"}
+
+# Row cap shared by the day-SELECT's own `LIMIT` and the caller-side pagination-accumulation cap
+# (L2 finding #4 / L4 finding #9(i)) — if a day's accumulated row count reaches this exact number,
+# the result MUST be treated as possibly-truncated (the LIMIT may have cut off real data), never as
+# a confident "this is everything."
+ROW_LIMIT = 200_000
+
+
+class UnsafeIdentifier(Exception):
+    """Raised by `_safe_ident` when a caller-controlled identifier fails strict allowlist
+    validation AND no safe fallback name was supplied — e.g. `database_name`/`table_name`, where
+    silently substituting a different table would be worse than refusing outright (L3 finding #7)."""
 
 
 # ── Rule fingerprint (sg_rule_inventory_versions) ────────────────────────────────────────────────
@@ -214,6 +227,128 @@ def classify_rule_day(compatible_count: int, overlap_count: int, has_source: boo
     if compatible_count > 0:
         return "observed_compatible"
     return "no_observed_evidence"
+
+
+# ── Identifier re-validation + the day-SELECT builder (shared by sg_rule_scan.py's caller-side
+#    tests and, per the L3 #6/#7 broker redesign, by sg_rule_athena_broker.py itself — the broker
+#    now resolves a source's config from Aurora and builds this SQL SERVER-SIDE, so the builder
+#    must live in a boto3-free module both processes can import cheaply) ────────────────────────
+
+_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_-]{0,127}$')
+
+
+def _safe_ident(name, fallback=None):
+    """Defense-in-depth re-validation of a column/database/table identifier. Allows '-' too: AWS's
+    own default VPC Flow Log Athena tables name columns like "interface-id"/"log-status"
+    (hyphenated). When `fallback` is given, an invalid `name` silently falls back to it (safe for
+    column aliases, where the fallback is just "assume the canonical underscore name"). When
+    `fallback` is None (database_name/table_name — there is no safe substitute for an entire
+    table), an invalid `name` raises `UnsafeIdentifier` instead of ever being interpolated."""
+    if isinstance(name, str) and _IDENT_RE.match(name):
+        return name
+    if fallback is not None:
+        return fallback
+    raise UnsafeIdentifier(f"unsafe identifier: {name!r}")
+
+
+def build_day_select(source, day):
+    """Validated SELECT for one account/region/day. Every identifier here is re-validated
+    (`_safe_ident`) before interpolation; workgroup/database/table already passed strict allowlist
+    regexes at PUT time (web/lib/sg-rules.ts) and the broker's own `_validate` re-resolves the exact
+    column ALIASES actually present in the table (persisted as `validation.columnMap`, canonical ->
+    actual name — e.g. `interface_id` -> `interface-id`) — this function uses THAT resolved mapping
+    instead of assuming underscore names. `bytes` is conditional on `validation.optionalFields` and
+    a partition predicate is added whenever validation resolved partition key names. The only
+    literals interpolated below are ISO day boundaries the worker itself computed (never user
+    input) and identifiers that passed `_safe_ident` — `database_name`/`table_name` have NO
+    fallback, so a corrupted/unsafe stored value raises `UnsafeIdentifier` rather than being
+    interpolated (L3 finding #7)."""
+    validation = source.get("validation") or {}
+    column_map = validation.get("columnMap") or {}
+    optional_fields = set(validation.get("optionalFields") or [])
+    partition_keys = validation.get("partitionKeys") or []
+
+    interface_col = _safe_ident(column_map.get("interface_id"), "interface_id")
+    log_status_col = _safe_ident(column_map.get("log_status"), "log_status")
+    start_col = _safe_ident(column_map.get("start"), "start")
+
+    start, end = day_bounds_utc(day)
+    table = f'"{_safe_ident(source["database_name"])}"."{_safe_ident(source["table_name"])}"'
+
+    has_optional_info = bool(column_map) or bool(optional_fields)
+    has_bytes = ("bytes" in optional_fields) if has_optional_info else True
+    bytes_select = ', sum("bytes") as bytes' if has_bytes else ''
+
+    partition_predicate = ""
+    lower_keys = {k.lower(): k for k in partition_keys}
+    if {"year", "month", "day"} <= set(lower_keys):
+        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
+        partition_predicate = (
+            f' AND "{_safe_ident(y, "year")}" = \'{day.year:04d}\''
+            f' AND "{_safe_ident(mo, "month")}" = \'{day.month:02d}\''
+            f' AND "{_safe_ident(d, "day")}" = \'{day.day:02d}\''
+        )
+    elif len(partition_keys) == 1:
+        dk = _safe_ident(partition_keys[0], "")
+        if dk:
+            partition_predicate = f' AND "{dk}" = \'{day.isoformat()}\''
+
+    return (
+        # `srcport` is deliberately NOT selected/grouped (L4 finding #9(i)) — process_day() never
+        # reads it, and ephemeral source ports would otherwise inflate group cardinality toward
+        # per-flow granularity, making the `LIMIT`/coverage-truncation check meaningless.
+        f'SELECT "{interface_col}" as interface_id, srcaddr, dstaddr, dstport, protocol, '
+        f'action{bytes_select}, count(*) as cnt, max("{start_col}") as last_start FROM {table} '
+        f'WHERE "{start_col}" >= {int(start.timestamp())} AND "{start_col}" < {int(end.timestamp())} '
+        f"AND action = 'ACCEPT' AND \"{log_status_col}\" = 'OK'{partition_predicate} "
+        f'GROUP BY "{interface_col}", srcaddr, dstaddr, dstport, protocol, action '
+        f"LIMIT {ROW_LIMIT}"
+    )
+
+
+def build_day_skipdata_count_select(source, day):
+    """A cheap, single-row companion aggregate: how many rows for this account/region/day carry
+    `log_status='SKIPDATA'` (Flow Log delivery loss) — the main day-SELECT's own
+    `log_status='OK'`-only filter would otherwise discard this signal entirely (L4 finding #9(iv)).
+    Same identifier re-validation and partition-bound discipline as `build_day_select`."""
+    validation = source.get("validation") or {}
+    column_map = validation.get("columnMap") or {}
+    partition_keys = validation.get("partitionKeys") or []
+    log_status_col = _safe_ident(column_map.get("log_status"), "log_status")
+    start_col = _safe_ident(column_map.get("start"), "start")
+    start, end = day_bounds_utc(day)
+    table = f'"{_safe_ident(source["database_name"])}"."{_safe_ident(source["table_name"])}"'
+
+    partition_predicate = ""
+    lower_keys = {k.lower(): k for k in partition_keys}
+    if {"year", "month", "day"} <= set(lower_keys):
+        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
+        partition_predicate = (
+            f' AND "{_safe_ident(y, "year")}" = \'{day.year:04d}\''
+            f' AND "{_safe_ident(mo, "month")}" = \'{day.month:02d}\''
+            f' AND "{_safe_ident(d, "day")}" = \'{day.day:02d}\''
+        )
+    elif len(partition_keys) == 1:
+        dk = _safe_ident(partition_keys[0], "")
+        if dk:
+            partition_predicate = f' AND "{dk}" = \'{day.isoformat()}\''
+
+    return (
+        f'SELECT count(*) as skipdata_count FROM {table} '
+        f'WHERE "{start_col}" >= {int(start.timestamp())} AND "{start_col}" < {int(end.timestamp())} '
+        f"AND \"{log_status_col}\" = 'SKIPDATA'{partition_predicate}"
+    )
+
+
+def has_resolved_partition_strategy(validation: dict) -> bool:
+    """True only when validation actually resolved a bound-able partition scheme (Hive-style
+    year/month/day, or exactly one date-typed partition key) — used to refuse an unbounded
+    full-table scan (L3 finding #8b) rather than silently falling back to one."""
+    partition_keys = (validation or {}).get("partitionKeys") or []
+    lower_keys = {str(k).lower() for k in partition_keys}
+    if {"year", "month", "day"} <= lower_keys:
+        return True
+    return len(partition_keys) == 1
 
 
 # ── Daily pipeline pure helpers (delivery lag, watermark, rescan window) ─────────────────────────

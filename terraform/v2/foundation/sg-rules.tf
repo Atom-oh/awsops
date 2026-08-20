@@ -56,6 +56,17 @@ resource "aws_iam_role" "sg_rule_athena_broker" {
   assume_role_policy = data.aws_iam_policy_document.worker_lambda_assume.json # lambda.amazonaws.com (workers.tf)
 }
 
+# L3 finding #6 (round 2 broker redesign): the broker now resolves a source's config from Aurora
+# ITSELF (never trusts a caller-supplied account_id/region/workgroup/database/query again) — it
+# therefore needs the same VPC-attached, rds-db-IAM-auth connectivity every other worker-tier
+# Lambda has (db.py/sg_rule_dispatcher.py's pattern), which it deliberately did NOT need under the
+# old caller-controlled-SQL design.
+resource "aws_iam_role_policy_attachment" "sg_rule_athena_broker_vpc" {
+  count      = local.sgr
+  role       = aws_iam_role.sg_rule_athena_broker[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 resource "aws_iam_role_policy" "sg_rule_athena_broker" {
   count = local.sgr
   name  = "${var.project}-sg-rule-athena-broker"
@@ -77,6 +88,15 @@ resource "aws_iam_role_policy" "sg_rule_athena_broker" {
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
         Resource = local.sgr_role_arn
+      },
+      {
+        # Read-only Aurora access to resolve a source's own config by `flow_source_id` — the SAME
+        # rds-db IAM-auth pattern as db.py/sg_rule_dispatcher.py, least-privilege `awsops_worker`
+        # role, never the master secret.
+        Sid      = "AuroraIamAuth"
+        Effect   = "Allow"
+        Action   = ["rds-db:connect"]
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/awsops_worker"
       }
     ]
   })
@@ -88,10 +108,10 @@ resource "aws_cloudwatch_log_group" "sg_rule_athena_broker" {
   retention_in_days = 30
 }
 
-# Dedicated code bundle — the broker is a standalone module with no shared-worker-src dependency
-# (no db.py/Aurora access at all: it only talks to STS/Athena/Glue in the assumed target-account
-# session). A separate zip keeps the shared workers_src archive hash unchanged when this feature is
-# off, and keeps this Lambda's own hash stable across unrelated worker-tier changes.
+# Code bundle now also includes db.py (Aurora IAM-auth connect helper) + sg_rule_matching.py (the
+# pure day-SELECT builder this module imports to build SQL server-side from resolved config) — a
+# separate zip from the shared workers_src archive still keeps this Lambda's own hash stable across
+# unrelated worker-tier changes.
 data "archive_file" "sg_rule_athena_broker_src" {
   count       = local.sgr
   type        = "zip"
@@ -99,6 +119,14 @@ data "archive_file" "sg_rule_athena_broker_src" {
   source {
     content  = file("${local.workers_src}/sg_rule_athena_broker.py")
     filename = "sg_rule_athena_broker.py"
+  }
+  source {
+    content  = file("${local.workers_src}/sg_rule_matching.py")
+    filename = "sg_rule_matching.py"
+  }
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
   }
 }
 
@@ -111,16 +139,22 @@ resource "aws_lambda_function" "sg_rule_athena_broker" {
   handler          = "sg_rule_athena_broker.lambda_handler"
   filename         = data.archive_file.sg_rule_athena_broker_src[0].output_path
   source_code_hash = data.archive_file.sg_rule_athena_broker_src[0].output_base64sha256
-  # No vpc_config: this function never touches Aurora, only regional AWS APIs (STS/Athena/Glue) in
-  # the assumed target-account session — public AWS endpoints, no NAT/VPC needed.
-  timeout     = 150 # > _MAX_POLL_S default (120s) + assume-role/API round-trip margin
-  memory_size = 256
+  timeout          = 150 # > _MAX_POLL_S default (120s) + assume-role/API round-trip margin
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
   environment {
     variables = {
       SG_RULE_ATHENA_POLL_TIMEOUT_S = "120"
+      AURORA_ENDPOINT               = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE               = aws_rds_cluster.aurora.database_name
+      AURORA_USER                   = "awsops_worker"
     }
   }
-  depends_on = [aws_cloudwatch_log_group.sg_rule_athena_broker]
+  depends_on = [aws_cloudwatch_log_group.sg_rule_athena_broker, aws_iam_role_policy_attachment.sg_rule_athena_broker_vpc]
 }
 
 ############################################################
