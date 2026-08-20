@@ -10,7 +10,10 @@ import re
 
 import boto3
 
-_MODEL_ID = os.environ.get("FINOPS_EXPLAIN_MODEL_ID", "global.anthropic.claude-haiku-4-5")
+# A bare "global.anthropic.claude-haiku-4-5" throws ValidationException invoked from
+# ap-northeast-2 — every other caller in this repo (classifier.ts, assistant.ts, signal_catalog_gen.py,
+# workload.tf's CLASSIFIER_MODEL_ID/K8SGPT_NARRATION_MODEL) uses the fully-qualified dated id below.
+_MODEL_ID = os.environ.get("FINOPS_EXPLAIN_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
 _SYSTEM = (
     "너는 FinOps 설명 도우미다. 이미 확정된 절감 항목(제목/금액/근거)을 한국어 1~2문장으로 설명한다. "
     "새로운 숫자를 만들거나, 주어진 금액과 다른 금액을 언급하거나, 실행을 제안하지 마라. "
@@ -28,20 +31,28 @@ def _get_client():
 
 
 def _amounts_in(text):
-    """Extract every '$123.45'-shaped number the model wrote, for the contradiction check below."""
-    return [float(m.replace(",", "")) for m in re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", text)]
+    """Extract every dollar-amount-shaped number the model wrote — both '$123.45' and the spelled-
+    out Korean '123.45달러' notation (a review round caught the LLM being just as free to write the
+    latter, which the old $-only regex couldn't see at all), for the contradiction check below."""
+    dollar_sign = re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", text)
+    dollar_word = re.findall(r"([\d,]+(?:\.\d+)?)\s*달러", text)
+    return [float(m.replace(",", "")) for m in dollar_sign + dollar_word]
 
 
 def _contradicts(text, monthly_savings_usd):
-    """True iff the explanation states a dollar figure that doesn't match the finding's own amount
-    (within 1 cent — formatting/rounding noise). A finding with NULL savings must not have the LLM
-    inventing one; any dollar amount in that case is itself a contradiction."""
+    """True iff the explanation states ANY dollar figure that doesn't match the finding's own
+    amount (within 1 cent — formatting/rounding noise). Requires ALL extracted amounts to match,
+    not just one of several ("$9.12, 원래는 $12였는데" contains both the right number and a wrong
+    one — a prior version's `any()` check let that whole sentence through). A finding with NULL
+    savings must not have the LLM inventing one; any dollar amount in that case is itself a
+    contradiction. NOTE: this still cannot catch every notation (e.g. "만원", a currency-unaware
+    plain number) — it is a meaningful hardening, not a complete parser."""
     amounts = _amounts_in(text)
     if not amounts:
         return False
     if monthly_savings_usd is None:
         return True
-    return not any(abs(a - float(monthly_savings_usd)) < 0.01 for a in amounts)
+    return not all(abs(a - float(monthly_savings_usd)) < 0.01 for a in amounts)
 
 
 def explain(title, category, monthly_savings_usd, evidence):

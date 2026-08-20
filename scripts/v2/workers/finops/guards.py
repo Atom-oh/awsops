@@ -25,13 +25,20 @@ def protected_tag(tags):
     return None
 
 
-def insufficient_observation(finding_reason):
-    """Compute Optimizer marks a recommendation 'INSUFFICIENT_DATA' when the resource hasn't run
-    long enough (typically <14 days) for the metrics behind a rightsizing call to be trustworthy.
-    Evaluate() must not call this rule's evidence-shaping code on such items in the first place for
-    the finding to be OMITTED — this guard exists for cases where a partial recommendation still
-    carries a real dollar estimate that is worth showing, just with lower confidence."""
-    if finding_reason == "INSUFFICIENT_DATA":
+# Compute Optimizer's own console/docs describe recommendations as unreliable below roughly two
+# weeks of metrics. There is NO "INSUFFICIENT_DATA" value in either GetEC2InstanceRecommendations'
+# or GetRDSDatabaseRecommendations' `finding` enum (verified against botocore's service model) —
+# `lookBackPeriodInDays`/`lookbackPeriodInDays` is the real per-recommendation signal.
+_MIN_OBSERVATION_DAYS = 14
+
+
+def insufficient_observation(lookback_days):
+    """lookback_days: the Compute Optimizer recommendation's own lookBackPeriodInDays (or None —
+    not a Compute Optimizer finding, e.g. the EBS rule). Below the threshold, the metrics behind
+    the recommendation haven't accumulated long enough to be trustworthy yet — the finding still
+    carries a real dollar estimate worth showing, just with lower confidence, so it's demoted
+    rather than omitted."""
+    if lookback_days is not None and lookback_days < _MIN_OBSERVATION_DAYS:
         return "insufficient_observation_period"
     return None
 
@@ -48,10 +55,10 @@ def stale_row_data(is_stale):
     return "stale_inventory_data" if is_stale else None
 
 
-def guard_hits(*, tags=None, finding_reason=None, stale=False):
+def guard_hits(*, tags=None, lookback_days=None, stale=False):
     """Run every guard and return the list of hit reasons (empty = no guard fired)."""
     hits = []
-    for hit in (protected_tag(tags), insufficient_observation(finding_reason), stale_row_data(stale)):
+    for hit in (protected_tag(tags), insufficient_observation(lookback_days), stale_row_data(stale)):
         if hit:
             hits.append(hit)
     return hits

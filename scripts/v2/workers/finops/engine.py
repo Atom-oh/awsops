@@ -26,30 +26,48 @@ def _upsert_finding(conn, run_id, rule_id, item, status, guard_hits):
     import json
     rows = conn.run(
         "INSERT INTO finops_findings "
-        "  (run_id, rule_id, resource_id, title, category, status, monthly_savings_usd, evidence, "
-        "   guard_hits, first_seen_at, last_seen_at) "
-        "VALUES (:run_id, :rule_id, :rid, :title, :cat, :status, :savings, :ev::jsonb, :guards, now(), now()) "
-        "ON CONFLICT (rule_id, resource_id) DO UPDATE SET "
+        "  (run_id, rule_id, account_id, region, resource_id, title, category, status, "
+        "   monthly_savings_usd, evidence, guard_hits, first_seen_at, last_seen_at) "
+        "VALUES (:run_id, :rule_id, :acct, :region, :rid, :title, :cat, :status, :savings, "
+        "        :ev::jsonb, :guards, now(), now()) "
+        "ON CONFLICT (rule_id, account_id, region, resource_id) DO UPDATE SET "
         "  run_id = EXCLUDED.run_id, title = EXCLUDED.title, category = EXCLUDED.category, "
         "  status = EXCLUDED.status, monthly_savings_usd = EXCLUDED.monthly_savings_usd, "
+        # A stale explanation_ko sitting next to a changed amount ("월 $9.12 절감" next to today's
+        # $12.40) is exactly the kind of confident-looking-but-wrong text the LLM layer's
+        # discard-on-contradiction check exists to prevent — except this path bypasses that check
+        # entirely, since the OLD explanation was never re-evaluated against the NEW number. Clear
+        # it only when the amount actually changed (IS DISTINCT FROM handles the NULL-to-NULL and
+        # NULL-to-value cases correctly); an unchanged finding keeps its explanation instead of
+        # needlessly re-prompting the LLM every day.
+        "  explanation_ko = CASE WHEN finops_findings.monthly_savings_usd IS DISTINCT FROM EXCLUDED.monthly_savings_usd "
+        "                        THEN NULL ELSE finops_findings.explanation_ko END, "
         "  evidence = EXCLUDED.evidence, guard_hits = EXCLUDED.guard_hits, "
         "  last_seen_at = now(), resolved_at = NULL "
         "RETURNING id",
-        run_id=run_id, rule_id=rule_id, rid=item["resource_id"], title=item["title"], cat=item["category"],
+        run_id=run_id, rule_id=rule_id, acct=item.get("account_id") or "self", region=item.get("region") or "",
+        rid=item["resource_id"], title=item["title"], cat=item["category"],
         status=status, savings=item.get("monthly_savings_usd"), ev=json.dumps(item.get("evidence") or {}),
         guards=guard_hits,
     )
     return rows[0][0]
 
 
-def _resolve_stale(conn, rule_id, seen_resource_ids):
+def _resolve_stale(conn, rule_id, seen_scoped_ids):
     """Findings for this rule that existed before but were NOT reproduced this run -> resolved.
     Only called for a rule that evaluated successfully this run (see run() below) — a rule that
-    raised must never resolve-away its own prior findings."""
+    raised must never resolve-away its own prior findings.
+
+    `seen_scoped_ids` is a set of "account_id\\x1fregion\\x1fresource_id" strings, not bare
+    resource_ids — a PR review caught that resource_id alone is not a safe identity: EBS reads
+    inventory_resources across every synced account/region, and a resource_id collision across
+    two scopes would let one account's still-true finding be wrongly resolved because a
+    DIFFERENT account's same-shaped id stopped reproducing this run."""
     conn.run(
         "UPDATE finops_findings SET status='resolved', resolved_at=now() "
-        "WHERE rule_id=:rid AND status != 'resolved' AND resource_id != ALL(:seen)",
-        rid=rule_id, seen=list(seen_resource_ids) or [""],
+        "WHERE rule_id=:rid AND status != 'resolved' "
+        "  AND (account_id || chr(31) || region || chr(31) || resource_id) != ALL(:seen)",
+        rid=rule_id, seen=list(seen_scoped_ids) or [""],
     )
 
 
@@ -71,28 +89,37 @@ def run(_payload, conn):
     run_id = _start_run(conn)
     ce_calls = [0]
     evaluated, persisted = 0, 0
+    failed_rules = []  # [(rule_id, error message)] — a rule failing must be VISIBLE, not silently
+    # absorbed into an otherwise-identical 'succeeded' run. Without this, a permanently-failing
+    # rule (e.g. steampipe_enabled=false making ebs_unattached raise every single run) means that
+    # rule NEVER evaluates, nothing surfaces it anywhere, and the card/API present a normal-looking
+    # "succeeded, N findings" result over a run that quietly skipped part of the catalog forever.
     try:
         for rule in catalog.active_rules():
             evaluated += 1
             try:
                 items = rule["fn"](conn, ce_calls)
             except Exception as e:  # noqa: BLE001 — one rule's failure must not sink the batch
-                print(f"[finops] rule {rule['id']} failed (skipped this run, prior findings untouched): {e}")
+                msg = str(e)[:500]
+                print(f"[finops] rule {rule['id']} failed (skipped this run, prior findings untouched): {msg}")
+                failed_rules.append((rule["id"], msg))
                 continue
             seen = []
             for item in items:
-                hits = guards.guard_hits(tags=item.get("tags"), finding_reason=item.get("finding_reason"),
+                hits = guards.guard_hits(tags=item.get("tags"), lookback_days=item.get("lookback_days"),
                                          stale=item.get("stale", False))
                 status = "needs_review" if hits else "active"
                 _upsert_finding(conn, run_id, rule["id"], item, status, hits)
-                seen.append(item["resource_id"])
+                seen.append(f"{item.get('account_id') or 'self'}\x1f{item.get('region') or ''}\x1f{item['resource_id']}")
                 persisted += 1
             _resolve_stale(conn, rule["id"], seen)
         _explain_pending(conn)
-        _finish_run(conn, run_id, status="succeeded", rules_evaluated=evaluated,
-                    findings_count=persisted, ce_api_calls=ce_calls[0])
+        status = "partial" if failed_rules else "succeeded"
+        error = "; ".join(f"{rid}: {msg}" for rid, msg in failed_rules)[:2000] if failed_rules else None
+        _finish_run(conn, run_id, status=status, rules_evaluated=evaluated,
+                    findings_count=persisted, ce_api_calls=ce_calls[0], error=error)
         return {"run_id": run_id, "rules_evaluated": evaluated, "findings_count": persisted,
-                "ce_api_calls": ce_calls[0]}
+                "ce_api_calls": ce_calls[0], "status": status, "failed_rules": [rid for rid, _ in failed_rules]}
     except Exception as e:  # noqa: BLE001 — surface on the run row, then re-raise (SFN Catch -> failed)
         _finish_run(conn, run_id, status="failed", rules_evaluated=evaluated,
                     findings_count=persisted, ce_api_calls=ce_calls[0], error=str(e)[:2000])

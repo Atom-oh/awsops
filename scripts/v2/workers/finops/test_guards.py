@@ -18,9 +18,17 @@ def test_protected_tag_no_hit_on_unrelated_tags_or_none():
     assert guards.protected_tag({}) is None
 
 
-def test_insufficient_observation_hit_only_on_that_exact_reason():
-    assert guards.insufficient_observation("INSUFFICIENT_DATA") == "insufficient_observation_period"
-    assert guards.insufficient_observation("OVER_PROVISIONED") is None
+def test_insufficient_observation_hit_below_threshold():
+    assert guards.insufficient_observation(7) == "insufficient_observation_period"
+    assert guards.insufficient_observation(13) == "insufficient_observation_period"
+
+
+def test_insufficient_observation_no_hit_at_or_above_threshold():
+    assert guards.insufficient_observation(14) is None
+    assert guards.insufficient_observation(30) is None
+
+
+def test_insufficient_observation_no_hit_when_not_a_compute_optimizer_finding():
     assert guards.insufficient_observation(None) is None
 
 
@@ -30,13 +38,13 @@ def test_stale_row_data_hit_only_when_true():
 
 
 def test_guard_hits_aggregates_all_firing_guards():
-    hits = guards.guard_hits(tags={"dr": "true"}, finding_reason="INSUFFICIENT_DATA", stale=True)
+    hits = guards.guard_hits(tags={"dr": "true"}, lookback_days=7, stale=True)
     assert hits == ["protected_tag:dr", "insufficient_observation_period", "stale_inventory_data"]
 
 
 def test_guard_hits_empty_when_nothing_fires():
-    assert guards.guard_hits(tags={"Name": "x"}, finding_reason="OVER_PROVISIONED", stale=False) == []
+    assert guards.guard_hits(tags={"Name": "x"}, lookback_days=30, stale=False) == []
 
 
 def test_guard_hits_defaults_stale_to_false():
-    assert guards.guard_hits(tags=None, finding_reason=None) == []
+    assert guards.guard_hits(tags=None, lookback_days=None) == []

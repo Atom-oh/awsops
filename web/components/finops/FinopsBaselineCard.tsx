@@ -41,12 +41,18 @@ export default function FinopsBaselineCard() {
   const { tt } = useI18n();
   const [data, setData] = useState<Findings | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Distinct from "no batch has run yet" (data === null with no error) — a failed/non-200 fetch
+  // must not silently render as if the feature simply hasn't started, per the repo's honest-
+  // degradation convention (the same class of fix the Direct Connect page's degradedRegions work
+  // in this same release applies elsewhere).
+  const [fetchError, setFetchError] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const r = await fetch('/api/finops/findings');
-      if (r.ok) setData(await r.json());
-    } catch { /* best-effort */ } finally { setLoaded(true); }
+      if (r.ok) { setData(await r.json()); setFetchError(false); }
+      else { setFetchError(true); }
+    } catch { setFetchError(true); } finally { setLoaded(true); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -98,18 +104,34 @@ export default function FinopsBaselineCard() {
       </div>
       {!loaded ? (
         <p className="text-[13px] text-ink-400">{tt('로딩 중…')}</p>
+      ) : fetchError ? (
+        <p className="text-[13px] text-rose-600" data-testid="finops-baseline-fetch-error">
+          {tt('데이터를 불러올 수 없습니다 — 잠시 후 다시 시도해주세요.')}
+        </p>
       ) : data?.lastRun?.status === 'failed' ? (
         <p className="text-[13px] text-rose-600" data-testid="finops-baseline-error">
           {tt('최근 배치 실행이 실패했습니다')}{data.lastRun.error ? `: ${data.lastRun.error}` : ''}
         </p>
       ) : findings.length === 0 ? (
         <p className="text-[13px] text-ink-400" data-testid="finops-baseline-empty">
-          {data?.lastRun
-            ? tt('현재 발견된 상시 낭비 항목이 없습니다.')
-            : tt('아직 배치가 실행되지 않았습니다 — 다음 일일 배치를 기다려주세요.')}
+          {!data?.lastRun
+            ? tt('아직 배치가 실행되지 않았습니다 — 다음 일일 배치를 기다려주세요.')
+            : data.lastRun.status === 'partial'
+            ? tt('일부 룰이 실패해 결과가 불완전합니다 — 표시된 항목 외에 추가 낭비가 있을 수 있습니다.')
+            : tt('현재 발견된 상시 낭비 항목이 없습니다.')}
         </p>
       ) : (
-        <ul className="flex flex-col gap-2">
+        <>
+          {data?.lastRun?.status === 'partial' && (
+            // Findings DO exist, but the run didn't evaluate the full catalog — a rule failed
+            // (e.g. a Compute Optimizer permission error, or ebs_unattached itself raising when
+            // steampipe_enabled=false) and engine.py correctly left that rule's PRIOR findings
+            // untouched rather than resolving them. What's shown below is real, just incomplete.
+            <p className="text-[12px] text-amber-600 mb-2" data-testid="finops-baseline-partial">
+              {tt('일부 룰이 이번 배치에서 실패했습니다 — 아래 목록은 불완전할 수 있습니다.')}
+            </p>
+          )}
+          <ul className="flex flex-col gap-2">
           {findings.map((f) => (
             <li key={f.id} className="flex items-start gap-2" data-testid="finops-baseline-item">
               <span className={`mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${STATUS_BADGE[f.status] || STATUS_BADGE.active}`}>
@@ -129,7 +151,8 @@ export default function FinopsBaselineCard() {
               </div>
             </li>
           ))}
-        </ul>
+          </ul>
+        </>
       )}
     </section>
   );

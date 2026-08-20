@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   try {
     const [findingsRes, runRes] = await Promise.all([
       getPool().query(
-        `SELECT id, rule_id, resource_id, title, category, status, monthly_savings_usd,
+        `SELECT id, rule_id, account_id, region, resource_id, title, category, status, monthly_savings_usd,
                 evidence, guard_hits, explanation_ko, first_seen_at, last_seen_at
            FROM finops_findings
           WHERE status != 'resolved'
@@ -37,6 +37,8 @@ export async function GET(request: Request) {
     const findings = findingsRes.rows.map((r) => ({
       id: r.id,
       ruleId: r.rule_id,
+      accountId: r.account_id,
+      region: r.region,
       resourceId: r.resource_id,
       title: r.title,
       category: r.category,

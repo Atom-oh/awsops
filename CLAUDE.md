@@ -147,11 +147,11 @@ make workers     # arm64 worker image push (after apply with workers_enabled=tru
 - **Agent cross-account self-assume trap**: v2 is single-account, but if the chat picks the host account (`180294183052`), `agent.py` forces `target_account_id=<host>` → tools then try to self-assume `arn:...:role/AWSopsReadOnlyRole` (which only exists in v1 *target* accounts, not the host) → AccessDenied, which the agent **misdiagnoses** as "cross-account blocked." Fix: `cross_account.get_role_arn()` returns `None` when the target is the host (use the exec role directly), and `agent.py`'s `effective_account_id()` treats the host like `__all__` (blank, defense-in-depth). Host detection = the `AWSOPS_HOST_ACCOUNT_ID` env, falling back to a cached STS `GetCallerIdentity`. The path for assuming a genuinely *different* account is unchanged. No impact on v1 (a separate function, `awsops-*-mcp` py3.12, vs v2's `awsops-v2-agent-*` py3.11).
 
 ## ADRs / Decisions
-**Current source of truth for decisions = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — the north star (WA 6-pillar goals) + invariants + gate/freeze register + an index of **18 consolidated ADRs** (`docs/decisions/0NN-*.md`). Start there.
+**Current source of truth for decisions = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — the north star (WA 6-pillar goals) + invariants + gate/freeze register + an index of **19 consolidated ADRs** (`docs/decisions/0NN-*.md`). Start there.
 - The bodies of the old ADRs 001–046 are **no longer in the tree** — preserved at git tag `adr-legacy-2026-06-22`, mapping in `docs/decisions/ADR-MAPPING.md`. **Do not read the old bodies (via the tag) without an explicit request.**
 - **AWS resource mutation and autonomy = FROZEN (ADR-005, do-not-enable).** Relaxing this is *not* a docs cleanup — it requires a new ADR + multi-AI panel + a dated owner-override, as a separate product decision. External DATA read/write is governed separately (ADR-007).
   - **First exception: ADR-015** (operational self-healing) — allowed by Junseok Oh's owner-override (2026-07-01) for **exactly one** action: `ecs:UpdateService force-new-deployment` on its own web service (a restart — image/task-def unchanged, not a code deploy), limited to Aurora secret-rotation events, one IAM ARN, secret-id fail-closed, default-off. Everything else under ADR-005 (code deploys, remediation, mutating tools) remains FROZEN.
-- A new ADR = highest number + 1 (currently **018**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules in `docs/decisions/CLAUDE.md`.
+- A new ADR = highest number + 1 (currently **019**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules in `docs/decisions/CLAUDE.md`.
 
 
 ## Implementation References

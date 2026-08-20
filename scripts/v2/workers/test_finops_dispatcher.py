@@ -2,6 +2,8 @@
 against double-fire within the same UTC day."""
 import json
 
+from pg8000.exceptions import DatabaseError
+
 import finops_dispatcher as fd
 
 
@@ -82,3 +84,28 @@ def test_requires_queue_url(monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError:
         pass
+
+
+def test_loses_the_enqueue_race_to_a_concurrent_invocation(monkeypatch):
+    # Both dispatchers pass the pre-check (SELECT sees 0 rows for both), then the second INSERT
+    # hits uq_worker_jobs_idem_internal — pg8000 raises DatabaseError with SQLSTATE 23505. Must be
+    # treated the same as "already enqueued today", not propagate as an unhandled error.
+    conn, inserted = _wire(monkeypatch)
+    monkeypatch.setattr(fd.db, "insert_job",
+                         lambda c, jid, t, p, **k: (_ for _ in ()).throw(DatabaseError({"C": "23505"})))
+    out = fd.lambda_handler({}, None)
+    assert out == {"enqueued": False, "reason": "already_enqueued_today"}
+    assert fd._sqs.sent == []
+    assert conn.closed
+
+
+def test_reraises_a_non_unique_violation_database_error(monkeypatch):
+    conn, inserted = _wire(monkeypatch)
+    monkeypatch.setattr(fd.db, "insert_job",
+                         lambda c, jid, t, p, **k: (_ for _ in ()).throw(DatabaseError({"C": "40001"})))
+    try:
+        fd.lambda_handler({}, None)
+        assert False, "expected DatabaseError"
+    except DatabaseError:
+        pass
+    assert fd._sqs.sent == []

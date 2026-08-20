@@ -104,6 +104,7 @@
 | `/api/cost` | GET | 비용 요약 — 기간 필터 `1m/3m/6m/12m` (미지정/오류 → 6개월) | verifyUser |
 | `/api/cost/availability` | GET | Cost Explorer 가용성 probe (1h 캐시, `?force=1` 재확인) | verifyUser |
 | `/api/cost/detail` | GET | 서비스별 비용 상세 (`?service=` 필수, ≤100자) | verifyUser |
+| `/api/finops/findings` | GET | ADR-019 FinOps 기본 권장 엔진 — 미해결 findings + 최근 배치 실행(`finops_runs`) 조회, Aurora만 읽음(라이브 AWS 호출 없음). `finops_baseline_enabled=false`면 `{enabled:false, findings:[], lastRun:null}` | verifyUser |
 | `/api/customization` | GET, POST, PUT | 스킬/에이전트 카탈로그 CRUD (ADR-004[legacy 031], admin) | verifyUser |
 | `/api/datasources` | GET | 데이터소스 인스턴스 목록 — 크리덴셜 미노출 | verifyUser |
 | `/api/datasources/generate` | POST | 자연어 → 쿼리 초안 생성 (리뷰용 — 절대 실행 안 함) | verifyUser |

@@ -40,7 +40,8 @@ describe('GET /api/finops/findings', () => {
     query
       .mockResolvedValueOnce({
         rows: [{
-          id: 1, rule_id: 'ebs_unattached', resource_id: 'vol-1', title: 'Unattached EBS',
+          id: 1, rule_id: 'ebs_unattached', account_id: 'self', region: 'ap-northeast-2',
+          resource_id: 'vol-1', title: 'Unattached EBS',
           category: 'storage', status: 'active', monthly_savings_usd: '9.12', evidence: { size_gib: 100 },
           guard_hits: [], explanation_ko: '설명', first_seen_at: '2026-01-01', last_seen_at: '2026-01-02',
         }],
@@ -57,6 +58,8 @@ describe('GET /api/finops/findings', () => {
     expect(body.findings).toHaveLength(1);
     expect(body.findings[0].monthlySavingsUsd).toBeCloseTo(9.12);
     expect(body.findings[0].resourceId).toBe('vol-1');
+    expect(body.findings[0].accountId).toBe('self');
+    expect(body.findings[0].region).toBe('ap-northeast-2');
     expect(body.lastRun.status).toBe('succeeded');
     expect(body.lastRun.rulesEvaluated).toBe(2);
   });

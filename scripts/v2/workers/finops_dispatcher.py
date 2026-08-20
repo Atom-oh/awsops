@@ -2,24 +2,31 @@
 datasource_index_dispatcher/schedule_dispatcher there is no per-row fan-out; the rule engine itself
 iterates the catalog against the whole account in a single run.
 
-Idempotent against double-fire (EventBridge occasionally retries): idempotency_key is the UTC date,
-and worker_jobs has no unique constraint on it today — so this dispatcher enforces "already enqueued
-today" itself via a pre-check, rather than relying on a DB constraint to reject the duplicate insert.
+Idempotent against double-fire (EventBridge occasionally retries): idempotency_key is the UTC date.
+worker_jobs DOES have a unique constraint covering this exact case — the base migration
+`01KYVDMY8Y...` creates `uq_worker_jobs_idem_internal` as `UNIQUE(idempotency_key) WHERE
+requested_by IS NULL`, and this dispatcher's insert_job call is requested_by=NULL (an internal
+enqueue, no end-user principal) by default. The SELECT pre-check below is a fast-path only — it
+narrows the window but does not close it: two concurrent EventBridge invocations can both pass the
+pre-check before either inserts, and the second INSERT then hits that constraint. `_insert_once`
+catches exactly that race (SQLSTATE 23505) and treats it the same as the pre-check hit, rather than
+letting it propagate as an unhandled error.
 Mirrors schedule_dispatcher/datasource_index_dispatcher: db.insert_job (ledger) + an SQS message
 identical to the BFF's enqueueJob -> the existing dispatcher->SFN->Fargate path runs the job.
-Read-only effect on AWS (the job itself only reads CE/Compute Optimizer/Cost Optimization Hub/
-inventory_resources)."""
+Read-only effect on AWS (the job itself only reads Compute Optimizer/inventory_resources)."""
 import json
 import os
 import uuid
 from datetime import datetime, timezone
 
 import boto3
+from pg8000.exceptions import DatabaseError
 
 import db
 
 QUEUE_URL = os.environ.get("JOBS_QUEUE_URL", "")
 _sqs = boto3.client("sqs", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+_UNIQUE_VIOLATION = "23505"
 
 
 def _already_enqueued_today(conn, key):
@@ -27,6 +34,18 @@ def _already_enqueued_today(conn, key):
         "SELECT 1 FROM worker_jobs WHERE type='finops_baseline' AND idempotency_key=:k LIMIT 1", k=key
     )
     return bool(rows)
+
+
+def _insert_once(conn, job_id, payload, key):
+    """Returns True if this call actually inserted the row, False if a concurrent dispatcher
+    invocation won the race (uq_worker_jobs_idem_internal) — re-raises any other DatabaseError."""
+    try:
+        db.insert_job(conn, job_id, "finops_baseline", payload, idempotency_key=key)
+        return True
+    except DatabaseError as e:
+        if e.args[0].get("C") == _UNIQUE_VIOLATION:
+            return False
+        raise
 
 
 def lambda_handler(_event, _ctx):
@@ -40,7 +59,9 @@ def lambda_handler(_event, _ctx):
             return {"enqueued": False, "reason": "already_enqueued_today"}
         job_id = str(uuid.uuid4())
         payload = {}
-        db.insert_job(conn, job_id, "finops_baseline", payload, idempotency_key=key)
+        if not _insert_once(conn, job_id, payload, key):
+            print(f"finops_dispatcher: lost the enqueue race for {key}, skipping")
+            return {"enqueued": False, "reason": "already_enqueued_today"}
         try:
             _sqs.send_message(
                 QueueUrl=QUEUE_URL,

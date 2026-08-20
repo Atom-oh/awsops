@@ -4,11 +4,13 @@ from finops import rules
 
 
 class FakeConn:
-    """`rows` = the ebs_volume data rows to return for the main SELECT. `sync_run` controls the
-    _require_fresh_inventory precheck (mirrors an inventory_sync_runs row): 'ok' (default) -> a
-    succeeded run finished just now (even if `rows` is empty — a healthy sync that found nothing);
-    'missing' -> no inventory_sync_runs row at all; 'failed' -> a row with status='failed'; a
-    datetime -> a succeeded run that finished at that timestamp (used to simulate staleness)."""
+    """`rows` = the ebs_volume data rows to return for the main SELECT — now
+    (resource_id, account_id, region, data, captured_at) tuples, matching the account/region-scoped
+    query. `sync_run` controls the _require_fresh_inventory precheck (mirrors an inventory_sync_runs
+    row): 'ok' (default) -> a succeeded run finished just now (even if `rows` is empty — a healthy
+    sync that found nothing); 'missing' -> no inventory_sync_runs row at all; 'failed' -> a row with
+    status='failed'; a datetime -> a succeeded run that finished at that timestamp (used to simulate
+    staleness)."""
     def __init__(self, rows, sync_run='ok'):
         self.rows = rows
         self.sync_run = sync_run
@@ -28,27 +30,31 @@ _NOW = datetime.now(timezone.utc)
 
 
 def test_ebs_unattached_computes_savings_from_rate_card():
-    conn = FakeConn([("vol-1", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp3",
-                                                    "tags": {"Name": "old"}}, _NOW)])
+    conn = FakeConn([("vol-1", "self", "ap-northeast-2", {"state": "available", "size": 100, "volume_type": "gp3",
+                                                           "tags": {"Name": "old"}}, _NOW)])
     out = rules.ebs_unattached(conn, [0])
     assert len(out) == 1
     f = out[0]
     assert f["resource_id"] == "vol-1"
+    assert f["account_id"] == "self"
+    assert f["region"] == "ap-northeast-2"
     assert f["category"] == "storage"
     assert f["monthly_savings_usd"] == round(100 * 0.0912, 2)
     assert f["tags"] == {"Name": "old"}
-    assert f["finding_reason"] is None
+    assert f["lookback_days"] is None
     assert f["stale"] is False
 
 
 def test_ebs_unattached_null_savings_when_size_missing():
-    conn = FakeConn([("vol-2", "ap-northeast-2", {"state": "available", "size": None, "volume_type": "gp3"}, _NOW)])
+    conn = FakeConn([("vol-2", "self", "ap-northeast-2",
+                       {"state": "available", "size": None, "volume_type": "gp3"}, _NOW)])
     out = rules.ebs_unattached(conn, [0])
     assert out[0]["monthly_savings_usd"] is None
 
 
 def test_ebs_unattached_unknown_volume_type_falls_back_to_default_rate():
-    conn = FakeConn([("vol-3", "ap-northeast-2", {"state": "available", "size": 50, "volume_type": "weird"}, _NOW)])
+    conn = FakeConn([("vol-3", "self", "ap-northeast-2",
+                       {"state": "available", "size": 50, "volume_type": "weird"}, _NOW)])
     out = rules.ebs_unattached(conn, [0])
     assert out[0]["monthly_savings_usd"] == round(50 * 0.10, 2)
 
@@ -60,7 +66,7 @@ def test_ebs_unattached_flags_a_per_row_stale_captured_at_even_though_the_job_su
     # refreshed. Must be demoted (stale_inventory_data guard), not trusted as confirmed-current,
     # and — because it's still returned — protected from being wrongly resolved.
     old = _NOW - timedelta(hours=25)
-    conn = FakeConn([("vol-4", "ap-northeast-2",
+    conn = FakeConn([("vol-4", "self", "ap-northeast-2",
                        {"state": "available", "size": 20, "volume_type": "gp3"}, old)])
     out = rules.ebs_unattached(conn, [0])
     assert len(out) == 1
@@ -70,9 +76,23 @@ def test_ebs_unattached_flags_a_per_row_stale_captured_at_even_though_the_job_su
 
 def test_ebs_unattached_row_within_threshold_is_not_flagged_stale():
     recent = _NOW - timedelta(hours=1)
-    conn = FakeConn([("vol-5", "ap-northeast-2", {"state": "available", "size": 20, "volume_type": "gp3"}, recent)])
+    conn = FakeConn([("vol-5", "self", "ap-northeast-2",
+                       {"state": "available", "size": 20, "volume_type": "gp3"}, recent)])
     out = rules.ebs_unattached(conn, [0])
     assert out[0]["stale"] is False
+
+
+def test_ebs_unattached_scopes_each_row_to_its_own_account_and_region():
+    # inventory_resources is read across every synced account/region — a review round caught that
+    # the finding's own identity must carry account_id/region, or a resource_id collision across
+    # two scopes (e.g. two accounts both surfacing "vol-1") is unrecoverable downstream.
+    conn = FakeConn([
+        ("vol-1", "111111111111", "ap-northeast-2", {"state": "available", "size": 10, "volume_type": "gp3"}, _NOW),
+        ("vol-1", "222222222222", "us-east-1", {"state": "available", "size": 20, "volume_type": "gp3"}, _NOW),
+    ])
+    out = rules.ebs_unattached(conn, [0])
+    scopes = {(f["account_id"], f["region"]) for f in out}
+    assert scopes == {("111111111111", "ap-northeast-2"), ("222222222222", "us-east-1")}
 
 
 def test_ebs_unattached_raises_when_sync_never_ran():
@@ -97,7 +117,7 @@ def test_ebs_unattached_raises_when_last_sync_failed():
 
 def test_ebs_unattached_raises_when_sync_is_stale():
     stale_at = datetime.now(timezone.utc) - timedelta(hours=25)
-    conn = FakeConn([("vol-1", "ap-northeast-2", {"state": "available", "size": 10, "volume_type": "gp3"})],
+    conn = FakeConn([("vol-1", "self", "ap-northeast-2", {"state": "available", "size": 10, "volume_type": "gp3"})],
                      sync_run=stale_at)
     try:
         rules.ebs_unattached(conn, [0])
@@ -139,12 +159,14 @@ class FakeCOPaged:
         return self.rds_pages.pop(0)
 
 
-def _ec2_page(arn, finding="OVER_PROVISIONED", next_token=None, savings=42.5):
+def _ec2_page(arn, finding="Overprovisioned", next_token=None, savings=42.5, rank=1):
     page = {"instanceRecommendations": [
         {"instanceArn": arn, "currentInstanceType": "m5.xlarge", "finding": finding,
          "instanceName": "web-1", "tags": [{"key": "Team", "value": "core"}],
-         "recommendationOptions": [{"instanceType": "m5.large",
-                                    "estimatedMonthlySavings": {"value": savings}, "performanceRisk": 1}]},
+         "lookBackPeriodInDays": 14,
+         "recommendationOptions": [{"instanceType": "m5.large", "rank": rank,
+                                    "savingsOpportunity": {"estimatedMonthlySavings": {"value": savings}},
+                                    "performanceRisk": 1}]},
     ]}
     if next_token:
         page["nextToken"] = next_token
@@ -155,7 +177,7 @@ def test_ec2_rightsizing_uses_top_option_and_skips_optimized(monkeypatch):
     fake = FakeCOPaged(ec2_pages=[{
         "instanceRecommendations": [
             _ec2_page("arn:aws:ec2:1")["instanceRecommendations"][0],
-            {"instanceArn": "arn:aws:ec2:2", "currentInstanceType": "t3.micro", "finding": "OPTIMIZED",
+            {"instanceArn": "arn:aws:ec2:2", "currentInstanceType": "t3.micro", "finding": "Optimized",
              "recommendationOptions": []},
         ],
     }])
@@ -166,6 +188,24 @@ def test_ec2_rightsizing_uses_top_option_and_skips_optimized(monkeypatch):
     assert f["resource_id"] == "arn:aws:ec2:1"
     assert f["monthly_savings_usd"] == 42.5
     assert f["tags"] == {"Team": "core"}
+    assert f["lookback_days"] == 14
+    assert f["account_id"] == "self"
+    assert f["region"] == rules._REGION
+
+
+def test_ec2_rightsizing_sorts_by_rank_and_picks_the_top_option(monkeypatch):
+    page = {"instanceRecommendations": [
+        {"instanceArn": "arn:aws:ec2:1", "currentInstanceType": "m5.xlarge", "finding": "Overprovisioned",
+         "lookBackPeriodInDays": 14, "recommendationOptions": [
+            {"instanceType": "m5.medium", "rank": 2, "savingsOpportunity": {"estimatedMonthlySavings": {"value": 10.0}}},
+            {"instanceType": "m5.large", "rank": 1, "savingsOpportunity": {"estimatedMonthlySavings": {"value": 42.5}}},
+         ]},
+    ]}
+    fake = FakeCOPaged(ec2_pages=[page])
+    monkeypatch.setattr(rules, "_co_client", lambda: fake)
+    out = rules.ec2_rightsizing(None, [0])
+    assert out[0]["monthly_savings_usd"] == 42.5
+    assert "m5.large" in out[0]["title"]
 
 
 def test_ec2_rightsizing_follows_pagination_across_multiple_pages(monkeypatch):
@@ -181,11 +221,15 @@ def test_ec2_rightsizing_follows_pagination_across_multiple_pages(monkeypatch):
 
 
 def test_ec2_rightsizing_stops_at_the_page_safety_bound(monkeypatch):
-    # Every page hands back a nextToken forever -> must stop at _CO_MAX_PAGES, not loop forever.
+    # Every page hands back a nextToken forever -> must raise (silent truncation), not loop forever.
     pages = [_ec2_page(f"arn:{i}", next_token="more") for i in range(10)]
     fake = FakeCOPaged(ec2_pages=pages)
     monkeypatch.setattr(rules, "_co_client", lambda: fake)
-    rules.ec2_rightsizing(None, [0])
+    try:
+        rules.ec2_rightsizing(None, [0])
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass
     assert len(fake.ec2_calls) == rules._CO_MAX_PAGES
 
 
@@ -207,26 +251,63 @@ def test_ec2_rightsizing_reraises_unexpected_errors_instead_of_degrading(monkeyp
         pass
 
 
-def test_rds_rightsizing_paginates_and_skips_no_option_rows(monkeypatch):
+def test_ec2_rightsizing_reraises_access_denied_instead_of_degrading(monkeypatch):
+    # AccessDenied must NOT be treated as "not opted in" — an IAM/SCP regression should surface,
+    # not silently present as a confirmed-empty result.
+    fake = FakeCOPaged(ec2_exc=Exception("An error occurred (AccessDeniedException) ..."))
+    monkeypatch.setattr(rules, "_co_client", lambda: fake)
+    try:
+        rules.ec2_rightsizing(None, [0])
+        assert False, "expected the exception to propagate"
+    except Exception as e:
+        assert "AccessDeniedException" in str(e)
+
+
+def _rds_rec(arn, finding="Overprovisioned", options=None, lookback=14):
+    return {"resourceArn": arn, "currentDBInstanceClass": "db.m5.large", "engine": "postgres",
+            "instanceFinding": finding, "lookbackPeriodInDays": lookback,
+            "tags": [{"key": "Team", "value": "data"}],
+            "instanceRecommendationOptions": options if options is not None else [
+                {"dbInstanceClass": "db.m5.medium", "rank": 1,
+                 "savingsOpportunity": {"estimatedMonthlySavings": {"value": 10.0}}},
+            ]}
+
+
+def test_rds_rightsizing_paginates_and_skips_no_option_and_underprovisioned_rows(monkeypatch):
     fake = FakeCOPaged(rds_pages=[
-        {"instanceRecommendations": []} | {"rdsDatabaseRecommendations": [
-            {"resourceArn": "arn:aws:rds:1", "currentDBInstanceClass": "db.m5.large", "engine": "postgres",
-             "recommendationOptions": [{"dbInstanceClass": "db.m5.medium", "estimatedMonthlySavings": {"value": 10.0}}]},
-            {"resourceArn": "arn:aws:rds:2", "recommendationOptions": []},
+        {"rdsDBRecommendations": [
+            _rds_rec("arn:aws:rds:1"),
+            _rds_rec("arn:aws:rds:2", options=[]),
+            _rds_rec("arn:aws:rds:3", finding="Underprovisioned"),
         ], "nextToken": "p2"},
-        {"rdsDatabaseRecommendations": [
-            {"resourceArn": "arn:aws:rds:3", "currentDBInstanceClass": "db.r5.large", "engine": "mysql",
-             "recommendationOptions": [{"dbInstanceClass": "db.r5.medium", "estimatedMonthlySavings": {"value": 5.0}}]},
+        {"rdsDBRecommendations": [
+            _rds_rec("arn:aws:rds:4"),
         ]},
     ])
     monkeypatch.setattr(rules, "_co_client", lambda: fake)
     out = rules.rds_rightsizing(None, [0])
-    assert {f["resource_id"] for f in out} == {"arn:aws:rds:1", "arn:aws:rds:3"}
+    assert {f["resource_id"] for f in out} == {"arn:aws:rds:1", "arn:aws:rds:4"}
     assert len(fake.rds_calls) == 2
+    f = next(f for f in out if f["resource_id"] == "arn:aws:rds:1")
+    assert f["monthly_savings_usd"] == 10.0
+    assert f["tags"] == {"Team": "data"}
+    assert f["lookback_days"] == 14
+    assert f["account_id"] == "self"
+    assert f["region"] == rules._REGION
 
 
-def test_rds_rightsizing_degrades_to_empty_on_access_denied(monkeypatch):
+def test_rds_rightsizing_reraises_access_denied_instead_of_degrading(monkeypatch):
     fake = FakeCOPaged(rds_exc=Exception("An error occurred (AccessDeniedException) ..."))
+    monkeypatch.setattr(rules, "_co_client", lambda: fake)
+    try:
+        rules.rds_rightsizing(None, [0])
+        assert False, "expected the exception to propagate"
+    except Exception as e:
+        assert "AccessDeniedException" in str(e)
+
+
+def test_rds_rightsizing_degrades_to_empty_on_not_opted_in(monkeypatch):
+    fake = FakeCOPaged(rds_exc=Exception("An error occurred (SubscriptionRequiredException) ..."))
     monkeypatch.setattr(rules, "_co_client", lambda: fake)
     assert rules.rds_rightsizing(None, [0]) == []
 

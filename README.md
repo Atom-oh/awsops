@@ -32,7 +32,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito auth) -> VPC Origin (https-only
   -> async workers: POST /api/jobs -> SQS -> Step Functions -> Lambda or Fargate worker
 ```
 
-Stats: 36 pages, 87 API routes, 90 components (`web/`), 18 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
+Stats: 36 pages, 87 API routes, 90 components (`web/`), 19 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
 
 > **No public ALB.** The edge is fully private — CloudFront reaches the ALB only through a VPC Origin, and the ALB only accepts traffic from CloudFront's managed security group. v2's posture is a **read-only ops dashboard + AI diagnosis**: AWS-resource mutation and autonomous remediation are FROZEN by design (ADR-005) — infra changes stay with the operator's own IaC/Change Manager, with one narrowly-scoped exception for self-healing service restarts (ADR-015).
 
@@ -126,6 +126,7 @@ Runtime configuration is **flag-gated in Terraform** (`variables.tf`). The featu
 | `integrations_enabled` | remaining 6 AgentCore Lambda slices |
 | `workers_enabled` | the async worker tier (SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | the Steampipe inventory-sync data layer |
+| `finops_baseline_enabled` | the FinOps baseline-recommendations engine (ADR-019): a daily Fargate rule batch (unattached EBS volumes; EC2/RDS rightsizing via Compute Optimizer) writing to `finops_findings`, read-only, rendered on `/cost`. Requires `workers_enabled` only |
 | `official_mcp_enabled` | ADR-017 curated official-vendor MCP presets — the **3 vendor-hosted** ones (Datadog·Dynatrace·New Relic) as external-obs `mcpServer` targets. (The runtime fail-closed tool allowlist is NOT gated by this flag — it is written on every provisioner run and enforced unconditionally; that unconditionality is the fail-closed property.) Operator notes: Dynatrace ships with a deliberately EMPTY allowlist (zero tools until its hosted tool list is transcribed into catalog.py); `make agentcore` waits for runtime READY (default 300s, `AGENTCORE_RUNTIME_READY_TIMEOUT`) and a failed/slow rollout temporarily retires eligible live targets until the next successful run. |
 | `graph_querygen_enabled` | LLM fallback for the ONE ClickHouse `trace_spans` graph query (ADR-018). Note it does NOT carry the diag-signal path's identifier sanitising, relevance gate, weekly budget or read-side gate — ADR-018 §C |
 | `diag_signal_querygen_enabled` | LLM fallback for ONE Explore diag-signal chip, only when a kind's deterministic catalog yields **zero ready rows** (a partial match is not topped up), and only for the chips — the diagnosis report never uses generated rows, and a flag-off read excludes them too. Separate from `graph_querygen_enabled`; both need `datasource_diagnosis_enabled`; `graph_querygen_enabled` ALSO requires `agentcore_enabled` (it provisions the Code Interpreter session IAM) |
@@ -150,7 +151,7 @@ awsops/
   terraform/v2/foundation/  # single Terraform root: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/             # configure/deploy/migrate/agentcore/workers tooling (all Node.js/Python)
   tests/                  # repo-wide hook/structure tests + PR-review/Steampipe/ExternalId wiring checks
-  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 18 consolidated ADRs)
+  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 19 consolidated ADRs)
   docs-site/              # Docusaurus user guide (deployed separately)
 ```
 
@@ -296,6 +297,7 @@ make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 ->
 | `integrations_enabled` | 나머지 AgentCore Lambda 슬라이스 6개 |
 | `workers_enabled` | 비동기 워커 계층(SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | Steampipe 인벤토리 sync 데이터 계층 |
+| `finops_baseline_enabled` | FinOps 기본 권장 엔진(ADR-019): 일별 Fargate 룰 배치(미사용 EBS 볼륨; Compute Optimizer 기반 EC2/RDS rightsizing)가 `finops_findings`에 적재, read-only, `/cost`에 렌더. `workers_enabled`만 선행 |
 | `official_mcp_enabled` | ADR-017 큐레이션 공식 벤더 MCP 프리셋 — **벤더 호스팅 3종**(Datadog·Dynatrace·New Relic)을 external-obs `mcpServer` target으로 등록. (런타임 fail-closed 툴 allowlist는 이 플래그와 무관하게 매 provisioner run에 기록·무조건 강제된다 — 그 무조건성이 fail-closed의 본체) 운영 주의: Dynatrace는 hosted 툴 목록 전사 전까지 의도적으로 툴 0개; `make agentcore`는 런타임 READY를 대기(기본 300s, `AGENTCORE_RUNTIME_READY_TIMEOUT`)하며 롤아웃 실패/지연 시 자격을 갖춘 live target을 다음 성공 run까지 일시 회수한다 |
 | `graph_querygen_enabled` | ClickHouse `trace_spans` 그래프 쿼리 **1건**에 대한 LLM 폴백 (ADR-018). diag-signal 경로의 식별자 정화·관련성 게이트·주간 예산·읽기 게이트는 **없다** — ADR-018 §C |
 | `diag_signal_querygen_enabled` | Explore diag-signal 칩 **1개**의 LLM 폴백 — 그 kind의 결정론 카탈로그가 **ready 0행**일 때만 발동(부분 매칭은 보충하지 않음), 생성 행은 칩 전용(진단 리포트 미사용, 플래그 OFF 면 읽기에서도 제외). `graph_querygen_enabled`와 **별개**, 둘 다 `datasource_diagnosis_enabled` 선행. `graph_querygen_enabled`는 **추가로** `agentcore_enabled`도 선행(Code Interpreter 세션 IAM 프로비저닝 때문) |

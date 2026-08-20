@@ -844,10 +844,14 @@ resource "aws_iam_role_policy" "worker_diagnosis" {
   })
 }
 
-# finops_baseline job (ADR-019, extends ADR-012) — read-only actions the rule engine calls beyond
-# what worker_diagnosis already grants (ce:GetCostAndUsage/ReservationCoverage/SavingsPlansCoverage
-# and cloudwatch:GetMetricData are already covered above; this Sid adds only what's new). No write
-# actions — the rule engine only reads and writes its own Aurora tables via the existing DB grant.
+# finops_baseline job (ADR-019, extends ADR-012) — EXACTLY the two Compute Optimizer read actions
+# the two shipped rules call (ec2_rightsizing/rds_rightsizing in finops/rules.py). A prior version
+# of this policy also granted ce:GetDimensionValues/ce:GetTags/cost-optimization-hub:*/
+# budgets:Describe* and a wildcard compute-optimizer:Get* — none of which any shipped rule calls;
+# CE/COH/Budgets-backed rules are catalog.py `requires_cur` stubs (not implemented yet, per
+# ADR-019's CUR-absence scoping) and must not carry IAM ahead of code that uses it — this repo's
+# `worker_diagnosis` policy sets the "exactly the actions the worker calls" precedent this follows.
+# Add CE/COH/Budgets actions here ONLY when a rule that actually calls them ships.
 resource "aws_iam_role_policy" "worker_finops_baseline" {
   count = local.fnb
   name  = "${var.project}-worker-finops-baseline-read"
@@ -859,12 +863,8 @@ resource "aws_iam_role_policy" "worker_finops_baseline" {
         Sid    = "FinopsBaselineReadOnly"
         Effect = "Allow"
         Action = [
-          "ce:GetDimensionValues",
-          "ce:GetTags",
-          "compute-optimizer:Get*",
-          "cost-optimization-hub:ListRecommendations",
-          "cost-optimization-hub:GetRecommendation",
-          "budgets:Describe*",
+          "compute-optimizer:GetEC2InstanceRecommendations",
+          "compute-optimizer:GetRDSDatabaseRecommendations",
         ]
         Resource = "*"
       }
@@ -914,29 +914,10 @@ resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
   })
 }
 
-resource "aws_iam_role_policy" "worker_lambda_finops_baseline" {
-  count = local.fnb
-  name  = "${var.project}-worker-lambda-finops-baseline-read"
-  role  = aws_iam_role.worker_lambda[0].id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "FinopsBaselineReadOnly"
-        Effect = "Allow"
-        Action = [
-          "ce:GetDimensionValues",
-          "ce:GetTags",
-          "compute-optimizer:Get*",
-          "cost-optimization-hub:ListRecommendations",
-          "cost-optimization-hub:GetRecommendation",
-          "budgets:Describe*",
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
+# NOTE: no worker_lambda_finops_baseline policy — handlers.REGISTRY["finops_baseline"] is
+# "fargate"-only (see handlers.py), so the job can never run on the Lambda path. A prior version
+# granted this same read set to worker_lambda anyway — a permanent, unused widening of the role
+# that also backs the dispatcher/reaper/status_updater/other Lambda jobs. Removed.
 
 ############################################################
 # finops_baseline dispatcher — daily EventBridge -> Lambda that enqueues ONE `finops_baseline` job

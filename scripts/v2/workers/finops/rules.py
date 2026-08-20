@@ -1,20 +1,25 @@
 """ADR-019 active rule implementations. Each rule is `(conn, ce_calls) -> list[dict]`, where
-ce_calls is a single-element list used as a mutable int counter (Cost Explorer calls are metered
-into finops_runs.ce_api_calls — Compute Optimizer/inventory_resources calls are NOT CE calls and
-don't increment it). Each item dict has:
-  resource_id, title, category, monthly_savings_usd (float or None — NEVER 0 as a stand-in for
-  "unknown"), evidence (dict, JSON-serializable), tags (dict or None), finding_reason (str or None,
-  passed to guards.insufficient_observation).
+ce_calls is a single-element list used as a mutable int counter (this PR ships no CE-calling rule
+yet, so it stays 0 for now — see catalog.py / ADR-019 for the current vs. planned source list).
+Each item dict has: resource_id, title, category, monthly_savings_usd (float or None — NEVER 0 as
+a stand-in for "unknown"), evidence (dict, JSON-serializable), tags (dict or None), lookback_days
+(int or None, passed to guards.insufficient_observation — the real Compute Optimizer signal for
+"not enough data yet", not a `finding` enum value).
 
 Amounts come from either a fixed, published AWS list-price rate (EBS: no CUR, so this is the
 closest deterministic estimate available — documented per rate) or directly from an AWS
 recommendation API's own estimate (Compute Optimizer) — never invented by this code.
-"""
+
+Compute Optimizer response shapes below were verified against botocore's own service model
+(`botocore.session.get_session().get_service_model("compute-optimizer")`), not hand-derived —
+an earlier version of this file guessed wrong on three separate axes (finding enum casing, the
+savings field's nesting, and the entire RDS response shape), which a PR review caught."""
+import os
 from datetime import datetime, timedelta, timezone
 
 import boto3
 
-_REGION = "ap-northeast-2"
+_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 
 # Published AWS EBS $/GB-month list prices (ap-northeast-2, on-demand). This is a deterministic
 # constant, not a CUR-derived actual — see the ADR-019 Context section: CUR/Athena don't exist in
@@ -33,13 +38,15 @@ def _co_client():
     return boto3.client("compute-optimizer", region_name=_REGION)
 
 
-# Compute Optimizer opt-in/support-plan gating — the SAME known-benign error family ADR-012's
-# aws_finops_mcp.py already special-cases (AccessDeniedException/OptInRequiredException/
-# SubscriptionRequiredException => "not available", not a real failure). Matched by substring
-# against the exception's str() since boto3 raises these as botocore.errorfactory classes whose
-# name isn't always importable ahead of time; the same substring match already covers the class
-# name because boto3 ClientError.__str__ includes it.
-_NOT_OPTED_IN = ("AccessDeniedException", "OptInRequiredException", "SubscriptionRequiredException")
+# Compute Optimizer opt-in/support-plan gating. ONLY these two are a genuine, PERMANENT
+# "not opted in" state — a review round correctly caught that AccessDeniedException does NOT
+# belong here: it is exactly as likely to mean "this account never opted in" as "an IAM/SCP
+# policy regressed" (this ADR itself exists partly because a Cost Optimization Hub AccessDenied
+# went unnoticed for months — see the CHANGELOG entry). Conflating the two would let an IAM
+# regression present as an authoritative empty result and silently resolve real prior findings —
+# so AccessDenied now falls through to `raise` below like any other unexpected error, protecting
+# prior findings via engine.py's per-rule skip-resolve instead.
+_NOT_OPTED_IN = ("OptInRequiredException", "SubscriptionRequiredException")
 
 
 def _is_not_opted_in(exc):
@@ -118,124 +125,157 @@ def ebs_unattached(conn, ce_calls):
     or silently dropped from the seen-set and wrongly resolved)."""
     _require_fresh_inventory(conn, "ebs_volume")
     rows = conn.run(
-        "SELECT resource_id, region, data, captured_at FROM inventory_resources "
+        "SELECT resource_id, account_id, region, data, captured_at FROM inventory_resources "
         "WHERE resource_type = 'ebs_volume' AND data->>'state' = 'available'"
     )
     out = []
-    for resource_id, region, data, captured_at in rows or []:
+    for resource_id, account_id, region, data, captured_at in rows or []:
         size = data.get("size")
         vtype = (data.get("volume_type") or "").lower()
         rate = _EBS_GB_MONTH_USD.get(vtype, _EBS_GB_MONTH_USD["default"])
         savings = round(size * rate, 2) if size else None
         out.append({
             "resource_id": resource_id,
+            "account_id": account_id,
+            "region": region,
             "title": f"Unattached EBS volume {resource_id} ({size or '?'} GiB, {vtype})",
             "category": "storage",
             "monthly_savings_usd": savings,
-            "evidence": {"region": region, "size_gib": size, "volume_type": vtype,
+            "evidence": {"account_id": account_id, "region": region, "size_gib": size, "volume_type": vtype,
                          "rate_usd_per_gb_month": rate, "captured_at": str(captured_at)},
             "tags": data.get("tags") or {},
-            "finding_reason": None,
+            "lookback_days": None,  # not a Compute Optimizer finding — this guard never applies here
             "stale": _is_stale(captured_at, _INVENTORY_STALE_AFTER_HOURS),
         })
     return out
 
 
 # Safety bound on pagination — protects against a runaway loop on a malformed/looping nextToken,
-# not a real-world account size limit (500 recommendations of either kind would be unusual).
+# not a real-world account size limit (500 recommendations of either kind would be unusual). If
+# the bound is hit and a nextToken is STILL present, the result is a silent partial truncation —
+# raising (not returning the partial list) so engine.py skips resolve_stale for this run rather
+# than resolving everything past page 5 as if it no longer existed.
 _CO_MAX_PAGES = 5
+
+# `lookBackPeriodInDays`/`lookbackPeriodInDays` (passed through as `lookback_days` below) is the
+# REAL per-recommendation "not enough data yet" signal — there is no "INSUFFICIENT_DATA" value in
+# either API's `finding` enum (verified against botocore's service model); an earlier version of
+# this file checked for one that can never appear, making guards.insufficient_observation
+# permanently dead code. The actual threshold lives in guards.py, next to the guard itself.
+
+
+def _co_page(get_fn, list_key):
+    """Shared pagination helper: yields each page's raw response dict. Raises RuntimeError if the
+    page bound is hit with a nextToken still present (truncated, not exhausted) — see _CO_MAX_PAGES."""
+    token = None
+    for i in range(_CO_MAX_PAGES):
+        kwargs = {"maxResults": 100}
+        if token:
+            kwargs["nextToken"] = token
+        resp = get_fn(**kwargs)
+        yield resp
+        token = resp.get("nextToken")
+        if not token:
+            return
+    raise RuntimeError(
+        f"{list_key} pagination hit the {_CO_MAX_PAGES}-page safety bound with a nextToken still "
+        f"present — result is a silent partial truncation, not a complete list"
+    )
 
 
 def ec2_rightsizing(conn, ce_calls):
     """EC2 rightsizing via Compute Optimizer, paginated (a single maxResults=100 page silently
-    truncated large accounts — the review that added this fix flagged it as "missing
-    recommendations"). Registered as ITS OWN catalog rule (not merged with RDS) so that an error
-    here does not also skip the RDS call, and — the more important half — so that engine.py's
-    per-rule resolve_stale only ever resolves EC2-rightsizing findings against an EC2-rightsizing
-    result set, never against a result set that silently dropped EC2 because the RDS call (or vice
-    versa) happened to fail first inside a combined function.
+    truncated large accounts). Registered as ITS OWN catalog rule (not merged with RDS) so that an
+    error here does not also skip the RDS call, and — the more important half — so that
+    engine.py's per-rule resolve_stale only ever resolves EC2-rightsizing findings against an
+    EC2-rightsizing result set, never against a result set that silently dropped EC2 because the
+    RDS call (or vice versa) happened to fail first inside a combined function.
 
-    A genuine "not opted in to Compute Optimizer" error (AccessDenied/OptInRequired/
-    SubscriptionRequired — ADR-012's own established list) is the correct, permanent, zero-findings
-    state for an account that never opted in, so it degrades to an empty list here (safe to
-    resolve-away any stale findings, since there is nothing left to find). Any OTHER exception
-    (throttling, a transient AWS-side error, a malformed response) is NOT swallowed — it propagates
+    A genuine "not opted in to Compute Optimizer" error (OptInRequired/SubscriptionRequired — the
+    only two states that are PERMANENT and unambiguous; AccessDenied is deliberately excluded, see
+    _NOT_OPTED_IN) degrades to an empty list here (safe to resolve-away any stale findings, since
+    there is nothing left to find). Any OTHER exception (AccessDenied, throttling, a transient
+    AWS-side error, a malformed response, page-bound truncation) is NOT swallowed — it propagates
     to engine.py's per-rule try/except, which skips resolve_stale for this rule THIS RUN, leaving
     yesterday's real findings untouched instead of a transient blip wiping them ("falsely
-    resolved" — the bug this replaces)."""
+    resolved" — the bug a PR review caught this rule doing under the wrong enum values anyway,
+    since the finding filter below never matched anything before this fix)."""
     co = _co_client()
     out = []
-    token = None
-    for _ in range(_CO_MAX_PAGES):
-        try:
-            kwargs = {"maxResults": 100}
-            if token:
-                kwargs["nextToken"] = token
-            resp = co.get_ec2_instance_recommendations(**kwargs)
-        except Exception as e:  # noqa: BLE001
-            if _is_not_opted_in(e):
-                return []
-            raise
-        for r in resp.get("instanceRecommendations", []):
-            finding = r.get("finding")
-            if finding not in ("OVER_PROVISIONED", "NOT_OPTIMIZED"):
-                continue  # UNDER_PROVISIONED / OPTIMIZED are not cost-saving opportunities
-            options = r.get("recommendationOptions") or []
-            top = options[0] if options else {}
-            savings = top.get("estimatedMonthlySavings", {}).get("value")
-            arn = r.get("instanceArn", "")
-            out.append({
-                "resource_id": arn,
-                "title": f"EC2 rightsizing: {r.get('currentInstanceType', '?')} -> "
-                         f"{top.get('instanceType', '?')} ({r.get('instanceName') or arn.rsplit('/', 1)[-1]})",
-                "category": "compute",
-                "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
-                "evidence": {"current_type": r.get("currentInstanceType"), "recommended_type": top.get("instanceType"),
-                             "finding": finding, "performance_risk": top.get("performanceRisk")},
-                "tags": {t.get("key"): t.get("value") for t in (r.get("tags") or [])},
-                "finding_reason": finding if finding == "INSUFFICIENT_DATA" else None,
-            })
-        token = resp.get("nextToken")
-        if not token:
-            break
+    try:
+        for resp in _co_page(co.get_ec2_instance_recommendations, "EC2"):
+            for r in resp.get("instanceRecommendations", []):
+                # Wire values are CamelCase (verified against botocore's service model), not the
+                # SCREAMING_SNAKE_CASE an earlier version of this file guessed — that guess matched
+                # zero rows, ever.
+                finding = r.get("finding")
+                if finding not in ("Overprovisioned", "NotOptimized"):
+                    continue  # Underprovisioned / Optimized are not cost-saving opportunities
+                options = sorted(r.get("recommendationOptions") or [], key=lambda o: o.get("rank", 999))
+                top = options[0] if options else {}
+                savings = (top.get("savingsOpportunity") or {}).get("estimatedMonthlySavings", {}).get("value")
+                arn = r.get("instanceArn", "")
+                out.append({
+                    "resource_id": arn,
+                    "account_id": "self",  # Compute Optimizer is called against the host account only
+                    "region": _REGION,
+                    "title": f"EC2 rightsizing: {r.get('currentInstanceType', '?')} -> "
+                             f"{top.get('instanceType', '?')} ({r.get('instanceName') or arn.rsplit('/', 1)[-1]})",
+                    "category": "compute",
+                    "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
+                    "evidence": {"current_type": r.get("currentInstanceType"), "recommended_type": top.get("instanceType"),
+                                 "finding": finding, "performance_risk": top.get("performanceRisk"),
+                                 "lookback_days": r.get("lookBackPeriodInDays")},
+                    "tags": {t.get("key"): t.get("value") for t in (r.get("tags") or [])},
+                    "lookback_days": r.get("lookBackPeriodInDays"),
+                })
+    except Exception as e:  # noqa: BLE001
+        if _is_not_opted_in(e):
+            return []
+        raise
     return out
 
 
 def rds_rightsizing(conn, ce_calls):
     """RDS rightsizing via Compute Optimizer, paginated. See ec2_rightsizing's docstring — the
-    same independent-rule + paginate + only-swallow-known-opt-out-errors reasoning applies here."""
+    same independent-rule + paginate + only-swallow-known-opt-out-errors reasoning applies here.
+    NOTE: the response shape is NOT a copy of the EC2 one — `GetRDSDatabaseRecommendations`
+    returns `rdsDBRecommendations` with `instanceRecommendationOptions` and a SEPARATE
+    `instanceFinding`/`storageFinding` pair (verified against botocore's service model); an earlier
+    version of this file assumed the EC2 field names and iterated zero rows, ever."""
     co = _co_client()
     out = []
-    token = None
-    for _ in range(_CO_MAX_PAGES):
-        try:
-            kwargs = {"maxResults": 100}
-            if token:
-                kwargs["nextToken"] = token
-            resp = co.get_rds_database_recommendations(**kwargs)
-        except Exception as e:  # noqa: BLE001
-            if _is_not_opted_in(e):
-                return []
-            raise
-        for r in resp.get("rdsDatabaseRecommendations", []):
-            options = r.get("recommendationOptions") or []
-            if not options:
-                continue  # no recommendation option -> nothing actionable to show
-            top = options[0]
-            savings = top.get("estimatedMonthlySavings", {}).get("value")
-            arn = r.get("resourceArn", "")
-            out.append({
-                "resource_id": arn,
-                "title": f"RDS rightsizing: {r.get('currentDBInstanceClass', '?')} -> "
-                         f"{top.get('dbInstanceClass', '?')} ({arn.rsplit(':', 1)[-1]})",
-                "category": "database",
-                "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
-                "evidence": {"current_class": r.get("currentDBInstanceClass"),
-                             "recommended_class": top.get("dbInstanceClass"), "engine": r.get("engine")},
-                "tags": {},
-                "finding_reason": None,
-            })
-        token = resp.get("nextToken")
-        if not token:
-            break
+    try:
+        for resp in _co_page(co.get_rds_database_recommendations, "RDS"):
+            for r in resp.get("rdsDBRecommendations", []):
+                finding = r.get("instanceFinding")
+                if finding != "Overprovisioned":
+                    # Underprovisioned is an upscale recommendation — not a savings opportunity;
+                    # surfacing it here (as an earlier version of this file did unconditionally)
+                    # would show "recommend a BIGGER instance" as a cost-saving finding.
+                    continue
+                options = sorted(r.get("instanceRecommendationOptions") or [], key=lambda o: o.get("rank", 999))
+                if not options:
+                    continue  # no recommendation option -> nothing actionable to show
+                top = options[0]
+                savings = (top.get("savingsOpportunity") or {}).get("estimatedMonthlySavings", {}).get("value")
+                arn = r.get("resourceArn", "")
+                out.append({
+                    "resource_id": arn,
+                    "account_id": "self",  # Compute Optimizer is called against the host account only
+                    "region": _REGION,
+                    "title": f"RDS rightsizing: {r.get('currentDBInstanceClass', '?')} -> "
+                             f"{top.get('dbInstanceClass', '?')} ({arn.rsplit(':', 1)[-1]})",
+                    "category": "database",
+                    "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
+                    "evidence": {"current_class": r.get("currentDBInstanceClass"),
+                                 "recommended_class": top.get("dbInstanceClass"), "engine": r.get("engine"),
+                                 "finding": finding, "lookback_days": r.get("lookbackPeriodInDays")},
+                    "tags": {t.get("key"): t.get("value") for t in (r.get("tags") or [])},
+                    "lookback_days": r.get("lookbackPeriodInDays"),
+                })
+    except Exception as e:  # noqa: BLE001
+        if _is_not_opted_in(e):
+            return []
+        raise
     return out
