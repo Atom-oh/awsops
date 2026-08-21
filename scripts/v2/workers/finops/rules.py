@@ -313,7 +313,16 @@ def ec2_rightsizing(conn, ce_calls):
     yesterday's real findings untouched instead of some being wiped by a state that looks like
     "confirmed clean" but isn't ("falsely resolved" — the bug a PR review caught this rule doing
     under the wrong enum values anyway, since the finding filter below never matched anything
-    before that fix)."""
+    before that fix).
+
+    COVERAGE SCOPE (PR review, deliberate, not yet closed): Compute Optimizer is a per-region
+    endpoint, and this call only queries `_REGION` (the worker's host region). A resource in any
+    other region is invisible to this rule while the run still reports `succeeded` — unlike
+    ebs_unattached, which spans every synced account/region and surfaces its own gaps via
+    _ebs_stale_account_coverage_gaps. Every finding's evidence carries `coverage:
+    "host-region-only"` so this is visible per-row rather than silently assumed global; closing
+    it for real needs iterating CO over the account's enabled regions (tracked as follow-up, out
+    of scope for this pass)."""
     co = _co_client()
     out = []
     for resp in _co_page(co.get_ec2_instance_recommendations, "EC2"):
@@ -342,9 +351,15 @@ def ec2_rightsizing(conn, ce_calls):
                          f"{top.get('instanceType', '?')} ({r.get('instanceName') or arn.rsplit('/', 1)[-1]})",
                 "category": "compute",
                 "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
+                # 리뷰 MAJOR(PR #232): Compute Optimizer 엔드포인트는 리전별이라 _REGION(host)에서만
+                # 호출한다 — 다른 리전의 rightsizing 기회는 이 룰에 전혀 나타나지 않는데도 run은
+                # 'succeeded'로 기록된다. EBS 룰(_ebs_stale_account_coverage_gaps)의 "결손은 항상
+                # 드러낸다" 기준과 동일하게, 여기도 evidence에 명시적 커버리지 마커를 남긴다 —
+                # 값을 발명하지 않고 범위를 정직하게 고지하는 쪽(리뷰 제안 1의 2안: 문서화+고지).
                 "evidence": {"current_type": r.get("currentInstanceType"), "recommended_type": top.get("instanceType"),
                              "finding": finding, "performance_risk": top.get("performanceRisk"),
-                             "lookback_days": r.get("lookBackPeriodInDays"), "savings_basis": savings_basis},
+                             "lookback_days": r.get("lookBackPeriodInDays"), "savings_basis": savings_basis,
+                             "coverage": "host-region-only", "coverage_region": _REGION},
                 "tags": {t.get("key"): t.get("value") for t in (r.get("tags") or [])},
                 "lookback_days": r.get("lookBackPeriodInDays"),
             })
@@ -382,10 +397,12 @@ def rds_rightsizing(conn, ce_calls):
                          f"{top.get('dbInstanceClass', '?')} ({arn.rsplit(':', 1)[-1]})",
                 "category": "database",
                 "monthly_savings_usd": round(savings, 2) if isinstance(savings, (int, float)) else None,
+                # See the matching comment in ec2_rightsizing — same host-region-only gap, same fix.
                 "evidence": {"current_class": r.get("currentDBInstanceClass"),
                              "recommended_class": top.get("dbInstanceClass"), "engine": r.get("engine"),
                              "finding": finding, "lookback_days": r.get("lookbackPeriodInDays"),
-                             "savings_basis": savings_basis},
+                             "savings_basis": savings_basis,
+                             "coverage": "host-region-only", "coverage_region": _REGION},
                 "tags": {t.get("key"): t.get("value") for t in (r.get("tags") or [])},
                 "lookback_days": r.get("lookbackPeriodInDays"),
             })

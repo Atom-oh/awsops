@@ -53,7 +53,7 @@ Live environment: account `180294183052`, domain `awsops-v2.atomai.click`, reusi
 
 ### Terraform Discipline
 - Make changes in `terraform/v2/foundation/`. **`-auto-approve` is forbidden on shared infrastructure** — a saved tfplan (`apply tfplan`) is what passes the automated gate. Long applies (CloudFront, SG) are **run by the controller** (subagents idle-timeout).
-- New large features are gated by a **count/flag**: `agentcore_enabled`, `workers_enabled`, `steampipe_enabled` (inventory sync), `hybrid_routing_enabled` (ADR-003[legacy 038] chat routing) — all default to false → `plan` = No changes, $0. Default off before toggling.
+- New large features are gated by a **count/flag**: `agentcore_enabled`, `workers_enabled`, `steampipe_enabled` (inventory sync), `hybrid_routing_enabled` (ADR-003[legacy 038] chat routing), `finops_baseline_enabled` (ADR-020 FinOps baseline-recommendations engine) — all default to false → `plan` = No changes, $0. Default off before toggling.
 - **SG `description` is immutable** — changing it makes the SG replace hang on the ALB dependency. Change ingress in-place; leave the description untouched.
 - **arm64 is required** (web/agent/worker images all use `buildx --platform linux/arm64`).
 
