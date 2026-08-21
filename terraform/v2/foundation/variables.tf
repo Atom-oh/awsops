@@ -199,6 +199,16 @@ variable "ai_insights_enabled" {
   }
 }
 
+variable "finops_baseline_enabled" {
+  type        = bool
+  description = "Deterministic FinOps baseline-recommendations engine (ADR-020, extends ADR-012): a daily Fargate worker job evaluates a Python rule catalog (scripts/v2/workers/finops/catalog.py) against inventory_resources (EBS unattached-volume rate card) + Compute Optimizer EC2/RDS instance recommendations, writes priced findings to finops_findings (amounts are always derived from an API result or a published rate card, never LLM-generated), and /cost renders them read-only. Cost Explorer/Cost Optimization Hub/Budgets-based rules are catalogued as future work, not called by this version. No AWS-resource mutation (ADR-005 out of scope — this adds no write path). Requires workers_enabled only at the Terraform level — its Compute Optimizer IAM (GetEC2InstanceRecommendations/GetRDSDatabaseRecommendations only) is granted directly on the worker task role (see worker_finops_baseline in workers.tf; the job runs on Fargate only, no Lambda-side grant), independent of agentcore_enabled/the agent Lambda role's CostRead Sid. NOTE: the EC2/RDS rules run fine with steampipe_enabled=false, but the EBS-unattached rule requires a succeeded inventory_sync_runs row for 'ebs_volume' less than 24h old — without one (e.g. steampipe_enabled=false, so no sync ever runs) that rule honestly surfaces finops_runs.status='partial' rather than a silent failure, so the minimal workers_enabled-only config is a real but permanently-partial deployment for the EBS rule specifically. CAVEAT (PR #232 review): the EC2/RDS rules call Compute Optimizer only in the worker's host region (Compute Optimizer is a per-region endpoint) — rightsizing opportunities in any other region are invisible to this version and not yet iterated; every finding's evidence carries an explicit coverage:\"host-region-only\" marker rather than presenting single-region results as account-wide. false (default) = 0 resources/IAM, $0, no scheduled run, /cost shows only the existing spend-visibility section."
+  default     = false
+  validation {
+    condition     = !var.finops_baseline_enabled || var.workers_enabled
+    error_message = "finops_baseline_enabled requires workers_enabled (the rule engine runs on the Fargate worker)."
+  }
+}
+
 variable "worker_image_tag" {
   type        = string
   description = "Worker Fargate image tag in the worker ECR repo."
@@ -317,7 +327,7 @@ variable "sg_rule_activity_enabled" {
 variable "network_path_check_enabled" {
   type        = bool
   default     = false
-  description = "Network Path Check: saveable async read-only network path policy checklist (BASELINE.md §2 register row, governed under ADR-019's Decision / design spec 2026-08-13). false = 0 resources/IAM, $0. Requires workers_enabled."
+  description = "Network Path Check: saveable async read-only network path policy checklist (BASELINE.md §2 register row; approved on the design spec 2026-08-13's own remaining conditions — ADR-019 §Decision explicitly excludes this flag from its scope, so no ADR sponsors it). false = 0 resources/IAM, $0. Requires workers_enabled."
   validation {
     condition     = !var.network_path_check_enabled || var.workers_enabled
     error_message = "network_path_check_enabled requires workers_enabled=true (reuses the worker role/pg8000 layer/VPC + jobs queue)."

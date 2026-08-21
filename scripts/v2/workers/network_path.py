@@ -22,18 +22,17 @@ its own docstring. Because of that, `run()` treats ANY exception during discover
 module while the feature is enabled but the fetcher is still a stub — ends in a visible `failed`
 row instead of crashing uncaught and leaving `network_path_runs` stuck at `running`/`discover`.
 
-"ADR-019 §2" citation ambiguity (L5 docs-consistency fix): code across this feature (this module,
-handlers.py, reaper.py, the network_path_check migration, variables.tf) previously cited
-"ADR-019 §2 register row" for `network_path_check_enabled`'s flag-gate entry. That phrase is
-ambiguous — `docs/decisions/019-athena-flow-log-query-classification.md`'s OWN §2 section
-("the exact same shape of pattern is already live") is about the SG-Rules Athena/CloudWatch-Logs-
-Insights pattern and has nothing to do with Network Path Check. The "§2 register row" being cited
-here is actually `docs/decisions/BASELINE.md`'s §2 gate/freeze register — `network_path_check_enabled`
-IS one of its rows, and BASELINE.md's own ADR-019 index entry confirms ADR-019's Decision is what
-classifies this flag as ordinary GATED (not FROZEN) reasoning, so ADR-019 is still the correct
-GOVERNING decision — only the "§2" shorthand was pointing at the wrong document's section. Every
-citation of this shape in the network-path code now reads "BASELINE.md §2 register row, governed
-under ADR-019's Decision".
+`network_path_check_enabled` has no governing ADR (docs-consistency fix, corrected after an earlier
+round left this ambiguous): code across this feature (this module, handlers.py, reaper.py, the
+network_path_check migration, variables.tf) previously cited "ADR-019 §2 register row" or "governed
+under ADR-019's Decision" for this flag. Both phrasings are wrong. `docs/decisions/
+019-athena-flow-log-query-classification.md` §Decision is explicit that it does not cover
+`network_path_check_enabled` at all — that spec was approved on its own remaining conditions (a
+BASELINE.md §2 row + one adapter-safety review pass), independent of ADR-019, and BASELINE.md's own
+§2 row for this flag records its 근거 ADR as "—" (none). The only correct citation for this flag's
+gating is `docs/decisions/BASELINE.md`'s §2 gate/freeze register row itself — not ADR-019, and not
+any other ADR. Every citation of this shape in the network-path code now reads "BASELINE.md §2
+register row" without attributing it to ADR-019.
 
 AI boundary (spec): this module never calls a model. It only computes the deterministic checklist.
 
