@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Cable, CheckCircle2, Gauge, Network, Unplug, Waypoints } from 'lucide-react';
+import { Activity, AlertTriangle, Cable, CheckCircle2, Gauge, Network, Unplug, Waypoints, XCircle } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
@@ -9,9 +9,11 @@ import DetailPanel from '@/components/ui/DetailPanel';
 import MetricTable, { type MetricCol } from '@/components/inventory/metrics/MetricTable';
 import { RangePicker, TH, MONO, TD, DANGER, dash } from '@/components/inventory/metrics/shared';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import DxTopology from '@/components/dx/DxTopology';
 import HBarList from '@/components/charts/HBarList';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { DxAnalysis, DxConnectionRow, DxVifRow, DxGatewayRow, DxRoute } from '@/lib/dx';
+import { assessResiliency, type DxSlaTier } from '@/lib/dx-topology';
 import type { InvType } from '@/lib/inventory-types';
 
 // /direct-connect — Direct Connect 리스트+분석 (Network 메뉴). 커넥션/VIF를 리전 fan-out으로
@@ -149,6 +151,14 @@ function gwDetail(r: DxGatewayRow): Record<string, unknown> {
   return Object.fromEntries(Object.entries(all).filter(([, v]) => v != null && v !== ''));
 }
 
+// SLA 티어 표시 — aws-samples/sample-network-resilience-agent의 resilience-engine 티어.
+const TIER_LABEL: Record<DxSlaTier, string> = {
+  maximum: '최대 복원력', high: '높은 복원력', single: '단일 연결', none: '커넥션 없음',
+};
+const TIER_TONE: Record<DxSlaTier, 'positive' | 'neutral' | 'negative'> = {
+  maximum: 'positive', high: 'neutral', single: 'negative', none: 'negative',
+};
+
 type Selected =
   | { kind: 'conn'; row: DxConnectionRow }
   | { kind: 'vif'; row: DxVifRow }
@@ -177,6 +187,7 @@ export default function DirectConnectPage() {
   const conns = useMemo(() => data?.connections ?? [], [data]);
   const vifs = useMemo(() => data?.vifs ?? [], [data]);
   const gws = useMemo(() => data?.gateways ?? [], [data]);
+  const resiliency = useMemo(() => (data ? assessResiliency(data) : null), [data]);
   const locations = data?.locations ?? [];
 
   // 도넛: VIF 타입 분포 (transit/private/public).
@@ -429,6 +440,63 @@ export default function DirectConnectPage() {
             <div className="grid gap-6 lg:grid-cols-2">
               <DonutBreakdown title="VIF 타입 분포" data={vifTypeDist} nameKey="name" valueKey="value" />
               <HBarList title="VIF별 평균 트래픽 (Kbps)" data={vifTraffic} labelKey="vif" valueKey="kbps" highlightMax />
+            </div>
+
+            {/* ②-b 구성도 + 복원력 평가 — aws-samples/sample-network-resilience-agent 참조:
+                온프레미스 → 로케이션 → 커넥션/LAG → VIF → DXGW → TGW/VGW 계층 그래프 + SLA 티어 */}
+            <div className="grid gap-6 lg:grid-cols-3">
+              <Card
+                title="구성도"
+                subtitle="온프레미스 → 로케이션 → 커넥션/LAG → VIF → DX Gateway → TGW/VGW — 노드 클릭 → 상세"
+                padded={false}
+                className="lg:col-span-2"
+              >
+                <DxTopology
+                  data={data}
+                  onNodeSelect={(n) => {
+                    if (n.kind === 'connection') setSelected({ kind: 'conn', row: n.row as DxConnectionRow });
+                    else if (n.kind === 'vif') setSelected({ kind: 'vif', row: n.row as DxVifRow });
+                    else if (n.kind === 'dxgw') setSelected({ kind: 'gw', row: n.row as DxGatewayRow });
+                  }}
+                />
+              </Card>
+              <Card
+                title="복원력 평가"
+                subtitle="AWS Direct Connect SLA 티어 — 로케이션·커넥션 이중화 기준"
+                padded={false}
+              >
+                {resiliency && (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+                      <Badge tone={TIER_TONE[resiliency.tier]} variant="soft">{tt(TIER_LABEL[resiliency.tier])}</Badge>
+                      {resiliency.slaPct && <span className="text-[13px] font-semibold">SLA {resiliency.slaPct}</span>}
+                      <span className="text-[12px] text-ink-500">
+                        {tt('로케이션')} {resiliency.locations} · {tt('디바이스 2개 이상 로케이션')} {resiliency.dualConnLocations}
+                      </span>
+                    </div>
+                    {resiliency.hostedConnections > 0 && (
+                      <div className="px-4 pb-2 text-[12px] text-ink-500">
+                        {tt('호스티드 커넥션은 AWS Direct Connect SLA 적용 제외 — 파트너 SLA를 확인하세요')} ({resiliency.hostedConnections})
+                      </div>
+                    )}
+                    <ul className="border-t border-ink-100">
+                      {resiliency.checks.map((c) => (
+                        <li key={c.label} className="flex items-start gap-2 border-b border-ink-50 px-4 py-2 text-[12.5px] last:border-0">
+                          {c.ok
+                            ? <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-emerald-600" />
+                            : c.severity === 'critical'
+                              ? <XCircle size={14} className="mt-0.5 shrink-0 text-rose-600" />
+                              : <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-500" />}
+                          <span className={c.ok ? 'text-ink-600' : c.severity === 'critical' ? 'text-rose-700' : 'text-amber-700'}>
+                            {tt(c.label)}
+                            {c.detail && <span className="ml-1 text-ink-400">({c.detail})</span>}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </Card>
             </div>
 
             {/* ③ 로케이션 이중화 — 전 커넥션 단일 로케이션 = 위치 장애 시 전체 DX 경로 상실 */}

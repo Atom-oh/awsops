@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add a topology diagram + resilience assessment to the Direct Connect page (modeled on aws-samples/sample-network-resilience-agent, fitted to the house React Flow conventions): an on-premises → DX location → connection/LAG → VIF → DX Gateway → TGW/VGW layered graph (dagre layout, state-colored nodes/edges — down connections and BGP-down VIFs in red, degraded LAGs and non-associated gateway links in amber/dashed, unattached VIFs dashed), node click opens the existing side detail panel, and a resilience card scoring the AWS Direct Connect SLA tier (Maximum 99.99% = 2+ connections at each of 2+ locations · High 99.9% = 2+ locations · Single 95%) with a critical/warn checklist (connection/VIF health, location redundancy, per-location dual connections, unassociated DXGWs, unattached VIFs) — built entirely from data the page already fetches, no new AWS API calls; 4-language i18n.
 
 ## [0.8.0] - 2026-08-19
 
@@ -506,6 +507,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
+- Direct Connect 페이지에 구성도 + 복원력 평가 추가(aws-samples/sample-network-resilience-agent 참조, 앱의 React Flow 관례에 맞춤): 온프레미스 → DX 로케이션 → 커넥션/LAG → VIF → DX Gateway → TGW/VGW 계층 그래프(dagre 레이아웃, 상태 색상 — 다운 커넥션·BGP 다운 VIF는 빨강, 성능 저하 LAG·미연결 게이트웨이 링크는 주황/점선, 미연결 VIF는 점선), 노드 클릭 시 기존 사이드 상세 패널, AWS Direct Connect SLA 티어(최대 복원력 99.99% = 2개 로케이션 × 각 2개 이상 커넥션 · 높은 복원력 99.9% = 2개 이상 로케이션 · 단일 연결 95%)와 critical/warn 체크리스트(커넥션/VIF 상태·로케이션 이중화·로케이션당 이중 커넥션·미연결 DXGW·미연결 VIF)를 판정하는 복원력 카드 — 페이지가 이미 가진 데이터만 사용, 신규 AWS 호출 없음; 4개 언어 i18n.
 
 ## [0.8.0] - 2026-08-19
 
