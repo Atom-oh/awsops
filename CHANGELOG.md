@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+
+## [0.9.0] - 2026-08-22
+
+### Added
+
 - Add a topology diagram + resilience assessment to the Direct Connect page (modeled on aws-samples/sample-network-resilience-agent, fitted to the house React Flow conventions): an on-premises → DX location → connection/LAG → VIF → DX Gateway → TGW/VGW layered graph (dagre layout, state-colored nodes/edges — down connections and BGP-down VIFs in red, degraded LAGs and non-associated gateway links in amber/dashed, unattached VIFs dashed), node click opens the existing side detail panel, and a resilience card scoring the AWS Direct Connect SLA tier (Maximum 99.99% = 2+ connections at each of 2+ locations · High 99.9% = 2+ locations · Single 95%) with a critical/warn checklist (connection/VIF health, location redundancy, per-location dual connections, unassociated DXGWs, unattached VIFs) — built entirely from data the page already fetches, no new AWS API calls; 4-language i18n.
 
 ## [0.8.0] - 2026-08-19
@@ -476,7 +481,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/whchoi98/awsops/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/whchoi98/awsops/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
@@ -504,6 +510,11 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+### Added
+
+
+## [0.9.0] - 2026-08-22
 
 ### Added
 
@@ -966,7 +977,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/whchoi98/awsops/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/whchoi98/awsops/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/whchoi98/awsops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
