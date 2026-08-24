@@ -1,4 +1,4 @@
--- since: 0.8.0
+-- since: 2.2.0
 -- ADR-020 follow-up (PR review): a rule inside a finops_baseline run can raise (e.g. a Compute
 -- Optimizer opt-in/permission error propagating, or ebs_unattached's own freshness check firing
 -- when steampipe_enabled=false) without failing the WHOLE run — engine.py's per-rule isolation

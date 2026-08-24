@@ -1,4 +1,4 @@
--- since: 0.8.0
+-- since: 2.2.0
 -- ADR-020: FinOps baseline-recommendations engine (extends ADR-012). Three tables:
 --   finops_runs      — one row per daily batch invocation (status/timing/CE API-call metering).
 --   finops_findings  — the deterministic rule engine's output. Upserted on (rule_id, resource_id) so
