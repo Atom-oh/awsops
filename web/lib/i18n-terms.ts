@@ -1177,6 +1177,8 @@ export const TERMS: Record<string, Pair> = {
   '액션 분포 확인 불가': { en: 'Action distribution unavailable', zh: '操作分布不可用', ja: 'アクション分布は確認できません' },
   '룰 히트 없음': { en: 'No rule hits', zh: '无规则命中', ja: 'ルールヒットなし' },
   '룰 히트 집계 불명 — 위 원시 시그니처 표 참고': { en: 'Rule-hit aggregation unknown — see the raw signature table above', zh: '规则命中汇总未知 — 请参见上方的原始签名表', ja: 'ルールヒット集計は不明です — 上記の生シグネチャ表を参照してください' },
+  '룰 히트 집계 불명': { en: 'Rule-hit aggregation unknown', zh: '规则命中汇总未知', ja: 'ルールヒット集計は不明です' },
+  '룰 히트 집계 불명 — 일부 방화벽의 ALERT 로그가 이 기간을 완전히 커버하지 않음': { en: 'Rule-hit aggregation unknown — some firewalls’ ALERT logs do not fully cover this range', zh: '规则命中汇总未知 — 部分防火墙的 ALERT 日志未完全覆盖此时间段', ja: 'ルールヒット集計は不明です — 一部のファイアウォールの ALERT ログがこの期間を完全にカバーしていません' },
 
   // ---- Network Firewall (/network-firewall) ----
   '방화벽·정책·룰 그룹 인벤토리 + AWS/NetworkFirewall 메트릭 트래픽·드롭 집계 — 보호 설정·로깅 갭·전량 통과 기본 액션·룰 용량 분석': { en: 'Firewall / policy / rule group inventory + AWS/NetworkFirewall traffic & drop aggregation — protection settings, logging gaps, pass-through default actions, rule capacity analysis', zh: '防火墙·策略·规则组清单 + AWS/NetworkFirewall 指标流量·丢弃汇总 — 保护设置·日志缺口·全量放行默认操作·规则容量分析', ja: 'ファイアウォール・ポリシー・ルールグループのインベントリ + AWS/NetworkFirewall メトリクスのトラフィック・ドロップ集計 — 保護設定・ログギャップ・全量通過デフォルトアクション・ルール容量分析' },
