@@ -1170,7 +1170,6 @@ export const TERMS: Record<string, Pair> = {
   '집계 절단(상위 100 sid 초과 또는 리전별 상한 도달)으로 이 sid가 포함됐는지 불명': { en: 'Aggregation truncation (over the top-100 SIDs, or a per-region cap was reached) — whether this SID was included is unknown', zh: '聚合被截断（超过前 100 个 SID，或达到区域上限）— 无法确定此 SID 是否被包含在内', ja: '集計が切り捨てられました（上位 100 SID 超過、またはリージョン別上限に到達）— この SID が含まれていたかは不明です' },
   '로그 집계 쿼리 실패 — 매칭 여부 불명': { en: 'Log aggregation query failed — match status unknown', zh: '日志汇总查询失败 — 匹配情况未知', ja: 'ログ集計クエリ失敗 — マッチ有無は不明' },
   '행 클릭 → 상세': { en: 'click a row → details', zh: '点击行 → 详情', ja: '行クリック → 詳細' },
-  'Top 소스 / 목적지': { en: 'Top sources / destinations', zh: 'Top 源 / 目标', ja: 'Top ソース / 宛先' },
   '히트 액션 분포': { en: 'Hit action distribution', zh: '命中操作分布', ja: 'ヒットアクション分布' },
   'Stateful 룰 히트 Top 10 (sid)': { en: 'Stateful rule hits Top 10 (sid)', zh: 'Stateful 规则命中 Top 10（sid）', ja: 'Stateful ルールヒット Top 10（sid）' },
   '일부 행 생략 — 검색·정렬은 전체 행에서 동작합니다': { en: 'Some rows omitted — search and sort operate on the full set', zh: '部分行已省略 — 搜索与排序基于全部行', ja: '一部の行を省略 — 検索・ソートは全行に対して動作します' },
@@ -1178,7 +1177,6 @@ export const TERMS: Record<string, Pair> = {
   '액션 분포 확인 불가': { en: 'Action distribution unavailable', zh: '操作分布不可用', ja: 'アクション分布は確認できません' },
   '룰 히트 없음': { en: 'No rule hits', zh: '无规则命中', ja: 'ルールヒットなし' },
   '룰 히트 집계 불명 — 위 원시 시그니처 표 참고': { en: 'Rule-hit aggregation unknown — see the raw signature table above', zh: '规则命中汇总未知 — 请参见上方的原始签名表', ja: 'ルールヒット集計は不明です — 上記の生シグネチャ表を参照してください' },
-  'ALERT 로그가 기간 전체를 커버하지 않아 일부 구간이 빠졌을 수 있음 — 분포는 참고용': { en: 'ALERT logs do not cover the entire range — some periods may be missing; the distribution is for reference only', zh: 'ALERT 日志未覆盖整个时间段 — 部分区间可能缺失，此分布仅供参考', ja: 'ALERT ログが期間全体をカバーしていないため一部区間が欠落している可能性があります — 分布は参考値です' },
 
   // ---- Network Firewall (/network-firewall) ----
   '방화벽·정책·룰 그룹 인벤토리 + AWS/NetworkFirewall 메트릭 트래픽·드롭 집계 — 보호 설정·로깅 갭·전량 통과 기본 액션·룰 용량 분석': { en: 'Firewall / policy / rule group inventory + AWS/NetworkFirewall traffic & drop aggregation — protection settings, logging gaps, pass-through default actions, rule capacity analysis', zh: '防火墙·策略·规则组清单 + AWS/NetworkFirewall 指标流量·丢弃汇总 — 保护设置·日志缺口·全量放行默认操作·规则容量分析', ja: 'ファイアウォール・ポリシー・ルールグループのインベントリ + AWS/NetworkFirewall メトリクスのトラフィック・ドロップ集計 — 保護設定・ログギャップ・全量通過デフォルトアクション・ルール容量分析' },

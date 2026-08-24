@@ -220,7 +220,7 @@ type HitsDisplay =
   | { kind: 'na' | 'unknown'; reason: string }
   | { kind: 'lowerbound'; reason: string }
   | { kind: 'exact' };
-function classifyHits(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean): HitsDisplay {
+function classifyHits(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean, alertObservabilityIncomplete: boolean): HitsDisplay {
   if (r.isPass) return { kind: 'na', reason: 'pass 또는 noalert 룰 — Alert 로그 미발생' };
   if (r.sharedSid) return { kind: 'na', reason: '여러 룰 그룹이 같은 SID 사용 — 어느 그룹의 히트인지 알 수 없어 숫자를 표시하지 않습니다' };
   if (r.unknown) {
@@ -231,12 +231,21 @@ function classifyHits(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPar
   if (r.observability === 'unobserved') return { kind: 'na', reason: '이 룰 그룹을 서빙하는 방화벽 전부 ALERT 로깅이 꺼져 있음이 확인됨 — 표시되는 히트가 있어도 이 룰 귀속으로 볼 수 없음' };
   if (r.hits === 0 && r.observability !== 'observed') return { kind: 'unknown', reason: '이 룰 그룹을 관측할 수 있는지 확인할 수 없어 매칭 0을 확정할 수 없음' };
   if (r.hits === 0 && !alertCoverageComplete) return { kind: 'unknown', reason: 'ALERT 로그가 선택한 기간 전체를 커버하지 않거나 커버 여부를 확인할 수 없어 매칭 0을 확정할 수 없음 (로깅이 기간 중간에 시작됐거나, 로그 그룹 조회가 거부/시간 초과됨)' };
-  if (r.hits > 0 && (ruleHitsPartial || !alertCoverageComplete || r.observability === 'unknown')) {
+  // 리뷰 MAJOR(확정, PR #229 AI Code Review): configured:false(관리형/미설정 SID) 행은
+  // 어느 룰 그룹에도 속하지 않아 observability를 계산할 근거가 없으므로 하드코딩된
+  // 'observed'로만 채워진다 — 그래서 이 행들은 위 observability 기반 분기(232/234)를
+  // 전혀 타지 않는다. 하지만 alertObservabilityIncomplete(일부 방화벽의 ALERT 목적지가
+  // CWL이 아니거나 로깅이 꺼져 있음)가 true면, 그 방화벽에서 발생한 이 SID의 매칭은
+  // 애초에 이 로그 집계에 나타날 수 없다 — 공간적으로 불완전한 값인데도 하드코딩된
+  // 'observed' 때문에 exact로 보인다. 도넛/바 차트/빈 상태는 이미 이 신호를 반영하므로,
+  // 표·상세 패널만 예외로 남으면 같은 화면에서 서로 다른 결론을 보여주게 된다.
+  if (r.hits > 0 && (ruleHitsPartial || !alertCoverageComplete || r.observability === 'unknown' || (!r.configured && alertObservabilityIncomplete))) {
     return {
       kind: 'lowerbound',
       reason: !alertCoverageComplete ? 'ALERT 로그가 기간 전체를 커버하지 않아 실제 값이 더 클 수 있음 — 하한'
         : ruleHitsPartial ? '리전별 상한에 도달해 실제 값이 더 클 수 있음 — 하한'
-          : '일부 방화벽만 관측이 확인돼 실제 값이 더 클 수 있음 — 하한',
+          : r.observability === 'unknown' ? '일부 방화벽만 관측이 확인돼 실제 값이 더 클 수 있음 — 하한'
+            : '일부 방화벽의 ALERT 로깅이 CloudWatch Logs가 아니거나 꺼져 있어, 이 SID의 매칭이 이 집계에 전부 반영됐다고 확정할 수 없음 — 하한',
     };
   }
   return { kind: 'exact' };
@@ -259,8 +268,8 @@ const RULEHIT_DETAIL_SPEC: InvType = {
 
 // 표의 hits 컬럼과 반드시 같은 classifyHits() 결과를 써야 한다 — 그래야 "hits: 0"과
 // hit_note가 서로 모순되는 조합(리뷰 MAJOR, PR #229)이 나오지 않는다.
-function ruleHitDetail(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean, tt: (s: string) => string): Record<string, unknown> {
-  const d = classifyHits(r, alertCoverageComplete, ruleHitsPartial);
+function ruleHitDetail(r: RuleHitRow, alertCoverageComplete: boolean, ruleHitsPartial: boolean, alertObservabilityIncomplete: boolean, tt: (s: string) => string): Record<string, unknown> {
+  const d = classifyHits(r, alertCoverageComplete, ruleHitsPartial, alertObservabilityIncomplete);
   const note = d.kind === 'na' ? `n/a — ${tt(d.reason)}`
     : d.kind === 'unknown' ? `unknown — ${tt(d.reason)}`
       : d.kind === 'lowerbound' ? `lower bound — ${tt(d.reason)}`
@@ -659,6 +668,20 @@ export default function NetworkFirewallPage() {
     () => ruleHitRows.filter(isIdleRule).length,
   [ruleHitRows]);
 
+  // 리뷰(Codex stop-hook, PR #229 라운드10): 라운드7~9의 `f.alertLogging != null &&
+  // !startsWith('CloudWatchLogs:')` 체크는 "ALERT 목적지가 CWL이 아닌" 방화벽만 잡고,
+  // "ALERT 로깅 자체가 꺼져 있는"(alertLogging === null) 방화벽은 조건의 `!= null`에서
+  // 걸려 빠져나간다 — 그 방화벽도 Insights 쿼리 대상이 아니므로 똑같이 관측 불가다.
+  // 도넛 게이트/바 차트의 과소집계 고지/빈 상태 판정이 모두 같은 신호를 써야 하므로
+  // 한 곳에서 계산해 공유한다.
+  // 리뷰 MAJOR(확정, PR #229 AI Code Review): `fws`는 토폴로지 fetch(`data`)가 아직
+  // 해석되지 않았거나 실패했을 때 `[]`로 폴백한다(위 useMemo) — 그러면 `[].some(...)`가
+  // false를 반환해 "관측 완전"으로 fail-open된다. 이 저장소의 명시적 관례("null은 unknown,
+  // 안 바뀜이 아님" — fail-closed)와 반대다. `data == null`(fetch 미완료/실패)을 명시적으로
+  // 불완전 취급해 fail-closed로 뒤집는다 — 방화벽이 실제로 0개인 계정(data는 로드됐고
+  // fws=[])과는 구분된다(그 경우는 관측할 것이 없으므로 정직하게 완전).
+  const alertObservabilityIncomplete = data == null || fws.some((f) => !(f.alertLogging?.startsWith('CloudWatchLogs:') ?? false));
+
   // 룰 히트 MetricTable 컬럼 — 헤더 클릭 정렬(num/str)·검색·facet은 MetricTable이 제공.
   // hits의 정렬 value는 hitsAttributable일 때만 실 값, 아니면 null(MetricTable 규약상 항상
   // 마지막 정렬) — round17의 "화면 표시와 같은 기준으로 정렬" 요구를 그대로 반영한다.
@@ -691,34 +714,27 @@ export default function NetworkFirewallPage() {
       // 리뷰 MAJOR(확정, PR #229): 이전엔 각자 다른 조건식을 써서 표는 "?"인데 상세 패널은
       // hitsAttributable만 보고 "hits: 0"을 확정처럼 보여주는 모순이 있었다.
       value: (r) => {
-        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false);
+        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false, alertObservabilityIncomplete);
         return d.kind === 'na' || d.kind === 'unknown' ? null : r.hits;
       },
       danger: (r) => {
-        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false);
+        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false, alertObservabilityIncomplete);
         return (d.kind === 'exact' || d.kind === 'lowerbound') && r.hits > 0 && r.actions.includes('blocked');
       },
       render: (r) => {
-        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false);
+        const d = classifyHits(r, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false, alertObservabilityIncomplete);
         if (d.kind === 'na') return <span className="text-ink-300" title={tt(d.reason)}>n/a</span>;
         if (d.kind === 'unknown') return <span className="text-ink-300" title={tt(d.reason)}>?</span>;
         if (d.kind === 'lowerbound') return <span title={tt(d.reason)}>{`≥${r.hits.toLocaleString()}`}</span>;
         return <>{r.hits.toLocaleString()}</>;
       },
     },
-  ], [tt, alertCoverageComplete, logsData]);
+  ], [tt, alertCoverageComplete, logsData, alertObservabilityIncomplete]);
   // 히트 바 — 로그 원본(ruleHits)에서 sid 단위 집계: 공유 SID의 설정 행 중복 합산 방지.
   // ruleHitsTruncated는 서버가 이미 계산한 값을 그대로 쓴다(join 컷오프 로직과 중복 계산 방지 —
   // length>=100 같은 로컬 재추정은 병합 후 sid 개수만 보고 리전별 상한(ruleHitsPartial)으로
   // 인한 별도 절단을 못 잡는다).
   const ruleHitsTruncated = logsData?.alert?.ruleHitsTruncated ?? false;
-  // 리뷰(Codex stop-hook, PR #229 라운드10): 라운드7~9의 `f.alertLogging != null &&
-  // !startsWith('CloudWatchLogs:')` 체크는 "ALERT 목적지가 CWL이 아닌" 방화벽만 잡고,
-  // "ALERT 로깅 자체가 꺼져 있는"(alertLogging === null) 방화벽은 조건의 `!= null`에서
-  // 걸려 빠져나간다 — 그 방화벽도 Insights 쿼리 대상이 아니므로 똑같이 관측 불가다.
-  // 도넛 게이트/바 차트의 과소집계 고지/빈 상태 판정이 모두 같은 신호를 써야 하므로
-  // 한 곳에서 계산해 공유한다.
-  const alertObservabilityIncomplete = fws.some((f) => !(f.alertLogging?.startsWith('CloudWatchLogs:') ?? false));
   const ruleHitBars = useMemo(() => {
     const m = new Map<string, { rule: string; hits: number }>();
     for (const h of logsData?.alert?.ruleHits ?? []) {
@@ -1362,9 +1378,18 @@ export default function NetworkFirewallPage() {
                                 range 앞쪽 구간의 매칭은 로그가 없어 "룰 히트 없음"이 아니라 "그 구간은 확인
                                 못함"이다. 위 조인 테이블의 hits===0 && !alertCoverageComplete 분기와 동일한
                                 기준. */}
-                            {(logsData?.alert?.ruleHits == null || alertObservabilityIncomplete || !alertCoverageComplete)
-                              ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고')
-                              : tt('룰 히트 없음')}
+                            {/* 리뷰 MINOR(확정, PR #229 AI Code Review): "위 원시 시그니처 표 참고"는
+                                ruleHits===null && topSignatures.length>0(위 폴백 표가 실제로 렌더된
+                                경우)에만 유효한 안내다 — alertObservabilityIncomplete/!alertCoverageComplete
+                                만으로 여기 들어오면(ruleHits는 null이 아닐 수 있음, 또는 topSignatures가
+                                비었을 수 있음) 존재하지 않는 표를 가리키는 무의미한 포인터가 된다. */}
+                            {logsData?.alert?.ruleHits == null
+                              ? ((logsData?.alert?.topSignatures?.length ?? 0) > 0
+                                ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고')
+                                : tt('룰 히트 집계 불명'))
+                              : (alertObservabilityIncomplete || !alertCoverageComplete)
+                                ? tt('룰 히트 집계 불명 — 일부 방화벽의 ALERT 로그가 이 기간을 완전히 커버하지 않음')
+                                : tt('룰 히트 없음')}
                           </div>
                         )}
                       </div>
@@ -1518,7 +1543,7 @@ export default function NetworkFirewallPage() {
             : selected.kind === 'policy'
               ? policyDetail(selected.row)
               : selected.kind === 'rulehit'
-                ? ruleHitDetail(selected.row, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false, tt)
+                ? ruleHitDetail(selected.row, alertCoverageComplete, logsData?.alert?.ruleHitsPartial ?? false, alertObservabilityIncomplete, tt)
                 : rgDetail(selected.row)
           : null}
         spec={selected?.kind === 'fw' ? FW_DETAIL_SPEC
