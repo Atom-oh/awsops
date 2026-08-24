@@ -326,12 +326,24 @@ def test_build_day_select_adds_single_date_partition_predicate():
     source = _source(validation={
         "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
         "optionalFields": ["bytes"],
-        "partitionKeys": ["dt"],
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"],
     })
     sql = scan.build_day_select(source, dt.date(2026, 3, 5))
     # item 5 follow-up fix: delivery lag only ever pushes a flow's partition file FORWARD, never
     # backward, so the predicate widens to an adjacent 2-day window rather than the single day.
     assert "\"dt\" IN ('2026-03-05', '2026-03-06')" in sql
+
+
+def test_build_day_select_skips_single_key_predicate_when_type_not_confirmed_date_like():
+    # item 7 follow-up fix: a lone partition key without a confirmed date-like Glue type (or
+    # missing partitionKeyTypes entirely) must not have a date-string predicate built for it.
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes"],
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "\"dt\"" not in sql
 
 
 def test_build_day_select_falls_back_to_underscore_names_when_no_column_map():

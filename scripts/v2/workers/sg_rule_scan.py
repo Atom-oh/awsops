@@ -33,6 +33,11 @@ import boto3
 import sg_rule_matching as sm
 
 DELIVERY_LAG_HOURS = int(os.environ.get("SG_RULE_DELIVERY_LAG_HOURS", "6"))
+# item 3 follow-up fix: sg_rule_inventory_versions.valid_from/valid_to are observation timestamps
+# (set by THIS scan's own run time), not the actual rule-change timestamp — see
+# sm.day_coverage()'s docstring. The scan itself runs once every SCAN_INTERVAL_HOURS (the
+# EventBridge daily-trigger cadence), which bounds how stale a version boundary can be.
+SCAN_INTERVAL_HOURS = int(os.environ.get("SG_RULE_SCAN_INTERVAL_HOURS", "24"))
 MEMBERSHIP_STALENESS_DAYS = int(os.environ.get("SG_RULE_MEMBERSHIP_STALENESS_DAYS", "3"))
 RESCAN_WINDOW_DAYS = int(os.environ.get("SG_RULE_RESCAN_WINDOW_DAYS", "2"))
 MAX_QUERY_BYTES = int(os.environ.get("SG_RULE_ACTIVITY_MAX_QUERY_BYTES", "107374182400"))
@@ -429,7 +434,7 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     per_rule = {}
     any_crossing = False
     for rule_id, versions in rule_versions_by_id.items():
-        day_cov = sm.day_coverage(versions, day)
+        day_cov = sm.day_coverage(versions, day, observation_lag=dt.timedelta(hours=SCAN_INTERVAL_HOURS))
         per_rule[rule_id] = {
             "compatible": 0, "overlap": 0, "bytes": 0,
             "unassessable": day_cov["crossing"],  # fingerprint-epoch-crossing (day-level)

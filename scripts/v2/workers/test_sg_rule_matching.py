@@ -46,12 +46,49 @@ def test_day_crossing_when_version_changes_mid_day_never_a_lower_bound():
     assert cov["version"] is None
 
 
-def test_day_not_crossing_when_transition_is_on_an_adjacent_day():
+def test_day_not_crossing_when_transition_is_well_beyond_the_observation_lag():
+    # valid_to is 3 days after the day in question — with the default 1-day observation_lag, the
+    # actual rule-change instant (bounded to (valid_to - lag, valid_to]) cannot have fallen inside
+    # day 3/5, so the day is confidently covered by the earlier version.
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8, 0, 0)},
+        {"valid_from": utc(2026, 3, 8, 0, 0), "valid_to": None},
+    ]
+    cov = m.day_coverage(versions, date(2026, 3, 5))
+    assert cov["crossing"] is False
+
+
+def test_day_crossing_when_transition_observed_at_next_midnight_is_within_observation_lag():
+    # item 3 follow-up fix: valid_from/valid_to are OBSERVATION timestamps (this scan's own run
+    # time), not the actual change timestamp — a version closed at exactly the next day's midnight
+    # was, per the default 1-day scan cadence, possibly closed by a change that happened anywhere
+    # in the preceding 24h, i.e. during day 3/5 itself. The old behavior (crossing=False here) was
+    # exactly the false-confident-day bug this item fixes.
     versions = [
         {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 6, 0, 0)},
         {"valid_from": utc(2026, 3, 6, 0, 0), "valid_to": None},
     ]
     cov = m.day_coverage(versions, date(2026, 3, 5))
+    assert cov["crossing"] is True
+    assert cov["version"] is None
+
+
+def test_day_not_crossing_with_a_shorter_observation_lag_when_transition_is_outside_it():
+    # A scan cadence shorter than 1 day (observation_lag override) narrows the uncertainty window
+    # accordingly — a transition observed 6h after day-end is outside a 1h lag.
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 6, 6, 0)},
+        {"valid_from": utc(2026, 3, 6, 6, 0), "valid_to": None},
+    ]
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=timedelta(hours=1))
+    assert cov["crossing"] is False
+
+
+def test_day_not_crossing_when_covering_version_is_still_open():
+    # A still-open version (valid_to is None) keeps the pre-existing "no lower bound assumed"
+    # behavior — a change that hasn't happened yet can never retroactively taint this day.
+    versions = [{"valid_from": utc(2026, 1, 1), "valid_to": None}]
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=timedelta(days=1))
     assert cov["crossing"] is False
 
 
@@ -320,7 +357,31 @@ def test_has_resolved_partition_strategy_true_for_hive_style():
 
 
 def test_has_resolved_partition_strategy_true_for_single_date_key():
-    assert m.has_resolved_partition_strategy({"partitionKeys": ["dt"]}) is True
+    assert m.has_resolved_partition_strategy(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}) is True
+
+
+def test_has_resolved_partition_strategy_false_for_single_key_without_confirmed_type():
+    # item 7 follow-up fix: partitionKeyTypes missing entirely (an older/never-re-validated
+    # source) must not be assumed date-like — refuse rather than guess.
+    assert m.has_resolved_partition_strategy({"partitionKeys": ["dt"]}) is False
+
+
+def test_has_resolved_partition_strategy_false_for_single_key_with_non_date_type():
+    # item 7 follow-up fix: a bigint-typed lone key (e.g. an epoch-day column happening to be
+    # named `dt`) must not be treated as accepting an ISO date-string literal.
+    assert m.has_resolved_partition_strategy(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"]}) is False
+
+
+def test_single_date_partition_key_accepts_string_typed_column():
+    assert m.single_date_partition_key(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["string"]}) == "dt"
+
+
+def test_single_date_partition_key_none_for_multi_key_without_hive_names():
+    assert m.single_date_partition_key(
+        {"partitionKeys": ["region", "tier"], "partitionKeyTypes": ["string", "string"]}) is None
 
 
 def test_has_resolved_partition_strategy_false_when_empty():

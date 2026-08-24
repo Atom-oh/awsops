@@ -82,13 +82,27 @@ def version_covering(versions: list, at: datetime):
     return None
 
 
-def day_coverage(versions: list, day) -> dict:
+def day_coverage(versions: list, day, observation_lag: timedelta = timedelta(days=1)) -> dict:
     """Per the spec's "Why versioning" section: a day matches confidently only if ONE version's
     [valid_from, valid_to) covers the WHOLE day (start-of-day AND end-of-day resolve to the same
     version row, by identity — not just equal fingerprint, since valid_from/valid_to distinguish
     epochs even when a rule flips back to an identical shape). If they differ (or either boundary
     resolves to no version at all), the day is `fingerprint_epoch_crossing` and MUST be classified
     `unassessable` for that rule/day — never a lower-bound number (spec's own round-12 self-check).
+
+    Item 3 follow-up fix: `valid_from`/`valid_to` are *observation* timestamps (when the daily scan
+    first/last saw a fingerprint) per the migration's own header comment — NOT the actual rule-change
+    timestamp. A rule that changed at, say, 14:00 on day D is only observed at the NEXT scan run,
+    which closes the old version with `valid_to` = that scan's run time (some time on day D+1). The
+    real change could have happened anywhere in `(valid_to - observation_lag, valid_to]` — a window
+    bounded by the scan cadence (`observation_lag`, default one day between successive daily scans).
+    If that uncertainty window overlaps this day (i.e. `valid_to - observation_lag < end`), part of
+    day D's traffic may have occurred under either the old or the new shape — the day can't be
+    confidently attributed to the version that merely *covers* it, even though a single version's
+    interval technically spans start-of-day through end-of-day. This only applies to a version whose
+    `valid_to` is closed (a still-open version, `valid_to is None`, keeps the pre-existing "no
+    lower bound assumed" behavior — never a false negative from a change that hasn't happened yet).
+
     Returns {"crossing": bool, "version": dict|None} — version is set only when NOT crossing.
     """
     start, end = day_bounds_utc(day)
@@ -102,6 +116,11 @@ def day_coverage(versions: list, day) -> dict:
     same = (at_start.get("valid_from") == at_end.get("valid_from"))
     if not same:
         return {"crossing": True, "version": None}
+    valid_to = at_start.get("valid_to")
+    if valid_to is not None and (valid_to - observation_lag) < end:
+        # The actual change to this version's successor could have happened inside day D's own
+        # window (per the docstring above) — the day's true rule-shape is ambiguous, not confident.
+        return {"crossing": True, "version": None, "reason": "observation_lag_boundary"}
     return {"crossing": False, "version": at_start}
 
 
@@ -283,7 +302,35 @@ def _safe_scope_value(value, pattern):
     raise UnsafeIdentifier(f"unsafe scope value: {value!r}")
 
 
-def _build_partition_predicate(partition_keys, day):
+# item 7 follow-up fix: Glue catalog types that are safe to assume accept an ISO date-string
+# literal (`'2026-03-05'`) for a single (non-Hive-style) partition key — a plain `date` column, or a
+# string/varchar/char column storing the date as text (the common manually-partitioned Flow Log
+# table pattern). An int/bigint/etc.-typed key must never be assumed to accept a string literal.
+_DATE_LIKE_PARTITION_TYPES = {"date", "string", "varchar", "char"}
+
+
+def single_date_partition_key(validation: dict):
+    """item 7 follow-up fix: the single-key (non-Hive) branch of `_build_partition_predicate` /
+    `_partition_exists` used to treat ANY lone partition key as a date column and interpolate an
+    ISO date string into it — true only when Glue's own catalog (`partitionKeyTypes`, persisted by
+    the broker's `_validate`) confirms the key's type is actually date-like. A key typed `bigint`
+    (e.g. an epoch-day column also happening to be named `dt`) would either error against a string
+    literal or silently produce a permanent `zero_partition_match`/query failure — never confidently
+    assumed. Returns the key name when safe to use as a date predicate, else `None` — including when
+    `partitionKeyTypes` was never recorded at all (an older source, or one whose `validate` action
+    predates this field): callers must treat that the same as "can't verify," not "assume date.\""""
+    partition_keys = (validation or {}).get("partitionKeys") or []
+    if len(partition_keys) != 1:
+        return None
+    types = (validation or {}).get("partitionKeyTypes")
+    if not types or len(types) != 1:
+        return None
+    if str(types[0]).lower() not in _DATE_LIKE_PARTITION_TYPES:
+        return None
+    return partition_keys[0]
+
+
+def _build_partition_predicate(validation, day):
     """Shared by `build_day_select`/`build_day_skipdata_count_select` (item 5 follow-up fix): Hive
     partitions are keyed by delivery/file time, not flow-start time, so a flow whose own `start`
     timestamp falls on day D can be delivered into day D+1's partition file (delivery lag only ever
@@ -292,6 +339,7 @@ def _build_partition_predicate(partition_keys, day):
     `partition IN {D, D+1}` (one extra day, never unbounded) while the caller's own `start`/`end`
     row-level filter remains the authoritative test for which flows actually belong to day D — this
     predicate only decides which PARTITION FILES are scanned, never which rows are counted."""
+    partition_keys = (validation or {}).get("partitionKeys") or []
     next_day = day + timedelta(days=1)
     lower_keys = {k.lower(): k for k in partition_keys}
     if {"year", "month", "day"} <= set(lower_keys):
@@ -302,8 +350,9 @@ def _build_partition_predicate(partition_keys, day):
             f'AND "{d_col}" = \'{day.day:02d}\') OR ("{y_col}" = \'{next_day.year:04d}\' '
             f'AND "{mo_col}" = \'{next_day.month:02d}\' AND "{d_col}" = \'{next_day.day:02d}\'))'
         )
-    if len(partition_keys) == 1:
-        dk = _safe_ident(partition_keys[0], "")
+    dk_raw = single_date_partition_key(validation)
+    if dk_raw:
+        dk = _safe_ident(dk_raw, "")
         if dk:
             return f' AND "{dk}" IN (\'{day.isoformat()}\', \'{next_day.isoformat()}\')'
     return ""
@@ -343,7 +392,6 @@ def build_day_select(source, day):
     validation = source.get("validation") or {}
     column_map = validation.get("columnMap") or {}
     optional_fields = set(validation.get("optionalFields") or [])
-    partition_keys = validation.get("partitionKeys") or []
 
     interface_col = _safe_ident(column_map.get("interface_id"), "interface_id")
     log_status_col = _safe_ident(column_map.get("log_status"), "log_status")
@@ -356,7 +404,7 @@ def build_day_select(source, day):
     has_bytes = ("bytes" in optional_fields) if has_optional_info else True
     bytes_select = ', sum("bytes") as bytes' if has_bytes else ''
 
-    partition_predicate = _build_partition_predicate(partition_keys, day)
+    partition_predicate = _build_partition_predicate(validation, day)
     scope_predicate = _build_scope_predicate(column_map, source)
 
     return (
@@ -379,13 +427,12 @@ def build_day_skipdata_count_select(source, day):
     Same identifier re-validation and partition-bound discipline as `build_day_select`."""
     validation = source.get("validation") or {}
     column_map = validation.get("columnMap") or {}
-    partition_keys = validation.get("partitionKeys") or []
     log_status_col = _safe_ident(column_map.get("log_status"), "log_status")
     start_col = _safe_ident(column_map.get("start"), "start")
     start, end = day_bounds_utc(day)
     table = f'"{_safe_ident(source["database_name"])}"."{_safe_ident(source["table_name"])}"'
 
-    partition_predicate = _build_partition_predicate(partition_keys, day)
+    partition_predicate = _build_partition_predicate(validation, day)
     scope_predicate = _build_scope_predicate(column_map, source)
 
     return (
@@ -397,13 +444,15 @@ def build_day_skipdata_count_select(source, day):
 
 def has_resolved_partition_strategy(validation: dict) -> bool:
     """True only when validation actually resolved a bound-able partition scheme (Hive-style
-    year/month/day, or exactly one date-typed partition key) — used to refuse an unbounded
-    full-table scan (L3 finding #8b) rather than silently falling back to one."""
+    year/month/day, or exactly one CONFIRMED date-typed partition key — item 7 follow-up fix: a
+    single key whose Glue-catalog type isn't known to be date-like no longer counts, since
+    `_build_partition_predicate` will refuse to build a predicate for it) — used to refuse an
+    unbounded full-table scan (L3 finding #8b) rather than silently falling back to one."""
     partition_keys = (validation or {}).get("partitionKeys") or []
     lower_keys = {str(k).lower() for k in partition_keys}
     if {"year", "month", "day"} <= lower_keys:
         return True
-    return len(partition_keys) == 1
+    return single_date_partition_key(validation) is not None
 
 
 # ── Daily pipeline pure helpers (delivery lag, watermark, rescan window) ─────────────────────────

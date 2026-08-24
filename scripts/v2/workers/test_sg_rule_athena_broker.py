@@ -234,6 +234,7 @@ def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkey
     conn = FakeConn(_source_row({
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"}, "partitionKeys": ["dt"],
+        "partitionKeyTypes": ["date"],
     }))
     captured = {}
 
@@ -281,7 +282,7 @@ def _continuation_setup(monkeypatch, athena):
     conn = FakeConn(_source_row({
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"}, "partitionKeys": ["dt"],
-        "partitionStrategy": "partition_keys",
+        "partitionKeyTypes": ["date"], "partitionStrategy": "partition_keys",
     }))
     monkeypatch.setattr(broker.sm, "build_day_select", lambda source, day: "SELECT 1 AS x")
 
@@ -394,7 +395,8 @@ def test_projection_strategy_skips_glue_partition_check(monkeypatch):
     conn, called = _empty_query_by_source_setup(monkeypatch, {
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"},
-        "partitionKeys": ["dt"], "optionalFields": [], "partitionStrategy": "projection",
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+        "partitionStrategy": "projection",
     })
     result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
     assert called["n"] == 0
@@ -408,9 +410,43 @@ def test_partition_keys_strategy_still_runs_glue_partition_check(monkeypatch):
     conn, called = _empty_query_by_source_setup(monkeypatch, {
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"},
-        "partitionKeys": ["dt"], "optionalFields": [], "partitionStrategy": "partition_keys",
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+        "partitionStrategy": "partition_keys",
     })
     result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
     assert called["n"] == 1
     assert result["ok"] is False
     assert result.get("zero_partition_match") is True
+
+
+# ── item 8 follow-up fix: an unverifiable Glue partition check must refuse the day, never ────────
+#    silently collapse into "confirmed present" (which the old boolean-returning version did). ───
+
+class FakeGlueRaises:
+    def get_partitions(self, **kwargs):
+        raise RuntimeError("Glue API hiccup")
+
+
+def test_partition_exists_returns_none_on_glue_error():
+    result = broker._partition_exists(
+        FakeGlueRaises(), "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]})
+    assert result is None
+
+
+def test_query_by_source_refuses_day_when_partition_check_is_unverifiable(monkeypatch):
+    """A Glue API error while checking for a matching partition must NOT be trusted as "partition
+    confirmed present, so the empty Athena result is genuine zero-traffic" — the old
+    boolean-returning `_partition_exists` collapsed "unverifiable" into the same truthy value as
+    "confirmed present". The day must be refused (watermark not advanced), not silently committed."""
+    conn, called = _empty_query_by_source_setup(monkeypatch, {
+        "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                          "start": "start"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+        "partitionStrategy": "partition_keys",
+    })
+    monkeypatch.setattr(broker, "_partition_exists", lambda *a, **k: None)
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert result.get("partition_check_unverified") is True
+    assert "zero_partition_match" not in result

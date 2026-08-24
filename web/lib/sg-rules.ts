@@ -145,6 +145,11 @@ export interface ValidationResult {
   /** Actual Glue partition key names (Hive-style year/month/day, or a single date-typed key) —
    * lets the worker add a real partition predicate instead of relying on the `start` filter alone. */
   partitionKeys?: string[];
+  /** Glue catalog type for each entry in `partitionKeys`, same order (e.g. `["date"]`,
+   * `["string","string","string"]` for a Hive year/month/day scheme, or `["bigint"]`) — lets the
+   * worker refuse to treat a non-date-typed single partition key as an ISO-date column (item 7
+   * follow-up fix: `sm.single_date_partition_key`). */
+  partitionKeyTypes?: string[];
   /** Optional Flow Log fields actually present on this table (e.g. `bytes` may be absent on a
    * custom-format table) — lets the worker make `sum(bytes)` conditional instead of assuming it. */
   optionalFields?: string[];
@@ -186,7 +191,8 @@ export async function validateFlowSourceViaBroker(input: FlowSourceInput): Promi
     }
     return {
       ok: true, status: 'valid', schemaFields: body.schemaFields, partitionStrategy: body.partitionStrategy,
-      columnMap: body.columnMap, partitionKeys: body.partitionKeys, optionalFields: body.optionalFields,
+      columnMap: body.columnMap, partitionKeys: body.partitionKeys, partitionKeyTypes: body.partitionKeyTypes,
+      optionalFields: body.optionalFields,
       checkedAt,
     };
   } catch (e) {

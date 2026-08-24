@@ -189,6 +189,12 @@ def _validate(event, conn):
         raise BrokerError(f"table missing required Flow Log fields: {', '.join(missing)}")
 
     partition_keys = [c["Name"] for c in tbl.get("PartitionKeys", [])]
+    # item 7 follow-up fix: a single-key partition scheme (the non-Hive-style branch of
+    # `_build_partition_predicate`/`_partition_exists`) is only safe to treat as a date column when
+    # Glue's own catalog says its type actually IS a date/string type — an int/bigint-typed single
+    # key (or any type this module hasn't confirmed) must never be assumed to accept an ISO date
+    # string literal. Persisted alongside partitionKeys so the matching engine can gate on it.
+    partition_key_types = [c.get("Type", "") for c in tbl.get("PartitionKeys", [])]
     projection_enabled = (tbl.get("Parameters", {}) or {}).get("projection.enabled") == "true"
     if not partition_keys and not projection_enabled:
         raise BrokerError("table has no partition keys or partition projection — cannot bound a scan")
@@ -198,7 +204,7 @@ def _validate(event, conn):
                                     "bytes", "packets") if c.lower() in columns]
     return {
         "ok": True, "schemaFields": sorted(resolved.values()), "partitionStrategy": strategy,
-        "optionalFields": optional_present,
+        "optionalFields": optional_present, "partitionKeyTypes": partition_key_types,
         # The canonical -> actual-alias mapping AND the actual partition key names, persisted by
         # web/lib/sg-rules.ts into sg_flow_sources.validation so this module's own
         # `query_by_source` action (via sg_rule_matching.build_day_select) can use the REAL
@@ -250,8 +256,20 @@ def _partition_exists(glue, database, table, day, validation):
     result as "no traffic that day", confirm at least one partition actually matches the day's
     predicate — a wrong/guessed partition-key mapping can otherwise silently match zero partitions
     and look exactly like a genuine zero-traffic day. Only meaningful for the `partition_keys`
-    strategy (partition projection has no enumerable Glue partitions to check); any Glue error is
-    treated as "cannot verify" (True) rather than falsely claiming zero traffic on an API hiccup."""
+    strategy (partition projection has no enumerable Glue partitions to check).
+
+    Item 8 follow-up fix: returns one of THREE states now, not a boolean —
+      - `True`  = confirmed at least one matching partition exists (or the scheme isn't checkable,
+                  e.g. a single non-date-typed key — nothing to disprove, so don't block on it).
+      - `False` = confirmed zero matching partitions (the check the caller actually wants).
+      - `None`  = genuinely unverifiable (a Glue API error, or an unsafe/unresolvable identifier).
+    The docstring on the OLD boolean-returning version claimed a Glue error was "treated as cannot
+    verify (True)", but the caller (`_query_by_source`) reads a truthy return as "a partition WAS
+    found, so trust the zero-row Athena result as genuine zero-traffic" — collapsing "unverifiable"
+    into the SAME value as "confirmed present" is exactly backwards: it lets a transient Glue API
+    hiccup silently manufacture a confident zero-traffic day. `None` lets the caller refuse to
+    commit that day's watermark instead, and retry on the next run."""
+    dk_raw = sm.single_date_partition_key(validation)  # item 7: only a CONFIRMED date-typed single key
     partition_keys = validation.get("partitionKeys") or []
     lower_keys = {k.lower(): k for k in partition_keys}
     try:
@@ -263,8 +281,8 @@ def _partition_exists(glue, database, table, day, validation):
             mo = sm._safe_ident(lower_keys["month"], "month")
             d = sm._safe_ident(lower_keys["day"], "day")
             expr = (f"{y} = '{day.year:04d}' AND {mo} = '{day.month:02d}' AND {d} = '{day.day:02d}'")
-        elif len(partition_keys) == 1:
-            dk = sm._safe_ident(partition_keys[0], "")
+        elif dk_raw:
+            dk = sm._safe_ident(dk_raw, "")
             if not dk:
                 return True  # unsafe identifier — not checkable, do not block on it
             expr = f"{dk} = '{day.isoformat()}'"
@@ -272,8 +290,8 @@ def _partition_exists(glue, database, table, day, validation):
             return True  # not a checkable single/hive-style scheme — do not block on it
         resp = glue.get_partitions(DatabaseName=database, TableName=table, Expression=expr, MaxResults=1)
         return bool(resp.get("Partitions"))
-    except Exception:  # noqa: BLE001 — an unverifiable check must never manufacture a false "no data"
-        return True
+    except Exception:  # noqa: BLE001 — a genuinely unverifiable check must never manufacture a
+        return None    # confident "zero traffic" OR a confident "partition present" — both are guesses.
 
 
 def _run_athena_query(session, workgroup, database, sql, max_bytes):
@@ -436,12 +454,25 @@ def _query_by_source(event, conn):
         # projection tables, there is nothing to enumerate.
         if validation.get("partitionStrategy") == "partition_keys":
             glue = session.client("glue")
-            if not _partition_exists(glue, source["database_name"], source["table_name"], day, validation):
+            exists = _partition_exists(glue, source["database_name"], source["table_name"], day, validation)
+            if exists is False:
                 return {
                     "ok": False,
                     "reason": "zero Glue partitions matched the day's predicate — likely a wrong "
                               "partition-key mapping, not a genuine zero-traffic day",
                     "zero_partition_match": True,
+                }
+            if exists is None:
+                # item 8 follow-up fix: a Glue API error (or an unsafe stored identifier) means
+                # this could NOT be verified either way — committing the day as zero-traffic here
+                # would risk manufacturing a confident false negative from a transient AWS hiccup.
+                # Refuse and let the next scheduled run retry; the watermark is never advanced.
+                return {
+                    "ok": False,
+                    "reason": "could not verify whether any Glue partition matches the day's "
+                              "predicate (Glue API error) — not trusting the empty result as "
+                              "genuine zero-traffic",
+                    "partition_check_unverified": True,
                 }
 
     skipdata_count = None
