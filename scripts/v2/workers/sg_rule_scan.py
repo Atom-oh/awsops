@@ -472,14 +472,27 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
         def _resolve(group_id):
             in_scope_ips = set()
             out_of_scope_hit = False
+            found_anywhere = False
             for other_vpc, snap in memberships_by_vpc.items():
                 in_scope = sm.eni_matches_vpc_scope(vpc_id, other_vpc, peered_or_shared)
                 for m in snap:
                     if group_id in (m.get("group_ids") or []):
+                        found_anywhere = True
                         if in_scope:
                             in_scope_ips.update(m.get("private_ips") or [])
                         else:
                             out_of_scope_hit = True
+            if not found_anywhere:
+                # Follow-up fix (item 6): the referenced group_id is not present ANYWHERE in this
+                # account/region's own membership snapshot data — this can be a LEGALLY
+                # cross-account or cross-region SG reference (AWS supports referencing an SG across
+                # accounts/regions via VPC peering), which this account/region's own snapshot data
+                # structurally cannot verify either way. Before this fix, "not found anywhere"
+                # fell through to `return in_scope_ips` (an empty set, not None), which
+                # `match_peer`/`sg_peer_ip_resolver` then treats as a confident, resolved-but-empty
+                # answer -> NO_MATCH -> a false `no_observed_evidence`. Resolving `None` here makes
+                # this genuinely UNASSESSABLE, matching the in-scope-but-elsewhere case just below.
+                return None
             if not in_scope_ips and out_of_scope_hit:
                 return None  # cross-VPC hit outside the known-legal scope -> unassessable
             return in_scope_ips

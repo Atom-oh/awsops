@@ -329,7 +329,9 @@ def test_build_day_select_adds_single_date_partition_predicate():
         "partitionKeys": ["dt"],
     })
     sql = scan.build_day_select(source, dt.date(2026, 3, 5))
-    assert "\"dt\" = '2026-03-05'" in sql
+    # item 5 follow-up fix: delivery lag only ever pushes a flow's partition file FORWARD, never
+    # backward, so the predicate widens to an adjacent 2-day window rather than the single day.
+    assert "\"dt\" IN ('2026-03-05', '2026-03-06')" in sql
 
 
 def test_build_day_select_falls_back_to_underscore_names_when_no_column_map():
@@ -848,6 +850,35 @@ def test_sg_reference_same_vpc_match_unaffected_by_new_scoping_logic():
     insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
     coverage = json.loads(insert_call[1]["cov"])
     assert coverage["status"] == "observed_compatible"
+
+
+def test_sg_reference_not_found_anywhere_in_snapshot_is_unassessable_not_no_match():
+    """Follow-up fix (item 6): a referenced group_id that is not carried by ANY ENI in this
+    account/region's own membership snapshot (neither in-scope nor a known out-of-scope VPC) can be
+    a LEGALLY cross-account or cross-region SG reference (AWS supports this via VPC peering) that
+    this account/region's data structurally cannot verify. Before this fix, `_resolve` fell through
+    to an empty set (not None) for this case, which `match_peer` treats as a confident, resolved
+    answer -> NO_MATCH -> a false `no_observed_evidence`. Must be `unassessable` instead."""
+    conn = FakeConn()
+    versions = {
+        "sgr-1": [{"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "sg",
+                    "peer_value": "sg-cross-account-peer", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+    }
+    # Note: "sg-cross-account-peer" appears in NO membership row at all — not in vpc-1, not
+    # anywhere else in this account/region's own snapshot data.
+    memberships = {
+        "vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.2.2.2"]}],
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, memberships, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["match_unassessable"] is True
 
 
 # ── L4 finding #11: a `stale` membership snapshot must downgrade matches to unassessable ─────────

@@ -269,6 +269,65 @@ def _safe_ident(name, fallback=None):
     raise UnsafeIdentifier(f"unsafe identifier: {name!r}")
 
 
+_ACCOUNT_ID_VALUE_RE = re.compile(r'^\d{12}$')
+_REGION_VALUE_RE = re.compile(r'^[a-z]{2,4}(-[a-z]+)+-\d$')
+
+
+def _safe_scope_value(value, pattern):
+    """Defense-in-depth re-validation of a literal VALUE (not an identifier) interpolated into a
+    generated SQL string — used for `account_id`/`region` scoping (item 4 follow-up fix). Unlike
+    `_safe_ident`, there is no safe fallback for a scope value: an invalid one means the resolved
+    source row itself is corrupted, and refusing to build the query is the only safe option."""
+    if isinstance(value, str) and pattern.match(value):
+        return value
+    raise UnsafeIdentifier(f"unsafe scope value: {value!r}")
+
+
+def _build_partition_predicate(partition_keys, day):
+    """Shared by `build_day_select`/`build_day_skipdata_count_select` (item 5 follow-up fix): Hive
+    partitions are keyed by delivery/file time, not flow-start time, so a flow whose own `start`
+    timestamp falls on day D can be delivered into day D+1's partition file (delivery lag only ever
+    pushes FORWARD, never backward). Querying strictly `partition = D` can therefore miss records
+    that are logically day-D traffic but partitioned under D+1. The predicate below widens to
+    `partition IN {D, D+1}` (one extra day, never unbounded) while the caller's own `start`/`end`
+    row-level filter remains the authoritative test for which flows actually belong to day D — this
+    predicate only decides which PARTITION FILES are scanned, never which rows are counted."""
+    next_day = day + timedelta(days=1)
+    lower_keys = {k.lower(): k for k in partition_keys}
+    if {"year", "month", "day"} <= set(lower_keys):
+        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
+        y_col, mo_col, d_col = _safe_ident(y, "year"), _safe_ident(mo, "month"), _safe_ident(d, "day")
+        return (
+            f' AND (("{y_col}" = \'{day.year:04d}\' AND "{mo_col}" = \'{day.month:02d}\' '
+            f'AND "{d_col}" = \'{day.day:02d}\') OR ("{y_col}" = \'{next_day.year:04d}\' '
+            f'AND "{mo_col}" = \'{next_day.month:02d}\' AND "{d_col}" = \'{next_day.day:02d}\'))'
+        )
+    if len(partition_keys) == 1:
+        dk = _safe_ident(partition_keys[0], "")
+        if dk:
+            return f' AND "{dk}" IN (\'{day.isoformat()}\', \'{next_day.isoformat()}\')'
+    return ""
+
+
+def _build_scope_predicate(column_map, source):
+    """item 4 follow-up fix: against a centralized/org-wide flow-log table (partitioned/columned
+    additionally by account/region beyond just date), every account's traffic gets scanned unless
+    explicitly scoped — inflating cost, tripping byte ceilings, and consuming the row `LIMIT` with
+    foreign rows. When the broker's own `_validate` resolved BOTH an `account_id` and a `region`
+    column alias (persisted into `validation.columnMap`, the same canonical->actual mapping already
+    used for the required Flow Log fields), add an exact-match predicate scoping to THIS resolved
+    source's own account_id/region. When the table doesn't expose those columns (a single-account
+    source — the common case, per `sg_flow_sources`' one-row-per-account+region schema), no
+    predicate is added, which is correct/unchanged."""
+    if "account_id" not in column_map or "region" not in column_map:
+        return ""
+    acct_col = _safe_ident(column_map["account_id"], "account_id")
+    region_col = _safe_ident(column_map["region"], "region")
+    acct_val = _safe_scope_value(str(source["account_id"]), _ACCOUNT_ID_VALUE_RE)
+    region_val = _safe_scope_value(str(source["region"]), _REGION_VALUE_RE)
+    return f' AND "{acct_col}" = \'{acct_val}\' AND "{region_col}" = \'{region_val}\''
+
+
 def build_day_select(source, day):
     """Validated SELECT for one account/region/day. Every identifier here is re-validated
     (`_safe_ident`) before interpolation; workgroup/database/table already passed strict allowlist
@@ -297,19 +356,8 @@ def build_day_select(source, day):
     has_bytes = ("bytes" in optional_fields) if has_optional_info else True
     bytes_select = ', sum("bytes") as bytes' if has_bytes else ''
 
-    partition_predicate = ""
-    lower_keys = {k.lower(): k for k in partition_keys}
-    if {"year", "month", "day"} <= set(lower_keys):
-        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
-        partition_predicate = (
-            f' AND "{_safe_ident(y, "year")}" = \'{day.year:04d}\''
-            f' AND "{_safe_ident(mo, "month")}" = \'{day.month:02d}\''
-            f' AND "{_safe_ident(d, "day")}" = \'{day.day:02d}\''
-        )
-    elif len(partition_keys) == 1:
-        dk = _safe_ident(partition_keys[0], "")
-        if dk:
-            partition_predicate = f' AND "{dk}" = \'{day.isoformat()}\''
+    partition_predicate = _build_partition_predicate(partition_keys, day)
+    scope_predicate = _build_scope_predicate(column_map, source)
 
     return (
         # `srcport` is deliberately NOT selected/grouped (L4 finding #9(i)) — process_day() never
@@ -318,7 +366,7 @@ def build_day_select(source, day):
         f'SELECT "{interface_col}" as interface_id, srcaddr, dstaddr, dstport, protocol, '
         f'action{bytes_select}, count(*) as cnt, max("{start_col}") as last_start FROM {table} '
         f'WHERE "{start_col}" >= {int(start.timestamp())} AND "{start_col}" < {int(end.timestamp())} '
-        f"AND action = 'ACCEPT' AND \"{log_status_col}\" = 'OK'{partition_predicate} "
+        f"AND action = 'ACCEPT' AND \"{log_status_col}\" = 'OK'{partition_predicate}{scope_predicate} "
         f'GROUP BY "{interface_col}", srcaddr, dstaddr, dstport, protocol, action '
         f"LIMIT {ROW_LIMIT}"
     )
@@ -337,24 +385,13 @@ def build_day_skipdata_count_select(source, day):
     start, end = day_bounds_utc(day)
     table = f'"{_safe_ident(source["database_name"])}"."{_safe_ident(source["table_name"])}"'
 
-    partition_predicate = ""
-    lower_keys = {k.lower(): k for k in partition_keys}
-    if {"year", "month", "day"} <= set(lower_keys):
-        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
-        partition_predicate = (
-            f' AND "{_safe_ident(y, "year")}" = \'{day.year:04d}\''
-            f' AND "{_safe_ident(mo, "month")}" = \'{day.month:02d}\''
-            f' AND "{_safe_ident(d, "day")}" = \'{day.day:02d}\''
-        )
-    elif len(partition_keys) == 1:
-        dk = _safe_ident(partition_keys[0], "")
-        if dk:
-            partition_predicate = f' AND "{dk}" = \'{day.isoformat()}\''
+    partition_predicate = _build_partition_predicate(partition_keys, day)
+    scope_predicate = _build_scope_predicate(column_map, source)
 
     return (
         f'SELECT count(*) as skipdata_count FROM {table} '
         f'WHERE "{start_col}" >= {int(start.timestamp())} AND "{start_col}" < {int(end.timestamp())} '
-        f"AND \"{log_status_col}\" = 'SKIPDATA'{partition_predicate}"
+        f"AND \"{log_status_col}\" = 'SKIPDATA'{partition_predicate}{scope_predicate}"
     )
 
 
