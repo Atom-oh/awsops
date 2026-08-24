@@ -1,4 +1,4 @@
--- since: 0.9.0
+-- since: 0.8.0
 -- ADR-020 follow-up (PR review, L4 MAJOR): finops_findings deduped on (rule_id, resource_id)
 -- alone, but ebs_unattached reads inventory_resources across ALL synced accounts/regions
 -- (base PK is (resource_type, account_id, region, resource_id)) while the Compute Optimizer
