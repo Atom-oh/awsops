@@ -195,9 +195,9 @@ def _sg_rule_scan(payload, dry_run):
 
 
 def _network_path(payload, dry_run):
-    """Network Path Check (BASELINE.md §2 register row, governed under ADR-019's Decision — NOT
-    "ADR-019's own §2 section", which is unrelated CloudWatch-pattern text; see network_path.py's
-    module docstring for the L5 docs-consistency disambiguation), design spec
+    """Network Path Check (BASELINE.md §2 register row — no governing ADR; ADR-019 §Decision
+    explicitly excludes this flag, see network_path.py's module docstring for the disambiguation),
+    design spec
     docs/superpowers/specs/2026-08-13-network-path-check-design.md). payload: {run_id, definition}
     (definition = the run's immutable definition_snapshot). Read-only: resolve -> discover ->
     verify -> conclude over cached topology + live SG/NACL/route/TGW/VPN/DX/Network Firewall/ELBv2/
@@ -245,6 +245,26 @@ def _insight(payload, dry_run):
             pass
 
 
+def _finops_baseline(payload, dry_run):
+    """ADR-020 FinOps baseline-recommendations engine (daily). Read-only Compute Optimizer calls +
+    inventory_resources reads -> finops_findings (Cost Explorer/Cost Optimization Hub/Budgets-based
+    rules are catalogued as future work — this version calls neither). Fargate runtime (matches the
+    ADR's "same Fargate worker as diagnosis" framing; a full Compute Optimizer + LLM-explanation
+    pass can run longer than the lambda job's time budget)."""
+    if dry_run:
+        return {"dry_run": True, "would_run_finops_baseline": True}, None
+    import db as wdb
+    from finops import engine
+    conn = wdb.connect()
+    try:
+        return engine.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # type -> (handler, runtime). runtime drives SFN routing (lambda<15min / fargate long+heavy).
 REGISTRY = {
     "noop":             (_noop, "lambda"),
@@ -253,6 +273,7 @@ REGISTRY = {
     "compliance":       (_compliance, "fargate"),
     "datasource_index": (_datasource_index, "lambda"),
     "insight":          (_insight, "lambda"),
+    "finops_baseline":  (_finops_baseline, "fargate"),
     "sg_rule_scan":     (_sg_rule_scan, "fargate"),
     "network_path":     (_network_path, "fargate"),
 }

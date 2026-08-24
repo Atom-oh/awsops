@@ -6,6 +6,19 @@
 ## Project Overview
 AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds v1's single-EC2 monolith as a **Terraform-based MSA**: private edge (CloudFront VPC Origin → internal ALB → Fargate), Cognito Lambda@Edge auth, Aurora persistent state, AgentCore section agents (live AWS queries), and an OOM-safe async worker tier.
 
+## Commands (web/, day-to-day dev)
+All app code/tests live under `web/` — there is no root `package.json`.
+```
+cd web && npm install
+npm run dev                              # next dev
+npm run build                            # next build (standalone, used by the deploy image)
+npm test                                 # vitest run — full suite (2000+ tests, ~10s)
+npx vitest run lib/anfw.test.ts          # a single test file
+npx vitest run -t "test name substring"  # filter by test name
+npx tsc --noEmit -p .                    # typecheck — no npm script wraps this; run directly
+```
+No lint script/config exists (no ESLint) — don't go looking for one. Integration tests for the migration/backfill scripts live outside `web/` as `scripts/v2/*.itest.mjs`, run directly with `node scripts/v2/<name>.itest.mjs` — each spins up a disposable `postgres:17` container via `sudo docker` (skips cleanly if Docker is unreachable), not the live Aurora instance.
+
 ## Architecture (v2)
 - **IaC**: **Terraform** (CDK retired). Single root at `terraform/v2/foundation/`, **partial S3 backend** (`backend.hcl`, `awsops-v2-tfstate`, `use_lockfile` — no DynamoDB). TF ≥1.15, provider `~>6.0`.
 - **Edge**: CloudFront (TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** The ALB SG allows 443 only from the CloudFront-managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only causes a 504).
@@ -40,7 +53,7 @@ Live environment: account `180294183052`, domain `awsops-v2.atomai.click`, reusi
 
 ### Terraform Discipline
 - Make changes in `terraform/v2/foundation/`. **`-auto-approve` is forbidden on shared infrastructure** — a saved tfplan (`apply tfplan`) is what passes the automated gate. Long applies (CloudFront, SG) are **run by the controller** (subagents idle-timeout).
-- New large features are gated by a **count/flag**: `agentcore_enabled`, `workers_enabled`, `steampipe_enabled` (inventory sync), `hybrid_routing_enabled` (ADR-003[legacy 038] chat routing) — all default to false → `plan` = No changes, $0. Default off before toggling.
+- New large features are gated by a **count/flag**: `agentcore_enabled`, `workers_enabled`, `steampipe_enabled` (inventory sync), `hybrid_routing_enabled` (ADR-003[legacy 038] chat routing), `finops_baseline_enabled` (ADR-020 FinOps baseline-recommendations engine) — all default to false → `plan` = No changes, $0. Default off before toggling.
 - **SG `description` is immutable** — changing it makes the SG replace hang on the ALB dependency. Change ingress in-place; leave the description untouched.
 - **arm64 is required** (web/agent/worker images all use `buildx --platform linux/arm64`).
 
@@ -134,15 +147,16 @@ make workers     # arm64 worker image push (after apply with workers_enabled=tru
 - **Agent cross-account self-assume trap**: v2 is single-account, but if the chat picks the host account (`180294183052`), `agent.py` forces `target_account_id=<host>` → tools then try to self-assume `arn:...:role/AWSopsReadOnlyRole` (which only exists in v1 *target* accounts, not the host) → AccessDenied, which the agent **misdiagnoses** as "cross-account blocked." Fix: `cross_account.get_role_arn()` returns `None` when the target is the host (use the exec role directly), and `agent.py`'s `effective_account_id()` treats the host like `__all__` (blank, defense-in-depth). Host detection = the `AWSOPS_HOST_ACCOUNT_ID` env, falling back to a cached STS `GetCallerIdentity`. The path for assuming a genuinely *different* account is unchanged. No impact on v1 (a separate function, `awsops-*-mcp` py3.12, vs v2's `awsops-v2-agent-*` py3.11).
 
 ## ADRs / Decisions
-**Current source of truth for decisions = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — the north star (WA 6-pillar goals) + invariants + gate/freeze register + an index of **19 consolidated ADRs** (`docs/decisions/0NN-*.md`). Start there.
+**Current source of truth for decisions = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — the north star (WA 6-pillar goals) + invariants + gate/freeze register + an index of **20 consolidated ADRs** (`docs/decisions/0NN-*.md`). Start there.
 - The bodies of the old ADRs 001–046 are **no longer in the tree** — preserved at git tag `adr-legacy-2026-06-22`, mapping in `docs/decisions/ADR-MAPPING.md`. **Do not read the old bodies (via the tag) without an explicit request.**
 - **AWS resource mutation and autonomy = FROZEN (ADR-005, do-not-enable).** Relaxing this is *not* a docs cleanup — it requires a new ADR + multi-AI panel + a dated owner-override, as a separate product decision. External DATA read/write is governed separately (ADR-007).
   - **First exception: ADR-015** (operational self-healing) — allowed by Junseok Oh's owner-override (2026-07-01) for **exactly one** action: `ecs:UpdateService force-new-deployment` on its own web service (a restart — image/task-def unchanged, not a code deploy), limited to Aurora secret-rotation events, one IAM ARN, secret-id fail-closed, default-off. Everything else under ADR-005 (code deploys, remediation, mutating tools) remains FROZEN.
-- A new ADR = highest number + 1 (currently **019**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules in `docs/decisions/CLAUDE.md`.
+  - **Not a second exception:** ADR-019's SG-rules Athena activity pipeline (`sg_rule_activity_enabled`, `AWSopsSgRuleAthenaRole`) does NOT relax ADR-005 — ADR-019 §Decision explicitly concludes it needs "neither an ADR-005 relaxation nor an ADR-007-tier classification," and registers it in BASELINE §2 as an **ordinary GATED** entry, not an owner-override carve-out. Don't cite it alongside ADR-015 as a FROZEN exception.
+- A new ADR = highest number + 1 (currently **020**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules in `docs/decisions/CLAUDE.md`.
 
 
 ## Implementation References
 <!-- AUTO-MANAGED:references — managed by the /project-init sync; do not hand-edit inside the markers. -->
 Per-layer implementation references live under `docs/reference/` (index: [README](docs/reference/README.md)) — [01 Edge Network](docs/reference/01-edge-network.md) · [02 Auth](docs/reference/02-auth.md) · [03 Aurora Data](docs/reference/03-data-aurora.md) · [04 Web BFF](docs/reference/04-web-bff.md) · [05 AgentCore](docs/reference/05-agentcore.md) · [06 Workers](docs/reference/06-workers.md) · [07 EKS](docs/reference/07-eks.md).
-Full overview: [docs/architecture.md](docs/architecture.md) (bilingual + mermaid) · New joiners: [docs/onboarding.md](docs/onboarding.md) · Full API index (86 routes): [docs/api-reference.md](docs/api-reference.md) · Operations: [docs/runbooks/](docs/runbooks/).
+Full overview: [docs/architecture.md](docs/architecture.md) (bilingual + mermaid) · New joiners: [docs/onboarding.md](docs/onboarding.md) · Full API index (94 routes): [docs/api-reference.md](docs/api-reference.md) · Operations: [docs/runbooks/](docs/runbooks/).
 <!-- /AUTO-MANAGED:references -->
