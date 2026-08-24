@@ -1246,12 +1246,11 @@ export default function NetworkFirewallPage() {
                         </div>
                       )}
                       {/* 리뷰 MAJOR(라운드10, stop-hook 재수정): totalAlerts>0 게이트를 단일 조건으로
-                          바꾸면, 한쪽 표만 실패해도 성공한 다른 표까지 가려지는 버그가 생긴다 —
-                          이 표는 자기 데이터 유무로 독립 게이트한다(upstream v2 UI 리워크 병합). */}
+                          바꿨더니, 한쪽 표만 실패해도 성공한 다른 표까지 가려지는 동일 계급의
+                          버그가 자리만 옮겼다 — 이 표는 자기 데이터 유무로 독립 게이트한다. */}
                       {(logsData.alert.topSources.length > 0 || logsData.alert.topDests.length > 0) && (
-                        <div className="border-t border-ink-100">
-                          <div className="px-4 pt-3 text-[12px] font-medium text-ink-600">{tt('Top 소스 / 목적지')}</div>
-                          <div className="overflow-x-auto px-4 pb-3 pt-1">
+                        <div className="grid gap-4 px-4 pb-3">
+                          <div className="overflow-x-auto">
                             <table className="w-full">
                               <thead><tr className="border-b border-ink-100">
                                 <th className={TH}>{tt('소스 IP')}</th>
@@ -1325,7 +1324,12 @@ export default function NetworkFirewallPage() {
                           다음(즉 logsData && logsData.alert != null 분기 안)으로 이동해 로딩/에러/
                           대상 없음 상태를 Alert Card 본문과 동일하게 상속받도록 한다. */}
                       <div className="grid gap-6 lg:grid-cols-2">
-                        {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || alertObservabilityIncomplete ? (
+                        {/* 리뷰 MAJOR(확정, PR #229 AI Code Review): 이 도넛은 alertObservabilityIncomplete/
+                            failed[] 만 게이트하고 !alertCoverageComplete(시간적 커버리지 미확보 — 로깅이
+                            range 도중 시작됐거나 로그 그룹 조회가 거부/시간 초과됨)는 반영하지 않아, 옆의
+                            Top-10 바 차트(위 right= 고지)·조인 테이블(hits===0 && !alertCoverageComplete
+                            분기)과 달리 부분 구간 집계를 확정치처럼 그렸다 — 같은 신호를 여기도 반영한다. */}
+                        {(logsData?.failed?.some((k) => k === 'firewallDiscovery' || k === 'logDiscovery' || (k.startsWith('logDiscoveryEmpty:') && k.endsWith(':ALERT')) || k === 'alertByAction') ?? false) || alertObservabilityIncomplete || !alertCoverageComplete ? (
                           <div className="flex items-center justify-center px-4 py-8 text-[12px] text-ink-400">{tt('액션 분포 확인 불가')}</div>
                         ) : (
                           <DonutBreakdown title="히트 액션 분포" data={logsData?.alert?.byAction ?? []} nameKey="name" valueKey="value" />
@@ -1352,8 +1356,13 @@ export default function NetworkFirewallPage() {
                                 이어도, ALERT 로깅이 CWL이 아니거나(비-CWL) 아예 꺼져 있는(null) 방화벽이
                                 섞여 있으면 그 방화벽의 히트는 Insights 쿼리 대상 자체가 아니라서 "0건
                                 확인"이 아니라 "일부 방화벽은 집계 불가"다 — null 체크만으로는 이 케이스를
-                                "룰 히트 없음"(확정 0)으로 오판한다. */}
-                            {(logsData?.alert?.ruleHits == null || alertObservabilityIncomplete)
+                                "룰 히트 없음"(확정 0)으로 오판한다.
+                                리뷰 MAJOR(확정, PR #229 AI Code Review): 같은 이유로 !alertCoverageComplete
+                                (기간 전체 커버 미확보)도 확정 0을 막아야 한다 — 로깅이 range 도중 시작됐다면
+                                range 앞쪽 구간의 매칭은 로그가 없어 "룰 히트 없음"이 아니라 "그 구간은 확인
+                                못함"이다. 위 조인 테이블의 hits===0 && !alertCoverageComplete 분기와 동일한
+                                기준. */}
+                            {(logsData?.alert?.ruleHits == null || alertObservabilityIncomplete || !alertCoverageComplete)
                               ? tt('룰 히트 집계 불명 — 위 원시 시그니처 표 참고')
                               : tt('룰 히트 없음')}
                           </div>

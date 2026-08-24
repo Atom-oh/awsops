@@ -187,7 +187,7 @@ export default function VpcResourceMap({
   const rtName = (rtId: string) => rts.find((r) => r.route_table_id === rtId)?.name || rtId;
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-ink-900/50 p-4 lg:p-8" role="dialog" aria-modal="true" aria-label="VPC Resource Map">
+    <div className="fixed inset-0 z-[60] flex flex-col bg-ink-900/50 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] lg:p-8" role="dialog" aria-modal="true" aria-label="VPC Resource Map">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-ink-200 bg-paper shadow-pop">
         <header className="flex flex-wrap items-center gap-3 border-b border-ink-100 px-5 py-3">
           <div className="min-w-0">

@@ -171,6 +171,63 @@ def _datasource_index(payload, dry_run):
             pass
 
 
+def _sg_rule_scan(payload, dry_run):
+    """SG Rules & Usage daily/manual scan (ADR-019, sg_rule_scan.py). payload:
+    {account_id, region, trigger}. Read-only (Role A DescribeSecurityGroupRules/
+    DescribeNetworkInterfaces via the reused AWSopsReadOnlyRole; Role B Athena query only via the
+    isolated broker Lambda — this handler never assumes AWSopsSgRuleAthenaRole itself). Fargate
+    runtime: pagination across every SGR/ENI in an account/region plus one-or-more Athena-broker
+    round-trips per day processed can comfortably exceed a lambda-tier budget."""
+    account_id = payload.get("account_id")
+    region = payload.get("region")
+    if dry_run:
+        return {"dry_run": True, "would_scan": account_id, "region": region}, None
+    import db as wdb
+    import sg_rule_scan as sgs
+    conn = wdb.connect()
+    try:
+        return sgs.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _network_path(payload, dry_run):
+    """Network Path Check (BASELINE.md §2 register row — no governing ADR; ADR-019 §Decision
+    explicitly excludes this flag, see network_path.py's module docstring for the disambiguation),
+    design spec
+    docs/superpowers/specs/2026-08-13-network-path-check-design.md). payload: {run_id, definition}
+    (definition = the run's immutable definition_snapshot). Read-only: resolve -> discover ->
+    verify -> conclude over cached topology + live SG/NACL/route/TGW/VPN/DX/Network Firewall/ELBv2/
+    K8s-policy reads (no Reachability Analyzer path creation, no mutation, no active probe).
+    Fargate runtime: Kubernetes policy evaluation and multi-account route analysis can exceed a
+    short lambda invocation budget (same reasoning as _sg_rule_scan)."""
+    run_id = payload.get("run_id")
+    if dry_run:
+        return {"dry_run": True, "would_run": run_id}, None
+    # [L5 docs-consistency + safety fix] A second, structurally independent fail-closed gate at the
+    # dispatch site itself — the web BFF gate (web/lib/network-path-gate.ts) and the Terraform count
+    # gate (network-path.tf's `local.npc`, which controls whether this env var is even set on the
+    # task) are the primary gates, but this handler must not blindly trust that a `network_path`
+    # message reaching the worker implies the feature is actually enabled (defense-in-depth,
+    # matching the SAME KIND of short-circuit `sg_rule_scan.run()` itself does on
+    # `SG_RULE_ATHENA_BROKER_ARN` — that check lives inside sg_rule_scan.py, not in this file).
+    if os.environ.get("NETWORK_PATH_CHECK_ENABLED") != "true":
+        return {"status": "disabled", "reason": "NETWORK_PATH_CHECK_ENABLED is not set (feature flag off)"}, None
+    import db as wdb
+    import network_path as npc
+    conn = wdb.connect()
+    try:
+        return npc.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _insight(payload, dry_run):
     """AI Insights generation (K8s/CloudWatch/cost → LLM bullets → ai_insights). Short + read-only →
     lambda runtime. Runtime-gated on AI_INSIGHTS_ENABLED inside insight.job.run."""
@@ -188,6 +245,26 @@ def _insight(payload, dry_run):
             pass
 
 
+def _finops_baseline(payload, dry_run):
+    """ADR-020 FinOps baseline-recommendations engine (daily). Read-only Compute Optimizer calls +
+    inventory_resources reads -> finops_findings (Cost Explorer/Cost Optimization Hub/Budgets-based
+    rules are catalogued as future work — this version calls neither). Fargate runtime (matches the
+    ADR's "same Fargate worker as diagnosis" framing; a full Compute Optimizer + LLM-explanation
+    pass can run longer than the lambda job's time budget)."""
+    if dry_run:
+        return {"dry_run": True, "would_run_finops_baseline": True}, None
+    import db as wdb
+    from finops import engine
+    conn = wdb.connect()
+    try:
+        return engine.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # type -> (handler, runtime). runtime drives SFN routing (lambda<15min / fargate long+heavy).
 REGISTRY = {
     "noop":             (_noop, "lambda"),
@@ -196,6 +273,9 @@ REGISTRY = {
     "compliance":       (_compliance, "fargate"),
     "datasource_index": (_datasource_index, "lambda"),
     "insight":          (_insight, "lambda"),
+    "finops_baseline":  (_finops_baseline, "fargate"),
+    "sg_rule_scan":     (_sg_rule_scan, "fargate"),
+    "network_path":     (_network_path, "fargate"),
 }
 
 

@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-**Accepted (2026-06-22) — consolidated.** / **채택됨 (2026-06-22) — 통합.**
+**Accepted (2026-06-22) — consolidated.** / **채택됨 (2026-06-22) — 통합.** **Extended by ADR-020 (2026-08-19)** — a deterministic baseline-recommendations rule engine on `/cost`; this ADR's content below is unchanged. / **ADR-020(2026-08-19)로 확장됨** — `/cost`의 결정론적 기본 권장 룰 엔진. 아래 본문은 변경 없음.
 
 Consolidates: **006** (Cost Explorer availability probe), **015** (FinOps MCP Lambda).
 통합 대상: **006**(Cost Explorer 가용성 probe), **015**(FinOps MCP Lambda).

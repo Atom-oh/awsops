@@ -147,7 +147,17 @@ function SgHitsPanel({ sgId, range, regionsKey }: { sgId: string; range: number;
  *  값이라 sg-analysis.ts의 리턴 타입을 오염시키지 않고 응답에만 덧붙인다). */
 type SgAnalysisResponse = SgAnalysis & { scopeTruncated?: boolean };
 
-export function SgAnalysisSection({ rows }: { rows: Row[] }) {
+export function SgAnalysisSection({
+  rows,
+  onSelect,
+}: {
+  rows: Row[];
+  /** Fired with the full SgUsageRow whenever the row-click drilldown opens/closes (null = closed).
+   *  Used by app/network/security-groups/usage/page.tsx to drive a supplementary relationship
+   *  graph alongside this section's own hit-matching drilldown — purely additive, no change to
+   *  this component's own behavior when the caller doesn't pass it. */
+  onSelect?: (row: SgUsageRow | null) => void;
+}) {
   const { tt } = useI18n();
   const [data, setData] = useState<SgAnalysisResponse | null>(null);
   const [err, setErr] = useState('');
@@ -300,7 +310,11 @@ export function SgAnalysisSection({ rows }: { rows: Row[] }) {
                 items={data.rows}
                 rowKey={(r) => `${r.region}|${r.id}`}
                 emptyText="보안 그룹 없음"
-                onRowClick={(r) => setOpenId((cur) => (cur === r.id ? null : r.id))}
+                onRowClick={(r) => setOpenId((cur) => {
+                  const next = cur === r.id ? null : r.id;
+                  onSelect?.(next ? r : null);
+                  return next;
+                })}
               />
             </div>
           </>

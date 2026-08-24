@@ -42,11 +42,18 @@ describe('POST /api/jobs', () => {
   // The diagnosis lineage join treats `worker_jobs.type = 'report'` as provenance for a payload-supplied
   // report_id, which only holds while this allowlist excludes it. If someone ever adds 'report' here, a
   // client could name any report_id and account (PR #203 codex stop-gate).
-  it('rejects report/compliance: they trust payload-supplied ids, so only their own routes may enqueue them',
+  it('rejects report/compliance/sg_rule_scan: they trust payload-supplied ids or must only be '
+    + 'enqueued from the trusted daily/admin-refresh path, so only their own routes may enqueue them',
     async () => {
       verifyUser.mockResolvedValue({ sub: 'u-1' });
       const { POST } = await import('./route');
-      for (const type of ['report', 'compliance']) {
+      // sg_rule_scan (SG Rules & Usage daily/manual pipeline, ADR-019 + the design spec's Daily
+      // pipeline section) must be rejected here too — it is enqueued only via the internal
+      // schedule dispatcher or POST /api/sg/rules/refresh (admin-only), never generically.
+      // network_path (Network Path Check, design spec 2026-08-13) must be rejected too — it is
+      // enqueued only via POST /api/network-paths/[id]/runs, which validates ownership/access and
+      // snapshots the definition server-side before enqueueing.
+      for (const type of ['report', 'compliance', 'sg_rule_scan', 'network_path']) {
         const res = await POST(req({ type }) as any);
         expect(res.status).toBe(400);
       }
