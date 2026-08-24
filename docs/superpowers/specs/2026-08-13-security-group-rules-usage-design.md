@@ -367,6 +367,21 @@ already-permitted continuing traffic, never the allow/deny outcome (Flow Log's o
 already records what AWS actually permitted). Accepted as a bounded, disclosed imprecision; connection-
 level correlation is out of scope for this spec.
 
+**Follow-up correction (post-launch CI review, item 3): a single version technically covering the
+whole day is still not always confident.** The day-granularity rule above checks that ONE version's
+`[valid_from, valid_to)` spans start-of-day through end-of-day, but `valid_from`/`valid_to` are — per
+the detection-lag argument above — *observation* timestamps (the run time of the scan that first/last
+saw that fingerprint), not the actual change instant. If the version's `valid_to` is closed and falls
+within one scan interval (the daily cadence between successive snapshots) of that day's own end, the
+real change could have happened anywhere in `(valid_to - scan_interval, valid_to]` — a window that can
+overlap the day being matched even though the version's *observation* interval technically spans it.
+Concretely: a version closed at exactly the next day's midnight (`valid_to` = day D+1 00:00) was, under
+a 24h scan cadence, possibly closed by a change that happened anywhere in the preceding 24h — i.e.
+during day D itself — so day D cannot be confidently attributed to the version that merely appears to
+cover it. `sm.day_coverage()` now folds this into the same `unassessable` outcome (never a lower bound)
+whenever the covering version's `valid_to - observation_lag < end-of-day`; a still-open version
+(`valid_to IS NULL`) is unaffected — a change that hasn't happened yet can't retroactively taint a day.
+
 Default outbound rules are displayed and marked protected from cleanup recommendations.
 
 ## Daily pipeline
