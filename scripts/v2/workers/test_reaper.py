@@ -4,14 +4,17 @@ never shows an eternal 'running'. V1 had a 30-min stale guard; this is its V2 ed
 
 
 class FakeConn:
-    def __init__(self, report_rows=None):
+    def __init__(self, report_rows=None, finops_run_rows=None):
         self.calls = []
         self.report_rows = report_rows or []
+        self.finops_run_rows = finops_run_rows or []
 
     def run(self, sql, **kw):
         self.calls.append((sql, kw))
         if "diagnosis_reports" in sql:
             return self.report_rows
+        if "finops_runs" in sql:
+            return self.finops_run_rows
         return []  # worker_jobs / remediation reaps: nothing stale
 
     def close(self):
@@ -20,6 +23,10 @@ class FakeConn:
 
 def _diag_call(conn):
     return next(c for c in conn.calls if "diagnosis_reports" in c[0])
+
+
+def _finops_run_call(conn):
+    return next(c for c in conn.calls if "finops_runs" in c[0])
 
 
 def test_reaper_reconciles_failed_and_stale_diagnosis_reports(monkeypatch):
@@ -44,6 +51,26 @@ def test_reaper_reports_zero_when_none_stale(monkeypatch):
     monkeypatch.setattr(reaper.db, "connect", lambda: conn)
     out = reaper.lambda_handler(None, None)
     assert out["reaped_reports"] == 0
+
+
+def test_reaper_reconciles_stale_running_finops_runs(monkeypatch):
+    # ADR-020: engine.run() writes finops_runs 'running' BEFORE evaluating anything, and only
+    # reaches its own terminal-status write via a Python return/except — a hard kill (Fargate OOM)
+    # leaves the row 'running' forever, since nothing else reconciles finops_runs (a review round
+    # caught this: the reaper only touched worker_jobs).
+    import reaper
+    conn = FakeConn(finops_run_rows=[[3]])
+    monkeypatch.setattr(reaper.db, "connect", lambda: conn)
+
+    out = reaper.lambda_handler(None, None)
+
+    assert out["reaped_finops_runs"] == 1
+    sql, kw = _finops_run_call(conn)
+    assert "UPDATE finops_runs" in sql
+    assert "status='failed'" in sql and "status='running'" in sql
+    assert "finished_at=now()" in sql
+    assert "make_interval" in sql
+    assert kw["m"] == reaper.R
 
 
 class FakeConnWithNetworkPathRows:

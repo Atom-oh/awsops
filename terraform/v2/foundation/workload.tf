@@ -512,6 +512,12 @@ resource "aws_ecs_task_definition" "web" {
         # (default) means the interval never starts — concat(base, []) == base, byte-identical web
         # task def when off. The manual scripts/v2/graph-rebuild.mjs path is unaffected either way.
         { name = "GRAPH_REBUILD_INTERVAL_MINS", value = tostring(var.graph_rebuild_interval_mins) },
+        ] : [], var.finops_baseline_enabled ? [
+        # ADR-020: omit the env when off -> concat(base, []) == base (no web task-def diff/redeploy).
+        # /api/finops/findings + the /cost baseline-recommendations section read this and no-op/hide
+        # when it's absent — the underlying finops_findings table can exist (harmless) even with the
+        # flag off; this env is what actually gates the read path.
+        { name = "FINOPS_BASELINE_ENABLED", value = "true" },
         ] : [], (var.sg_rule_activity_enabled && var.workers_enabled) ? [
         # ADR-019 SG Rules & Usage: web/lib/sg-rules.ts's validateFlowSourceViaBroker reads this to
         # invoke the isolated Athena/Glue broker Lambda (Role B stays isolated — invoke-only, see

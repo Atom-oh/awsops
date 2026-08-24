@@ -19,6 +19,7 @@ import {
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
 } from '@/lib/cost';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
+import FinopsBaselineCard from '@/components/finops/FinopsBaselineCard';
 
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 // Client model: only `forecast` is read directly off the API response — the monthly/daily TOTALS
@@ -248,6 +249,8 @@ export default function CostPage() {
             <button onClick={load} className="rounded-md border border-amber-300 bg-card px-2 py-0.5 font-medium hover:bg-amber-100">{tt('라이브 재시도')}</button>
           </div>
         )}
+        <FinopsBaselineCard />
+
         {!d && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
 
         {d && (

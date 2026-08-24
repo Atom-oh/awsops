@@ -6,9 +6,9 @@ Next.js 14 thin-BFF. Serves at the root path (`/`) — no basePath, fetch is `/a
 ## Layout
 | Directory | Contents | Size |
 |---|---|---|
-| `app/` | Pages + API routes (App Router) | 39 pages / 93 API routes |
+| `app/` | Pages + API routes (App Router) | 39 pages / 94 API routes |
 | `lib/` | Domain logic — mostly React-free | 118 modules |
-| `components/` | Client components | 89 files, 11 subdirs |
+| `components/` | Client components | 90 files, 12 subdirs |
 
 ## Key Files
 - `middleware.ts` — global 2MB body cap over all of `/api/*` (defense-in-depth above each route's own `readJsonBounded`).
