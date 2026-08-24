@@ -42,6 +42,32 @@ class TestSecurityGroup:
         r = ad.eval_security_group(rules, "tcp", 443, peer_ip=None, peer_sg_ids=None)
         assert r["status"] == "unknown"
 
+    # ── item 9: partial peer identity (known SG but no IP, or vice versa) must never yield a
+    #    confident `blocked` when a CIDR/SG-reference rule couldn't be evaluated ────────────────
+
+    def test_known_peer_sg_but_missing_peer_ip_leaves_cidr_rule_unknown(self):
+        rules = [{"sg_id": "sg-1", "protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "0.0.0.0/0"}]
+        r = ad.eval_security_group(rules, "tcp", 443, peer_ip=None, peer_sg_ids=["sg-peer"])
+        assert r["status"] == "unknown"
+
+    def test_known_peer_ip_but_missing_peer_sg_ids_leaves_sg_reference_rule_unknown(self):
+        rules = [{"sg_id": "sg-1", "protocol": "tcp", "from_port": 5432, "to_port": 5432,
+                  "referenced_group_id": "sg-db"}]
+        r = ad.eval_security_group(rules, "tcp", 5432, peer_ip="10.1.2.3", peer_sg_ids=None)
+        assert r["status"] == "unknown"
+
+    def test_partial_data_still_confidently_allowed_when_a_different_rule_matches(self):
+        # The CIDR rule is unevaluable (no peer_ip), but a separate SG-reference rule DOES
+        # confidently match via peer_sg_ids — the confident match must win over `unknown`.
+        rules = [
+            {"sg_id": "sg-1", "protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "0.0.0.0/0"},
+            {"sg_id": "sg-2", "protocol": "tcp", "from_port": 443, "to_port": 443,
+             "referenced_group_id": "sg-db"},
+        ]
+        r = ad.eval_security_group(rules, "tcp", 443, peer_ip=None, peer_sg_ids=["sg-db"])
+        assert r["status"] == "allowed"
+        assert r["resource"] == "sg-2"
+
     def test_multi_sg_union(self):
         # Second SG's rule is the one that actually allows — union across all attached SGs.
         rules = [
@@ -150,6 +176,31 @@ class TestNacl:
                {"rule_number": 100, "protocol": "-1", "action": "allow"}]
         r = ad.eval_nacl(fwd, ret, "tcp", 443)
         assert r["status"] == "conditional"
+
+    # ── item 1: a CIDR-scoped entry with NO peer_ip must never yield a confident verdict ──────────
+
+    def test_cidr_scoped_forward_entry_with_no_peer_ip_is_unknown_not_a_confident_match(self):
+        """Before this fix, `peer_ip is None` short-circuited the CIDR scoping check entirely,
+        letting the first proto/port-matching entry win regardless of CIDR — a confident verdict
+        from missing evidence. The only forward entry is CIDR-scoped and peer_ip is unavailable, so
+        this must be `unknown`, not a confident `allowed` (nor a confident `blocked`)."""
+        fwd = [{"rule_number": 100, "protocol": "-1", "cidr": "10.0.0.0/8", "action": "allow"},
+               {"rule_number": 32767, "action": "deny"}]
+        r = ad.eval_nacl(fwd, [], "tcp", 443, peer_ip=None)
+        assert r["status"] == "unknown"
+
+    def test_cidr_scoped_return_entry_with_no_peer_ip_is_unknown_even_when_forward_resolves(self):
+        fwd = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        ret = [{"rule_number": 100, "protocol": "-1", "cidr": "10.0.0.0/8", "action": "allow"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443, peer_ip=None)
+        assert r["status"] == "unknown"
+
+    def test_cidr_scoped_entry_with_peer_ip_present_still_resolves_confidently(self):
+        # Regression guard: supplying peer_ip must still produce the pre-existing confident verdict.
+        fwd = [{"rule_number": 100, "protocol": "-1", "cidr": "10.0.0.0/8", "action": "allow"}]
+        ret = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
+        r = ad.eval_nacl(fwd, ret, "tcp", 443, peer_ip="10.1.2.3")
+        assert r["status"] == "allowed"
 
     def test_return_deny_covering_full_ephemeral_range_is_confidently_blocked(self):
         """A deny that genuinely spans the full 0-65535 ephemeral range (unrestricted) legitimately
@@ -413,7 +464,10 @@ class TestK8sNetworkPolicy:
     def test_selected_matching_pod_selector_allows(self):
         policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
             {"from": [{"pod_selector": {"app": "gateway"}}]}]}]
-        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"})
+        # item 2c: a bare podSelector (no namespaceSelector) is scoped to the policy's OWN
+        # namespace — confirming same-namespace is required for a confident `allowed`.
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"},
+                                        policy_namespace="orders-ns", peer_namespace="orders-ns")
         assert r["status"] == "allowed"
 
     def test_ip_block_peer_match(self):
@@ -445,7 +499,8 @@ class TestK8sNetworkPolicy:
     def test_canonical_cased_policy_types_matching_peer_allows(self):
         policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["Ingress"],
                      "ingress": [{"from": [{"pod_selector": {"app": "gateway"}}]}]}]
-        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"})
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"},
+                                        policy_namespace="ns", peer_namespace="ns")
         assert r["status"] == "allowed"
 
     # ── L4 finding #10a: policyTypes OMITTED entirely must still apply K8s' real defaulting ──────
@@ -486,14 +541,16 @@ class TestK8sNetworkPolicy:
         policies = [{"pod_selector": {"app": "dns"}, "policy_types": ["ingress"], "ingress": [
             {"from": [{"pod_selector": {"app": "client"}}], "ports": [{"protocol": "UDP", "port": 53}]}]}]
         r = ad.eval_k8s_network_policy(policies, {"app": "dns"}, "ingress",
-                                        peer_labels={"app": "client"}, protocol="udp", port=53)
+                                        peer_labels={"app": "client"}, protocol="udp", port=53,
+                                        policy_namespace="ns", peer_namespace="ns")
         assert r["status"] == "allowed"
 
     def test_rule_with_no_ports_field_allows_any_port(self):
         policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
             {"from": [{"pod_selector": {"app": "gateway"}}]}]}]
         r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress",
-                                        peer_labels={"app": "gateway"}, protocol="tcp", port=9999)
+                                        peer_labels={"app": "gateway"}, protocol="tcp", port=9999,
+                                        policy_namespace="ns", peer_namespace="ns")
         assert r["status"] == "allowed"
 
     def test_port_range_via_end_port_matches(self):
@@ -501,8 +558,77 @@ class TestK8sNetworkPolicy:
             {"from": [{"pod_selector": {"app": "gateway"}}],
              "ports": [{"protocol": "TCP", "port": 8000, "endPort": 8100}]}]}]
         r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress",
-                                        peer_labels={"app": "gateway"}, protocol="tcp", port=8050)
+                                        peer_labels={"app": "gateway"}, protocol="tcp", port=8050,
+                                        policy_namespace="ns", peer_namespace="ns")
         assert r["status"] == "allowed"
+
+    # ── item 2b: named ports must never confidently deny ────────────────────────────────────────
+
+    def test_named_port_that_cannot_be_resolved_is_unknown_not_blocked(self):
+        """A rule restricted to a named port ("port": "http") that this pure adapter has no
+        Service-port-name resolution for must not be treated as a confident non-match (the old
+        `int()` conversion silently swallowed the ValueError via a bare `continue`, producing a
+        false `blocked`)."""
+        policies = [{"pod_selector": {"app": "web"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "client"}}],
+             "ports": [{"protocol": "TCP", "port": "http"}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "web"}, "ingress",
+                                        peer_labels={"app": "client"}, protocol="tcp", port=80,
+                                        policy_namespace="ns", peer_namespace="ns")
+        assert r["status"] == "unknown"
+
+    def test_named_port_alongside_a_confidently_matching_port_still_allows(self):
+        """When another, numeric ports entry in the SAME rule confidently matches, that confident
+        match wins — an unresolvable named port elsewhere must not downgrade an otherwise-confident
+        allow."""
+        policies = [{"pod_selector": {"app": "web"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "client"}}],
+             "ports": [{"protocol": "TCP", "port": "http"}, {"protocol": "TCP", "port": 80}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "web"}, "ingress",
+                                        peer_labels={"app": "client"}, protocol="tcp", port=80,
+                                        policy_namespace="ns", peer_namespace="ns")
+        assert r["status"] == "allowed"
+
+    # ── item 2a: partial peer data (podSelector w/o peer_labels, ipBlock w/o peer_ip) -> unknown ──
+
+    def test_pod_selector_peer_with_no_peer_labels_is_unknown_not_blocked(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels=None)
+        assert r["status"] == "unknown"
+
+    def test_ip_block_peer_with_no_peer_ip_is_unknown_not_blocked(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["egress"], "egress": [
+            {"to": [{"ip_block": {"cidr": "10.0.0.0/8"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "egress", peer_ip=None)
+        assert r["status"] == "unknown"
+
+    # ── item 2c: bare podSelector-only peer without namespace confirmation -> unknown ────────────
+
+    def test_bare_pod_selector_without_namespace_data_is_unknown_even_when_labels_match(self):
+        """K8s restricts a bare podSelector (no namespaceSelector) to the SAME namespace as the
+        policy — without namespace data to confirm that, a label match alone must not become a
+        confident cross-namespace `allowed`."""
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"})
+        assert r["status"] == "unknown"
+
+    def test_bare_pod_selector_different_namespace_does_not_match(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "gateway"},
+                                        policy_namespace="ns-a", peer_namespace="ns-b")
+        assert r["status"] == "blocked"
+
+    def test_bare_pod_selector_label_mismatch_is_a_confident_non_match_no_namespace_needed(self):
+        """When the labels themselves don't match, that's a confident non-match regardless of
+        namespace data — the namespace-confirmation requirement only applies to entries that would
+        otherwise match."""
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "gateway"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_labels={"app": "other"})
+        assert r["status"] == "blocked"
 
     # ── L4 finding #10c: data_available=False must yield `unknown`, never a fail-open `allowed` ──
 

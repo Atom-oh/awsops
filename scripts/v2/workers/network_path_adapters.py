@@ -83,23 +83,48 @@ def eval_security_group(rules, protocol, port, peer_ip=None, peer_sg_ids=None, l
             "evidence": [],
         }
     matched = None
+    # Follow-up fix (item 9): a PARTIAL peer identity (e.g. peer_sg_ids known but peer_ip missing,
+    # or vice versa) leaves an entire class of rule unevaluable rather than the whole call. Track
+    # whether any proto/port-eligible rule couldn't be checked because its OWN peer kind's data is
+    # missing — if nothing confidently matches AND such a rule existed, the verdict must be
+    # `unknown`, not a confident `blocked` (only the fully-missing-everything case above was
+    # guarded before this fix).
+    had_unevaluable_rule = False
     for rule in rules:
         if not _proto_matches(rule.get("protocol", "-1"), protocol):
             continue
         if not _port_in_range(rule, port):
             continue
-        if rule.get("cidr") and _cidr_contains(rule["cidr"], peer_ip):
-            matched = rule
-            break
-        if rule.get("referenced_group_id") and rule["referenced_group_id"] in peer_sg_ids:
-            matched = rule
-            break
+        cidr = rule.get("cidr")
+        if cidr:
+            if peer_ip is None:
+                had_unevaluable_rule = True
+            elif _cidr_contains(cidr, peer_ip):
+                matched = rule
+                break
+        ref_group = rule.get("referenced_group_id")
+        if ref_group:
+            if not peer_sg_ids:
+                had_unevaluable_rule = True
+            elif ref_group in peer_sg_ids:
+                matched = rule
+                break
     if matched:
         return {
             "layer": layer, "status": "allowed",
             "resource": matched.get("sg_id"),
             "summary": f"matched SG rule {matched.get('sg_id')} allowing {protocol}/{port}",
             "evidence": [matched],
+        }
+    if had_unevaluable_rule:
+        return {
+            "layer": layer, "status": "unknown", "resource": None,
+            "summary": (
+                f"one or more SG rules for {protocol}/{port} could not be evaluated due to partial "
+                "missing peer data (a CIDR rule with no peer_ip, or an SG-reference rule with no "
+                "peer_sg_ids) and no rule confidently matched"
+            ),
+            "evidence": [],
         }
     return {
         "layer": layer, "status": "blocked",
@@ -118,19 +143,34 @@ def _first_match(entries, protocol, port, peer_ip=None):
     (or denying) only an unrelated CIDR must not be treated as matching every peer. An entry with NO
     `cidr` field at all is treated as unrestricted (preserves prior behavior for callers/tests that
     don't model CIDR scope), matching how EC2 NACL entries with `0.0.0.0/0` behave.
+
+    Follow-up fix (item 1): when the FIRST proto/port-eligible entry encountered carries a `cidr`
+    field but `peer_ip` is unavailable, this function cannot tell whether that entry would actually
+    match — under first-match-wins semantics it is structurally wrong to either (a) skip past it and
+    let a LATER, unrelated entry win, or (b) let it win regardless of its CIDR scope (the bug this
+    was reported against: the old code did exactly (b), since `peer_ip` was falsy and short-circuited
+    the CIDR check away entirely). Returns `(entry, ambiguous)` — `ambiguous=True` means resolution
+    genuinely cannot proceed past this position without `peer_ip`; the caller must surface `unknown`,
+    never invent a confident verdict from either side of that entry.
     """
     for entry in sorted(entries, key=lambda e: e["rule_number"]):
         if entry["rule_number"] >= 32767:  # implicit default-deny catch-all
-            return entry
+            return entry, False
         if not _proto_matches(entry.get("protocol", "-1"), protocol):
             continue
         if not _port_in_range(entry, port):
             continue
         cidr = entry.get("cidr")
-        if cidr and peer_ip and not _cidr_contains(cidr, peer_ip):
-            continue
-        return entry
-    return None
+        if cidr:
+            if peer_ip is None:
+                # Cannot determine whether this entry (the first eligible one, evaluated in
+                # ascending rule_number order) matches — first-match-wins means we cannot safely
+                # skip it either, since a real peer_ip might have matched it here.
+                return None, True
+            if not _cidr_contains(cidr, peer_ip):
+                continue
+        return entry, False
+    return None, False
 
 
 def eval_nacl(forward_entries, return_entries, protocol, port, peer_ip=None, layer="nacl"):
@@ -150,7 +190,19 @@ def eval_nacl(forward_entries, return_entries, protocol, port, peer_ip=None, lay
     evaluation pass (L4 finding #13's cheap mitigation — see network_path.py's `_layer_plan_for`
     "sg-dst"/"nacl-dst" wiring) without the two passes' steps colliding under one layer name.
     """
-    fwd = _first_match(forward_entries, protocol, port, peer_ip)
+    fwd, fwd_ambiguous = _first_match(forward_entries, protocol, port, peer_ip)
+    if fwd_ambiguous:
+        # Follow-up fix (item 1): the first proto/port-eligible forward entry is CIDR-scoped but
+        # peer_ip is missing — first-match-wins cannot be resolved past it, so this must not
+        # silently let a later entry (or an implicit assumption) decide a confident verdict.
+        return {
+            "layer": layer, "status": "unknown", "resource": None,
+            "summary": (
+                "a NACL forward entry scoped to a CIDR could not be evaluated because peer_ip is "
+                "missing; cannot confidently determine allow/deny for this entry"
+            ),
+            "evidence": [],
+        }
     if fwd is None or fwd.get("action") != "allow":
         return {
             "layer": layer, "status": "blocked",
@@ -158,7 +210,16 @@ def eval_nacl(forward_entries, return_entries, protocol, port, peer_ip=None, lay
             "summary": f"NACL forward rule denies {protocol}/{port}",
             "evidence": [fwd] if fwd else [],
         }
-    ret = _first_match(return_entries, protocol, EPHEMERAL_PROBE_PORT, peer_ip)
+    ret, ret_ambiguous = _first_match(return_entries, protocol, EPHEMERAL_PROBE_PORT, peer_ip)
+    if ret_ambiguous:
+        return {
+            "layer": layer, "status": "unknown", "resource": None,
+            "summary": (
+                "a NACL return entry scoped to a CIDR could not be evaluated because peer_ip is "
+                "missing; cannot confidently determine the return path"
+            ),
+            "evidence": [fwd],
+        }
     if ret is None:
         return {
             "layer": layer, "status": "blocked",
@@ -514,10 +575,18 @@ def _k8s_port_matches(rule, protocol, port):
     ABSENT/empty `ports` list means "all ports" (K8s semantics — a rule with no `ports` field
     applies to every port). When `ports` IS present but the flow's own `port` is unknown, this
     conservatively does NOT match (never fail-open on a port-restricted rule just because the
-    caller didn't supply a port to check)."""
+    caller didn't supply a port to check).
+
+    Returns `True` (matched), `False` (confidently does not match), or `None` (item 2b follow-up
+    fix: at least one `ports` entry names a PORT BY NAME — e.g. `"port": "http"` — that this pure
+    adapter has no Service-port-name resolution for, and no OTHER entry produced a confident match;
+    treating an unresolvable named port as a non-match would silently deny traffic that a real
+    cluster might actually allow. `None` tells the caller this rule is unevaluable for that entry,
+    not that it confidently denies)."""
     ports = rule.get("ports")
     if not ports:
         return True
+    saw_unresolvable_named_port = False
     for p in ports:
         want_proto = str(p.get("protocol") or "TCP").upper()
         if protocol is not None and want_proto != str(protocol).upper():
@@ -528,7 +597,14 @@ def _k8s_port_matches(rule, protocol, port):
         if port is None:
             continue
         try:
-            want_i, port_i = int(want_port), int(port)
+            want_i = int(want_port)
+        except (TypeError, ValueError):
+            # Named port (e.g. "http") — this adapter never resolves Service/container port names,
+            # so it cannot confidently say this entry does NOT match either.
+            saw_unresolvable_named_port = True
+            continue
+        try:
+            port_i = int(port)
         except (TypeError, ValueError):
             continue
         end_port = p.get("endPort")
@@ -540,12 +616,14 @@ def _k8s_port_matches(rule, protocol, port):
                 continue
         elif port_i == want_i:
             return True
+    if saw_unresolvable_named_port:
+        return None
     return False
 
 
 def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, peer_ip=None,
                              protocol=None, port=None, data_available=True,
-                             peer_namespace_labels=None):
+                             peer_namespace_labels=None, policy_namespace=None, peer_namespace=None):
     """`policies`: list of {"pod_selector": {...}, "policy_types": ["Ingress","Egress"] (optional —
     see `_policy_type_applies` for the real K8s defaulting semantics when omitted),
     "ingress"/"egress": [{"from"/"to": [...], "ports": [...]}]}.
@@ -563,6 +641,14 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
     don't actually know." Defaults to `True` so existing "no policy found, and we know it" callers
     are unaffected.
 
+    `policy_namespace`/`peer_namespace` (item 2c follow-up fix): Kubernetes restricts a BARE
+    `podSelector` peer (no `namespaceSelector` alongside it) to the SAME namespace as the policy
+    itself — it is never cluster-wide. This function has no namespace concept in its earlier input
+    contract, so a caller that can supply both of these (the policy's own namespace and the actual
+    peer's namespace) gets a correctly-scoped match/no-match; a caller that supplies neither (or
+    only one) gets `unknown` for that specific peer entry when its labels would otherwise match —
+    never a confident cross-namespace `allowed`.
+
     MAJOR fix (L2 finding #2): an `ipBlock` peer with an `except` list of CIDRs must NOT match a
     peer whose IP falls inside one of those excluded CIDRs, even though it also falls inside the
     rule's main `cidr` — `except` carves that sub-range back OUT of the allow. Also, a peer entry
@@ -572,6 +658,12 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
     (a false-deny), so when at least one candidate rule/peer could only be resolved by
     `namespaceSelector` data the caller didn't provide, the verdict is downgraded to `unknown`
     rather than `blocked` (never invent a confident verdict from data we don't have).
+
+    Follow-up fix (item 2a): a `pod_selector` peer with `peer_labels=None`, or an `ip_block` peer
+    with `peer_ip=None`, used to fall straight through to a confident `blocked` (indistinguishable
+    from a genuine, evaluated non-match) — both are now tracked the same way the namespaceSelector
+    gap already is, and downgrade the final verdict to `unknown` when nothing else confidently
+    matched.
     """
     if not data_available:
         return {"layer": "k8s-networkpolicy", "status": "unknown", "resource": None,
@@ -591,9 +683,17 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
                 "summary": "no NetworkPolicy selects this pod for this direction (default allow)",
                 "evidence": []}
     saw_unresolvable_namespace_selector = False
+    saw_unresolvable_peer_data = False
+    saw_unscoped_bare_pod_selector = False
     for policy in selecting:
         for rule in policy.get(key, []):
-            if not _k8s_port_matches(rule, protocol, port):
+            port_match = _k8s_port_matches(rule, protocol, port)
+            if port_match is None:
+                # item 2b: a named port ("port": "http") this adapter cannot resolve — do not treat
+                # this rule as a confident non-match; remember it and keep scanning other rules.
+                saw_unresolvable_peer_data = True
+                continue
+            if not port_match:
                 continue
             peers = rule.get("from" if direction == "ingress" else "to", [])
             if not peers:  # an empty peer list on a present rule means "allow all" for that rule
@@ -601,6 +701,9 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
                         "summary": "matching NetworkPolicy rule allows all peers", "evidence": [rule]}
             for peer in peers:
                 has_ns_selector = "namespace_selector" in peer
+                has_pod_selector = "pod_selector" in peer
+                has_ip_block = "ip_block" in peer
+
                 if has_ns_selector and peer_namespace_labels is None:
                     # Can't evaluate a namespaceSelector peer without namespace label data — do
                     # NOT fall through to a confident blocked; remember it and keep scanning other
@@ -609,16 +712,42 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
                     continue
                 if has_ns_selector and not _labels_match(peer["namespace_selector"], peer_namespace_labels):
                     continue  # namespace doesn't match this peer's namespaceSelector — not this peer
-                if "pod_selector" in peer and not (peer_labels and _labels_match(peer["pod_selector"], peer_labels)):
-                    continue
-                if "pod_selector" not in peer and has_ns_selector:
+
+                if has_pod_selector:
+                    if peer_labels is None:
+                        # item 2a: can't evaluate a podSelector peer without peer label data —
+                        # unresolved, not a confident non-match.
+                        saw_unresolvable_peer_data = True
+                        continue
+                    if not _labels_match(peer["pod_selector"], peer_labels):
+                        continue  # labels genuinely don't match this peer — confident non-match
+
+                    if not has_ns_selector:
+                        # item 2c: a BARE podSelector (no namespaceSelector alongside it) is
+                        # restricted by K8s to the policy's OWN namespace — labels matched, but we
+                        # still need namespace confirmation before this can be a confident allow.
+                        if policy_namespace is None or peer_namespace is None:
+                            saw_unscoped_bare_pod_selector = True
+                            continue
+                        if policy_namespace != peer_namespace:
+                            continue  # different namespace — bare podSelector cannot reach it
+
+                    return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
+                            "summary": "matched pod_selector peer rule", "evidence": [peer]}
+
+                if has_ns_selector:
                     # namespaceSelector alone (no podSelector): matches every pod in that namespace.
                     return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                             "summary": "matched namespaceSelector peer rule", "evidence": [peer]}
-                if "pod_selector" in peer and peer_labels and _labels_match(peer["pod_selector"], peer_labels):
-                    return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
-                            "summary": "matched pod_selector peer rule", "evidence": [peer]}
-                if "ip_block" in peer and peer_ip and _cidr_contains(peer["ip_block"].get("cidr"), peer_ip):
+
+                if has_ip_block:
+                    cidr = peer["ip_block"].get("cidr")
+                    if peer_ip is None:
+                        # item 2a: can't evaluate an ipBlock peer without peer_ip — unresolved.
+                        saw_unresolvable_peer_data = True
+                        continue
+                    if not _cidr_contains(cidr, peer_ip):
+                        continue
                     excepts = peer["ip_block"].get("except") or []
                     if any(_cidr_contains(ex, peer_ip) for ex in excepts):
                         continue  # excluded sub-range carves this peer back OUT of the allow
@@ -629,6 +758,22 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
             "layer": "k8s-networkpolicy", "status": "unknown", "resource": None,
             "summary": "a candidate NetworkPolicy rule uses namespaceSelector but the caller did "
                        "not supply peer namespace labels — cannot confidently evaluate", "evidence": [],
+        }
+    if saw_unscoped_bare_pod_selector:
+        return {
+            "layer": "k8s-networkpolicy", "status": "unknown", "resource": None,
+            "summary": "a candidate NetworkPolicy rule's bare podSelector peer's labels match, but "
+                       "the policy's own namespace and/or the peer's namespace were not supplied — "
+                       "cannot confirm the same-namespace scoping K8s requires for a bare podSelector",
+            "evidence": [],
+        }
+    if saw_unresolvable_peer_data:
+        return {
+            "layer": "k8s-networkpolicy", "status": "unknown", "resource": None,
+            "summary": "a candidate NetworkPolicy rule could not be evaluated due to missing peer "
+                       "data (podSelector peer with no peer_labels, ipBlock peer with no peer_ip, or "
+                       "a named port this adapter cannot resolve) — cannot confidently evaluate",
+            "evidence": [],
         }
     return {"layer": "k8s-networkpolicy", "status": "blocked", "resource": None,
             "summary": "pod is selected by >=1 NetworkPolicy for this direction; no rule matched the peer",

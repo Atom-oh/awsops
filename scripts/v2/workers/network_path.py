@@ -288,7 +288,13 @@ _ADAPTER_BY_LAYER = {
         # False` explicitly when it could not actually retrieve NetworkPolicy data for this pod/
         # namespace — an empty `policies` list defaults to "fetched, genuinely none" (`True`) since
         # that's the correct interpretation for every fixture-driven test today.
-        data_available=data.get("policies_fetched", True)),
+        data_available=data.get("policies_fetched", True),
+        peer_namespace_labels=data.get("peer_namespace_labels"),
+        # item 2c follow-up fix: threaded through once the topology fetcher can supply them — a
+        # bare podSelector peer is only a confident match when both are known and equal (see
+        # eval_k8s_network_policy's own docstring); neither is set by any fixture today, so this is
+        # a no-op until the fetcher is implemented, deliberately not changing current behavior.
+        policy_namespace=data.get("policy_namespace"), peer_namespace=data.get("peer_namespace")),
     "dns": lambda data, req: {
         "layer": "dns", "status": "unknown", "resource": None,
         "summary": "DNS/L7 resolution not evaluated in this release", "evidence": [],
