@@ -47,6 +47,7 @@ never touches CreateWorkGroup/CreateTable/DeleteTable/etc, and never writes S3 o
 workgroup's own configured result location (that write is Athena's own intrinsic mechanic, not
 something this module does directly).
 """
+import calendar
 import datetime as _dt
 import os
 import re
@@ -134,6 +135,96 @@ def _projection_range_upper_bound_expired(range_param, now):
         return None  # not the plain-ISO-literal form this check confidently handles (includes
         # any NOW-relative offset form like `NOW-45DAYS`, which this function does not parse)
     return upper_date < now.date()
+
+
+def _shift_date(d, years=0, months=0, days=0):
+    """Calendar-correct `d` shifted back by whole years/months (day-of-month clamped to the
+    target month's length, e.g. Feb 29 - 1 year -> Feb 28) then by whole days."""
+    total_months = d.year * 12 + (d.month - 1) - months - years * 12
+    year, month = divmod(total_months, 12)
+    month += 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return d.replace(year=year, month=month, day=day) - _dt.timedelta(days=days)
+
+
+_NOW_OFFSET_RE = re.compile(r'^NOW\s*-\s*(\d+)\s*(YEARS?|MONTHS?|DAYS?)$', re.IGNORECASE)
+
+
+def _projection_range_bound_date(value, now):
+    """Resolves one `projection.<col>.range` bound (either side of the comma) to a concrete
+    `date`, or `None` when it isn't one of the forms this can confidently resolve without
+    guessing: a bare `NOW`, a `NOW-N/UNIT` offset (an exact, documented Athena grammar — not a
+    guess), or a plain `yyyy-MM-dd` literal. Anything else (an enum/integer bound, a malformed
+    offset) is left unresolved."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.upper() == "NOW":
+        return now.date()
+    m = _NOW_OFFSET_RE.match(value)
+    if m:
+        n, unit = int(m.group(1)), m.group(2).upper()
+        if unit.startswith("YEAR"):
+            return _shift_date(now.date(), years=n)
+        if unit.startswith("MONTH"):
+            return _shift_date(now.date(), months=n)
+        return _shift_date(now.date(), days=n)
+    try:
+        return _dt.datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _projection_range_day_status(range_param, day, now):
+    """CI-review MAJOR fix (round 12, MAJOR #2): `_projection_range_upper_bound_expired` only
+    ever runs once, at VALIDATE time, and only confidently flags the narrow bare-`NOW` closed-range
+    form. A range like `NOW-3YEARS,NOW-45DAYS` resolves to `None` there (an offset upper bound is
+    deliberately left unparsed by that check) and the source is persisted `status: "valid"`
+    forever — but the range genuinely EXCLUDES every day in the last 45 days, so every recent
+    scan silently gets zero candidate partitions and commits a confident false `no_observed_
+    evidence` with no existence check to catch it (`projection` sources have no enumerable Glue
+    partitions for `_partition_exists` to inspect). This is a separate, SCAN-time check against the
+    actual day being queried (not just "has the range's end already passed `now`"), and resolves
+    `NOW-N/UNIT` offsets exactly rather than leaving them unparsed, since day-membership needs both
+    bounds to mean anything. Returns `True` (confirmed the day falls outside the declared range),
+    `False` (confirmed it falls inside), or `None` (a bound didn't resolve to a concrete date —
+    genuinely can't tell, not the same as "inside")."""
+    if not range_param or "," not in range_param:
+        return None
+    lower_str, upper_str = range_param.split(",", 1)
+    lower_date = _projection_range_bound_date(lower_str, now)
+    upper_date = _projection_range_bound_date(upper_str, now)
+    if lower_date is not None and day < lower_date:
+        return True
+    if upper_date is not None and day > upper_date:
+        return True
+    if lower_date is None or upper_date is None:
+        return None
+    return False
+
+
+def _projection_day_out_of_range(glue, database, table, day, validation, now=None):
+    """Scan-time counterpart to `_partition_exists` for the `projection` strategy (which has no
+    enumerable Glue partitions to check): before trusting a zero-row Athena result for `day` as
+    genuine zero-traffic, confirm `day` actually falls within the resolved date key's own
+    declared `projection.<col>.range`. Mirrors `_partition_exists`'s 3-state contract:
+      - `True`  = confirmed `day` falls outside the declared range (the empty result is a
+                  config/range mismatch, not zero traffic).
+      - `False` = confirmed inside the range, or nothing checkable (no confirmed single date key,
+                  no range param, or the range didn't resolve confidently) — don't block.
+      - `None`  = a Glue API error — genuinely unverifiable."""
+    dk_raw = sm.single_date_partition_key(validation)
+    if not dk_raw:
+        return False
+    try:
+        tbl = glue.get_table(DatabaseName=database, Name=table)["Table"]
+    except Exception:  # noqa: BLE001 — unverifiable, not a confident "inside the range"
+        return None
+    proj_range = (tbl.get("Parameters", {}) or {}).get(f"projection.{dk_raw}.range")
+    if not proj_range:
+        return False
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    return _projection_range_day_status(proj_range, day, now) is True
 
 
 def _validate_identifiers(account_id, region, workgroup, database, table=None, require_table=False):
@@ -371,6 +462,19 @@ def _validate(event, conn, now=None):
         }
         remaining_keys = sm.partition_keys_excluding_scope(probe_validation)
         lower_remaining = {str(k).lower() for k in remaining_keys}
+        # CI-review MAJOR fix (round 12): every check below used a SUBSET test
+        # (`{"year","month","day"} <= lower_remaining`) to detect the Hive scheme — true for a
+        # `year/month/day/hour` (or `.../vpc_id`) layout too, which has a FOURTH remaining
+        # partition key that then never gets its own `projection.<col>.*`/catalog-type validated
+        # at all (Athena requires projection config for every partition column once enabled, so
+        # that extra key's real query would error permanently). The strict "exactly one remaining
+        # key" rejection two blocks below only ever ran in the `else` of the subset test, so a
+        # 4-key layout satisfied the subset test, skipped that rejection, and validated `status:
+        # "valid"` with an unvalidated 4th key. Hive-style detection must require an EXACT match
+        # (no extra remaining keys) — an off-schema superset gets no special-cased pass and falls
+        # through to the same "does not resolve a single bounded date candidate" rejection a
+        # 2-key or 0-key mismatch already gets.
+        is_hive_style = lower_remaining == {"year", "month", "day"}
         # CI-review MAJOR fix (round 11): the single-key (non-Hive) branch below has always
         # required the Glue-catalog TYPE to be date-shaped (`sm.is_date_like_partition_type`)
         # before trusting a lone key as a date column — but the Hive year/month/day branch NEVER
@@ -382,7 +486,7 @@ def _validate(event, conn, now=None):
         # scan" class a sixth time, for exactly the asymmetry between the two date-detection
         # branches this validate-time gate was built to eliminate. Require each of year/month/day
         # to be a string-like Glue catalog type (matching what the predicate builder assumes).
-        if {"year", "month", "day"} <= lower_remaining:
+        if is_hive_style:
             for hive_key in ("year", "month", "day"):
                 actual_key = next(k for k in remaining_keys if str(k).lower() == hive_key)
                 idx = next(i for i, k in enumerate(partition_keys) if k == actual_key)
@@ -403,7 +507,7 @@ def _validate(event, conn, now=None):
         # `projection.<col>.type=integer` (year/month/day are plain zero-padded integers, not
         # `date`-typed), each requiring its own `.range` — validate that here, symmetrically with
         # the single-key branch's own `.type`/`.range` checks below.
-        if strategy == "projection" and {"year", "month", "day"} <= lower_remaining:
+        if strategy == "projection" and is_hive_style:
             params = tbl.get("Parameters", {}) or {}
             for hive_key in ("year", "month", "day"):
                 actual_key = next(k for k in remaining_keys if str(k).lower() == hive_key)
@@ -445,7 +549,7 @@ def _validate(event, conn, now=None):
                             "projection values would match zero rows on every real scan, silently "
                             "committing a confident false zero-traffic day "
                             "[reason: projection_hive_digits_not_zero_padded]")
-        if not ({"year", "month", "day"} <= lower_remaining):
+        if not is_hive_style:
             if len(remaining_keys) != 1:
                 raise BrokerError(
                     "partition-key layout does not resolve a single bounded date candidate after "
@@ -506,12 +610,23 @@ def _validate(event, conn, now=None):
                         "fail or silently match zero rows [reason: projection_type_not_date]")
                 if sm.is_string_like_partition_type(key_type):
                     proj_format = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.format")
-                    if proj_format and proj_format.strip() != "yyyy-MM-dd":
+                    # CI-review MAJOR fix (round 12, MAJOR #3): absence of `.format` used to be
+                    # accepted here as "Athena's own ISO default" — but Athena has no such default;
+                    # `.format` is a REQUIRED parameter for a `date`-typed projection column
+                    # (https://docs.aws.amazon.com/athena/latest/ug/partition-projection-supported-types.html),
+                    # and omitting it is itself an invalid/unqueryable projection configuration, not
+                    # a safe assumption — every real scan would fail (or silently match zero rows),
+                    # exactly the class of bug the presence checks above (`.type`/`.range`) already
+                    # close for their own parameters.
+                    if not proj_format or proj_format.strip() != "yyyy-MM-dd":
                         raise BrokerError(
-                            f"partition key {remaining_key!r} is a PROJECTION column with a non-ISO "
-                            f"date format ({proj_format!r}) — date-format projection patterns other "
-                            "than yyyy-MM-dd are not yet supported, and assuming ISO would silently "
-                            "match zero rows every day [reason: projection_date_format_not_iso]")
+                            f"partition key {remaining_key!r} is a PROJECTION column with "
+                            f"projection.{remaining_key}.format={proj_format!r} — Athena requires "
+                            "this parameter to be present and exactly 'yyyy-MM-dd' for a date-typed "
+                            "projection column (it has no ISO default); a missing or non-ISO value "
+                            "is either an invalid/unqueryable projection configuration or would "
+                            "silently match zero rows every day "
+                            "[reason: projection_date_format_missing_or_not_iso]")
                 # CI-review MAJOR fix (round 9): `projection.<col>.range` was never validated at
                 # all — Athena requires it for every `date`-typed projection column, and its
                 # absence means Athena has no candidate partitions to generate at all, so every
@@ -867,6 +982,31 @@ def _query_by_source(event, conn):
                     "reason": "could not verify whether any Glue partition matches the day's "
                               "predicate (Glue API error) — not trusting the empty result as "
                               "genuine zero-traffic",
+                    "partition_check_unverified": True,
+                }
+        elif validation.get("partitionStrategy") == "projection":
+            # CI-review MAJOR fix (round 12, MAJOR #2): see `_projection_day_out_of_range`'s
+            # docstring — a `projection` source has no enumerable Glue partitions to check, but its
+            # resolved date key's own `projection.<col>.range` can still exclude `day` (e.g. a
+            # `NOW-3YEARS,NOW-45DAYS` range that validate-time checking left unflagged), silently
+            # manufacturing a confident zero-traffic day for every recent scan.
+            glue = session.client("glue")
+            out_of_range = _projection_day_out_of_range(
+                glue, source["database_name"], source["table_name"], day, validation)
+            if out_of_range is True:
+                return {
+                    "ok": False,
+                    "reason": "the day falls outside the resolved partition key's own "
+                              "projection.<col>.range — the empty result reflects a range "
+                              "mismatch, not genuine zero-traffic",
+                    "projection_range_uncovered": True,
+                }
+            if out_of_range is None:
+                return {
+                    "ok": False,
+                    "reason": "could not verify whether the day falls within the resolved "
+                              "partition key's projection range (Glue API error) — not trusting "
+                              "the empty result as genuine zero-traffic",
                     "partition_check_unverified": True,
                 }
 

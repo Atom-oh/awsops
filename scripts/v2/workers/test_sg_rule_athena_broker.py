@@ -651,7 +651,7 @@ def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_t
             # them; a test that wants to exercise the `.type`/`.range` gate itself passes an
             # explicit override in `proj_format_params`.
             params = {"projection.enabled": "true", "projection.dt.type": "date",
-                      "projection.dt.range": "NOW-3YEARS,NOW"}
+                      "projection.dt.range": "NOW-3YEARS,NOW", "projection.dt.format": "yyyy-MM-dd"}
             params.update(proj_format_params)
             return {"Table": {
                 "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
@@ -672,7 +672,7 @@ def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_t
 
 def test_validate_rejects_a_projection_string_key_with_a_non_iso_date_format(monkeypatch):
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
-    with pytest.raises(broker.BrokerError, match="non-ISO date format"):
+    with pytest.raises(broker.BrokerError, match="projection_date_format_missing_or_not_iso"):
         _validate_projection_string_key(monkeypatch, conn, {"projection.dt.format": "yyyy/MM/dd"})
 
 
@@ -682,11 +682,15 @@ def test_validate_accepts_a_projection_string_key_with_an_explicit_iso_date_form
     assert result["ok"] is True
 
 
-def test_validate_accepts_a_projection_string_key_with_no_declared_format(monkeypatch):
-    """No `projection.<col>.format` at all is Athena's own ISO default — not an error."""
+# ── CI-review MAJOR fix (round 12, MAJOR #3): Athena has NO ISO default for a date-typed
+#    projection column's `.format` — omitting it is itself an invalid/unqueryable projection
+#    configuration, not a safe assumption. The test above used to bless absence as fine; it must
+#    now be rejected exactly like an explicit non-ISO format. ────────────────────────────────────
+
+def test_validate_rejects_a_projection_string_key_with_no_declared_format(monkeypatch):
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
-    result = _validate_projection_string_key(monkeypatch, conn, {})
-    assert result["ok"] is True
+    with pytest.raises(broker.BrokerError, match="projection_date_format_missing_or_not_iso"):
+        _validate_projection_string_key(monkeypatch, conn, {"projection.dt.format": None})
 
 
 # ── CI-review MAJOR fix (round 7): the format gate above compared the Glue type with a bare
@@ -700,7 +704,7 @@ def test_validate_rejects_a_projection_varchar_key_with_a_non_iso_date_format(mo
     not just a bare `string` type — otherwise this exact class of projection column bypasses
     format validation entirely."""
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
-    with pytest.raises(broker.BrokerError, match="non-ISO date format"):
+    with pytest.raises(broker.BrokerError, match="projection_date_format_missing_or_not_iso"):
         _validate_projection_string_key(
             monkeypatch, conn, {"projection.dt.format": "yyyy/MM/dd"}, key_type="varchar(10)")
 
@@ -719,7 +723,7 @@ def test_validate_rejects_a_projection_char_key_with_a_non_iso_date_format(monke
     check — the same class of bug as the `varchar(10)` case above, for the other string-like
     parameterized type."""
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
-    with pytest.raises(broker.BrokerError, match="non-ISO date format"):
+    with pytest.raises(broker.BrokerError, match="projection_date_format_missing_or_not_iso"):
         _validate_projection_string_key(
             monkeypatch, conn, {"projection.dt.format": "yyyy/MM/dd"}, key_type="char(20)")
 
@@ -837,7 +841,7 @@ def test_projection_range_upper_bound_expired_returns_false_only_for_bare_now():
 #    PROJECTION layout skipped every one of them entirely, reproducing the "validates valid yet
 #    permanently refuses/false-zeros every scan" class this PR fixes elsewhere. ───────────────────
 
-def _validate_hive_projection(monkeypatch, conn, proj_params, key_type="string"):
+def _validate_hive_projection(monkeypatch, conn, proj_params, key_type="string", extra_partition_keys=None):
     class FakeAthenaWorkGroup:
         def get_work_group(self, WorkGroup):
             return {"WorkGroup": {"Configuration": {
@@ -859,10 +863,12 @@ def _validate_hive_projection(monkeypatch, conn, proj_params, key_type="string")
                 "projection.day.digits": "2",
             }
             params.update(proj_params)
+            partition_keys = [{"Name": "year", "Type": key_type}, {"Name": "month", "Type": key_type},
+                               {"Name": "day", "Type": key_type}]
+            partition_keys.extend(extra_partition_keys or [])
             return {"Table": {
                 "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
-                "PartitionKeys": [{"Name": "year", "Type": key_type}, {"Name": "month", "Type": key_type},
-                                  {"Name": "day", "Type": key_type}],
+                "PartitionKeys": partition_keys,
                 "Parameters": params,
             }}
 
@@ -881,6 +887,29 @@ def test_validate_accepts_a_correctly_configured_hive_projection_layout(monkeypa
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
     result = _validate_hive_projection(monkeypatch, conn, {})
     assert result["ok"] is True
+
+
+# ── CI-review MAJOR fix (round 12, codex-L2 `hour` / kiro-gpt-L2 `vpc_id`): every Hive-scheme
+#    check used a SUBSET test (`{"year","month","day"} <= lower_remaining`), which is also true
+#    for a year/month/day/PLUS-one-more layout. The extra remaining key then never got its own
+#    projection/catalog-type validation, so a table with a 4th unvalidated partition column still
+#    validated `status: "valid"` even though Athena requires projection config for every
+#    partition column once projection is enabled (the real query against that 4th key would
+#    error). Hive-style detection must require an EXACT match. ────────────────────────────────────
+
+def test_validate_rejects_a_hive_projection_layout_with_an_extra_unvalidated_key(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="does not resolve a single bounded date candidate"):
+        _validate_hive_projection(monkeypatch, conn, {}, extra_partition_keys=[{"Name": "hour", "Type": "string"}])
+
+
+def test_validate_rejects_a_hive_partition_keys_layout_with_an_extra_unvalidated_key(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="does not resolve a single bounded date candidate"):
+        _validate_hive_projection(
+            monkeypatch, conn, {"projection.enabled": "false"},
+            extra_partition_keys=[{"Name": "vpc_id", "Type": "string"}],
+        )
 
 
 def test_validate_rejects_a_hive_projection_layout_missing_a_key_type(monkeypatch):
@@ -1246,20 +1275,30 @@ def test_continuation_still_refuses_a_pending_source():
 # ── round-3 finding #3: the Glue-partition-existence check must be skipped entirely for a ────────
 #    partition-projection source — it has no enumerable Glue partitions to check.
 
+class FakeGlueGetTableEmpty:
+    """Round-12 MAJOR #2 wiring: a Glue `get_table` stub with no `projection.*` params at all — the
+    scan-time range-coverage check (`_projection_day_out_of_range`) then finds no `.range` to
+    compare against and does not block, mirroring a source whose validate-time checks already ran
+    (this fake bypasses `_validate` entirely, so it carries none of those params)."""
+
+    def get_table(self, DatabaseName, Name):
+        return {"Table": {"Parameters": {}}}
+
+
 class FakeSession:
-    def __init__(self):
-        self.clients = {}
+    def __init__(self, glue=None):
+        self.clients = {"glue": glue if glue is not None else FakeGlueGetTableEmpty()}
 
     def client(self, name):
         return self.clients.setdefault(name, object())
 
 
-def _empty_query_by_source_setup(monkeypatch, validation):
+def _empty_query_by_source_setup(monkeypatch, validation, glue=None):
     """Common wiring: an empty-result Athena query (no rows, no next_token) against a source whose
     `validation` is under test, with `_partition_exists` instrumented to record whether it was
     called at all."""
     conn = FakeConn(_source_row(validation))
-    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSession())
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSession(glue=glue))
     monkeypatch.setattr(broker, "_run_athena_query",
                          lambda *a, **k: {"ok": True, "athena": object(), "query_execution_id": "q1"})
     monkeypatch.setattr(broker, "_fetch_page", lambda *a, **k: (["c1"], [], None))
@@ -1289,6 +1328,67 @@ def test_projection_strategy_skips_glue_partition_check(monkeypatch):
     assert called["n"] == 0
     assert result["ok"] is True
     assert "zero_partition_match" not in result
+
+
+# ── CI-review MAJOR fix (round 12, MAJOR #2): a `projection` source's resolved date key's own
+#    `projection.<col>.range` can exclude the queried day (e.g. a closed-then-forgotten range, or
+#    a `NOW-3YEARS,NOW-45DAYS` form validate-time checking leaves unflagged) — an empty Athena
+#    result for that day is a range mismatch, not genuine zero-traffic. ─────────────────────────
+
+class FakeGlueGetTableWithRange:
+    def __init__(self, range_param):
+        self._range_param = range_param
+
+    def get_table(self, DatabaseName, Name):
+        return {"Table": {"Parameters": {"projection.dt.range": self._range_param}}}
+
+
+class FakeGlueGetTableRaises:
+    def get_table(self, DatabaseName, Name):
+        raise RuntimeError("boto3 ClientError")
+
+
+_PROJECTION_VALIDATION = {
+    "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                      "start": "start"},
+    "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    "partitionStrategy": "projection",
+}
+
+
+def test_query_by_source_rejects_a_day_excluded_by_the_projection_range_upper_bound(monkeypatch):
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("2020-01-01,2026-01-01"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert result.get("projection_range_uncovered") is True
+
+
+def test_query_by_source_rejects_a_day_excluded_by_a_now_relative_lower_bound(monkeypatch):
+    """`NOW-45DAYS,NOW` excludes any day more than 45 days before `now` — the exact scenario the
+    round-9/11 validate-time check leaves unflagged (an offset upper bound is deliberately left
+    unparsed there, but here `now` is resolvable, so both bounds resolve confidently)."""
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("NOW-45DAYS,NOW"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2020-01-01"}, conn)
+    assert result["ok"] is False
+    assert result.get("projection_range_uncovered") is True
+
+
+def test_query_by_source_accepts_a_day_within_the_projection_range(monkeypatch):
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("2020-01-01,NOW"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is True
+    assert "projection_range_uncovered" not in result
+
+
+def test_query_by_source_refuses_when_the_projection_range_check_cannot_verify(monkeypatch):
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableRaises())
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert result.get("partition_check_unverified") is True
 
 
 def test_partition_keys_strategy_still_runs_glue_partition_check(monkeypatch):
