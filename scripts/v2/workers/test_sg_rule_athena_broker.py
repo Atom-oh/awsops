@@ -693,6 +693,27 @@ def test_validate_rejects_a_projection_string_key_with_no_declared_format(monkey
         _validate_projection_string_key(monkeypatch, conn, {"projection.dt.format": None})
 
 
+# ── CI-review MAJOR fix (round 13, L2-2/L4-2): the round-12 `.format`-required check only ran
+#    inside `if sm.is_string_like_partition_type(key_type):` — a Glue `date`- or `timestamp`-typed
+#    CATALOG column (not string-like) with `projection.<col>.type=date` and a missing/non-ISO
+#    `.format` therefore validated `status: "valid"` anyway, even though `.format` is required for
+#    every `.type=date` projection column regardless of the underlying catalog type. Now runs
+#    unconditionally. ─────────────────────────────────────────────────────────────────────────────
+
+def test_validate_rejects_a_date_typed_catalog_key_with_no_declared_format(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_date_format_missing_or_not_iso"):
+        _validate_projection_string_key(
+            monkeypatch, conn, {"projection.dt.format": None}, key_type="date")
+
+
+def test_validate_accepts_a_date_typed_catalog_key_with_the_iso_date_format(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_projection_string_key(
+        monkeypatch, conn, {"projection.dt.format": "yyyy-MM-dd"}, key_type="date")
+    assert result["ok"] is True
+
+
 # ── CI-review MAJOR fix (round 7): the format gate above compared the Glue type with a bare
 #    `== "string"`, missing the length-parameterized `varchar(10)`/`char(20)` forms
 #    `sm._normalize_glue_type` exists to handle, and never inspected `projection.<col>.type` at
@@ -1150,7 +1171,7 @@ def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkey
     conn = FakeConn(_source_row({
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"}, "partitionKeys": ["dt"],
-        "partitionKeyTypes": ["date"],
+        "partitionKeyTypes": ["date"], "scopeResolution": {},
     }))
     captured = {}
 
@@ -1198,7 +1219,7 @@ def _continuation_setup(monkeypatch, athena):
     conn = FakeConn(_source_row({
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"}, "partitionKeys": ["dt"],
-        "partitionKeyTypes": ["date"], "partitionStrategy": "partition_keys",
+        "partitionKeyTypes": ["date"], "partitionStrategy": "partition_keys", "scopeResolution": {},
     }))
     monkeypatch.setattr(broker.sm, "build_day_select", lambda source, day: "SELECT 1 AS x")
 
@@ -1272,6 +1293,49 @@ def test_continuation_still_refuses_a_pending_source():
     assert "valid" in result["reason"]
 
 
+# ── CI-review MAJOR fix (round 13, L3-1): the round-8 stale-validation refusal ("predates
+#    partitionKeyTypes/scopeResolution") used to be enforced only in `sg_rule_scan.run()`'s
+#    self-heal check — NOT inside the broker's own `_query_by_source`, even though the worker AND
+#    the web BFF task role both hold `lambda:InvokeFunction` on this broker directly. A pre-round-2
+#    Hive-style source (bare year/month/day, missing both fields) satisfies
+#    `has_resolved_partition_strategy` without either field, so it passed both existing broker-side
+#    guards and would scan account/region-UNSCOPED if invoked directly, bypassing `run()`'s
+#    self-heal entirely. The refusal must live at the boundary the module's own design says must
+#    not trust its callers, not rely on one specific caller happening to self-heal first. ─────────
+
+def test_query_by_source_refuses_a_stale_hive_style_source_missing_scope_resolution(monkeypatch):
+    """A bare Hive-style year/month/day layout satisfies `has_resolved_partition_strategy` on its
+    own, so only the NEW staleness check (missing `scopeResolution`) can catch this — proving the
+    broker itself, not just the worker's self-heal, refuses a stale source."""
+    conn = FakeConn(_source_row({
+        "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                          "start": "start"},
+        "partitionKeys": ["year", "month", "day"], "partitionKeyTypes": ["string", "string", "string"],
+        "partitionStrategy": "partition_keys",
+        # scopeResolution deliberately absent — the pre-round-2 signature.
+    }))
+    monkeypatch.setattr(broker, "_assumed_session",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must never be called")))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert "scopeResolution" in result["reason"]
+
+
+def test_query_by_source_refuses_a_stale_source_missing_partition_key_types(monkeypatch):
+    conn = FakeConn(_source_row({
+        "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                          "start": "start"},
+        "partitionKeys": ["year", "month", "day"], "partitionStrategy": "partition_keys",
+        "scopeResolution": {},
+        # partitionKeyTypes deliberately absent.
+    }))
+    monkeypatch.setattr(broker, "_assumed_session",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must never be called")))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert "partitionKeyTypes" in result["reason"]
+
+
 # ── round-3 finding #3: the Glue-partition-existence check must be skipped entirely for a ────────
 #    partition-projection source — it has no enumerable Glue partitions to check.
 
@@ -1322,7 +1386,7 @@ def test_projection_strategy_skips_glue_partition_check(monkeypatch):
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"},
         "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
-        "partitionStrategy": "projection",
+        "partitionStrategy": "projection", "scopeResolution": {},
     })
     result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
     assert called["n"] == 0
@@ -1352,7 +1416,7 @@ _PROJECTION_VALIDATION = {
     "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                       "start": "start"},
     "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
-    "partitionStrategy": "projection",
+    "partitionStrategy": "projection", "scopeResolution": {},
 }
 
 
@@ -1391,6 +1455,51 @@ def test_query_by_source_refuses_when_the_projection_range_check_cannot_verify(m
     assert result.get("partition_check_unverified") is True
 
 
+# ── CI-review MAJOR fix (round 13, L2-1/L4-1): a Hive-style year/month/day PROJECTION layout used
+#    to fall all the way through `_projection_day_out_of_range` untouched — `single_date_partition_
+#    key` returns `None` for it by design (it only ever resolves a lone remaining key), so the
+#    function returned `False` ("don't block") before ever reading `projection.year.range`. A table
+#    with `projection.year.range=2020,2025` validated `status: "valid"` (round 9 only checks range
+#    PRESENCE for Hive keys) and then silently committed a confident false zero-traffic day for any
+#    post-2025 day. ────────────────────────────────────────────────────────────────────────────────
+
+_HIVE_PROJECTION_VALIDATION = {
+    "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                      "start": "start"},
+    "partitionKeys": ["year", "month", "day"], "partitionKeyTypes": ["string", "string", "string"],
+    "optionalFields": [], "partitionStrategy": "projection", "scopeResolution": {},
+}
+
+
+class FakeGlueGetTableWithHiveRanges:
+    def __init__(self, year_range="2020,2030", month_range="1,12", day_range="1,31"):
+        self._params = {
+            "projection.year.range": year_range, "projection.month.range": month_range,
+            "projection.day.range": day_range,
+        }
+
+    def get_table(self, DatabaseName, Name):
+        return {"Table": {"Parameters": self._params}}
+
+
+def test_query_by_source_rejects_a_day_excluded_by_a_hive_projection_year_range(monkeypatch):
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _HIVE_PROJECTION_VALIDATION,
+        glue=FakeGlueGetTableWithHiveRanges(year_range="2020,2025"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert result.get("projection_range_uncovered") is True
+
+
+def test_query_by_source_accepts_a_day_within_a_hive_projection_year_range(monkeypatch):
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _HIVE_PROJECTION_VALIDATION,
+        glue=FakeGlueGetTableWithHiveRanges(year_range="2020,2030"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is True
+    assert "projection_range_uncovered" not in result
+
+
 def test_partition_keys_strategy_still_runs_glue_partition_check(monkeypatch):
     """The real, enumerable `partition_keys` strategy must still run the check (regression guard —
     the restriction above must not accidentally disable the check for the case it exists for)."""
@@ -1398,7 +1507,7 @@ def test_partition_keys_strategy_still_runs_glue_partition_check(monkeypatch):
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"},
         "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
-        "partitionStrategy": "partition_keys",
+        "partitionStrategy": "partition_keys", "scopeResolution": {},
     })
     result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
     assert called["n"] == 1
@@ -1613,7 +1722,7 @@ def test_query_by_source_commits_a_zero_traffic_day_when_only_the_next_day_parti
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"},
         "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
-        "partitionStrategy": "partition_keys",
+        "partitionStrategy": "partition_keys", "scopeResolution": {},
     }))
     glue = FakeGluePartitions(["2026-03-06"])
 
@@ -1640,7 +1749,7 @@ def test_query_by_source_refuses_day_when_partition_check_is_unverifiable(monkey
         "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
                                           "start": "start"},
         "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
-        "partitionStrategy": "partition_keys",
+        "partitionStrategy": "partition_keys", "scopeResolution": {},
     })
     monkeypatch.setattr(broker, "_partition_exists", lambda *a, **k: None)
     result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)

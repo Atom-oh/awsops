@@ -203,6 +203,34 @@ def _projection_range_day_status(range_param, day, now):
     return False
 
 
+def _projection_integer_range_bound(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _projection_integer_range_excludes(range_param, value):
+    """Same 3-state contract as `_projection_range_day_status`, but for a Hive-style
+    `year`/`month`/`day` projection column's plain-integer `.range` (e.g. `2020,2025`), not a
+    date-literal one. Returns `True` (confirmed `value` outside the declared bounds), `False`
+    (confirmed inside, or a bound didn't resolve), `None` only when the range has no comma at
+    all (never actually reached below — a comma-less presence check already rejects that at
+    validate time; kept for symmetry with `_projection_range_day_status`)."""
+    if not range_param or "," not in range_param:
+        return None
+    lower_str, upper_str = range_param.split(",", 1)
+    lower = _projection_integer_range_bound(lower_str)
+    upper = _projection_integer_range_bound(upper_str)
+    if lower is not None and value < lower:
+        return True
+    if upper is not None and value > upper:
+        return True
+    if lower is None or upper is None:
+        return None
+    return False
+
+
 def _projection_day_out_of_range(glue, database, table, day, validation, now=None):
     """Scan-time counterpart to `_partition_exists` for the `projection` strategy (which has no
     enumerable Glue partitions to check): before trusting a zero-row Athena result for `day` as
@@ -215,6 +243,30 @@ def _projection_day_out_of_range(glue, database, table, day, validation, now=Non
       - `None`  = a Glue API error — genuinely unverifiable."""
     dk_raw = sm.single_date_partition_key(validation)
     if not dk_raw:
+        # CI-review MAJOR fix (round 13, L2-1/L4-1): `single_date_partition_key` returns `None` BY
+        # DESIGN for a Hive-style 3-key `year`/`month`/`day` layout (it only ever resolves a LONE
+        # remaining key) — this function used to return `False` ("don't block") right here without
+        # ever looking at `projection.year|month|day.range`, so a Hive projection table with, e.g.,
+        # `projection.year.range=2020,2025` still validated `status: "valid"` (round 9 only checks
+        # RANGE PRESENCE for Hive keys, not day-coverage — "remains a scan-time concern" per this
+        # module's own changelog) and then silently committed a confident false zero-traffic day
+        # for any post-2025 day — the precise failure mode this PR's contract exists to forbid.
+        remaining = sm.partition_keys_excluding_scope(validation)
+        actual_by_lower = {str(k).lower(): k for k in remaining}
+        if set(actual_by_lower) != {"year", "month", "day"}:
+            return False  # not a checkable scheme (neither single-key nor Hive)
+        try:
+            tbl = glue.get_table(DatabaseName=database, Name=table)["Table"]
+        except Exception:  # noqa: BLE001 — unverifiable, not a confident "inside the range"
+            return None
+        params = tbl.get("Parameters", {}) or {}
+        day_value = {"year": day.year, "month": day.month, "day": day.day}
+        for hive_key, actual_key in actual_by_lower.items():
+            range_param = params.get(f"projection.{actual_key}.range")
+            if not range_param:
+                continue
+            if _projection_integer_range_excludes(range_param, day_value[hive_key]) is True:
+                return True
         return False
     try:
         tbl = glue.get_table(DatabaseName=database, Name=table)["Table"]
@@ -608,25 +660,33 @@ def _validate(event, conn, now=None):
                         "projection configuration or one whose values ('enum'/'integer'/'injected') "
                         "are not guaranteed ISO date strings, and either way every real scan would "
                         "fail or silently match zero rows [reason: projection_type_not_date]")
-                if sm.is_string_like_partition_type(key_type):
-                    proj_format = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.format")
-                    # CI-review MAJOR fix (round 12, MAJOR #3): absence of `.format` used to be
-                    # accepted here as "Athena's own ISO default" — but Athena has no such default;
-                    # `.format` is a REQUIRED parameter for a `date`-typed projection column
-                    # (https://docs.aws.amazon.com/athena/latest/ug/partition-projection-supported-types.html),
-                    # and omitting it is itself an invalid/unqueryable projection configuration, not
-                    # a safe assumption — every real scan would fail (or silently match zero rows),
-                    # exactly the class of bug the presence checks above (`.type`/`.range`) already
-                    # close for their own parameters.
-                    if not proj_format or proj_format.strip() != "yyyy-MM-dd":
-                        raise BrokerError(
-                            f"partition key {remaining_key!r} is a PROJECTION column with "
-                            f"projection.{remaining_key}.format={proj_format!r} — Athena requires "
-                            "this parameter to be present and exactly 'yyyy-MM-dd' for a date-typed "
-                            "projection column (it has no ISO default); a missing or non-ISO value "
-                            "is either an invalid/unqueryable projection configuration or would "
-                            "silently match zero rows every day "
-                            "[reason: projection_date_format_missing_or_not_iso]")
+                # CI-review MAJOR fix (round 13, L2-2/L4-2): the round-12 `.format`-required check
+                # used to live INSIDE `if sm.is_string_like_partition_type(key_type):` — but
+                # `.format` is required by Athena for every `projection.<col>.type=date` column
+                # regardless of the underlying Glue CATALOG type, not just a string-like one. A
+                # Glue `date`-/`timestamp`-typed partition key with `projection.<col>.type=date`
+                # and a missing/non-ISO `.format` still validated `status: "valid"` here (the check
+                # above only confirms `.type=date`) and then every real scan would error — the
+                # "validates valid yet permanently refuses every scan" class rounds 2/4/5/8/9 close
+                # elsewhere. Runs unconditionally now, for every `.type=date` key.
+                proj_format = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.format")
+                # CI-review MAJOR fix (round 12, MAJOR #3): absence of `.format` used to be
+                # accepted here as "Athena's own ISO default" — but Athena has no such default;
+                # `.format` is a REQUIRED parameter for a `date`-typed projection column
+                # (https://docs.aws.amazon.com/athena/latest/ug/partition-projection-supported-types.html),
+                # and omitting it is itself an invalid/unqueryable projection configuration, not
+                # a safe assumption — every real scan would fail (or silently match zero rows),
+                # exactly the class of bug the presence checks above (`.type`/`.range`) already
+                # close for their own parameters.
+                if not proj_format or proj_format.strip() != "yyyy-MM-dd":
+                    raise BrokerError(
+                        f"partition key {remaining_key!r} is a PROJECTION column with "
+                        f"projection.{remaining_key}.format={proj_format!r} — Athena requires "
+                        "this parameter to be present and exactly 'yyyy-MM-dd' for a date-typed "
+                        "projection column (it has no ISO default); a missing or non-ISO value "
+                        "is either an invalid/unqueryable projection configuration or would "
+                        "silently match zero rows every day "
+                        "[reason: projection_date_format_missing_or_not_iso]")
                 # CI-review MAJOR fix (round 9): `projection.<col>.range` was never validated at
                 # all — Athena requires it for every `date`-typed projection column, and its
                 # absence means Athena has no candidate partitions to generate at all, so every
@@ -884,6 +944,23 @@ def _query_by_source(event, conn):
         # L3 finding #8b: no resolved bound means an unbounded full-table scan — refuse outright
         # rather than silently falling back to one.
         return {"ok": False, "reason": "validation did not resolve a partition strategy — refusing an unbounded scan"}
+    if "partitionKeyTypes" not in validation or "scopeResolution" not in validation:
+        # CI-review MAJOR fix (round 13, L3-1): the round-8 stale-validation self-heal/refusal
+        # (`sg_rule_scan.run()`'s "predates partitionKeyTypes/scopeResolution" check) was only ever
+        # enforced by ONE of this broker's callers. `has_resolved_partition_strategy` is satisfied
+        # by a bare Hive-style year/month/day layout without needing either field, so a pre-round-2
+        # source that has never picked up the round-2/6/8 scope-resolution and date-shape fixes
+        # still passes both guards above and would scan account/region-UNSCOPED — this module's own
+        # design contract (see the `continuation` handling above) is that any principal able to
+        # invoke this broker directly (the worker AND the web BFF task role both hold
+        # `lambda:InvokeFunction` on it) must be refused by THIS function, not rely on a caller
+        # that happens to self-heal first. Refuse here too, independent of `run()`'s own self-heal.
+        return {
+            "ok": False,
+            "reason": "stale validation predates partitionKeyTypes/scopeResolution and cannot be "
+                      "trusted to be scoped/date-shaped correctly — refusing to scan; re-run "
+                      "validate to refresh it",
+        }
 
     try:
         sql = sm.build_day_select(source, day)
