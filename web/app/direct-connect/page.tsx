@@ -161,9 +161,13 @@ const TIER_TONE: Record<DxSlaTier, 'positive' | 'neutral' | 'negative'> = {
 // 리뷰(Codex stop-hook): tier==='none'은 두 가지 다른 상황을 뭉뚱그린다 — (a) 커넥션이
 // 정말 0개, (b) 전량 호스티드라 AWS SLA 산정 대상 owned 커넥션이 0개(assessResiliency의
 // 티어 산정에서 호스티드를 제외한 결과). (b)를 "커넥션 없음"으로 표시하면 실제로 존재하는
-// 호스티드 커넥션을 없는 것처럼 오도한다 — hostedConnections로 두 경우를 구분한다.
+// 호스티드 커넥션을 없는 것처럼 오도한다.
+// 리뷰(Codex stop-hook, 2차): hostedConnections는 '배포 상태' 커넥션만 센다 — owned
+// 커넥션이 pending/ordering 상태로 존재하면(아직 미배포) tier==='none'이면서
+// hostedConnections>0일 수 있는데, 이 경우는 "전량 호스티드"가 아니라 "배포된 owned가
+// 없을 뿐"이다. allConnectionsHosted(상태 무관 전체 커넥션 기준)로만 이 라벨을 판단한다.
 function tierLabel(r: DxResiliency): string {
-  if (r.tier === 'none' && r.hostedConnections > 0) return 'AWS SLA 해당 없음 (전량 호스티드)';
+  if (r.tier === 'none' && r.allConnectionsHosted) return 'AWS SLA 해당 없음 (전량 호스티드)';
   return TIER_LABEL[r.tier];
 }
 

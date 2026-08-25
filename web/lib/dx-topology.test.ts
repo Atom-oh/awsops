@@ -194,6 +194,23 @@ describe('assessResiliency (DX SLA 티어 — sample-network-resilience-agent �
     expect(r.tier).toBe('none');
     expect(r.slaPct).toBeNull();
     expect(r.locations).toBe(0);
+    expect(r.allConnectionsHosted).toBe(true);
+  });
+
+  it('리뷰(Codex stop-hook, 2차): pending 상태의 owned 커넥션이 있으면 tier=none이어도 "전량 호스티드"가 아니다', () => {
+    const r = assessResiliency({
+      connections: [
+        // owned지만 아직 미배포(pending) — deployedAll/total/hostedConnections 어디에도 안 잡힘.
+        conn({ id: 'c1', state: 'pending' }),
+        // 호스티드 & 배포됨 — hostedConnections에 잡혀 tier==='none'이 되는 원인.
+        conn({ id: 'c2', location: 'SEL2', partnerName: 'PartnerA' }),
+      ],
+      vifs: [], gateways: [],
+    });
+    expect(r.tier).toBe('none'); // 배포된 owned 커넥션이 0개라 SLA 티어 산정 대상이 없음
+    expect(r.hostedConnections).toBe(1);
+    // 하지만 pending owned 커넥션이 존재하므로 "전량 호스티드"라고 말하면 거짓 — false여야 한다.
+    expect(r.allConnectionsHosted).toBe(false);
   });
 
   it('체크: 다운 커넥션·미연결 DXGW·미연결 VIF가 실패로 표시', () => {
