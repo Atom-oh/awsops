@@ -231,16 +231,39 @@ def _projection_integer_range_excludes(range_param, value):
     return False
 
 
+def _hive_day_excluded(actual_by_lower, params, day):
+    day_value = {"year": day.year, "month": day.month, "day": day.day}
+    for hive_key, actual_key in actual_by_lower.items():
+        range_param = params.get(f"projection.{actual_key}.range")
+        if not range_param:
+            continue
+        if _projection_integer_range_excludes(range_param, day_value[hive_key]) is True:
+            return True
+    return False
+
+
 def _projection_day_out_of_range(glue, database, table, day, validation, now=None):
     """Scan-time counterpart to `_partition_exists` for the `projection` strategy (which has no
     enumerable Glue partitions to check): before trusting a zero-row Athena result for `day` as
     genuine zero-traffic, confirm `day` actually falls within the resolved date key's own
     declared `projection.<col>.range`. Mirrors `_partition_exists`'s 3-state contract:
-      - `True`  = confirmed `day` falls outside the declared range (the empty result is a
-                  config/range mismatch, not zero traffic).
+      - `True`  = confirmed the query window falls (at least partly) outside the declared range
+                  (the empty result is a config/range mismatch, not zero traffic).
       - `False` = confirmed inside the range, or nothing checkable (no confirmed single date key,
                   no range param, or the range didn't resolve confidently) — don't block.
-      - `None`  = a Glue API error — genuinely unverifiable."""
+      - `None`  = a Glue API error — genuinely unverifiable.
+
+    CI-review MAJOR fix (round 14): this used to check only `day` itself — but
+    `sm._build_partition_predicate` (Hive delivery-time partitioning: a day-D flow can land in
+    day D+1's partition file) widens the QUERY's own predicate to the two-day window {D, D+1},
+    and round 3/4 already widened `_partition_exists` (the `partition_keys`-strategy counterpart)
+    to match that SAME window. This projection-side check never did — for a day at the range's
+    upper boundary, D itself validates in-range while D+1 generates no candidate partition, so
+    day-D flows delivered late into D+1's partition are silently missed, a confident false
+    zero-traffic day for a low-traffic day, the exact failure mode this PR's contract forbids
+    (and the reason `_partition_exists` was widened in the first place). Both the single-key and
+    Hive-integer branches below now check the WHOLE window, not just `day`."""
+    next_day = day + _dt.timedelta(days=1)
     dk_raw = sm.single_date_partition_key(validation)
     if not dk_raw:
         # CI-review MAJOR fix (round 13, L2-1/L4-1): `single_date_partition_key` returns `None` BY
@@ -260,13 +283,10 @@ def _projection_day_out_of_range(glue, database, table, day, validation, now=Non
         except Exception:  # noqa: BLE001 — unverifiable, not a confident "inside the range"
             return None
         params = tbl.get("Parameters", {}) or {}
-        day_value = {"year": day.year, "month": day.month, "day": day.day}
-        for hive_key, actual_key in actual_by_lower.items():
-            range_param = params.get(f"projection.{actual_key}.range")
-            if not range_param:
-                continue
-            if _projection_integer_range_excludes(range_param, day_value[hive_key]) is True:
-                return True
+        if _hive_day_excluded(actual_by_lower, params, day):
+            return True
+        if _hive_day_excluded(actual_by_lower, params, next_day):
+            return True
         return False
     try:
         tbl = glue.get_table(DatabaseName=database, Name=table)["Table"]
@@ -276,7 +296,9 @@ def _projection_day_out_of_range(glue, database, table, day, validation, now=Non
     if not proj_range:
         return False
     now = now or _dt.datetime.now(_dt.timezone.utc)
-    return _projection_range_day_status(proj_range, day, now) is True
+    if _projection_range_day_status(proj_range, day, now) is True:
+        return True
+    return _projection_range_day_status(proj_range, next_day, now) is True
 
 
 def _validate_identifiers(account_id, region, workgroup, database, table=None, require_table=False):
@@ -484,6 +506,34 @@ def _validate(event, conn, now=None):
                 "'integer'/'date'/absent generates typed values that can never equal the literal, "
                 "silently matching zero rows on every real scan "
                 "[reason: projection_scope_type_not_representable]")
+
+    # CI-review MAJOR fix (round 14): the round-11 catalog-type check (string-like Glue type
+    # required) only ever ran for the Hive `year`/`month`/`day` keys and the single remaining date
+    # key — never for a `partition_keys`-strategy SCOPE key (`account_id`/`region` resolved as an
+    # actual partition column, not the `projection` strategy's own scope-type gate just above,
+    # which is a different check for a different strategy). `sm._build_scope_predicate`/
+    # `scope_partition_expr_clauses` always compare this source's own literal STRING value
+    # (`"account-id" = '123456789012'`) — a Glue-crawler-misinferred `bigint`/`int` catalog type for
+    # a numeric-looking partition value (a common misinference for 12-digit account ids) makes that
+    # comparison `bigint = varchar`, which Trino rejects outright. Such a source still validated
+    # `status: "valid"` (nothing checked the scope key's catalog type at all) and then every real
+    # query permanently refused — the "validates valid yet permanently refuses every scan" class
+    # rounds 2/4/5/8/9/13 already close for every OTHER partition key in this module.
+    if strategy == "partition_keys":
+        for canonical in ("account_id", "region"):
+            if scope_resolution.get(canonical) != "partition":
+                continue
+            scope_col = resolved[canonical]
+            idx = next(i for i, k in enumerate(partition_keys) if k == scope_col)
+            scope_key_type = partition_key_types[idx] if idx < len(partition_key_types) else ""
+            if not sm.is_string_like_partition_type(scope_key_type):
+                raise BrokerError(
+                    f"scope partition key {scope_col!r} ({canonical}) has Glue type "
+                    f"{scope_key_type!r}, which is not string-like — the query predicate always "
+                    "compares this source's own literal string value, and a non-string-like "
+                    "catalog type (e.g. a crawler-misinferred bigint/int for a numeric-looking "
+                    "value) makes that comparison a type mismatch Trino rejects on every real "
+                    "query [reason: scope_key_not_string_typed]")
 
     # MAJOR fix (item 4, round 2; corrected item 1, round 3; extended to `projection`, round 5): a
     # partition-key layout is only a valid, scannable strategy when it resolves EXACTLY ONE

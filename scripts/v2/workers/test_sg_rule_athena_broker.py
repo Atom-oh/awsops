@@ -540,6 +540,57 @@ def test_validate_prefers_partition_key_form_over_column_when_both_present(monke
     assert result["scopeResolution"]["account_id"] == "partition"
 
 
+# ── CI-review MAJOR fix (round 14): round 11 added a string-like catalog-type gate for the Hive
+#    year/month/day keys and the single remaining date key, but never for a `partition_keys`-
+#    strategy SCOPE key (account_id/region resolved as an actual partition column) — a Glue-
+#    crawler-misinferred `bigint`/`int` catalog type for a numeric-looking scope value (e.g. a
+#    12-digit account id) validated `status: "valid"` with no check at all, and then every real
+#    query compared `bigint = varchar`, which Trino rejects, permanently refusing every scan. ─────
+
+def _validate_scope_key_catalog_type(monkeypatch, conn, scope_key_type):
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "dt", "Type": "date"},
+                                  {"Name": "account-id", "Type": scope_key_type}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_rejects_a_bigint_typed_partition_keys_scope_key(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="scope_key_not_string_typed"):
+        _validate_scope_key_catalog_type(monkeypatch, conn, "bigint")
+
+
+def test_validate_accepts_a_string_typed_partition_keys_scope_key(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_scope_key_catalog_type(monkeypatch, conn, "string")
+    assert result["ok"] is True
+    assert result["scopeResolution"]["account_id"] == "partition"
+
+
 # ── MAJOR fix (item 4, round 2): a single-key partition scheme whose Glue type isn't date-shaped
 #    must be REJECTED at validation time — round 1 only enforced this at runtime scan time
 #    (`has_resolved_partition_strategy`'s hard-refuse), so a brand-new such source validated
@@ -1498,6 +1549,34 @@ def test_query_by_source_accepts_a_day_within_a_hive_projection_year_range(monke
     result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
     assert result["ok"] is True
     assert "projection_range_uncovered" not in result
+
+
+# ── CI-review MAJOR fix (round 14): the query's own predicate widens to the two-day window
+#    {D, D+1} (Hive delivery-time partitioning), but this check used to look at D alone in both
+#    branches — a day AT the range's upper boundary validated in-range while D+1 (also queried)
+#    generates no candidate partition, silently missing D-day flows delivered late into D+1's
+#    partition file. ───────────────────────────────────────────────────────────────────────────────
+
+def test_query_by_source_rejects_a_day_whose_next_day_is_excluded_by_the_projection_range(monkeypatch):
+    """Day D=2025-12-31 is itself within `2020-01-01,2025-12-31`, but D+1=2026-01-01 is not — the
+    query's own widened {D, D+1} window is only partly covered, so the day must be refused."""
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION,
+        glue=FakeGlueGetTableWithRange("2020-01-01,2025-12-31"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2025-12-31"}, conn)
+    assert result["ok"] is False
+    assert result.get("projection_range_uncovered") is True
+
+
+def test_query_by_source_rejects_a_hive_day_whose_next_day_year_is_excluded_by_the_range(monkeypatch):
+    """Day D=2025-12-31 falls in year 2025 (within `2020,2025`), but D+1=2026-01-01 falls in year
+    2026 (outside it) — the widened window is only partly covered."""
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _HIVE_PROJECTION_VALIDATION,
+        glue=FakeGlueGetTableWithHiveRanges(year_range="2020,2025"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2025-12-31"}, conn)
+    assert result["ok"] is False
+    assert result.get("projection_range_uncovered") is True
 
 
 def test_partition_keys_strategy_still_runs_glue_partition_check(monkeypatch):
