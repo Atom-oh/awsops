@@ -1179,14 +1179,44 @@ def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespac
     evaluates `False` and every `!=`/`not in` term confidently evaluates `True`. Unfetched
     namespace labels thus produced a confident `blocked`/`allowed` instead of `unknown` — the
     exact asymmetry the `selector`/`peer_labels` branch already guards against below. A `None`
-    `peer_namespace_labels` now short-circuits to unresolvable, mirroring that branch."""
+    `peer_namespace_labels` now short-circuits to unresolvable, mirroring that branch.
+
+    CI-review MAJOR fix (round 21): rounds 18-20 each closed one more Calico field this function
+    silently ignored (protocol, negation fields, destination-side constraints, ipVersion) via a
+    hand-maintained DENY-list — the exact whack-a-mole pattern that guarantees the next unmodeled
+    field (round 21 found `serviceAccounts`/`notServiceAccounts`/`notNamespaceSelector`, and
+    `source`-side `ports`/`notPorts` on the sender for ingress) produces the same confident
+    `allowed`. The guard is now an ALLOWLIST: any key on the Rule itself, or on EITHER EntityRule
+    (`source`/`destination`), outside the explicitly modeled set forces `unknown` — this closes
+    the whole class (including `icmp`/`notICMP`/`http`) at once rather than one field per round."""
+    _MODELED_RULE_KEYS = {"action", "protocol", "notProtocol", "ipVersion", "source", "destination", "metadata"}
+    _MODELED_ENTITY_KEYS = {"nets", "selector", "namespaceSelector", "notNets", "notSelector", "ports", "notPorts"}
+    source_entity = rule.get("source") or {}
+    dest_entity = rule.get("destination") or {}
+    if (any(k not in _MODELED_RULE_KEYS for k in rule)
+            or any(k not in _MODELED_ENTITY_KEYS for k in source_entity)
+            or any(k not in _MODELED_ENTITY_KEYS for k in dest_entity)):
+        return None
     peer = rule.get("source" if direction == "ingress" else "destination") or {}
     dest = rule.get("destination") or {}
     if (rule.get("notProtocol") or rule.get("ipVersion") is not None
             or dest.get("notPorts") or peer.get("notSelector") or peer.get("notNets")):
         return None
-    if direction == "ingress" and (dest.get("nets") or dest.get("selector") or dest.get("namespaceSelector")
-                                    or dest.get("notSelector") or dest.get("notNets")):
+    # The entity NOT used as `peer` for this direction (destination for ingress, source for
+    # egress) can still carry its own nets/selector/namespaceSelector constraint — a real Calico
+    # field this adapter has no way to evaluate (it has no signal for "is THIS policy-selected
+    # workload the one that entity scopes to"), generalizing round 20's ingress-only version of
+    # this same guard to cover the symmetric egress case too.
+    opposite_entity = dest_entity if direction == "ingress" else source_entity
+    if (opposite_entity.get("nets") or opposite_entity.get("selector") or opposite_entity.get("namespaceSelector")
+            or opposite_entity.get("notSelector") or opposite_entity.get("notNets")):
+        return None
+    # CI-review MAJOR fix (round 21): a `ports`/`notPorts` restriction on the ENTITY not used as
+    # the destination side (i.e. `source` — ports always describe the connection's destination
+    # port regardless of direction, per round 19) is a real, if unusual, Calico field this adapter
+    # never reads and never guards; silently ignoring it could let an intended source-port
+    # restriction fall through to a confident match/non-match it cannot actually support.
+    if source_entity.get("ports") or source_entity.get("notPorts"):
         return None
     rule_protocol = rule.get("protocol")
     if rule_protocol is not None and protocol is not None and str(rule_protocol).upper() != str(protocol).upper():
@@ -1279,11 +1309,24 @@ def eval_route53_resolution(records, query_host, data_available=True):
         for i in range(len(klabels)):
             _existing_nodes.add(".".join(klabels[i:]))
 
-    def _find(name, depth=0):
-        if depth > 5:  # bounded CNAME-chain following — never loop forever on a misconfigured zone
-            return None
+    def _find(name):
+        # CI-review MINOR fix (round 21): the CNAME-chain loop that calls this is bounded by its
+        # own `seen_names` cycle guard (a genuine cycle degrades to `unknown` there), not by a
+        # depth counter here — this function never recurses into itself, so a `depth` parameter
+        # would always be 0 and never actually bound anything. Removed rather than left as
+        # dead/misleading code.
         if name in by_name:
             return by_name[name]
+        # CI-review MAJOR fix (round 21): the query name ITSELF can exist in the zone as an
+        # "empty non-terminal" (a name with descendants but no RRset of its own — e.g. `b.example.
+        # com` exists because `x.b.example.com` is a real record, even though `b.example.com` has
+        # no record). RFC 4592 wildcard synthesis is NEVER permitted for a name that already
+        # exists in the zone, RRset or not — real DNS answers NODATA for it, not a wildcard
+        # match. The closest-encloser loop below only ever checked STRICT ancestors, so a query
+        # for exactly such an existing-but-empty name incorrectly fell through to wildcard
+        # synthesis from a farther ancestor.
+        if name in _existing_nodes:
+            return None
         labels = name.split(".")
         closest_encloser = None
         for i in range(1, len(labels)):
@@ -1354,8 +1397,20 @@ def eval_route53_resolution(records, query_host, data_available=True):
     unhealthy = [r for r in matched if r.get("health_check_status") == "unhealthy"]
     healthy_or_unchecked = [r for r in matched if r.get("health_check_status") != "unhealthy"]
     if unhealthy and not healthy_or_unchecked:
-        return {"layer": "dns", "status": "blocked", "resource": host,
-                "summary": f"Route 53 record(s) for {host!r} all report an unhealthy health check",
+        # CI-review MAJOR fix (round 21): Route 53's DOCUMENTED behavior when every record in a
+        # set fails its health check is FAIL-OPEN — it answers as if all records were healthy,
+        # not NXDOMAIN/refuse. A confident `blocked` here contradicts that real behavior (a false
+        # verdict, not an honest degrade) — this module also has no routing-policy modeling
+        # (`failover`/weighted/latency records are accepted in the record shape but never
+        # consulted), so whether the real answer would actually route away entirely depends on a
+        # policy this adapter cannot evaluate. Degrades to `unknown` instead of a confident
+        # `blocked`.
+        return {"layer": "dns", "status": "unknown", "resource": host,
+                "summary": f"Route 53 record(s) for {host!r} all report an unhealthy health check "
+                           "— Route 53's documented behavior in this case is to fail OPEN (answer "
+                           "as if healthy) rather than NXDOMAIN, and this module does not model "
+                           "routing policy (failover/weighted/latency), so the real outcome cannot "
+                           "be confidently determined from health-check status alone",
                 "evidence": matched}
     if unhealthy and healthy_or_unchecked:
         return {"layer": "dns", "status": "conditional", "resource": host,

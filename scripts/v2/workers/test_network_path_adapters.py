@@ -962,16 +962,18 @@ class TestCalicoPolicy:
     # ── CI-review MAJOR fix (round 19): ports/notPorts live in the destination EntityRule, not the
     #    rule root — a rule-root `ports` (the pre-fix shape) must NOT restrict anything. ──────────
 
-    def test_rule_root_ports_is_not_the_real_calico_shape_and_does_not_restrict(self):
+    def test_rule_root_ports_is_not_the_real_calico_shape_and_is_unmodeled(self):
         """A `ports` key placed at the rule root (not inside `destination`) is not a real Calico
-        field — it must be ignored entirely, so port 22 still matches this otherwise-unrestricted
-        Allow rule (regression guard against reverting to reading the rule root)."""
+        field. It must not be silently ignored either (that was the round-19-era behavior, before
+        the round-21 allowlist) — an unrecognized rule shape is exactly the kind of thing this
+        adapter cannot confidently reason about, so it degrades to `unknown`, not a confident
+        `allowed` derived by pretending the field isn't there."""
         policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
             {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "ports": [80, 443]},
         ]}]
         r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
                                    port=22, crd_present=True, observed_api_version=_CALICO_VERSION)
-        assert r["status"] == "allowed"
+        assert r["status"] == "unknown"
 
     def test_destination_not_ports_is_unknown_not_a_guessed_match(self):
         policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
@@ -1038,6 +1040,55 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "unknown"
 
+    # ── CI-review MAJOR fix (round 21): the round-18/19/20 deny-list guard covered one more
+    #    unmodeled field each round; converted to an allowlist so an ARBITRARY unmodeled field
+    #    (not just the specific ones already caught) forces `unknown`. ───────────────────────────
+
+    def test_entity_service_accounts_constraint_is_unknown_not_a_guaranteed_match(self):
+        """A rule scoped ONLY by `source.serviceAccounts` (no nets/selector/namespaceSelector at
+        all) used to fall into the "no peer criteria" branch and confidently match ANY peer —
+        `serviceAccounts` is a real, unmodeled Calico field, not the absence of a constraint."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"serviceAccounts": {"names": ["frontend-sa"]}}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_entity_not_namespace_selector_is_unknown_not_ignored(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"], "notNamespaceSelector": "team == 'x'"}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_source_side_ports_restriction_is_unknown_not_ignored(self):
+        """`ports`/`notPorts` on `source` (the sender's OWN port, distinct from the connection's
+        destination port always read from `destination`) is a real, if unusual, Calico field this
+        adapter never evaluates — its presence must not be silently dropped."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"], "ports": [1024]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_rule_level_icmp_field_is_unknown_not_ignored(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "icmp": {"type": 8}, "source": {"nets": ["0.0.0.0/0"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_egress_source_side_selector_constraint_is_unknown_not_ignored(self):
+        """Symmetric to round 20's ingress-side `destination` guard: for EGRESS, `destination` is
+        the peer being matched, but `source` (the workload itself) can still carry its own
+        `selector`/`nets` constraint that this adapter never evaluates for egress."""
+        policies = [{"selector": "role == 'web'", "types": ["Egress"], "egress": [
+            {"action": "Allow", "source": {"selector": "tier == 'restricted'"},
+             "destination": {"nets": ["0.0.0.0/0"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "egress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
     def test_data_unavailable_is_unknown_not_allowed(self):
         r = ad.eval_calico_policy([], {}, "ingress", crd_present=True,
                                    observed_api_version=_CALICO_VERSION, data_available=False)
@@ -1077,6 +1128,19 @@ class TestRoute53Resolution:
         r = ad.eval_route53_resolution(records, "app.example.com")
         assert r["status"] == "allowed"
 
+    def test_query_name_existing_as_an_empty_non_terminal_gets_no_wildcard_synthesis(self):
+        """CI-review MAJOR fix (round 21): the query name ITSELF can exist in the zone as an
+        empty non-terminal (has descendants, no RRset of its own) — real DNS answers NODATA/
+        NXDOMAIN for it, never a wildcard match, regardless of a farther ancestor's wildcard.
+        Here `b.example.com` exists solely because `x.b.example.com` is a real record; querying
+        `b.example.com` directly must not synthesize from `*.example.com`."""
+        records = [
+            {"name": "x.b.example.com", "type": "A"},
+            {"name": "*.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "b.example.com")
+        assert r["status"] == "blocked"
+
     def test_closer_empty_non_terminal_without_its_own_wildcard_blocks_a_farther_wildcard(self):
         """CI-review MAJOR fix (round 20): RFC 4592 wildcard synthesis is valid ONLY from the
         CLOSEST encloser, not from any ancestor with a wildcard child. Here `b.example.com` is a
@@ -1101,10 +1165,13 @@ class TestRoute53Resolution:
         r = ad.eval_route53_resolution(records, "a.b.example.com")
         assert r["status"] == "allowed"
 
-    def test_all_unhealthy_blocks(self):
+    def test_all_unhealthy_is_unknown_not_confidently_blocked(self):
+        """CI-review MAJOR fix (round 21): Route 53's documented behavior when every record fails
+        its health check is FAIL-OPEN (answer as if healthy), not NXDOMAIN — a confident `blocked`
+        here was itself a false verdict, the exact failure mode this module's contract forbids."""
         records = [{"name": "app.example.com", "type": "A", "health_check_status": "unhealthy"}]
         r = ad.eval_route53_resolution(records, "app.example.com")
-        assert r["status"] == "blocked"
+        assert r["status"] == "unknown"
 
     def test_mixed_health_is_conditional(self):
         records = [

@@ -42,11 +42,27 @@
 # any access policy still attached to the entry, so "converged" is actually true regardless of how
 # the entry got there. This needs `eks:ListAssociatedAccessPolicies` +
 # `eks:DisassociateAccessPolicy` in addition to the create/update permissions above.
+#
+# CI-review MAJOR fix (round 21): the round-20 fix itself had two problems, both because the
+# worker task role's Access Entry is a SHARED-principal resource this script does not exclusively
+# own. (a) `list-associated-access-policies ... 2>/dev/null || true` swallowed AccessDenied/
+# throttling/network errors the SAME way as "no policies found" — a listing failure silently
+# printed a false "converged" claim while a stale over-broad policy could still be attached; a
+# listing failure is now FATAL, not treated as empty. (b) `update-access-entry
+# --kubernetes-groups "$K8S_GROUP"` REPLACES the entry's entire groups list, and disassociating
+# EVERY attached policy could revoke a legitimate out-of-band grant this script knows nothing
+# about — this now MERGES with whatever groups are already present (never drops one), and only
+# disassociates the SPECIFIC policy ARNs this script's own earlier rounds are known to have
+# associated (`_KNOWN_STALE_POLICY_ARNS` below), not an unbounded "whatever is attached."
 set -euo pipefail
 
 CHDIR="$(cd "$(dirname "$0")/../../../terraform/v2/foundation" && pwd)"
 K8S_GROUP="network-path-reader"
 RBAC_MANIFEST="$(cd "$(dirname "$0")" && pwd)/network-path-reader-rbac.yaml"
+# Policy ARNs this script's OWN earlier rounds are known to have associated on this Access Entry
+# (round 18's AdminView; kept here rather than "whatever is currently attached" so a disassociate
+# never touches a policy some other, unrelated process put there).
+_KNOWN_STALE_POLICY_ARNS="arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
 
 ROLE_ARN="${ROLE_ARN:-$(terraform -chdir="$CHDIR" output -raw worker_task_role_arn 2>/dev/null || true)}"
 if [ -z "$ROLE_ARN" ] || [ "$ROLE_ARN" = "null" ]; then
@@ -58,18 +74,48 @@ if [ "$#" -lt 1 ]; then
   exit 1
 fi
 
+# Union of the entry's CURRENT kubernetesGroups (if any) with $K8S_GROUP — never a replacement,
+# so an unrelated group already bound to this shared principal's entry survives.
+merged_kubernetes_groups() {
+  local cluster="$1"
+  local existing
+  if ! existing=$(aws eks describe-access-entry --cluster-name "$cluster" --principal-arn "$ROLE_ARN" \
+      --query 'accessEntry.kubernetesGroups' --output text 2>&1); then
+    echo "  ERROR describing existing access entry on ${cluster} (cannot safely merge groups): $existing" >&2
+    exit 1
+  fi
+  if [ "$existing" = "None" ] || [ -z "$existing" ]; then
+    echo "$K8S_GROUP"
+    return 0
+  fi
+  printf '%s\n%s\n' "$existing" "$K8S_GROUP" | tr '\t' '\n' | sort -u | tr '\n' ' '
+}
+
 disassociate_stale_policies() {
   local cluster="$1"
   local arns
-  arns=$(aws eks list-associated-access-policies --cluster-name "$cluster" --principal-arn "$ROLE_ARN" \
-    --query 'associatedAccessPolicies[].policyArn' --output text 2>/dev/null || true)
-  if [ -z "$arns" ]; then
-    return 0
+  # CI-review MAJOR fix (round 21): a listing failure (AccessDenied, throttling, network) must NOT
+  # be treated the same as "no policies associated" — that was round 20's fail-open bug. Fatal now.
+  if ! arns=$(aws eks list-associated-access-policies --cluster-name "$cluster" --principal-arn "$ROLE_ARN" \
+      --query 'associatedAccessPolicies[].policyArn' --output text 2>&1); then
+    echo "  ERROR listing associated access policies on ${cluster} (cannot confirm 'converged' is" >&2
+    echo "  actually true — refusing to report success): $arns" >&2
+    exit 1
   fi
-  local arn
+  local arn found
   for arn in $arns; do
-    echo "  found stale associated access policy $arn — disassociating (least-privilege now comes"
-    echo "  from the RBAC manifest below, not an AWS-managed policy)"
+    found=""
+    for stale in $_KNOWN_STALE_POLICY_ARNS; do
+      [ "$arn" = "$stale" ] && found=1
+    done
+    if [ -z "$found" ]; then
+      echo "  found an associated access policy ($arn) this script did not itself associate —"
+      echo "  leaving it untouched (not one of this script's own known-stale ARNs)"
+      continue
+    fi
+    echo "  found stale associated access policy $arn (from an earlier round of this script) —"
+    echo "  disassociating (least-privilege now comes from the RBAC manifest below, not an"
+    echo "  AWS-managed policy)"
     if ! derr=$(aws eks disassociate-access-policy --cluster-name "$cluster" --principal-arn "$ROLE_ARN" \
         --policy-arn "$arn" 2>&1); then
       echo "  ERROR disassociating $arn on ${cluster}: $derr" >&2
@@ -91,10 +137,12 @@ for C in "$@"; do
   elif printf '%s' "$err" | grep -q "ResourceInUseException"; then
     # Entry already exists (e.g. from a prior run, or created without the group) — make the
     # kubernetes-groups binding converge via an explicit update rather than assuming it's already
-    # correct, so this script stays idempotent regardless of how the entry got there.
+    # correct, so this script stays idempotent regardless of how the entry got there. Merged (not
+    # replaced) so an unrelated group already on this shared principal's entry is never dropped.
+    merged="$(merged_kubernetes_groups "$C")"
     if uerr=$(aws eks update-access-entry --cluster-name "$C" --principal-arn "$ROLE_ARN" \
-        --kubernetes-groups "$K8S_GROUP" 2>&1); then
-      echo "  access entry already existed; kubernetes-groups converged to $K8S_GROUP"
+        --kubernetes-groups $merged 2>&1); then
+      echo "  access entry already existed; kubernetes-groups converged to: $merged"
     else
       echo "  ERROR updating kubernetes-groups on ${C}: $uerr" >&2
       exit 1
