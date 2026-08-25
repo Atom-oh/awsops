@@ -90,6 +90,40 @@ class BrokerError(Exception):
     pass
 
 
+def _projection_range_upper_bound_expired(range_param, now):
+    """CI-review MAJOR fix (round 9, part b): `projection.<col>.range`'s PRESENCE was validated
+    above, but never whether the declared window still covers the current date — a common real
+    misconfiguration is a closed range (e.g. `2020-01-01,2025-06-30`) an admin forgot to make
+    open-ended, which Athena will happily accept as valid config while generating zero candidate
+    partitions for any day past its end — genuinely empty (but wrong) results the `projection`
+    strategy has no `_partition_exists` check to catch, so this would otherwise be committed as a
+    confident false `no_observed_evidence`.
+
+    Athena's projection range grammar supports several forms (`NOW`, `NOW-N/day`, arbitrary
+    enum/integer bounds, etc.) that aren't all safely parseable here without guessing. Per the
+    "safer path" contract used throughout this module: only the common, unambiguously-parseable
+    closed-range-with-a-literal-`yyyy-MM-dd`-end-date form is checked. Anything else (an open-ended
+    `NOW`-anchored upper bound, or an upper bound this function can't confidently parse as a plain
+    ISO date) is left unvalidated here rather than risk a false rejection — returns `None` in
+    those cases (a caller checks `is True` for "confirmed expired", `is False`/`None` are both
+    "no confirmed expiry, but not the same as an unparseable case").
+
+    Returns True (expired), False (confirmed still covers `now`), or None (couldn't confidently
+    tell — not the common closed-range-with-literal-end-date form).
+    """
+    if not range_param or "," not in range_param:
+        return None
+    upper = range_param.rsplit(",", 1)[-1].strip()
+    if not upper or upper.upper().startswith("NOW"):
+        # Open-ended/anchored-to-now — always covers the current date by construction.
+        return False
+    try:
+        upper_date = _dt.datetime.strptime(upper, "%Y-%m-%d").date()
+    except ValueError:
+        return None  # not the plain-ISO-literal form this check confidently handles
+    return upper_date < now.date()
+
+
 def _validate_identifiers(account_id, region, workgroup, database, table=None, require_table=False):
     if not isinstance(account_id, str) or not _ACCOUNT_ID_RE.match(account_id):
         raise BrokerError("account_id must be a 12-digit AWS account id")
@@ -141,7 +175,10 @@ def _resolve_external_id(conn, account_id):
     return rows[0][0]
 
 
-def _validate(event, conn):
+def _validate(event, conn, now=None):
+    # `now` is injectable (mirrors `sg_rule_scan.process_day`'s own `observed_at` pattern) so the
+    # round-9 range-staleness check below stays testable without a real wall-clock dependency.
+    now = now or _dt.datetime.now(_dt.timezone.utc)
     account_id = event.get("account_id")
     region = event.get("region")
     workgroup = event.get("workgroup")
@@ -269,6 +306,34 @@ def _validate(event, conn):
         }
         remaining_keys = sm.partition_keys_excluding_scope(probe_validation)
         lower_remaining = {str(k).lower() for k in remaining_keys}
+        # CI-review MAJOR fix (round 9): the projection-parameter validation added in rounds
+        # 7/8 (below) lived ENTIRELY inside the single-key `else` branch of the
+        # `{"year","month","day"} <= lower_remaining` check, so it never ran at all for a
+        # Hive-style year/month/day PROJECTION layout — the exact "validates valid yet
+        # permanently refuses/false-zeros every scan" class this PR fixes elsewhere, just for
+        # the OTHER branch this time. A Hive-style projection column conventionally uses
+        # `projection.<col>.type=integer` (year/month/day are plain zero-padded integers, not
+        # `date`-typed), each requiring its own `.range` — validate that here, symmetrically with
+        # the single-key branch's own `.type`/`.range` checks below.
+        if strategy == "projection" and {"year", "month", "day"} <= lower_remaining:
+            params = tbl.get("Parameters", {}) or {}
+            for hive_key in ("year", "month", "day"):
+                actual_key = next(k for k in remaining_keys if str(k).lower() == hive_key)
+                proj_type_param = params.get(f"projection.{actual_key}.type")
+                if not proj_type_param or proj_type_param.strip().lower() != "integer":
+                    raise BrokerError(
+                        f"Hive-style partition key {actual_key!r} ({hive_key}) is a PROJECTION "
+                        f"column with projection.{actual_key}.type={proj_type_param!r} — Athena "
+                        "requires this parameter to be present and 'integer' for a zero-padded "
+                        "numeric year/month/day projection column; a missing or wrong-typed value "
+                        "is an invalid/unqueryable projection configuration and every real scan "
+                        "would fail [reason: projection_hive_type_not_integer]")
+                if not params.get(f"projection.{actual_key}.range"):
+                    raise BrokerError(
+                        f"Hive-style partition key {actual_key!r} ({hive_key}) is a PROJECTION "
+                        f"column missing projection.{actual_key}.range — Athena requires a range "
+                        "for every projected partition column; without it the configuration is "
+                        "invalid/unqueryable [reason: projection_hive_range_missing]")
         if not ({"year", "month", "day"} <= lower_remaining):
             if len(remaining_keys) != 1:
                 raise BrokerError(
@@ -336,6 +401,34 @@ def _validate(event, conn):
                             f"date format ({proj_format!r}) — date-format projection patterns other "
                             "than yyyy-MM-dd are not yet supported, and assuming ISO would silently "
                             "match zero rows every day [reason: projection_date_format_not_iso]")
+                # CI-review MAJOR fix (round 9): `projection.<col>.range` was never validated at
+                # all — Athena requires it for every `date`-typed projection column, and its
+                # absence means Athena has no candidate partitions to generate at all, so every
+                # real scan would fail (or, per Athena's own behavior for an unrecognized/invalid
+                # range, silently produce none — indistinguishable at this layer from a genuine
+                # zero-traffic day, since `projection` has no `_partition_exists` existence check
+                # to catch it). This only confirms PRESENCE (not that the declared range covers any
+                # particular day being scanned — that remains a scan-time concern).
+                proj_range = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.range")
+                if not proj_range:
+                    raise BrokerError(
+                        f"partition key {remaining_key!r} is a PROJECTION column missing "
+                        f"projection.{remaining_key}.range — Athena requires a range for every "
+                        "date-typed projected partition column; without it the configuration is "
+                        "invalid/unqueryable [reason: projection_range_missing]")
+                # CI-review MAJOR fix (round 9, part b): a PRESENT but stale range (upper bound
+                # already in the past) is just as unqueryable for TODAY's scan as a missing one —
+                # see `_projection_range_upper_bound_expired`'s docstring for exactly which range
+                # forms this can confidently detect (a closed range with a literal `yyyy-MM-dd` end
+                # date) versus which it deliberately leaves unvalidated (`NOW`-anchored or any other
+                # form it can't confidently parse without guessing).
+                if _projection_range_upper_bound_expired(proj_range, now) is True:
+                    raise BrokerError(
+                        f"partition key {remaining_key!r} is a PROJECTION column whose "
+                        f"projection.{remaining_key}.range={proj_range!r} upper bound has already "
+                        "passed — Athena will generate no candidate partitions for the current or "
+                        "any future date, so every real scan from today onward would silently match "
+                        "zero rows [reason: projection_range_expired]")
 
     optional_present = [c for c in ("flow-direction", "flow_direction", "tcp-flags", "tcp_flags",
                                     "bytes", "packets") if c.lower() in columns]

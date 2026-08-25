@@ -632,7 +632,7 @@ def test_validate_rejects_a_non_date_typed_single_partition_key_under_projection
 #    `no_observed_evidence`. Reject at validate time unless the declared `projection.<col>.format`
 #    is absent or exactly the ISO pattern this module emits. ────────────────────────────────────────
 
-def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_type="string"):
+def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_type="string", now=None):
     class FakeAthenaWorkGroup:
         def get_work_group(self, WorkGroup):
             return {"WorkGroup": {"Configuration": {
@@ -645,11 +645,13 @@ def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_t
             return {}
 
         def get_table(self, DatabaseName, Name):
-            # Round-8 fix: `projection.dt.type` must be PRESENT and `date` for validation to pass
-            # at all — default it to the valid shape so tests exercising the format/type-normalization
-            # checks below don't have to restate it; a test that wants to exercise the `.type` gate
-            # itself passes an explicit override in `proj_format_params`.
-            params = {"projection.enabled": "true", "projection.dt.type": "date"}
+            # Round-8/9 fix: `projection.dt.type` must be PRESENT and `date`, and `projection.dt.range`
+            # must be PRESENT, for validation to pass at all — default both to a valid shape so
+            # tests exercising the format/type-normalization checks below don't have to restate
+            # them; a test that wants to exercise the `.type`/`.range` gate itself passes an
+            # explicit override in `proj_format_params`.
+            params = {"projection.enabled": "true", "projection.dt.type": "date",
+                      "projection.dt.range": "NOW-3YEARS,NOW"}
             params.update(proj_format_params)
             return {"Table": {
                 "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
@@ -753,6 +755,83 @@ def test_validate_rejects_a_projection_key_with_no_declared_type_at_all(monkeypa
     with pytest.raises(broker.BrokerError, match="projection_type_not_date"):
         # None mimics the parameter being entirely absent (same falsy check as a missing key).
         _validate_projection_string_key(monkeypatch, conn, {"projection.dt.type": None})
+
+
+def test_validate_rejects_a_projection_key_with_no_declared_range(monkeypatch):
+    """CI-review MAJOR fix (round 9): `projection.<col>.range` was never validated at all — Athena
+    requires it for every date-typed projection column, and its absence means Athena has no
+    candidate partitions to generate, so every real scan would fail or silently match zero rows
+    (no `_partition_exists` existence check exists for `projection` sources to catch it)."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_range_missing"):
+        _validate_projection_string_key(monkeypatch, conn, {"projection.dt.range": None})
+
+
+# ── CI-review MAJOR fix (round 9): the round-7/8 projection.<col>.type/.format/.range gates all
+#    lived inside the SINGLE-KEY branch of the date-candidate check — a Hive-style year/month/day
+#    PROJECTION layout skipped every one of them entirely, reproducing the "validates valid yet
+#    permanently refuses/false-zeros every scan" class this PR fixes elsewhere. ───────────────────
+
+def _validate_hive_projection(monkeypatch, conn, proj_params):
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            params = {
+                "projection.enabled": "true",
+                "projection.year.type": "integer", "projection.year.range": "2020,2030",
+                "projection.month.type": "integer", "projection.month.range": "1,12",
+                "projection.day.type": "integer", "projection.day.range": "1,31",
+            }
+            params.update(proj_params)
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "year", "Type": "string"}, {"Name": "month", "Type": "string"},
+                                  {"Name": "day", "Type": "string"}],
+                "Parameters": params,
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_accepts_a_correctly_configured_hive_projection_layout(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_hive_projection(monkeypatch, conn, {})
+    assert result["ok"] is True
+
+
+def test_validate_rejects_a_hive_projection_layout_missing_a_key_type(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_hive_type_not_integer"):
+        _validate_hive_projection(monkeypatch, conn, {"projection.month.type": None})
+
+
+def test_validate_rejects_a_hive_projection_layout_with_a_non_integer_key_type(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_hive_type_not_integer"):
+        _validate_hive_projection(monkeypatch, conn, {"projection.day.type": "enum"})
+
+
+def test_validate_rejects_a_hive_projection_layout_missing_a_key_range(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_hive_range_missing"):
+        _validate_hive_projection(monkeypatch, conn, {"projection.year.range": None})
 
 
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):
