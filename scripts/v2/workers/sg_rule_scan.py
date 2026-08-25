@@ -217,29 +217,57 @@ def snapshot_eni_membership_via_describe(ec2):
 
 # ── Step 2: upsert sg_rule_inventory + append-only versions ──────────────────────────────────────
 
-def upsert_inventory_and_versions(conn, account_id, region, rules, now):
+def group_vpc_map_from_memberships(memberships):
+    """Gap-5 fix: derives {group_id -> vpc_id} purely from the ENI-membership snapshot the worker
+    already fetches for step 2 of the daily pipeline (`snapshot_eni_membership_via_describe`) — no
+    extra AWS call. An SG belongs to exactly one VPC, so the first ENI observed carrying a given
+    group_id determines that group's vpc_id; a group_id with no ENI in this snapshot (e.g.
+    currently unattached) has no entry, which callers must treat as "unknown", not fabricate."""
+    out = {}
+    for m in memberships:
+        vpc_id = m.get("vpc_id")
+        if not vpc_id:
+            continue
+        for gid in m.get("group_ids") or []:
+            out.setdefault(gid, vpc_id)
+    return out
+
+
+def upsert_inventory_and_versions(conn, account_id, region, rules, now, group_vpc_map=None):
     """Per rule: upsert the current-state cache (sg_rule_inventory) and, only when the freshly
     computed fingerprint differs from the currently-open version, close the old version and open a
     new one in sg_rule_inventory_versions (append-only). A rule seen for the first time gets its
     first version row with valid_from = now (approximating first_seen_at, since this IS the first
-    observation)."""
+    observation).
+
+    `group_vpc_map` (gap-5 fix, optional dict {group_id -> vpc_id} from
+    `group_vpc_map_from_memberships`): populates the nullable `sg_rule_inventory.vpc_id` column.
+    On conflict, a fresh non-NULL resolution always overwrites the stored value (an SG's VPC never
+    changes, but a fresher, more complete snapshot should still win); when this run couldn't
+    resolve a VPC for the group (not in `group_vpc_map`), the previously stored value — if any — is
+    preserved via COALESCE rather than being clobbered back to NULL."""
+    group_vpc_map = group_vpc_map or {}
     seen_ids = []
     for rule in rules:
         fp = sm.rule_fingerprint(rule)
         seen_ids.append(rule["rule_id"])
+        vpc_id = group_vpc_map.get(rule["group_id"])
         conn.run(
             "INSERT INTO sg_rule_inventory "
             "(account_id, region, rule_id, group_id, is_egress, protocol, from_port, to_port, "
-            " peer_kind, peer_value, description, fingerprint, first_seen_at, last_seen_at, active) "
-            "VALUES (:a,:r,:rid,:gid,:eg,:proto,:fp_,:tp,:pk,:pv,:desc,:fp,:now,:now,true) "
+            " peer_kind, peer_value, description, fingerprint, first_seen_at, last_seen_at, active, "
+            " vpc_id) "
+            "VALUES (:a,:r,:rid,:gid,:eg,:proto,:fp_,:tp,:pk,:pv,:desc,:fp,:now,:now,true,:vpc) "
             "ON CONFLICT (account_id, region, rule_id) DO UPDATE SET "
             "group_id=EXCLUDED.group_id, is_egress=EXCLUDED.is_egress, protocol=EXCLUDED.protocol, "
             "from_port=EXCLUDED.from_port, to_port=EXCLUDED.to_port, peer_kind=EXCLUDED.peer_kind, "
             "peer_value=EXCLUDED.peer_value, description=EXCLUDED.description, "
-            "fingerprint=EXCLUDED.fingerprint, last_seen_at=:now, active=true",
+            "fingerprint=EXCLUDED.fingerprint, last_seen_at=:now, active=true, "
+            "vpc_id=COALESCE(EXCLUDED.vpc_id, sg_rule_inventory.vpc_id)",
             a=account_id, r=region, rid=rule["rule_id"], gid=rule["group_id"], eg=rule["is_egress"],
             proto=rule["protocol"], fp_=rule.get("from_port"), tp=rule.get("to_port"),
             pk=rule["peer_kind"], pv=rule["peer_value"], desc=rule.get("description"), fp=fp, now=now,
+            vpc=vpc_id,
         )
         open_rows = conn.run(
             "SELECT fingerprint FROM sg_rule_inventory_versions "
@@ -899,7 +927,11 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
     now = dt.datetime.now(dt.timezone.utc)
     rules = snapshot_rules_via_describe(ec2)
     memberships, eni_snapshot_truncated = snapshot_eni_membership_via_describe(ec2)
-    upsert_inventory_and_versions(conn, account_id, region, rules, now)
+    # Gap-5 fix: derive vpc_id per group_id from the SAME membership snapshot just fetched above —
+    # no extra AWS call — and thread it into the inventory upsert (see
+    # group_vpc_map_from_memberships's docstring).
+    group_vpc_map = group_vpc_map_from_memberships(memberships)
+    upsert_inventory_and_versions(conn, account_id, region, rules, now, group_vpc_map=group_vpc_map)
     write_eni_snapshot(conn, account_id, region, memberships, now)
 
     broker_arn = os.environ.get("SG_RULE_ATHENA_BROKER_ARN")

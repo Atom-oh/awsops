@@ -226,6 +226,60 @@ def test_snapshot_eni_membership_not_truncated_when_pages_exhaust_before_cap():
     assert truncated is False
 
 
+# ── gap-5: VPC id derived from the ENI-membership snapshot, wired through the upsert ────────────
+
+def test_group_vpc_map_from_memberships_maps_group_id_to_vpc_id():
+    memberships = [
+        {"vpc_id": "vpc-aaa", "eni_id": "eni-1", "group_ids": ["sg-1", "sg-2"], "private_ips": ["10.0.0.1"]},
+        {"vpc_id": "vpc-bbb", "eni_id": "eni-2", "group_ids": ["sg-3"], "private_ips": ["10.0.1.1"]},
+    ]
+    out = scan.group_vpc_map_from_memberships(memberships)
+    assert out == {"sg-1": "vpc-aaa", "sg-2": "vpc-aaa", "sg-3": "vpc-bbb"}
+
+
+def test_group_vpc_map_from_memberships_skips_enis_with_no_vpc():
+    memberships = [{"vpc_id": "", "eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": []}]
+    assert scan.group_vpc_map_from_memberships(memberships) == {}
+
+
+def test_group_vpc_map_from_memberships_empty_input():
+    assert scan.group_vpc_map_from_memberships([]) == {}
+
+
+def test_upsert_inventory_populates_vpc_id_from_group_vpc_map():
+    conn = FakeConn({"sg_rule_inventory_versions": [[]]})
+    rules = [{"rule_id": "sgr-1", "group_id": "sg-1", "is_egress": False, "protocol": "tcp",
+              "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
+              "description": None}]
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5),
+                                        group_vpc_map={"sg-1": "vpc-aaa"})
+    inserts = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_inventory ")]
+    assert len(inserts) == 1
+    assert inserts[0][1]["vpc"] == "vpc-aaa"
+    assert "vpc_id=COALESCE(EXCLUDED.vpc_id, sg_rule_inventory.vpc_id)" in inserts[0][0]
+
+
+def test_upsert_inventory_vpc_id_none_when_group_not_in_map():
+    conn = FakeConn({"sg_rule_inventory_versions": [[]]})
+    rules = [{"rule_id": "sgr-1", "group_id": "sg-unattached", "is_egress": False, "protocol": "tcp",
+              "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
+              "description": None}]
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5),
+                                        group_vpc_map={"sg-1": "vpc-aaa"})
+    inserts = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_inventory ")]
+    assert inserts[0][1]["vpc"] is None
+
+
+def test_upsert_inventory_defaults_to_no_vpc_map_when_omitted():
+    conn = FakeConn({"sg_rule_inventory_versions": [[]]})
+    rules = [{"rule_id": "sgr-1", "group_id": "sg-1", "is_egress": False, "protocol": "tcp",
+              "from_port": 443, "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8",
+              "description": None}]
+    scan.upsert_inventory_and_versions(conn, "123456789012", "ap-northeast-2", rules, utc(2026, 3, 5))
+    inserts = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_inventory ")]
+    assert inserts[0][1]["vpc"] is None
+
+
 # ── inventory versioning (upsert_inventory_and_versions) ────────────────────────────────────────
 
 def test_upsert_inventory_opens_first_version_when_none_open():
