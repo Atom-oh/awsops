@@ -621,29 +621,29 @@ AWSops는 41가지 리소스 타입을 제네릭 `/inventory/[type]` 페이지�
 # Scenario 3: Topology & Dependencies (1/2)
 
 :::html
-<div class="flow-h">
-  <div class="flow-group bg-blue" data-fragment-index="1">
-    <div class="flow-group-label">CloudFront</div>
-    <div class="flow-box">배포 / 도메인</div>
-    <div class="flow-box">VPC Origin</div>
+<div style="display:flex;align-items:stretch;justify-content:center;gap:1.25rem;">
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:.75rem;padding:1rem;border-radius:8px;background:var(--blue-bg);border:1px solid var(--blue);" data-fragment-index="1">
+    <div style="color:var(--cyan);font-weight:bold;font-size:.85rem;">CloudFront</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">배포 / 도메인</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">VPC Origin</div>
   </div>
-  <div class="flow-arrow">&rarr;</div>
-  <div class="flow-group bg-orange" data-fragment-index="2">
-    <div class="flow-group-label">Load Balancer</div>
-    <div class="flow-box">내부 ALB</div>
-    <div class="flow-box">Listener / Rule</div>
+  <div style="font-size:1.5rem;color:var(--text-secondary);display:flex;align-items:center;flex-shrink:0;">&rarr;</div>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:.75rem;padding:1rem;border-radius:8px;background:var(--yellow-bg);border:1px solid var(--orange);" data-fragment-index="2">
+    <div style="color:var(--orange);font-weight:bold;font-size:.85rem;">Load Balancer</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">내부 ALB</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">Listener / Rule</div>
   </div>
-  <div class="flow-arrow">&rarr;</div>
-  <div class="flow-group bg-green" data-fragment-index="3">
-    <div class="flow-group-label">Target Group</div>
-    <div class="flow-box">ECS / EKS Target</div>
-    <div class="flow-box">Health Status</div>
+  <div style="font-size:1.5rem;color:var(--text-secondary);display:flex;align-items:center;flex-shrink:0;">&rarr;</div>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:.75rem;padding:1rem;border-radius:8px;background:var(--green-bg);border:1px solid var(--green);" data-fragment-index="3">
+    <div style="color:var(--green);font-weight:bold;font-size:.85rem;">Target Group</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">ECS / EKS Target</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">Health Status</div>
   </div>
-  <div class="flow-arrow">&rarr;</div>
-  <div class="flow-group bg-pink" data-fragment-index="4">
-    <div class="flow-group-label">Database</div>
-    <div class="flow-box">Aurora / RDS</div>
-    <div class="flow-box">의존 리소스</div>
+  <div style="font-size:1.5rem;color:var(--text-secondary);display:flex;align-items:center;flex-shrink:0;">&rarr;</div>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:.75rem;padding:1rem;border-radius:8px;background:var(--accent-subtle);border:1px solid var(--accent);" data-fragment-index="4">
+    <div style="color:var(--accent);font-weight:bold;font-size:.85rem;">Database</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">Aurora / RDS</div>
+    <div style="width:100%;box-sizing:border-box;padding:.75rem 1rem;border-radius:8px;font-weight:500;text-align:center;background:var(--bg-primary);color:var(--text-primary);">의존 리소스</div>
   </div>
 </div>
 :::

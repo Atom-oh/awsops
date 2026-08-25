@@ -37,8 +37,8 @@
   <text x="28" y="52" fill="#9ba1b8" font-size="12.5">Derived entirely from a synced inventory table — no live scanning, no target-account writes</text>
 
   <!-- read-only badge -->
-  <rect x="955" y="16" width="225" height="34" rx="17" fill="rgba(0,184,148,.15)" stroke="#00b894" stroke-width="1.5"/>
-  <use href="#icon-lock" x="967" y="21" width="22" height="22" color="#00b894"/>
+  <rect x="955" y="8" width="225" height="30" rx="15" fill="rgba(0,184,148,.15)" stroke="#00b894" stroke-width="1.5"/>
+  <use href="#icon-lock" x="967" y="12" width="22" height="22" color="#00b894"/>
   <text x="995" y="38" fill="#00b894" font-size="12.5" font-weight="700">READ-ONLY · no mutation</text>
 
   <!-- ================= 1. Accounts ================= -->
@@ -156,11 +156,11 @@
   </g>
 
   <!-- chips -> dashboard -->
-  <path id="p-d1" d="M1080,70 H1000 V300 H1018" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
-  <path id="p-d2" d="M1080,185 H1000 V300 H1018" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
-  <path id="p-d3" d="M1080,300 H1018" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
-  <path id="p-d4" d="M1080,415 H1000 V300 H1018" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
-  <path id="p-d5" d="M1080,530 H1000 V300 H1018" fill="none" stroke="#6b7194" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrow-dashed)"/>
+  <path id="p-d1" d="M1080,70 H1000 V300 H1088" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
+  <path id="p-d2" d="M1080,185 H1000 V300 H1088" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
+  <path id="p-d3" d="M1080,300 H1088" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
+  <path id="p-d4" d="M1080,415 H1000 V300 H1088" fill="none" stroke="#2d3250" stroke-width="2" marker-end="url(#arrow)"/>
+  <path id="p-d5" d="M1080,530 H1000 V300 H1088" fill="none" stroke="#6b7194" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrow-dashed)"/>
 
   <circle r="4.5" fill="#74b9ff"><animateMotion dur="1.8s" begin="0.2s" repeatCount="indefinite"><mpath href="#p-d1"/></animateMotion></circle>
   <circle r="4.5" fill="#fdcb6e"><animateMotion dur="1.8s" begin="0.5s" repeatCount="indefinite"><mpath href="#p-d2"/></animateMotion></circle>
@@ -169,8 +169,8 @@
   <circle r="4" fill="#9ba1b8"><animateMotion dur="2s" begin="0.4s" repeatCount="indefinite"><mpath href="#p-d5"/></animateMotion></circle>
 
   <!-- ================= 6. Security dashboard ================= -->
-  <rect x="1020" y="230" width="150" height="140" rx="10" fill="#1a1d2e" stroke="#e8eaf0" stroke-width="1.2"/>
-  <g transform="translate(1095,285)">
+  <rect x="1090" y="230" width="100" height="140" rx="10" fill="#1a1d2e" stroke="#e8eaf0" stroke-width="1.2"/>
+  <g transform="translate(1140,285)">
     <circle r="42" fill="none" stroke="#232740" stroke-width="0"/>
     <circle r="42" fill="none">
       <animate attributeName="opacity" values=".4;.9;.4" dur="2.6s" repeatCount="indefinite"/>
@@ -180,6 +180,6 @@
     <circle r="34" fill="none" stroke="#fdcb6e" stroke-width="12" stroke-dasharray="75 300" stroke-dashoffset="-55" transform="rotate(-90)"/>
     <circle r="34" fill="none" stroke="#74b9ff" stroke-width="12" stroke-dasharray="83 300" stroke-dashoffset="-130" transform="rotate(-90)"/>
   </g>
-  <text x="1095" y="350" fill="#e8eaf0" font-size="12.5" font-weight="700" text-anchor="middle">Security Dashboard</text>
-  <text x="1095" y="365" fill="#6b7194" font-size="10" text-anchor="middle">findings by severity</text>
+  <text x="1140" y="350" fill="#e8eaf0" font-size="12.5" font-weight="700" text-anchor="middle">Security Dashboard</text>
+  <text x="1140" y="365" fill="#6b7194" font-size="10" text-anchor="middle">findings by severity</text>
 </svg>

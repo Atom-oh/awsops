@@ -297,7 +297,7 @@ PostgreSQL 17.9, 0.5에서 4 ACU로 오토스케일하고, KMS CMK로 암호화�
 :::
 
 :::html
-<div style="text-align:right"><img src="../../screenshots/overview/agentcore.png" alt="" class="slide-img" style="max-width:280px" /></div>
+<div style="text-align:center;margin-top:0.5rem;"><img src="../../screenshots/overview/agentcore.png" alt="AgentCore 설정 화면 — Runtime ARN·Interpreter ID·Memory ID를 SSM에서 읽어온 화면" class="slide-img" style="max-width:70%;max-height:42vh" /></div>
 :::
 
 :::notes
