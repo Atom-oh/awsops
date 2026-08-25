@@ -1258,8 +1258,14 @@ class TestRoute53Resolution:
         """CI-review MAJOR fix (round 25): if the closest encloser of the query name owns an NS
         RRset, the query name falls under a zone DELEGATION — the real answer lives in a child
         zone this evaluator was never given any data for. Returning a confident `blocked`
-        (NXDOMAIN) is wrong; the fetched NS record itself proves resolution continues elsewhere."""
-        records = [{"name": "delegated.example.com", "type": "NS", "alias_target": None}]
+        (NXDOMAIN) is wrong; the fetched NS record itself proves resolution continues elsewhere.
+        (Round 28: an apex SOA row is included so `_delegation_check_armed` — this evaluator's
+        own signal that the fetched set is a real zone sweep, not a producer that never emits
+        SOA at all — is set, matching every other delegation fixture in this class.)"""
+        records = [
+            {"name": "example.com", "type": "SOA"},
+            {"name": "delegated.example.com", "type": "NS", "alias_target": None},
+        ]
         r = ad.eval_route53_resolution(records, "sub.delegated.example.com")
         assert r["status"] == "unknown"
 
@@ -1292,8 +1298,10 @@ class TestRoute53Resolution:
         parent-zone glue data: `ns.delegated.example.com A` alongside `delegated.example.com NS`,
         no SOA) used to return `by_name[name]` immediately, bypassing every delegation check and
         reaching a confident `allowed` even though the real answer is occluded in the child zone.
-        The delegation check now runs FIRST, over every strict ancestor, before exact-match."""
+        The delegation check now runs FIRST, over every strict ancestor, before exact-match.
+        (Round 28: an apex SOA row is included so `_delegation_check_armed` is set.)"""
         records = [
+            {"name": "example.com", "type": "SOA"},
             {"name": "delegated.example.com", "type": "NS"},
             {"name": "ns.delegated.example.com", "type": "A"},
         ]
@@ -1306,13 +1314,40 @@ class TestRoute53Resolution:
         whose closest existing node is `ns.delegated.example.com`, itself one level below the
         actual NS cut at `delegated.example.com`) never saw the delegation at all and reached a
         confident `blocked` (NXDOMAIN). Walking every strict ancestor (not just the nearest
-        existing one) now catches a cut at any distance."""
+        existing one) now catches a cut at any distance.
+        (Round 28: an apex SOA row is included so `_delegation_check_armed` is set.)"""
         records = [
+            {"name": "example.com", "type": "SOA"},
             {"name": "delegated.example.com", "type": "NS"},
             {"name": "ns.delegated.example.com", "type": "A"},
         ]
         r = ad.eval_route53_resolution(records, "x.ns.delegated.example.com")
         assert r["status"] == "unknown"
+
+    def test_query_name_itself_at_the_delegation_cut_is_unknown_not_allowed(self):
+        """CI-review MAJOR fix (round 28): the round-27 walk still used `range(1, ...)` — STRICT
+        ancestors only — so a query for the delegation cut NAME ITSELF (`delegated.example.com`,
+        which owns both the NS-without-SOA cut AND a same-owner `A` row — occluded parent-zone
+        glue, real shape) hit `name in by_name` before ever reaching the delegation check, and
+        reached a confident `allowed`. The walk now starts at `i=0` (the name itself)."""
+        records = [
+            {"name": "example.com", "type": "SOA"},
+            {"name": "delegated.example.com", "type": "NS"},
+            {"name": "delegated.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "delegated.example.com")
+        assert r["status"] == "unknown"
+
+    def test_delegation_check_disarmed_when_no_soa_anywhere_in_the_fetched_set(self):
+        """CI-review MAJOR fix (round 28): the NS-without-SOA signal is only trustworthy when the
+        fetched set could plausibly carry an SOA at all — the repo's only Route 53 producer
+        (`sync_lambda.py`) filters to A/AAAA/CNAME only, so a real feeder built on it would emit
+        NS with NO SOA anywhere, which would otherwise misread every name in every zone as
+        delegated. With zero SOA rows in the whole payload, delegation detection is disarmed
+        entirely (falls through to ordinary NXDOMAIN handling) rather than guessed."""
+        records = [{"name": "delegated.example.com", "type": "NS"}]  # no SOA anywhere at all
+        r = ad.eval_route53_resolution(records, "sub.delegated.example.com")
+        assert r["status"] == "blocked"
 
     def test_closer_empty_non_terminal_without_its_own_wildcard_blocks_a_farther_wildcard(self):
         """CI-review MAJOR fix (round 20): RFC 4592 wildcard synthesis is valid ONLY from the

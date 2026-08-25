@@ -1398,15 +1398,32 @@ def eval_route53_resolution(records, query_host, data_available=True):
     `ListResourceRecordSets` and, for ALIAS/failover records, health-check status is expected to
     supply it here).
 
-    `records`: [{"name": str, "type": "A"|"AAAA"|"CNAME"|"ALIAS"|..., "alias_target": str|None,
-    "health_check_status": "healthy"|"unhealthy"|None, "failover": "PRIMARY"|"SECONDARY"|None}].
-    Matching: exact name match, else the RFC 4592 closest-encloser wildcard (see `_find`'s own
-    comment — NOT every ancestor's wildcard independently, only the nearest ancestor that actually
-    exists in the zone, and only when that encloser isn't itself an NS-delegation point), else
-    (for a CNAME/ALIAS target) chain-following across MULTIPLE hops, bounded by a cycle guard —
-    NOT just one hop (stale docstring fixed in round 26; the chain has followed multiple hops
-    since round 21's cycle-detection rewrite). Not a full recursive resolver — this is read-only
-    zone-data inspection, never an actual DNS query (spec's "no active probe" boundary).
+    `records`: [{"name": str, "type": "A"|"AAAA"|"CNAME"|"ALIAS"|"NS"|"SOA"|..., "alias_target":
+    str|None, "health_check_status": "healthy"|"unhealthy"|None, "failover":
+    "PRIMARY"|"SECONDARY"|None}]. CI-review MAJOR fix (round 28): `NS` and `SOA` rows are
+    LOAD-BEARING inputs for the zone-delegation check below, not optional extras — a feeder that
+    filters them out (as `scripts/v2/steampipe/sync_lambda.py`'s current `A`/`AAAA`/`CNAME`-only
+    query does) leaves delegation detection permanently inert (no NS rows at all), and one that
+    emits NS without ALSO emitting the zone's own apex SOA would make every name in the zone
+    misread as delegated — this evaluator arms delegation detection ONLY when the fetched set
+    contains at least one SOA row anywhere, so a producer that never emits SOA correctly leaves
+    it disarmed rather than mis-armed (see `_delegation_check_armed` below). A real
+    `ListResourceRecordSets` sweep with no `type` filter always returns the zone's own apex NS +
+    SOA, plus any child-zone NS delegation records; a `type IN (...)` projection must include both.
+
+    Matching order: FIRST, the delegation check — walking EVERY ancestor of the query name
+    (including the name itself) for an NS RRset with no co-located SOA (a real delegation point
+    never carries an SOA; only the zone apex does) — occludes exact matches, empty non-terminals,
+    and wildcard synthesis alike, degrading to `unknown` before any of them get a chance to
+    answer (this paragraph's earlier revisions described delegation as a late qualifier on
+    wildcard synthesis only — no longer true since round 27 moved it to run first, over the whole
+    ancestor chain). Absent a delegation: exact name match, else the RFC 4592 closest-encloser
+    wildcard (see `_find`'s own comment — NOT every ancestor's wildcard independently, only the
+    nearest ancestor that actually exists in the zone), else (for a CNAME/ALIAS target)
+    chain-following across MULTIPLE hops, bounded by a cycle guard — NOT just one hop (the chain
+    has followed multiple hops since round 21's cycle-detection rewrite). Not a full recursive
+    resolver — this is read-only zone-data inspection, never an actual DNS query (spec's "no
+    active probe" boundary).
     """
     if not data_available:
         return {"layer": "dns", "status": "unknown", "resource": None,
@@ -1450,6 +1467,19 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # mutable flag lets `_find` signal "delegated, not NXDOMAIN" to its caller without changing
     # its own return-value contract (still `None` on a miss either way).
     _delegated = [False]
+    _delegation_point = [None]
+    # CI-review MAJOR fix (round 28): the NS-without-SOA delegation signal is only trustworthy
+    # when the fetched record set could plausibly carry an SOA at all — the repo's only Route 53
+    # producer (`scripts/v2/steampipe/sync_lambda.py`) currently filters to `A`/`AAAA`/`CNAME`
+    # only, so a real feeder built on it would emit NS with no SOA ANYWHERE in the payload; the
+    # per-ancestor "NS present, SOA absent" check would then misfire on every single name in every
+    # zone (mistaking "this producer never emits SOA" for "every name is delegated"), silently
+    # degrading everything to `unknown` — the exact regression round 26 fixed for the apex case,
+    # reintroduced wholesale by a different data-shape assumption. Delegation detection is now
+    # armed ONLY when the fetched set contains at least one SOA row anywhere (proof the producer
+    # feeding this call does emit SOA, so its absence at a given ancestor is meaningful); with
+    # zero SOA rows in the whole payload, detection is skipped entirely rather than guessed.
+    _delegation_check_armed = any(str(r.get("type", "")).upper() == "SOA" for r in (records or []))
 
     def _find(name):
         # CI-review MINOR fix (round 21): the CNAME-chain loop that calls this is bounded by its
@@ -1475,12 +1505,21 @@ def eval_route53_resolution(records, query_host, data_available=True):
         # exact-match, empty-non-terminal, or wildcard handling get a chance to answer. The apex
         # exemption (a real delegation point never carries an SOA; only the zone apex does — round
         # 26) composes correctly here since it's evaluated per-ancestor.
-        for i in range(1, len(labels)):
-            ancestor = ".".join(labels[i:])
-            ancestor_types = {str(r.get("type", "")).upper() for r in by_name.get(ancestor, [])}
-            if "NS" in ancestor_types and "SOA" not in ancestor_types:
-                _delegated[0] = True
-                return None
+        # CI-review MAJOR fix (round 28): "strict ancestors only" (`range(1, ...)`) still missed
+        # the QUERY NAME ITSELF being the delegation cut — a query for `delegated.example.com`
+        # where the records include `delegated.example.com NS` (no SOA) plus a same-owner `A` row
+        # (occluded parent-zone glue, one label shallower than round 27's own regression tests)
+        # hit `name in by_name` immediately below, never reaching this check at all, and reached a
+        # confident `allowed`. The walk now starts at `i=0` (the name itself), not `i=1`; the
+        # apex exemption still composes correctly since a genuine apex query carries its own SOA.
+        if _delegation_check_armed:
+            for i in range(0, len(labels)):
+                ancestor = ".".join(labels[i:])
+                ancestor_types = {str(r.get("type", "")).upper() for r in by_name.get(ancestor, [])}
+                if "NS" in ancestor_types and "SOA" not in ancestor_types:
+                    _delegated[0] = True
+                    _delegation_point[0] = ancestor
+                    return None
         if name in by_name:
             return by_name[name]
         # CI-review MAJOR fix (round 21): the query name ITSELF can exist in the zone as an
@@ -1509,10 +1548,14 @@ def eval_route53_resolution(records, query_host, data_available=True):
     matched = _find(host)
     if matched is None:
         if _delegated[0]:
+            # CI-review MINOR fix (round 28): this used to say "its closest encloser" regardless
+            # of where the cut actually was — but the walk can now fire at the query name itself,
+            # at its closest EXISTING ancestor, or at any ancestor beyond that; naming the actual
+            # `_delegation_point` makes the diagnostic accurate and actionable for an operator.
             return {"layer": "dns", "status": "unknown", "resource": None,
-                    "summary": f"{host!r} falls under a zone delegation (an NS RRset exists at "
-                               "its closest encloser) — the real answer lives in a child zone "
-                               "this evaluator has no data for, not a confirmed NXDOMAIN",
+                    "summary": f"{host!r} falls under a zone delegation ({_delegation_point[0]!r} "
+                               "owns an NS RRset with no SOA) — the real answer lives in a child "
+                               "zone this evaluator has no data for, not a confirmed NXDOMAIN",
                     "evidence": []}
         return {"layer": "dns", "status": "blocked", "resource": None,
                 "summary": f"no Route 53 record resolves {host!r} (NXDOMAIN against known zone data)",
@@ -1535,10 +1578,11 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # record is a CNAME/ALIAS pointer at all — well-formed or not — so the guard now fires on
     # `any(...)` instead of `all(...)`.
     def _multi_pointer_ambiguous(rows):
-        # CI-review MINOR fix (round 26): the chain-loop condition and the NS-delegation check
-        # both normalize `type` with `str(...).upper()` — this comparison didn't, so a
-        # lowercase `"alias"`/`"cname"` (Route 53 itself always returns uppercase, but this
-        # evaluator's own contract doesn't require it) would silently bypass this guard.
+        # CI-review MINOR fix (round 26): this comparison read `type` raw, while the NS-delegation
+        # check already normalized with `str(...).upper()` — a lowercase `"alias"`/`"cname"`
+        # (Route 53 itself always returns uppercase, but this evaluator's own contract doesn't
+        # require it) would silently bypass this guard. The chain-loop condition below had the
+        # SAME gap and is normalized in this same round-26 pass, for consistency.
         return len(rows) > 1 and any(str(r.get("type", "")).upper() in ("CNAME", "ALIAS") for r in rows)
 
     if _multi_pointer_ambiguous(matched):
@@ -1575,6 +1619,18 @@ def eval_route53_resolution(records, query_host, data_available=True):
         seen_names.add(target)
         nxt = _find(target)
         if nxt is None:
+            # CI-review MINOR fix (round 28): `_find` can return `None` here for TWO distinct
+            # reasons — a genuine out-of-zone target, or the target itself falling under a zone
+            # delegation (`_delegated[0]` set as a side effect of this same `_find` call). The old
+            # code always reported the generic "not in the fetched zone data" message even when
+            # the zone data DOES explain why (an NS-without-SOA cut) — `unknown` was still the
+            # right status either way, but the diagnostic was misleading.
+            if _delegated[0]:
+                return {"layer": "dns", "status": "unknown", "resource": host,
+                        "summary": f"Route 53 CNAME chain for {host!r} terminates at {target!r}, "
+                                   f"which falls under a zone delegation ({_delegation_point[0]!r} "
+                                   "owns an NS RRset with no SOA) — the real answer lives in a "
+                                   "child zone this evaluator has no data for", "evidence": matched}
             # CI-review MAJOR fix (round 18): an out-of-zone CNAME target used to fall through to
             # the healthy/unhealthy check below using the STALE CNAME record itself (which carries
             # no health-check/address data of its own) — reporting a confident `allowed` for a
