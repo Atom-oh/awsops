@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Grant the AWSops worker Fargate task role a cluster-scoped EKS Access Entry so the Network Path
-# Check's resolve_live_identity() can GET Pod/Node objects (scripts/v2/workers/network_path.py).
+# Grant the AWSops worker Fargate task role a minimal EKS Access Entry so the Network Path
+# Check's resolve_live_identity() can GET a single named Pod or Node object
+# (scripts/v2/workers/network_path.py) — nothing more.
 #
-# Run this as an operator WHO HOLDS cluster permissions (eks:CreateAccessEntry +
-# eks:AssociateAccessPolicy). AWSops deliberately does NOT create this access entry in terraform —
-# granting a principal k8s access is the cluster owner's call (read-only stance; the apply principal
-# may not own third-party clusters). Re-running is safe (already-exists is tolerated).
+# Run this as an operator who holds cluster permissions (eks:CreateAccessEntry +
+# eks:UpdateAccessEntry) AND cluster-admin (or equivalent RBAC-write) k8s access to apply the
+# ClusterRole/ClusterRoleBinding below. AWSops deliberately does NOT create this access entry in
+# terraform — granting a principal k8s access is the cluster owner's call (read-only stance; the
+# apply principal may not own third-party clusters). Re-running is safe (already-exists is
+# tolerated).
 #
 # Usage:
 #   scripts/v2/eks/register-network-path-access.sh <cluster-name> [<cluster-name> ...]
@@ -14,18 +17,26 @@
 # The worker task role ARN is read from `terraform output -raw worker_task_role_arn` unless
 # ROLE_ARN is set.
 #
-# POLICY = AmazonEKSAdminViewPolicy (cluster scope) — NOT AmazonEKSViewPolicy. This is the SAME
-# policy eks.tf binds for the web task role's own manual-registration Access Entry, and for the
-# SAME reason: `resolve_live_identity()` GETs `/api/v1/nodes/{name}`, a CLUSTER-SCOPED resource.
-# AmazonEKSViewPolicy mirrors the k8s `view` ClusterRole, which has NO cluster-scoped resources at
-# all (listing/getting nodes 403s under it) — it is the wrong precedent for this feature, even
-# though it is the right one for the istio-read MCP's namespaced-only CRD reads
-# (register-istio-access.sh). Do not swap this back to View: doing so silently breaks every
-# pod/node-sourced Network Path check with a bounded (but confusing) AccessDenied.
+# CI-review MAJOR fix (round 19): this used to associate the AWS-managed `AmazonEKSAdminViewPolicy`
+# (cluster scope) on the access entry, the SAME policy eks.tf binds for the web task role's OWN
+# manual-registration Access Entry. That was the wrong precedent to reuse here: this feature's
+# resolve_live_identity() only ever GETs ONE named Node and ONE named Pod, but AdminView grants
+# cluster-wide LIST/GET/WATCH on every cluster-scoped resource AND every Secret in every namespace
+# — to the SAME shared worker task role every other job type runs under. The sibling script,
+# register-istio-access.sh, explicitly documents why NOT to do this ("do NOT widen to AdminView —
+# that would grant cluster-wide Secret read to an automated agent"); this script was the one place
+# that violated its own repo's documented convention.
+#
+# Fix: bind the principal to a Kubernetes GROUP (`network-path-reader`) via `--kubernetes-groups`
+# instead of an AWS-managed access policy, and authorize that group with a minimal ClusterRole
+# granting ONLY `get` on `nodes` and `pods` — no Secret access, no LIST/WATCH, no other resource
+# kind. See network-path-reader-rbac.yaml (applied separately via kubectl, since Access Entries
+# alone establish the IAM-principal -> k8s-group mapping; RBAC authorization is still needed).
 set -euo pipefail
 
 CHDIR="$(cd "$(dirname "$0")/../../../terraform/v2/foundation" && pwd)"
-POLICY="arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
+K8S_GROUP="network-path-reader"
+RBAC_MANIFEST="$(cd "$(dirname "$0")" && pwd)/network-path-reader-rbac.yaml"
 
 ROLE_ARN="${ROLE_ARN:-$(terraform -chdir="$CHDIR" output -raw worker_task_role_arn 2>/dev/null || true)}"
 if [ -z "$ROLE_ARN" ] || [ "$ROLE_ARN" = "null" ]; then
@@ -38,28 +49,32 @@ if [ "$#" -lt 1 ]; then
 fi
 
 echo "Principal: $ROLE_ARN"
+echo "Kubernetes group: $K8S_GROUP (authorized via $RBAC_MANIFEST — apply that manifest separately"
+echo "with kubectl once per cluster; this script only manages the IAM-side Access Entry)"
 for C in "$@"; do
-  echo "== ${C}: register read-only Node/Pod access =="
+  echo "== ${C}: register minimal Node/Pod GET access =="
   # Only treat ResourceInUseException (already registered) as benign — surface real errors
   # (e.g. AccessDenied) instead of masking them as "already exists".
-  if err=$(aws eks create-access-entry --cluster-name "$C" --principal-arn "$ROLE_ARN" --type STANDARD 2>&1); then
-    echo "  access entry created"
+  if err=$(aws eks create-access-entry --cluster-name "$C" --principal-arn "$ROLE_ARN" \
+      --type STANDARD --kubernetes-groups "$K8S_GROUP" 2>&1); then
+    echo "  access entry created (kubernetes-groups=$K8S_GROUP)"
   elif printf '%s' "$err" | grep -q "ResourceInUseException"; then
-    echo "  access entry already exists (ok)"
+    # Entry already exists (e.g. from a prior run, or created without the group) — make the
+    # kubernetes-groups binding converge via an explicit update rather than assuming it's already
+    # correct, so this script stays idempotent regardless of how the entry got there.
+    if uerr=$(aws eks update-access-entry --cluster-name "$C" --principal-arn "$ROLE_ARN" \
+        --kubernetes-groups "$K8S_GROUP" 2>&1); then
+      echo "  access entry already existed; kubernetes-groups converged to $K8S_GROUP"
+    else
+      echo "  ERROR updating kubernetes-groups on ${C}: $uerr" >&2
+      exit 1
+    fi
   else
     echo "  ERROR creating access entry on ${C}: $err" >&2
     exit 1
   fi
-  # associate-access-policy is an upsert (idempotent), but guard it so a failure here surfaces clearly
-  # instead of leaving an access-entry-without-policy partial state under `set -e`.
-  if aerr=$(aws eks associate-access-policy --cluster-name "$C" --principal-arn "$ROLE_ARN" \
-      --policy-arn "$POLICY" --access-scope type=cluster 2>&1); then
-    echo "  AdminView policy associated (cluster scope — grants the cluster-scoped Node/Pod GET"
-    echo "  resolve_live_identity() needs; also grants Secret read, unlike istio-read's View policy)"
-  else
-    echo "  ERROR associating AdminView policy on ${C} (entry exists but policy NOT attached): $aerr" >&2
-    exit 1
-  fi
 done
-echo "Done. Network Path checks sourced from a pod/node on: $* can now resolve live identity."
+echo "Done. Now apply the RBAC manifest once per cluster (requires cluster-admin k8s access):"
+echo "  kubectl apply -f $RBAC_MANIFEST"
+echo "Network Path checks sourced from a pod/node on: $* can then resolve live identity."
 echo "To revoke: aws eks delete-access-entry --cluster-name <c> --principal-arn $ROLE_ARN"

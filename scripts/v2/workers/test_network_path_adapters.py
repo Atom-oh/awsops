@@ -346,6 +346,14 @@ class TestBoundaryClassification:
         r = ad.eval_vpn_or_dx("dx", "up", False)
         assert r["status"] == "blocked"
 
+    def test_missing_aws_side_state_is_unknown_not_a_confident_block(self):
+        """CI-review MAJOR fix (round 19): `aws_side_state=None` (never fetched) must not report
+        the same confident `blocked` as a CONFIRMED-down state — the topology fetcher never
+        populates this field today, so this is the honest-degrade path a real on-prem candidate
+        takes until live wiring exists."""
+        r = ad.eval_vpn_or_dx("vpn", None, True)
+        assert r["status"] == "unknown"
+
 
 # ── Network Firewall ─────────────────────────────────────────────────────────────────────────────
 
@@ -925,9 +933,11 @@ class TestCalicoPolicy:
 
     def test_native_ports_list_matches_requested_port(self):
         """Calico's own `ports` shape is a plain int/string list (e.g. `[80, 443]`), not core
-        K8s's `{"protocol", "port"}` dicts — this must still restrict the match."""
+        K8s's `{"protocol", "port"}` dicts — this must still restrict the match. `ports` lives in
+        the `destination` EntityRule per the real Calico v3 schema (there is no rule-root
+        `ports`), regardless of ingress/egress direction (round-19 fix)."""
         policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
-            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "ports": [80, 443]},
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "destination": {"ports": [80, 443]}},
         ]}]
         r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
                                    port=443, crd_present=True, observed_api_version=_CALICO_VERSION)
@@ -935,7 +945,7 @@ class TestCalicoPolicy:
 
     def test_native_ports_list_does_not_match_other_port(self):
         policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
-            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "ports": [80, 443]},
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "destination": {"ports": [80, 443]}},
         ]}]
         r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
                                    port=22, crd_present=True, observed_api_version=_CALICO_VERSION)
@@ -943,11 +953,52 @@ class TestCalicoPolicy:
 
     def test_native_ports_range_string_matches_within_range(self):
         policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
-            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "ports": ["8080:9090"]},
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "destination": {"ports": ["8080:9090"]}},
         ]}]
         r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
                                    port=8500, crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "allowed"
+
+    # ── CI-review MAJOR fix (round 19): ports/notPorts live in the destination EntityRule, not the
+    #    rule root — a rule-root `ports` (the pre-fix shape) must NOT restrict anything. ──────────
+
+    def test_rule_root_ports_is_not_the_real_calico_shape_and_does_not_restrict(self):
+        """A `ports` key placed at the rule root (not inside `destination`) is not a real Calico
+        field — it must be ignored entirely, so port 22 still matches this otherwise-unrestricted
+        Allow rule (regression guard against reverting to reading the rule root)."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]}, "ports": [80, 443]},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   port=22, crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
+    def test_destination_not_ports_is_unknown_not_a_guessed_match(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]},
+             "destination": {"ports": [80, 443], "notPorts": [443]}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   port=80, crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_rule_level_not_protocol_is_unknown_not_a_guessed_match(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "notProtocol": "TCP", "source": {"nets": ["0.0.0.0/0"]}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   protocol="tcp", crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_egress_destination_ports_restrict_the_peer_port(self):
+        """For egress, `destination` is already the peer being contacted — its `ports` must still
+        restrict the match (not merely fail to break it)."""
+        policies = [{"selector": "role == 'web'", "types": ["Egress"], "egress": [
+            {"action": "Allow", "destination": {"nets": ["0.0.0.0/0"], "ports": [443]}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "egress", peer_ip="10.0.0.5",
+                                   port=22, crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "blocked"
 
     def test_missing_peer_labels_for_selector_peer_is_unknown_not_blocked(self):
         policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
@@ -993,6 +1044,16 @@ class TestRoute53Resolution:
     def test_wildcard_match_allows(self):
         records = [{"name": "*.example.com", "type": "A"}]
         r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "allowed"
+
+    def test_ancestor_wildcard_beyond_the_immediate_parent_still_resolves(self):
+        """CI-review MAJOR fix (round 19): the immediate parent of `a.b.example.com` is
+        `b.example.com`, which has no wildcard record here — but `*.example.com` (a higher
+        ancestor) does, and per RFC 4592 wildcard synthesis that still resolves the query. The
+        pre-fix code checked only the immediate-parent wildcard and would confidently report
+        `blocked` (NXDOMAIN) for this name."""
+        records = [{"name": "*.example.com", "type": "A"}]
+        r = ad.eval_route53_resolution(records, "a.b.example.com")
         assert r["status"] == "allowed"
 
     def test_all_unhealthy_blocks(self):
@@ -1091,6 +1152,16 @@ class TestK8sServiceResolution:
         eps = {"svc-a": [{"ready": True}, {"ready": False}]}
         r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
         assert r["status"] == "conditional"
+
+    def test_null_or_missing_ready_is_treated_as_ready(self):
+        """MINOR fix: EndpointSlice `ready: null`/missing means unknown per Kubernetes'
+        EndpointConditions guidance — treated as ready, not unready. Only an explicit `false`
+        counts as genuinely not ready."""
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80}]}}
+        eps = {"svc-a": [{"ready": None}, {}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "allowed"
 
     def test_path_prefix_match(self):
         rules = [{"host": "app.example.com", "path": "/api", "path_type": "Prefix",
@@ -1191,6 +1262,15 @@ class TestK8sServiceResolution:
     def test_wildcard_host_does_not_match_the_bare_parent_domain(self):
         rules = [{"host": "*.example.com", "backend_service": "svc-a"}]
         r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "example.com", "path": "/"})
+        assert r["status"] == "blocked"
+
+    def test_wildcard_host_does_not_match_a_multi_label_subdomain(self):
+        """CI-review MAJOR fix (round 19): a K8s Ingress wildcard covers exactly ONE DNS label —
+        `*.example.com` matches `api.example.com` but must NOT match `a.b.example.com`."""
+        rules = [{"host": "*.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"ports": [{"port": 80}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "a.b.example.com", "path": "/"})
         assert r["status"] == "blocked"
 
     def test_implementation_specific_path_type_with_a_path_is_unknown_not_guessed(self):

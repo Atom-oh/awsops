@@ -112,10 +112,17 @@ resource "aws_iam_role_policy" "worker_task_network_path_readonly_assume" {
         # precedent (`AmazonEKSViewPolicy`) — that policy is the WRONG model here: it mirrors the
         # k8s `view` ClusterRole, which has NO cluster-scoped resources at all (eks.tf's own
         # comment: "listing nodes 403s"), but `resolve_live_identity()` GETs
-        # `/api/v1/nodes/{name}` — a cluster-scoped resource. An operator following the istio-read
-        # runbook would register the wrong policy and get 403 on every pod/node check. The correct
-        # precedent is eks.tf's OWN web task-role Access Entry (`AmazonEKSAdminViewPolicy`,
-        # cluster scope) — that is what the new runbook/script grant.
+        # `/api/v1/nodes/{name}` — a cluster-scoped resource.
+        #
+        # CI-review MAJOR fix (round 19): the round-18 fix above then pointed at eks.tf's OWN web
+        # task-role Access Entry (`AmazonEKSAdminViewPolicy`, cluster scope) as the "correct"
+        # precedent — but AdminView ALSO grants cluster-wide Secret read to the SAME shared worker
+        # task role every other job type runs under, for a feature that performs exactly two GETs
+        # (one Node, one Pod). The runbook/script now instead bind the worker task role to a
+        # Kubernetes GROUP (`--kubernetes-groups network-path-reader`) and authorize that group via
+        # a minimal, operator-applied ClusterRole granting ONLY `get` on `nodes`/`pods`
+        # (scripts/v2/eks/network-path-reader-rbac.yaml) — no AWS-managed access policy is
+        # associated with this Access Entry at all.
         # Until that registration exists for a given cluster, a network_path check whose source is
         # a pod/node on that cluster correctly fails closed with a bounded "could not resolve
         # pod/node..." error (resolve_live_identity()'s own AccessDenied handling) rather than

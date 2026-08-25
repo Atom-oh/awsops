@@ -94,6 +94,28 @@ _PROVIDER_ID_RE = re.compile(r'^aws:///[^/]+/(i-[0-9a-f]+)$')
 # `../`-style segment can never form.
 _K8S_NAME_RE = re.compile(r'^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$')
 
+# CI-review MAJOR fix (round 19, item 6, defense-in-depth): `_default_k8s_get` must never issue a
+# request to any K8s API path other than the two shapes `resolve_live_identity()` actually needs —
+# a Pod GET or a Node GET. `_validate_k8s_name` already constrains the interpolated
+# namespace/pod/node segments themselves (no `/`, no path-traversal characters), but this is an
+# INDEPENDENT belt-and-suspenders check on the assembled path as a whole: even if some future
+# caller/bug builds a differently-shaped path, or the assumed principal's actual cluster RBAC turns
+# out to be broader than intended (see the accompanying least-privilege Access Entry fix), this
+# code itself can never be made to GET anything else. Checked BEFORE any HTTP request is attempted.
+_ALLOWED_K8S_GET_PATH_RE = re.compile(
+    r'^/api/v1/namespaces/[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?/pods/'
+    r'[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$'
+    r'|^/api/v1/nodes/[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$'
+)
+
+
+def _validate_k8s_get_path(path):
+    if not _ALLOWED_K8S_GET_PATH_RE.match(path or ""):
+        raise NetworkPathError(
+            f"refusing to GET disallowed K8s API path {path!r} — only "
+            "/api/v1/namespaces/{ns}/pods/{name} and /api/v1/nodes/{name} are permitted")
+    return path
+
 
 class _NoRedirectHandler(HTTPRedirectHandler):
     """MINOR fix: `urlopen`'s default opener silently follows a redirect response, which would
@@ -302,6 +324,7 @@ def _default_k8s_get(account_id, region, cluster, path, external_id=None):
     NOT created by this pass's terraform change (mirrors the istio-read MCP precedent: granting a
     principal k8s access is the cluster owner's call, done out-of-band).
     """
+    _validate_k8s_get_path(path)
     import boto3
     from botocore.signers import RequestSigner
     session = _assumed_session(account_id, region, external_id)
@@ -829,10 +852,17 @@ def _find_infra_node(conn, account_id, ref):
     # topology silently computed from the HOST account's own graph. The 'self' alternative must
     # only ever apply when `account_id` genuinely IS the host account.
     account_filter = "(account_id=:a OR account_id='self')" if account_id == HOST_ACCOUNT_ID else "account_id=:a"
+    # MINOR fix: `ref` is a definition-authored value (an ENI id, IP, or subnet id straight off the
+    # check's own JSON) interpolated into a LIKE pattern -- an unescaped `%`/`_` in it are SQL LIKE
+    # wildcard metacharacters (not injection, the query is otherwise parameterized, but they widen
+    # the match to unrelated node ids), which could misattribute a different same-account
+    # resource's placement data to this candidate. Escape them (and any literal backslash, the
+    # escape character itself) before building the pattern.
+    escaped_ref = str(ref).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     rows = conn.run(
         f"SELECT id, kind FROM topology_nodes WHERE class='infra' "
-        f"AND {account_filter} AND id LIKE :pat LIMIT 2",
-        a=account_id, pat=f"%:{ref}")
+        f"AND {account_filter} AND id LIKE :pat ESCAPE '\\' LIMIT 2",
+        a=account_id, pat=f"%:{escaped_ref}")
     if len(rows) != 1:
         return None
     node_id, kind = rows[0]
@@ -890,10 +920,19 @@ def fetch_live_topology(resolved, conn):
         `unknown` on its own — no adapter changes were needed to make that honest.
       - TGW attachments, VPN/DX AWS-side state, Network Firewall policy, ELBv2 listener/target-group
         config, or any Kubernetes policy/CRD content — none of these have a cached-topology
-        representation at all today; their layers are simply never added to `layer_plan` for a
-        candidate built by this fetcher (`_layer_plan_for` only adds `peering`/`tgw`/`network-
-        firewall`/`alb-listener` etc. when the topology hint says so, and this fetcher never sets
-        those hints, since it has no cached signal for any of them).
+        representation at all today. For `tgw`/`network-firewall`/`alb-listener`/`k8s-service-
+        resolution`, `_layer_plan_for` only adds the layer when the topology hint says so, and this
+        fetcher never sets those hints, so those layers are correctly never added at all.
+
+        CI-review MAJOR fix (round 19): the `onprem` case is DIFFERENT and this docstring's blanket
+        "simply never added" claim was false for it — `_layer_plan_for` appends the `vpn`/`dx` layer
+        UNCONDITIONALLY for an `onprem` destination (`plan.append(topology_hint.get("boundary",
+        "vpn"))`), regardless of what this fetcher's hints contain. Before this fix, the layer WAS
+        added with no `aws_side_state`/`route_present` data, and `eval_vpn_or_dx` treated a missing
+        `aws_side_state` the same as a confirmed-down one — a confident `blocked` fabricated from
+        missing data, the exact failure mode this fetcher otherwise takes care to avoid for
+        `sg`/`nacl`/`route` above. `eval_vpn_or_dx` now degrades a `None` `aws_side_state` to
+        `unknown`, so this fetcher's on-prem candidates correctly report unknown for that layer too.
 
     Candidate `kind`: `resolved` only when discovery found the source (and, for an `aws_resource`
     destination, the destination) as a SINGLE unambiguous node — i.e. path-finding itself hit no
@@ -908,7 +947,18 @@ def fetch_live_topology(resolved, conn):
     src, dst = resolved["source"], resolved["destination"]
     account_id = src.get("account_id")
 
-    src_node = _find_infra_node(conn, account_id, src.get("eni_id") or src.get("subnet_id"))
+    # MINOR fix: when `resolve_live_identity()` (Gap 4) has already confirmed this run's source
+    # against a LIVE EC2 read, `src["instance_id"]` is the freshest, most-likely-to-hit ref this
+    # fetcher can use — the exact bare form (`i-...`) that appears after the `:` in the `ec2:<id>`
+    # node ids `web/lib/infra-topology.ts`'s `buildInfraGraph` builds for an EC2 instance. A pod's
+    # own ENI id is rarely also a top-level inventoried resource id (this function's own docstring
+    # above), so preferring `instance_id` first closes the "cached-topology lookup rarely resolves
+    # real identities" gap for exactly the case (a live-resolved pod/node source) where a confident
+    # ref is actually available. Falls back to the pre-fix eni_id/subnet_id refs when no live
+    # identity was resolved (e.g. a directly-known ENI/subnet source, or `resolve_live_identity()`
+    # never ran because the source declares no `cluster`).
+    src_node = _find_infra_node(
+        conn, account_id, src.get("instance_id") or src.get("eni_id") or src.get("subnet_id"))
     src_place = _infra_placement(conn, account_id, src_node["id"]) if src_node else {}
 
     dst_node = None

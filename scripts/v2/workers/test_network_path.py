@@ -234,6 +234,24 @@ class TestFetchLiveTopology:
         c = topo["candidates"][0]
         assert c["dest_eni_known"] is False
 
+    def test_onprem_candidate_from_fetcher_is_unknown_at_boundary_not_confident_blocked(self):
+        """CI-review MAJOR fix (round 19, item 3): `fetch_live_topology()` never populates
+        `aws_side_state`/`boundary` for an on-prem destination (no cached-topology signal for
+        either exists today — see the fetcher's own docstring), but `_layer_plan_for` still always
+        appends a `vpn`/`dx` boundary layer for an onprem destination. Before the fix,
+        `eval_vpn_or_dx` treated the resulting missing `aws_side_state` (`None`) the same as a
+        CONFIRMED-down state, so every on-prem candidate this fetcher produces got a confident
+        false `blocked` at that layer. This exercises the REAL end-to-end pipeline (fetch ->
+        discover -> verify) and asserts the boundary layer is `unknown`, not `blocked`."""
+        conn = FakeConn(node_rows_by_ref={"eni-src": [("ec2:i-src", "ec2")]})
+        resolved = np.resolve_identities(_definition(dest_kind="onprem"))
+        topo = np.fetch_live_topology(resolved, conn)
+        candidates = np.discover_candidates(resolved, topo)
+        assert "vpn" in candidates[0]["layer_plan"]  # default boundary, no hint supplied
+        steps = np.verify_candidate(candidates[0], resolved["request"], deadline_at=1e18)
+        vpn_step = next(s for s in steps if s["layer"] == "vpn")
+        assert vpn_step["status"] == "unknown"
+
     def test_member_account_topology_query_never_admits_self_tagged_rows(self, monkeypatch):
         """CI-review MAJOR fix (round 17, item 3): `'self'` is this repo's established sentinel
         for HOST-account rows specifically (web/lib/inventory.ts, web/lib/sg-analysis.ts) — for a
@@ -620,6 +638,43 @@ class TestNoRedirectHandler:
                                            {"Location": "https://attacker.example.com/steal"},
                                            "https://attacker.example.com/steal")
         assert result is None
+
+
+# ── CI-review MAJOR fix (round 19, item 6): defense-in-depth allowlist on the K8s GET path ────────
+
+class TestK8sGetPathAllowlist:
+    def test_pod_path_is_allowed(self):
+        path = "/api/v1/namespaces/default/pods/my-pod"
+        assert np._validate_k8s_get_path(path) == path
+
+    def test_node_path_is_allowed(self):
+        path = "/api/v1/nodes/ip-10-0-1-5.ec2.internal"
+        assert np._validate_k8s_get_path(path) == path
+
+    @pytest.mark.parametrize("bad_path", [
+        "/api/v1/secrets",
+        "/api/v1/namespaces/default/secrets/my-secret",
+        "/api/v1/namespaces/default/pods",  # list, not a single GET
+        "/api/v1/nodes",  # list, not a single GET
+        "/api/v1/namespaces/default/pods/my-pod/exec",
+        "/api/v1/namespaces/default/pods/my-pod/../../secrets/x",
+        "/../etc/passwd",
+        "",
+        None,
+    ])
+    def test_disallowed_paths_are_rejected(self, bad_path):
+        with pytest.raises(np.NetworkPathError):
+            np._validate_k8s_get_path(bad_path)
+
+    def test_default_k8s_get_rejects_a_disallowed_path_before_any_http_call(self, monkeypatch):
+        """The allowlist check must run BEFORE `_default_k8s_get` ever assumes a session or makes
+        an HTTP request — proven here by making the session-assumption step itself raise if it's
+        ever reached for a disallowed path."""
+        def must_not_be_called(*a, **k):
+            raise AssertionError("must not assume a session for a disallowed K8s GET path")
+        monkeypatch.setattr(np, "_assumed_session", must_not_be_called)
+        with pytest.raises(np.NetworkPathError, match="disallowed K8s API path"):
+            np._default_k8s_get("111111111111", "ap-northeast-2", "my-cluster", "/api/v1/secrets")
 
 
 # ── discover ─────────────────────────────────────────────────────────────────────────────────────

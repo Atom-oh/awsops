@@ -443,7 +443,18 @@ def eval_vpn_or_dx(kind, aws_side_state, route_present):
     """AWS-side segment only, per spec: 'For on-premises destinations, AWSops evaluates the
     AWS-visible segment only.' The customer router/firewall side is never assertable and is not
     modeled here — the orchestrator's DNS/L7 layer records the on-prem boundary as `unknown`
-    separately (see network_path.py). This function reports only the AWS-side attachment/route."""
+    separately (see network_path.py). This function reports only the AWS-side attachment/route.
+
+    CI-review MAJOR fix (round 19): `aws_side_state=None` (this layer's data was never fetched —
+    `fetch_live_topology` never populates it) used to fall into the same `!= "up"` branch as a
+    CONFIRMED-down state, reporting a confident `blocked` for a layer this evaluator has no data
+    on at all. `None` now degrades to `unknown`, mirroring this module's `_nacl_or_unknown` and
+    every other "missing data, not a confirmed negative" layer — only an actually-observed
+    non-`up` state (e.g. `"down"`) still confidently blocks."""
+    if aws_side_state is None:
+        return {"layer": kind, "status": "unknown", "resource": None,
+                "summary": f"{kind} AWS-side attachment state was not fetched — cannot evaluate "
+                           "(missing data, not a confirmed down state)", "evidence": []}
     if aws_side_state != "up":
         return {"layer": kind, "status": "blocked", "resource": None,
                 "summary": f"{kind} AWS-side state is {aws_side_state!r}", "evidence": []}
@@ -1134,14 +1145,29 @@ def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespac
     `_k8s_port_matches` expects (that shape is core K8s NetworkPolicy's own). Passing Calico ports
     straight through used to make every entry fail `isinstance` checks inside `_k8s_port_matches`
     silently (an int has no `.get`), so a Calico rule with a real native `ports` list never actually
-    restricted anything. `_normalize_calico_ports` below builds the dict shape first."""
+    restricted anything. `_normalize_calico_ports` below builds the dict shape first.
+
+    CI-review MAJOR fix (round 19): `ports`/`notPorts` were read off the RULE root, but the real
+    Calico v3 `Rule` schema has no top-level `ports`/`notPorts` at all — those fields live inside
+    the `EntityRule` (`source`/`destination`), same as `selector`/`nets`. A `ports` restriction
+    always describes the DESTINATION port of the connection regardless of direction (the port the
+    connection is made TO), so it is read from `destination` for both ingress and egress — for
+    egress `destination` is already `peer` (the entity being contacted); for ingress it is the
+    protected workload's own listening port, a separate EntityRule from `peer` (`source`, the
+    sender). Reading from the rule root used to silently ignore any real `ports`/`notPorts`
+    restriction (and never trigger the `notPorts` negation guard), so a port-restricted Allow rule
+    confidently `allowed` traffic to every port. `notProtocol` (a real rule-level field, independent
+    of `EntityRule`) is added to the negation guard alongside the peer/port ones for the same
+    reason `notNets`/`notSelector`/`notPorts` are guarded — this adapter cannot evaluate a negated
+    protocol match."""
     peer = rule.get("source" if direction == "ingress" else "destination") or {}
-    if rule.get("notPorts") or peer.get("notSelector") or peer.get("notNets"):
+    dest = rule.get("destination") or {}
+    if rule.get("notProtocol") or dest.get("notPorts") or peer.get("notSelector") or peer.get("notNets"):
         return None
     rule_protocol = rule.get("protocol")
     if rule_protocol is not None and protocol is not None and str(rule_protocol).upper() != str(protocol).upper():
         return False
-    raw_ports = rule.get("ports")
+    raw_ports = dest.get("ports")
     port_match = _k8s_port_matches(
         {"ports": _normalize_calico_ports(raw_ports)} if raw_ports else {}, protocol, port)
     if port_match is False:
@@ -1211,9 +1237,18 @@ def eval_route53_resolution(records, query_host, data_available=True):
             return None
         if name in by_name:
             return by_name[name]
-        wildcard = "*." + name.split(".", 1)[1] if "." in name else None
-        if wildcard and wildcard in by_name:
-            return by_name[wildcard]
+        # CI-review MAJOR fix (round 19): this used to check ONLY the immediate-parent wildcard
+        # (`*.` + everything after the first label) — for `a.b.example.com` that is `*.b.example.
+        # com`, never `*.example.com`. Per RFC 4592 wildcard synthesis, a wildcard at ANY ancestor
+        # level can answer a query with no closer/more-specific record, so a query name whose
+        # immediate parent has no wildcard but a higher ancestor does would incorrectly report a
+        # confident `blocked` ("NXDOMAIN against known zone data") for a name the zone genuinely
+        # resolves. Every ancestor level is now checked, nearest first.
+        labels = name.split(".")
+        for i in range(1, len(labels)):
+            wildcard = "*." + ".".join(labels[i:])
+            if wildcard in by_name:
+                return by_name[wildcard]
         return None
 
     matched = _find(host)
@@ -1330,15 +1365,24 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
     def _host_match(rule_host):
         """Returns (matches, specificity) — higher specificity wins on a tie-break. `None` (no
         host on the rule) is least specific; an exact match is most specific; `*.parent` is
-        in between (an exact, documented wildcard semantic — not a guess)."""
+        in between (an exact, documented wildcard semantic — not a guess).
+
+        CI-review MAJOR fix (round 19): a Kubernetes Ingress wildcard host covers exactly ONE DNS
+        label — `*.example.com` matches `api.example.com` but NOT `a.b.example.com`. The pre-fix
+        check (`req_host.endswith(parent)`) matched a suffix of ANY depth, so a multi-label
+        subdomain would confidently select a wildcard-routed backend the real Ingress controller
+        would never route to. The label the wildcard covers is now required to be non-empty and
+        contain no further `.` (i.e. exactly one label between the request host and `parent`)."""
         if rule_host is None:
             return True, 0
         if rule_host == req_host:
             return True, 2
         if rule_host.startswith("*."):
             parent = rule_host[1:]  # ".example.com"
-            if req_host and req_host.endswith(parent) and req_host != parent[1:]:
-                return True, 1
+            if req_host and req_host.endswith(parent):
+                label = req_host[: -len(parent)]
+                if label and "." not in label:
+                    return True, 1
         return False, -1
 
     def _path_match(rule):
@@ -1422,7 +1466,12 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
                                f"(declared ports: {sorted(p.get('port') for p in svc_ports if p.get('port') is not None)})",
                     "evidence": svc_ports}
     eps = (endpoint_slices or {}).get(svc_name, [])
-    ready = [e for e in eps if e.get("ready")]
+    # MINOR fix: an EndpointSlice endpoint's `ready` condition being `null`/absent means "unknown,
+    # treat as ready" per Kubernetes' own EndpointConditions guidance (only an explicit `false`
+    # means genuinely not ready) — treating a missing/null `ready` the same as `False` (the pre-fix
+    # behavior) undercounted ready endpoints and could report a confident `blocked`/`conditional`
+    # for a Service that real kube-proxy/Ingress would still route to.
+    ready = [e for e in eps if e.get("ready") is not False]
     if not eps:
         return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,
                 "summary": f"Service {svc_name!r} has no EndpointSlice entries (no pods matched its selector)",

@@ -15,24 +15,39 @@ the **cluster owner's** decision, and the terraform apply principal may not hold
 it out-of-band, same as the istio-read MCP's own access entry
 (`docs/runbooks/istio-agent-eks-access.md`).
 
-**Why AdminView, not View (unlike istio-read):** `resolve_live_identity()` GETs `/api/v1/nodes/
-{name}` — a **cluster-scoped** resource. `AmazonEKSViewPolicy` (what istio-read uses) mirrors the
-k8s `view` ClusterRole, which has **no cluster-scoped resources at all** — `eks.tf`'s own comment
-on the web task role's Access Entry notes plainly that "listing nodes 403s" under View. The correct
-precedent is `eks.tf`'s **own web task-role Access Entry**, which binds
-`AmazonEKSAdminViewPolicy` (cluster scope) for exactly this reason. This grant is READ-ONLY
-(`get`/`list`/`watch`), same as View, but additionally covers cluster-scoped kinds; it can also
-read Secrets, which is why it is reserved for principals (like this one) that genuinely need
-cluster-scoped reads, not handed out by default.
+**Why a minimal Kubernetes-group RBAC binding, not an AWS-managed access policy (unlike
+istio-read's `AmazonEKSViewPolicy`):** `resolve_live_identity()` GETs `/api/v1/nodes/{name}` — a
+**cluster-scoped** resource — plus one namespaced Pod GET. `AmazonEKSViewPolicy` mirrors the k8s
+`view` ClusterRole, which has **no cluster-scoped resources at all** (`eks.tf`'s own comment on the
+web task role's Access Entry notes plainly that "listing nodes 403s" under View), so it cannot be
+reused as-is. The next AWS-managed step up, `AmazonEKSAdminViewPolicy` (what `eks.tf` binds for the
+web task role's own manual-registration Access Entry), DOES cover cluster-scoped resources — but it
+also grants cluster-wide `get`/`list`/`watch` on **every Secret in every namespace**, to the SAME
+shared worker task role every other job type runs under. That is a materially larger grant than
+this feature needs (exactly one Node GET, one Pod GET), and it is the exact pattern
+`register-istio-access.sh` explicitly warns against ("do NOT widen to AdminView — that would grant
+cluster-wide Secret read to an automated agent") — round-19 CI review flagged this script as the
+one place that violated its own repo's documented convention.
+
+**The fix:** bind the worker task role's Access Entry to a Kubernetes **group**
+(`network-path-reader`) via `--kubernetes-groups`, rather than an AWS-managed access policy, and
+author a minimal `ClusterRole` (`network-path-reader-rbac.yaml`) granting **only** `get` on
+`nodes` and `pods` to that group — no Secret access, no LIST/WATCH, no other resource kind. An
+Access Entry's `--kubernetes-groups` only establishes the IAM-principal → k8s-group mapping;
+authorization still requires the `ClusterRoleBinding` in that manifest, applied separately via
+`kubectl` (an EKS Access Entry alone cannot grant custom fine-grained RBAC — only AWS-managed
+access policies or your own RBAC objects can).
 
 ## Prerequisites
 - `workers_enabled = true` and the foundation applied (the worker task role exists).
 - `network_path_check_enabled = true` (see the README's flag table — this feature only queries
-  live K8s/EC2 state for a pod/node source once this AND the Access Entry below are both true;
-  without the Access Entry, such a check still runs but fails closed on that one source with a
-  bounded "could not resolve pod/node identity" error, per `resolve_live_identity()`'s own
-  AccessDenied handling).
-- You hold `eks:CreateAccessEntry` + `eks:AssociateAccessPolicy` on the target cluster.
+  live K8s/EC2 state for a pod/node source once this AND the Access Entry + RBAC below are all
+  true; without them, such a check still runs but fails closed on that one source with a bounded
+  "could not resolve pod/node identity" error, per `resolve_live_identity()`'s own AccessDenied
+  handling).
+- You hold `eks:CreateAccessEntry` + `eks:UpdateAccessEntry` on the target cluster (for the IAM
+  side), AND cluster-admin (or equivalent RBAC-write) Kubernetes access (for the `kubectl apply`
+  RBAC side).
 
 ## Grant (idempotent)
 ```bash
@@ -40,13 +55,21 @@ scripts/v2/eks/register-network-path-access.sh <cluster-name> [<cluster-name> ..
 # or, if you can't run terraform output:
 ROLE_ARN=arn:aws:iam::<acct>:role/awsops-v2-worker-task \
   scripts/v2/eks/register-network-path-access.sh <cluster-name>
+
+kubectl apply -f scripts/v2/eks/network-path-reader-rbac.yaml
 ```
 The script reads `terraform output -raw worker_task_role_arn`, then runs
-`aws eks create-access-entry` + `aws eks associate-access-policy` (AdminViewPolicy, `type=cluster`).
+`aws eks create-access-entry` (or `update-access-entry` if the entry already exists) binding the
+role to the `network-path-reader` Kubernetes group — no AWS-managed access policy is associated.
+The `kubectl apply` step is what actually authorizes that group (`get` on `nodes`/`pods` only) —
+run it once per cluster.
 
 ## Verify
 ```bash
 aws eks list-access-entries --cluster-name <cluster-name> | grep worker-task
+aws eks describe-access-entry --cluster-name <cluster-name> --principal-arn <worker-task-role-arn> \
+  --query kubernetesGroups
+kubectl get clusterrolebinding awsops-network-path-reader
 ```
 Then create a Network Path Check whose source is a pod/node on that cluster and confirm the run's
 live-identity step no longer reports an AccessDenied.
@@ -55,6 +78,8 @@ live-identity step no longer reports an AccessDenied.
 ```bash
 aws eks delete-access-entry --cluster-name <cluster-name> \
   --principal-arn arn:aws:iam::<acct>:role/awsops-v2-worker-task
+# optional — only if no other principal is bound to the network-path-reader group on this cluster:
+kubectl delete -f scripts/v2/eks/network-path-reader-rbac.yaml
 ```
 
 ## Notes
