@@ -35,8 +35,12 @@ import sg_rule_matching as sm
 DELIVERY_LAG_HOURS = int(os.environ.get("SG_RULE_DELIVERY_LAG_HOURS", "6"))
 # item 3 follow-up fix: sg_rule_inventory_versions.valid_from/valid_to are observation timestamps
 # (set by THIS scan's own run time), not the actual rule-change timestamp — see
-# sm.day_coverage()'s docstring. The scan itself runs once every SCAN_INTERVAL_HOURS (the
-# EventBridge daily-trigger cadence), which bounds how stale a version boundary can be.
+# sm.day_coverage()'s docstring. The scan is nominally scheduled every SCAN_INTERVAL_HOURS (the
+# EventBridge daily-trigger cadence, `rate(24 hours)` in sg-rules.tf) — but item 2 follow-up fix
+# (round 2): this constant is NO LONGER fed into `sm.day_coverage()`'s `observation_lag` directly.
+# A fixed nominal cadence is wrong whenever scans are actually delayed or missed for multiple days
+# in a row — see `previous_successful_scan_gap()` below, which derives the REAL elapsed gap from
+# `sg_rule_scan_runs` instead. Kept only as a documented/scheduled-cadence reference value.
 SCAN_INTERVAL_HOURS = int(os.environ.get("SG_RULE_SCAN_INTERVAL_HOURS", "24"))
 MEMBERSHIP_STALENESS_DAYS = int(os.environ.get("SG_RULE_MEMBERSHIP_STALENESS_DAYS", "3"))
 RESCAN_WINDOW_DAYS = int(os.environ.get("SG_RULE_RESCAN_WINDOW_DAYS", "2"))
@@ -298,6 +302,29 @@ def last_committed_day(conn, flow_source_id):
     return rows[0][0] if rows and rows[0][0] else None
 
 
+def previous_successful_scan_gap(conn, flow_source_id, before):
+    """Item 2 follow-up fix (round 2): the uncertainty window `sm.day_coverage()` applies to a
+    closed rule-inventory version must reflect the ACTUAL elapsed gap since the previous successful
+    scan for this source, not a fixed `SG_RULE_SCAN_INTERVAL_HOURS` constant — after a multi-day
+    scan outage (delayed/missed runs), the real rule-shape change could have happened anywhere in
+    the WHOLE gap, not just within one nominal cadence period.
+
+    Returns the `timedelta` gap between `before` (this run's own observation instant — the same
+    `now` value that closes any version in THIS call) and the most recent PRIOR `sg_rule_scan_runs`
+    row with `status='succeeded'` for this `flow_source_id`, or `None` when there is no reasonably
+    recent previous successful run to compare against (e.g. the very first scan for this source, or
+    Athena scanning was only just enabled). Callers must treat `None` as "unknown" and mark the
+    affected day `unassessable` rather than guessing a window (`sm.day_coverage`'s own contract)."""
+    rows = conn.run(
+        "SELECT max(started_at) FROM sg_rule_scan_runs "
+        "WHERE flow_source_id=:fid AND status='succeeded' AND started_at < :before",
+        fid=flow_source_id, before=before)
+    prev = rows[0][0] if rows and rows[0][0] else None
+    if prev is None:
+        return None
+    return before - prev
+
+
 # ── Step 4-6: Athena query + matching for one day ─────────────────────────────────────────────────
 
 # `_safe_ident`/`build_day_select` now live in sg_rule_matching.py (a boto3-free pure module) so
@@ -371,7 +398,8 @@ def eni_group_ids_for_ip(memberships, ip):
 
 
 def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vpc, earliest_snapshot_at,
-                 stale_vpcs=None, coverage_flags=None, peered_or_shared_vpc_ids_by_vpc=None):
+                 stale_vpcs=None, coverage_flags=None, peered_or_shared_vpc_ids_by_vpc=None,
+                 observation_lag=None):
     """Matches `flows` (already-aggregated Athena rows) against every rule for this account/region,
     classifies the whole day per rule, and commits sg_rule_activity_daily + sg_rule_scan_runs in
     ONE transaction (delete-then-insert for the day — idempotent regardless of how many times this
@@ -418,6 +446,12 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     downgraded to `unassessable` for that day exactly like `flow_result_truncated`/
     `eni_snapshot_truncated` already are (an unattributed flow must not look identical to a
     genuinely-clean, fully-evidenced zero).
+
+    `observation_lag` (item 2 follow-up fix, round 2): the `timedelta` uncertainty window
+    `sm.day_coverage()` applies to a CLOSED rule-inventory version's day — resolved by the caller
+    (`run()`) from the ACTUAL gap to the previous successful scan (`previous_successful_scan_gap()`),
+    never a fixed nominal cadence. Defaults to `None` ("unknown gap" — every closed version's day is
+    then marked unassessable rather than guessing) when the caller doesn't resolve one.
     """
     stale_vpcs = stale_vpcs or set()
     coverage_flags = coverage_flags or {}
@@ -434,7 +468,7 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     per_rule = {}
     any_crossing = False
     for rule_id, versions in rule_versions_by_id.items():
-        day_cov = sm.day_coverage(versions, day, observation_lag=dt.timedelta(hours=SCAN_INTERVAL_HOURS))
+        day_cov = sm.day_coverage(versions, day, observation_lag=observation_lag)
         per_rule[rule_id] = {
             "compatible": 0, "overlap": 0, "bytes": 0,
             "unassessable": day_cov["crossing"],  # fingerprint-epoch-crossing (day-level)
@@ -777,6 +811,12 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
     lam = (lambda_client_factory or (lambda: boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))))()
 
     fid = source["id"]
+    # Item 2 follow-up fix (round 2): resolve the REAL gap to the previous successful scan for this
+    # source, once per run() call — every day/version this call closes shares the SAME observation
+    # instant (`now`, above), so one resolved lag applies to the whole batch. `None` (no reasonably
+    # recent previous successful run) is passed straight through to `process_day`/`sm.day_coverage`,
+    # which then marks any closed-version day unassessable rather than guessing a window.
+    observation_lag = previous_successful_scan_gap(conn, fid, now)
     watermark = last_committed_day(conn, fid)
     source_created_day = source["created_at"].date() if hasattr(source["created_at"], "date") else source["created_at"]
     next_day = sm.next_day_to_process(watermark, source_created_day)
@@ -810,7 +850,8 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
         }
         try:
             res = process_day(conn, source, day, body.get("rows", []), rule_versions, memberships_by_vpc,
-                               None, stale_vpcs=stale_vpcs, coverage_flags=coverage_flags)
+                               None, stale_vpcs=stale_vpcs, coverage_flags=coverage_flags,
+                               observation_lag=observation_lag)
         except Exception as e:  # noqa: BLE001 — one day's transaction failure must not crash run()
             # process_day() itself still raises on internal failure (its own rollback contract is
             # unchanged, see test_process_day_rolls_back_on_failure) — this is the caller-side

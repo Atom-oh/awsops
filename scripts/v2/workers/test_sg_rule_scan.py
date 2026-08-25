@@ -137,6 +137,32 @@ def test_last_committed_day_returns_max_succeeded_partition():
     assert scan.last_committed_day(conn, 1) == datetime.date(2026, 3, 5)
 
 
+# ── item 2 follow-up fix (round 2): previous_successful_scan_gap must derive the REAL elapsed gap
+#    to the previous successful scan, not assume a fixed nominal cadence — this is what lets
+#    sm.day_coverage() correctly widen its uncertainty window after a multi-day scan outage. ────────
+
+def test_previous_successful_scan_gap_none_when_no_prior_successful_run():
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(None,)]]})
+    assert scan.previous_successful_scan_gap(conn, 1, utc(2026, 3, 9)) is None
+
+
+def test_previous_successful_scan_gap_returns_the_real_elapsed_gap():
+    """The previous successful run was 4 days before `before` (a multi-day scan outage) — the
+    returned gap must reflect that REAL elapsed time, not a fixed nominal cadence."""
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(utc(2026, 3, 5),)]]})
+    gap = scan.previous_successful_scan_gap(conn, 1, utc(2026, 3, 9))
+    assert gap == dt.timedelta(days=4)
+
+
+def test_previous_successful_scan_gap_queries_only_succeeded_runs_before_the_given_instant():
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(utc(2026, 3, 5),)]]})
+    scan.previous_successful_scan_gap(conn, 1, utc(2026, 3, 9))
+    call = [c for c in conn.calls if "FROM sg_rule_scan_runs" in c[0]][0]
+    assert "succeeded" in call[0]
+    assert call[1]["fid"] == 1
+    assert call[1]["before"] == utc(2026, 3, 9)
+
+
 # ── L2 finding #2: IPv6 ENI addresses must be captured too ───────────────────────────────────────
 
 class FakeEc2Eni:
@@ -331,7 +357,9 @@ def test_build_day_select_adds_single_date_partition_predicate():
     sql = scan.build_day_select(source, dt.date(2026, 3, 5))
     # item 5 follow-up fix: delivery lag only ever pushes a flow's partition file FORWARD, never
     # backward, so the predicate widens to an adjacent 2-day window rather than the single day.
-    assert "\"dt\" IN ('2026-03-05', '2026-03-06')" in sql
+    # Item 3 follow-up fix (round 2): a genuinely `date`-typed key gets a typed `DATE '...'`
+    # literal, not a bare string (Athena/Trino rejects comparing a `date` column to a string).
+    assert "\"dt\" IN (DATE '2026-03-05', DATE '2026-03-06')" in sql
 
 
 def test_build_day_select_skips_single_key_predicate_when_type_not_confirmed_date_like():
@@ -582,6 +610,66 @@ def test_process_day_crossing_day_downgrades_to_unassessable_and_no_lower_bound(
     assert res["any_crossing"] is True
     insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
     assert insert_call[1]["cm"] == 0  # no flows counted against an unassessable rule/day
+
+
+# ── item 2 follow-up fix (round 2): process_day must thread a caller-resolved observation_lag
+#    (the REAL gap to the previous successful scan) into sm.day_coverage(), rather than a fixed
+#    nominal cadence, and must treat `None` (unresolvable gap) as unassessable too. ─────────────────
+
+def test_process_day_defaults_observation_lag_to_unknown_and_marks_closed_version_unassessable():
+    """No `observation_lag` passed at all (the default) — a CLOSED version's day must never be
+    confidently resolved without a real, caller-supplied gap."""
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8)},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None)
+    assert res["any_crossing"] is True
+    coverage = json.loads(
+        [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0][1]["cov"])
+    assert coverage["fingerprint_epoch_crossing"] is True
+
+
+def test_process_day_multi_day_scan_gap_widens_the_uncertainty_window():
+    """A REAL ~4-day gap (simulating a multi-day scan outage) to the previous successful scan must
+    widen the uncertainty window enough to mark day 3/5 unassessable — the FIXED-24h behavior this
+    item replaces would have confidently resolved this exact valid_to (3 days after the scanned
+    day) as not-crossing (see the equivalent sg_rule_matching-level test)."""
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8)},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None,
+                            observation_lag=dt.timedelta(days=4))
+    assert res["any_crossing"] is True
+
+
+def test_process_day_real_observation_lag_confidently_resolves_when_outside_the_window():
+    """A real (caller-resolved), short observation_lag that does NOT overlap the scanned day must
+    still allow a confident (non-crossing) result — this fix must not make EVERY closed version
+    unassessable, only ones whose real gap is unknown or wide enough to overlap."""
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8)},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None,
+                            observation_lag=dt.timedelta(hours=1))
+    assert res["any_crossing"] is False
 
 
 def test_process_day_matches_compatible_flow():
@@ -1135,6 +1223,41 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     assert fake_lambda.invocations[0]["flow_source_id"] == 1
     assert "query" not in fake_lambda.invocations[0]
     assert "account_id" not in fake_lambda.invocations[0]
+
+
+def test_run_resolves_and_threads_the_real_observation_lag_into_process_day(monkeypatch):
+    """Item 2 follow-up fix (round 2), end-to-end: `run()` must resolve the REAL gap to the
+    previous successful scan (from `sg_rule_scan_runs`) and pass it into `process_day` — not a
+    fixed nominal cadence, and not silently dropped."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [
+            [(utc(2026, 3, 1),)],  # previous_successful_scan_gap's own query (called first)
+            [(None,)],             # last_committed_day's own query (called second)
+        ],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = FakeLambda({"ok": True, "rows": []})
+    captured = {}
+    real_process_day = scan.process_day
+
+    def fake_process_day(*a, **k):
+        captured["observation_lag"] = k.get("observation_lag")
+        return real_process_day(*a, **k)
+
+    monkeypatch.setattr(scan, "process_day", fake_process_day)
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert captured["observation_lag"] is not None
+    assert captured["observation_lag"] > dt.timedelta(days=1)  # a real, non-nominal gap was resolved
 
 
 def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):
