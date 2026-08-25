@@ -837,9 +837,13 @@ def test_partition_exists_true_when_only_the_next_day_partition_exists():
         glue, "db", "tbl", dt.date(2026, 3, 5),
         {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]})
     assert result is True
-    # Item 3 follow-up fix (round 2): a genuinely `date`-typed key gets a typed `DATE '...'`
-    # literal, not a bare string — Athena/Trino rejects comparing a `date` column to a string.
-    assert glue.expressions == ["dt IN (DATE '2026-03-05', DATE '2026-03-06')"]
+    # CI-review MAJOR fix (round 4): unlike the Athena SQL side, the Glue Expression grammar
+    # compares partition values as plain strings regardless of the column's declared catalog
+    # type (Glue partition values are stored as raw strings) — a typed `DATE '...'` literal risked
+    # the same permanent-refusal failure as the unquoted-identifier bug, so this stays a plain
+    # quoted string even for a `date`-typed key. The identifier is now double-quoted to match the
+    # quoted-identifier grammar JSQLParser (Glue's Expression parser) shares with Athena SQL.
+    assert glue.expressions == ["\"dt\" IN ('2026-03-05', '2026-03-06')"]
 
 
 def test_partition_exists_keeps_string_literal_for_a_string_typed_key():
@@ -850,7 +854,7 @@ def test_partition_exists_keeps_string_literal_for_a_string_typed_key():
     broker._partition_exists(
         glue, "db", "tbl", dt.date(2026, 3, 5),
         {"partitionKeys": ["dt"], "partitionKeyTypes": ["string"]})
-    assert glue.expressions == ["dt IN ('2026-03-05', '2026-03-06')"]
+    assert glue.expressions == ["\"dt\" IN ('2026-03-05', '2026-03-06')"]
 
 
 def test_partition_exists_false_when_neither_day_has_a_partition():
@@ -871,8 +875,8 @@ def test_partition_exists_hive_expression_covers_both_days_across_a_month_bounda
         glue, "db", "tbl", dt.date(2026, 3, 31),
         {"partitionKeys": ["year", "month", "day"], "partitionKeyTypes": ["string"] * 3})
     expr = glue.expressions[0]
-    assert "(year = '2026' AND month = '03' AND day = '31')" in expr
-    assert "(year = '2026' AND month = '04' AND day = '01')" in expr
+    assert "(\"year\" = '2026' AND \"month\" = '03' AND \"day\" = '31')" in expr
+    assert "(\"year\" = '2026' AND \"month\" = '04' AND \"day\" = '01')" in expr
     assert " OR " in expr
 
 
@@ -891,8 +895,8 @@ def test_partition_exists_scopes_the_expression_by_account_id_and_region_when_re
     result = broker._partition_exists(glue, "db", "tbl", dt.date(2026, 3, 5), validation, source=source)
     assert result is True
     expr = glue.expressions[0]
-    assert "account-id = '123456789012'" in expr
-    assert "region = 'ap-northeast-2'" in expr
+    assert "\"account-id\" = '123456789012'" in expr
+    assert "\"region\" = 'ap-northeast-2'" in expr
 
 
 def test_partition_exists_wrong_scope_value_does_not_manufacture_a_confident_partition_hit():
@@ -914,12 +918,61 @@ def test_partition_exists_wrong_scope_value_does_not_manufacture_a_confident_par
 
 def test_partition_exists_unscoped_when_source_is_none_keeps_old_behavior():
     """Backward-compat: existing callers/tests that never pass `source` (no scope to add) must see
-    the exact same unscoped Expression as before this fix."""
+    no scope clause appended — just the plain (quoted-identifier, untyped-literal) date predicate."""
     glue = FakeGluePartitions(["2026-03-06"])
     validation = {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}
     result = broker._partition_exists(glue, "db", "tbl", dt.date(2026, 3, 5), validation)
     assert result is True
-    assert glue.expressions == ["dt IN (DATE '2026-03-05', DATE '2026-03-06')"]
+    assert glue.expressions == ["\"dt\" IN ('2026-03-05', '2026-03-06')"]
+
+
+# ── CI-review MAJOR regressions (round 4): a BARE hyphenated identifier in the Glue Expression
+#    parses as arithmetic subtraction under JSQLParser and permanently refuses every day for that
+#    table; a typed `DATE '...'`/`TIMESTAMP '...'` literal risks the identical failure mode since
+#    Glue Expression compares partition values as plain strings, not Athena SQL types. ─────────────
+
+def test_partition_exists_quotes_a_hyphenated_single_partition_key():
+    """A hyphenated single-key name (e.g. a table whose only partition column is `account-id`-style
+    text) must be double-quoted in the Glue Expression — a bare hyphenated identifier parses as
+    arithmetic subtraction under Glue's JSQLParser grammar, not a column reference."""
+    glue = FakeGluePartitions(["2026-03-05"])
+    result = broker._partition_exists(
+        glue, "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["log-date"], "partitionKeyTypes": ["string"]})
+    assert result is True
+    assert glue.expressions == ["\"log-date\" IN ('2026-03-05', '2026-03-06')"]
+
+
+def test_partition_exists_never_emits_a_typed_literal_for_a_date_typed_key():
+    """A `date`-typed single key must still get a plain quoted-string literal in the Glue
+    Expression, never `DATE '...'` — Glue partition values are stored as raw strings regardless of
+    the column's declared catalog type, and a typed literal risks the same permanent-refusal
+    failure mode as the unquoted-identifier bug."""
+    glue = FakeGluePartitions(["2026-03-05"])
+    broker._partition_exists(
+        glue, "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]})
+    assert "DATE" not in glue.expressions[0]
+
+
+def test_partition_exists_timestamp_key_uses_a_range_not_an_exact_midnight_match():
+    """A `timestamp`-typed single key whose partition values are NOT exactly midnight (e.g. an
+    hourly-partitioned table) must be checked with a RANGE, not an equality/IN against midnight
+    literals — an exact-midnight check would silently miss every non-midnight partition value and
+    manufacture a spurious `zero_partition_match` refusal for a day that genuinely has data.
+    (`FakeGluePartitions` does naive substring matching, not real range evaluation, so this asserts
+    the produced Expression's SHAPE rather than round-tripping a non-midnight value through it —
+    the SQL-side equivalent, `test_build_partition_predicate_uses_a_range_...`, covers the actual
+    predicate semantics.)"""
+    glue = FakeGluePartitions([])
+    broker._partition_exists(
+        glue, "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["ts"], "partitionKeyTypes": ["timestamp"]})
+    expr = glue.expressions[0]
+    assert ">=" in expr and "<" in expr  # a range predicate, not an exact-midnight equality/IN
+    assert "IN (" not in expr
+    assert "2026-03-05 00:00:00" in expr
+    assert "2026-03-07 00:00:00" in expr  # half-open upper bound covers D and D+1 fully
 
 
 def test_query_by_source_commits_a_zero_traffic_day_when_only_the_next_day_partition_exists(monkeypatch):

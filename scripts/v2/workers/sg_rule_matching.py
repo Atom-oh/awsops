@@ -469,6 +469,18 @@ def _build_partition_predicate(validation, day):
         dk = _safe_ident(dk_raw, "")
         if dk:
             key_type = single_date_partition_key_type(validation)
+            if key_type == "timestamp":
+                # CI-review MAJOR fix (round 4): a `timestamp`-typed partition value is not
+                # guaranteed to sit at exact midnight (e.g. an hourly-partitioned table) — the
+                # equality/IN form below only ever matched an exact `D 00:00:00`/`D+1 00:00:00`
+                # instant, silently missing every non-midnight partition value even though the
+                # column validated as date-like. Use a half-open range spanning the whole two-day
+                # window instead: it matches any partition value within [D 00:00:00, D+2 00:00:00),
+                # regardless of what time-of-day component the partition actually carries.
+                after_next_day = next_day + timedelta(days=1)
+                lo = date_literal(day.isoformat(), key_type)
+                hi = date_literal(after_next_day.isoformat(), key_type)
+                return f' AND "{dk}" >= {lo} AND "{dk}" < {hi}'
             lit_a = date_literal(day.isoformat(), key_type)
             lit_b = date_literal(next_day.isoformat(), key_type)
             return f' AND "{dk}" IN ({lit_a}, {lit_b})'
@@ -514,9 +526,13 @@ def scope_partition_expr_clauses(validation, source):
     existence check never looked at scope at all.
 
     Returns a list of already-safe (`_safe_ident`/`_safe_scope_value`-checked) Glue-Expression
-    clauses (bare `col = 'value'`, matching this module's own Expression syntax — no quoting on the
-    identifier, unlike the double-quoted SQL identifiers `_build_scope_predicate` emits for Athena
-    SQL) for each of `account_id`/`region` that resolved as an ACTUAL Glue PARTITION KEY
+    clauses (double-quoted `"col" = 'value'` — CI-review MAJOR fix, round 4: Glue's `GetPartitions`
+    `Expression` is parsed by JSQLParser, the SAME quoted-identifier grammar Athena SQL uses, and
+    `_safe_ident` deliberately allows hyphens for AWS's own `interface-id`-style column names; a
+    BARE hyphenated identifier here (e.g. `account-id`) parses as arithmetic subtraction, not a
+    column reference, raising and permanently refusing every day for that table. Double-quoting
+    matches what `_build_scope_predicate` already emits for Athena SQL) for each of
+    `account_id`/`region` that resolved as an ACTUAL Glue PARTITION KEY
     (`scopeResolution[...] == "partition"`). A scope field that resolved only as a plain table
     COLUMN is not a partition dimension at all — Glue's partition-Expression syntax has nothing to
     filter on for it, so it's intentionally omitted here (the row-level SQL predicate
@@ -526,15 +542,18 @@ def scope_partition_expr_clauses(validation, source):
     column_map = validation.get("columnMap") or {}
     clauses = []
     if scope_resolution.get("account_id") == "partition":
-        col = _safe_ident(column_map.get("account_id"), "")
-        if col:
-            val = _safe_scope_value(str(source["account_id"]), _ACCOUNT_ID_VALUE_RE)
-            clauses.append(f"{col} = '{val}'")
+        # CI-review MINOR fix: fall back to `None` (raise `UnsafeIdentifier`), not `""` (silently
+        # drop the clause) — a corrupted/unresolvable stored column name for a field that DID
+        # resolve as a partition key means the scope predicate cannot be safely built at all, and
+        # silently omitting it reopens the any-tenant existence-check hole this function exists to
+        # close. Matches `_safe_scope_value`'s own fail-closed posture for the value half.
+        col = _safe_ident(column_map.get("account_id"), None)
+        val = _safe_scope_value(str(source["account_id"]), _ACCOUNT_ID_VALUE_RE)
+        clauses.append(f'"{col}" = \'{val}\'')
     if scope_resolution.get("region") == "partition":
-        col = _safe_ident(column_map.get("region"), "")
-        if col:
-            val = _safe_scope_value(str(source["region"]), _REGION_VALUE_RE)
-            clauses.append(f"{col} = '{val}'")
+        col = _safe_ident(column_map.get("region"), None)
+        val = _safe_scope_value(str(source["region"]), _REGION_VALUE_RE)
+        clauses.append(f'"{col}" = \'{val}\'')
     return clauses
 
 

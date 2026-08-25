@@ -161,6 +161,20 @@ def test_build_partition_predicate_keeps_string_literal_for_a_string_typed_singl
     assert "DATE '2026-03-05'" not in predicate
 
 
+def test_build_partition_predicate_uses_a_range_not_an_exact_match_for_a_timestamp_typed_key():
+    """CI-review MAJOR fix (round 4): a `timestamp`-typed partition value is not guaranteed to sit
+    at exact midnight (e.g. an hourly-partitioned table) — an equality/IN predicate against
+    midnight-only literals would silently exclude every non-midnight partition value even though
+    the column validated as date-like. The predicate must be a half-open range spanning the whole
+    two-day window instead."""
+    validation = {"partitionKeys": ["ts"], "partitionKeyTypes": ["timestamp"]}
+    predicate = m._build_partition_predicate(validation, date(2026, 3, 5))
+    assert ">=" in predicate and "<" in predicate
+    assert "IN (" not in predicate
+    assert "TIMESTAMP '2026-03-05 00:00:00'" in predicate
+    assert "TIMESTAMP '2026-03-07 00:00:00'" in predicate  # exclusive upper bound covers D and D+1
+
+
 def test_classify_rule_day_crossing_downgrades_to_unassessable_not_lower_bound():
     status = m.classify_rule_day(compatible_count=0, overlap_count=0, has_source=True, unassessable=True)
     assert status == "unassessable"

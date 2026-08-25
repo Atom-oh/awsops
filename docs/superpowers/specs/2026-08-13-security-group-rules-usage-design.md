@@ -394,6 +394,23 @@ elapsed gap to the previous successful `sg_rule_scan_runs` row for this source a
 very first scan for a source, or Athena scanning only just enabled), `observation_lag` is `None` and
 `sm.day_coverage()` marks the day `unassessable` rather than guessing a window.
 
+**Further follow-up correction (CI review round 3/4, item 2): `observation_lag` is a per-boundary
+CALLABLE, not a single scalar resolved once per run.** The paragraph above describes
+`previous_successful_scan_gap()` as resolving one gap value that gets passed into
+`sm.day_coverage()` for the whole run — that was accurate for round 2's code, but round 3 replaced
+it because that single-scalar form is unsafe for the trailing rescan window: `run()` re-evaluates
+several days each pass, and each day's version boundary may have been CLOSED by a different, earlier
+run than the one currently executing. Passing today's own (possibly short) gap into
+`day_coverage()` for a boundary an EARLIER, wide-gap-after-an-outage run actually closed would
+silently overwrite a correct `unassessable` verdict with a confident (wrong) attribution the next
+time that day is idempotently re-evaluated. `sg_rule_scan.py`'s `boundary_lag_resolver()` fixes this
+by returning a memoized callable `f(valid_to) -> timedelta | None` instead of a value:
+`sm.day_coverage()` invokes it lazily per covering version's own `valid_to`, and the callable looks
+up `previous_successful_scan_gap(conn, flow_source_id, before=valid_to)` — the gap that existed AT
+THE TIME the run that closed THAT SPECIFIC boundary ran, not the gap before whichever run happens to
+be re-evaluating the day today. `run()` calls `boundary_lag_resolver()` once per scan and passes the
+resulting callable as `observation_lag` for every day/version pair it evaluates in that pass.
+
 Default outbound rules are displayed and marked protected from cleanup recommendations.
 
 ## Daily pipeline

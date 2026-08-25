@@ -376,27 +376,44 @@ def _partition_exists(glue, database, table, day, validation, source=None):
         # MINOR fix: re-apply the SAME identifier-safety helper this module's own SQL builders
         # (`sg_rule_matching.build_day_select`/`build_day_skipdata_count_select`) use before ever
         # interpolating a stored partition-key name into a Glue `Expression` string.
+        #
+        # CI-review MAJOR fix (round 4, two issues fixed together per the review's own
+        # recommendation): (1) identifiers below are now double-quoted — Glue's `GetPartitions`
+        # `Expression` is parsed by JSQLParser, the same quoted-identifier SQL grammar Athena uses,
+        # and `_safe_ident` deliberately allows hyphens (AWS's own `interface-id` convention); a
+        # BARE hyphenated name (e.g. `account-id`) parses as arithmetic subtraction, raising and
+        # permanently refusing every day for that table. (2) literals below are now ALWAYS plain
+        # quoted strings, never the typed `DATE '...'`/`TIMESTAMP '...'` form `sm.date_literal()`
+        # emits for Athena SQL — Glue partition values are stored as raw strings in the Hive
+        # metastore regardless of the column's declared catalog type, and Glue's Expression grammar
+        # documents partition-value comparisons as plain string literals; a typed literal risks the
+        # exact same permanent-refusal failure mode as the unquoted-identifier bug.
         if {"year", "month", "day"} <= set(lower_keys):
             y = sm._safe_ident(lower_keys["year"], "year")
             mo = sm._safe_ident(lower_keys["month"], "month")
             d = sm._safe_ident(lower_keys["day"], "day")
             expr = (
-                f"({y} = '{day.year:04d}' AND {mo} = '{day.month:02d}' AND {d} = '{day.day:02d}')"
-                f" OR ({y} = '{next_day.year:04d}' AND {mo} = '{next_day.month:02d}' "
-                f"AND {d} = '{next_day.day:02d}')"
+                f'("{y}" = \'{day.year:04d}\' AND "{mo}" = \'{day.month:02d}\' AND "{d}" = \'{day.day:02d}\')'
+                f' OR ("{y}" = \'{next_day.year:04d}\' AND "{mo}" = \'{next_day.month:02d}\' '
+                f'AND "{d}" = \'{next_day.day:02d}\')'
             )
         elif dk_raw:
             dk = sm._safe_ident(dk_raw, "")
             if not dk:
                 return None  # unsafe identifier — genuinely unverifiable, per the 3-state contract above
-            # Item 3 follow-up fix (round 2): use the SAME type-aware literal builder
-            # `build_day_select`/`build_day_skipdata_count_select` use — a genuinely `date`/
-            # `timestamp`-typed key must get a typed literal, not a bare string (Athena rejects the
-            # comparison with a type error).
             key_type = sm.single_date_partition_key_type(validation)
-            lit_a = sm.date_literal(day.isoformat(), key_type)
-            lit_b = sm.date_literal(next_day.isoformat(), key_type)
-            expr = f"{dk} IN ({lit_a}, {lit_b})"
+            if key_type == "timestamp":
+                # Mirrors the SQL-side range fix in `sm._build_partition_predicate`: a
+                # `timestamp`-typed partition value is not guaranteed to sit at exact midnight, so
+                # an equality/IN check would silently report "no partition" for a legitimately
+                # non-midnight value. A half-open range matches any value in the two-day window.
+                after_next_day = next_day + _dt.timedelta(days=1)
+                expr = (
+                    f'"{dk}" >= \'{day.isoformat()} 00:00:00\' '
+                    f'AND "{dk}" < \'{after_next_day.isoformat()} 00:00:00\''
+                )
+            else:
+                expr = f'"{dk}" IN (\'{day.isoformat()}\', \'{next_day.isoformat()}\')'
         else:
             return True  # not a checkable single/hive-style scheme — do not block on it
         if scope_clauses:
