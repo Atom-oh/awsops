@@ -13,7 +13,7 @@ import DxTopology from '@/components/dx/DxTopology';
 import HBarList from '@/components/charts/HBarList';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { DxAnalysis, DxConnectionRow, DxVifRow, DxGatewayRow, DxRoute } from '@/lib/dx';
-import { assessResiliency, type DxSlaTier } from '@/lib/dx-topology';
+import { assessResiliency, type DxSlaTier, type DxResiliency } from '@/lib/dx-topology';
 import type { InvType } from '@/lib/inventory-types';
 
 // /direct-connect — Direct Connect 리스트+분석 (Network 메뉴). 커넥션/VIF를 리전 fan-out으로
@@ -158,6 +158,14 @@ const TIER_LABEL: Record<DxSlaTier, string> = {
 const TIER_TONE: Record<DxSlaTier, 'positive' | 'neutral' | 'negative'> = {
   maximum: 'positive', high: 'neutral', single: 'negative', none: 'negative',
 };
+// 리뷰(Codex stop-hook): tier==='none'은 두 가지 다른 상황을 뭉뚱그린다 — (a) 커넥션이
+// 정말 0개, (b) 전량 호스티드라 AWS SLA 산정 대상 owned 커넥션이 0개(assessResiliency의
+// 티어 산정에서 호스티드를 제외한 결과). (b)를 "커넥션 없음"으로 표시하면 실제로 존재하는
+// 호스티드 커넥션을 없는 것처럼 오도한다 — hostedConnections로 두 경우를 구분한다.
+function tierLabel(r: DxResiliency): string {
+  if (r.tier === 'none' && r.hostedConnections > 0) return 'AWS SLA 해당 없음 (전량 호스티드)';
+  return TIER_LABEL[r.tier];
+}
 
 type Selected =
   | { kind: 'conn'; row: DxConnectionRow }
@@ -468,7 +476,7 @@ export default function DirectConnectPage() {
                 {resiliency && (
                   <>
                     <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-                      <Badge tone={TIER_TONE[resiliency.tier]} variant="soft">{tt(TIER_LABEL[resiliency.tier])}</Badge>
+                      <Badge tone={TIER_TONE[resiliency.tier]} variant="soft">{tt(tierLabel(resiliency))}</Badge>
                       {resiliency.slaPct && <span className="text-[13px] font-semibold">SLA {resiliency.slaPct}</span>}
                       <span className="text-[12px] text-ink-500">
                         {tt('로케이션')} {resiliency.locations} · {tt('디바이스 2개 이상 로케이션')} {resiliency.dualConnLocations}

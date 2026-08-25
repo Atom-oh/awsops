@@ -677,6 +677,7 @@ export const TERMS: Record<string, Pair> = {
   '모든 커넥션이 단일 로케이션에 있습니다 — 이 로케이션 장애 시 전체 DX 경로가 끊깁니다. AWS Resiliency Toolkit은 2개 이상 로케이션을 권장합니다': { en: 'All connections are in a single location — a failure of this location severs the entire DX path. The AWS Resiliency Toolkit recommends 2+ locations', zh: '所有连接都在单一位置 — 该位置故障将切断整个 DX 路径。AWS Resiliency Toolkit 建议使用 2 个以上位置', ja: 'すべての接続が単一ロケーションにあります — このロケーションの障害で DX 経路全体が切断されます。AWS Resiliency Toolkit は 2 か所以上を推奨' },
   '이상 없음 — 커넥션이 2개 이상 로케이션에 분산되어 있습니다': { en: 'All clear — connections are spread across 2+ locations', zh: '无异常 — 连接分布在 2 个以上位置', ja: '異常なし — 接続は 2 か所以上のロケーションに分散' },
   '커넥션 없음': { en: 'No connections', zh: '无连接', ja: '接続なし' },
+  'AWS SLA 해당 없음 (전량 호스티드)': { en: 'AWS SLA not applicable (all hosted)', zh: '不适用 AWS SLA（全部为托管连接）', ja: 'AWS SLA 対象外（全てホスト型）' },
   '대역폭 합계': { en: 'Bandwidth total', zh: '带宽总和', ja: '帯域幅合計' },
   '행 클릭 → 용량·보안·상태 상세': { en: 'Click a row → capacity / security / health details', zh: '点击行 → 容量·安全·状态详情', ja: '行をクリック → 容量・セキュリティ・状態詳細' },
   '가상 인터페이스 (VIF)': { en: 'Virtual interfaces (VIF)', zh: '虚拟接口（VIF）', ja: '仮想インターフェイス（VIF）' },
