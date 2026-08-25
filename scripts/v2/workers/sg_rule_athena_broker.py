@@ -286,6 +286,27 @@ def _validate(event, conn):
                     "can never be bounded to a day and must not be scanned; use a Hive-style "
                     "year/month/day partitioned table or re-partition on a date-typed key "
                     "[reason: partition_key_type_not_date_shaped]")
+            # MINOR fix (L4 finding, round 6): a `string`-typed single partition key under the
+            # PROJECTION strategy is trusted by the check above to hold an ISO `YYYY-MM-DD` date
+            # string — but partition projection lets the table's own `projection.<col>.format`
+            # parameter declare a DIFFERENT (Java `SimpleDateFormat`-style) pattern, e.g.
+            # `yyyy/MM/dd`. There is no `_partition_exists` existence check for projection tables
+            # (unlike `partition_keys`), so a format mismatch here would silently match ZERO rows
+            # every day and commit a confident `no_observed_evidence` for real traffic. We cannot
+            # positively confirm from this sandbox exactly how a NON-ISO format value should be
+            # translated into the day-SELECT's own predicate, so — rather than assume ISO — take the
+            # SAFER path: reject at validate time unless the declared format is exactly the ISO
+            # pattern this module already emits (`yyyy-MM-dd`), or no format is declared at all
+            # (Athena's own default for a `string`-typed projected column is `yyyy-MM-dd`, per its
+            # partition-projection docs).
+            if strategy == "projection" and str(key_type or "").strip().lower() == "string":
+                proj_format = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.format")
+                if proj_format and proj_format.strip() != "yyyy-MM-dd":
+                    raise BrokerError(
+                        f"partition key {remaining_key!r} is a PROJECTION column with a non-ISO "
+                        f"date format ({proj_format!r}) — date-format projection patterns other "
+                        "than yyyy-MM-dd are not yet supported, and assuming ISO would silently "
+                        "match zero rows every day [reason: projection_date_format_not_iso]")
 
     optional_present = [c for c in ("flow-direction", "flow_direction", "tcp-flags", "tcp_flags",
                                     "bytes", "packets") if c.lower() in columns]

@@ -483,7 +483,13 @@ def _build_partition_predicate(validation, day):
         )
     dk_raw = single_date_partition_key(validation)
     if dk_raw:
-        dk = _safe_ident(dk_raw, "")
+        # MINOR fix: match `scope_partition_expr_clauses`' fail-closed posture (round 4) instead of
+        # silently falling back to `""` — a stored key name that passed the date-type strategy gate
+        # but fails `_safe_ident` means the resolved source row itself is corrupted, and building an
+        # empty/no-op predicate here is unsafe: for the `partition_keys` strategy it still fails
+        # closed via `_partition_exists` returning `None`, but for `projection` (which has no
+        # existence check at all) it would silently run the query partition-unbounded instead.
+        dk = _safe_ident(dk_raw, None)
         if dk:
             key_type = single_date_partition_key_type(validation)
             if key_type == "timestamp":

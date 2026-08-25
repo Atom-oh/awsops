@@ -161,6 +161,19 @@ def test_build_partition_predicate_keeps_string_literal_for_a_string_typed_singl
     assert "DATE '2026-03-05'" not in predicate
 
 
+def test_build_partition_predicate_raises_on_an_unsafe_single_partition_key_name():
+    """MINOR fix: an unsafe/corrupted stored partition-key name that nonetheless passes the
+    date-type strategy gate (e.g. `has_resolved_partition_strategy` sees a confirmed `date` type)
+    used to fall back to `_safe_ident(dk_raw, "")` — silently building an empty/no-op predicate
+    instead of raising. For the `partition_keys` strategy this still failed closed via
+    `_partition_exists` returning `None`, but for `projection` (no existence check at all) it would
+    have run the query fully partition-unbounded. Now matches `scope_partition_expr_clauses`'
+    fail-closed posture (round 4) and raises `UnsafeIdentifier` instead."""
+    validation = {"partitionKeys": ["dt; DROP TABLE x"], "partitionKeyTypes": ["date"]}
+    with pytest.raises(m.UnsafeIdentifier):
+        m._build_partition_predicate(validation, date(2026, 3, 5))
+
+
 def test_build_partition_predicate_uses_a_range_not_an_exact_match_for_a_timestamp_typed_key():
     """CI-review MAJOR fix (round 4): a `timestamp`-typed partition value is not guaranteed to sit
     at exact midnight (e.g. an hourly-partitioned table) — an equality/IN predicate against

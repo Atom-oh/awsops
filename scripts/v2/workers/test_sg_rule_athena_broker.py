@@ -625,6 +625,64 @@ def test_validate_rejects_a_non_date_typed_single_partition_key_under_projection
         }, conn)
 
 
+# ── MINOR fix (L4 finding, round 6): a `string`-typed single partition key under the PROJECTION
+#    strategy has no format validation — real values might not be ISO `YYYY-MM-DD` (e.g.
+#    `yyyy/MM/dd`), and projection tables have no `_partition_exists` existence check to catch a
+#    format mismatch, so a real day with traffic could silently commit a confident
+#    `no_observed_evidence`. Reject at validate time unless the declared `projection.<col>.format`
+#    is absent or exactly the ISO pattern this module emits. ────────────────────────────────────────
+
+def _validate_projection_string_key(monkeypatch, conn, proj_format_params):
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            params = {"projection.enabled": "true"}
+            params.update(proj_format_params)
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "dt", "Type": "string"}],
+                "Parameters": params,
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_rejects_a_projection_string_key_with_a_non_iso_date_format(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="non-ISO date format"):
+        _validate_projection_string_key(monkeypatch, conn, {"projection.dt.format": "yyyy/MM/dd"})
+
+
+def test_validate_accepts_a_projection_string_key_with_an_explicit_iso_date_format(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_projection_string_key(monkeypatch, conn, {"projection.dt.format": "yyyy-MM-dd"})
+    assert result["ok"] is True
+
+
+def test_validate_accepts_a_projection_string_key_with_no_declared_format(monkeypatch):
+    """No `projection.<col>.format` at all is Athena's own ISO default — not an error."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_projection_string_key(monkeypatch, conn, {})
+    assert result["ok"] is True
+
+
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):
     """Even if a caller tries to smuggle account_id/query/database into the event, they are simply
     ignored — the broker only ever uses what it resolved from Aurora via flow_source_id."""
