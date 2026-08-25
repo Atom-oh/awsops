@@ -708,13 +708,24 @@ _ADAPTER_BY_LAYER = {
         data_available=data.get("resolved_fetched", False)),
     # Gap 2: Calico gets a REAL evaluator now (ad.eval_calico_policy) — wired explicitly rather than
     # through the generic stub loop below, which stays for Cilium/Istio only.
+    #
+    # CI-review MAJOR fix (round 23): `data_available` used to default `policies_fetched` to
+    # `True` — inconsistent with the sibling "dns"/"k8s-service-resolution" wiring above, which
+    # both default their own fetched-markers to `False` (no data plumbed in yet), and a
+    # regression versus the OLD stub this adapter replaced (`eval_mesh_policy_stub`, which only
+    # ever consumed detection-only data and always returned `unknown`). Partially-populated data
+    # with the marker simply absent (a real risk once a caller starts supplying SOME Calico
+    # fields but not yet this one) used to reach a confident `allowed`/`blocked` from data this
+    # worker never actually fetched — the exact contract violation this series exists to close.
+    # `crd_present` still defaults `False` so a fully-empty data dict degrades honestly either
+    # way, but the fail-open specifically needed partially-populated data to trigger.
     "k8s-calico": lambda data, req: ad.eval_calico_policy(
         data.get("policies", []), data.get("pod_labels", {}), data.get("direction", "egress"),
         crd_present=data.get("crd_present", False), observed_api_version=data.get("api_version"),
         peer_labels=data.get("peer_labels"), peer_ip=data.get("peer_ip"),
         peer_namespace_labels=data.get("peer_namespace_labels"),
         protocol=req.get("protocol"), port=req.get("port"),
-        data_available=data.get("policies_fetched", True)),
+        data_available=data.get("policies_fetched", False)),
 }
 
 # Cilium/Istio stay true bounded stubs (K8s mesh policy) routed through the shared stub evaluator —
@@ -1039,8 +1050,14 @@ def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=
                 f"own source_account_id {expected_account_id!r} -- refusing to resolve identity")
         resolved = resolve_live_identity(resolved, conn, k8s_get=k8s_get, ec2_lookup=ec2_lookup)
     except NetworkPathError as e:
-        _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
-        return {"run_id": run_id, "status": "failed", "error": str(e)}
+        # CI-review MINOR fix (round 23): this branch persisted `str(e)` verbatim while the
+        # broad-Exception branch just below redacts — but `NetworkPathError` messages in THIS
+        # phase can themselves embed raw 12-digit account ids (the account-binding-mismatch
+        # refusal above, and `_account_external_id`'s own refusal message), which `_ACCOUNT_ID_RE`
+        # exists to redact from persisted columns. Redacted the same way now.
+        error_text = _redact_sensitive(str(e))
+        _finish_run(conn, run_id, "failed", overall_status="failed", error=error_text)
+        return {"run_id": run_id, "status": "failed", "error": error_text}
     except Exception as e:  # noqa: BLE001 — CI-review MAJOR fix (round 18): this phase now
         # performs DB I/O (`_account_external_id()`'s `conn.run`), unlike when it only validated
         # the definition's own fields — a `conn.run` failure used to escape this narrow
@@ -1056,8 +1073,13 @@ def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=
         topology = fetcher(resolved)
         candidates = discover_candidates(resolved, topology)
     except NetworkPathError as e:
-        _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
-        return {"run_id": run_id, "status": "failed", "error": str(e)}
+        # CI-review MINOR fix (round 23): this branch persisted `str(e)` verbatim while the
+        # broad-Exception branch just below redacts — for consistency with the resolve phase's
+        # own NetworkPathError branch above (which CAN embed raw account ids), and since a future
+        # `discover_candidates`/`fetcher` error could too. Redacted the same way now.
+        error_text = _redact_sensitive(str(e))
+        _finish_run(conn, run_id, "failed", overall_status="failed", error=error_text)
+        return {"run_id": run_id, "status": "failed", "error": error_text}
     except Exception as e:  # noqa: BLE001 — an unexpected fetcher failure (e.g. the Aurora
         # connection itself failing) must still terminate the run visibly rather than crash uncaught
         # and leave network_path_runs stuck at running/discover until the reaper eventually flips it

@@ -194,4 +194,29 @@ done
 echo "Done. Now apply the RBAC manifest once per cluster (requires cluster-admin k8s access):"
 echo "  kubectl apply -f $RBAC_MANIFEST"
 echo "Network Path checks sourced from a pod/node on: $* can then resolve live identity."
-echo "To revoke: aws eks delete-access-entry --cluster-name <c> --principal-arn $ROLE_ARN"
+echo ""
+# CI-review MAJOR fix (round 23): this used to unconditionally print
+# "delete-access-entry --principal-arn $ROLE_ARN" — for the documented member-account
+# `ROLE_ARN=...AWSopsReadOnlyRole` override case, that DELETES THE WHOLE ACCESS ENTRY, including
+# any onboarding-provisioned `AmazonEKSViewPolicy` grant that principal legitimately carries for
+# unrelated reasons — reproducing on this script's own printed output the exact shared-principal
+# destructiveness rounds 21/22 fixed in the script's actual BEHAVIOR. The guidance is now scoped:
+# remove only the `network-path-reader` group (never the whole entry) for an overridden
+# principal, and only offer full entry deletion for the DEFAULT worker task role, with an
+# explicit warning to confirm nothing else is attached first.
+echo "To revoke access for this feature specifically (works for either principal):"
+echo "  # 1) remove ONLY the network-path-reader group (never the whole entry on a shared principal):"
+echo "  aws eks describe-access-entry --cluster-name <c> --principal-arn $ROLE_ARN \\"
+echo "    --query 'accessEntry.kubernetesGroups' --output text"
+echo "  # then re-run update-access-entry --kubernetes-groups with that list MINUS network-path-reader"
+echo "  # (an empty resulting list is fine; it does not delete the entry)"
+if [ -n "$IS_DEFAULT_PRINCIPAL" ]; then
+  echo "  # 2) this IS the default worker task role — full entry deletion is safe ONLY if"
+  echo "  #    'aws eks list-associated-access-policies' and the kubernetesGroups list above are"
+  echo "  #    BOTH confirmed empty (nothing else attached):"
+  echo "  aws eks delete-access-entry --cluster-name <c> --principal-arn $ROLE_ARN"
+else
+  echo "  # 2) this is an OVERRIDDEN principal (e.g. a member account's AWSopsReadOnlyRole) —"
+  echo "  #    do NOT delete-access-entry: it is not this script's to own, and other grants (e.g."
+  echo "  #    onboarding's AmazonEKSViewPolicy) may legitimately depend on this entry surviving."
+fi

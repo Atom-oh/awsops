@@ -1139,6 +1139,28 @@ class TestCalicoPolicy:
         assert ingress_result["status"] == "allowed"  # no "ingress" key -> Ingress type doesn't apply
         assert egress_result["status"] == "blocked"   # "egress" key present -> selected, no rule matches
 
+    def test_policy_level_unmodeled_field_is_unknown_not_ignored(self):
+        """CI-review MAJOR fix (round 23): round 21's allowlist principle applied to Rule/
+        EntityRule keys only — a real Calico POLICY spec field this adapter never reads (e.g.
+        `serviceAccountSelector`) could scope the policy away from this pod entirely silently,
+        so its presence must degrade the result, not be ignored."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [],
+                     "serviceAccountSelector": "team == 'platform'"}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_no_rules_at_all_and_omitted_types_still_defaults_to_ingress_selected(self):
+        """CI-review MAJOR fix (round 23): a policy with NEITHER an `ingress` NOR an `egress` key,
+        and no `types`, is a valid Calico default-deny shape — real Calico defaults `types` to
+        `[Ingress]` whenever there are no egress rules (this case has none), so the policy SHOULD
+        select the pod for Ingress and reduce to `blocked`. The old "symmetric rule presence"
+        defaulting treated this as not-selecting-at-all and confidently `allowed`ed instead."""
+        policies = [{"selector": "role == 'web'"}]  # no "types", no "ingress"/"egress" keys at all
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "blocked"
+
 
 # ── Gap 3: Route 53 resolution — REAL evaluation of already-fetched zone data ──────────────────
 
@@ -1266,6 +1288,19 @@ class TestRoute53Resolution:
 
     def test_out_of_zone_alias_target_is_unknown_not_allowed(self):
         records = [{"name": "app.example.com", "type": "ALIAS", "alias_target": "external-lb.other-domain.com"}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "unknown"
+
+    def test_multiple_alias_pointer_records_at_the_same_name_is_unknown_not_allowed(self):
+        """CI-review MAJOR fix (round 23): a weighted/failover/latency routing-policy SET of >=2
+        ALIAS records at the same name is a real, supported Route 53 shape — chain-following only
+        ran for a SINGLE matched record, so this set skipped it entirely and (since ALIAS is an
+        address type) reported a confident `allowed` without ever checking either pointer's own
+        target. Which record answers, and whether its target resolves, is unmodeled — `unknown`."""
+        records = [
+            {"name": "app.example.com", "type": "ALIAS", "alias_target": "primary.example.com", "failover": "PRIMARY"},
+            {"name": "app.example.com", "type": "ALIAS", "alias_target": "secondary.example.com", "failover": "SECONDARY"},
+        ]
         r = ad.eval_route53_resolution(records, "app.example.com")
         assert r["status"] == "unknown"
 

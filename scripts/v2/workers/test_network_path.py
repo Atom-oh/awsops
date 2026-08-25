@@ -150,6 +150,11 @@ class TestResolve:
         finishes = conn.run_finishes()
         assert finishes[-1]["s"] == "failed"
         assert "does not match" in finishes[-1]["err"]
+        # CI-review MINOR fix (round 23): this NetworkPathError branch used to persist `str(e)`
+        # verbatim, unlike the broad-Exception branch's `_redact_sensitive` — the raw 12-digit
+        # account ids embedded in this exact message must not reach the persisted error column.
+        assert "111111111111" not in finishes[-1]["err"]
+        assert "222222222222" not in finishes[-1]["err"]
 
     def test_run_rejects_a_missing_source_account_id_on_the_payload(self):
         """A payload lacking `source_account_id` entirely is treated as fail-closed the same as a
@@ -890,6 +895,25 @@ class TestVerify:
                      }}}
         steps = np.verify_candidate(candidate, {"protocol": "tcp", "port": 443}, deadline_at=1e18)
         assert steps[0]["status"] == "allowed"
+
+    def test_k8s_calico_layer_wiring_is_unknown_when_policies_fetched_marker_is_absent(self):
+        """CI-review MAJOR fix (round 23): the `k8s-calico` layer's wiring used to default
+        `policies_fetched` to `True` — inconsistent with the sibling `dns`/`k8s-service-
+        resolution` wiring (both default `False`) and a regression versus the OLD stub this real
+        evaluator replaced (which always returned `unknown`). Partially-populated candidate data
+        (a real Calico policy list, but no `policies_fetched` marker at all — the marker simply
+        was never plumbed through by whatever populated `policies`) must not reach a confident
+        verdict from data this worker never actually confirmed it fetched."""
+        candidate = {"candidate_id": "c0", "kind": "resolved",
+                     "layer_plan": ["k8s-calico"],
+                     "data": {"k8s-calico": {
+                         "policies": [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": []}],
+                         "pod_labels": {"role": "web"}, "direction": "ingress",
+                         "crd_present": True, "api_version": "projectcalico.org/v3",
+                         # deliberately no "policies_fetched" key
+                     }}}
+        steps = np.verify_candidate(candidate, {"protocol": "tcp", "port": 443}, deadline_at=1e18)
+        assert steps[0]["status"] == "unknown"
 
     def test_evidence_item_count_capped(self):
         big_evidence = [{"i": i} for i in range(50)]

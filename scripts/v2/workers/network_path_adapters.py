@@ -956,16 +956,27 @@ def _calico_selector_matches(selector, labels):
 
 def _calico_policy_type_applies(policy, direction):
     """Calico's `types` defaulting: when present, only that explicit list applies (case-insensitive,
-    same as core K8s). When OMITTED, Calico's own docs default on RULE PRESENCE for BOTH directions
-    symmetrically (unlike core K8s's `_policy_type_applies`, which always defaults Ingress on
-    regardless of rule presence) — Ingress applies iff an `ingress` key is present, Egress iff an
-    `egress` key is present."""
+    same as core K8s). When OMITTED, Calico's own docs default `types` to `Ingress` UNLESS the
+    policy has egress rules (in which case `Egress` is also included) — this is NOT symmetric
+    rule-presence defaulting for both directions the way an earlier version of this comment
+    claimed.
+
+    CI-review MAJOR fix (round 23): the earlier "symmetric rule presence" defaulting (`key in
+    policy` for BOTH directions) inverted the verdict for the no-rules-at-all case — a
+    selector-only policy with NEITHER an `ingress` NOR an `egress` key, and no `types`, is a valid
+    Calico default-deny shape whose real default is `types: [Ingress]` (Calico ALWAYS defaults
+    Ingress in when there are no egress rules to override that), so it SHOULD select the pod for
+    Ingress and reduce to `blocked` — the old code returned `key in policy` -> `False` for
+    Ingress, treating the policy as not selecting the pod at all and confidently `allowed`ing
+    traffic a real cluster would default-deny. Egress's own defaulting (applies iff an `egress`
+    key is present) was already correct and is unchanged."""
     types = policy.get("types")
     if types:
         want = "ingress" if direction == "ingress" else "egress"
         return want in {str(t).lower() for t in types}
-    key = "ingress" if direction == "ingress" else "egress"
-    return key in policy
+    if direction == "ingress":
+        return "egress" not in policy
+    return "egress" in policy
 
 
 def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observed_api_version=None,
@@ -1018,8 +1029,23 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
                            "cannot evaluate (missing data, not a confirmed absence of policy)",
                 "evidence": []}
 
+    # CI-review MAJOR fix (round 23): round 21's allowlist principle was applied to Rule/EntityRule
+    # keys only — a real Calico policy SPEC field this adapter doesn't read (e.g.
+    # `serviceAccountSelector`, `preDNAT`, `applyOnForward`, `doNotTrack`) could scope the policy
+    # away from this pod, or change how/whether it applies, entirely silently; the same
+    # whack-a-mole class rounds 18-22 closed at the rule level was left open at the policy level.
+    # `order` is deliberately allowlisted as "known and already handled elsewhere" — this module's
+    # existing cross-policy-order gap is a documented, accepted limitation (see this function's own
+    # docstring on `saw_deny_or_pass_conflict`), not something this guard needs to re-flag.
+    _MODELED_POLICY_KEYS = {"selector", "types", "ingress", "egress", "order"}
     selecting = []
     for p in policies:
+        if any(k not in _MODELED_POLICY_KEYS for k in p):
+            return {"layer": layer, "status": "unknown", "resource": None,
+                    "summary": "a Calico policy uses a spec field this adapter does not model "
+                               "(e.g. serviceAccountSelector/preDNAT/applyOnForward/doNotTrack) — "
+                               "whether/how it governs this pod cannot be confidently determined",
+                    "evidence": []}
         match = _calico_selector_matches(p.get("selector"), pod_labels)
         if match is None:
             return {"layer": layer, "status": "unknown", "resource": None,
@@ -1387,6 +1413,24 @@ def eval_route53_resolution(records, query_host, data_available=True):
         return {"layer": "dns", "status": "blocked", "resource": None,
                 "summary": f"no Route 53 record resolves {host!r} (NXDOMAIN against known zone data)",
                 "evidence": []}
+    # CI-review MAJOR fix (round 23): the chain-following loop below only ever ran when EXACTLY
+    # ONE record matched — a weighted/failover/latency SET of >=2 CNAME/ALIAS records at the same
+    # name (a real, supported Route 53 routing-policy shape) skipped chain-following entirely, and
+    # since `ALIAS` is in `_R53_ADDRESS_TYPES`, those records were then treated as terminally
+    # address-resolving on their own even though every one of them is still just a pointer whose
+    # OWN target was never checked — the same "trust a pointer without following it" class the
+    # round-18/22 fixes closed for the single-record case, left open here. This module has no
+    # routing-policy model (which record in the set would actually answer a given query), so a
+    # multi-record set where EVERY record is an unresolved CNAME/ALIAS pointer degrades to
+    # `unknown` rather than guessing any one of them is the answer.
+    if len(matched) > 1 and all(
+            r.get("type") in ("CNAME", "ALIAS") and r.get("alias_target") for r in matched):
+        return {"layer": "dns", "status": "unknown", "resource": host,
+                "summary": f"Route 53 has multiple CNAME/ALIAS pointer records for {host!r} "
+                           "(a weighted/failover/latency routing-policy set) — which one answers "
+                           "a given query, and whether its own target resolves, is not "
+                           "determinable from zone data without routing-policy modeling",
+                "evidence": matched}
     # A CNAME (or ALIAS — see round-22 fix below) with no further usable data at its target is
     # followed one hop, still within the already-fetched `records` set (no live DNS query is
     # ever issued).
