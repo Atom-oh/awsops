@@ -13,7 +13,7 @@ import DxTopology from '@/components/dx/DxTopology';
 import HBarList from '@/components/charts/HBarList';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { DxAnalysis, DxConnectionRow, DxVifRow, DxGatewayRow, DxRoute } from '@/lib/dx';
-import { assessResiliency, type DxSlaTier, type DxResiliency } from '@/lib/dx-topology';
+import { assessResiliency, type DxSlaTier, type DxResiliency, type DxNoneReason } from '@/lib/dx-topology';
 import type { InvType } from '@/lib/inventory-types';
 
 // /direct-connect — Direct Connect 리스트+분석 (Network 메뉴). 커넥션/VIF를 리전 fan-out으로
@@ -158,16 +158,19 @@ const TIER_LABEL: Record<DxSlaTier, string> = {
 const TIER_TONE: Record<DxSlaTier, 'positive' | 'neutral' | 'negative'> = {
   maximum: 'positive', high: 'neutral', single: 'negative', none: 'negative',
 };
-// 리뷰(Codex stop-hook): tier==='none'은 두 가지 다른 상황을 뭉뚱그린다 — (a) 커넥션이
-// 정말 0개, (b) 전량 호스티드라 AWS SLA 산정 대상 owned 커넥션이 0개(assessResiliency의
-// 티어 산정에서 호스티드를 제외한 결과). (b)를 "커넥션 없음"으로 표시하면 실제로 존재하는
-// 호스티드 커넥션을 없는 것처럼 오도한다.
-// 리뷰(Codex stop-hook, 2차): hostedConnections는 '배포 상태' 커넥션만 센다 — owned
-// 커넥션이 pending/ordering 상태로 존재하면(아직 미배포) tier==='none'이면서
-// hostedConnections>0일 수 있는데, 이 경우는 "전량 호스티드"가 아니라 "배포된 owned가
-// 없을 뿐"이다. allConnectionsHosted(상태 무관 전체 커넥션 기준)로만 이 라벨을 판단한다.
+// 리뷰(Codex stop-hook, 3라운드): tier==='none'은 서로 다른 라벨이 필요한 세 상황을
+// 뭉뚱그린다 — assessResiliency()가 계산한 noneReason(단일 소스)으로 그대로 분기한다.
+// 이전 두 라운드는 각각 hostedConnections(배포 상태 한정)·allConnectionsHosted(상태
+// 무관이지만 이분법)라는 단일 축만 봐서, owned+호스티드가 혼재하는데 배포된 owned가
+// 0개인 "혼재" 케이스를 매번 "커넥션 없음"으로 오분류했다 — noneReason이 그 세 번째
+// 경우를 별도 값으로 이미 구분해 반환하므로 여기서 재조합할 필요가 없다.
+const NONE_REASON_LABEL: Record<DxNoneReason, string> = {
+  'no-connections': '커넥션 없음',
+  'all-hosted': 'AWS SLA 해당 없음 (전량 호스티드)',
+  'no-deployed-owned': 'AWS SLA 미확정 (배포된 owned 커넥션 없음)',
+};
 function tierLabel(r: DxResiliency): string {
-  if (r.tier === 'none' && r.allConnectionsHosted) return 'AWS SLA 해당 없음 (전량 호스티드)';
+  if (r.tier === 'none' && r.noneReason) return NONE_REASON_LABEL[r.noneReason];
   return TIER_LABEL[r.tier];
 }
 

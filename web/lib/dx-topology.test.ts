@@ -112,6 +112,7 @@ describe('assessResiliency (DX SLA 티어 — sample-network-resilience-agent �
     const r = assessResiliency({ connections: [], vifs: [], gateways: [] });
     expect(r.tier).toBe('none');
     expect(r.slaPct).toBeNull();
+    expect(r.noneReason).toBe('no-connections');
   });
   it('single 95%: 로케이션 1곳', () => {
     const r = assessResiliency({ connections: [conn({}), conn({ id: 'dxcon-2' })], vifs: [], gateways: [] });
@@ -194,10 +195,10 @@ describe('assessResiliency (DX SLA 티어 — sample-network-resilience-agent �
     expect(r.tier).toBe('none');
     expect(r.slaPct).toBeNull();
     expect(r.locations).toBe(0);
-    expect(r.allConnectionsHosted).toBe(true);
+    expect(r.noneReason).toBe('all-hosted');
   });
 
-  it('리뷰(Codex stop-hook, 2차): pending 상태의 owned 커넥션이 있으면 tier=none이어도 "전량 호스티드"가 아니다', () => {
+  it('리뷰(Codex stop-hook, 3라운드): pending 상태의 owned 커넥션 + 배포된 호스티드 커넥션이 혼재하면 "전량 호스티드"도 "커넥션 없음"도 아닌 별도 사유(no-deployed-owned)로 구분된다', () => {
     const r = assessResiliency({
       connections: [
         // owned지만 아직 미배포(pending) — deployedAll/total/hostedConnections 어디에도 안 잡힘.
@@ -209,8 +210,9 @@ describe('assessResiliency (DX SLA 티어 — sample-network-resilience-agent �
     });
     expect(r.tier).toBe('none'); // 배포된 owned 커넥션이 0개라 SLA 티어 산정 대상이 없음
     expect(r.hostedConnections).toBe(1);
-    // 하지만 pending owned 커넥션이 존재하므로 "전량 호스티드"라고 말하면 거짓 — false여야 한다.
-    expect(r.allConnectionsHosted).toBe(false);
+    // pending owned 커넥션이 존재하므로 "전량 호스티드"(all-hosted)도, 커넥션이 실제로 있으므로
+    // "커넥션 없음"(no-connections)도 아니다 — 세 번째 사유로 정확히 구분돼야 한다.
+    expect(r.noneReason).toBe('no-deployed-owned');
   });
 
   it('체크: 다운 커넥션·미연결 DXGW·미연결 VIF가 실패로 표시', () => {

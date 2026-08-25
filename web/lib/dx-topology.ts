@@ -145,6 +145,17 @@ export interface DxResiliencyCheck {
   detail?: string;
 }
 
+/**
+ * tier==='none'일 때 '왜' none인지 — 이 세 가지는 화면에 서로 다른 문구가 필요하다:
+ * - 'no-connections': 커넥션이 정말 하나도 없음 (상태 무관).
+ * - 'all-hosted': 커넥션은 있지만 전부(상태 무관) 호스티드 — AWS SLA 산정 대상 자체가 없음.
+ * - 'no-deployed-owned': owned 커넥션이 존재하긴 하지만 전부 미배포(pending/ordering 등)
+ *   상태이거나, owned+호스티드가 혼재하는데 배포된 owned가 0개 — "전량 호스티드"도
+ *   "커넥션 없음"도 아니다("일부는 호스티드고 일부는 아직 배포 전"일 수도 있음).
+ * tier !== 'none'이면 null.
+ */
+export type DxNoneReason = 'no-connections' | 'all-hosted' | 'no-deployed-owned';
+
 export interface DxResiliency {
   tier: DxSlaTier;
   /** AWS Direct Connect SLA 공표 수치. */
@@ -154,13 +165,8 @@ export interface DxResiliency {
   dualConnLocations: number;
   /** 호스티드(파트너 경유) 커넥션 수 — AWS DX SLA 적용 제외 대상 (배포 상태 커넥션 기준). */
   hostedConnections: number;
-  /**
-   * '모든' 커넥션(상태 무관 — deleted/pending 등 미배포 상태도 포함)이 호스티드일 때만 true.
-   * tier==='none'이라고 해서 이게 true인 건 아니다: owned 커넥션이 pending/ordering
-   * 상태로 존재하면(아직 미배포라 total에서는 제외되지만 owned임) "전량 호스티드"가 아니라
-   * "배포된 owned 커넥션이 없음"일 뿐이다 — 화면에서 이 둘을 구분해야 한다.
-   */
-  allConnectionsHosted: boolean;
+  /** tier==='none'일 때만 non-null — 위 DxNoneReason 참고. */
+  noneReason: DxNoneReason | null;
   /** 일부 로케이션에서 awsDevice 정보가 없어 디바이스 이중화 여부를 확정할 수 없음. */
   deviceRedundancyUnverifiable: boolean;
   checks: DxResiliencyCheck[];
@@ -179,9 +185,6 @@ export function assessResiliency(a: Pick<DxAnalysis, 'connections' | 'vifs' | 'g
   const isHosted = (c: DxConnectionRow) => c.partnerName != null && c.partnerName !== '';
   const deployed = deployedAll.filter((c) => !isHosted(c));
   const hostedConnections = deployedAll.filter(isHosted).length;
-  // 상태 무관 전체 커넥션 기준 — "전량 호스티드" 표시는 이 신호로만 판단한다(위 hostedConnections는
-  // 배포 상태 한정이라 pending/ordering owned 커넥션이 있어도 놓친다).
-  const allConnectionsHosted = a.connections.length > 0 && a.connections.every(isHosted);
 
   // 이중화는 로케이션당 '고유 AWS 디바이스' 수 기준 (sample sla-gating.ts와 동일 —
   // 같은 디바이스의 커넥션 2개는 디바이스 장애에 함께 죽는다). awsDevice가 없는 커넥션은
@@ -211,6 +214,14 @@ export function assessResiliency(a: Pick<DxAnalysis, 'connections' | 'vifs' | 'g
 
   const connsDown = a.connections.filter((c) => c.down).length;
   const totalAll = a.connections.length;
+  // tier==='none'인 '이유' — 화면 라벨이 세 경우를 구분해야 한다(리뷰, 라운드 3: hostedConnections/
+  // allConnectionsHosted 둘 다 '배포 상태'나 '상태 무관 전체'라는 단일 축만 봐서 owned+호스티드가
+  // 혼재하는데 배포된 owned가 0인 경우를 여전히 오분류했다). totalAll(상태 무관 전체 커넥션 수)과
+  // 상태 무관 전체가 전부 호스티드인지를 함께 봐야 세 경우가 정확히 갈린다.
+  const noneReason: DxNoneReason | null = tier !== 'none' ? null
+    : totalAll === 0 ? 'no-connections'
+      : a.connections.every(isHosted) ? 'all-hosted'
+        : 'no-deployed-owned';
   const vifsDown = a.vifs.filter((v) => v.down).length;
   const unassociated = a.gateways.filter((g) => g.unassociated).length;
   const unattachedVifs = a.vifs.filter((v) => v.type !== 'public' && !v.attachedTo).length;
@@ -225,7 +236,7 @@ export function assessResiliency(a: Pick<DxAnalysis, 'connections' | 'vifs' | 'g
     { label: '미연결 VIF 없음 (게이트웨이 attachment)', ok: unattachedVifs === 0, severity: 'warn', detail: unattachedVifs > 0 ? `${unattachedVifs}` : undefined },
   ];
 
-  return { tier, slaPct, locations, dualConnLocations, hostedConnections, allConnectionsHosted, deviceRedundancyUnverifiable, checks };
+  return { tier, slaPct, locations, dualConnLocations, hostedConnections, noneReason, deviceRedundancyUnverifiable, checks };
 }
 
 // ── dagre 레이아웃 (flow-layout.ts와 동일 기법 — LR 계층 배치, 중심→좌상단 변환) ──

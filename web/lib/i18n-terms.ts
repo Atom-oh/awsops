@@ -678,6 +678,7 @@ export const TERMS: Record<string, Pair> = {
   '이상 없음 — 커넥션이 2개 이상 로케이션에 분산되어 있습니다': { en: 'All clear — connections are spread across 2+ locations', zh: '无异常 — 连接分布在 2 个以上位置', ja: '異常なし — 接続は 2 か所以上のロケーションに分散' },
   '커넥션 없음': { en: 'No connections', zh: '无连接', ja: '接続なし' },
   'AWS SLA 해당 없음 (전량 호스티드)': { en: 'AWS SLA not applicable (all hosted)', zh: '不适用 AWS SLA（全部为托管连接）', ja: 'AWS SLA 対象外（全てホスト型）' },
+  'AWS SLA 미확정 (배포된 owned 커넥션 없음)': { en: 'AWS SLA undetermined (no deployed owned connections)', zh: 'AWS SLA 未确定（无已部署的自有连接）', ja: 'AWS SLA 未確定（デプロイ済みの自己所有接続なし）' },
   '대역폭 합계': { en: 'Bandwidth total', zh: '带宽总和', ja: '帯域幅合計' },
   '행 클릭 → 용량·보안·상태 상세': { en: 'Click a row → capacity / security / health details', zh: '点击行 → 容量·安全·状态详情', ja: '行をクリック → 容量・セキュリティ・状態詳細' },
   '가상 인터페이스 (VIF)': { en: 'Virtual interfaces (VIF)', zh: '虚拟接口（VIF）', ja: '仮想インターフェイス（VIF）' },
