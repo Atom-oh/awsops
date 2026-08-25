@@ -366,6 +366,24 @@ def is_date_like_partition_type(type_str) -> bool:
     return _normalize_glue_type(type_str) in _DATE_LIKE_PARTITION_TYPES
 
 
+# The subset of `_DATE_LIKE_PARTITION_TYPES` that stores the date as TEXT (as opposed to `date`/
+# `timestamp`, which are genuine temporal Glue types with no `projection.<col>.format` ambiguity —
+# partition projection's format-string parameter only applies to a STRING-typed projected column).
+_STRING_LIKE_PARTITION_TYPES = {"string", "varchar", "char"}
+
+
+def is_string_like_partition_type(type_str) -> bool:
+    """CI-review MAJOR fix (round 7): `sg_rule_athena_broker._validate`'s projection date-format
+    gate used to run only when `str(key_type).strip().lower() == "string"` EXACTLY — missing
+    `varchar`/`varchar(10)`/`char`/`char(20)`, which `_normalize_glue_type`/`is_date_like_partition_
+    type` already treat as date-like text columns elsewhere in this module. Since the `projection`
+    strategy has no `_partition_exists` existence check to catch a format mismatch, a `varchar`-typed
+    projected key with a non-ISO `projection.<col>.format` slipped the gate entirely and would
+    silently match zero rows every day. Normalizes the same way `is_date_like_partition_type` does
+    so `string`/`varchar(10)`/`char(20)` are all covered uniformly."""
+    return _normalize_glue_type(type_str) in _STRING_LIKE_PARTITION_TYPES
+
+
 def partition_keys_excluding_scope(validation: dict) -> list:
     """Item 1 follow-up fix (round 3): the partition-key names remaining AFTER excluding any key
     already resolved as an `account_id`/`region` SCOPE key (`validation['scopeResolution']` marking

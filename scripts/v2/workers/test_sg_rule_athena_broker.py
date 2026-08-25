@@ -632,7 +632,7 @@ def test_validate_rejects_a_non_date_typed_single_partition_key_under_projection
 #    `no_observed_evidence`. Reject at validate time unless the declared `projection.<col>.format`
 #    is absent or exactly the ISO pattern this module emits. ────────────────────────────────────────
 
-def _validate_projection_string_key(monkeypatch, conn, proj_format_params):
+def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_type="string"):
     class FakeAthenaWorkGroup:
         def get_work_group(self, WorkGroup):
             return {"WorkGroup": {"Configuration": {
@@ -649,7 +649,7 @@ def _validate_projection_string_key(monkeypatch, conn, proj_format_params):
             params.update(proj_format_params)
             return {"Table": {
                 "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
-                "PartitionKeys": [{"Name": "dt", "Type": "string"}],
+                "PartitionKeys": [{"Name": "dt", "Type": key_type}],
                 "Parameters": params,
             }}
 
@@ -680,6 +680,62 @@ def test_validate_accepts_a_projection_string_key_with_no_declared_format(monkey
     """No `projection.<col>.format` at all is Athena's own ISO default — not an error."""
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
     result = _validate_projection_string_key(monkeypatch, conn, {})
+    assert result["ok"] is True
+
+
+# ── CI-review MAJOR fix (round 7): the format gate above compared the Glue type with a bare
+#    `== "string"`, missing the length-parameterized `varchar(10)`/`char(20)` forms
+#    `sm._normalize_glue_type` exists to handle, and never inspected `projection.<col>.type` at
+#    all — an `enum`/`integer`/`injected` projection (arbitrary or epoch-shaped values, not ISO date
+#    strings) on a string-typed key sailed through whenever no `.format` param was set. ────────────
+
+def test_validate_rejects_a_projection_varchar_key_with_a_non_iso_date_format(monkeypatch):
+    """A length-parameterized `varchar(10)` Glue type must be normalized before the format check —
+    not just a bare `string` type — otherwise this exact class of projection column bypasses
+    format validation entirely."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="non-ISO date format"):
+        _validate_projection_string_key(
+            monkeypatch, conn, {"projection.dt.format": "yyyy/MM/dd"}, key_type="varchar(10)")
+
+
+def test_validate_rejects_a_projection_key_declared_integer_typed(monkeypatch):
+    """`projection.<col>.type=integer` means the projected values are numeric (e.g. epoch days),
+    never ISO date strings — must be rejected regardless of whether `.format` happens to be set,
+    since assuming ISO would silently match zero rows every day (no existence check to catch it)."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_type_not_date"):
+        _validate_projection_string_key(monkeypatch, conn, {"projection.dt.type": "integer"})
+
+
+def test_validate_rejects_a_projection_char_key_with_a_non_iso_date_format(monkeypatch):
+    """A length-parameterized `char(20)` Glue type must ALSO be normalized before the format
+    check — the same class of bug as the `varchar(10)` case above, for the other string-like
+    parameterized type."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="non-ISO date format"):
+        _validate_projection_string_key(
+            monkeypatch, conn, {"projection.dt.format": "yyyy/MM/dd"}, key_type="char(20)")
+
+
+def test_validate_rejects_a_projection_key_declared_enum_typed_even_without_a_format(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_type_not_date"):
+        _validate_projection_string_key(monkeypatch, conn, {"projection.dt.type": "enum"})
+
+
+def test_validate_rejects_a_projection_key_declared_injected_typed_even_without_a_format(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_type_not_date"):
+        _validate_projection_string_key(monkeypatch, conn, {"projection.dt.type": "injected"})
+
+
+def test_validate_accepts_a_projection_key_explicitly_declared_date_typed(monkeypatch):
+    """`projection.<col>.type=date` (explicit) is the expected/documented shape and must still
+    pass, combined with a valid ISO format."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_projection_string_key(
+        monkeypatch, conn, {"projection.dt.type": "date", "projection.dt.format": "yyyy-MM-dd"})
     assert result["ok"] is True
 
 

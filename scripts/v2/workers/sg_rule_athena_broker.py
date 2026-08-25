@@ -286,27 +286,44 @@ def _validate(event, conn):
                     "can never be bounded to a day and must not be scanned; use a Hive-style "
                     "year/month/day partitioned table or re-partition on a date-typed key "
                     "[reason: partition_key_type_not_date_shaped]")
-            # MINOR fix (L4 finding, round 6): a `string`-typed single partition key under the
-            # PROJECTION strategy is trusted by the check above to hold an ISO `YYYY-MM-DD` date
-            # string — but partition projection lets the table's own `projection.<col>.format`
-            # parameter declare a DIFFERENT (Java `SimpleDateFormat`-style) pattern, e.g.
-            # `yyyy/MM/dd`. There is no `_partition_exists` existence check for projection tables
-            # (unlike `partition_keys`), so a format mismatch here would silently match ZERO rows
-            # every day and commit a confident `no_observed_evidence` for real traffic. We cannot
-            # positively confirm from this sandbox exactly how a NON-ISO format value should be
-            # translated into the day-SELECT's own predicate, so — rather than assume ISO — take the
-            # SAFER path: reject at validate time unless the declared format is exactly the ISO
-            # pattern this module already emits (`yyyy-MM-dd`), or no format is declared at all
-            # (Athena's own default for a `string`-typed projected column is `yyyy-MM-dd`, per its
-            # partition-projection docs).
-            if strategy == "projection" and str(key_type or "").strip().lower() == "string":
-                proj_format = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.format")
-                if proj_format and proj_format.strip() != "yyyy-MM-dd":
+            # MINOR fix (L4 finding, round 6; closed round 7): a `string`-typed single partition
+            # key under the PROJECTION strategy is trusted by the check above to hold an ISO
+            # `YYYY-MM-DD` date string — but partition projection lets the table's own
+            # `projection.<col>.format` parameter declare a DIFFERENT (Java `SimpleDateFormat`-
+            # style) pattern, e.g. `yyyy/MM/dd`, and `projection.<col>.type` can declare the
+            # projection is `enum`/`integer`/`injected` (arbitrary or epoch-shaped values), NOT a
+            # date at all — regardless of what the Glue CATALOG column type happens to say. There
+            # is no `_partition_exists` existence check for projection tables (unlike
+            # `partition_keys`), so either mismatch would silently match ZERO rows every day and
+            # commit a confident `no_observed_evidence` for real traffic.
+            #
+            # CI-review MAJOR fix (round 7): this check used to (a) compare `key_type` with a bare
+            # `== "string"`, missing the SAME length-parameterized `varchar(10)`/`char(20)` forms
+            # `sm.is_string_like_partition_type` exists to handle (a `varchar`-typed projection key
+            # sailed through unchecked), and (b) never looked at `projection.<col>.type` at all, so an
+            # `enum`/`integer`/`injected` projection on a string-typed key passed through whenever
+            # no `.format` param happened to be set (treated as "safe ISO default"). Both are
+            # closed together: normalize the type before the string-like membership check, and
+            # explicitly require `projection.<col>.type` to be absent or `date` — anything else
+            # is rejected outright, matching this fix's own "rather than assume ISO, take the safer
+            # path" rationale.
+            if strategy == "projection":
+                proj_type_param = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.type")
+                if proj_type_param and proj_type_param.strip().lower() != "date":
                     raise BrokerError(
-                        f"partition key {remaining_key!r} is a PROJECTION column with a non-ISO "
-                        f"date format ({proj_format!r}) — date-format projection patterns other "
-                        "than yyyy-MM-dd are not yet supported, and assuming ISO would silently "
-                        "match zero rows every day [reason: projection_date_format_not_iso]")
+                        f"partition key {remaining_key!r} is a PROJECTION column declared "
+                        f"projection.{remaining_key}.type={proj_type_param!r} — only a 'date'-typed "
+                        "projection (or no declared type) is supported; 'enum'/'integer'/'injected' "
+                        "values are not guaranteed ISO date strings, and assuming so would silently "
+                        "match zero rows every day [reason: projection_type_not_date]")
+                if sm.is_string_like_partition_type(key_type):
+                    proj_format = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.format")
+                    if proj_format and proj_format.strip() != "yyyy-MM-dd":
+                        raise BrokerError(
+                            f"partition key {remaining_key!r} is a PROJECTION column with a non-ISO "
+                            f"date format ({proj_format!r}) — date-format projection patterns other "
+                            "than yyyy-MM-dd are not yet supported, and assuming ISO would silently "
+                            "match zero rows every day [reason: projection_date_format_not_iso]")
 
     optional_present = [c for c in ("flow-direction", "flow_direction", "tcp-flags", "tcp_flags",
                                     "bytes", "packets") if c.lower() in columns]
