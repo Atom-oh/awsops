@@ -220,6 +220,12 @@ CREATE TABLE sg_rule_inventory (
   active           boolean NOT NULL DEFAULT true,
   PRIMARY KEY (account_id, region, rule_id)
 );
+-- gap 5 (CI review, PR #237): a nullable `vpc_id text` column was added to this table by migration
+-- `01M0W55KJ1TVMMYJ4AH0V07Y7D_sg_rule_inventory_vpc_id.sql` (not shown in the CREATE TABLE above,
+-- which stays as the table's ORIGINAL shape at design time) — the Rules page's "VPC" column/filter
+-- reads it. Populated from the same ENI membership snapshot the daily worker already fetches for
+-- step 2 (a group_id -> vpc_id map, no extra AWS call); existing rows and SGs with no ENI in the
+-- snapshot stay NULL until/unless a scan cycle can populate them.
 -- Review MAJOR (confirmed, 3 models): the sg_rule_inventory above is a mutable cache holding exactly
 -- one current fingerprint per rule_id — fine for the Rules inventory page (current-state lookup), but
 -- the matching engine needs to know "what did this rule look like when this flow was observed," which

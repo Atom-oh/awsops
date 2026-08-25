@@ -26,26 +26,42 @@ function EmptyState({ message }: { message: string }) {
 
 // ── Structured source/destination/request selector ────────────────────────────────────────────
 //
-// Wire format built here matches the existing `NetworkPathDefinition` contract (source/destination/
-// request each an arbitrary JSON object — see lib/network-path.ts's validateDefinition, which only
-// checks the three keys are objects). No API/DB shape change was needed: this only replaces the
-// free-form JSON textarea UX with typed fields that assemble the same kind of plain object. The
-// concrete shapes below follow the spec's "Supported endpoints" list (source: EKS Pod/Node;
-// destination: AWS resource / internet IP-or-URL / on-prem IP-or-URL) and "Result semantics" section.
-type SourceKind = 'eks_pod' | 'eks_node';
-type DestKind = 'aws_resource' | 'internet' | 'on_prem';
+// CI-review MAJOR fix (round 17, item 1): this form used to emit a DIFFERENT vocabulary than the
+// worker actually consumes — `source.kind: 'eks_pod'|'eks_node'` vs. the worker's `resolve_
+// identities()` (scripts/v2/workers/network_path.py), which accepts only `'pod'|'node'`;
+// `destination.kind: 'on_prem'` vs. the worker's `'onprem'`; a `resource_id` destination field the
+// worker never reads at all; and NO `source.account_id`/`region`/`eni_id`/`subnet_id` at all, even
+// though `resolve_identities()` requires account_id+region and (eni_id OR subnet_id) INSIDE the
+// `source` object itself (not the sibling `source_account_id` DB column). `validateDefinition()`
+// (lib/network-path.ts) only checks the three top-level keys are objects, so this mismatch
+// persisted a definition that only ever failed at resolve time.
+//
+// Fix = Option A (this form now emits the worker's OWN canonical vocabulary directly, rather than
+// adding a server-side translation layer): `source.kind` is `'pod'|'node'`, `source.account_id`/
+// `region` are threaded from the form's own account-id/region fields, `source.eni_id`/`subnet_id`
+// are new explicit fields (at least one is required — `resolve_identities()` rejects a source with
+// neither), and `destination.kind` for the on-prem case is `'onprem'`. An `aws_resource`
+// destination now supplies `eni_id`/`cidr`/`ip` (whichever the worker can actually match against
+// — `resource_id` was never read by any adapter) instead of the old single `resource_id` field.
+type SourceKind = 'pod' | 'node';
+type DestKind = 'aws_resource' | 'internet' | 'onprem';
 type Protocol = 'tcp' | 'udp' | 'icmp';
 
 interface FormState {
   name: string;
   sourceAccountId: string;
+  sourceRegion: string;
   sourceKind: SourceKind;
   sourceCluster: string;
   sourceNamespace: string;
   sourcePodName: string;
   sourceNodeName: string;
+  sourceEniId: string;
+  sourceSubnetId: string;
   destKind: DestKind;
-  destResourceId: string;
+  destEniId: string;
+  destCidr: string;
+  destIp: string;
   destHost: string;
   destPath: string;
   onPremHost: string;
@@ -56,13 +72,18 @@ interface FormState {
 const EMPTY_FORM: FormState = {
   name: '',
   sourceAccountId: '',
-  sourceKind: 'eks_pod',
+  sourceRegion: '',
+  sourceKind: 'pod',
   sourceCluster: '',
   sourceNamespace: '',
   sourcePodName: '',
   sourceNodeName: '',
+  sourceEniId: '',
+  sourceSubnetId: '',
   destKind: 'aws_resource',
-  destResourceId: '',
+  destEniId: '',
+  destCidr: '',
+  destIp: '',
   destHost: '',
   destPath: '',
   onPremHost: '',
@@ -70,50 +91,89 @@ const EMPTY_FORM: FormState = {
   port: '443',
 };
 
-/** Best-effort inverse of buildDefinition() — used to pre-fill the edit form from a saved check. */
+/**
+ * Best-effort inverse of buildDefinition() — used to pre-fill the edit form from a saved check.
+ *
+ * CI-review MAJOR fix (round 17, item 1, second half): this used to DROP `account_id`/`region`/
+ * `eni_id`/`subnet_id` when reading an existing check back into the form — editing a currently-
+ * valid check and saving replaced its correct definition with this reduced shape, corrupting
+ * live data (not just a new-check bug). Every field `buildDefinition()` can emit is now round-
+ * tripped here, so re-saving after an edit never silently drops a field the definition already
+ * had populated (including ones populated by a live run's `resolve_live_identity()`, e.g. a
+ * confirmed `eni_id` that started out as a bare `subnet_id`).
+ */
 function formStateFromCheck(check: NetworkPathCheckRow): FormState {
   const d = check.definition ?? { source: {}, destination: {}, request: {} };
   const s = (d.source ?? {}) as Record<string, unknown>;
   const dest = (d.destination ?? {}) as Record<string, unknown>;
   const req = (d.request ?? {}) as Record<string, unknown>;
-  const sourceKind: SourceKind = s.kind === 'eks_node' ? 'eks_node' : 'eks_pod';
-  const destKind: DestKind = dest.kind === 'internet' || dest.kind === 'on_prem' ? (dest.kind as DestKind) : 'aws_resource';
+  const sourceKind: SourceKind = s.kind === 'node' ? 'node' : 'pod';
+  const destKind: DestKind =
+    dest.kind === 'internet' || dest.kind === 'onprem' ? (dest.kind as DestKind) : 'aws_resource';
   return {
     name: check.name,
     sourceAccountId: check.source_account_id,
+    sourceRegion: typeof s.region === 'string' ? s.region : '',
     sourceKind,
     sourceCluster: typeof s.cluster === 'string' ? s.cluster : '',
     sourceNamespace: typeof s.namespace === 'string' ? s.namespace : '',
     sourcePodName: typeof s.pod_name === 'string' ? s.pod_name : '',
     sourceNodeName: typeof s.node_name === 'string' ? s.node_name : '',
-    destResourceId: typeof dest.resource_id === 'string' ? dest.resource_id : '',
+    sourceEniId: typeof s.eni_id === 'string' ? s.eni_id : '',
+    sourceSubnetId: typeof s.subnet_id === 'string' ? s.subnet_id : '',
+    destKind,
+    destEniId: destKind === 'aws_resource' && typeof dest.eni_id === 'string' ? dest.eni_id : '',
+    destCidr: destKind === 'aws_resource' && typeof dest.cidr === 'string' ? dest.cidr : '',
+    destIp: destKind === 'aws_resource' && typeof dest.ip === 'string' ? dest.ip : '',
     destHost: destKind === 'internet' && typeof dest.host === 'string' ? dest.host : '',
     destPath: typeof dest.path === 'string' ? dest.path : '',
-    onPremHost: destKind === 'on_prem' && typeof dest.host === 'string' ? dest.host : '',
-    destKind,
+    onPremHost: destKind === 'onprem' && typeof dest.host === 'string' ? dest.host : '',
     protocol: req.protocol === 'udp' || req.protocol === 'icmp' ? req.protocol : 'tcp',
     port: typeof req.port === 'number' ? String(req.port) : '',
   };
 }
 
 function buildDefinition(f: FormState) {
-  const source =
-    f.sourceKind === 'eks_pod'
-      ? { kind: 'eks_pod', cluster: f.sourceCluster, namespace: f.sourceNamespace, pod_name: f.sourcePodName }
-      : { kind: 'eks_node', cluster: f.sourceCluster, node_name: f.sourceNodeName };
+  const source: Record<string, unknown> = {
+    kind: f.sourceKind,
+    account_id: f.sourceAccountId,
+    region: f.sourceRegion,
+    cluster: f.sourceCluster,
+    ...(f.sourceKind === 'pod'
+      ? { namespace: f.sourceNamespace, pod_name: f.sourcePodName }
+      : { node_name: f.sourceNodeName }),
+    ...(f.sourceEniId.trim() ? { eni_id: f.sourceEniId.trim() } : {}),
+    ...(f.sourceSubnetId.trim() ? { subnet_id: f.sourceSubnetId.trim() } : {}),
+  };
 
-  const destination =
+  const destination: Record<string, unknown> =
     f.destKind === 'aws_resource'
-      ? { kind: 'aws_resource', resource_id: f.destResourceId }
+      ? {
+          kind: 'aws_resource',
+          ...(f.destEniId.trim() ? { eni_id: f.destEniId.trim() } : {}),
+          ...(f.destCidr.trim() ? { cidr: f.destCidr.trim() } : {}),
+          ...(f.destIp.trim() ? { ip: f.destIp.trim() } : {}),
+        }
       : f.destKind === 'internet'
       ? { kind: 'internet', host: f.destHost, ...(f.destPath ? { path: f.destPath } : {}) }
-      : { kind: 'on_prem', host: f.onPremHost };
+      : { kind: 'onprem', host: f.onPremHost };
 
   const request: Record<string, unknown> = { protocol: f.protocol };
   if (f.protocol !== 'icmp' && f.port.trim()) request.port = Number(f.port);
   if (f.destKind === 'internet' && f.destPath) request.path = f.destPath;
 
   return { source, destination, request };
+}
+
+/** Client-side pre-check mirroring resolve_identities()'s own required-field rules (network_path.py)
+ * — catches the common mistake before an enqueued run deterministically fails at resolve time. */
+function validateFormState(f: FormState): string | null {
+  if (!f.sourceRegion.trim()) return '소스 리전은 필수입니다';
+  if (!f.sourceEniId.trim() && !f.sourceSubnetId.trim()) return '소스는 ENI ID 또는 서브넷 ID 중 하나가 필요합니다';
+  if (f.destKind === 'aws_resource' && !f.destEniId.trim() && !f.destCidr.trim() && !f.destIp.trim()) {
+    return 'AWS 리소스 목적지는 ENI ID, CIDR, IP 중 하나가 필요합니다';
+  }
+  return null;
 }
 
 const selectClass = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]';
@@ -139,6 +199,8 @@ function CheckForm({
   const submit = async () => {
     setBusy(true); setErr('');
     try {
+      const validationError = validateFormState(f);
+      if (validationError) throw new Error(validationError);
       const definition = buildDefinition(f);
       const body = { name: f.name, source_account_id: f.sourceAccountId, definition };
       const r = existing
@@ -168,14 +230,21 @@ function CheckForm({
           className={`${inputClass} disabled:opacity-50`}
         />
 
+        <input
+          placeholder={tt('소스 리전 (예: ap-northeast-2)')}
+          value={f.sourceRegion}
+          onChange={(e) => set('sourceRegion', e.target.value)}
+          className={inputClass}
+        />
+
         <div className="flex flex-col gap-1.5 rounded-md border border-ink-100 p-2">
           <div className="text-[11px] font-semibold uppercase text-ink-400">{tt('소스 (Source)')}</div>
           <select aria-label={tt('소스 종류')} value={f.sourceKind} onChange={(e) => set('sourceKind', e.target.value as SourceKind)} className={selectClass}>
-            <option value="eks_pod">{tt('EKS Pod')}</option>
-            <option value="eks_node">{tt('EKS Node')}</option>
+            <option value="pod">{tt('EKS Pod')}</option>
+            <option value="node">{tt('EKS Node')}</option>
           </select>
           <input placeholder={tt('클러스터')} value={f.sourceCluster} onChange={(e) => set('sourceCluster', e.target.value)} className={inputClass} />
-          {f.sourceKind === 'eks_pod' ? (
+          {f.sourceKind === 'pod' ? (
             <>
               <input placeholder={tt('네임스페이스')} value={f.sourceNamespace} onChange={(e) => set('sourceNamespace', e.target.value)} className={inputClass} />
               <input placeholder={tt('Pod 이름')} value={f.sourcePodName} onChange={(e) => set('sourcePodName', e.target.value)} className={inputClass} />
@@ -183,6 +252,11 @@ function CheckForm({
           ) : (
             <input placeholder={tt('노드 이름')} value={f.sourceNodeName} onChange={(e) => set('sourceNodeName', e.target.value)} className={inputClass} />
           )}
+          {/* eni_id/subnet_id: resolve_identities() requires at least one — cluster/namespace/
+              pod_name above only trigger a LIVE re-confirmation of these values at run time
+              (resolve_live_identity), they don't replace the need for an initial value here. */}
+          <input placeholder={tt('소스 ENI ID (eni_id — 선택, subnet_id 중 하나 필요)')} value={f.sourceEniId} onChange={(e) => set('sourceEniId', e.target.value)} className={inputClass} />
+          <input placeholder={tt('소스 서브넷 ID (subnet_id — 선택, ENI ID 중 하나 필요)')} value={f.sourceSubnetId} onChange={(e) => set('sourceSubnetId', e.target.value)} className={inputClass} />
         </div>
 
         <div className="flex flex-col gap-1.5 rounded-md border border-ink-100 p-2">
@@ -190,15 +264,19 @@ function CheckForm({
           <select aria-label={tt('목적지 종류')} value={f.destKind} onChange={(e) => set('destKind', e.target.value as DestKind)} className={selectClass}>
             <option value="aws_resource">{tt('AWS 리소스')}</option>
             <option value="internet">{tt('인터넷 IP 또는 URL')}</option>
-            <option value="on_prem">{tt('온프레미스 (VPN/DX)')}</option>
+            <option value="onprem">{tt('온프레미스 (VPN/DX)')}</option>
           </select>
           {f.destKind === 'aws_resource' && (
-            <input placeholder={tt('리소스 ARN 또는 ID')} value={f.destResourceId} onChange={(e) => set('destResourceId', e.target.value)} className={inputClass} />
+            <>
+              <input placeholder={tt('목적지 ENI ID (선택, CIDR/IP 중 하나 필요)')} value={f.destEniId} onChange={(e) => set('destEniId', e.target.value)} className={inputClass} />
+              <input placeholder={tt('목적지 CIDR (선택)')} value={f.destCidr} onChange={(e) => set('destCidr', e.target.value)} className={inputClass} />
+              <input placeholder={tt('목적지 IP (선택)')} value={f.destIp} onChange={(e) => set('destIp', e.target.value)} className={inputClass} />
+            </>
           )}
           {f.destKind === 'internet' && (
             <input placeholder={tt('호스트 또는 IP/URL')} value={f.destHost} onChange={(e) => set('destHost', e.target.value)} className={inputClass} />
           )}
-          {f.destKind === 'on_prem' && (
+          {f.destKind === 'onprem' && (
             <input placeholder={tt('온프레미스 IP 또는 URL')} value={f.onPremHost} onChange={(e) => set('onPremHost', e.target.value)} className={inputClass} />
           )}
         </div>

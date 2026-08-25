@@ -21,6 +21,11 @@ locals {
   # identical task defs, no redeploy) exactly like every other optional-env local in this repo.
   npc_env_list = local.npc == 1 ? [
     { name = "NETWORK_PATH_CHECK_ENABLED", value = "true" },
+    # CI review item 7(a): network_path.py's HOST_ACCOUNT_ID reads this env var to detect the
+    # host account (e.g. to skip AssumeRole and use the task's own credentials). It was previously
+    # set ONLY by the unrelated `sg_rule_activity_enabled` gate's env list (sg-rules.tf) — this
+    # feature must not silently depend on that separate flag being enabled too.
+    { name = "AWS_ACCOUNT_ID", value = local.acct },
   ] : []
 }
 
@@ -102,6 +107,11 @@ resource "aws_iam_role_policy" "worker_task_network_path_readonly_assume" {
           # error (resolve_live_identity()'s own AccessDenied handling) rather than silently trusting
           # the definition's stale fields.
           "eks:DescribeCluster",
+          # CI review item 7(b): _default_ec2_lookup()'s DescribeInstances call (resolving a
+          # Node's real EC2 instance -> ENI/subnet/VPC) had no corresponding host-account grant
+          # here — every host-account node/pod source would fail closed with AccessDenied. This
+          # is the same read-only Describe pattern as every other action in this statement.
+          "ec2:DescribeInstances",
         ]
         Resource = "*"
       }

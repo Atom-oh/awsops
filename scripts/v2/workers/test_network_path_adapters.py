@@ -852,6 +852,31 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "blocked"  # no Allow rule matched (the Deny rule was skipped, not applied)
 
+    # ── CI-review MAJOR fix (round 17): a Deny/Pass rule that ALSO matches the peer must veto a
+    #    confident `allowed` from a later-listed Allow rule — Calico's real precedence between them
+    #    depends on unmodeled cross-policy `order`, so this adapter cannot know which one would
+    #    actually win. ──────────────────────────────────────────────────────────────────────────────
+
+    def test_a_matching_deny_rule_downgrades_a_would_be_allowed_to_unknown(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Deny", "source": {"selector": "role == 'frontend'"}},
+            {"action": "Allow", "source": {"selector": "role == 'frontend'"}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_a_non_matching_deny_rule_does_not_affect_a_matching_allow(self):
+        """A Deny rule for a DIFFERENT peer must not spuriously downgrade an Allow that matches
+        THIS peer — only a Deny/Pass that itself matches (or might match) the peer counts."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Deny", "source": {"selector": "role == 'other'"}},
+            {"action": "Allow", "source": {"selector": "role == 'frontend'"}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
     def test_unsupported_selector_construct_is_unknown_not_a_guess(self):
         policies = [{"selector": "role == 'web' || tier == 'edge'", "types": ["Ingress"], "ingress": []}]
         r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress",
@@ -929,6 +954,23 @@ class TestRoute53Resolution:
         r = ad.eval_route53_resolution([{"name": "app.example.com", "type": "A"}], None)
         assert r["status"] == "unknown"
 
+    def test_cname_cycle_is_unknown_not_allowed(self):
+        """MINOR fix: a genuine CNAME cycle (a hits b hits a) must not fall through to a confident
+        `allowed` using the stale record from before the cycle was detected."""
+        records = [
+            {"name": "a.example.com", "type": "CNAME", "alias_target": "b.example.com"},
+            {"name": "b.example.com", "type": "CNAME", "alias_target": "a.example.com"},
+        ]
+        r = ad.eval_route53_resolution(records, "a.example.com")
+        assert r["status"] == "unknown"
+
+    def test_out_of_zone_cname_target_not_a_cycle_stays_allowed(self):
+        """An out-of-zone CNAME target (no record for it at all, not a cycle) is a SEPARATE case
+        that stays correctly `allowed` — only a genuine cycle must degrade."""
+        records = [{"name": "app.example.com", "type": "CNAME", "alias_target": "external.other-domain.com"}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "allowed"
+
 
 # ── Gap 3: K8s Ingress -> Service -> EndpointSlice resolution — REAL evaluation ─────────────────
 
@@ -949,20 +991,20 @@ class TestK8sServiceResolution:
 
     def test_no_endpoints_is_blocked(self):
         rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
-        services = {"svc-a": {"selector": {"app": "a"}}}
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80}]}}
         r = ad.eval_k8s_service_resolution(rules, services, {"svc-a": []}, {"host": "app.example.com", "path": "/"})
         assert r["status"] == "blocked"
 
     def test_all_endpoints_ready_allows(self):
         rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
-        services = {"svc-a": {"selector": {"app": "a"}}}
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80}]}}
         eps = {"svc-a": [{"ready": True}, {"ready": True}]}
         r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
         assert r["status"] == "allowed"
 
     def test_partial_ready_is_conditional(self):
         rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
-        services = {"svc-a": {"selector": {"app": "a"}}}
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80}]}}
         eps = {"svc-a": [{"ready": True}, {"ready": False}]}
         r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
         assert r["status"] == "conditional"
@@ -970,7 +1012,7 @@ class TestK8sServiceResolution:
     def test_path_prefix_match(self):
         rules = [{"host": "app.example.com", "path": "/api", "path_type": "Prefix",
                    "backend_service": "svc-a"}]
-        services = {"svc-a": {"selector": {"app": "a"}}}
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80}]}}
         eps = {"svc-a": [{"ready": True}]}
         r = ad.eval_k8s_service_resolution(rules, services, eps,
                                             {"host": "app.example.com", "path": "/api/v1"})
@@ -981,3 +1023,50 @@ class TestK8sServiceResolution:
                    "backend_service": "svc-a"}]
         r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "app.example.com", "path": "/api/v1"})
         assert r["status"] == "blocked"
+
+    # ── CI-review MAJOR fix (round 17): `backend_port` was never checked against the Service's own
+    #    declared ports — an Ingress referencing a nonexistent Service port returned `allowed`
+    #    whenever any endpoint happened to be ready. ────────────────────────────────────────────────
+
+    def test_backend_port_not_declared_on_service_blocks(self):
+        rules = [{"host": "app.example.com", "backend_service": "svc-a", "backend_port": 9999}]
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80, "target_port": 8080}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "blocked"
+        assert "9999" in r["summary"]
+
+    def test_backend_port_declared_on_service_allows(self):
+        rules = [{"host": "app.example.com", "backend_service": "svc-a", "backend_port": 80}]
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80, "target_port": 8080}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "allowed"
+
+    def test_no_backend_port_declared_skips_the_port_check(self):
+        """No `backend_port` on the Ingress rule at all (e.g. a name-based backend port) — nothing
+        to validate, must not spuriously block."""
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"selector": {"app": "a"}, "ports": [{"port": 80, "target_port": 8080}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "allowed"
+
+    def test_backend_port_by_name_declared_on_service_allows(self):
+        """`backend_port` can also be a NAME (Ingress `service.port.name`) — must be matched
+        against the Service port's own `name` field, not its numeric `port`."""
+        rules = [{"host": "app.example.com", "backend_service": "svc-a", "backend_port": "https"}]
+        services = {"svc-a": {"selector": {"app": "a"},
+                               "ports": [{"port": 443, "name": "https"}, {"port": 80, "name": "http"}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "allowed"
+
+    def test_backend_port_by_name_not_declared_on_service_blocks(self):
+        rules = [{"host": "app.example.com", "backend_service": "svc-a", "backend_port": "metrics"}]
+        services = {"svc-a": {"selector": {"app": "a"},
+                               "ports": [{"port": 443, "name": "https"}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "blocked"
+        assert "metrics" in r["summary"]

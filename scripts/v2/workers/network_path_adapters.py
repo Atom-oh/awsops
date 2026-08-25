@@ -983,6 +983,16 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     Allow elsewhere. The final "no Allow rule matched" case still correctly reduces to `blocked`
     (mirrors `eval_k8s_network_policy`'s own default-deny-once-selected semantics), since the ABSENCE
     of any matching Allow is itself confidently evaluable without needing Calico's ordering model.
+
+    CI-review MAJOR fix (round 17): the SAME unmodeled-`order` problem the docstring above already
+    defends `blocked` against also applies to `allowed` — a lower-order Deny/Pass rule that ALSO
+    matches this peer would win over a later-listed Allow rule under Calico's real precedence, but
+    (before this fix) a skipped Deny/Pass rule was never even checked against the peer, so this
+    function could still confidently return `allowed` while such a conflicting Deny/Pass existed.
+    Every skipped Deny/Pass rule is now checked against the SAME peer/port criteria an Allow rule
+    would be; if it matches (or its match can't be confidently ruled out), the result degrades to
+    `unknown` instead of a confident `allowed`, mirroring this module's own "never invent" rule for
+    the direction it was previously missing.
     """
     layer = "k8s-calico"
     if not crd_present:
@@ -1014,51 +1024,42 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
 
     key = "ingress" if direction == "ingress" else "egress"
     saw_unresolvable = False
+    saw_deny_or_pass_conflict = False
+    matched_allow_rule = None
     for policy in selecting:
         for rule in policy.get(key, []):
-            if str(rule.get("action", "Allow")).lower() != "allow":
-                continue  # Deny/Log/Pass — not evaluated, see docstring
-            port_match = _k8s_port_matches(
-                {"ports": rule.get("ports")} if rule.get("ports") else {},
-                protocol or rule.get("protocol"), port)
-            if port_match is False:
+            match = _calico_rule_peer_match(rule, direction, peer_labels, peer_ip,
+                                             peer_namespace_labels, protocol, port)
+            action = str(rule.get("action", "Allow")).lower()
+            if action != "allow":
+                # CI-review MAJOR fix (round 17): a Deny/Log/Pass rule used to be skipped WITHOUT
+                # ever checking whether it matches this peer — see the docstring above for why a
+                # matching (or possibly-matching) Deny/Pass rule anywhere in the list must veto a
+                # confident `allowed`, since this adapter has no model of cross-policy `order`.
+                if match is not False:
+                    saw_deny_or_pass_conflict = True
                 continue
-            peer = rule.get("source" if direction == "ingress" else "destination") or {}
-            selector, ns_selector, nets = peer.get("selector"), peer.get("namespaceSelector"), peer.get("nets")
-            if not selector and not ns_selector and not nets:
-                if port_match is None:
-                    saw_unresolvable = True
-                    continue
-                return {"layer": layer, "status": "allowed", "resource": None,
-                        "summary": "matching Calico rule allows all peers", "evidence": [rule]}
-            if ns_selector:
-                ns_match = _calico_selector_matches(ns_selector, peer_namespace_labels)
-                if ns_match is None:
-                    saw_unresolvable = True
-                    continue
-                if not ns_match:
-                    continue
-            if selector:
-                if peer_labels is None:
-                    saw_unresolvable = True
-                    continue
-                pod_match = _calico_selector_matches(selector, peer_labels)
-                if pod_match is None:
-                    saw_unresolvable = True
-                    continue
-                if not pod_match:
-                    continue
-            if nets:
-                if peer_ip is None or not _is_valid_ip(peer_ip):
-                    saw_unresolvable = True
-                    continue
-                if not any(_cidr_contains(n, peer_ip) for n in nets):
-                    continue
-            if port_match is None:
+            if match is False:
+                continue
+            if match is None:
                 saw_unresolvable = True
                 continue
-            return {"layer": layer, "status": "allowed", "resource": None,
-                    "summary": "matched Calico rule peer", "evidence": [rule]}
+            if matched_allow_rule is None:
+                matched_allow_rule = rule
+    if matched_allow_rule is not None:
+        if saw_deny_or_pass_conflict:
+            return {"layer": layer, "status": "unknown", "resource": None,
+                    "summary": "an Allow rule matches this peer, but a Deny/Pass rule that also "
+                               "matches (or might match) it exists — Calico's real precedence "
+                               "between them depends on policy/rule `order`, which this adapter "
+                               "does not model", "evidence": [matched_allow_rule]}
+        return {"layer": layer, "status": "allowed", "resource": None,
+                "summary": "matched Calico rule peer", "evidence": [matched_allow_rule]}
+    # No Allow rule matched — this reduces to `blocked` regardless of whether any Deny/Pass rule
+    # also matched (a matching Deny/Pass here changes nothing: the confident-deny OUTCOME is the
+    # same either way, so `saw_deny_or_pass_conflict` — which exists only to veto a confident
+    # `allowed` — is irrelevant to this branch; see `test_deny_action_rule_is_never_a_confident_
+    # blocker` for why the absence of a matching Allow is itself always safely `blocked`).
     if saw_unresolvable:
         return {"layer": layer, "status": "unknown", "resource": None,
                 "summary": "a candidate Calico rule could not be confidently evaluated due to "
@@ -1067,6 +1068,44 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     return {"layer": layer, "status": "blocked", "resource": None,
             "summary": "pod is selected by >=1 Calico NetworkPolicy for this direction; no Allow "
                        "rule matched the peer", "evidence": []}
+
+
+def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespace_labels, protocol, port):
+    """Whether `rule`'s port + peer (`selector`/`namespaceSelector`/`nets`) criteria match the
+    given peer — the SAME logic `eval_calico_policy` applies to an Allow rule, factored out so it
+    can ALSO be applied to a skipped Deny/Pass rule (round 17 fix, see that function's docstring).
+    Returns `True` (confirmed match), `False` (confirmed no match), or `None` (this adapter cannot
+    confidently tell — missing peer data, or a selector construct it cannot parse)."""
+    port_match = _k8s_port_matches(
+        {"ports": rule.get("ports")} if rule.get("ports") else {}, protocol or rule.get("protocol"), port)
+    if port_match is False:
+        return False
+    peer = rule.get("source" if direction == "ingress" else "destination") or {}
+    selector, ns_selector, nets = peer.get("selector"), peer.get("namespaceSelector"), peer.get("nets")
+    if not selector and not ns_selector and not nets:
+        return None if port_match is None else True
+    if ns_selector:
+        ns_match = _calico_selector_matches(ns_selector, peer_namespace_labels)
+        if ns_match is None:
+            return None
+        if not ns_match:
+            return False
+    if selector:
+        if peer_labels is None:
+            return None
+        pod_match = _calico_selector_matches(selector, peer_labels)
+        if pod_match is None:
+            return None
+        if not pod_match:
+            return False
+    if nets:
+        if peer_ip is None or not _is_valid_ip(peer_ip):
+            return None
+        if not any(_cidr_contains(n, peer_ip) for n in nets):
+            return False
+    if port_match is None:
+        return None
+    return True
 
 
 # ── DNS/L7: Route 53 resolution ─────────────────────────────────────────────────────────────────
@@ -1115,15 +1154,26 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # A CNAME with no further usable data at its target is followed one hop, still within the
     # already-fetched `records` set (no live DNS query is ever issued).
     seen_names = {host}
+    cycle_detected = False
     while len(matched) == 1 and matched[0].get("type") == "CNAME" and matched[0].get("alias_target"):
         target = str(matched[0]["alias_target"]).rstrip(".").lower()
         if target in seen_names:
+            # MINOR fix: a genuine CNAME cycle (target already seen in this chain) must not fall
+            # through to the healthy/unhealthy check below using the stale `matched` record — that
+            # would misreport a broken zone as a confident `allowed`. An out-of-zone CNAME target
+            # that ISN'T a cycle (the `nxt is None` branch below) stays a separate, correctly
+            # `allowed`-eligible case.
+            cycle_detected = True
             break
         seen_names.add(target)
         nxt = _find(target)
         if nxt is None:
             break
         matched = nxt
+    if cycle_detected:
+        return {"layer": "dns", "status": "unknown", "resource": host,
+                "summary": f"Route 53 CNAME chain for {host!r} forms a cycle — cannot confidently "
+                           "resolve this record", "evidence": matched}
 
     unhealthy = [r for r in matched if r.get("health_check_status") == "unhealthy"]
     healthy_or_unchecked = [r for r in matched if r.get("health_check_status") != "unhealthy"]
@@ -1153,10 +1203,20 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
     exists.
 
     `ingress_rules`: [{"host": str|None, "path": str|None, "path_type": "Exact"|"Prefix"|"ImplementationSpecific",
-    "backend_service": str, "backend_port": int}].
-    `services`: {service_name: {"selector": {...}, "ports": [{"port": int, "target_port": int}]}}.
+    "backend_service": str, "backend_port": int|str|None}] (`backend_port` is the Ingress
+    `backend.service.port.number` or `.name` — a real Ingress object always carries exactly one of
+    those two, `int` or `str` respectively; `None` means the Ingress object omitted the port,
+    which K8s only accepts when the Service declares exactly one port).
+    `services`: {service_name: {"selector": {...}, "ports": [{"port": int, "name": str|None}]}}
+    (`ports` are the Service's OWN declared ports — what the Ingress backend's port reference is
+    validated against, not the pod's `target_port`).
     `endpoint_slices`: {service_name: [{"ready": bool}, ...]} (one entry per endpoint).
     `request`: {"host": str|None, "path": str|None, "port": int|None}.
+
+    CI-review MAJOR fix (round 17, item 4): this used to report a confident `allowed` whenever ANY
+    endpoint was ready, without ever checking that the Ingress backend's referenced port actually
+    exists on the Service's own `ports` list — a real, common misconfiguration (an Ingress
+    pointing at a port name/number the Service never declared) would silently report `allowed`.
     """
     if not data_available:
         return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
@@ -1189,6 +1249,30 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
     if svc is None:
         return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,
                 "summary": f"Ingress backend Service {svc_name!r} does not exist", "evidence": []}
+    # CI-review MAJOR fix (round 17, item 4): `backend_port` (and the Service's own declared
+    # ports) were never checked at all — an Ingress rule referencing a Service port the Service
+    # doesn't actually declare returned a confident `allowed` whenever any endpoint happened to be
+    # ready. A real Ingress backend port reference is EITHER a number (`service.port.number`,
+    # matched against a Service port's own `port` field) OR a name (`service.port.name`, matched
+    # against a Service port's own `name` field) — never both at once, so both are checked here.
+    backend_port = matched_rule.get("backend_port")
+    svc_ports = [p for p in (svc.get("ports") or []) if isinstance(p, dict)]
+    if backend_port is None:
+        pass  # no port reference on the Ingress rule at all — nothing to validate against
+    elif isinstance(backend_port, str):
+        if not any(p.get("name") == backend_port for p in svc_ports):
+            return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,
+                    "summary": f"Ingress backend references port name {backend_port!r}, which "
+                               f"Service {svc_name!r} does not declare "
+                               f"(declared names: {sorted(p.get('name') for p in svc_ports if p.get('name'))})",
+                    "evidence": svc_ports}
+    else:
+        if not any(p.get("port") == backend_port for p in svc_ports):
+            return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,
+                    "summary": f"Ingress backend references port {backend_port!r}, which Service "
+                               f"{svc_name!r} does not declare "
+                               f"(declared ports: {sorted(p.get('port') for p in svc_ports if p.get('port') is not None)})",
+                    "evidence": svc_ports}
     eps = (endpoint_slices or {}).get(svc_name, [])
     ready = [e for e in eps if e.get("ready")]
     if not eps:

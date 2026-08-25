@@ -139,9 +139,24 @@ describe('createRun', () => {
     expect(run.worker_job_id).toBe('job-1');
     expect(enqueueJob).toHaveBeenCalledWith(
       'network_path',
-      expect.objectContaining({ run_id: expect.any(String), definition: VALID_DEFINITION }),
+      expect.objectContaining({
+        run_id: expect.any(String), definition: VALID_DEFINITION,
+        source_account_id: '123456789012',
+      }),
       expect.objectContaining({ requestedBy: 'viewer-not-creator' }),
     );
+  });
+
+  it('threads the check\'s own source_account_id into the job payload (CI-review item 5: the worker '
+    + 'binds definition.source.account_id against this column rather than trusting the definition alone)', async () => {
+    query.mockResolvedValueOnce({ rows: [check] })
+      .mockResolvedValueOnce({ rows: [{ id: 'run-1', definition_snapshot: VALID_DEFINITION, status: 'queued', phase: 'resolve' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    enqueueJob.mockResolvedValue({ job_id: 'job-1' });
+    const { createRun } = await import('./network-path');
+    await createRun(user('viewer'), 'c1');
+    const [, payload] = enqueueJob.mock.calls[0];
+    expect(payload.source_account_id).toBe(check.source_account_id);
   });
 
   it('snapshots the definition — mutating the source object after createRun does not affect what was persisted', async () => {

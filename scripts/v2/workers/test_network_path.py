@@ -16,10 +16,15 @@ class FakeConn:
     (against `topology_nodes`/`topology_edges`) without a real Aurora connection — keyed the same way
     `_find_infra_node`/`_infra_placement` build their own query params (`pat="%:" + ref`,
     `s=node_id`)."""
-    def __init__(self, node_rows_by_ref=None, edge_rows_by_node=None):
+    def __init__(self, node_rows_by_ref=None, edge_rows_by_node=None, accounts_rows=None):
         self.calls = []
         self.node_rows_by_ref = node_rows_by_ref or {}
         self.edge_rows_by_node = edge_rows_by_node or {}
+        # CI-review MAJOR fix (round 17) test wiring: `resolve_live_identity()` now resolves
+        # external_id from the enabled `accounts` registry instead of trusting the definition —
+        # default to a registered row for the fixtures' own account id so existing tests don't all
+        # need to seed this explicitly; a test exercising the registry check overrides it.
+        self.accounts_rows = accounts_rows if accounts_rows is not None else {"111111111111": (None,)}
 
     def run(self, sql, **kwargs):
         self.calls.append((sql, kwargs))
@@ -28,6 +33,9 @@ class FakeConn:
             return self.node_rows_by_ref.get(ref, [])
         if "FROM topology_edges" in sql:
             return self.edge_rows_by_node.get(kwargs.get("s"), [])
+        if "FROM accounts" in sql:
+            row = self.accounts_rows.get(kwargs.get("a"))
+            return [row] if row is not None else []
         return []
 
     def inserted_steps(self):
@@ -103,6 +111,34 @@ class TestResolve:
         assert finishes[-1]["err"] == result["error"]
         assert "account_id" in finishes[-1]["err"]
 
+    def test_run_rejects_a_definition_account_id_mismatched_against_the_checks_own_column(self):
+        """CI-review MAJOR fix (round 17, item 5, second half): a check's declared source account
+        must match (or be validated against) the account the check was actually created/authorized
+        for -- `definition.source.account_id` is user-authored (part of the check's own JSON
+        definition) and must never be accepted as-is if it disagrees with the check's own
+        `source_account_id` column, threaded into the payload as `source_account_id` by
+        web/lib/network-path.ts's createRun(). This must fail BEFORE resolve_live_identity ever
+        gets a chance to attempt an AssumeRole."""
+        conn = FakeConn()
+        d = _definition()
+        assert d["source"]["account_id"] == "111111111111"
+        result = np.run({"run_id": "r-mismatch", "definition": d,
+                          "source_account_id": "222222222222"}, conn)
+        assert result["status"] == "failed"
+        assert conn.inserted_candidates() == []
+        finishes = conn.run_finishes()
+        assert finishes[-1]["s"] == "failed"
+        assert "does not match" in finishes[-1]["err"]
+
+    def test_run_rejects_a_missing_source_account_id_on_the_payload(self):
+        """A payload lacking `source_account_id` entirely is treated as fail-closed the same as a
+        mismatch -- every payload created by createRun() always carries this field, so its
+        absence means the run didn't go through the trusted enqueue path."""
+        conn = FakeConn()
+        result = np.run({"run_id": "r-missing", "definition": _definition()}, conn)
+        assert result["status"] == "failed"
+        assert conn.inserted_candidates() == []
+
 
 # ── Gap 1: fetch_live_topology() — real, best-effort cached-topology discovery ─────────────────
 
@@ -177,6 +213,32 @@ class TestFetchLiveTopology:
         c = topo["candidates"][0]
         assert c["dest_eni_known"] is False
 
+    def test_member_account_topology_query_never_admits_self_tagged_rows(self, monkeypatch):
+        """CI-review MAJOR fix (round 17, item 3): `'self'` is this repo's established sentinel
+        for HOST-account rows specifically (web/lib/inventory.ts, web/lib/sg-analysis.ts) — for a
+        MEMBER-account check (account_id != the host account), `_find_infra_node`/
+        `_infra_placement` must query strictly `account_id=:a`, with NO `'self'` fallback that
+        would admit host-account topology into this member account's placement/candidate
+        resolution."""
+        monkeypatch.setattr(np, "HOST_ACCOUNT_ID", "999999999999")  # a DIFFERENT account than 111111111111
+        conn = FakeConn(node_rows_by_ref={"eni-src": [("ec2:i-src", "ec2")]})
+        resolved = np.resolve_identities(_definition(dest_kind="internet"))
+        np.fetch_live_topology(resolved, conn)
+        node_query_calls = [kw for sql, kw in conn.calls if "FROM topology_nodes" in sql]
+        assert node_query_calls, "expected at least one topology_nodes query"
+        node_query_sql = [sql for sql, kw in conn.calls if "FROM topology_nodes" in sql][0]
+        assert "'self'" not in node_query_sql
+
+    def test_host_account_topology_query_still_admits_self_tagged_rows(self, monkeypatch):
+        """The 'self' fallback must still work for a genuine host-account check -- this fix must
+        not remove that case entirely, only stop it leaking into member-account checks."""
+        monkeypatch.setattr(np, "HOST_ACCOUNT_ID", "111111111111")  # SAME account as the definition
+        conn = FakeConn(node_rows_by_ref={"eni-src": [("ec2:i-src", "ec2")]})
+        resolved = np.resolve_identities(_definition(dest_kind="internet"))
+        np.fetch_live_topology(resolved, conn)
+        node_query_sql = [sql for sql, kw in conn.calls if "FROM topology_nodes" in sql][0]
+        assert "'self'" in node_query_sql
+
 
 # ── Gap 4: resolve_live_identity() — confirm source identity via live K8s/EC2 calls ─────────────
 
@@ -204,8 +266,102 @@ class TestResolveLiveIdentity:
     def test_no_cluster_declared_is_a_no_op(self):
         """A source with no `cluster` is the pre-existing directly-known-ENI path — untouched."""
         resolved = np.resolve_identities(_definition())
-        out = np.resolve_live_identity(resolved)
+        out = np.resolve_live_identity(resolved, FakeConn())
         assert out is resolved
+
+    # ── CI-review MAJOR fix (round 17): confused-deputy regression — `external_id` used to be
+    #    trusted straight from the user-authored definition, with no check against the enabled
+    #    `accounts` registry, against a wildcard `sts:AssumeRole` grant. ────────────────────────────
+
+    def test_refuses_an_unregistered_account(self):
+        conn = FakeConn(accounts_rows={})  # no row at all for 111111111111
+        resolved = np.resolve_identities(_pod_definition())
+        with pytest.raises(np.NetworkPathError, match="not a registered, enabled account"):
+            np.resolve_live_identity(resolved, conn)
+
+    def test_refuses_a_disabled_account(self):
+        conn = FakeConn(accounts_rows={})  # modeled the same as unregistered — no enabled row
+        resolved = np.resolve_identities(_pod_definition())
+        with pytest.raises(np.NetworkPathError, match="not a registered, enabled account"):
+            np.resolve_live_identity(resolved, conn)
+
+    def test_resolves_external_id_from_the_registry_not_the_definition(self):
+        """Even if the definition declares its OWN `external_id`, the registry's value must be
+        used instead — a user-authored external_id must never reach `_assumed_session`."""
+        conn = FakeConn(accounts_rows={"111111111111": ("registry-ext-id",)})
+        d = _pod_definition()
+        d["source"]["external_id"] = "attacker-supplied-ext-id"
+        captured = {}
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            captured["external_id"] = external_id
+            return {"status": {"podIP": "10.0.1.42", "phase": "Running"},
+                    "spec": {"nodeName": "ip-10-0-1-5.ec2.internal"}}
+
+        with pytest.raises(np.NetworkPathError):
+            # fails later (no node fixture), but the pod call already captured external_id
+            np.resolve_live_identity(np.resolve_identities(d), conn, k8s_get=fake_k8s_get)
+        assert captured["external_id"] == "registry-ext-id"
+
+    def test_host_account_source_skips_the_registry_lookup(self, monkeypatch):
+        monkeypatch.setattr(np, "HOST_ACCOUNT_ID", "111111111111")
+        conn = FakeConn(accounts_rows={})  # would refuse if the lookup ran at all
+        d = _pod_definition()
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            assert external_id is None
+            if path.endswith("/pods/my-pod"):
+                return {"status": {"podIP": "10.0.1.42", "phase": "Running"},
+                        "spec": {"nodeName": "ip-10-0-1-5.ec2.internal"}}
+            return {"spec": {"providerID": "aws:///ap-northeast-2a/i-0abc123def456"}}
+
+        def fake_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_id=None):
+            return {"instance_id": instance_id, "eni_id": "eni-x", "subnet_id": "subnet-x",
+                    "vpc_id": "vpc-x"}
+
+        out = np.resolve_live_identity(np.resolve_identities(d), conn,
+                                        k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
+        assert out["source"]["eni_id"] == "eni-x"
+
+    # ── CI-review MAJOR fix (round 17): K8s API path-injection — namespace/pod_name/node_name/
+    #    cluster must be rejected outright if they contain a `/` (or any other unsafe character),
+    #    rather than being interpolated straight into the GET path/signed header. ─────────────────
+
+    def test_refuses_a_path_traversal_namespace(self):
+        conn = FakeConn()
+        d = _pod_definition(namespace="../../etc")
+        with pytest.raises(np.NetworkPathError, match="not a valid Kubernetes resource name"):
+            np.resolve_live_identity(np.resolve_identities(d), conn)
+
+    def test_refuses_a_path_traversal_pod_name(self):
+        conn = FakeConn()
+        d = _pod_definition(pod_name="my-pod/../../secrets")
+        with pytest.raises(np.NetworkPathError, match="not a valid Kubernetes resource name"):
+            np.resolve_live_identity(np.resolve_identities(d), conn)
+
+    def test_refuses_a_path_traversal_cluster(self):
+        conn = FakeConn()
+        d = _pod_definition(cluster="cluster/../admin")
+        with pytest.raises(np.NetworkPathError, match="not a valid Kubernetes resource name"):
+            np.resolve_live_identity(np.resolve_identities(d), conn)
+
+    def test_accepts_a_dotted_ec2_style_node_name(self):
+        """A real EC2-style Node name (`ip-10-0-1-5.ec2.internal`) is a DNS-1123 SUBDOMAIN with
+        dots — must not be rejected as invalid."""
+        conn = FakeConn()
+        d = _node_definition(node_name="ip-10-0-1-5.ec2.internal")
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            assert path.endswith("/nodes/ip-10-0-1-5.ec2.internal")
+            return {"spec": {"providerID": "aws:///ap-northeast-2a/i-0abc123def456"}}
+
+        def fake_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_id=None):
+            return {"instance_id": instance_id, "eni_id": "eni-x", "subnet_id": "subnet-x",
+                    "vpc_id": "vpc-x"}
+
+        out = np.resolve_live_identity(np.resolve_identities(d), conn,
+                                        k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
+        assert out["source"]["eni_id"] == "eni-x"
 
     def test_successful_pod_resolution_populates_real_pod_node_eni_subnet_vpc(self):
         pod_obj = {"status": {"podIP": "10.0.1.42", "phase": "Running"},
@@ -226,7 +382,7 @@ class TestResolveLiveIdentity:
                     "subnet_id": "subnet-real1", "vpc_id": "vpc-real1"}
 
         resolved = np.resolve_identities(_pod_definition())
-        out = np.resolve_live_identity(resolved, k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
+        out = np.resolve_live_identity(resolved, FakeConn(), k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
         src = out["source"]
         assert src["pod_ip"] == "10.0.1.42"
         assert src["node_name"] == "ip-10-0-1-5.ec2.internal"
@@ -248,7 +404,7 @@ class TestResolveLiveIdentity:
                     "subnet_id": "subnet-node-real", "vpc_id": "vpc-node-real"}
 
         resolved = np.resolve_identities(_node_definition())
-        out = np.resolve_live_identity(resolved, k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
+        out = np.resolve_live_identity(resolved, FakeConn(), k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
         assert out["source"]["eni_id"] == "eni-node-real"
         assert "pod_ip" not in out["source"]
 
@@ -258,7 +414,7 @@ class TestResolveLiveIdentity:
 
         resolved = np.resolve_identities(_pod_definition())
         with pytest.raises(np.NetworkPathError) as ei:
-            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+            np.resolve_live_identity(resolved, FakeConn(), k8s_get=fake_k8s_get)
         assert "my-pod" in str(ei.value)
         assert "not found" in str(ei.value) or "404" in str(ei.value)
 
@@ -268,7 +424,7 @@ class TestResolveLiveIdentity:
 
         resolved = np.resolve_identities(_pod_definition())
         with pytest.raises(np.NetworkPathError) as ei:
-            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+            np.resolve_live_identity(resolved, FakeConn(), k8s_get=fake_k8s_get)
         assert "Pending" in str(ei.value)
 
     def test_node_ec2_instance_not_resolvable_fails_with_bounded_error(self):
@@ -281,7 +437,7 @@ class TestResolveLiveIdentity:
             raise np.NetworkPathError(f"EC2 instance {instance_id} not found (DescribeInstances returned none)")
 
         with pytest.raises(np.NetworkPathError) as ei:
-            np.resolve_live_identity(np.resolve_identities(_node_definition()),
+            np.resolve_live_identity(np.resolve_identities(_node_definition()), FakeConn(),
                                       k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
         assert "i-0abcdef01234" in str(ei.value)
         assert "not found" in str(ei.value)
@@ -292,7 +448,7 @@ class TestResolveLiveIdentity:
 
         resolved = np.resolve_identities(_node_definition())
         with pytest.raises(np.NetworkPathError) as ei:
-            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+            np.resolve_live_identity(resolved, FakeConn(), k8s_get=fake_k8s_get)
         assert "providerID" in str(ei.value)
 
     def test_error_message_is_redacted(self):
@@ -304,7 +460,7 @@ class TestResolveLiveIdentity:
 
         resolved = np.resolve_identities(_pod_definition())
         with pytest.raises(np.NetworkPathError) as ei:
-            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+            np.resolve_live_identity(resolved, FakeConn(), k8s_get=fake_k8s_get)
         assert "arn:aws:iam" not in str(ei.value)
         assert "<arn-redacted>" in str(ei.value)
 
@@ -317,7 +473,8 @@ class TestResolveLiveIdentity:
         def fake_k8s_get(account_id, region, cluster, path, external_id=None):
             raise RuntimeError("connection refused")
 
-        result = np.run({"run_id": "r-live-1", "definition": _pod_definition()}, conn,
+        result = np.run({"run_id": "r-live-1", "definition": _pod_definition(),
+                          "source_account_id": "111111111111"}, conn,
                          k8s_get=fake_k8s_get)
         assert result["status"] == "failed"
         assert conn.inserted_candidates() == []
@@ -347,12 +504,78 @@ class TestResolveLiveIdentity:
             seen_resolved.update(resolved)
             return _topology_one_candidate()
 
-        result = np.run({"run_id": "r-live-2", "definition": _pod_definition()}, conn,
+        result = np.run({"run_id": "r-live-2", "definition": _pod_definition(),
+                          "source_account_id": "111111111111"}, conn,
                          topology_fetcher=capture_topology, k8s_get=fake_k8s_get,
                          ec2_lookup=fake_ec2_lookup)
         assert result["status"] == "succeeded"
         assert seen_resolved["source"]["eni_id"] == "eni-real123"
         assert seen_resolved["source"]["pod_ip"] == "10.0.1.42"
+
+
+# ── MINOR fix: _default_ec2_lookup() must fail closed for a pod source whose IP matches no ────
+#    attached ENI, rather than silently falling back to the instance's primary ENI. ──────────────
+
+class TestDefaultEc2Lookup:
+    class _FakeEc2:
+        def __init__(self, enis):
+            self._enis = enis
+
+        def describe_instances(self, InstanceIds):
+            return {"Reservations": [{"Instances": [{"NetworkInterfaces": self._enis}]}]}
+
+    def _patch_session(self, monkeypatch, enis):
+        fake_ec2 = self._FakeEc2(enis)
+
+        class FakeSession:
+            def client(self, name):
+                assert name == "ec2"
+                return fake_ec2
+
+        monkeypatch.setattr(np, "_assumed_session", lambda *a, **k: FakeSession())
+
+    def test_pod_ip_matching_no_eni_fails_closed(self, monkeypatch):
+        """A pod's IP that matches none of the instance's top-level attached ENIs (e.g. an
+        unenumerated SG-for-Pods branch ENI) must raise, never silently fall back to the primary
+        ENI -- that ENI is known NOT to be the pod's."""
+        self._patch_session(monkeypatch, [
+            {"NetworkInterfaceId": "eni-primary", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 0}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}]},
+        ])
+        with pytest.raises(np.NetworkPathError, match="does not match any network interface"):
+            np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc", pod_ip="10.0.1.42")
+
+    def test_pod_ip_matching_eni_is_used(self, monkeypatch):
+        self._patch_session(monkeypatch, [
+            {"NetworkInterfaceId": "eni-primary", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 0}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}]},
+            {"NetworkInterfaceId": "eni-branch", "SubnetId": "subnet-2", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 1}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.1.42"}]},
+        ])
+        out = np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc", pod_ip="10.0.1.42")
+        assert out["eni_id"] == "eni-branch"
+
+    def test_node_source_with_no_pod_ip_uses_primary_eni(self, monkeypatch):
+        """A bare node source (no pod_ip at all) still uses the primary-ENI fallback -- a Node
+        genuinely IS its primary ENI, unlike a pod that could be on any branch ENI."""
+        self._patch_session(monkeypatch, [
+            {"NetworkInterfaceId": "eni-primary", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 0}},
+        ])
+        out = np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc")
+        assert out["eni_id"] == "eni-primary"
+
+
+# ── MINOR fix: the K8s GET must never follow a redirect with the same bearer token ──────────────
+
+class TestNoRedirectHandler:
+    def test_redirect_request_refuses_to_follow(self):
+        handler = np._NoRedirectHandler()
+        req = np.Request("https://cluster.example.com/api/v1/nodes/x")
+        result = handler.redirect_request(req, None, 302, "Found",
+                                           {"Location": "https://attacker.example.com/steal"},
+                                           "https://attacker.example.com/steal")
+        assert result is None
 
 
 # ── discover ─────────────────────────────────────────────────────────────────────────────────────
@@ -576,7 +799,8 @@ class TestFullRun:
             topo["candidates"].append(dict(topo["candidates"][0]))
             return topo
 
-        result = np.run({"run_id": "run-1", "definition": resolved_definition}, conn,
+        result = np.run({"run_id": "run-1", "definition": resolved_definition,
+                          "source_account_id": "111111111111"}, conn,
                          topology_fetcher=two_candidate_topology)
         assert result["status"] == "succeeded"
         steps = conn.inserted_steps()
@@ -587,7 +811,8 @@ class TestFullRun:
 
     def test_run_succeeds_and_writes_overall_status(self):
         conn = FakeConn()
-        result = np.run({"run_id": "run-2", "definition": _definition()}, conn,
+        result = np.run({"run_id": "run-2", "definition": _definition(),
+                          "source_account_id": "111111111111"}, conn,
                          topology_fetcher=lambda r: _topology_one_candidate())
         assert result["status"] == "succeeded"
         # MAJOR fix (2026-08-19+ review): the fixture's NACL forward+return rules are genuinely
@@ -611,7 +836,8 @@ class TestFullRun:
         fabricating a confident path. This replaces the old stub-era test that asserted a terminal
         `failed`/NotImplementedError run."""
         conn = FakeConn()  # no seeded node/edge rows -> nothing resolves
-        result = np.run({"run_id": "run-3", "definition": _definition()}, conn)  # default fetcher
+        result = np.run({"run_id": "run-3", "definition": _definition(),
+                          "source_account_id": "111111111111"}, conn)  # default fetcher
         assert result["status"] == "succeeded"
         candidates = conn.inserted_candidates()
         assert len(candidates) == 1

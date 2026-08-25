@@ -69,7 +69,7 @@ import re
 import ssl
 import time
 import uuid
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 import network_path_adapters as ad
 import network_path_reduce as reduce
@@ -83,6 +83,31 @@ HOST_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 READONLY_ROLE_NAME = "AWSopsReadOnlyRole"
 _K8S_REQUEST_TIMEOUT_S = 4  # matches web/lib/eks-incluster.ts's K8S_REQUEST_TIMEOUT_MS bound
 _PROVIDER_ID_RE = re.compile(r'^aws:///[^/]+/(i-[0-9a-f]+)$')
+
+# CI-review MAJOR fix (round 17): a Kubernetes resource name (namespace/pod/node/cluster) must
+# match this safe charset before it's ever interpolated into a K8s API path or the signed
+# `x-k8s-aws-id` header — see `_validate_k8s_name` below. Deliberately permissive enough to accept
+# every legitimate name shape actually seen here (namespace/pod names are DNS-1123 labels; EC2-
+# style Node names are DNS-1123 SUBDOMAINS with dots, e.g. `ip-10-0-1-5.ec2.internal`; EKS cluster
+# names allow letters/digits/hyphens/underscores) while still rejecting the one thing that
+# matters for path safety: no `/` (or other URL-meaningful characters) can ever appear, so a
+# `../`-style segment can never form.
+_K8S_NAME_RE = re.compile(r'^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$')
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """MINOR fix: `urlopen`'s default opener silently follows a redirect response, which would
+    resend the SAME `Authorization: Bearer <k8s-aws-v1. token>` header to whatever host the
+    redirect names — a genuinely different host would then receive this cluster's presigned STS
+    token. `redirect_request` returning `None` tells urllib to hand back the redirect response
+    itself rather than follow it (see `urllib.request.HTTPRedirectHandler`'s own contract)."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N803 — stdlib signature
+        return None
+
+
+def _NO_REDIRECT_OPENER(ssl_context):  # noqa: N802 — reads as a constructor-like helper at call sites
+    return build_opener(_NoRedirectHandler(), HTTPSHandler(context=ssl_context))
+
 
 # MINOR fix: a raw AWS exception message persisted verbatim into the operator-readable
 # `network_path_runs.error` column can embed an ARN/account id/Athena-style UUID identifier — strip
@@ -115,6 +140,38 @@ _REDACT_KEYS = {
 class NetworkPathError(Exception):
     """Execution-level failure (spec: "Identity cannot be resolved -> run completes `failed`").
     Raised by resolve(); the caller marks the run failed WITHOUT creating any candidate rows."""
+
+
+def _validate_k8s_name(value, field):
+    """CI-review MAJOR fix (round 17): a K8s API path-injection hole — `namespace`/`pod_name`/
+    `node_name`/`cluster` used to be interpolated straight from the (user-authored) check
+    definition into the K8s API GET path, and `cluster` additionally into the signed
+    `x-k8s-aws-id` header, with no validation or escaping. A `../`-style segment let a check
+    author steer the read to an arbitrary path under the assumed principal's Access Entry —
+    read-only, but an authorization-scope escape. Every one of these fields must be a valid
+    Kubernetes DNS-1123 label/subdomain (lowercase alphanumerics and hyphens, cannot start/end
+    with a hyphen) before it's used in a URL or header — that's what every real K8s resource name
+    already looks like, so this rejects nothing legitimate."""
+    if not isinstance(value, str) or not _K8S_NAME_RE.match(value):
+        raise NetworkPathError(f"{field} is not a valid Kubernetes resource name: {value!r}")
+    return value
+
+
+def _account_external_id(conn, account_id):
+    """CI-review MAJOR fix (round 17): confused-deputy regression — `resolve_live_identity()`
+    used to pass `src["account_id"]`/`src.get("external_id")` (both straight from the
+    user-authored check definition) into `_assumed_session()` with no registry check at all,
+    against a wildcard `sts:AssumeRole` grant on `arn:aws:iam::*:role/AWSopsReadOnlyRole`
+    (network-path.tf). The sibling worker fixed exactly this class of hole already —
+    `sg_rule_scan.py`'s `account_external_id()` requires an ENABLED `accounts` row and raises
+    otherwise; this is the same lookup, kept as a local copy per this module's own convention
+    (see the constants above)."""
+    rows = conn.run("SELECT external_id FROM accounts WHERE account_id=:a AND enabled", a=account_id)
+    if not rows:
+        raise NetworkPathError(
+            f"account_id {account_id!r} is not a registered, enabled account in the accounts "
+            "table — refusing to assume a role for an unregistered account")
+    return rows[0][0]
 
 
 # ── Evidence redaction/bounding ──────────────────────────────────────────────────────────────────
@@ -256,7 +313,12 @@ def _default_k8s_get(account_id, region, cluster, path, external_id=None):
     token = "k8s-aws-v1." + base64.urlsafe_b64encode(signed.encode()).rstrip(b"=").decode()
     ctx = ssl.create_default_context(cadata=base64.b64decode(ca).decode())
     req = Request(endpoint + path, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-    with urlopen(req, timeout=_K8S_REQUEST_TIMEOUT_S, context=ctx) as r:  # noqa: S310 — fixed EKS https endpoint, GET only
+    # MINOR fix: `urlopen`'s default opener follows redirects, and a redirect response could carry
+    # the same `Authorization` bearer token to a DIFFERENT host than the pinned EKS `endpoint` —
+    # `_NoRedirectOpener` refuses to follow any redirect at all rather than trying to verify the
+    # target host (the simplest correct fix: this request's only legitimate destination is the
+    # cluster's own describe-cluster endpoint, so any redirect response is itself unexpected).
+    with _NO_REDIRECT_OPENER(ctx).open(req, timeout=_K8S_REQUEST_TIMEOUT_S) as r:  # noqa: S310 — fixed EKS https endpoint, GET only
         return json.loads(r.read().decode())
 
 
@@ -264,8 +326,16 @@ def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_i
     """Read-only `DescribeInstances` for the Node's resolved EC2 instance, returning that
     instance's describable ENI/subnet/VPC. When `pod_ip` is given and matches one of the instance's
     attached ENIs' private IPs (VPC CNI secondary-IP / SG-for-Pods branch-ENI placement), THAT ENI
-    is returned -- otherwise the instance's primary (device-index-0) ENI is used. Raises
-    NetworkPathError (never returns a guess) when the instance or a describable ENI isn't found."""
+    is returned. When `pod_ip` is NOT given (a bare node source), the instance's primary
+    (device-index-0) ENI is used. Raises NetworkPathError (never returns a guess) when the
+    instance or a describable ENI isn't found.
+
+    MINOR fix: a pod source whose `pod_ip` matches NO attached ENI (e.g. a SG-for-Pods branch ENI,
+    which isn't enumerated under the instance's top-level `NetworkInterfaces` at all) used to
+    silently fall back to the instance's primary ENI -- the WRONG ENI for that pod, not a
+    describable-but-unrelated one. A pod source must fail closed here rather than resolve to an
+    ENI known not to be the pod's; only a bare node source (no `pod_ip` at all) uses the primary-
+    ENI fallback, since a Node genuinely IS its primary ENI."""
     session = _assumed_session(account_id, region, external_id)
     ec2 = session.client("ec2")
     resp = ec2.describe_instances(InstanceIds=[instance_id])
@@ -280,7 +350,12 @@ def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_i
             (ni for ni in enis
              if any(pa.get("PrivateIpAddress") == pod_ip for pa in ni.get("PrivateIpAddresses", []))),
             None)
-    if eni is None:
+        if eni is None:
+            raise NetworkPathError(
+                f"pod IP {pod_ip} does not match any network interface attached to EC2 instance "
+                f"{instance_id} (e.g. an unenumerated SG-for-Pods branch ENI) -- refusing to guess "
+                "by falling back to the instance's primary ENI")
+    else:
         eni = next((ni for ni in enis if (ni.get("Attachment") or {}).get("DeviceIndex") == 0), None)
     if eni is None:
         raise NetworkPathError(f"EC2 instance {instance_id} has no describable network interface")
@@ -292,7 +367,7 @@ def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_i
     }
 
 
-def resolve_live_identity(resolved, k8s_get=None, ec2_lookup=None):
+def resolve_live_identity(resolved, conn, k8s_get=None, ec2_lookup=None):
     """Confirm a `pod`/`node` source's identity against the LIVE K8s/EC2 state (Gap 4) rather than
     trusting the saved definition's own eni_id/subnet_id fields as already verified. No-op (returns
     `resolved` unchanged) when the source declares no `cluster` -- that's the "directly-known
@@ -307,14 +382,22 @@ def resolve_live_identity(resolved, k8s_get=None, ec2_lookup=None):
     Fargate-profile virtual node), or the resolved EC2 instance/ENI not being describable. Per
     spec's "Identity cannot be resolved -> run completes `failed`" rule, this function never
     degrades to trusting the definition's stale fields on any of these failures.
+
+    CI-review MAJOR fix (round 17): `conn` is now REQUIRED (not optional) — `external_id` is no
+    longer trusted from the definition's own `src.get("external_id")` (a confused-deputy hole: the
+    IAM grant is a wildcard `sts:AssumeRole` on `arn:aws:iam::*:role/AWSopsReadOnlyRole`, so a
+    user-authored `account_id`/`external_id` pair could target ANY account with that role). It is
+    now resolved server-side from the same enabled `accounts` registry `sg_rule_scan.py`'s
+    `account_external_id()` already enforces for the sibling worker — see `_account_external_id`.
     """
     src = resolved["source"]
     cluster = src.get("cluster")
     if not cluster:
         return resolved
+    cluster = _validate_k8s_name(cluster, "cluster")
 
     account_id, region = src["account_id"], src["region"]
-    external_id = src.get("external_id")
+    external_id = None if account_id == HOST_ACCOUNT_ID else _account_external_id(conn, account_id)
     k8s_get = k8s_get or _default_k8s_get
     ec2_lookup = ec2_lookup or _default_ec2_lookup
 
@@ -323,6 +406,8 @@ def resolve_live_identity(resolved, k8s_get=None, ec2_lookup=None):
         namespace, pod_name = src.get("namespace"), src.get("pod_name")
         if not namespace or not pod_name:
             raise NetworkPathError("pod source declares a cluster but is missing namespace/pod_name")
+        namespace = _validate_k8s_name(namespace, "namespace")
+        pod_name = _validate_k8s_name(pod_name, "pod_name")
         try:
             pod = k8s_get(account_id, region, cluster, f"/api/v1/namespaces/{namespace}/pods/{pod_name}",
                           external_id)
@@ -344,6 +429,7 @@ def resolve_live_identity(resolved, k8s_get=None, ec2_lookup=None):
     else:
         return resolved  # a cluster with neither pod nor node kind has nothing to confirm here
 
+    node_name = _validate_k8s_name(node_name, "node_name")
     try:
         node = k8s_get(account_id, region, cluster, f"/api/v1/nodes/{node_name}", external_id)
     except Exception as e:  # noqa: BLE001
@@ -706,9 +792,16 @@ def _find_infra_node(conn, account_id, ref):
     """
     if not ref:
         return None
+    # CI-review MAJOR fix (round 17): `(account_id=:a OR account_id='self')` unconditionally
+    # admitted host-account ('self') rows even for a MEMBER-account check — `'self'` is the host
+    # sentinel used throughout inventory/topology tables (web/lib/inventory.ts,
+    # web/lib/sg-analysis.ts), so a member-account check could have its placement/candidate
+    # topology silently computed from the HOST account's own graph. The 'self' alternative must
+    # only ever apply when `account_id` genuinely IS the host account.
+    account_filter = "(account_id=:a OR account_id='self')" if account_id == HOST_ACCOUNT_ID else "account_id=:a"
     rows = conn.run(
-        "SELECT id, kind FROM topology_nodes WHERE class='infra' "
-        "AND (account_id=:a OR account_id='self') AND id LIKE :pat LIMIT 2",
+        f"SELECT id, kind FROM topology_nodes WHERE class='infra' "
+        f"AND {account_filter} AND id LIKE :pat LIMIT 2",
         a=account_id, pat=f"%:{ref}")
     if len(rows) != 1:
         return None
@@ -720,9 +813,12 @@ def _infra_placement(conn, account_id, node_id):
     """This candidate's cached `infra:in_vpc`/`infra:in_subnet`/`infra:uses_sg` edges (see
     web/lib/infra-topology.ts) — resource<->vpc/subnet/sg MEMBERSHIP only, never rule/ACL/route
     CONTENT (that's not in this table at all, see `fetch_live_topology`'s own docstring)."""
+    # CI-review MAJOR fix (round 17): same cross-account leak as `_find_infra_node` above — the
+    # 'self' host sentinel must not be admitted for a member-account check.
+    account_filter = "(account_id=:a OR account_id='self')" if account_id == HOST_ACCOUNT_ID else "account_id=:a"
     rows = conn.run(
-        "SELECT rel, target FROM topology_edges WHERE class='infra' "
-        "AND (account_id=:a OR account_id='self') AND source=:s",
+        f"SELECT rel, target FROM topology_edges WHERE class='infra' "
+        f"AND {account_filter} AND source=:s",
         a=account_id, s=node_id)
     vpc = subnet = None
     sg_ids = []
@@ -836,7 +932,21 @@ def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=
 
     try:
         resolved = resolve_identities(definition)
-        resolved = resolve_live_identity(resolved, k8s_get=k8s_get, ec2_lookup=ec2_lookup)
+        # CI-review MAJOR fix (round 17, item 5, second half): `definition.source.account_id` is
+        # user-authored (part of the check's own JSON definition) and must be bound to the check's
+        # OWN validated `source_account_id` column -- web/lib/network-path.ts's createRun() now
+        # threads that column into this payload precisely so this comparison can happen BEFORE any
+        # AssumeRole is even attempted (resolve_live_identity, below). A missing
+        # `source_account_id` on the payload is treated the same as a mismatch (fail closed) --
+        # every payload created by createRun() always carries it, so its absence means this run
+        # didn't go through the trusted enqueue path this check expects.
+        expected_account_id = payload.get("source_account_id")
+        actual_account_id = resolved["source"].get("account_id")
+        if expected_account_id != actual_account_id:
+            raise NetworkPathError(
+                f"definition.source.account_id {actual_account_id!r} does not match this check's "
+                f"own source_account_id {expected_account_id!r} -- refusing to resolve identity")
+        resolved = resolve_live_identity(resolved, conn, k8s_get=k8s_get, ec2_lookup=ec2_lookup)
     except NetworkPathError as e:
         _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
         return {"run_id": run_id, "status": "failed", "error": str(e)}

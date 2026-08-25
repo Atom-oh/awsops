@@ -122,7 +122,9 @@ describe('/network-paths', () => {
     expect(screen.getByPlaceholderText('Pod 이름')).toBeTruthy();
     expect(screen.queryByPlaceholderText('노드 이름')).toBeNull();
 
-    fireEvent.change(screen.getByLabelText('소스 종류'), { target: { value: 'eks_node' } });
+    // CI-review MAJOR fix (round 17, item 1): source.kind is the worker's OWN vocabulary
+    // ('pod'/'node'), not the old UI-invented 'eks_pod'/'eks_node'.
+    fireEvent.change(screen.getByLabelText('소스 종류'), { target: { value: 'node' } });
     expect(screen.queryByPlaceholderText('네임스페이스')).toBeNull();
     expect(screen.queryByPlaceholderText('Pod 이름')).toBeNull();
     expect(screen.getByPlaceholderText('노드 이름')).toBeTruthy();
@@ -132,10 +134,10 @@ describe('/network-paths', () => {
     mockFetches({ checks: [] });
     render(<NetworkPathsPage />);
     fireEvent.click(screen.getByText('새 점검'));
-    await waitFor(() => expect(screen.getByPlaceholderText('리소스 ARN 또는 ID')).toBeTruthy());
+    await waitFor(() => expect(screen.getByPlaceholderText('목적지 ENI ID (선택, CIDR/IP 중 하나 필요)')).toBeTruthy());
 
     fireEvent.change(screen.getByLabelText('목적지 종류'), { target: { value: 'internet' } });
-    expect(screen.queryByPlaceholderText('리소스 ARN 또는 ID')).toBeNull();
+    expect(screen.queryByPlaceholderText('목적지 ENI ID (선택, CIDR/IP 중 하나 필요)')).toBeNull();
     expect(screen.getByPlaceholderText('호스트 또는 IP/URL')).toBeTruthy();
     // request path field only appears for internet + TCP.
     expect(screen.getByPlaceholderText('경로 (선택, 예: /health)')).toBeTruthy();
@@ -144,12 +146,14 @@ describe('/network-paths', () => {
     expect(screen.queryByPlaceholderText('경로 (선택, 예: /health)')).toBeNull();
     expect(screen.queryByPlaceholderText('포트')).toBeNull();
 
-    fireEvent.change(screen.getByLabelText('목적지 종류'), { target: { value: 'on_prem' } });
+    // CI-review MAJOR fix (round 17, item 1): destination.kind is the worker's OWN vocabulary
+    // ('onprem'), not the old UI-invented 'on_prem'.
+    fireEvent.change(screen.getByLabelText('목적지 종류'), { target: { value: 'onprem' } });
     expect(screen.queryByPlaceholderText('호스트 또는 IP/URL')).toBeNull();
     expect(screen.getByPlaceholderText('온프레미스 IP 또는 URL')).toBeTruthy();
   });
 
-  it('submitting the structured create form POSTs the assembled definition JSON', async () => {
+  it('submitting the structured create form POSTs a definition resolve_identities() can actually consume', async () => {
     let posted: any = null;
     mockFetches({ checks: [], onCreatePost: (b) => { posted = b; } });
     render(<NetworkPathsPage />);
@@ -158,29 +162,38 @@ describe('/network-paths', () => {
 
     fireEvent.change(screen.getByPlaceholderText('이름'), { target: { value: 'web to db' } });
     fireEvent.change(screen.getByPlaceholderText('소스 계정 ID (12자리)'), { target: { value: '123456789012' } });
+    fireEvent.change(screen.getByPlaceholderText('소스 리전 (예: ap-northeast-2)'), { target: { value: 'ap-northeast-2' } });
     fireEvent.change(screen.getByPlaceholderText('클러스터'), { target: { value: 'prod-cluster' } });
     fireEvent.change(screen.getByPlaceholderText('네임스페이스'), { target: { value: 'web' } });
     fireEvent.change(screen.getByPlaceholderText('Pod 이름'), { target: { value: 'web-abc123' } });
+    fireEvent.change(screen.getByPlaceholderText('소스 ENI ID (eni_id — 선택, subnet_id 중 하나 필요)'), { target: { value: 'eni-source-1' } });
     fireEvent.change(screen.getByLabelText('목적지 종류'), { target: { value: 'aws_resource' } });
-    fireEvent.change(screen.getByPlaceholderText('리소스 ARN 또는 ID'), { target: { value: 'arn:aws:rds:ap-northeast-2:123456789012:db:mydb' } });
+    fireEvent.change(screen.getByPlaceholderText('목적지 ENI ID (선택, CIDR/IP 중 하나 필요)'), { target: { value: 'eni-dest-1' } });
     fireEvent.change(screen.getByLabelText('프로토콜'), { target: { value: 'tcp' } });
     fireEvent.change(screen.getByPlaceholderText('포트'), { target: { value: '5432' } });
 
     fireEvent.click(screen.getByText('생성'));
     await waitFor(() => expect(posted).not.toBeNull());
 
+    // Exact key/value shape network_path.py's resolve_identities() requires: source.kind in
+    // ('pod','node'); source.account_id/region present; source has eni_id or subnet_id;
+    // destination.kind in ('aws_resource','internet','onprem'); an aws_resource destination has
+    // eni_id/cidr/ip.
     expect(posted).toEqual({
       name: 'web to db',
       source_account_id: '123456789012',
       definition: {
-        source: { kind: 'eks_pod', cluster: 'prod-cluster', namespace: 'web', pod_name: 'web-abc123' },
-        destination: { kind: 'aws_resource', resource_id: 'arn:aws:rds:ap-northeast-2:123456789012:db:mydb' },
+        source: {
+          kind: 'pod', account_id: '123456789012', region: 'ap-northeast-2',
+          cluster: 'prod-cluster', namespace: 'web', pod_name: 'web-abc123', eni_id: 'eni-source-1',
+        },
+        destination: { kind: 'aws_resource', eni_id: 'eni-dest-1' },
         request: { protocol: 'tcp', port: 5432 },
       },
     });
   });
 
-  it('edit action (creator-or-admin only) pre-fills the structured form and PATCHes /api/network-paths/[id]', async () => {
+  it('edit action (creator-or-admin only) pre-fills the structured form and PATCHes /api/network-paths/[id], preserving fields the form does not directly expose', async () => {
     const existingCheck = {
       id: 'chk-1',
       name: 'web -> db',
@@ -188,7 +201,10 @@ describe('/network-paths', () => {
       created_by_sub: 'u-1',
       created_at: '', updated_at: '', deleted_at: null,
       definition: {
-        source: { kind: 'eks_pod', cluster: 'prod-cluster', namespace: 'web', pod_name: 'web-abc123' },
+        source: {
+          kind: 'pod', account_id: '123456789012', region: 'ap-northeast-2',
+          cluster: 'prod-cluster', namespace: 'web', pod_name: 'web-abc123', eni_id: 'eni-source-1',
+        },
         destination: { kind: 'internet', host: 'example.com', path: '/health' },
         request: { protocol: 'tcp', port: 443, path: '/health' },
       },
@@ -204,10 +220,14 @@ describe('/network-paths', () => {
 
     fireEvent.click(screen.getByTitle('수정'));
     await waitFor(() => expect(screen.getByDisplayValue('web -> db')).toBeTruthy());
-    // pre-filled from the saved definition
+    // pre-filled from the saved definition, INCLUDING account_id/region/eni_id -- CI-review MAJOR
+    // fix (round 17, item 1, second half): these used to be silently dropped by
+    // formStateFromCheck(), so re-saving after an edit corrupted a currently-valid check.
     expect(screen.getByDisplayValue('prod-cluster')).toBeTruthy();
     expect(screen.getByDisplayValue('web')).toBeTruthy();
     expect(screen.getByDisplayValue('web-abc123')).toBeTruthy();
+    expect(screen.getByDisplayValue('ap-northeast-2')).toBeTruthy();
+    expect(screen.getByDisplayValue('eni-source-1')).toBeTruthy();
     expect(screen.getByDisplayValue('example.com')).toBeTruthy();
     expect(screen.getByDisplayValue('443')).toBeTruthy();
 
@@ -216,8 +236,12 @@ describe('/network-paths', () => {
 
     await waitFor(() => expect(patchedId).toBe('chk-1'));
     expect(patchedBody.name).toBe('web -> db (renamed)');
+    // The full round trip, including account_id/region/eni_id, survives an edit+save untouched.
     expect(patchedBody.definition).toEqual({
-      source: { kind: 'eks_pod', cluster: 'prod-cluster', namespace: 'web', pod_name: 'web-abc123' },
+      source: {
+        kind: 'pod', account_id: '123456789012', region: 'ap-northeast-2',
+        cluster: 'prod-cluster', namespace: 'web', pod_name: 'web-abc123', eni_id: 'eni-source-1',
+      },
       destination: { kind: 'internet', host: 'example.com', path: '/health' },
       request: { protocol: 'tcp', port: 443, path: '/health' },
     });

@@ -1,4 +1,3 @@
--- since: 0.8.0
 -- SG Rules & Usage gap 5: sg_rule_inventory has no VPC id, so the Rules page's "VPC" column and a
 -- VPC filter could not be wired honestly (see the now-removed header comment in
 -- web/app/network/security-groups/rules/page.tsx and docs/superpowers/specs/
