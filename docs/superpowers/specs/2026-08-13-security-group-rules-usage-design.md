@@ -118,14 +118,26 @@ An administrator configures each supported account and region inside Rules:
 - Glue table
 - enabled state
 
-The workgroup must already enforce a query-results S3 location. AWSops validates:
+The workgroup must already enforce a query-results S3 location AND its own
+`BytesScannedCutoffPerQuery` scan-bytes ceiling — AWS itself pre-emptively enforcing a cap, rather
+than relying solely on this feature's own post-hoc (query-already-ran, cost-already-incurred)
+budget check. AWSops validates:
 
 - workgroup exists and is usable
+- workgroup enforces a `BytesScannedCutoffPerQuery`
 - database and table exist
 - table location and schema are readable
 - canonical VPC Flow Log fields can be resolved without administrator-supplied SQL
 - the table exposes Glue partitions or partition projection that supports bounded time pruning
 - the caller has Athena, Glue, and S3 access
+
+Validation additionally records, and gates scanning on, a resolved `columnMap`/`partitionKeys`/
+`partitionKeyTypes`/`scopeResolution` (which of `account_id`/`region` resolved, and whether as a
+Glue partition key or a plain column). Because these fields were added after the feature first
+shipped, an existing `sg_flow_sources` row saved before they existed has no record of them —
+**an already-configured source needs one no-op re-save (the admin PUT route re-runs validation on
+every save) to pick them up**; until then it is treated the same as any other source that hasn't
+resolved a bound-able partition strategy.
 
 Configuration is stored in Aurora and contains no credentials — the account/region source config
 references a target account only; the actual query execution uses the purpose-named policy described
@@ -432,8 +444,8 @@ For each source:
    row-level `start`/`end` filter, not this predicate, is what still authoritatively decides which
    rows count as day D's traffic). This means the effective per-day scanned-PARTITION-file bound is
    up to double a single day's own partition size — size the workgroup's `BytesScannedCutoffPerQuery`
-   (Feature gate / IAM sections) with that doubling in mind, not against a single day's partition
-   alone
+   (required at validation time — see **Flow Log source configuration** above) with that doubling
+   in mind, not against a single day's partition alone
 5. select and aggregate only fields needed for deterministic matching
 6. match accepted flows against candidate ingress or egress rules
 7. within one transaction: delete all `sg_rule_activity_daily` rows for
@@ -513,12 +525,22 @@ Rule matching covers:
   this repository yet (`sg_rule_scan.py`'s `process_day` docstring and its `peered_or_shared_vpc_ids_by_vpc`
   parameter say so directly), so the peering/shared-VPC PARTICIPANT SET this paragraph describes is
   currently always empty in practice — every SG-reference resolution effectively scopes to the flow's
-  own VPC alone. This is the SAFE direction, not a broken feature: item 6's fix (see "Fixed" in the
-  CHANGELOG) makes an SG reference to a `group_id` that resolves outside that (currently empty) known-
-  legal scope but IS present somewhere else in the account/region's own membership snapshot data
-  resolve `unassessable` — never a confident `no_observed_evidence` and never a false cross-VPC match.
-  Populating `peered_or_shared_vpc_ids_by_vpc` from a real peering/RAM data source (closing the gap
-  this paragraph originally implied was already closed) remains a scoped, undone follow-up.
+  own VPC alone. This is the SAFE direction, not a broken feature: a `group_id` found ONLY outside
+  that (currently empty) known-legal scope — present elsewhere in the account/region's own
+  membership snapshot data, but not in a VPC this call can confirm is legally allowed to reference
+  it — already resolved `unassessable` before this PR (`sg_resolver_factory`'s
+  `if not in_scope_ips and out_of_scope_hit: return None` branch). **Round-5 CI review correction:**
+  the paragraph above previously attributed item 6's fix to that SAME pre-existing branch; item 6's
+  own contribution is the DIFFERENT `found_anywhere == False` case — a `group_id` that is not
+  present ANYWHERE in this account/region's own snapshot data at all (a legally possible
+  cross-account or cross-region SG reference, per AWS's own peering model, that this account/
+  region's snapshot structurally cannot verify either way). Before item 6, that case fell through to
+  `return in_scope_ips` (an empty set, not `None`), which `match_peer`/`sg_peer_ip_resolver` then
+  read as a confident, resolved-but-empty answer → a false `no_observed_evidence`; item 6 makes it
+  resolve `unassessable` instead, matching the in-scope-but-elsewhere case's own honest-degrade
+  posture rather than confidently guessing a non-match. Populating `peered_or_shared_vpc_ids_by_vpc`
+  from a real peering/RAM data source (closing the gap this paragraph originally implied was already
+  closed) remains a scoped, undone follow-up.
 - managed prefix lists when entries can be resolved read-only
 - ingress and egress
 - protocol and port ranges

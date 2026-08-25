@@ -419,6 +419,21 @@ def test_build_day_select_raises_on_unsafe_table_name():
         m.build_day_select(source, date(2026, 3, 5))
 
 
+def test_scope_partition_expr_clauses_raises_on_unresolvable_account_id_column():
+    """MINOR fix (CI review round 4): a scope field marked `scopeResolution: "partition"` but whose
+    `columnMap` entry is missing/corrupted must raise `UnsafeIdentifier` (fail closed), not silently
+    drop the clause — dropping it would reopen the any-tenant existence-check gap `_partition_exists`'s
+    scoping exists to close, for exactly the corrupted-input case that's hardest to notice."""
+    validation = {
+        "partitionKeys": ["dt", "account-id"], "partitionKeyTypes": ["date", "string"],
+        "scopeResolution": {"account_id": "partition", "region": None},
+        "columnMap": {},  # corrupted: no "account_id" entry despite resolving as a partition key
+    }
+    source = {"account_id": "123456789012", "region": "ap-northeast-2"}
+    with pytest.raises(m.UnsafeIdentifier):
+        m.scope_partition_expr_clauses(validation, source)
+
+
 def test_build_day_select_never_selects_or_groups_by_srcport():
     """L4 finding #9(i): srcport is unused downstream and inflates group cardinality — must not
     appear in the query at all."""

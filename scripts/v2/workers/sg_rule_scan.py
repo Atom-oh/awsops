@@ -430,6 +430,31 @@ def invoke_broker_query(lambda_client, broker_arn, flow_source_id, day):
         }
 
 
+def invoke_broker_validate(lambda_client, broker_arn, source):
+    """CI-review MAJOR fix (round 5): a source whose persisted `validation` predates the
+    `partitionKeyTypes`/`scopeResolution` fields (or the single-key date-shape gate those fields
+    back) reads `status: "valid"` from Aurora yet `sm.has_resolved_partition_strategy()` — applied
+    identically at scan time, with no migration/grandfathering branch — refuses it on every run.
+    Manually re-saving the source (which re-runs the web BFF's PUT-time validate call) fixes this,
+    but nothing forces that to happen, so a source can sit permanently refused indefinitely. `run()`
+    calls this to re-run the broker's OWN `validate` action — the exact check the web BFF's PUT
+    route already trusts — against the source's live schema, so a genuinely stale (never-rejected,
+    just never-rechecked) validation self-heals with no operator action required. Returns the
+    broker's raw `validate` response ({"ok": True, ...} on success, {"ok": False, "reason": ...}
+    otherwise) — callers must treat a failure as "leave the existing (still-refusing) validation in
+    place," never as a reason to proceed unvalidated."""
+    payload = {
+        "action": "validate", "account_id": source["account_id"], "region": source["region"],
+        "workgroup": source["workgroup"], "database": source["database_name"], "table": source["table_name"],
+    }
+    resp = lambda_client.invoke(FunctionName=broker_arn, Payload=json.dumps(payload).encode("utf-8"))
+    raw_payload = resp.get("Payload")
+    body = json.loads((raw_payload.read() if hasattr(raw_payload, "read") else raw_payload) or b"{}")
+    if resp.get("FunctionError") or "ok" not in body:
+        return {"ok": False, "reason": f"broker invocation error: FunctionError={resp.get('FunctionError')!r}, body={body!r}"}
+    return body
+
+
 def eni_group_ids_for_ip(memberships, ip):
     """memberships: list of {eni_id, group_ids, private_ips} for the resolved snapshot. Returns the
     union of group_ids of any ENI carrying `ip`."""
@@ -868,6 +893,24 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
         return {"status": "awaiting_validation",
                 "reason": f"source validation.status={source.get('validation', {}).get('status')!r} is not 'valid'"}
     lam = (lambda_client_factory or (lambda: boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))))()
+
+    # CI-review MAJOR fix (round 5): distinguish a validation that was genuinely CHECKED and
+    # rejected the date-shape (it already carries `partitionKeyTypes`, so `has_resolved_partition_
+    # strategy` correctly and permanently refuses it) from one that predates that field entirely —
+    # persisted before the round-4 fixes existed, never re-run since. The latter is a stale
+    # snapshot of an old, looser check, not a confirmed-bad source, and self-heals via the broker's
+    # own `validate` action rather than requiring a manual admin no-op re-save (the ONLY previously
+    # documented remediation) before it can ever scan again.
+    validation = source.get("validation") or {}
+    if "partitionKeyTypes" not in validation and not sm.has_resolved_partition_strategy(validation):
+        fresh = invoke_broker_validate(lam, broker_arn, source)
+        if fresh.get("ok"):
+            conn.run("UPDATE sg_flow_sources SET validation=:v WHERE id=:id",
+                      v=json.dumps(fresh), id=source["id"])
+            source["validation"] = fresh
+        # A failed re-validation leaves the stale validation in place; `has_resolved_partition_
+        # strategy` below still refuses the scan exactly as it already would have — this path only
+        # ever helps a source that turns out to genuinely resolve, never masks a real rejection.
 
     fid = source["id"]
     # Item 2 follow-up fix (round 3): a SINGLE `observation_lag` value (the gap before THIS run's

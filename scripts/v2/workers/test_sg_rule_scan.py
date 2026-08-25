@@ -414,6 +414,38 @@ def test_invoke_broker_query_surfaces_malformed_body_without_ok_key():
     assert body["ok"] is False
 
 
+# ── invoke_broker_validate (CI-review MAJOR fix, round 5): self-heals a stale validation that
+#    predates partitionKeyTypes/scopeResolution by re-running the broker's own "validate" action —
+#    never requires a manual admin no-op re-save before a source can scan again. ─────────────────
+
+def test_invoke_broker_validate_sends_the_sources_own_resolved_config():
+    """The broker's `validate` action takes raw account_id/region/workgroup/database/table (unlike
+    `query_by_source`'s opaque flow_source_id) — this is the SAME action the web BFF's PUT route
+    already calls, just re-run here against the source's own persisted config."""
+    calls = []
+
+    class RecordingLambda:
+        def invoke(self, FunctionName, Payload):
+            calls.append(json.loads(Payload))
+            return {"Payload": type("R", (), {"read": lambda self: b'{"ok": true, "status": "valid"}'})()}
+
+    source = {"id": 7, "account_id": "123456789012", "region": "ap-northeast-2",
+              "workgroup": "wg", "database_name": "db", "table_name": "tbl"}
+    body = scan.invoke_broker_validate(RecordingLambda(), "arn:...:function:broker", source)
+    assert body == {"ok": True, "status": "valid"}
+    assert calls[0] == {"action": "validate", "account_id": "123456789012", "region": "ap-northeast-2",
+                         "workgroup": "wg", "database": "db", "table": "tbl"}
+
+
+def test_invoke_broker_validate_surfaces_function_error():
+    lam = FakeLambdaRaw(b'{"errorMessage": "boom"}', function_error="Unhandled")
+    source = {"id": 7, "account_id": "123456789012", "region": "ap-northeast-2",
+              "workgroup": "wg", "database_name": "db", "table_name": "tbl"}
+    body = scan.invoke_broker_validate(lam, "arn:...:function:broker", source)
+    assert body["ok"] is False
+    assert "FunctionError" in body["reason"]
+
+
 # ── invoke_broker_query: L3 finding #6 (opaque flow_source_id + day, never raw SQL/account) ──────
 
 def test_invoke_broker_query_sends_only_flow_source_id_and_day():
@@ -1227,7 +1259,11 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
     conn = FakeConn({
         "FROM sg_flow_sources": [[
-            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+            # A Hive-style year/month/day layout resolves `has_resolved_partition_strategy` without
+            # needing `partitionKeyTypes` at all, so this fixture (unlike a bare {"status":"valid"})
+            # never triggers the round-5 stale-validation self-heal path below.
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps({"status": "valid", "partitionKeys": ["year", "month", "day"]}), utc(2020, 1, 1)),
         ]],
         "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],  # no watermark yet -> first run starts at source created day
@@ -1249,6 +1285,85 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     assert fake_lambda.invocations[0]["flow_source_id"] == 1
     assert "query" not in fake_lambda.invocations[0]
     assert "account_id" not in fake_lambda.invocations[0]
+
+
+class DispatchingFakeLambda:
+    """Returns a different canned response depending on the invoked action — needed to test
+    `run()`'s self-heal path, which invokes BOTH `validate` (once, only when validation is stale)
+    and `query_by_source` (per eligible day) in the same call."""
+    def __init__(self, responses_by_action):
+        self.responses_by_action = responses_by_action
+        self.invocations = []
+
+    def invoke(self, FunctionName, Payload):
+        evt = json.loads(Payload)
+        self.invocations.append(evt)
+        body = self.responses_by_action[evt["action"]]
+        return {"Payload": type("R", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()}
+
+
+def test_run_self_heals_a_stale_validation_missing_partition_key_types(monkeypatch):
+    """CI-review MAJOR fix (round 5): a source persisted BEFORE `partitionKeyTypes` existed reads
+    `status: "valid"` yet `has_resolved_partition_strategy` (no grandfathering branch) refuses it —
+    `run()` must re-run the broker's own `validate` action and persist the fresh result, rather than
+    requiring a manual admin re-save before this source can ever scan again."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    stale_validation = {"status": "valid", "partitionKeys": ["dt"]}  # no partitionKeyTypes at all
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps(stale_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fresh_validation = {"ok": True, "status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}
+    fake_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    validate_calls = [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert len(validate_calls) == 1
+    assert validate_calls[0] == {"action": "validate", "account_id": "123456789012",
+                                  "region": "ap-northeast-2", "workgroup": "wg",
+                                  "database": "db", "table": "tbl"}
+    update_calls = [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+    assert len(update_calls) == 1
+    assert json.loads(update_calls[0][1]["v"]) == fresh_validation
+    # The scan itself proceeded using the freshly-resolved (now scannable) strategy.
+    query_calls = [i for i in fake_lambda.invocations if i["action"] == "query_by_source"]
+    assert len(query_calls) >= 1
+
+
+def test_run_does_not_revalidate_a_source_that_was_genuinely_checked_and_rejected(monkeypatch):
+    """A validation that DOES carry `partitionKeyTypes` (it was checked, and the type genuinely
+    isn't date-shaped) must never be silently re-tried on every single run — that field's presence
+    is what distinguishes 'stale, never re-checked' from 'confirmed, permanently unscannable'."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    checked_and_rejected = {"status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"]}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps(checked_and_rejected), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = DispatchingFakeLambda({"validate": {"ok": True}, "query_by_source": {"ok": True, "rows": []}})
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert not [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert not [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
 
 
 def test_run_threads_a_per_boundary_lag_resolver_callable_into_process_day(monkeypatch):
