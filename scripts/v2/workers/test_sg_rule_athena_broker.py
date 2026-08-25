@@ -282,6 +282,152 @@ def test_validate_omits_account_id_and_region_when_the_table_has_no_such_columns
     result = _validate_with_columns(monkeypatch, conn, _CANONICAL_FLOW_COLUMNS)
     assert "account_id" not in result["columnMap"]
     assert "region" not in result["columnMap"]
+    assert result["scopeResolution"] == {"account_id": None, "region": None}
+    assert result["scannedUnscoped"] is True
+
+
+# ── MAJOR fix (item 1, round 2): the scope predicate is unreachable for the very table layout it
+#    targets — centralized/org-wide flow-log tables canonically carry account_id/region as Glue
+#    PARTITION KEYS, never plain table columns. The round-1 fix only ever searched
+#    StorageDescriptor.Columns, so this table layout still resolved nothing. Also verifies the
+#    hyphen-alias mechanism (already used for the required Flow Log fields) now applies here too. ──
+
+def _validate_with_partition_keys(monkeypatch, conn, extra_partition_keys):
+    """Like `_validate_with_columns`, but lets a test add extra Glue PartitionKeys (beyond the
+    baseline `dt`/date key every fixture needs to satisfy the "table has a bound-able partition
+    scheme" check) instead of only StorageDescriptor columns."""
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "dt", "Type": "date"}] + list(extra_partition_keys),
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_resolves_scope_from_partition_keys_not_only_columns(monkeypatch):
+    """Both scope fields are Glue PARTITION KEYS (not table columns, per the CI review's exact
+    ask) — the resolved columnMap must still carry them, and the predicate built from that
+    resolved config must still scope the query, using the hyphen alias `account-id` (the SAME
+    alias mechanism the required-field loop already uses for `interface-id`/`log-status`)."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_with_partition_keys(monkeypatch, conn, [
+        {"Name": "account-id", "Type": "string"}, {"Name": "region", "Type": "string"},
+    ])
+    assert result["columnMap"]["account_id"] == "account-id"
+    assert result["columnMap"]["region"] == "region"
+    assert result["scopeResolution"] == {"account_id": "partition", "region": "partition"}
+    assert result["scannedUnscoped"] is False
+
+    import sg_rule_matching as sm
+    source = {"account_id": "123456789012", "region": "ap-northeast-2", "database_name": "db",
+              "table_name": "tbl", "validation": result}
+    sql = sm.build_day_select(source, dt.date(2026, 3, 5))
+    assert '"account-id" = \'123456789012\'' in sql
+    assert '"region" = \'ap-northeast-2\'' in sql
+
+
+def test_validate_prefers_partition_key_form_over_column_when_both_present(monkeypatch):
+    """When the SAME canonical field resolves via both a partition key and a plain column, the
+    partition-key form must win — only it actually prunes scanned partition files."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]
+                                       + [{"Name": "account_id"}]},
+                "PartitionKeys": [{"Name": "dt", "Type": "date"}, {"Name": "account_id", "Type": "string"}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    result = broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+    assert result["scopeResolution"]["account_id"] == "partition"
+
+
+# ── MAJOR fix (item 4, round 2): a single-key partition scheme whose Glue type isn't date-shaped
+#    must be REJECTED at validation time — round 1 only enforced this at runtime scan time
+#    (`has_resolved_partition_strategy`'s hard-refuse), so a brand-new such source validated
+#    `status: "valid"` yet every real scan permanently refused it. ──────────────────────────────────
+
+def test_validate_rejects_a_non_date_typed_single_partition_key(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "dt", "Type": "bigint"}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    with pytest.raises(broker.BrokerError, match="not date-shaped"):
+        broker._validate({
+            "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+            "database": "db", "table": "tbl",
+        }, conn)
+
+
+def test_validate_still_accepts_a_date_typed_single_partition_key(monkeypatch):
+    """The pre-existing, common-case single date-typed key must keep validating successfully —
+    this MAJOR fix only rejects non-date-shaped types."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_with_columns(monkeypatch, conn, _CANONICAL_FLOW_COLUMNS)
+    assert result["ok"] is True
+    assert result["partitionKeyTypes"] == ["date"]
 
 
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):
@@ -534,6 +680,19 @@ def test_partition_exists_true_when_only_the_next_day_partition_exists():
         glue, "db", "tbl", dt.date(2026, 3, 5),
         {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]})
     assert result is True
+    # Item 3 follow-up fix (round 2): a genuinely `date`-typed key gets a typed `DATE '...'`
+    # literal, not a bare string — Athena/Trino rejects comparing a `date` column to a string.
+    assert glue.expressions == ["dt IN (DATE '2026-03-05', DATE '2026-03-06')"]
+
+
+def test_partition_exists_keeps_string_literal_for_a_string_typed_key():
+    """A string/varchar/char-typed single key (the common manually-partitioned-as-text pattern)
+    must keep the plain quoted-string literal — only genuinely date/timestamp-typed keys switch to
+    a typed literal."""
+    glue = FakeGluePartitions(["2026-03-06"])
+    broker._partition_exists(
+        glue, "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["string"]})
     assert glue.expressions == ["dt IN ('2026-03-05', '2026-03-06')"]
 
 

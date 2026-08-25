@@ -99,6 +99,68 @@ def test_day_crossing_when_no_version_covers_a_boundary():
     assert cov["version"] is None
 
 
+# ── item 2 follow-up fix (round 2): observation_lag must reflect the ACTUAL gap since the previous
+#    successful scan, not a fixed nominal cadence — a multi-day scan outage must widen the window. ──
+
+def test_day_crossing_when_observation_lag_is_unknown_never_guesses():
+    # A closed version with no resolvable observation_lag (the caller found no reasonably recent
+    # previous successful scan) must never be trusted as confident — even though, with the OLD
+    # fixed-24h behavior, this exact valid_to (3 days after the day in question) would have been
+    # confidently NOT crossing (see test_day_not_crossing_when_transition_is_well_beyond_the_
+    # observation_lag above).
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8, 0, 0)},
+        {"valid_from": utc(2026, 3, 8, 0, 0), "valid_to": None},
+    ]
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=None)
+    assert cov["crossing"] is True
+    assert cov["version"] is None
+    assert cov["reason"] == "observation_lag_unknown"
+
+
+def test_day_crossing_after_a_multi_day_scan_gap_widens_the_window():
+    # Simulates a real multi-day scan outage: the previous successful scan was 4 days before the
+    # closing observation (valid_to) — a FIXED 24h/1-day lag would have missed this entirely and
+    # confidently attributed day 3/5 to the old version (the false-confidence bug this item fixes).
+    # With the real ~4-day gap threaded through as observation_lag, the uncertainty window covers
+    # day 3/5 and the day must be marked unassessable (crossing), not confidently resolved.
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8, 0, 0)},
+        {"valid_from": utc(2026, 3, 8, 0, 0), "valid_to": None},
+    ]
+    real_gap = timedelta(days=4)  # scans were missed for several days before this observation
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=real_gap)
+    assert cov["crossing"] is True
+    assert cov["version"] is None
+    assert cov["reason"] == "observation_lag_boundary"
+
+
+# ── item 3 follow-up fix (round 2): a genuinely `date`-typed Glue partition key must get a typed
+#    literal (Athena/Trino rejects comparing a `date` column to a bare string literal). ─────────────
+
+def test_date_literal_uses_typed_literal_for_a_date_typed_key():
+    assert m.date_literal("2026-03-05", "date") == "DATE '2026-03-05'"
+
+
+def test_date_literal_keeps_quoted_string_for_a_string_typed_key():
+    assert m.date_literal("2026-03-05", "string") == "'2026-03-05'"
+
+
+def test_build_partition_predicate_emits_date_literal_for_a_date_typed_single_key():
+    validation = {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}
+    predicate = m._build_partition_predicate(validation, date(2026, 3, 5))
+    assert "DATE '2026-03-05'" in predicate
+    assert "DATE '2026-03-06'" in predicate
+    assert "'2026-03-05'" not in predicate.replace("DATE '2026-03-05'", "")
+
+
+def test_build_partition_predicate_keeps_string_literal_for_a_string_typed_single_key():
+    validation = {"partitionKeys": ["dt"], "partitionKeyTypes": ["string"]}
+    predicate = m._build_partition_predicate(validation, date(2026, 3, 5))
+    assert "'2026-03-05'" in predicate
+    assert "DATE '2026-03-05'" not in predicate
+
+
 def test_classify_rule_day_crossing_downgrades_to_unassessable_not_lower_bound():
     status = m.classify_rule_day(compatible_count=0, overlap_count=0, has_source=True, unassessable=True)
     assert status == "unassessable"
@@ -376,6 +438,32 @@ def test_build_day_select_adds_no_scope_predicate_without_both_columns():
     assert "ap-northeast-2" not in sql
 
 
+# ── item 1 follow-up fix (round 2): each of account_id/region must be scoped INDEPENDENTLY — a
+#    table exposing only one of the two still gets that half of scoping, which round 1 (requiring
+#    both together) silently discarded entirely. ─────────────────────────────────────────────────
+
+def test_build_day_select_scopes_partially_when_only_account_id_resolved():
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start",
+                      "account_id": "account_id"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert '"account_id" = \'123456789012\'' in sql
+    assert "ap-northeast-2" not in sql
+
+
+def test_build_day_select_scopes_partially_when_only_region_resolved():
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start",
+                      "region": "region"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert '"region" = \'ap-northeast-2\'' in sql
+    assert "123456789012" not in sql
+
+
 # ── has_resolved_partition_strategy (L3 finding #8b) ──────────────────────────────────────────────
 
 def test_has_resolved_partition_strategy_true_for_hive_style():
@@ -398,6 +486,22 @@ def test_has_resolved_partition_strategy_false_for_single_key_with_non_date_type
     # named `dt`) must not be treated as accepting an ISO date-string literal.
     assert m.has_resolved_partition_strategy(
         {"partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"]}) is False
+
+
+# ── is_date_like_partition_type (item 4 follow-up fix, round 2 — public accessor used by
+#    sg_rule_athena_broker._validate to reject a non-date-shaped single key at VALIDATE time). ──────
+
+def test_is_date_like_partition_type_true_for_date_and_timestamp_and_text_types():
+    assert m.is_date_like_partition_type("date") is True
+    assert m.is_date_like_partition_type("timestamp") is True
+    assert m.is_date_like_partition_type("string") is True
+    assert m.is_date_like_partition_type("varchar") is True
+    assert m.is_date_like_partition_type("char") is True
+
+
+def test_is_date_like_partition_type_false_for_bigint_and_unknown():
+    assert m.is_date_like_partition_type("bigint") is False
+    assert m.is_date_like_partition_type(None) is False
 
 
 def test_single_date_partition_key_accepts_string_typed_column():

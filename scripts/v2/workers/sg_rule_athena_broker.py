@@ -78,8 +78,11 @@ _FORBIDDEN_RE = re.compile(
 # it once; a second, structurally different check in a different process.
 _GLUE_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,127}$')
 _WORKGROUP_RE = re.compile(r'^[A-Za-z0-9._-]{1,128}$')
-_ACCOUNT_ID_RE = re.compile(r'^\d{12}$')
-_REGION_RE = re.compile(r'^[a-z]{2,4}(-[a-z]+)+-\d$')
+# MINOR fix (round 2): these used to be a byte-for-byte duplicate of
+# `sg_rule_matching._ACCOUNT_ID_VALUE_RE`/`_REGION_VALUE_RE` — a drift risk (this module already
+# imports `sg_rule_matching as sm`, so reuse its definitions directly instead of a second copy).
+_ACCOUNT_ID_RE = sm._ACCOUNT_ID_VALUE_RE
+_REGION_RE = sm._REGION_VALUE_RE
 _DAY_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 
@@ -188,16 +191,6 @@ def _validate(event, conn):
     if missing:
         raise BrokerError(f"table missing required Flow Log fields: {', '.join(missing)}")
 
-    # MAJOR fix: `sg_rule_matching._build_scope_predicate` scopes the generated day-SELECT to this
-    # source's own account_id/region, but ONLY when BOTH of those keys are present in
-    # `validation.columnMap` — and the required-field loop above can never put them there (they are
-    # not Flow Log fields, so they're not in `required`). Without this second, OPTIONAL pass the
-    # scope predicate was unreachable dead code and a centralized/org-wide flow-log table would be
-    # scanned unscoped. Absence is not an error: a single-account table simply has no such columns.
-    for optional_scope in ("account_id", "region"):
-        if optional_scope in columns:
-            resolved[optional_scope] = optional_scope
-
     partition_keys = [c["Name"] for c in tbl.get("PartitionKeys", [])]
     # item 7 follow-up fix: a single-key partition scheme (the non-Hive-style branch of
     # `_build_partition_predicate`/`_partition_exists`) is only safe to treat as a date column when
@@ -205,10 +198,68 @@ def _validate(event, conn):
     # key (or any type this module hasn't confirmed) must never be assumed to accept an ISO date
     # string literal. Persisted alongside partitionKeys so the matching engine can gate on it.
     partition_key_types = [c.get("Type", "") for c in tbl.get("PartitionKeys", [])]
+
+    # MAJOR fix (item 1, round 2): `sg_rule_matching._build_scope_predicate` scopes the generated
+    # day-SELECT to this source's own account_id/region, but the round-1 fix resolved those two
+    # fields ONLY from `StorageDescriptor.Columns` — and centralized/org-wide flow-log tables
+    # canonically carry account/region as PARTITION KEYS, never plain columns, which left the scope
+    # predicate permanently unreachable for exactly the table layout this feature was built to
+    # guard. Also, round-1 only matched the exact underscore names, while the REQUIRED-field loop
+    # above already accepts hyphen aliases (`interface-id`, `log-status`) for the SAME reason a
+    # Glue crawler would name a column `account-id` — extend that same alias mechanism here rather
+    # than inventing a new one. Resolve from the UNION of PartitionKeys and Columns, apply each of
+    # account_id/region INDEPENDENTLY (a table exposing only one of the two still gets the
+    # available half of scoping, which is strictly better than none), and prefer the partition-key
+    # form when both resolve the same canonical name — only the partition-key form actually PRUNES
+    # scanned partition files; the column form is a post-scan filter only.
+    lower_partition_keys = {k.lower(): k for k in partition_keys}
+    scope_aliases = {
+        "account_id": ["account_id", "account-id", "aws-account-id", "aws_account_id"],
+        "region": ["region", "aws-region", "aws_region"],
+    }
+    scope_resolution = {}  # canonical -> "partition" | "column" | None
+    for canonical, aliases in scope_aliases.items():
+        pk_hit = next((a for a in aliases if a.lower() in lower_partition_keys), None)
+        if pk_hit:
+            resolved[canonical] = lower_partition_keys[pk_hit.lower()]
+            scope_resolution[canonical] = "partition"
+            continue
+        col_hit = next((a for a in aliases if a.lower() in columns), None)
+        if col_hit:
+            resolved[canonical] = col_hit
+            scope_resolution[canonical] = "column"
+        else:
+            scope_resolution[canonical] = None
+    # Explicitly recorded (not just inferred from absence) so operators can distinguish a
+    # genuinely single-account table from a mis-detected org-wide one — a source that resolves
+    # NEITHER field is scanned entirely unscoped, which used to be silent.
+    scanned_unscoped = scope_resolution["account_id"] is None and scope_resolution["region"] is None
+
     projection_enabled = (tbl.get("Parameters", {}) or {}).get("projection.enabled") == "true"
     if not partition_keys and not projection_enabled:
         raise BrokerError("table has no partition keys or partition projection — cannot bound a scan")
     strategy = "projection" if projection_enabled else "partition_keys"
+
+    # MAJOR fix (item 4, round 2): a single-key (non-Hive-style) partition scheme is only a valid,
+    # scannable strategy when Glue's own catalog type is CONFIRMED date-shaped — the SAME check
+    # `sm.has_resolved_partition_strategy`/`sm.single_date_partition_key` already apply at RUNTIME
+    # (this module's own `_query_by_source` hard-refuses via that check). Before this fix,
+    # `_validate` never looked at the key's type at all, so a brand-new table with e.g. a
+    # `bigint`-typed single key validated `status: "valid"` yet every real scan permanently refused
+    # it (the validation-vs-runtime mismatch the CI review flagged) — reject it HERE instead, with a
+    # reason distinct from the runtime's generic `partition_check_unverified`/"did not resolve a
+    # partition strategy" messages, so operators can tell "wrong key type, will never work" apart
+    # from "transient Glue API hiccup, retry" at a glance. A Hive-style year/month/day scheme (3+
+    # keys) is unaffected — `_build_partition_predicate`'s Hive branch doesn't depend on key types.
+    if strategy == "partition_keys" and len(partition_keys) == 1:
+        key_type = partition_key_types[0] if partition_key_types else ""
+        if not sm.is_date_like_partition_type(key_type):
+            raise BrokerError(
+                f"single partition key {partition_keys[0]!r} has Glue type {key_type!r}, which is "
+                "not date-shaped (expected date/timestamp/string/varchar/char) — this source can "
+                "never be bounded to a day and must not be scanned; use a Hive-style "
+                "year/month/day partitioned table or re-partition on a date-typed key "
+                "[reason: partition_key_type_not_date_shaped]")
 
     optional_present = [c for c in ("flow-direction", "flow_direction", "tcp-flags", "tcp_flags",
                                     "bytes", "packets") if c.lower() in columns]
@@ -220,6 +271,7 @@ def _validate(event, conn):
         # `query_by_source` action (via sg_rule_matching.build_day_select) can use the REAL
         # resolved schema instead of hardcoding underscore names / an unbounded scan.
         "columnMap": resolved, "partitionKeys": partition_keys,
+        "scopeResolution": scope_resolution, "scannedUnscoped": scanned_unscoped,
     }
 
 
@@ -306,7 +358,14 @@ def _partition_exists(glue, database, table, day, validation):
             dk = sm._safe_ident(dk_raw, "")
             if not dk:
                 return None  # unsafe identifier — genuinely unverifiable, per the 3-state contract above
-            expr = f"{dk} IN ('{day.isoformat()}', '{next_day.isoformat()}')"
+            # Item 3 follow-up fix (round 2): use the SAME type-aware literal builder
+            # `build_day_select`/`build_day_skipdata_count_select` use — a genuinely `date`/
+            # `timestamp`-typed key must get a typed literal, not a bare string (Athena rejects the
+            # comparison with a type error).
+            key_type = sm.single_date_partition_key_type(validation)
+            lit_a = sm.date_literal(day.isoformat(), key_type)
+            lit_b = sm.date_literal(next_day.isoformat(), key_type)
+            expr = f"{dk} IN ({lit_a}, {lit_b})"
         else:
             return True  # not a checkable single/hive-style scheme — do not block on it
         resp = glue.get_partitions(DatabaseName=database, TableName=table, Expression=expr, MaxResults=1)
