@@ -672,6 +672,32 @@ def test_process_day_real_observation_lag_confidently_resolves_when_outside_the_
     assert res["any_crossing"] is False
 
 
+# ── CI-review MAJOR fix (round 5): sg_rule_scan_runs.started_at must record the run-wide
+#    observation instant `run()` used to close/open rule-inventory versions, not the wall-clock
+#    time this transaction happens to commit at — otherwise a later run's
+#    `previous_successful_scan_gap()` under-estimates the real gap. ──────────────────────────────
+
+def test_process_day_stamps_started_at_from_the_passed_observed_at_not_wall_clock():
+    conn = FakeConn()
+    observed_at = utc(2026, 3, 6, 2)  # the run-wide `now` captured by run(), NOT commit time
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None, observed_at=observed_at)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_scan_runs")][0]
+    assert insert_call[1]["started_at"] == observed_at
+
+
+def test_process_day_defaults_observed_at_to_wall_clock_when_not_passed():
+    """Standalone/test callers with no run-wide observation instant to pass still get a sane
+    default (current wall-clock time) rather than an error."""
+    conn = FakeConn()
+    before = dt.datetime.now(dt.timezone.utc)
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None)
+    after = dt.datetime.now(dt.timezone.utc)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_scan_runs")][0]
+    assert before <= insert_call[1]["started_at"] <= after
+
+
 def test_process_day_matches_compatible_flow():
     conn = FakeConn()
     res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},

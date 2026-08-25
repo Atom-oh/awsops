@@ -442,7 +442,7 @@ def eni_group_ids_for_ip(memberships, ip):
 
 def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vpc, earliest_snapshot_at,
                  stale_vpcs=None, coverage_flags=None, peered_or_shared_vpc_ids_by_vpc=None,
-                 observation_lag=None):
+                 observation_lag=None, observed_at=None):
     """Matches `flows` (already-aggregated Athena rows) against every rule for this account/region,
     classifies the whole day per rule, and commits sg_rule_activity_daily + sg_rule_scan_runs in
     ONE transaction (delete-then-insert for the day — idempotent regardless of how many times this
@@ -495,10 +495,25 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     (`run()`) from the ACTUAL gap to the previous successful scan (`previous_successful_scan_gap()`),
     never a fixed nominal cadence. Defaults to `None` ("unknown gap" — every closed version's day is
     then marked unassessable rather than guessing) when the caller doesn't resolve one.
+
+    `observed_at` (CI-review MAJOR fix, round 5): the `sg_rule_scan_runs.started_at` row this call
+    commits is what `previous_successful_scan_gap()` later reads to resolve THIS run's own
+    observation instant for some FUTURE run's `boundary_lag_resolver`. It must therefore be the same
+    `now` `run()` passed to `upsert_inventory_and_versions()` when it closed/opened rule-inventory
+    versions for this scan — NOT the wall-clock time this transaction happens to commit at. Those
+    two differ by however long the EC2 describes + Athena wait + matching took, and for a multi-day
+    batch, EVERY day's row gets stamped with the SAME single run-wide observation instant (there is
+    only one inventory snapshot per `run()` call, matching `upsert_inventory_and_versions`' own
+    per-run `now`). Using the commit-time wall clock instead would systematically UNDER-estimate the
+    gap a later run resolves via `previous_successful_scan_gap`, silently narrowing the very
+    uncertainty window items 2/3 exist to widen. Defaults to `dt.datetime.now(dt.timezone.utc)` only
+    for callers/tests that have no run-wide observation instant to pass (single-day, standalone
+    invocations) — `run()` itself always passes its own captured `now` explicitly.
     """
     stale_vpcs = stale_vpcs or set()
     coverage_flags = coverage_flags or {}
     peered_or_shared_vpc_ids_by_vpc = peered_or_shared_vpc_ids_by_vpc or {}
+    observed_at = observed_at or dt.datetime.now(dt.timezone.utc)
     flow_result_truncated = bool(coverage_flags.get("flow_result_truncated"))
     eni_snapshot_truncated = bool(coverage_flags.get("eni_snapshot_truncated"))
     unresolved_flow_count = 0
@@ -727,10 +742,11 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
         conn.run(
             "INSERT INTO sg_rule_scan_runs "
             "(id, flow_source_id, status, partition_start, partition_end, rows_processed, coverage, started_at, finished_at) "
-            "VALUES (:id,:fid,'succeeded',:ps,:pe,:rows,:cov::jsonb,now(),now())",
+            "VALUES (:id,:fid,'succeeded',:ps,:pe,:rows,:cov::jsonb,:started_at,now())",
             id=run_id, fid=source["id"], ps=start, pe=end, rows=len(flows),
             cov=json.dumps({"fingerprint_epoch_crossing_any": any_crossing,
                              "unresolved_flow_count": unresolved_flow_count}),
+            started_at=observed_at,
         )
         conn.run("COMMIT")
     except Exception:
@@ -896,7 +912,7 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
         try:
             res = process_day(conn, source, day, body.get("rows", []), rule_versions, memberships_by_vpc,
                                None, stale_vpcs=stale_vpcs, coverage_flags=coverage_flags,
-                               observation_lag=observation_lag)
+                               observation_lag=observation_lag, observed_at=now)
         except Exception as e:  # noqa: BLE001 — one day's transaction failure must not crash run()
             # process_day() itself still raises on internal failure (its own rollback contract is
             # unchanged, see test_process_day_rolls_back_on_failure) — this is the caller-side

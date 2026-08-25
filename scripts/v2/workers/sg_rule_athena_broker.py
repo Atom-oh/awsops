@@ -240,23 +240,29 @@ def _validate(event, conn):
         raise BrokerError("table has no partition keys or partition projection — cannot bound a scan")
     strategy = "projection" if projection_enabled else "partition_keys"
 
-    # MAJOR fix (item 4, round 2; corrected item 1, round 3): a partition-key layout is only a
-    # valid, scannable strategy when it resolves EXACTLY ONE bound-able date candidate AFTER
-    # excluding whatever partition keys were already resolved as account_id/region SCOPE keys
-    # above — the SAME exclusion-aware logic `sm.single_date_partition_key`/
+    # MAJOR fix (item 4, round 2; corrected item 1, round 3; extended to `projection`, round 5): a
+    # partition-key layout is only a valid, scannable strategy when it resolves EXACTLY ONE
+    # bound-able date candidate AFTER excluding whatever partition keys were already resolved as
+    # account_id/region SCOPE keys above — the SAME exclusion-aware logic `sm.single_date_partition_key`/
     # `sm.has_resolved_partition_strategy` apply at RUNTIME (this module's own `_query_by_source`
-    # hard-refuses via that check). Round 2's fix only ever checked `len(partition_keys) == 1`,
+    # hard-refuses via that check) for BOTH strategies — `has_resolved_partition_strategy` has no
+    # strategy-conditional branch at all. Round 2's fix only ever checked `len(partition_keys) == 1`,
     # which (a) validated `status: "valid"` for a `dt + account-id + region` layout (3 partition
     # keys) that then permanently refused to scan at runtime, since date detection there ALSO used
     # to require exactly one TOTAL key — the exact validate-vs-scan mismatch the CI review flagged
     # a third time; and (b) would have validated a single SCOPE-only key (e.g. just `account-id`,
     # no date key at all) as long as its Glue type happened to be string-like, since it never
-    # excluded scope keys before checking date-shape at all. Both gaps are closed by running the
-    # SAME `sm.partition_keys_excluding_scope` exclusion here that scan-time uses, then requiring
-    # either a Hive-style year/month/day scheme among what remains, or exactly one remaining
-    # date-typed key — zero or more than one remaining (non-Hive) candidate has no bounded date
-    # strategy and must be rejected outright, never silently left to fail at scan time.
-    if strategy == "partition_keys":
+    # excluded scope keys before checking date-shape at all. Round 4 closed both gaps for
+    # `partition_keys` but left this check gated to that ONE strategy — a `projection`-strategy
+    # source with a non-date-typed (e.g. `bigint`) single partition key still validated
+    # `status: "valid"` yet the SAME unconditional runtime gate refused every scan, reopening the
+    # exact mismatch this fix exists to close, just for the other strategy. Both gaps are closed by
+    # running the SAME `sm.partition_keys_excluding_scope` exclusion here that scan-time uses,
+    # regardless of `strategy`, then requiring either a Hive-style year/month/day scheme among what
+    # remains, or exactly one remaining date-typed key — zero or more than one remaining (non-Hive)
+    # candidate has no bounded date strategy and must be rejected outright, never silently left to
+    # fail at scan time.
+    if strategy in ("partition_keys", "projection"):
         probe_validation = {
             "partitionKeys": partition_keys, "partitionKeyTypes": partition_key_types,
             "scopeResolution": scope_resolution, "columnMap": resolved,

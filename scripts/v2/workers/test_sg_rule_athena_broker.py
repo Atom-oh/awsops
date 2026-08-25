@@ -587,6 +587,44 @@ def test_validate_still_accepts_a_date_typed_single_partition_key(monkeypatch):
     assert result["partitionKeyTypes"] == ["date"]
 
 
+def test_validate_rejects_a_non_date_typed_single_partition_key_under_projection_strategy(monkeypatch):
+    """Round 5: the date-shape validate-time gate above used to be gated to `strategy ==
+    "partition_keys"` only — a `projection`-strategy source with the SAME non-date-typed single key
+    still validated `status: "valid"`, yet `has_resolved_partition_strategy` (which has no
+    strategy-conditional branch) refuses it at every scan attempt. The gate must run for BOTH
+    strategies."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "dt", "Type": "bigint"}],
+                "Parameters": {"projection.enabled": "true"},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    with pytest.raises(broker.BrokerError, match="not date-shaped"):
+        broker._validate({
+            "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+            "database": "db", "table": "tbl",
+        }, conn)
+
+
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):
     """Even if a caller tries to smuggle account_id/query/database into the event, they are simply
     ignored — the broker only ever uses what it resolved from Aurora via flow_source_id."""
