@@ -43,6 +43,82 @@ Junseok Oh | Solutions Architect | AWS
 
 ---
 
+<!-- Slide 2b: The Five Goals -->
+
+@type: content
+@transition: slide
+
+# 왜 만들었나 — 5가지 목표
+
+:::html
+<div class="tab-bar" style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+  <button class="tab-btn" style="padding:.5rem .875rem;border:none;border-radius:6px;background:var(--accent);color:var(--accent-on);font-weight:bold;cursor:pointer;font-size:.8125rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tg').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,0)">1. 가시성</button>
+  <button class="tab-btn" style="padding:.5rem .875rem;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text-muted);font-weight:bold;cursor:pointer;font-size:.8125rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tg').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,1)">2. FinOps</button>
+  <button class="tab-btn" style="padding:.5rem .875rem;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text-muted);font-weight:bold;cursor:pointer;font-size:.8125rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tg').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,2)">3. Well-Architected</button>
+  <button class="tab-btn" style="padding:.5rem .875rem;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text-muted);font-weight:bold;cursor:pointer;font-size:.8125rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tg').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,3)">4. 보안성</button>
+  <button class="tab-btn" style="padding:.5rem .875rem;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text-muted);font-weight:bold;cursor:pointer;font-size:.8125rem;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tg').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='var(--bg-tertiary)';x.style.color='var(--text-muted)';x.classList.remove('active')});b.style.background='var(--accent)';b.style.color='var(--accent-on)';b.classList.add('active')})(this,4)">5. 장애 대응 AI</button>
+</div>
+<div class="tg" style="display:block;padding:1rem;background:var(--bg-secondary);border-radius:8px;">
+  <div style="color:var(--cyan);font-weight:bold;font-size:1.05rem;margin-bottom:.5rem;">DevOps·SRE 가시성 향상</div>
+  <div style="color:var(--text-secondary);line-height:1.7;font-size:.9375rem;">
+  <b>고민:</b> EC2·CloudWatch·VPC·NFM·Direct Connect 콘솔을 오가며 트래픽·네트워크 상태를 따로 확인해야 했다.<br>
+  <b>AWSops로 얻는 것:</b> Overview·Topology·Monitoring에 <b>NFM(트래픽 top-contributor·E2E hop path)</b>·<b>Direct Connect(피크 사용률·BGP 라우트·다운 감지)</b>·DNS 쿼리 로그·IP 인벤토리·VPC 엔드포인트·Network Firewall까지 <b>하나의 대시보드</b>에서 읽기 전용으로 확인.
+  </div>
+</div>
+<div class="tg" style="display:none;padding:1rem;background:var(--bg-secondary);border-radius:8px;">
+  <div style="color:var(--orange);font-weight:bold;font-size:1.05rem;margin-bottom:.5rem;">FinOps 비용 최적화</div>
+  <div style="color:var(--text-secondary);line-height:1.7;font-size:.9375rem;">
+  <b>고민:</b> 비용 리포트를 매달 수작업으로 만들고, rightsizing 판단은 감에 의존했다.<br>
+  <b>AWSops로 얻는 것:</b> Cost 대시보드 + AgentCore 비용 도구로 <b>읽기 전용 비용 분석</b>과 rightsizing 인사이트를 상시 확인. OpenCost 읽기 전용 패널로 K8s 비용까지 같은 화면에서 본다 — 권고만 제시, 자동 변경은 없음.
+  </div>
+</div>
+<div class="tg" style="display:none;padding:1rem;background:var(--bg-secondary);border-radius:8px;">
+  <div style="color:var(--green);font-weight:bold;font-size:1.05rem;margin-bottom:.5rem;">Well-Architected 아키텍처 점검</div>
+  <div style="color:var(--text-secondary);line-height:1.7;font-size:.9375rem;">
+  <b>고민:</b> Well-Architected Review는 수작업으로 2-3일 걸리고, 놓치는 항목이 생겼다.<br>
+  <b>AWSops로 얻는 것:</b> <b>종합진단 리포트</b>(light·mid 9섹션 / deep 16섹션)가 6개 Pillar에 매핑되어 자동 생성되고, 비동기 워커가 만든 결과를 DOCX/PDF로 내보낸다.
+  </div>
+</div>
+<div class="tg" style="display:none;padding:1rem;background:var(--bg-secondary);border-radius:8px;">
+  <div style="color:var(--red);font-weight:bold;font-size:1.05rem;margin-bottom:.5rem;">보안성 향상</div>
+  <div style="color:var(--text-secondary);line-height:1.7;font-size:.9375rem;">
+  <b>고민:</b> Public S3·오픈 SG·미암호화 EBS·MFA 미적용 같은 기본 보안 항목이 계정 전반에 흩어져 보이지 않았다.<br>
+  <b>AWSops로 얻는 것:</b> Security 페이지가 인벤토리에서 파생한 <b>Findings</b>를 상시 노출하고, Compliance 페이지가 <b>CIS 벤치마크</b>를 실행·이력화한다 — 둘 다 읽기 전용.
+  </div>
+</div>
+<div class="tg" style="display:none;padding:1rem;background:var(--bg-secondary);border-radius:8px;">
+  <div style="color:var(--accent);font-weight:bold;font-size:1.05rem;margin-bottom:.5rem;">장애 시 AI 기반 트래픽·원인 분석</div>
+  <div style="color:var(--text-secondary);line-height:1.7;font-size:.9375rem;">
+  <b>고민:</b> 장애가 나면 메트릭·로그·트레이스·네트워크 경로를 사람이 일일이 교차 조회하며 원인을 좁혀야 했다.<br>
+  <b>AWSops로 얻는 것:</b> AI Assistant/Diagnosis가 CloudWatch·Datasource(Prometheus·Loki·Tempo)·<b>NFM E2E hop path</b>를 자연어로 교차 분석하고, Incident 라이프사이클(로드맵)까지 같은 대시보드 안에서 연결된다.
+  </div>
+</div>
+:::
+
+:::notes
+{timing: 3min}
+[요약]
+• 이 프로젝트를 시작할 때 세운 5가지 목표를 먼저 공유합니다.
+
+이 프로젝트를 시작할 때 5가지 목표를 세웠습니다.
+
+첫째, DevOps·SRE의 가시성 향상입니다. 콘솔을 오가지 않고 NFM 트래픽 분석, Direct Connect 상태, DNS·IP·VPC 엔드포인트·Network Firewall까지 한 화면에서 봅니다.
+
+{cue: pause}
+둘째, FinOps로 비용을 최적화하는 것입니다. 읽기 전용 비용 분석과 rightsizing 인사이트, OpenCost 패널을 상시 확인합니다.
+
+셋째, Well-Architected 기준으로 아키텍처를 점검하는 것입니다. 종합진단 리포트가 6개 Pillar에 매핑되어 자동 생성됩니다.
+
+넷째, 보안성 향상입니다. Security Findings와 CIS Compliance 벤치마크를 상시 노출합니다.
+
+다섯째, 장애가 났을 때 AI가 트래픽과 원인을 분석하는 것입니다. NFM의 E2E hop path까지 포함해 자연어로 교차 분석합니다.
+
+{cue: transition}
+이 5가지 목표가 앞으로 볼 모든 기능의 출발점입니다. 먼저 이걸 만들게 된 도전 과제부터 보겠습니다.
+:::
+
+---
+
 <!-- Slide 3: The Challenge -->
 
 @type: content
@@ -278,6 +354,7 @@ AI는 9개 섹션 게이트웨이(8개 AWS 도메인 + external-obs)에 160개 �
 - **Console Hopping 제거** — 한 화면에서 모든 리소스
 - **자연어 트러블슈팅** — "VPC Flow Log 분석해줘" (읽기 전용, 스트리밍 챗)
 - **Topology / EKS 읽기 전용 뷰** — CF→LB→TG→DB 리소스 그래프
+- **Network 통합 뷰** — NFM(트래픽 top-contributor·E2E hop) · Direct Connect(피크 사용률·BGP) · DNS·IP·VPC 엔드포인트·Network Firewall까지 하나의 대시보드
 - **Datasource Explore** — Prometheus · Loki · Tempo · ClickHouse 교차 조회
 - **Cmd-K + 4개 언어** — 한/영/中/日 완전 지원, 어디서든 키보드로 이동
 
@@ -298,7 +375,7 @@ AI는 9개 섹션 게이트웨이(8개 AWS 도메인 + external-obs)에 160개 �
 {timing: 3min}
 두 가지 관점에서 가치를 드립니다.
 
-DevOps나 SRE 분들에게는 콘솔 호핑 없이 한 화면에서 모든 리소스를 보고, AI에게 자연어로 질문하면 됩니다. "이 EC2 인스턴스가 왜 느려?"라고 물으면 CloudWatch 메트릭을 확인하고, 네트워크 경로를 분석하고, 관련 로그를 찾아줍니다. 모두 읽기 전용이고, 응답은 스트리밍으로 흐릅니다. Topology와 EKS 읽기 전용 뷰, 그리고 Prometheus·Loki·Tempo 같은 데이터소스 Explore도 함께 제공합니다.
+DevOps나 SRE 분들에게는 콘솔 호핑 없이 한 화면에서 모든 리소스를 보고, AI에게 자연어로 질문하면 됩니다. "이 EC2 인스턴스가 왜 느려?"라고 물으면 CloudWatch 메트릭을 확인하고, 네트워크 경로를 분석하고, 관련 로그를 찾아줍니다. 모두 읽기 전용이고, 응답은 스트리밍으로 흐릅니다. Topology와 EKS 읽기 전용 뷰에 더해, NFM 트래픽 top-contributor와 E2E hop path, Direct Connect 피크 사용률·BGP 라우트, DNS·IP·VPC 엔드포인트·Network Firewall까지 네트워크 6종 메뉴가 같은 대시보드에 통합되어 있습니다. Prometheus·Loki·Tempo 같은 데이터소스 Explore도 함께 제공합니다.
 
 {cue: pause}
 
@@ -389,20 +466,21 @@ AWSops의 차별점은 세 가지로 압축됩니다.
 @type: content
 @transition: fade
 
-# Key Takeaways — Why AWSops
+# Key Takeaways — 5가지 목표, 하나의 대시보드
 
-- **Console Hopping 문제** → Single Pane of Glass 대시보드
-- **데이터 사일로** → AgentCore 읽기 전용 도구 + Datasource 커넥터 통합
-- **반복 수작업** → 변경형 자동화 대신 읽기 전용 AI Assistant + 진단
-- **보고서 부담** → 종합진단 리포트 자동 생성 (Well-Architected, light·mid/deep, DOCX/PDF)
+- **① 가시성** → Overview·Topology·Monitoring + NFM·Direct Connect까지 통합된 Network 6종 메뉴
+- **② FinOps** → 읽기 전용 비용 분석 + Rightsizing 인사이트 + OpenCost 패널
+- **③ Well-Architected** → 종합진단 리포트 자동 생성 (light·mid/deep, DOCX/PDF)
+- **④ 보안성** → Security Findings + CIS Compliance 벤치마크, 둘 다 읽기 전용
+- **⑤ 장애 대응 AI** → AI Assistant/Diagnosis가 메트릭·로그·트레이스·NFM 경로를 자연어로 교차 분석
 - **핵심 차별점** → In-account Bedrock AI + 읽기 전용 태세 (ADR-005 FROZEN) + 4개 언어 UX
 
 :::notes
 {timing: 2min}
 첫 번째 파트를 정리하겠습니다.
 
-AWSops는 클라우드 운영의 4대 도전 과제를 동시에 해결합니다.
-콘솔 호핑 대신 한 화면, 데이터 사일로 대신 AgentCore 읽기 전용 도구와 데이터소스 커넥터 통합, 반복 수작업 대신 읽기 전용 AI Assistant와 진단, 수동 보고서 대신 자동 종합진단 리포트입니다.
+AWSops는 처음 세운 5가지 목표를 하나의 대시보드 안에서 동시에 해결합니다.
+가시성은 Overview·Topology·Monitoring에 NFM·Direct Connect를 포함한 네트워크 6종 메뉴까지 통합해서, FinOps는 읽기 전용 비용 분석과 Rightsizing으로, Well-Architected 점검은 자동 생성되는 종합진단 리포트로, 보안성은 Security Findings와 CIS Compliance로, 장애 대응은 AI가 메트릭·로그·트레이스·NFM 경로를 함께 교차 분석하는 것으로 풀었습니다.
 
 그리고 가장 중요한 것은, AI 추론을 고객 계정 안 Bedrock에서 돌리고, AWS 리소스 변경과 자율 실행은 동결한 읽기 전용 태세라는 점입니다. 설계상 안전합니다.
 
