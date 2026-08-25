@@ -673,8 +673,13 @@ _ADAPTER_BY_LAYER = {
         data.get("attachment_state"), data.get("associated", False),
         data.get("propagation_enabled", False), data.get("route_entry")),
     "peering": lambda data, req: ad.eval_peering(data.get("state")),
-    "vpn": lambda data, req: ad.eval_vpn_or_dx("vpn", data.get("aws_side_state"), data.get("route_present", False)),
-    "dx": lambda data, req: ad.eval_vpn_or_dx("dx", data.get("aws_side_state"), data.get("route_present", False)),
+    # CI-review MAJOR fix (round 25): `route_present` used to default to `False` on absence —
+    # indistinguishable from a CONFIRMED-absent route, so `eval_vpn_or_dx`'s own `None`-vs-`False`
+    # guard (added to fix exactly this class of bug for `aws_side_state`) never actually fired for
+    # `route_present`, since this wiring collapsed the absence to `False` before the adapter ever
+    # saw it. No default now, so an unfetched marker reaches the adapter as `None`.
+    "vpn": lambda data, req: ad.eval_vpn_or_dx("vpn", data.get("aws_side_state"), data.get("route_present")),
+    "dx": lambda data, req: ad.eval_vpn_or_dx("dx", data.get("aws_side_state"), data.get("route_present")),
     "network-firewall": lambda data, req: ad.eval_network_firewall(
         data.get("rule_action"), uninspectable=data.get("uninspectable", False)),
     "alb-listener": lambda data, req: ad.eval_alb_listener(data.get("rules", []), data.get("request", {})),

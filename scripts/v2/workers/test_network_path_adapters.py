@@ -354,6 +354,14 @@ class TestBoundaryClassification:
         r = ad.eval_vpn_or_dx("vpn", None, True)
         assert r["status"] == "unknown"
 
+    def test_missing_route_present_is_unknown_not_a_confident_block(self):
+        """CI-review MAJOR fix (round 25): the round-19 fix distinguished a missing
+        `aws_side_state` from a confirmed-down one, but left `route_present` on the old
+        `not route_present` shortcut — a genuinely unfetched route marker (`None`) reported the
+        same confident `blocked` as a CONFIRMED-absent route (`False`)."""
+        r = ad.eval_vpn_or_dx("vpn", "up", None)
+        assert r["status"] == "unknown"
+
 
 # ── Network Firewall ─────────────────────────────────────────────────────────────────────────────
 
@@ -1265,6 +1273,20 @@ class TestRoute53Resolution:
         ]
         r = ad.eval_route53_resolution(records, "app.example.com")
         assert r["status"] == "allowed"
+
+    def test_cname_hop_landing_on_a_multi_pointer_set_is_unknown_not_allowed(self):
+        """CI-review MAJOR fix (round 25): the multi-pointer ambiguity guard only ever ran on
+        the ENTRY name — a CNAME hop landing on a weighted/failover SET of >=2 ALIAS records
+        (ALIAS being an address type) exited the chain-following loop silently (its own
+        `len(matched) == 1` condition just stops matching) and reached the health-check block
+        with neither pointer's own target checked."""
+        records = [
+            {"name": "app.example.com", "type": "CNAME", "alias_target": "lb.example.com"},
+            {"name": "lb.example.com", "type": "ALIAS", "alias_target": "primary.example.com", "failover": "PRIMARY"},
+            {"name": "lb.example.com", "type": "ALIAS", "alias_target": "secondary.example.com", "failover": "SECONDARY"},
+        ]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "unknown"
 
     def test_no_query_host_is_unknown(self):
         r = ad.eval_route53_resolution([{"name": "app.example.com", "type": "A"}], None)
