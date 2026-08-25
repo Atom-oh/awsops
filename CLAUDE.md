@@ -1,18 +1,14 @@
 # AWSops v2 — Claude Context
 
 > **The v2 architecture** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers) is live on `main`.
-> v1.8.0 (CDK/EC2/Steampipe, `/awsops` basePath) is **being decommissioned in phases per ADR-016 (2026-07-09)** — see `docs/runbooks/v1-decommission.md`. **Phase 5 (repo code cleanup — `src/`, `infra-cdk/`, etc.) is complete (2026-07-12)** — v1 app code is no longer in the tree (restore via git tag `v1-pre-code-removal-20260712`). Phase 4 (full AWS infra teardown) proceeds separately after the grace period ends — v1 EC2/CloudFront still exist (stopped/disabled). v1 rules (especially the `/awsops` fetch prefix and the Steampipe pg Pool) **do not apply to v2.**
+> v1.8.0 (CDK/EC2/Steampipe, `/awsops` basePath) is **decommissioned per ADR-016 (2026-07-09)** — see `docs/runbooks/v1-decommission.md`. **Phase 5 (repo code cleanup — `src/`, `infra-cdk/`, etc.) is complete (2026-07-12)** — v1 app code is no longer in the tree (restore via git tag `v1-pre-code-removal-20260712`). **Phase 4 (full AWS infra teardown — CFN stack `AwsopsStack`, orphan Lambdas, AgentCore gateways/Memory/Interpreter, deploy bucket) is complete (2026-08-25)**, verified against live AWS state. Only Phase 6 (docs-site v1 content archival banners) remains open. v1 rules (especially the `/awsops` fetch prefix and the Steampipe pg Pool) **do not apply to v2.**
 
 ## Project Overview
 AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds v1's single-EC2 monolith as a **Terraform-based MSA**: private edge (CloudFront VPC Origin → internal ALB → Fargate), Cognito Lambda@Edge auth, Aurora persistent state, AgentCore section agents (live AWS queries), and an OOM-safe async worker tier.
 
 ## Commands (web/, day-to-day dev)
-All app code/tests live under `web/` — there is no root `package.json`.
+All app code/tests live under `web/` — there is no root `package.json`. See `web/CLAUDE.md` for the `npm` build/test invocations.
 ```
-cd web && npm install
-npm run dev                              # next dev
-npm run build                            # next build (standalone, used by the deploy image)
-npm test                                 # vitest run — full suite (2000+ tests, ~10s)
 npx vitest run lib/anfw.test.ts          # a single test file
 npx vitest run -t "test name substring"  # filter by test name
 npx tsc --noEmit -p .                    # typecheck — no npm script wraps this; run directly
@@ -70,73 +66,12 @@ Live environment: account `180294183052`, domain `awsops-v2.atomai.click`, reusi
 ### Operational Notes
 - **Concurrent sessions frequently switch branches** (docs-site deploys, etc). Check `git branch --show-current` before working. Uncommitted changes can be lost to an external reset/checkout, so **commit small units immediately**.
 
-## Key Files
+## Gated files worth knowing
+- `remediation.tf` — remediation substrate (`remediation_enabled`·`integrations_write_enabled`) — **ADR-005 FROZEN, do-not-enable**
+- `secret-rotation.tf` — web self-restart on Aurora secret rotation (`secret_rotation_redeploy_enabled`) — **the sole ADR-015 owner-override exception**, default-off
 
-### Terraform (`terraform/v2/foundation/`)
-- `network.tf` — creates a new VPC or reuses an existing one (`create_network` flag)
-- `edge.tf` — CloudFront + VPC Origin + internal ALB + ACM
-- `auth.tf` + `edge-lambda/cognito_edge.py.tftpl` — Cognito + Lambda@Edge (RS256)
-- `data.tf` + `data/schema.sql` — Aurora Serverless v2 + schema based on ADR-001[legacy 030] (baseline v9 frozen + migrations/*.sql)
-- `workload.tf` — ECS cluster/service/task (web)
-- `ecr.tf` — dual-tier ECR (dev-private + prod-public)
-- `ai.tf` — AgentCore ECR + IAM role + agent Lambda slices + SSM (21 slices gated by `agentcore_enabled` + 9 gated by `integrations_enabled`)
-- `workers.tf` — SQS + ESM + dispatcher/worker/status_updater/reaper Lambdas + Step Functions + Fargate worker (all gated by `workers_enabled`)
-- `eks.tf` — `for_each onboard_eks_clusters` Access Entry + AdminView policy
-- `steampipe.tf` — D1 inventory data layer: warm Steampipe Fargate (FDW) + sync Lambda → Aurora (`steampipe_enabled` gate)
-- `notify.tf` — diagnosis-completion email SNS topic + subscription IAM (`diagnosis_notify_enabled` gate)
-- `incidents.tf` — incident-lifecycle webhook/state (`incident_lifecycle_enabled` gate, ADR-006[legacy 032])
-- `k8sgpt.tf` — K8sGPT diagnosis-layer Bedrock budget/resources (`k8sgpt_enabled` gate, ADR-006[legacy 035])
-- `writeback.tf` — RCA-result write-back path (`rca_writeback_enabled` gate)
-- `remediation.tf` — remediation substrate (`remediation_enabled`·`integrations_write_enabled` gates — **ADR-005 FROZEN, do-not-enable**)
-- `secret-rotation.tf` — self-restart of the web service on Aurora secret rotation (`secret_rotation_redeploy_enabled` gate — **the sole ADR-015 owner-override exception**, default-off)
-- `variables.tf` / `outputs.tf` / `providers.tf` / `backend.tf`
-
-### Scripts (`scripts/v2/`)
-- `configure.mjs` — interactive TUI (VPC/domain/bucket/EKS selection → `terraform.tfvars` + `backend.hcl`)
-- `deploy.mjs` — web: login → buildx arm64 push → ECS force-new-deployment → wait stable → smoke `/api/health`
-- `agentcore.mjs` + `agentcore/{catalog.py,provision.py}` — builds/pushes the arm64 agent image + idempotent provisioner (Runtime/9 GW/Target/Memory/Interpreter, writes SSM)
-- `workers.mjs` + `workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py + sfn.asl.json` — P2 worker backbone (includes the diagnosis `report` job + `schedule_dispatcher.py` + `diagnosis/notify.py`)
-- `migrate.mjs` / `migrate-core.mjs` / `backfill-*.mjs` / `upgrade.sh` — ULID migrations · v1→v2 Aurora backfill · Aurora major-version upgrade
-- `steampipe/` · `eks/` · `incident/` · `remediation/` — helpers for gated subsystems (inventory sync · EKS access · incidents · remediation [**ADR-005 FROZEN**])
-
-### Web (`web/`)
-- `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF routes
-- `app/security/page.tsx` + `app/api/security/{route,refresh}` — security findings (Public S3 · Open SG · Unencrypted EBS · IAM MFA), derived by the BFF from `inventory_resources` (read-only). `s3_public_access` is added via the sync_lambda's SDK sync.
-- `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS benchmarks (a Powerpipe Fargate worker `compliance` job → `compliance_runs`/`compliance_results` history). Both gated by `steampipe_enabled`.
-- `app/{network-flow,dns-query,ip-addresses,vpc-endpoints,direct-connect,network-firewall}/` + `lib/{nfm,dns-logs,ip-inventory,vpce,dx,anfw}.ts` — the 6 network menu items: live NFM top-contributor queries + E2E hop path · Resolver/CoreDNS query-log aggregation via Logs Insights · ENI-based IP inventory (detects unused EIPs/available ENIs) · VPC endpoint idle/policy/Gateway-coverage analysis · Direct Connect down-detection/peak-utilization/BGP route visibility · Network Firewall protection/logging/rule capacity + traffic/drop analysis.
-- `app/eks/` — EKS drilldown: cluster list → `[cluster]` tabs (including an OpenCost cost panel) + nodes/pods/deployments/services/explorer/cost fleet pages.
-- `lib/aws-data.ts` + `lib/collectors/` — chat BFF-local handlers (not via AgentCore): aws-data (LLM Steampipe SQL — live execution is hard-disabled, ADR-001/010) + the 6 auto-collect collectors registry — `app/api/chat/route.ts` branches to these locally.
-- `lib/db.ts` — Aurora node-pg shared pool (`getPool`)
-- `app/layout.tsx`, `app/page.tsx`, `Dockerfile` (standalone arm64)
-
-### Agent (`agent/`, reuses v1 assets)
-- `agent/agent.py` — Strands Agent (routes via the `GATEWAYS_JSON` env, no EC2 build needed)
-- `agent/lambda/*.py` — MCP tool Lambda sources (fleet-deployed — 21+9 slices defined in `ai.tf`'s `local.agent_lambdas`)
-
-## Deployment (Makefile)
-```
-make configure   # interactive TUI → terraform.tfvars + backend.hcl (auto-installs deps)
-terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
-terraform -chdir=terraform/v2/foundation plan -out tfplan   # controller runs apply tfplan (shared infra)
-make deploy      # web: arm64 build → ECR push → ECS rolling deploy → wait stable → smoke /api/health
-make migrate     # DB migrations + syncs the `awsops_sql_reader` password. **Required before agentcore**
-                 # (make agentcore does not run migrate → skipping it makes execute_sql/inventory-read
-                 #  fail Data API auth. See docs/runbooks/agent-sql-reader.md)
-make agentcore   # arm64 agent image + idempotent AgentCore provisioner (--smoke to verify the call). Run after apply
-make workers     # arm64 worker image push (after apply with workers_enabled=true)
-```
-
-## v2 vs v1 Key Differences
-| Item | v1 (`src/`) | v2 (`web/` + `terraform/v2/`) |
-|------|-------------|-------------------------------|
-| IaC | CDK | Terraform (partial S3 backend) |
-| Compute | Single EC2 t4g.2xlarge | ECS Fargate (web/worker split) |
-| Data | Steampipe embedded PG + `data/*.json` | Aurora Serverless v2 PG17 (+ AgentCore live queries) |
-| Path | `/awsops` basePath | Root `/` (no basePath) |
-| Edge | CloudFront → public ALB → EC2 | CloudFront VPC Origin → internal ALB → Fargate |
-| AI setup | 8 Gateways, 11-route router | 9 section GWs + 1 incident orchestrator (designed) |
-| Long-running work | In-process | SQS+SFN+Lambda/Fargate async workers |
-| Auth verification | exp-only (edge) | RS256 JWKS + PKCE |
+## Deployment
+`/deploy`, or the `make` targets. **`make migrate` is required before `make agentcore`** — agentcore doesn't run it, and skipping it makes `execute_sql`/inventory-read fail Data API auth (`docs/runbooks/agent-sql-reader.md`).
 
 ## Known Issues / Lessons (key reusable knowledge)
 - **Edge 504→200**: CF→ALB is TLS end-to-end (VPC Origin `https-only` + origin domain = public FQDN so SNI matches), the ALB is HTTPS:443 + regional ACM, and the ALB SG allows 443 from `CloudFront-VPCOrigins-Service-SG`. The VPC Origin protocol can't be changed in-place → use `create_before_destroy` + `-replace`.
