@@ -1476,6 +1476,7 @@ input[type="range"]::-webkit-slider-thumb {
   min-width: 120px;
   width: 100%;             /* fill the group → uniform box width across stages */
   box-sizing: border-box;
+  color: var(--on-surface); /* pairs with the surface-1 bg the light-theme override below paints in; without this it inherits the ambient (often light) slide text color and goes invisible on that light box */
 }
 
 /* --- Icon + Label component --- */

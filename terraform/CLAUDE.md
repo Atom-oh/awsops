@@ -11,7 +11,7 @@ partial S3 backend(`backend.hcl`) + count/flag 게이트 방식.
 - `backend.hcl.example` / `terraform.tfvars.example` — 커밋 가능한 템플릿 (committable templates)
 - `variables.tf` — 대부분의 플래그 선언. 단 `agentcore_enabled`/`integrations_enabled`는 **`ai.tf` 상단에 선언** (Most flags here, but agentcore/integrations flags are declared in `ai.tf`)
 - `migrations/*.sql` — DB 마이그레이션. terraform이 아니라 `make migrate`(scripts/v2)가 적용. 베이스라인은 `data/schema.sql`(v9 동결) — 스키마 변경은 항상 새 마이그레이션 파일로 (Applied by `make migrate`, not terraform; schema changes go in new migration files)
-- 도메인별 `*.tf`(edge/auth/data/workload/ai/workers/eks/steampipe 등) — 루트 CLAUDE.md "주요 파일" 참조 (per-domain files; see root CLAUDE.md)
+- 도메인별 `*.tf`(edge/auth/data/workload/ai/workers/eks/steampipe 등) — `docs/reference/`의 계층별 문서 참조(01 Edge · 02 Auth · 03 Data · 04 Web BFF · 05 AgentCore · 06 Workers · 07 EKS) (per-domain files; see the per-layer docs under `docs/reference/`, not root CLAUDE.md — it dropped its own Key Files section)
 
 ## 플래그 게이트 / Flag Gates
 - 대형 기능은 전부 flag 게이트, **기본 false** → `plan`=No changes, $0: `agentcore_enabled`, `integrations_enabled`, `steampipe_enabled`, `workers_enabled` 외 다수 (All large features flag-gated, default false)

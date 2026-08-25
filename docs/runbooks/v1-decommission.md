@@ -280,6 +280,8 @@ aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID_BARE" --chang
 
 ## Phase 4 — 완전 삭제 (유예 후) / Full teardown (after grace period)
 
+**✅ 완료(2026-08-25)** — 4.1~4.3(CFN 스택 `AwsopsStack` 삭제, ALB/SQS 포함)과 4.4/4.5(고아 Lambda 19개, v1 배포 버킷, AgentCore 게이트웨이 8개·Memory·Code Interpreter)까지 전부 실시간 AWS 상태 재조회로 검증 완료(`ALL CLEAR`). v2(`awsops-v2.atomai.click`) 헬스체크 200 정상. 남은 건 Phase 6(docs-site 아카이브 표기, 별도 미완료 트랙)뿐.
+
 ```bash
 # 4.1 스택 전수 확인
 aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
