@@ -973,6 +973,43 @@ def test_projection_range_bound_date_resolves_weeks_hours_minutes_seconds_offset
     assert broker._projection_range_bound_date("NOW-30SECONDS", now) == dt.date(2026, 8, 25)
 
 
+# ── CI-review MAJOR fix (round 16): round 15 widened the unit set but kept the sign fixed to `-`
+#    — Athena's projection range grammar documents BOTH `NOW-N<unit>` and `NOW+N<unit>` (e.g. a
+#    late-arrival/timezone-skew upper bound like `NOW+1DAYS`). Combined with round 15's own
+#    fail-closed flip (an unresolvable bound now REFUSES rather than trusts), a valid `NOW+`-
+#    anchored source would have validated `status: "valid"` and then had every scan permanently
+#    refuse — exactly the "validates valid yet permanently refuses" class this series exists to
+#    close. ─────────────────────────────────────────────────────────────────────────────────────
+
+def test_projection_range_bound_date_resolves_a_now_plus_offset():
+    now = dt.datetime(2026, 8, 25, 12, 0, 0, tzinfo=dt.timezone.utc)
+    assert broker._projection_range_bound_date("NOW+1DAYS", now) == dt.date(2026, 8, 26)
+    assert broker._projection_range_bound_date("NOW+2YEARS", now) == dt.date(2028, 8, 25)
+    assert broker._projection_range_bound_date("NOW+48HOURS", now) == dt.date(2026, 8, 27)
+
+
+def test_query_by_source_accepts_a_day_within_a_now_plus_upper_bound(monkeypatch):
+    """A valid, previously-working source with a `NOW+1DAYS`-anchored upper bound must NOT be
+    permanently refused — the exact round-16 regression."""
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("2020-01-01,NOW+1DAYS"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is True
+    assert "projection_range_uncovered" not in result
+    assert "partition_check_unverified" not in result
+
+
+def test_query_by_source_unverified_reason_names_the_unparseable_range_cause(monkeypatch):
+    """The `None` (unverifiable) refusal message must not hardcode "Glue API error" as the only
+    possible cause — an unparseable range bound is at least as likely a trigger."""
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("some_enum_a,some_enum_z"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert result.get("partition_check_unverified") is True
+    assert "cannot confidently parse" in result["reason"]
+
+
 def test_projection_day_out_of_range_refuses_rather_than_passes_an_unresolvable_range(monkeypatch):
     """A range this module genuinely can't parse (neither bound resolves) must propagate `None`
     (unverifiable) from `_projection_day_out_of_range`, not collapse into `False` ("don't block") —

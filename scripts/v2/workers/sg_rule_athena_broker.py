@@ -147,20 +147,26 @@ def _shift_date(d, years=0, months=0, days=0):
     return d.replace(year=year, month=month, day=day) - _dt.timedelta(days=days)
 
 
-# CI-review MAJOR fix (round 15, part a): this used to accept only YEARS/MONTHS/DAYS, but
-# Athena's own partition-projection range grammar also allows WEEKS/HOURS/MINUTES/SECONDS — an
-# offset using one of those (e.g. `NOW-48HOURS`) fell through to the unresolved (`None`) case
-# below, which the OLD caller then collapsed into "don't block" (see the fail-open fix on
-# `_projection_day_out_of_range` below). All of these are exact, documented arithmetic — not a
-# guess — so there's no reason to leave them unparsed.
+# CI-review MAJOR fix (round 15, part a; round 16 CORRECTION): this used to accept only
+# `NOW-N<unit>` with YEARS/MONTHS/DAYS. Round 15 widened the unit set to WEEKS/HOURS/MINUTES/
+# SECONDS but kept the sign fixed to `-` — Athena's own partition-projection range grammar
+# documents BOTH `NOW-N<unit>` and `NOW+N<unit>` (e.g. a late-arrival/timezone-skew upper bound
+# like `2020-01-01,NOW+1DAYS`). Round 15 also flipped an unresolved bound from fail-OPEN ("don't
+# block") to fail-CLOSED ("refuse") — correct for a genuinely unparseable range, but a `NOW+…`
+# bound isn't unparseable, it's simply a sign this regex didn't accept; combined with round 15's
+# own fail-closed flip, a perfectly valid, previously-working source with a `NOW+`-anchored bound
+# would now validate `status: "valid"` and then have EVERY scan permanently refuse — exactly the
+# "validates valid yet permanently refuses every scan" class this PR series exists to close, and
+# precisely the round-15 fail-closed fix's own failure mode if the grammar isn't fully covered.
+# Both signs are exact, documented arithmetic — not a guess — so both must be parsed.
 _NOW_OFFSET_RE = re.compile(
-    r'^NOW\s*-\s*(\d+)\s*(YEARS?|MONTHS?|WEEKS?|DAYS?|HOURS?|MINUTES?|SECONDS?)$', re.IGNORECASE)
+    r'^NOW\s*([+-])\s*(\d+)\s*(YEARS?|MONTHS?|WEEKS?|DAYS?|HOURS?|MINUTES?|SECONDS?)$', re.IGNORECASE)
 
 
 def _projection_range_bound_date(value, now):
     """Resolves one `projection.<col>.range` bound (either side of the comma) to a concrete
     `date`, or `None` when it isn't one of the forms this can confidently resolve without
-    guessing: a bare `NOW`, a `NOW-N/UNIT` offset (an exact, documented Athena grammar — not a
+    guessing: a bare `NOW`, a `NOW[+-]N/UNIT` offset (an exact, documented Athena grammar — not a
     guess), or a plain `yyyy-MM-dd` literal. Anything else (an enum/integer bound, a malformed
     offset) is left unresolved."""
     value = (value or "").strip()
@@ -170,20 +176,20 @@ def _projection_range_bound_date(value, now):
         return now.date()
     m = _NOW_OFFSET_RE.match(value)
     if m:
-        n, unit = int(m.group(1)), m.group(2).upper()
+        sign, n, unit = (1 if m.group(1) == "+" else -1), int(m.group(2)), m.group(3).upper()
         if unit.startswith("YEAR"):
-            return _shift_date(now.date(), years=n)
+            return _shift_date(now.date(), years=-sign * n)
         if unit.startswith("MONTH"):
-            return _shift_date(now.date(), months=n)
+            return _shift_date(now.date(), months=-sign * n)
         if unit.startswith("WEEK"):
-            return _shift_date(now.date(), days=n * 7)
+            return _shift_date(now.date(), days=-sign * n * 7)
         if unit.startswith("DAY"):
-            return _shift_date(now.date(), days=n)
+            return _shift_date(now.date(), days=-sign * n)
         if unit.startswith("HOUR"):
-            return (now - _dt.timedelta(hours=n)).date()
+            return (now + _dt.timedelta(hours=sign * n)).date()
         if unit.startswith("MINUTE"):
-            return (now - _dt.timedelta(minutes=n)).date()
-        return (now - _dt.timedelta(seconds=n)).date()
+            return (now + _dt.timedelta(minutes=sign * n)).date()
+        return (now + _dt.timedelta(seconds=sign * n)).date()
     try:
         return _dt.datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError:
@@ -277,9 +283,14 @@ def _projection_day_out_of_range(glue, database, table, day, validation, now=Non
     declared `projection.<col>.range`. Mirrors `_partition_exists`'s 3-state contract:
       - `True`  = confirmed the query window falls (at least partly) outside the declared range
                   (the empty result is a config/range mismatch, not zero traffic).
-      - `False` = confirmed inside the range, or nothing checkable (no confirmed single date key,
-                  no range param, or the range didn't resolve confidently) — don't block.
-      - `None`  = a Glue API error — genuinely unverifiable.
+      - `False` = confirmed inside the range, or nothing checkable at all (no confirmed single
+                  date key or Hive scheme, or no `.range` param present) — don't block.
+      - `None`  = genuinely unverifiable — either a Glue API error, OR a declared `.range` bound
+                  this module can't confidently resolve (see `_projection_range_bound_date`'s
+                  supported grammar). CI-review MAJOR fix (round 15, part a) intentionally flipped
+                  an unresolvable bound from the OLD `False` ("don't block," fails open exactly
+                  where this check exists to catch a range mismatch) to this `None` ("refuse,"
+                  matching the module's own Glue-error posture) — do not revert this to `False`.
 
     CI-review MAJOR fix (round 14): this used to check only `day` itself — but
     `sm._build_partition_predicate` (Hive delivery-time partitioning: a day-D flow can land in
@@ -1172,11 +1183,19 @@ def _query_by_source(event, conn):
                 "projection_range_uncovered": True,
             }
         if out_of_range is None:
+            # CI-review MAJOR fix (round 16): this message used to hardcode "(Glue API error)" as
+            # the cause, but `_projection_day_out_of_range` returns `None` for TWO distinct
+            # reasons — a Glue API error, or a declared `projection.<col>.range` bound this module
+            # genuinely can't parse (see `_projection_range_bound_date`'s supported grammar). The
+            # latter is at least as likely in practice, and telling an operator to investigate
+            # Glue IAM/API health for what's actually a config problem sends them looking in the
+            # wrong place.
             return {
                 "ok": False,
                 "reason": "could not verify whether the day's query window falls within the "
-                          "resolved partition key's projection range (Glue API error) — not "
-                          "trusting the result as complete",
+                          "resolved partition key's projection range — either a Glue API error, "
+                          "or the declared projection.<col>.range uses a form this module cannot "
+                          "confidently parse — not trusting the result as complete",
                 "partition_check_unverified": True,
             }
 
