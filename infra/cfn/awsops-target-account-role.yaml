@@ -11,6 +11,25 @@ Parameters:
     Type: String
     Description: ARN of the AWSops host WEB task role (registration/verify + read), e.g. arn:aws:iam::<host>:role/awsops-v2-task
     AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
+  WorkerTaskRoleArn:
+    Type: String
+    Default: ''
+    # CI-review finding (network-path-check round 19, "explicitly UNVERIFIED" item): the worker
+    # Fargate task role (awsops-v2-worker-task) is a DIFFERENT IAM principal than the web task
+    # role above, but it also assumes this SAME AWSopsReadOnlyRole — for the sg-rules Athena
+    # broker's worker (sg_rule_scan.py) and now the Network Path Check worker
+    # (network_path.py's resolve_live_identity()/fetch_live_topology()) doing member-account
+    # reads. Before this parameter existed, only the web task role was ever trusted, so a
+    # member-account read from either worker's own task role would AccessDenied — a pre-existing
+    # gap shared by BOTH sibling workers, not introduced by either one. OPTIONAL and additive:
+    # leave empty (the default) to keep the exact pre-existing single-principal trust unchanged;
+    # set it once this account also needs to be reachable from the worker task role.
+    AllowedPattern: '^$|^arn:aws:iam::\d{12}:role/.+$'
+    Description: >
+      OPTIONAL. ARN of the AWSops host WORKER Fargate task role (awsops-v2-worker-task), e.g.
+      arn:aws:iam::<host>:role/awsops-v2-worker-task — needed only if this target account is used
+      as a source/destination for a worker-driven member-account read (sg-rules Athena scan or a
+      Network Path Check live-identity resolution). Leave empty otherwise.
   ExternalId:
     Type: String
     Default: ''
@@ -28,23 +47,31 @@ Parameters:
 
 Conditions:
   HasExternalId: !Not [!Equals [!Ref ExternalId, '']]
+  HasWorkerTaskRoleArn: !Not [!Equals [!Ref WorkerTaskRoleArn, '']]
 
 Resources:
   AWSopsReadOnlyRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Ref RoleName
-      Description: AWSops cross-account read-only access (assumed by the host web task role).
+      Description: AWSops cross-account read-only access (assumed by the host web/worker task roles).
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              # ONLY the host web task role, ARN-validated — NOT account root (least privilege).
+              # ONLY the host web task role (and, when supplied, the host worker task role),
+              # ARN-validated — NOT account root, NOT a wildcard (least privilege). Additive: the
+              # worker principal is included only when WorkerTaskRoleArn is non-empty, so an
+              # existing stack that never sets it keeps the EXACT pre-existing single-principal
+              # trust unchanged on update.
               # (The steampipe task role is added by the multi-account inventory fan-out PR, which
               # also grants it the source-side sts:AssumeRole — kept together there for consistency.)
-              AWS: !Ref HostTaskRoleArn
+              AWS: !If
+                - HasWorkerTaskRoleArn
+                - [!Ref HostTaskRoleArn, !Ref WorkerTaskRoleArn]
+                - !Ref HostTaskRoleArn
             Action: 'sts:AssumeRole'
             # 1st-party (no ExternalId): the exact-ARN principal pin IS the confused-deputy guard.
             # 3rd-party: add the ExternalId StringEquals condition.

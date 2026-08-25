@@ -85,9 +85,13 @@ kubectl delete -f scripts/v2/eks/network-path-reader-rbac.yaml
 ## Notes
 - The worker task role also needs the target account registered (ENABLED row in the `accounts`
   table) and, for a target-account source, the target account's `AWSopsReadOnlyRole` trust policy
-  to include this principal — this is the SAME pre-existing target-account trust gap the
-  `sg-rules` worker grant shares (see `infra/cfn/awsops-target-account-role.yaml`), not something
-  this script or the Access Entry above can fix on its own.
+  to include this principal. `infra/cfn/awsops-target-account-role.yaml` now takes an OPTIONAL
+  `WorkerTaskRoleArn` parameter for exactly this (additive — a target account onboarded before this
+  parameter existed keeps working for the web task role, and gains worker-driven reads once
+  re-deployed with it set); see `docs/runbooks/onboard-target-account.md`'s Prerequisites. This is
+  the SAME trust policy the `sg-rules` worker grant shares — set `WorkerTaskRoleArn` once and both
+  workers gain member-account access to that target account, not something this script or the
+  Access Entry above manages on its own.
 - `resolve_live_identity()` never trusts a check definition's stale `eni_id`/`subnet_id` fields as
   already-verified — every pod/node source is re-confirmed against this live read on every run.
 - This grant is per-cluster; a fleet with multiple onboarded clusters needs the script run once per
