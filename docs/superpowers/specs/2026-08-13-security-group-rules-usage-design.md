@@ -134,10 +134,14 @@ budget check. AWSops validates:
 Validation additionally records, and gates scanning on, a resolved `columnMap`/`partitionKeys`/
 `partitionKeyTypes`/`scopeResolution` (which of `account_id`/`region` resolved, and whether as a
 Glue partition key or a plain column). Because these fields were added after the feature first
-shipped, an existing `sg_flow_sources` row saved before they existed has no record of them —
-**an already-configured source needs one no-op re-save (the admin PUT route re-runs validation on
-every save) to pick them up**; until then it is treated the same as any other source that hasn't
-resolved a bound-able partition strategy.
+shipped, an existing `sg_flow_sources` row saved before they existed has no record of them and
+reads as unbound/unscannable at scan time even though it was never actually re-checked against
+this gate. An administrator re-save (the admin PUT route re-runs validation on every save) always
+fixes this, but the daily worker's own `run()` also self-heals it automatically: it detects that
+specific "stale, never re-checked" signature and re-invokes the broker's `validate` action against
+the live schema, persisting the fresh result with no operator action required. A source that WAS
+checked against the current gate and genuinely rejected (a real non-date-shaped key, for example)
+is not touched by self-heal and stays refused.
 
 Configuration is stored in Aurora and contains no credentials — the account/region source config
 references a target account only; the actual query execution uses the purpose-named policy described
