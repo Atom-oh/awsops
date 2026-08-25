@@ -282,7 +282,7 @@ def _validate_with_columns(monkeypatch, conn, columns):
 
         def get_table(self, DatabaseName, Name):
             return {"Table": {
-                "StorageDescriptor": {"Columns": [{"Name": c} for c in columns]},
+                "StorageDescriptor": {"Columns": [{"Name": c, "Type": "string"} for c in columns]},
                 "PartitionKeys": [{"Name": "dt", "Type": "date"}],
                 "Parameters": {},
             }}
@@ -589,6 +589,57 @@ def test_validate_accepts_a_string_typed_partition_keys_scope_key(monkeypatch):
     result = _validate_scope_key_catalog_type(monkeypatch, conn, "string")
     assert result["ok"] is True
     assert result["scopeResolution"]["account_id"] == "partition"
+
+
+# ── CI-review MAJOR fix (round 15, part c): the round-14 check above only ever looked at a scope
+#    key resolved as a `"partition"` — but `sm._build_scope_predicate` builds the SAME literal-
+#    string-comparison SQL predicate for a scope key resolved as a plain `"column"` too, regardless
+#    of `strategy`. A Glue-crawler-misinferred `bigint`/`int` catalog type for that STORAGE column
+#    validated `status: "valid"` with no check at all. ─────────────────────────────────────────────
+
+def _validate_scope_column_catalog_type(monkeypatch, conn, scope_column_type):
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c, "Type": "string"}
+                                                    for c in _CANONICAL_FLOW_COLUMNS]
+                                       + [{"Name": "account_id", "Type": scope_column_type}]},
+                "PartitionKeys": [{"Name": "dt", "Type": "date"}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_rejects_a_bigint_typed_scope_column(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="scope_key_not_string_typed"):
+        _validate_scope_column_catalog_type(monkeypatch, conn, "bigint")
+
+
+def test_validate_accepts_a_string_typed_scope_column(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_scope_column_catalog_type(monkeypatch, conn, "string")
+    assert result["ok"] is True
+    assert result["scopeResolution"]["account_id"] == "column"
 
 
 # ── MAJOR fix (item 4, round 2): a single-key partition scheme whose Glue type isn't date-shaped
@@ -906,6 +957,40 @@ def test_projection_range_upper_bound_expired_returns_false_only_for_bare_now():
     now = dt.datetime(2026, 8, 25, tzinfo=dt.timezone.utc)
     assert broker._projection_range_upper_bound_expired("2020-01-01,NOW", now) is False
     assert broker._projection_range_upper_bound_expired("2020-01-01,now", now) is False
+
+
+# ── CI-review MAJOR fix (round 15, part a): `_NOW_OFFSET_RE` used to accept only YEARS/MONTHS/
+#    DAYS — Athena's own projection range grammar also allows WEEKS/HOURS/MINUTES/SECONDS, and an
+#    offset using one of those fell through to the unresolved (`None`) case, which the OLD
+#    `_projection_day_out_of_range` collapsed into "don't block" (fail-OPEN). Both the grammar
+#    extension and the fail-closed propagation are tested here. ───────────────────────────────────
+
+def test_projection_range_bound_date_resolves_weeks_hours_minutes_seconds_offsets():
+    now = dt.datetime(2026, 8, 25, 12, 0, 0, tzinfo=dt.timezone.utc)
+    assert broker._projection_range_bound_date("NOW-1WEEKS", now) == dt.date(2026, 8, 18)
+    assert broker._projection_range_bound_date("NOW-48HOURS", now) == dt.date(2026, 8, 23)
+    assert broker._projection_range_bound_date("NOW-90MINUTES", now) == dt.date(2026, 8, 25)
+    assert broker._projection_range_bound_date("NOW-30SECONDS", now) == dt.date(2026, 8, 25)
+
+
+def test_projection_day_out_of_range_refuses_rather_than_passes_an_unresolvable_range(monkeypatch):
+    """A range this module genuinely can't parse (neither bound resolves) must propagate `None`
+    (unverifiable) from `_projection_day_out_of_range`, not collapse into `False` ("don't block") —
+    the same fail-closed posture the module already applies to a Glue API error."""
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("some_enum_a,some_enum_z"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert result.get("partition_check_unverified") is True
+
+
+def test_projection_day_out_of_range_refuses_for_an_unresolvable_hive_range(monkeypatch):
+    conn, called = _empty_query_by_source_setup(
+        monkeypatch, _HIVE_PROJECTION_VALIDATION,
+        glue=FakeGlueGetTableWithHiveRanges(year_range="not_an_int,also_not_an_int"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is False
+    assert result.get("partition_check_unverified") is True
 
 
 # ── CI-review MAJOR fix (round 9): the round-7/8 projection.<col>.type/.format/.range gates all
@@ -1577,6 +1662,38 @@ def test_query_by_source_rejects_a_hive_day_whose_next_day_year_is_excluded_by_t
     result = broker._query_by_source({"flow_source_id": 1, "day": "2025-12-31"}, conn)
     assert result["ok"] is False
     assert result.get("projection_range_uncovered") is True
+
+
+# ── CI-review MAJOR fix (round 15, part b): the projection-range check used to run ONLY inside
+#    `if not raw_rows and not next_token:` — but a boundary day can return SOME rows for D while
+#    D+1 (also part of the query's own widened predicate) is excluded by the range, silently
+#    missing D-day flows delivered late into D+1's partition. The check must run regardless of
+#    whether the result was empty. ───────────────────────────────────────────────────────────────
+
+def _nonempty_query_by_source_setup(monkeypatch, validation, glue=None):
+    """Like `_empty_query_by_source_setup`, but the Athena query returns a NON-empty result."""
+    conn = FakeConn(_source_row(validation))
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSession(glue=glue))
+    monkeypatch.setattr(broker, "_run_athena_query",
+                         lambda *a, **k: {"ok": True, "athena": object(), "query_execution_id": "q1"})
+    monkeypatch.setattr(broker, "_fetch_page", lambda *a, **k: (["c1"], [["v1"]], None))
+    return conn
+
+
+def test_query_by_source_rejects_a_nonempty_result_whose_next_day_is_excluded_by_the_range(monkeypatch):
+    conn = _nonempty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("2020-01-01,2025-12-31"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2025-12-31"}, conn)
+    assert result["ok"] is False
+    assert result.get("projection_range_uncovered") is True
+
+
+def test_query_by_source_accepts_a_nonempty_result_fully_within_the_range(monkeypatch):
+    conn = _nonempty_query_by_source_setup(
+        monkeypatch, _PROJECTION_VALIDATION, glue=FakeGlueGetTableWithRange("2020-01-01,NOW"))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is True
+    assert result["rows"] == [{"c1": "v1"}]
 
 
 def test_partition_keys_strategy_still_runs_glue_partition_check(monkeypatch):

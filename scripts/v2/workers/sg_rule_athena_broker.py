@@ -147,7 +147,14 @@ def _shift_date(d, years=0, months=0, days=0):
     return d.replace(year=year, month=month, day=day) - _dt.timedelta(days=days)
 
 
-_NOW_OFFSET_RE = re.compile(r'^NOW\s*-\s*(\d+)\s*(YEARS?|MONTHS?|DAYS?)$', re.IGNORECASE)
+# CI-review MAJOR fix (round 15, part a): this used to accept only YEARS/MONTHS/DAYS, but
+# Athena's own partition-projection range grammar also allows WEEKS/HOURS/MINUTES/SECONDS — an
+# offset using one of those (e.g. `NOW-48HOURS`) fell through to the unresolved (`None`) case
+# below, which the OLD caller then collapsed into "don't block" (see the fail-open fix on
+# `_projection_day_out_of_range` below). All of these are exact, documented arithmetic — not a
+# guess — so there's no reason to leave them unparsed.
+_NOW_OFFSET_RE = re.compile(
+    r'^NOW\s*-\s*(\d+)\s*(YEARS?|MONTHS?|WEEKS?|DAYS?|HOURS?|MINUTES?|SECONDS?)$', re.IGNORECASE)
 
 
 def _projection_range_bound_date(value, now):
@@ -168,7 +175,15 @@ def _projection_range_bound_date(value, now):
             return _shift_date(now.date(), years=n)
         if unit.startswith("MONTH"):
             return _shift_date(now.date(), months=n)
-        return _shift_date(now.date(), days=n)
+        if unit.startswith("WEEK"):
+            return _shift_date(now.date(), days=n * 7)
+        if unit.startswith("DAY"):
+            return _shift_date(now.date(), days=n)
+        if unit.startswith("HOUR"):
+            return (now - _dt.timedelta(hours=n)).date()
+        if unit.startswith("MINUTE"):
+            return (now - _dt.timedelta(minutes=n)).date()
+        return (now - _dt.timedelta(seconds=n)).date()
     try:
         return _dt.datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError:
@@ -232,14 +247,27 @@ def _projection_integer_range_excludes(range_param, value):
 
 
 def _hive_day_excluded(actual_by_lower, params, day):
+    """Returns `True` (confirmed excluded by at least one key's range), `False` (confirmed
+    included by every key that has a range, or nothing to check), or `None` (at least one key's
+    range didn't resolve confidently — genuinely can't tell, must not be treated as "included").
+
+    CI-review MAJOR fix (round 15, part a): a range bound this module can't confidently resolve
+    (an unparseable form, or previously any `WEEKS`/`HOURS`/`MINUTES`/`SECONDS` offset) used to be
+    silently treated as "not excluded" here — fails OPEN for exactly the case the whole point of
+    this check is to catch, inconsistent with this module's own Glue-API-error posture (which
+    always fails CLOSED, i.e. refuses rather than trusts). `None` now propagates instead."""
     day_value = {"year": day.year, "month": day.month, "day": day.day}
+    unresolved = False
     for hive_key, actual_key in actual_by_lower.items():
         range_param = params.get(f"projection.{actual_key}.range")
         if not range_param:
             continue
-        if _projection_integer_range_excludes(range_param, day_value[hive_key]) is True:
+        status = _projection_integer_range_excludes(range_param, day_value[hive_key])
+        if status is True:
             return True
-    return False
+        if status is None:
+            unresolved = True
+    return None if unresolved else False
 
 
 def _projection_day_out_of_range(glue, database, table, day, validation, now=None):
@@ -283,10 +311,14 @@ def _projection_day_out_of_range(glue, database, table, day, validation, now=Non
         except Exception:  # noqa: BLE001 — unverifiable, not a confident "inside the range"
             return None
         params = tbl.get("Parameters", {}) or {}
-        if _hive_day_excluded(actual_by_lower, params, day):
+        status_day = _hive_day_excluded(actual_by_lower, params, day)
+        status_next = _hive_day_excluded(actual_by_lower, params, next_day)
+        # CI-review MAJOR fix (round 15, part a): `is True` used to collapse an unresolved
+        # (`None`) status into "don't block" — see `_hive_day_excluded`'s docstring.
+        if status_day is True or status_next is True:
             return True
-        if _hive_day_excluded(actual_by_lower, params, next_day):
-            return True
+        if status_day is None or status_next is None:
+            return None
         return False
     try:
         tbl = glue.get_table(DatabaseName=database, Name=table)["Table"]
@@ -296,9 +328,19 @@ def _projection_day_out_of_range(glue, database, table, day, validation, now=Non
     if not proj_range:
         return False
     now = now or _dt.datetime.now(_dt.timezone.utc)
-    if _projection_range_day_status(proj_range, day, now) is True:
+    status_day = _projection_range_day_status(proj_range, day, now)
+    status_next = _projection_range_day_status(proj_range, next_day, now)
+    # CI-review MAJOR fix (round 15, part a): `is True` used to collapse an unresolved (`None`)
+    # bound into "don't block," fail-OPEN for a range this module genuinely can't parse (e.g. a
+    # `WEEKS`/`HOURS`/`MINUTES`/`SECONDS` offset before this round's grammar extension, or any
+    # other form outside this module's confidently-parseable set) — the empty/undercounted result
+    # would then be trusted as genuine, inconsistent with this same function's own fail-CLOSED
+    # posture for a Glue API error just above.
+    if status_day is True or status_next is True:
         return True
-    return _projection_range_day_status(proj_range, next_day, now) is True
+    if status_day is None or status_next is None:
+        return None
+    return False
 
 
 def _validate_identifiers(account_id, region, workgroup, database, table=None, require_table=False):
@@ -386,6 +428,11 @@ def _validate(event, conn, now=None):
     glue.get_database(Name=database)
     tbl = glue.get_table(DatabaseName=database, Name=table)["Table"]
     columns = [c["Name"].lower() for c in tbl.get("StorageDescriptor", {}).get("Columns", [])]
+    # CI-review MAJOR fix (round 15, part c): name->Glue-type map for plain STORAGE columns,
+    # mirroring `partition_key_types` below — needed so a scope key resolved as `"column"` (not
+    # `"partition"`) can also be checked for a string-like catalog type.
+    column_types = {c["Name"].lower(): c.get("Type", "")
+                     for c in tbl.get("StorageDescriptor", {}).get("Columns", [])}
     # Canonical VPC Flow Log fields (+ their Athena underscore-normalized forms).
     required = {
         "interface_id": ["interface-id", "interface_id"],
@@ -519,6 +566,30 @@ def _validate(event, conn, now=None):
     # `status: "valid"` (nothing checked the scope key's catalog type at all) and then every real
     # query permanently refused — the "validates valid yet permanently refuses every scan" class
     # rounds 2/4/5/8/9/13 already close for every OTHER partition key in this module.
+    # CI-review MAJOR fix (round 15, part c): the round-14 check above only ever looked at
+    # `scope_resolution == "partition"`, gated to `strategy == "partition_keys"` — but
+    # `sm._build_scope_predicate` builds the SAME literal-string-comparison SQL predicate for a
+    # scope key resolved as a plain `"column"` too (see the `col_hit` branch above), regardless of
+    # `strategy`. A Glue-crawler-misinferred `bigint`/`int` catalog type for a numeric-looking
+    # STORAGE column (the exact misinference round 14 cites for a partition column) validated
+    # `status: "valid"` with no check at all, then hit the SAME `bigint = varchar` Trino rejection
+    # on every real query — reproducing the class round 14 closes, just for the other resolution
+    # kind. Covers `"column"` for BOTH strategies here (a `"partition"`-resolved scope key under
+    # `projection` already gets its own, different type-representability check above).
+    for canonical in ("account_id", "region"):
+        if scope_resolution.get(canonical) != "column":
+            continue
+        scope_col = resolved[canonical]
+        scope_key_type = column_types.get(scope_col.lower(), "")
+        if not sm.is_string_like_partition_type(scope_key_type):
+            raise BrokerError(
+                f"scope column {scope_col!r} ({canonical}) has Glue type {scope_key_type!r}, "
+                "which is not string-like — the query predicate always compares this source's own "
+                "literal string value, and a non-string-like catalog type (e.g. a "
+                "crawler-misinferred bigint/int for a numeric-looking value) makes that comparison "
+                "a type mismatch Trino rejects on every real query "
+                "[reason: scope_key_not_string_typed]")
+
     if strategy == "partition_keys":
         for canonical in ("account_id", "region"):
             if scope_resolution.get(canonical) != "partition":
@@ -1077,6 +1148,38 @@ def _query_by_source(event, conn):
     athena = result.pop("athena")
     columns, raw_rows, next_token = _fetch_page(athena, result["query_execution_id"], None, first_page=True)
 
+    # CI-review MAJOR fix (round 15): this used to run ONLY inside the `if not raw_rows and not
+    # next_token:` branch below — but the query's own predicate deliberately widens to the two-day
+    # {D, D+1} window (Hive delivery-time partitioning), and when D returns SOME rows while D+1 is
+    # excluded by the declared range, `projection` generates no D+1 candidate partition even though
+    # matching S3 data may exist there — day-D flows delivered late into D+1 are silently missed,
+    # producing an undercount (or, for a rule whose only flows were late-delivered, a confident
+    # false `no_observed_evidence`) that a raw_rows-non-empty check can never catch. Unlike
+    # `partition_keys` (whose D+1 Glue partition, if it exists, is always enumerable regardless of
+    # row count), this is `projection`-specific — its "no enumerable partitions to check" property
+    # is exactly what makes a range mismatch invisible on a non-empty result too. Runs
+    # unconditionally now, before the empty-result-only checks.
+    if validation.get("partitionStrategy") == "projection":
+        glue = session.client("glue")
+        out_of_range = _projection_day_out_of_range(
+            glue, source["database_name"], source["table_name"], day, validation)
+        if out_of_range is True:
+            return {
+                "ok": False,
+                "reason": "the day's query window falls (at least partly) outside the resolved "
+                          "partition key's own projection.<col>.range — the result cannot be "
+                          "trusted as complete",
+                "projection_range_uncovered": True,
+            }
+        if out_of_range is None:
+            return {
+                "ok": False,
+                "reason": "could not verify whether the day's query window falls within the "
+                          "resolved partition key's projection range (Glue API error) — not "
+                          "trusting the result as complete",
+                "partition_check_unverified": True,
+            }
+
     if not raw_rows and not next_token:
         # L4 finding #9(iii)/round-3 finding #3: before trusting an empty result as "no traffic",
         # verify the partition predicate actually matched something — but ONLY for the enumerable
@@ -1109,31 +1212,6 @@ def _query_by_source(event, conn):
                     "reason": "could not verify whether any Glue partition matches the day's "
                               "predicate (Glue API error) — not trusting the empty result as "
                               "genuine zero-traffic",
-                    "partition_check_unverified": True,
-                }
-        elif validation.get("partitionStrategy") == "projection":
-            # CI-review MAJOR fix (round 12, MAJOR #2): see `_projection_day_out_of_range`'s
-            # docstring — a `projection` source has no enumerable Glue partitions to check, but its
-            # resolved date key's own `projection.<col>.range` can still exclude `day` (e.g. a
-            # `NOW-3YEARS,NOW-45DAYS` range that validate-time checking left unflagged), silently
-            # manufacturing a confident zero-traffic day for every recent scan.
-            glue = session.client("glue")
-            out_of_range = _projection_day_out_of_range(
-                glue, source["database_name"], source["table_name"], day, validation)
-            if out_of_range is True:
-                return {
-                    "ok": False,
-                    "reason": "the day falls outside the resolved partition key's own "
-                              "projection.<col>.range — the empty result reflects a range "
-                              "mismatch, not genuine zero-traffic",
-                    "projection_range_uncovered": True,
-                }
-            if out_of_range is None:
-                return {
-                    "ok": False,
-                    "reason": "could not verify whether the day falls within the resolved "
-                              "partition key's projection range (Glue API error) — not trusting "
-                              "the empty result as genuine zero-traffic",
                     "partition_check_unverified": True,
                 }
 
