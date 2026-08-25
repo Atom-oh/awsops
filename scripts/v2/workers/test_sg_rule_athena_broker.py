@@ -98,6 +98,37 @@ def test_reject_non_select_accepts_bare_select():
     broker._reject_non_select("SELECT 1")  # must not raise
 
 
+# ── MINOR fix (defense-in-depth): the broker's account-id/region regexes are ALIASED to
+#    sg_rule_matching's copies (not independently duplicated), a deliberate merge of an
+#    ingress-side AssumeRole-input gate with an SQL-literal-side check. If module boundaries stay
+#    merged, this test pins BOTH patterns to the exact same accepted/rejected value set, so a
+#    future edit to one (e.g. loosening the matching module's regex for a legitimate SQL-value
+#    reason) is caught by CI even though it would silently widen the broker's own AssumeRole gate
+#    too. ────────────────────────────────────────────────────────────────────────────────────────
+
+def test_broker_and_matching_account_id_region_patterns_stay_value_equal():
+    assert broker._ACCOUNT_ID_RE is broker.sm._ACCOUNT_ID_VALUE_RE
+    assert broker._REGION_RE is broker.sm._REGION_VALUE_RE
+
+    accepted_account_ids = ["123456789012", "000000000000"]
+    rejected_account_ids = ["12345", "1234567890123", "12345678901a", "; DROP TABLE x"]
+    for value in accepted_account_ids:
+        assert broker._ACCOUNT_ID_RE.match(value)
+        assert broker.sm._ACCOUNT_ID_VALUE_RE.match(value)
+    for value in rejected_account_ids:
+        assert not broker._ACCOUNT_ID_RE.match(value)
+        assert not broker.sm._ACCOUNT_ID_VALUE_RE.match(value)
+
+    accepted_regions = ["ap-northeast-2", "us-east-1", "us-gov-west-1"]
+    rejected_regions = ["ap_northeast_2", "APNORTHEAST2", "; DROP TABLE x", "ap-northeast"]
+    for value in accepted_regions:
+        assert broker._REGION_RE.match(value)
+        assert broker.sm._REGION_VALUE_RE.match(value)
+    for value in rejected_regions:
+        assert not broker._REGION_RE.match(value)
+        assert not broker.sm._REGION_VALUE_RE.match(value)
+
+
 # ── "query_by_source": Aurora-resolved config, never caller-supplied SQL/account (L3 #6) ─────────
 
 class FakeConn:
@@ -343,6 +374,132 @@ def test_validate_resolves_scope_from_partition_keys_not_only_columns(monkeypatc
     source = {"account_id": "123456789012", "region": "ap-northeast-2", "database_name": "db",
               "table_name": "tbl", "validation": result}
     sql = sm.build_day_select(source, dt.date(2026, 3, 5))
+    assert '"account-id" = \'123456789012\'' in sql
+    assert '"region" = \'ap-northeast-2\'' in sql
+    # MAJOR fix (item 1, round 3): this exact `dt + account-id + region` layout used to validate
+    # `status: "valid"` yet permanently refuse to scan, because date-key detection required exactly
+    # ONE total partition key. After excluding the two scope-resolved partition keys, `dt` must be
+    # the lone remaining date candidate — both the SQL's own date predicate AND
+    # has_resolved_partition_strategy() (the exact check `_query_by_source` hard-refuses on) must
+    # agree the layout is scannable.
+    assert '"dt" IN (' in sql
+    assert sm.has_resolved_partition_strategy(result) is True
+
+
+# ── MAJOR fix (item 1, round 3): the date-key detection bug the round-2 fix introduced — a
+#    partition-key layout that validates `status: "valid"` yet has NO bounded date strategy after
+#    excluding resolved scope keys (case (b): a lone SCOPE-only key with no date key at all) must be
+#    REJECTED at validation time, not silently left to fail every real scan. ────────────────────────
+
+def test_validate_rejects_a_single_scope_only_partition_key_with_no_date_key(monkeypatch):
+    """Case (b): the table's ONLY partition key is `account-id` (a scope field) — there is no date
+    key at all, so no bounded date strategy can ever be resolved. Before the round-3 fix, this
+    validated successfully whenever the scope key's Glue type happened to be string-like (since the
+    old check never excluded scope keys before testing date-shape at all)."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "account-id", "Type": "string"}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    with pytest.raises(broker.BrokerError, match="no_date_candidate|does not resolve a single bounded date"):
+        broker._validate({
+            "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+            "database": "db", "table": "tbl",
+        }, conn)
+
+
+def test_validate_rejects_multiple_partition_keys_none_date_shaped(monkeypatch):
+    """Case (d): multiple partition keys, none of them the date and none resolved as a scope
+    field either — there's no way to bound a scan on any one of them, and no Hive-style
+    year/month/day scheme is present. Must be rejected outright, not left to validate."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "tier", "Type": "string"}, {"Name": "env", "Type": "string"}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    with pytest.raises(broker.BrokerError, match="no_date_candidate|does not resolve a single bounded date"):
+        broker._validate({
+            "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+            "database": "db", "table": "tbl",
+        }, conn)
+
+
+# ── MAJOR fix (item 1, round 3), full end-to-end regression: the review explicitly asked for a
+#    test that actually calls `_query_by_source()` (not `_validate`/`has_resolved_partition_
+#    strategy` in isolation) for the `dt + account-id + region` layout, asserting the scan is NOT
+#    refused and the generated SQL carries both the date AND the scope predicates. ────────────────
+
+def test_query_by_source_scans_a_dt_account_id_region_layout_end_to_end(monkeypatch):
+    validation = {
+        "status": "valid", "partitionKeys": ["dt", "account-id", "region"],
+        "partitionKeyTypes": ["date", "string", "string"],
+        "scopeResolution": {"account_id": "partition", "region": "partition"},
+        "columnMap": {
+            "interface_id": "interface_id", "log_status": "log_status", "start": "start",
+            "account_id": "account-id", "region": "region",
+        },
+        "optionalFields": [], "partitionStrategy": "partition_keys",
+    }
+    conn = FakeConn(_source_row(validation))
+    captured = {}
+
+    def fake_run_athena_query(session, workgroup, database, sql, max_bytes):
+        captured["sql"] = sql
+        return {"ok": True, "query_execution_id": "q-1", "data_scanned_bytes": 100, "athena": object()}
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSession())
+    monkeypatch.setattr(broker, "_run_athena_query", fake_run_athena_query)
+    monkeypatch.setattr(broker, "_fetch_page", lambda *a, **k: (["c1"], [["1"]], None))
+
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+
+    # (i) the scan is NOT refused.
+    assert result["ok"] is True
+    assert "reason" not in result
+    # (ii) the generated day-SELECT SQL carries BOTH the date partition predicate for `dt` AND the
+    # scope predicates for account-id/region.
+    sql = captured["sql"]
+    assert '"dt" IN (' in sql
     assert '"account-id" = \'123456789012\'' in sql
     assert '"region" = \'ap-northeast-2\'' in sql
 
@@ -717,6 +874,52 @@ def test_partition_exists_hive_expression_covers_both_days_across_a_month_bounda
     assert "(year = '2026' AND month = '03' AND day = '31')" in expr
     assert "(year = '2026' AND month = '04' AND day = '01')" in expr
     assert " OR " in expr
+
+
+# ── MAJOR fix (item 3, round 3): the existence check's Glue Expression must be scoped by
+#    account_id/region when those resolved as actual PARTITION KEYS — otherwise ANY tenant's
+#    partition satisfies "a partition exists," not necessarily this resolved source's own. ─────────
+
+def test_partition_exists_scopes_the_expression_by_account_id_and_region_when_resolved_as_partition_keys():
+    glue = FakeGluePartitions(["2026-03-05"])
+    validation = {
+        "partitionKeys": ["dt", "account-id", "region"], "partitionKeyTypes": ["date", "string", "string"],
+        "scopeResolution": {"account_id": "partition", "region": "partition"},
+        "columnMap": {"account_id": "account-id", "region": "region"},
+    }
+    source = {"account_id": "123456789012", "region": "ap-northeast-2"}
+    result = broker._partition_exists(glue, "db", "tbl", dt.date(2026, 3, 5), validation, source=source)
+    assert result is True
+    expr = glue.expressions[0]
+    assert "account-id = '123456789012'" in expr
+    assert "region = 'ap-northeast-2'" in expr
+
+
+def test_partition_exists_wrong_scope_value_does_not_manufacture_a_confident_partition_hit():
+    """The SAME Expression the real query would scope to — if the resolved source's own
+    account/region doesn't match the partition that satisfies the (unscoped) date predicate, the
+    scoped Expression must report no matching partition, not a false positive borrowed from another
+    tenant's partition."""
+    glue = FakeGluePartitions(["2026-03-05"])  # a partition exists for the DATE, but not this account
+    validation = {
+        "partitionKeys": ["dt", "account-id", "region"], "partitionKeyTypes": ["date", "string", "string"],
+        "scopeResolution": {"account_id": "partition", "region": "partition"},
+        "columnMap": {"account_id": "account-id", "region": "region"},
+    }
+    source = {"account_id": "999999999999", "region": "ap-northeast-2"}
+    result = broker._partition_exists(glue, "db", "tbl", dt.date(2026, 3, 5), validation, source=source)
+    expr = glue.expressions[0]
+    assert "999999999999" in expr
+
+
+def test_partition_exists_unscoped_when_source_is_none_keeps_old_behavior():
+    """Backward-compat: existing callers/tests that never pass `source` (no scope to add) must see
+    the exact same unscoped Expression as before this fix."""
+    glue = FakeGluePartitions(["2026-03-06"])
+    validation = {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}
+    result = broker._partition_exists(glue, "db", "tbl", dt.date(2026, 3, 5), validation)
+    assert result is True
+    assert glue.expressions == ["dt IN (DATE '2026-03-05', DATE '2026-03-06')"]
 
 
 def test_query_by_source_commits_a_zero_traffic_day_when_only_the_next_day_partition_exists(monkeypatch):

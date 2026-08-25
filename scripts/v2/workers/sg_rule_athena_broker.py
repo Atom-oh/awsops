@@ -240,26 +240,46 @@ def _validate(event, conn):
         raise BrokerError("table has no partition keys or partition projection — cannot bound a scan")
     strategy = "projection" if projection_enabled else "partition_keys"
 
-    # MAJOR fix (item 4, round 2): a single-key (non-Hive-style) partition scheme is only a valid,
-    # scannable strategy when Glue's own catalog type is CONFIRMED date-shaped — the SAME check
-    # `sm.has_resolved_partition_strategy`/`sm.single_date_partition_key` already apply at RUNTIME
-    # (this module's own `_query_by_source` hard-refuses via that check). Before this fix,
-    # `_validate` never looked at the key's type at all, so a brand-new table with e.g. a
-    # `bigint`-typed single key validated `status: "valid"` yet every real scan permanently refused
-    # it (the validation-vs-runtime mismatch the CI review flagged) — reject it HERE instead, with a
-    # reason distinct from the runtime's generic `partition_check_unverified`/"did not resolve a
-    # partition strategy" messages, so operators can tell "wrong key type, will never work" apart
-    # from "transient Glue API hiccup, retry" at a glance. A Hive-style year/month/day scheme (3+
-    # keys) is unaffected — `_build_partition_predicate`'s Hive branch doesn't depend on key types.
-    if strategy == "partition_keys" and len(partition_keys) == 1:
-        key_type = partition_key_types[0] if partition_key_types else ""
-        if not sm.is_date_like_partition_type(key_type):
-            raise BrokerError(
-                f"single partition key {partition_keys[0]!r} has Glue type {key_type!r}, which is "
-                "not date-shaped (expected date/timestamp/string/varchar/char) — this source can "
-                "never be bounded to a day and must not be scanned; use a Hive-style "
-                "year/month/day partitioned table or re-partition on a date-typed key "
-                "[reason: partition_key_type_not_date_shaped]")
+    # MAJOR fix (item 4, round 2; corrected item 1, round 3): a partition-key layout is only a
+    # valid, scannable strategy when it resolves EXACTLY ONE bound-able date candidate AFTER
+    # excluding whatever partition keys were already resolved as account_id/region SCOPE keys
+    # above — the SAME exclusion-aware logic `sm.single_date_partition_key`/
+    # `sm.has_resolved_partition_strategy` apply at RUNTIME (this module's own `_query_by_source`
+    # hard-refuses via that check). Round 2's fix only ever checked `len(partition_keys) == 1`,
+    # which (a) validated `status: "valid"` for a `dt + account-id + region` layout (3 partition
+    # keys) that then permanently refused to scan at runtime, since date detection there ALSO used
+    # to require exactly one TOTAL key — the exact validate-vs-scan mismatch the CI review flagged
+    # a third time; and (b) would have validated a single SCOPE-only key (e.g. just `account-id`,
+    # no date key at all) as long as its Glue type happened to be string-like, since it never
+    # excluded scope keys before checking date-shape at all. Both gaps are closed by running the
+    # SAME `sm.partition_keys_excluding_scope` exclusion here that scan-time uses, then requiring
+    # either a Hive-style year/month/day scheme among what remains, or exactly one remaining
+    # date-typed key — zero or more than one remaining (non-Hive) candidate has no bounded date
+    # strategy and must be rejected outright, never silently left to fail at scan time.
+    if strategy == "partition_keys":
+        probe_validation = {
+            "partitionKeys": partition_keys, "partitionKeyTypes": partition_key_types,
+            "scopeResolution": scope_resolution, "columnMap": resolved,
+        }
+        remaining_keys = sm.partition_keys_excluding_scope(probe_validation)
+        lower_remaining = {str(k).lower() for k in remaining_keys}
+        if not ({"year", "month", "day"} <= lower_remaining):
+            if len(remaining_keys) != 1:
+                raise BrokerError(
+                    "partition-key layout does not resolve a single bounded date candidate after "
+                    "excluding resolved account_id/region scope keys — expected either a "
+                    "Hive-style year/month/day scheme or exactly one remaining date-typed key "
+                    "[reason: partition_key_no_date_candidate]")
+            remaining_key = remaining_keys[0]
+            idx = next(i for i, k in enumerate(partition_keys) if k == remaining_key)
+            key_type = partition_key_types[idx] if idx < len(partition_key_types) else ""
+            if not sm.is_date_like_partition_type(key_type):
+                raise BrokerError(
+                    f"single partition key {remaining_key!r} has Glue type {key_type!r}, which is "
+                    "not date-shaped (expected date/timestamp/string/varchar/char) — this source "
+                    "can never be bounded to a day and must not be scanned; use a Hive-style "
+                    "year/month/day partitioned table or re-partition on a date-typed key "
+                    "[reason: partition_key_type_not_date_shaped]")
 
     optional_present = [c for c in ("flow-direction", "flow_direction", "tcp-flags", "tcp_flags",
                                     "bytes", "packets") if c.lower() in columns]
@@ -313,7 +333,7 @@ def _load_source_row(conn, flow_source_id):
     }
 
 
-def _partition_exists(glue, database, table, day, validation):
+def _partition_exists(glue, database, table, day, validation, source=None):
     """Best-effort Glue GetPartitions check (L4 finding #9(iii)): before trusting a zero-row Athena
     result as "no traffic that day", confirm at least one partition actually matches the day's
     predicate — a wrong/guessed partition-key mapping can otherwise silently match zero partitions
@@ -330,10 +350,21 @@ def _partition_exists(glue, database, table, day, validation):
     found, so trust the zero-row Athena result as genuine zero-traffic" — collapsing "unverifiable"
     into the SAME value as "confirmed present" is exactly backwards: it lets a transient Glue API
     hiccup silently manufacture a confident zero-traffic day. `None` lets the caller refuse to
-    commit that day's watermark instead, and retry on the next run."""
+    commit that day's watermark instead, and retry on the next run.
+
+    Item 3 follow-up fix (round 3): `source` (the resolved sg_flow_sources row, carrying its own
+    account_id/region) is now accepted so the Expression can ALSO be scoped by any account_id/
+    region field that resolved as an actual Glue partition key (sm.scope_partition_expr_clauses)
+    -- without it, a Hive-style year/month/day table that ALSO partitions by account/region (the
+    layout item 1's fix makes scannable) would report "a partition exists" for ANY tenant's
+    partition, not necessarily this resolved source's own, and a mis-resolved scope mapping could
+    silently manufacture a confident zero-traffic day. `source` defaults to None (existing
+    single-tenant-table callers/tests, where there is nothing to scope) so the Expression is
+    unchanged when there's no scope to add."""
     dk_raw = sm.single_date_partition_key(validation)  # item 7: only a CONFIRMED date-typed single key
     partition_keys = validation.get("partitionKeys") or []
     lower_keys = {k.lower(): k for k in partition_keys}
+    scope_clauses = sm.scope_partition_expr_clauses(validation, source) if source is not None else []
     # MAJOR fix: `sg_rule_matching._build_partition_predicate` widens the QUERY's partition
     # predicate to {D, D+1} (Hive partitions are keyed by delivery time, so day-D flows can land in
     # day D+1's partition file), but this existence check used to look at day D alone in BOTH
@@ -368,6 +399,12 @@ def _partition_exists(glue, database, table, day, validation):
             expr = f"{dk} IN ({lit_a}, {lit_b})"
         else:
             return True  # not a checkable single/hive-style scheme — do not block on it
+        if scope_clauses:
+            # Item 3 follow-up fix (round 3): the existence check's Expression must be scoped to
+            # this SAME resolved source's own account/region partition values, exactly like the
+            # actual query's own predicate — otherwise "a partition exists" is true for any
+            # tenant's partition, not necessarily this one.
+            expr = f"({expr}) AND {' AND '.join(scope_clauses)}"
         resp = glue.get_partitions(DatabaseName=database, TableName=table, Expression=expr, MaxResults=1)
         return bool(resp.get("Partitions"))
     except Exception:  # noqa: BLE001 — a genuinely unverifiable check must never manufacture a
@@ -534,7 +571,8 @@ def _query_by_source(event, conn):
         # projection tables, there is nothing to enumerate.
         if validation.get("partitionStrategy") == "partition_keys":
             glue = session.client("glue")
-            exists = _partition_exists(glue, source["database_name"], source["table_name"], day, validation)
+            exists = _partition_exists(glue, source["database_name"], source["table_name"], day,
+                                        validation, source=source)
             if exists is False:
                 return {
                     "ok": False,

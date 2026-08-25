@@ -113,6 +113,16 @@ def day_coverage(versions: list, day, observation_lag: timedelta = timedelta(day
     compare against, e.g. the very first scan) — a closed version's day can then never be trusted as
     confident, and is marked crossing/unassessable rather than guessing a window.
 
+    Item 2 follow-up fix (round 3): a single, run-wide `observation_lag` scalar is only correct for
+    the version boundary that THIS run itself just closed — every OTHER (historical) closed version
+    a rescan-window day might resolve to needs the gap that preceded the run that closed THAT
+    boundary, not the gap before the CURRENT run's own `now`. `observation_lag` may therefore also be
+    a CALLABLE `f(valid_to) -> timedelta|None` — called lazily, exactly once per covering version's
+    `valid_to`, so each historical boundary gets its own correctly-anchored lag instead of the
+    current run's. A plain `timedelta`/`None` (non-callable) keeps the pre-existing single-value
+    behavior unchanged (still used directly by every test in this module and by any caller that
+    genuinely only has one uniform value to offer).
+
     Returns {"crossing": bool, "version": dict|None} — version is set only when NOT crossing.
     """
     start, end = day_bounds_utc(day)
@@ -128,11 +138,13 @@ def day_coverage(versions: list, day, observation_lag: timedelta = timedelta(day
         return {"crossing": True, "version": None}
     valid_to = at_start.get("valid_to")
     if valid_to is not None:
-        if observation_lag is None:
-            # No reasonably recent previous successful scan to derive a real gap from — never
-            # guess a window; treat this closed version's day as unassessable.
+        lag = observation_lag(valid_to) if callable(observation_lag) else observation_lag
+        if lag is None:
+            # No reasonably recent previous successful scan (relative to THIS boundary's own
+            # closing observation) to derive a real gap from — never guess a window; treat this
+            # closed version's day as unassessable.
             return {"crossing": True, "version": None, "reason": "observation_lag_unknown"}
-        if (valid_to - observation_lag) < end:
+        if (valid_to - lag) < end:
             # The actual change to this version's successor could have happened inside day D's own
             # window (per the docstring above) — the day's true rule-shape is ambiguous, not
             # confident.
@@ -337,20 +349,60 @@ def is_date_like_partition_type(type_str) -> bool:
     return str(type_str or "").lower() in _DATE_LIKE_PARTITION_TYPES
 
 
+def partition_keys_excluding_scope(validation: dict) -> list:
+    """Item 1 follow-up fix (round 3): the partition-key names remaining AFTER excluding any key
+    already resolved as an `account_id`/`region` SCOPE key (`validation['scopeResolution']` marking
+    a canonical field `"partition"` — i.e. it's one of the ACTUAL Glue `PartitionKeys`, per
+    `sg_rule_athena_broker._validate`'s item-1/round-2 fix — versus `"column"`, a plain table column
+    that isn't a partition dimension at all and needs no exclusion here).
+
+    A centralized/org-wide table's canonical `dt + account-id + region` partition-key layout has
+    THREE partition keys, but only ONE of them (`dt`) is a date candidate — the other two are
+    already accounted for by `_build_scope_predicate`/`_build_scope_expr`. Date-key detection
+    (`single_date_partition_key` below) must look at the partition keys REMAINING after excluding
+    the scope ones, not the raw full list — otherwise a 3-key layout never resolves to a lone date
+    candidate, `has_resolved_partition_strategy()` returns `False`, and `_query_by_source` hard-
+    refuses every scan of a layout that `sg_rule_athena_broker._validate` reported `status: "valid"`
+    for (the exact validate-vs-scan mismatch the CI review flagged). Both `_validate` (at validation
+    time) and this module (at scan time) call this SAME function so the two can never disagree."""
+    validation = validation or {}
+    partition_keys = validation.get("partitionKeys") or []
+    scope_resolution = validation.get("scopeResolution") or {}
+    column_map = validation.get("columnMap") or {}
+    excluded_lower = set()
+    for canonical in ("account_id", "region"):
+        if scope_resolution.get(canonical) == "partition":
+            actual = column_map.get(canonical)
+            if actual:
+                excluded_lower.add(str(actual).lower())
+    return [k for k in partition_keys if str(k).lower() not in excluded_lower]
+
+
 def _single_partition_key_and_type(validation: dict):
     """Shared resolution behind `single_date_partition_key`/`single_date_partition_key_type` —
     returns (key_name, lowercased_glue_type) for the single CONFIRMED date-like partition key, or
-    (None, None) when there isn't exactly one, or its type isn't known/date-like."""
-    partition_keys = (validation or {}).get("partitionKeys") or []
-    if len(partition_keys) != 1:
+    (None, None) when there isn't exactly one REMAINING after excluding scope-resolved partition
+    keys (`partition_keys_excluding_scope`, item 1 follow-up fix round 3), or its type isn't
+    known/date-like. `partitionKeyTypes` is positional against the FULL `partitionKeys` list (Glue's
+    own ordering), so the remaining key's type is looked up by its index in that full list, not by
+    position in the excluded-down remainder."""
+    validation = validation or {}
+    all_keys = validation.get("partitionKeys") or []
+    remaining = partition_keys_excluding_scope(validation)
+    if len(remaining) != 1:
         return None, None
-    types = (validation or {}).get("partitionKeyTypes")
-    if not types or len(types) != 1:
+    types = validation.get("partitionKeyTypes")
+    if not types or len(types) != len(all_keys):
         return None, None
-    t = str(types[0]).lower()
+    key = remaining[0]
+    try:
+        idx = next(i for i, k in enumerate(all_keys) if k == key)
+    except StopIteration:
+        return None, None
+    t = str(types[idx]).lower()
     if t not in _DATE_LIKE_PARTITION_TYPES:
         return None, None
-    return partition_keys[0], t
+    return key, t
 
 
 def single_date_partition_key(validation: dict):
@@ -449,6 +501,41 @@ def _build_scope_predicate(column_map, source):
     if not clauses:
         return ""
     return " AND " + " AND ".join(clauses)
+
+
+def scope_partition_expr_clauses(validation, source):
+    """Item 3 follow-up fix (round 3): `sg_rule_athena_broker._partition_exists`'s Glue
+    `GetPartitions` existence check used to OR together only the DATE dimensions of its
+    `Expression` — for a Hive-style `year/month/day` table that ALSO carries `account_id`/`region`
+    as partition keys (the layout item 1's fix makes scannable), that means ANY tenant's partition
+    satisfies "a partition exists," not necessarily the resolved source's OWN account/region. A
+    genuinely wrong/mis-resolved scope mapping could then return a real zero-row Athena result
+    (scoped to the wrong account) that gets waved through as confident zero-traffic, because the
+    existence check never looked at scope at all.
+
+    Returns a list of already-safe (`_safe_ident`/`_safe_scope_value`-checked) Glue-Expression
+    clauses (bare `col = 'value'`, matching this module's own Expression syntax — no quoting on the
+    identifier, unlike the double-quoted SQL identifiers `_build_scope_predicate` emits for Athena
+    SQL) for each of `account_id`/`region` that resolved as an ACTUAL Glue PARTITION KEY
+    (`scopeResolution[...] == "partition"`). A scope field that resolved only as a plain table
+    COLUMN is not a partition dimension at all — Glue's partition-Expression syntax has nothing to
+    filter on for it, so it's intentionally omitted here (the row-level SQL predicate
+    `_build_scope_predicate` already builds still covers that case at query time)."""
+    validation = validation or {}
+    scope_resolution = validation.get("scopeResolution") or {}
+    column_map = validation.get("columnMap") or {}
+    clauses = []
+    if scope_resolution.get("account_id") == "partition":
+        col = _safe_ident(column_map.get("account_id"), "")
+        if col:
+            val = _safe_scope_value(str(source["account_id"]), _ACCOUNT_ID_VALUE_RE)
+            clauses.append(f"{col} = '{val}'")
+    if scope_resolution.get("region") == "partition":
+        col = _safe_ident(column_map.get("region"), "")
+        if col:
+            val = _safe_scope_value(str(source["region"]), _REGION_VALUE_RE)
+            clauses.append(f"{col} = '{val}'")
+    return clauses
 
 
 def build_day_select(source, day):
