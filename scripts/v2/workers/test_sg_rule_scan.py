@@ -1225,10 +1225,13 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     assert "account_id" not in fake_lambda.invocations[0]
 
 
-def test_run_resolves_and_threads_the_real_observation_lag_into_process_day(monkeypatch):
-    """Item 2 follow-up fix (round 2), end-to-end: `run()` must resolve the REAL gap to the
-    previous successful scan (from `sg_rule_scan_runs`) and pass it into `process_day` — not a
-    fixed nominal cadence, and not silently dropped."""
+def test_run_threads_a_per_boundary_lag_resolver_callable_into_process_day(monkeypatch):
+    """Item 2 follow-up fix (round 3): `run()` must pass a per-boundary lag RESOLVER (a callable,
+    `sm.day_coverage`'s new callable-`observation_lag` contract) into `process_day` — never a single
+    scalar computed against THIS run's own `now`, which would apply that run's gap uniformly to
+    every historical version boundary a rescan-window day might resolve to (see
+    `test_rescan_window_does_not_flip_an_unassessable_day_confident_after_a_later_short_gap_run`
+    below for the concrete failure this replaces)."""
     monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
     conn = FakeConn({
         "FROM sg_flow_sources": [[
@@ -1236,8 +1239,8 @@ def test_run_resolves_and_threads_the_real_observation_lag_into_process_day(monk
         ]],
         "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [
-            [(utc(2026, 3, 1),)],  # previous_successful_scan_gap's own query (called first)
-            [(None,)],             # last_committed_day's own query (called second)
+            [(None,)],  # last_committed_day's own query — the resolver itself queries lazily,
+                        # only when day_coverage actually needs a lag for a CLOSED version.
         ],
         "sg_rule_inventory_versions": [[]],
         "FROM sg_eni_membership_snapshots": [[]],
@@ -1256,8 +1259,100 @@ def test_run_resolves_and_threads_the_real_observation_lag_into_process_day(monk
         ec2_client_factory=lambda *a, **k: FakeEc2(),
         lambda_client_factory=lambda: fake_lambda,
     )
-    assert captured["observation_lag"] is not None
-    assert captured["observation_lag"] > dt.timedelta(days=1)  # a real, non-nominal gap was resolved
+    assert callable(captured["observation_lag"])
+    # Invoking the resolver for an arbitrary boundary queries sg_rule_scan_runs lazily, on demand.
+    conn.responses["FROM sg_rule_scan_runs"] = [[(utc(2026, 3, 1),)]]
+    gap = captured["observation_lag"](utc(2026, 3, 9))
+    assert gap == utc(2026, 3, 9) - utc(2026, 3, 1)
+
+
+class _ScanRunsHistoryConn:
+    """Item 2 follow-up fix (round 3) regression-test harness: tracks a real, growing
+    `sg_rule_scan_runs` history across MULTIPLE `process_day()` calls (simulating separate daily
+    scan runs, unlike the fixed canned-response-queue `FakeConn` above) — so
+    `scan.boundary_lag_resolver`/`scan.previous_successful_scan_gap` see the actual accumulated
+    history a real rescan-window re-run would see, instead of a scripted response list. `clock`
+    controls the `started_at` this fake assigns to the next `INSERT INTO sg_rule_scan_runs` row
+    (mirroring that statement's own `now()` SQL literal, which a fake can't evaluate for real) —
+    the test advances it to simulate the passage of time between successive runs."""
+
+    def __init__(self):
+        self.scan_runs = []  # list of (started_at, status)
+        self.activity_daily = []  # captured INSERT INTO sg_rule_activity_daily kwargs, in order
+        self.clock = None
+        self.in_txn = False
+
+    def run(self, sql, **kwargs):
+        s = sql.strip()
+        if s == "BEGIN":
+            self.in_txn = True
+            return []
+        if s in ("COMMIT", "ROLLBACK"):
+            self.in_txn = False
+            return []
+        if "SELECT max(started_at) FROM sg_rule_scan_runs" in sql:
+            before = kwargs["before"]
+            candidates = [t for t, status in self.scan_runs if status == "succeeded" and t < before]
+            return [(max(candidates),)] if candidates else [(None,)]
+        if "INSERT INTO sg_rule_scan_runs" in sql:
+            self.scan_runs.append((self.clock, "succeeded"))
+            return []
+        if "INSERT INTO sg_rule_activity_daily" in sql:
+            self.activity_daily.append(kwargs)
+            return []
+        return []  # DELETE FROM sg_rule_activity_daily, etc. — not needed by this test.
+
+
+def test_rescan_window_does_not_flip_an_unassessable_day_confident_after_a_later_short_gap_run():
+    """Item 2 follow-up fix (round 3) regression test — the EXACT scenario the CI review described:
+    a multi-day scan outage means the run that finally closes an old rule-inventory version (on
+    day D_close) correctly sees a wide gap and marks the affected day `unassessable`. A day or two
+    LATER, the next run's OWN gap (relative to D_close) is short — but its trailing rescan window
+    idempotently re-processes that SAME already-`unassessable` day. Before this fix, `run()` would
+    have threaded THAT run's own short gap into `sm.day_coverage()` for every boundary, silently
+    overwriting the earlier correct `unassessable` with a confident (wrong) attribution. This test
+    exercises the REAL `process_day` + `boundary_lag_resolver` + `previous_successful_scan_gap`
+    wiring against a real (if fake) growing `sg_rule_scan_runs` history — not `sm.day_coverage` in
+    isolation with a hand-fed scalar."""
+    conn = _ScanRunsHistoryConn()
+    source = {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1}
+    day = dt.date(2026, 3, 5)
+
+    t0 = utc(2026, 3, 1)       # last successful run BEFORE the outage
+    t_close = utc(2026, 3, 9)  # the outage-closing run: an 8-day gap since t0, correctly wide
+    t_next = utc(2026, 3, 10)  # the NEXT run: only a 1-day gap since t_close
+
+    rule_versions = {
+        "sgr-1": [
+            {"valid_from": utc(2026, 1, 1), "valid_to": t_close, "fingerprint": "fp-old",
+             "group_id": "sg-1", "is_egress": False, "protocol": "tcp", "from_port": 443,
+             "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8"},
+            {"valid_from": t_close, "valid_to": None, "fingerprint": "fp-new",
+             "group_id": "sg-1", "is_egress": False, "protocol": "tcp", "from_port": 443,
+             "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8"},
+        ],
+    }
+
+    # Seed history with the pre-outage successful run, then run process_day exactly as the
+    # outage-closing run itself would (its own scan_runs row is written with started_at=t_close).
+    conn.scan_runs.append((t0, "succeeded"))
+    conn.clock = t_close
+    resolver_1 = scan.boundary_lag_resolver(conn, source["id"])
+    scan.process_day(conn, source, day, [], rule_versions, {}, None, observation_lag=resolver_1)
+    status_1 = json.loads(conn.activity_daily[-1]["cov"])["status"]
+    assert status_1 == "unassessable"  # the wide (8-day) gap correctly marks this crossing.
+
+    # A LATER run — only a short gap after the outage-closing run — re-processes the SAME day via
+    # the idempotent rescan window. It builds its OWN fresh resolver (exactly like a real run()
+    # call would), against the SAME (now-grown) history.
+    conn.clock = t_next
+    resolver_2 = scan.boundary_lag_resolver(conn, source["id"])
+    scan.process_day(conn, source, day, [], rule_versions, {}, None, observation_lag=resolver_2)
+    status_2 = json.loads(conn.activity_daily[-1]["cov"])["status"]
+    # The version boundary's own valid_to (t_close) never changed — the resolver must anchor to the
+    # gap that preceded t_close (8 days, still wide), NOT the short 1-day gap before t_next. The day
+    # must stay unassessable, never flip to a confident attribution.
+    assert status_2 == "unassessable"
 
 
 def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):

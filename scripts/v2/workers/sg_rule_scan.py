@@ -40,8 +40,12 @@ DELIVERY_LAG_HOURS = int(os.environ.get("SG_RULE_DELIVERY_LAG_HOURS", "6"))
 # (round 2): this constant is NO LONGER fed into `sm.day_coverage()`'s `observation_lag` directly.
 # A fixed nominal cadence is wrong whenever scans are actually delayed or missed for multiple days
 # in a row — see `previous_successful_scan_gap()` below, which derives the REAL elapsed gap from
-# `sg_rule_scan_runs` instead. Kept only as a documented/scheduled-cadence reference value.
-SCAN_INTERVAL_HOURS = int(os.environ.get("SG_RULE_SCAN_INTERVAL_HOURS", "24"))
+# `sg_rule_scan_runs` instead. `SCAN_INTERVAL_HOURS` below is NOT wired into any runtime decision
+# in this module (or anywhere else) — it exists PURELY as documentation of the EventBridge
+# scheduled cadence (`rate(24 hours)` in sg-rules.tf), for a human reading this file to cross-check
+# against the actual Terraform schedule. If it's ever wired to something (e.g. an eligibility or
+# alerting threshold), update this comment accordingly.
+SCAN_INTERVAL_HOURS = int(os.environ.get("SG_RULE_SCAN_INTERVAL_HOURS", "24"))  # descriptive only
 MEMBERSHIP_STALENESS_DAYS = int(os.environ.get("SG_RULE_MEMBERSHIP_STALENESS_DAYS", "3"))
 RESCAN_WINDOW_DAYS = int(os.environ.get("SG_RULE_RESCAN_WINDOW_DAYS", "2"))
 MAX_QUERY_BYTES = int(os.environ.get("SG_RULE_ACTIVITY_MAX_QUERY_BYTES", "107374182400"))
@@ -323,6 +327,45 @@ def previous_successful_scan_gap(conn, flow_source_id, before):
     if prev is None:
         return None
     return before - prev
+
+
+def boundary_lag_resolver(conn, flow_source_id):
+    """Item 2 follow-up fix (round 3): `run()` used to resolve ONE `observation_lag` value — the
+    gap between `now` (this run's own observation instant) and the previous successful scan — and
+    thread that SAME value into `sm.day_coverage()` for EVERY version boundary evaluated across
+    EVERY day in the batch (the fresh day AND every day in the trailing rescan window). That is only
+    correct for a version boundary THIS run itself just closed; a boundary closed by some EARLIER
+    run (the common case for a rescan-window day being idempotently re-evaluated days or weeks
+    later) needs the gap that preceded THAT run, not the gap before today's.
+
+    Concretely: a 4-day scan outage means the run that finally closes an old version on day D
+    correctly sees a wide gap and marks the affected day `unassessable`. A day or two later, the
+    NEXT run's lag is short again — but its trailing rescan window (`RESCAN_WINDOW_DAYS`,
+    delete-then-insert, idempotent) revisits that SAME day. Passing that run's own short lag into
+    `day_coverage()` for a boundary closed by the OLD, wide-gap run would silently overwrite the
+    correct `unassessable` with a confident (wrong) attribution — precisely defeating the point of
+    resolving a real gap at all.
+
+    Fix: `sm.day_coverage()`'s `observation_lag` parameter now accepts a CALLABLE `f(valid_to) ->
+    timedelta|None`, invoked lazily per covering version's own `valid_to`. This returns exactly
+    that callable — for a given `valid_to`, it looks up the gap to the previous successful run
+    BEFORE `valid_to` itself (`previous_successful_scan_gap(conn, flow_source_id, before=valid_to)`)
+    — i.e. the gap that existed AT THE TIME the run that closed this specific boundary ran, not the
+    gap before whatever run happens to be re-evaluating the day today. If no prior successful run
+    can be found before `valid_to` (e.g. old `sg_rule_scan_runs` history was pruned), the resolver
+    returns `None` — `sm.day_coverage()`'s own contract then marks that day `unassessable` rather
+    than assuming a short/confident lag; missing history must never default to "looks fine."
+
+    Memoized per `valid_to` (a small dict, scoped to one `run()` call) since many rules can share
+    the exact same version-closing timestamp within one scan."""
+    cache = {}
+
+    def resolve(valid_to):
+        if valid_to not in cache:
+            cache[valid_to] = previous_successful_scan_gap(conn, flow_source_id, valid_to)
+        return cache[valid_to]
+
+    return resolve
 
 
 # ── Step 4-6: Athena query + matching for one day ─────────────────────────────────────────────────
@@ -811,12 +854,14 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
     lam = (lambda_client_factory or (lambda: boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))))()
 
     fid = source["id"]
-    # Item 2 follow-up fix (round 2): resolve the REAL gap to the previous successful scan for this
-    # source, once per run() call — every day/version this call closes shares the SAME observation
-    # instant (`now`, above), so one resolved lag applies to the whole batch. `None` (no reasonably
-    # recent previous successful run) is passed straight through to `process_day`/`sm.day_coverage`,
-    # which then marks any closed-version day unassessable rather than guessing a window.
-    observation_lag = previous_successful_scan_gap(conn, fid, now)
+    # Item 2 follow-up fix (round 3): a SINGLE `observation_lag` value (the gap before THIS run's
+    # own `now`) used to be threaded into every day/version this call processes — correct only for
+    # a boundary this run itself just closed, and WRONG for a historical boundary a rescan-window
+    # day re-evaluates (see `boundary_lag_resolver`'s own docstring for the exact failure mode).
+    # Pass a per-boundary resolver instead — `sm.day_coverage()` now accepts either a plain
+    # timedelta/None (unchanged single-value behavior) or a callable, invoked lazily per covering
+    # version's own `valid_to`.
+    observation_lag = boundary_lag_resolver(conn, fid)
     watermark = last_committed_day(conn, fid)
     source_created_day = source["created_at"].date() if hasattr(source["created_at"], "date") else source["created_at"]
     next_day = sm.next_day_to_process(watermark, source_created_day)
