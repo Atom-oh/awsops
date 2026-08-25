@@ -58,7 +58,12 @@ export async function PUT(req: NextRequest) {
       // resolved column aliases / partition keys / optional-field presence instead of hardcoded
       // assumptions (MAJOR fix — see sg-rules.ts's ValidationResult doc comments).
       columnMap: validation.columnMap ?? null, partitionKeys: validation.partitionKeys ?? null,
+      partitionKeyTypes: validation.partitionKeyTypes ?? null,
       optionalFields: validation.optionalFields ?? null,
+      // Item 1 follow-up fix (round 2): persist the explicit scope-resolution record so operators
+      // can distinguish a genuinely single-account table from a mis-detected org-wide one, instead
+      // of an unscoped scan being silently indistinguishable from "not applicable."
+      scopeResolution: validation.scopeResolution ?? null, scannedUnscoped: validation.scannedUnscoped ?? null,
       checkedAt: validation.checkedAt,
     });
     return NextResponse.json({ row, validation }, { status: 200 });

@@ -82,13 +82,47 @@ def version_covering(versions: list, at: datetime):
     return None
 
 
-def day_coverage(versions: list, day) -> dict:
+def day_coverage(versions: list, day, observation_lag: timedelta = timedelta(days=1)) -> dict:
     """Per the spec's "Why versioning" section: a day matches confidently only if ONE version's
     [valid_from, valid_to) covers the WHOLE day (start-of-day AND end-of-day resolve to the same
     version row, by identity — not just equal fingerprint, since valid_from/valid_to distinguish
     epochs even when a rule flips back to an identical shape). If they differ (or either boundary
     resolves to no version at all), the day is `fingerprint_epoch_crossing` and MUST be classified
     `unassessable` for that rule/day — never a lower-bound number (spec's own round-12 self-check).
+
+    Item 3 follow-up fix: `valid_from`/`valid_to` are *observation* timestamps (when the daily scan
+    first/last saw a fingerprint) per the migration's own header comment — NOT the actual rule-change
+    timestamp. A rule that changed at, say, 14:00 on day D is only observed at the NEXT scan run,
+    which closes the old version with `valid_to` = that scan's run time (some time on day D+1). The
+    real change could have happened anywhere in `(valid_to - observation_lag, valid_to]` — a window
+    bounded by the scan cadence (`observation_lag`, default one day between successive daily scans).
+    If that uncertainty window overlaps this day (i.e. `valid_to - observation_lag < end`), part of
+    day D's traffic may have occurred under either the old or the new shape — the day can't be
+    confidently attributed to the version that merely *covers* it, even though a single version's
+    interval technically spans start-of-day through end-of-day. This only applies to a version whose
+    `valid_to` is closed (a still-open version, `valid_to is None`, keeps the pre-existing "no
+    lower bound assumed" behavior — never a false negative from a change that hasn't happened yet).
+
+    Item 2 follow-up fix (round 2): `observation_lag` used to be a FIXED value derived from the
+    nominal scan cadence (`SG_RULE_SCAN_INTERVAL_HOURS`, nominally 24h) — but that's wrong whenever
+    scans were actually delayed or missed for multiple days: the real change could have happened
+    anywhere in the WHOLE gap since the previous successful scan, not just within one nominal
+    cadence period. Callers (`sg_rule_scan.py`) now resolve `observation_lag` from the ACTUAL elapsed
+    gap between successive successful `sg_rule_scan_runs` rows for this source before passing it in.
+    `observation_lag=None` means that gap is unknown (no reasonably recent previous successful run to
+    compare against, e.g. the very first scan) — a closed version's day can then never be trusted as
+    confident, and is marked crossing/unassessable rather than guessing a window.
+
+    Item 2 follow-up fix (round 3): a single, run-wide `observation_lag` scalar is only correct for
+    the version boundary that THIS run itself just closed — every OTHER (historical) closed version
+    a rescan-window day might resolve to needs the gap that preceded the run that closed THAT
+    boundary, not the gap before the CURRENT run's own `now`. `observation_lag` may therefore also be
+    a CALLABLE `f(valid_to) -> timedelta|None` — called lazily, exactly once per covering version's
+    `valid_to`, so each historical boundary gets its own correctly-anchored lag instead of the
+    current run's. A plain `timedelta`/`None` (non-callable) keeps the pre-existing single-value
+    behavior unchanged (still used directly by every test in this module and by any caller that
+    genuinely only has one uniform value to offer).
+
     Returns {"crossing": bool, "version": dict|None} — version is set only when NOT crossing.
     """
     start, end = day_bounds_utc(day)
@@ -102,6 +136,19 @@ def day_coverage(versions: list, day) -> dict:
     same = (at_start.get("valid_from") == at_end.get("valid_from"))
     if not same:
         return {"crossing": True, "version": None}
+    valid_to = at_start.get("valid_to")
+    if valid_to is not None:
+        lag = observation_lag(valid_to) if callable(observation_lag) else observation_lag
+        if lag is None:
+            # No reasonably recent previous successful scan (relative to THIS boundary's own
+            # closing observation) to derive a real gap from — never guess a window; treat this
+            # closed version's day as unassessable.
+            return {"crossing": True, "version": None, "reason": "observation_lag_unknown"}
+        if (valid_to - lag) < end:
+            # The actual change to this version's successor could have happened inside day D's own
+            # window (per the docstring above) — the day's true rule-shape is ambiguous, not
+            # confident.
+            return {"crossing": True, "version": None, "reason": "observation_lag_boundary"}
     return {"crossing": False, "version": at_start}
 
 
@@ -269,6 +316,288 @@ def _safe_ident(name, fallback=None):
     raise UnsafeIdentifier(f"unsafe identifier: {name!r}")
 
 
+_ACCOUNT_ID_VALUE_RE = re.compile(r'^\d{12}$')
+_REGION_VALUE_RE = re.compile(r'^[a-z]{2,4}(-[a-z]+)+-\d$')
+
+
+def _safe_scope_value(value, pattern):
+    """Defense-in-depth re-validation of a literal VALUE (not an identifier) interpolated into a
+    generated SQL string — used for `account_id`/`region` scoping (item 4 follow-up fix). Unlike
+    `_safe_ident`, there is no safe fallback for a scope value: an invalid one means the resolved
+    source row itself is corrupted, and refusing to build the query is the only safe option."""
+    if isinstance(value, str) and pattern.match(value):
+        return value
+    raise UnsafeIdentifier(f"unsafe scope value: {value!r}")
+
+
+# item 7 follow-up fix: Glue catalog types that are safe to assume accept an ISO date-string
+# literal (`'2026-03-05'`) for a single (non-Hive-style) partition key — a plain `date`/`timestamp`
+# column, or a string/varchar/char column storing the date as text (the common
+# manually-partitioned Flow Log table pattern). An int/bigint/etc.-typed key must never be assumed
+# to accept a string literal. (Item 3 follow-up fix, round 2, extends this set with "timestamp" —
+# see `date_literal` below for why the LITERAL FORM still differs per type even though all of these
+# are accepted as "safe to bound a scan on.")
+_DATE_LIKE_PARTITION_TYPES = {"date", "string", "varchar", "char", "timestamp"}
+
+_TYPE_PARAM_SUFFIX_RE = re.compile(r'\(.*\)$')
+
+
+def _normalize_glue_type(type_str) -> str:
+    """CI-review MAJOR fix (round 6): Glue/Hive legitimately types a column `varchar(10)`/`char(20)`
+    (length-parameterized) — a lowercased exact-string membership check against
+    `_DATE_LIKE_PARTITION_TYPES` never matches those, even though the underlying type IS
+    varchar/char. This is a regression: base code (before this round's fixes) built the ISO-date
+    predicate for ANY lone partition key regardless of type, so a `varchar(10)` date-as-text column
+    scanned fine before, and a bare exact-match check now permanently refuses it (with no rescue
+    path — re-validation raises `BrokerError` too, since `sg_rule_athena_broker._validate` calls the
+    same `is_date_like_partition_type` at validate time). Strips a trailing parenthesized
+    length/precision suffix (`varchar(10)` -> `varchar`, `decimal(10,2)` -> `decimal`) before any
+    date-likeness comparison."""
+    return _TYPE_PARAM_SUFFIX_RE.sub("", str(type_str or "").strip().lower())
+
+
+def is_date_like_partition_type(type_str) -> bool:
+    """Public accessor for `_DATE_LIKE_PARTITION_TYPES` — used by
+    `sg_rule_athena_broker._validate` (item 4 follow-up fix, round 2) to reject a single-key
+    partition strategy AT VALIDATION TIME when the Glue-catalog type isn't date-shaped, instead of
+    letting it validate `status: "valid"` and then have the runtime scan
+    (`has_resolved_partition_strategy`) permanently refuse every real scan. Normalizes away any
+    parameterized length/precision suffix first (round 6 fix, see `_normalize_glue_type`)."""
+    return _normalize_glue_type(type_str) in _DATE_LIKE_PARTITION_TYPES
+
+
+# The subset of `_DATE_LIKE_PARTITION_TYPES` that stores the date as TEXT (as opposed to `date`/
+# `timestamp`, which are genuine temporal Glue types with no `projection.<col>.format` ambiguity —
+# partition projection's format-string parameter only applies to a STRING-typed projected column).
+_STRING_LIKE_PARTITION_TYPES = {"string", "varchar", "char"}
+
+
+def is_string_like_partition_type(type_str) -> bool:
+    """CI-review MAJOR fix (round 7): `sg_rule_athena_broker._validate`'s projection date-format
+    gate used to run only when `str(key_type).strip().lower() == "string"` EXACTLY — missing
+    `varchar`/`varchar(10)`/`char`/`char(20)`, which `_normalize_glue_type`/`is_date_like_partition_
+    type` already treat as date-like text columns elsewhere in this module. Since the `projection`
+    strategy has no `_partition_exists` existence check to catch a format mismatch, a `varchar`-typed
+    projected key with a non-ISO `projection.<col>.format` slipped the gate entirely and would
+    silently match zero rows every day. Normalizes the same way `is_date_like_partition_type` does
+    so `string`/`varchar(10)`/`char(20)` are all covered uniformly."""
+    return _normalize_glue_type(type_str) in _STRING_LIKE_PARTITION_TYPES
+
+
+def partition_keys_excluding_scope(validation: dict) -> list:
+    """Item 1 follow-up fix (round 3): the partition-key names remaining AFTER excluding any key
+    already resolved as an `account_id`/`region` SCOPE key (`validation['scopeResolution']` marking
+    a canonical field `"partition"` — i.e. it's one of the ACTUAL Glue `PartitionKeys`, per
+    `sg_rule_athena_broker._validate`'s item-1/round-2 fix — versus `"column"`, a plain table column
+    that isn't a partition dimension at all and needs no exclusion here).
+
+    A centralized/org-wide table's canonical `dt + account-id + region` partition-key layout has
+    THREE partition keys, but only ONE of them (`dt`) is a date candidate — the other two are
+    already accounted for by `_build_scope_predicate`/`_build_scope_expr`. Date-key detection
+    (`single_date_partition_key` below) must look at the partition keys REMAINING after excluding
+    the scope ones, not the raw full list — otherwise a 3-key layout never resolves to a lone date
+    candidate, `has_resolved_partition_strategy()` returns `False`, and `_query_by_source` hard-
+    refuses every scan of a layout that `sg_rule_athena_broker._validate` reported `status: "valid"`
+    for (the exact validate-vs-scan mismatch the CI review flagged). Both `_validate` (at validation
+    time) and this module (at scan time) call this SAME function so the two can never disagree."""
+    validation = validation or {}
+    partition_keys = validation.get("partitionKeys") or []
+    scope_resolution = validation.get("scopeResolution") or {}
+    column_map = validation.get("columnMap") or {}
+    excluded_lower = set()
+    for canonical in ("account_id", "region"):
+        if scope_resolution.get(canonical) == "partition":
+            actual = column_map.get(canonical)
+            if actual:
+                excluded_lower.add(str(actual).lower())
+    return [k for k in partition_keys if str(k).lower() not in excluded_lower]
+
+
+def _single_partition_key_and_type(validation: dict):
+    """Shared resolution behind `single_date_partition_key`/`single_date_partition_key_type` —
+    returns (key_name, lowercased_glue_type) for the single CONFIRMED date-like partition key, or
+    (None, None) when there isn't exactly one REMAINING after excluding scope-resolved partition
+    keys (`partition_keys_excluding_scope`, item 1 follow-up fix round 3), or its type isn't
+    known/date-like. `partitionKeyTypes` is positional against the FULL `partitionKeys` list (Glue's
+    own ordering), so the remaining key's type is looked up by its index in that full list, not by
+    position in the excluded-down remainder."""
+    validation = validation or {}
+    all_keys = validation.get("partitionKeys") or []
+    remaining = partition_keys_excluding_scope(validation)
+    if len(remaining) != 1:
+        return None, None
+    types = validation.get("partitionKeyTypes")
+    if not types or len(types) != len(all_keys):
+        return None, None
+    key = remaining[0]
+    try:
+        idx = next(i for i, k in enumerate(all_keys) if k == key)
+    except StopIteration:
+        return None, None
+    t = _normalize_glue_type(types[idx])
+    if t not in _DATE_LIKE_PARTITION_TYPES:
+        return None, None
+    return key, t
+
+
+def single_date_partition_key(validation: dict):
+    """item 7 follow-up fix: the single-key (non-Hive) branch of `_build_partition_predicate` /
+    `_partition_exists` used to treat ANY lone partition key as a date column and interpolate an
+    ISO date string into it — true only when Glue's own catalog (`partitionKeyTypes`, persisted by
+    the broker's `_validate`) confirms the key's type is actually date-like. A key typed `bigint`
+    (e.g. an epoch-day column also happening to be named `dt`) would either error against a string
+    literal or silently produce a permanent `zero_partition_match`/query failure — never confidently
+    assumed. Returns the key name when safe to use as a date predicate, else `None` — including when
+    `partitionKeyTypes` was never recorded at all (an older source, or one whose `validate` action
+    predates this field): callers must treat that the same as "can't verify," not "assume date.\""""
+    key, _ = _single_partition_key_and_type(validation)
+    return key
+
+
+def single_date_partition_key_type(validation: dict):
+    """Item 3 follow-up fix (round 2): the resolved (lowercased) Glue catalog type for the single
+    confirmed date-like partition key (see `single_date_partition_key`), or `None` when there isn't
+    one — used by callers to pick the correctly-typed SQL literal via `date_literal` below."""
+    _, t = _single_partition_key_and_type(validation)
+    return t
+
+
+def date_literal(iso_date_str: str, key_type) -> str:
+    """Item 3 follow-up fix (round 2): `_DATE_LIKE_PARTITION_TYPES` includes genuinely `date`-typed
+    (and `timestamp`-typed) Glue partition columns, but Athena (Trino/Presto) REJECTS comparing a
+    `date`/`timestamp` column to a bare string literal (`date_col IN ('2026-03-05', ...)`) with a
+    type error — a table whose single partition key is truly `date`-typed therefore *validated*
+    successfully (item 7's fix accepts it) yet failed EVERY scan. Emit a properly typed literal
+    (`DATE '2026-03-05'` / `TIMESTAMP '2026-03-05 00:00:00'`) for those two catalog types; keep the
+    plain quoted-string form for `string`/`varchar`/`char`-typed keys (the common
+    manually-partitioned-as-text pattern), which IS correct for those — never change that branch."""
+    t = str(key_type or "").lower()
+    if t == "date":
+        return f"DATE '{iso_date_str}'"
+    if t == "timestamp":
+        return f"TIMESTAMP '{iso_date_str} 00:00:00'"
+    return f"'{iso_date_str}'"
+
+
+def _build_partition_predicate(validation, day):
+    """Shared by `build_day_select`/`build_day_skipdata_count_select` (item 5 follow-up fix): Hive
+    partitions are keyed by delivery/file time, not flow-start time, so a flow whose own `start`
+    timestamp falls on day D can be delivered into day D+1's partition file (delivery lag only ever
+    pushes FORWARD, never backward). Querying strictly `partition = D` can therefore miss records
+    that are logically day-D traffic but partitioned under D+1. The predicate below widens to
+    `partition IN {D, D+1}` (one extra day, never unbounded) while the caller's own `start`/`end`
+    row-level filter remains the authoritative test for which flows actually belong to day D — this
+    predicate only decides which PARTITION FILES are scanned, never which rows are counted."""
+    partition_keys = (validation or {}).get("partitionKeys") or []
+    next_day = day + timedelta(days=1)
+    lower_keys = {k.lower(): k for k in partition_keys}
+    if {"year", "month", "day"} <= set(lower_keys):
+        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
+        y_col, mo_col, d_col = _safe_ident(y, "year"), _safe_ident(mo, "month"), _safe_ident(d, "day")
+        return (
+            f' AND (("{y_col}" = \'{day.year:04d}\' AND "{mo_col}" = \'{day.month:02d}\' '
+            f'AND "{d_col}" = \'{day.day:02d}\') OR ("{y_col}" = \'{next_day.year:04d}\' '
+            f'AND "{mo_col}" = \'{next_day.month:02d}\' AND "{d_col}" = \'{next_day.day:02d}\'))'
+        )
+    dk_raw = single_date_partition_key(validation)
+    if dk_raw:
+        # MINOR fix: match `scope_partition_expr_clauses`' fail-closed posture (round 4) instead of
+        # silently falling back to `""` — a stored key name that passed the date-type strategy gate
+        # but fails `_safe_ident` means the resolved source row itself is corrupted, and building an
+        # empty/no-op predicate here is unsafe: for the `partition_keys` strategy it still fails
+        # closed via `_partition_exists` returning `None`, but for `projection` (which has no
+        # existence check at all) it would silently run the query partition-unbounded instead.
+        dk = _safe_ident(dk_raw, None)
+        if dk:
+            key_type = single_date_partition_key_type(validation)
+            if key_type == "timestamp":
+                # CI-review MAJOR fix (round 4): a `timestamp`-typed partition value is not
+                # guaranteed to sit at exact midnight (e.g. an hourly-partitioned table) — the
+                # equality/IN form below only ever matched an exact `D 00:00:00`/`D+1 00:00:00`
+                # instant, silently missing every non-midnight partition value even though the
+                # column validated as date-like. Use a half-open range spanning the whole two-day
+                # window instead: it matches any partition value within [D 00:00:00, D+2 00:00:00),
+                # regardless of what time-of-day component the partition actually carries.
+                after_next_day = next_day + timedelta(days=1)
+                lo = date_literal(day.isoformat(), key_type)
+                hi = date_literal(after_next_day.isoformat(), key_type)
+                return f' AND "{dk}" >= {lo} AND "{dk}" < {hi}'
+            lit_a = date_literal(day.isoformat(), key_type)
+            lit_b = date_literal(next_day.isoformat(), key_type)
+            return f' AND "{dk}" IN ({lit_a}, {lit_b})'
+    return ""
+
+
+def _build_scope_predicate(column_map, source):
+    """item 4/item 1 (round 2) follow-up fix: against a centralized/org-wide flow-log table
+    (partitioned/columned additionally by account/region beyond just date), every account's traffic
+    gets scanned unless explicitly scoped — inflating cost, tripping byte ceilings, and consuming
+    the row `LIMIT` with foreign rows. When the broker's own `_validate` resolved an `account_id`
+    and/or `region` alias (persisted into `validation.columnMap` — resolved from the UNION of
+    PartitionKeys and Columns, with the same hyphen-alias mechanism as the required Flow Log
+    fields, per the item 1 round-2 fix), add an exact-match predicate for EACH one resolved,
+    independently — a table exposing only one of the two still gets that half of scoping, which is
+    strictly better than none (round 1 required both together, silently discarding the available
+    half). When the table exposes NEITHER (a single-account source — the common case, per
+    `sg_flow_sources`' one-row-per-account+region schema), no predicate is added, which is
+    correct/unchanged; `sg_rule_athena_broker._validate`'s `scannedUnscoped` flag records that case
+    explicitly for operators, rather than leaving it indistinguishable from "not applicable."""
+    clauses = []
+    if "account_id" in column_map:
+        acct_col = _safe_ident(column_map["account_id"], "account_id")
+        acct_val = _safe_scope_value(str(source["account_id"]), _ACCOUNT_ID_VALUE_RE)
+        clauses.append(f'"{acct_col}" = \'{acct_val}\'')
+    if "region" in column_map:
+        region_col = _safe_ident(column_map["region"], "region")
+        region_val = _safe_scope_value(str(source["region"]), _REGION_VALUE_RE)
+        clauses.append(f'"{region_col}" = \'{region_val}\'')
+    if not clauses:
+        return ""
+    return " AND " + " AND ".join(clauses)
+
+
+def scope_partition_expr_clauses(validation, source):
+    """Item 3 follow-up fix (round 3): `sg_rule_athena_broker._partition_exists`'s Glue
+    `GetPartitions` existence check used to OR together only the DATE dimensions of its
+    `Expression` — for a Hive-style `year/month/day` table that ALSO carries `account_id`/`region`
+    as partition keys (the layout item 1's fix makes scannable), that means ANY tenant's partition
+    satisfies "a partition exists," not necessarily the resolved source's OWN account/region. A
+    genuinely wrong/mis-resolved scope mapping could then return a real zero-row Athena result
+    (scoped to the wrong account) that gets waved through as confident zero-traffic, because the
+    existence check never looked at scope at all.
+
+    Returns a list of already-safe (`_safe_ident`/`_safe_scope_value`-checked) Glue-Expression
+    clauses (double-quoted `"col" = 'value'` — CI-review MAJOR fix, round 4: Glue's `GetPartitions`
+    `Expression` is parsed by JSQLParser, the SAME quoted-identifier grammar Athena SQL uses, and
+    `_safe_ident` deliberately allows hyphens for AWS's own `interface-id`-style column names; a
+    BARE hyphenated identifier here (e.g. `account-id`) parses as arithmetic subtraction, not a
+    column reference, raising and permanently refusing every day for that table. Double-quoting
+    matches what `_build_scope_predicate` already emits for Athena SQL) for each of
+    `account_id`/`region` that resolved as an ACTUAL Glue PARTITION KEY
+    (`scopeResolution[...] == "partition"`). A scope field that resolved only as a plain table
+    COLUMN is not a partition dimension at all — Glue's partition-Expression syntax has nothing to
+    filter on for it, so it's intentionally omitted here (the row-level SQL predicate
+    `_build_scope_predicate` already builds still covers that case at query time)."""
+    validation = validation or {}
+    scope_resolution = validation.get("scopeResolution") or {}
+    column_map = validation.get("columnMap") or {}
+    clauses = []
+    if scope_resolution.get("account_id") == "partition":
+        # CI-review MINOR fix: fall back to `None` (raise `UnsafeIdentifier`), not `""` (silently
+        # drop the clause) — a corrupted/unresolvable stored column name for a field that DID
+        # resolve as a partition key means the scope predicate cannot be safely built at all, and
+        # silently omitting it reopens the any-tenant existence-check hole this function exists to
+        # close. Matches `_safe_scope_value`'s own fail-closed posture for the value half.
+        col = _safe_ident(column_map.get("account_id"), None)
+        val = _safe_scope_value(str(source["account_id"]), _ACCOUNT_ID_VALUE_RE)
+        clauses.append(f'"{col}" = \'{val}\'')
+    if scope_resolution.get("region") == "partition":
+        col = _safe_ident(column_map.get("region"), None)
+        val = _safe_scope_value(str(source["region"]), _REGION_VALUE_RE)
+        clauses.append(f'"{col}" = \'{val}\'')
+    return clauses
+
+
 def build_day_select(source, day):
     """Validated SELECT for one account/region/day. Every identifier here is re-validated
     (`_safe_ident`) before interpolation; workgroup/database/table already passed strict allowlist
@@ -284,7 +613,6 @@ def build_day_select(source, day):
     validation = source.get("validation") or {}
     column_map = validation.get("columnMap") or {}
     optional_fields = set(validation.get("optionalFields") or [])
-    partition_keys = validation.get("partitionKeys") or []
 
     interface_col = _safe_ident(column_map.get("interface_id"), "interface_id")
     log_status_col = _safe_ident(column_map.get("log_status"), "log_status")
@@ -297,19 +625,8 @@ def build_day_select(source, day):
     has_bytes = ("bytes" in optional_fields) if has_optional_info else True
     bytes_select = ', sum("bytes") as bytes' if has_bytes else ''
 
-    partition_predicate = ""
-    lower_keys = {k.lower(): k for k in partition_keys}
-    if {"year", "month", "day"} <= set(lower_keys):
-        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
-        partition_predicate = (
-            f' AND "{_safe_ident(y, "year")}" = \'{day.year:04d}\''
-            f' AND "{_safe_ident(mo, "month")}" = \'{day.month:02d}\''
-            f' AND "{_safe_ident(d, "day")}" = \'{day.day:02d}\''
-        )
-    elif len(partition_keys) == 1:
-        dk = _safe_ident(partition_keys[0], "")
-        if dk:
-            partition_predicate = f' AND "{dk}" = \'{day.isoformat()}\''
+    partition_predicate = _build_partition_predicate(validation, day)
+    scope_predicate = _build_scope_predicate(column_map, source)
 
     return (
         # `srcport` is deliberately NOT selected/grouped (L4 finding #9(i)) — process_day() never
@@ -318,7 +635,7 @@ def build_day_select(source, day):
         f'SELECT "{interface_col}" as interface_id, srcaddr, dstaddr, dstport, protocol, '
         f'action{bytes_select}, count(*) as cnt, max("{start_col}") as last_start FROM {table} '
         f'WHERE "{start_col}" >= {int(start.timestamp())} AND "{start_col}" < {int(end.timestamp())} '
-        f"AND action = 'ACCEPT' AND \"{log_status_col}\" = 'OK'{partition_predicate} "
+        f"AND action = 'ACCEPT' AND \"{log_status_col}\" = 'OK'{partition_predicate}{scope_predicate} "
         f'GROUP BY "{interface_col}", srcaddr, dstaddr, dstport, protocol, action '
         f"LIMIT {ROW_LIMIT}"
     )
@@ -331,42 +648,32 @@ def build_day_skipdata_count_select(source, day):
     Same identifier re-validation and partition-bound discipline as `build_day_select`."""
     validation = source.get("validation") or {}
     column_map = validation.get("columnMap") or {}
-    partition_keys = validation.get("partitionKeys") or []
     log_status_col = _safe_ident(column_map.get("log_status"), "log_status")
     start_col = _safe_ident(column_map.get("start"), "start")
     start, end = day_bounds_utc(day)
     table = f'"{_safe_ident(source["database_name"])}"."{_safe_ident(source["table_name"])}"'
 
-    partition_predicate = ""
-    lower_keys = {k.lower(): k for k in partition_keys}
-    if {"year", "month", "day"} <= set(lower_keys):
-        y, mo, d = lower_keys["year"], lower_keys["month"], lower_keys["day"]
-        partition_predicate = (
-            f' AND "{_safe_ident(y, "year")}" = \'{day.year:04d}\''
-            f' AND "{_safe_ident(mo, "month")}" = \'{day.month:02d}\''
-            f' AND "{_safe_ident(d, "day")}" = \'{day.day:02d}\''
-        )
-    elif len(partition_keys) == 1:
-        dk = _safe_ident(partition_keys[0], "")
-        if dk:
-            partition_predicate = f' AND "{dk}" = \'{day.isoformat()}\''
+    partition_predicate = _build_partition_predicate(validation, day)
+    scope_predicate = _build_scope_predicate(column_map, source)
 
     return (
         f'SELECT count(*) as skipdata_count FROM {table} '
         f'WHERE "{start_col}" >= {int(start.timestamp())} AND "{start_col}" < {int(end.timestamp())} '
-        f"AND \"{log_status_col}\" = 'SKIPDATA'{partition_predicate}"
+        f"AND \"{log_status_col}\" = 'SKIPDATA'{partition_predicate}{scope_predicate}"
     )
 
 
 def has_resolved_partition_strategy(validation: dict) -> bool:
     """True only when validation actually resolved a bound-able partition scheme (Hive-style
-    year/month/day, or exactly one date-typed partition key) — used to refuse an unbounded
-    full-table scan (L3 finding #8b) rather than silently falling back to one."""
+    year/month/day, or exactly one CONFIRMED date-typed partition key — item 7 follow-up fix: a
+    single key whose Glue-catalog type isn't known to be date-like no longer counts, since
+    `_build_partition_predicate` will refuse to build a predicate for it) — used to refuse an
+    unbounded full-table scan (L3 finding #8b) rather than silently falling back to one."""
     partition_keys = (validation or {}).get("partitionKeys") or []
     lower_keys = {str(k).lower() for k in partition_keys}
     if {"year", "month", "day"} <= lower_keys:
         return True
-    return len(partition_keys) == 1
+    return single_date_partition_key(validation) is not None
 
 
 # ── Daily pipeline pure helpers (delivery lag, watermark, rescan window) ─────────────────────────

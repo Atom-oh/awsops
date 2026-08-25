@@ -137,6 +137,32 @@ def test_last_committed_day_returns_max_succeeded_partition():
     assert scan.last_committed_day(conn, 1) == datetime.date(2026, 3, 5)
 
 
+# ── item 2 follow-up fix (round 2): previous_successful_scan_gap must derive the REAL elapsed gap
+#    to the previous successful scan, not assume a fixed nominal cadence — this is what lets
+#    sm.day_coverage() correctly widen its uncertainty window after a multi-day scan outage. ────────
+
+def test_previous_successful_scan_gap_none_when_no_prior_successful_run():
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(None,)]]})
+    assert scan.previous_successful_scan_gap(conn, 1, utc(2026, 3, 9)) is None
+
+
+def test_previous_successful_scan_gap_returns_the_real_elapsed_gap():
+    """The previous successful run was 4 days before `before` (a multi-day scan outage) — the
+    returned gap must reflect that REAL elapsed time, not a fixed nominal cadence."""
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(utc(2026, 3, 5),)]]})
+    gap = scan.previous_successful_scan_gap(conn, 1, utc(2026, 3, 9))
+    assert gap == dt.timedelta(days=4)
+
+
+def test_previous_successful_scan_gap_queries_only_succeeded_runs_before_the_given_instant():
+    conn = FakeConn({"FROM sg_rule_scan_runs": [[(utc(2026, 3, 5),)]]})
+    scan.previous_successful_scan_gap(conn, 1, utc(2026, 3, 9))
+    call = [c for c in conn.calls if "FROM sg_rule_scan_runs" in c[0]][0]
+    assert "succeeded" in call[0]
+    assert call[1]["fid"] == 1
+    assert call[1]["before"] == utc(2026, 3, 9)
+
+
 # ── L2 finding #2: IPv6 ENI addresses must be captured too ───────────────────────────────────────
 
 class FakeEc2Eni:
@@ -326,10 +352,26 @@ def test_build_day_select_adds_single_date_partition_predicate():
     source = _source(validation={
         "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
         "optionalFields": ["bytes"],
-        "partitionKeys": ["dt"],
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"],
     })
     sql = scan.build_day_select(source, dt.date(2026, 3, 5))
-    assert "\"dt\" = '2026-03-05'" in sql
+    # item 5 follow-up fix: delivery lag only ever pushes a flow's partition file FORWARD, never
+    # backward, so the predicate widens to an adjacent 2-day window rather than the single day.
+    # Item 3 follow-up fix (round 2): a genuinely `date`-typed key gets a typed `DATE '...'`
+    # literal, not a bare string (Athena/Trino rejects comparing a `date` column to a string).
+    assert "\"dt\" IN (DATE '2026-03-05', DATE '2026-03-06')" in sql
+
+
+def test_build_day_select_skips_single_key_predicate_when_type_not_confirmed_date_like():
+    # item 7 follow-up fix: a lone partition key without a confirmed date-like Glue type (or
+    # missing partitionKeyTypes entirely) must not have a date-string predicate built for it.
+    source = _source(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "optionalFields": ["bytes"],
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"],
+    })
+    sql = scan.build_day_select(source, dt.date(2026, 3, 5))
+    assert "\"dt\"" not in sql
 
 
 def test_build_day_select_falls_back_to_underscore_names_when_no_column_map():
@@ -370,6 +412,38 @@ def test_invoke_broker_query_surfaces_malformed_body_without_ok_key():
     body = scan.invoke_broker_query(
         lam, "arn:aws:lambda:ap-northeast-2:123456789012:function:broker", 1, dt.date(2026, 3, 5))
     assert body["ok"] is False
+
+
+# ── invoke_broker_validate (CI-review MAJOR fix, round 5): self-heals a stale validation that
+#    predates partitionKeyTypes/scopeResolution by re-running the broker's own "validate" action —
+#    never requires a manual admin no-op re-save before a source can scan again. ─────────────────
+
+def test_invoke_broker_validate_sends_the_sources_own_resolved_config():
+    """The broker's `validate` action takes raw account_id/region/workgroup/database/table (unlike
+    `query_by_source`'s opaque flow_source_id) — this is the SAME action the web BFF's PUT route
+    already calls, just re-run here against the source's own persisted config."""
+    calls = []
+
+    class RecordingLambda:
+        def invoke(self, FunctionName, Payload):
+            calls.append(json.loads(Payload))
+            return {"Payload": type("R", (), {"read": lambda self: b'{"ok": true, "status": "valid"}'})()}
+
+    source = {"id": 7, "account_id": "123456789012", "region": "ap-northeast-2",
+              "workgroup": "wg", "database_name": "db", "table_name": "tbl"}
+    body = scan.invoke_broker_validate(RecordingLambda(), "arn:...:function:broker", source)
+    assert body == {"ok": True, "status": "valid"}
+    assert calls[0] == {"action": "validate", "account_id": "123456789012", "region": "ap-northeast-2",
+                         "workgroup": "wg", "database": "db", "table": "tbl"}
+
+
+def test_invoke_broker_validate_surfaces_function_error():
+    lam = FakeLambdaRaw(b'{"errorMessage": "boom"}', function_error="Unhandled")
+    source = {"id": 7, "account_id": "123456789012", "region": "ap-northeast-2",
+              "workgroup": "wg", "database_name": "db", "table_name": "tbl"}
+    body = scan.invoke_broker_validate(lam, "arn:...:function:broker", source)
+    assert body["ok"] is False
+    assert "FunctionError" in body["reason"]
 
 
 # ── invoke_broker_query: L3 finding #6 (opaque flow_source_id + day, never raw SQL/account) ──────
@@ -568,6 +642,92 @@ def test_process_day_crossing_day_downgrades_to_unassessable_and_no_lower_bound(
     assert res["any_crossing"] is True
     insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
     assert insert_call[1]["cm"] == 0  # no flows counted against an unassessable rule/day
+
+
+# ── item 2 follow-up fix (round 2): process_day must thread a caller-resolved observation_lag
+#    (the REAL gap to the previous successful scan) into sm.day_coverage(), rather than a fixed
+#    nominal cadence, and must treat `None` (unresolvable gap) as unassessable too. ─────────────────
+
+def test_process_day_defaults_observation_lag_to_unknown_and_marks_closed_version_unassessable():
+    """No `observation_lag` passed at all (the default) — a CLOSED version's day must never be
+    confidently resolved without a real, caller-supplied gap."""
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8)},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None)
+    assert res["any_crossing"] is True
+    coverage = json.loads(
+        [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0][1]["cov"])
+    assert coverage["fingerprint_epoch_crossing"] is True
+
+
+def test_process_day_multi_day_scan_gap_widens_the_uncertainty_window():
+    """A REAL ~4-day gap (simulating a multi-day scan outage) to the previous successful scan must
+    widen the uncertainty window enough to mark day 3/5 unassessable — the FIXED-24h behavior this
+    item replaces would have confidently resolved this exact valid_to (3 days after the scanned
+    day) as not-crossing (see the equivalent sg_rule_matching-level test)."""
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8)},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None,
+                            observation_lag=dt.timedelta(days=4))
+    assert res["any_crossing"] is True
+
+
+def test_process_day_real_observation_lag_confidently_resolves_when_outside_the_window():
+    """A real (caller-resolved), short observation_lag that does NOT overlap the scanned day must
+    still allow a confident (non-crossing) result — this fix must not make EVERY closed version
+    unassessable, only ones whose real gap is unknown or wide enough to overlap."""
+    versions = {
+        "sgr-1": [
+            {"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+             "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "cidr",
+             "peer_value": "10.0.0.0/8", "valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8)},
+        ],
+    }
+    conn = FakeConn()
+    res = scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                            dt.date(2026, 3, 5), [], versions, {}, None,
+                            observation_lag=dt.timedelta(hours=1))
+    assert res["any_crossing"] is False
+
+
+# ── CI-review MAJOR fix (round 5): sg_rule_scan_runs.started_at must record the run-wide
+#    observation instant `run()` used to close/open rule-inventory versions, not the wall-clock
+#    time this transaction happens to commit at — otherwise a later run's
+#    `previous_successful_scan_gap()` under-estimates the real gap. ──────────────────────────────
+
+def test_process_day_stamps_started_at_from_the_passed_observed_at_not_wall_clock():
+    conn = FakeConn()
+    observed_at = utc(2026, 3, 6, 2)  # the run-wide `now` captured by run(), NOT commit time
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None, observed_at=observed_at)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_scan_runs")][0]
+    assert insert_call[1]["started_at"] == observed_at
+
+
+def test_process_day_defaults_observed_at_to_wall_clock_when_not_passed():
+    """Standalone/test callers with no run-wide observation instant to pass still get a sane
+    default (current wall-clock time) rather than an error."""
+    conn = FakeConn()
+    before = dt.datetime.now(dt.timezone.utc)
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [], _versions(), {}, None)
+    after = dt.datetime.now(dt.timezone.utc)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_scan_runs")][0]
+    assert before <= insert_call[1]["started_at"] <= after
 
 
 def test_process_day_matches_compatible_flow():
@@ -850,6 +1010,35 @@ def test_sg_reference_same_vpc_match_unaffected_by_new_scoping_logic():
     assert coverage["status"] == "observed_compatible"
 
 
+def test_sg_reference_not_found_anywhere_in_snapshot_is_unassessable_not_no_match():
+    """Follow-up fix (item 6): a referenced group_id that is not carried by ANY ENI in this
+    account/region's own membership snapshot (neither in-scope nor a known out-of-scope VPC) can be
+    a LEGALLY cross-account or cross-region SG reference (AWS supports this via VPC peering) that
+    this account/region's data structurally cannot verify. Before this fix, `_resolve` fell through
+    to an empty set (not None) for this case, which `match_peer` treats as a confident, resolved
+    answer -> NO_MATCH -> a false `no_observed_evidence`. Must be `unassessable` instead."""
+    conn = FakeConn()
+    versions = {
+        "sgr-1": [{"rule_id": "sgr-1", "fingerprint": "fp1", "group_id": "sg-1", "is_egress": False,
+                    "protocol": "tcp", "from_port": 443, "to_port": 443, "peer_kind": "sg",
+                    "peer_value": "sg-cross-account-peer", "valid_from": utc(2026, 1, 1), "valid_to": None}],
+    }
+    # Note: "sg-cross-account-peer" appears in NO membership row at all — not in vpc-1, not
+    # anywhere else in this account/region's own snapshot data.
+    memberships = {
+        "vpc-1": [{"eni_id": "eni-1", "group_ids": ["sg-1"], "private_ips": ["10.2.2.2"]}],
+    }
+    scan.process_day(conn, {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1},
+                      dt.date(2026, 3, 5), [
+                          {"interface_id": "eni-1", "srcaddr": "10.1.1.1", "dstaddr": "10.2.2.2",
+                           "dstport": "443", "protocol": "6", "bytes": "500", "cnt": "3"},
+                      ], versions, memberships, None)
+    insert_call = [c for c in conn.calls if c[0].startswith("INSERT INTO sg_rule_activity_daily")][0]
+    coverage = json.loads(insert_call[1]["cov"])
+    assert coverage["status"] == "unassessable"
+    assert coverage["match_unassessable"] is True
+
+
 # ── L4 finding #11: a `stale` membership snapshot must downgrade matches to unassessable ─────────
 
 def test_stale_membership_snapshot_downgrades_match_to_unassessable():
@@ -1070,7 +1259,15 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
     conn = FakeConn({
         "FROM sg_flow_sources": [[
-            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+            # A Hive-style year/month/day layout that ALSO carries `scopeResolution` (round-7 fix:
+            # its absence alone — not just `partitionKeyTypes`'s — now triggers self-heal, since a
+            # Hive layout can satisfy `has_resolved_partition_strategy` without either field) — this
+            # fixture represents a source already fully re-validated under the current schema, so it
+            # never triggers the stale-validation self-heal path below.
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps({"status": "valid", "partitionKeys": ["year", "month", "day"],
+                         "partitionKeyTypes": ["string", "string", "string"],
+                         "scopeResolution": {"account_id": None, "region": None}}), utc(2020, 1, 1)),
         ]],
         "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],  # no watermark yet -> first run starts at source created day
@@ -1092,6 +1289,390 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     assert fake_lambda.invocations[0]["flow_source_id"] == 1
     assert "query" not in fake_lambda.invocations[0]
     assert "account_id" not in fake_lambda.invocations[0]
+
+
+class DispatchingFakeLambda:
+    """Returns a different canned response depending on the invoked action — needed to test
+    `run()`'s self-heal path, which invokes BOTH `validate` (once, only when validation is stale)
+    and `query_by_source` (per eligible day) in the same call."""
+    def __init__(self, responses_by_action):
+        self.responses_by_action = responses_by_action
+        self.invocations = []
+
+    def invoke(self, FunctionName, Payload):
+        evt = json.loads(Payload)
+        self.invocations.append(evt)
+        body = self.responses_by_action[evt["action"]]
+        return {"Payload": type("R", (), {"read": lambda self: json.dumps(body).encode("utf-8")})()}
+
+
+def test_run_self_heals_a_stale_validation_missing_partition_key_types(monkeypatch):
+    """CI-review MAJOR fix (round 5): a source persisted BEFORE `partitionKeyTypes` existed reads
+    `status: "valid"` yet `has_resolved_partition_strategy` (no grandfathering branch) refuses it —
+    `run()` must re-run the broker's own `validate` action and persist the fresh result, rather than
+    requiring a manual admin re-save before this source can ever scan again."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    stale_validation = {"status": "valid", "partitionKeys": ["dt"]}  # no partitionKeyTypes at all
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps(stale_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    # CI-review MAJOR fix (round 6): the REAL broker `_validate` response (`sg_rule_athena_broker.
+    # py`'s `_validate`) never carries a `status` key at all — that wrapper is added only by the web
+    # BFF (`web/lib/sg-rules.ts`) at PUT-time. A fake that hand-writes `status: "valid"` here would
+    # mask exactly the bug this test exists to catch (the self-heal path persisting the broker's raw,
+    # `status`-less shape and permanently bricking the source on the very next run).
+    fresh_validation = {"ok": True, "partitionKeys": ["dt"], "partitionKeyTypes": ["date"],
+                         "columnMap": {}, "scopeResolution": {"account_id": None, "region": None}}
+    fake_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    validate_calls = [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert len(validate_calls) == 1
+    assert validate_calls[0] == {"action": "validate", "account_id": "123456789012",
+                                  "region": "ap-northeast-2", "workgroup": "wg",
+                                  "database": "db", "table": "tbl"}
+    update_calls = [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+    assert len(update_calls) == 1
+    persisted = json.loads(update_calls[0][1]["v"])
+    # The persisted blob must be wrapped with `status: "valid"` — the raw broker response alone
+    # would make this source unscannable in the very next run (see the two guards this exercises
+    # below), which is the exact regression this test guards against.
+    assert persisted["status"] == "valid"
+    assert persisted["ok"] is True
+    assert persisted["partitionKeys"] == ["dt"]
+    assert persisted["partitionKeyTypes"] == ["date"]
+    assert "checkedAt" in persisted
+    # The scan itself proceeded using the freshly-resolved (now scannable) strategy — i.e. the SAME
+    # run's own `query_by_source` guard (`sg_rule_athena_broker.py`'s `_query_by_source`, which
+    # checks `validation.status != 'valid'`) did NOT refuse the just-self-healed row.
+    query_calls = [i for i in fake_lambda.invocations if i["action"] == "query_by_source"]
+    assert len(query_calls) >= 1
+    # A SUBSEQUENT run must also see the healed, valid-shaped validation — not fall back into
+    # `run()`'s own `validation.status != 'valid'` guard (which would exit with
+    # `awaiting_validation` before even reaching the self-heal block again).
+    second_run_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,  # must NOT be invoked again
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    conn2 = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps(persisted), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    result2 = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn2,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: second_run_lambda,
+    )
+    assert result2.get("status") != "awaiting_validation"
+    assert not [i for i in second_run_lambda.invocations if i["action"] == "validate"]
+    assert [i for i in second_run_lambda.invocations if i["action"] == "query_by_source"]
+
+
+def test_run_self_heals_a_legacy_hive_style_source_missing_scope_resolution(monkeypatch):
+    """CI-review MAJOR fix (round 7): the round-5 self-heal condition gated on
+    `not sm.has_resolved_partition_strategy(validation)` — but a Hive-style year/month/day layout
+    satisfies that check WITHOUT needing `partitionKeyTypes` OR `scopeResolution` at all (that
+    function never looks at scope metadata). A pre-round-2 Hive-style source on a centralized/
+    org-wide table therefore never re-validated under the round-5 condition, permanently missing
+    `scopeResolution`/`scannedUnscoped` and the account/region scope predicate — exactly the
+    'scanned entirely unscoped, which used to be silent' defect the round-2 fix exists to close.
+    `run()` must self-heal on `scopeResolution` being absent too, not just `partitionKeyTypes`."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    # A pre-round-2 Hive-style validation: has_resolved_partition_strategy(this) is already True,
+    # so the OLD self-heal condition would skip it entirely.
+    legacy_hive_validation = {"status": "valid", "partitionKeys": ["year", "month", "day"]}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps(legacy_hive_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fresh_validation = {"ok": True, "partitionKeys": ["year", "month", "day"],
+                         "partitionKeyTypes": ["string", "string", "string"],
+                         "columnMap": {"account_id": "account_id", "region": "region"},
+                         "scopeResolution": {"account_id": "column", "region": "column"}}
+    fake_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    validate_calls = [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert len(validate_calls) == 1
+    update_calls = [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+    assert len(update_calls) == 1
+    persisted = json.loads(update_calls[0][1]["v"])
+    assert persisted["scopeResolution"] == {"account_id": "column", "region": "column"}
+
+
+def test_run_self_heals_a_stale_hive_layout_source_missing_scope_resolution(monkeypatch):
+    """CI-review MAJOR fix (round 7): a Hive-style year/month/day source persisted BEFORE round-2's
+    scope-resolution work satisfies `has_resolved_partition_strategy` WITHOUT needing
+    `partitionKeyTypes` or `scopeResolution` at all — so the original round-5 condition (`not
+    sm.has_resolved_partition_strategy(validation)`) never re-validated it, permanently stranding it
+    unscoped (no `account_id`/`region` predicate, no `scopeResolution`/`scannedUnscoped` markers) on
+    every run, exactly the pre-round-2 defect. `run()` must trigger self-heal for ANY source whose
+    persisted validation lacks `scopeResolution` — regardless of whether its partition strategy
+    already happens to resolve — and the healed validation must carry `scopeResolution` afterward."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    # A real pre-PR-231 legacy row: Hive layout, `status: "valid"`, no `partitionKeyTypes` and no
+    # `scopeResolution` — `has_resolved_partition_strategy` returns True for this shape today.
+    legacy_hive_validation = {"status": "valid", "partitionKeys": ["year", "month", "day"]}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps(legacy_hive_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fresh_validation = {
+        "ok": True, "partitionKeys": ["year", "month", "day"],
+        "partitionKeyTypes": ["string", "string", "string"], "columnMap": {},
+        "scopeResolution": {"account_id": "partition", "region": "partition"},
+    }
+    fake_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    # The self-heal must have fired even though `has_resolved_partition_strategy` would already
+    # accept the pre-heal Hive layout — the trigger is `scopeResolution`'s absence, not whether the
+    # partition strategy is resolved.
+    validate_calls = [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert len(validate_calls) == 1
+    update_calls = [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+    assert len(update_calls) == 1
+    persisted = json.loads(update_calls[0][1]["v"])
+    assert persisted["status"] == "valid"
+    assert persisted["scopeResolution"] == {"account_id": "partition", "region": "partition"}
+
+
+def test_run_refuses_the_scan_when_self_heal_re_validation_fails_for_a_hive_source(monkeypatch):
+    """CI-review MAJOR fix (round 8): when the staleness trigger fires and `invoke_broker_validate`
+    does NOT return `ok: true` (a transient Lambda/Glue error, or a table that now genuinely fails
+    the current gate), `run()` used to fall through and scan on the STALE validation, on the theory
+    that `has_resolved_partition_strategy` would refuse it downstream anyway — false for a
+    Hive-style year/month/day layout, which satisfies that check without `scopeResolution` at all.
+    Falling through therefore let a pre-round-2 Hive-style source on a centralized table scan
+    UNSCOPED on every run where re-validation happens to fail — reopening exactly the
+    'silently keep scanning unscoped forever' defect the round-2/6 fixes exist to close. A stale,
+    unconfirmed validation must refuse the run instead of being trusted."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    legacy_hive_validation = {"status": "valid", "partitionKeys": ["year", "month", "day"]}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps(legacy_hive_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = DispatchingFakeLambda({
+        "validate": {"ok": False, "reason": "transient Glue API error"},
+        "query_by_source": {"ok": True, "rows": []},  # must NEVER be reached
+    })
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "awaiting_validation"
+    assert not [i for i in fake_lambda.invocations if i["action"] == "query_by_source"]
+    assert not [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+
+
+def test_run_does_not_revalidate_a_source_that_was_genuinely_checked_and_rejected(monkeypatch):
+    """A validation that DOES carry `partitionKeyTypes` AND `scopeResolution` (it was fully checked
+    under the current schema, and the type genuinely isn't date-shaped) must never be silently
+    re-tried on every single run — both fields' presence is what distinguishes 'stale, never
+    re-checked under the current schema' from 'confirmed, permanently unscannable'. (Round-7 CI
+    review fix: `scopeResolution`, not just `partitionKeyTypes`, must be present — a Hive-style
+    source can pass `has_resolved_partition_strategy` without either field, so gating self-heal on
+    that check being satisfied let legacy Hive sources skip re-validation forever and keep scanning
+    a centralized table unscoped.)"""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    checked_and_rejected = {"status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"],
+                             "scopeResolution": {"account_id": None, "region": None}}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps(checked_and_rejected), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = DispatchingFakeLambda({"validate": {"ok": True}, "query_by_source": {"ok": True, "rows": []}})
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert not [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert not [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+
+
+def test_run_threads_a_per_boundary_lag_resolver_callable_into_process_day(monkeypatch):
+    """Item 2 follow-up fix (round 3): `run()` must pass a per-boundary lag RESOLVER (a callable,
+    `sm.day_coverage`'s new callable-`observation_lag` contract) into `process_day` — never a single
+    scalar computed against THIS run's own `now`, which would apply that run's gap uniformly to
+    every historical version boundary a rescan-window day might resolve to (see
+    `test_rescan_window_does_not_flip_an_unassessable_day_confident_after_a_later_short_gap_run`
+    below for the concrete failure this replaces)."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [
+            [(None,)],  # last_committed_day's own query — the resolver itself queries lazily,
+                        # only when day_coverage actually needs a lag for a CLOSED version.
+        ],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = FakeLambda({"ok": True, "rows": []})
+    captured = {}
+    real_process_day = scan.process_day
+
+    def fake_process_day(*a, **k):
+        captured["observation_lag"] = k.get("observation_lag")
+        return real_process_day(*a, **k)
+
+    monkeypatch.setattr(scan, "process_day", fake_process_day)
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert callable(captured["observation_lag"])
+    # Invoking the resolver for an arbitrary boundary queries sg_rule_scan_runs lazily, on demand.
+    conn.responses["FROM sg_rule_scan_runs"] = [[(utc(2026, 3, 1),)]]
+    gap = captured["observation_lag"](utc(2026, 3, 9))
+    assert gap == utc(2026, 3, 9) - utc(2026, 3, 1)
+
+
+class _ScanRunsHistoryConn:
+    """Item 2 follow-up fix (round 3) regression-test harness: tracks a real, growing
+    `sg_rule_scan_runs` history across MULTIPLE `process_day()` calls (simulating separate daily
+    scan runs, unlike the fixed canned-response-queue `FakeConn` above) — so
+    `scan.boundary_lag_resolver`/`scan.previous_successful_scan_gap` see the actual accumulated
+    history a real rescan-window re-run would see, instead of a scripted response list. `clock`
+    controls the `started_at` this fake assigns to the next `INSERT INTO sg_rule_scan_runs` row
+    (mirroring that statement's own `now()` SQL literal, which a fake can't evaluate for real) —
+    the test advances it to simulate the passage of time between successive runs."""
+
+    def __init__(self):
+        self.scan_runs = []  # list of (started_at, status)
+        self.activity_daily = []  # captured INSERT INTO sg_rule_activity_daily kwargs, in order
+        self.clock = None
+        self.in_txn = False
+
+    def run(self, sql, **kwargs):
+        s = sql.strip()
+        if s == "BEGIN":
+            self.in_txn = True
+            return []
+        if s in ("COMMIT", "ROLLBACK"):
+            self.in_txn = False
+            return []
+        if "SELECT max(started_at) FROM sg_rule_scan_runs" in sql:
+            before = kwargs["before"]
+            candidates = [t for t, status in self.scan_runs if status == "succeeded" and t < before]
+            return [(max(candidates),)] if candidates else [(None,)]
+        if "INSERT INTO sg_rule_scan_runs" in sql:
+            self.scan_runs.append((self.clock, "succeeded"))
+            return []
+        if "INSERT INTO sg_rule_activity_daily" in sql:
+            self.activity_daily.append(kwargs)
+            return []
+        return []  # DELETE FROM sg_rule_activity_daily, etc. — not needed by this test.
+
+
+def test_rescan_window_does_not_flip_an_unassessable_day_confident_after_a_later_short_gap_run():
+    """Item 2 follow-up fix (round 3) regression test — the EXACT scenario the CI review described:
+    a multi-day scan outage means the run that finally closes an old rule-inventory version (on
+    day D_close) correctly sees a wide gap and marks the affected day `unassessable`. A day or two
+    LATER, the next run's OWN gap (relative to D_close) is short — but its trailing rescan window
+    idempotently re-processes that SAME already-`unassessable` day. Before this fix, `run()` would
+    have threaded THAT run's own short gap into `sm.day_coverage()` for every boundary, silently
+    overwriting the earlier correct `unassessable` with a confident (wrong) attribution. This test
+    exercises the REAL `process_day` + `boundary_lag_resolver` + `previous_successful_scan_gap`
+    wiring against a real (if fake) growing `sg_rule_scan_runs` history — not `sm.day_coverage` in
+    isolation with a hand-fed scalar."""
+    conn = _ScanRunsHistoryConn()
+    source = {"account_id": "123456789012", "region": "ap-northeast-2", "id": 1}
+    day = dt.date(2026, 3, 5)
+
+    t0 = utc(2026, 3, 1)       # last successful run BEFORE the outage
+    t_close = utc(2026, 3, 9)  # the outage-closing run: an 8-day gap since t0, correctly wide
+    t_next = utc(2026, 3, 10)  # the NEXT run: only a 1-day gap since t_close
+
+    rule_versions = {
+        "sgr-1": [
+            {"valid_from": utc(2026, 1, 1), "valid_to": t_close, "fingerprint": "fp-old",
+             "group_id": "sg-1", "is_egress": False, "protocol": "tcp", "from_port": 443,
+             "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8"},
+            {"valid_from": t_close, "valid_to": None, "fingerprint": "fp-new",
+             "group_id": "sg-1", "is_egress": False, "protocol": "tcp", "from_port": 443,
+             "to_port": 443, "peer_kind": "cidr", "peer_value": "10.0.0.0/8"},
+        ],
+    }
+
+    # Seed history with the pre-outage successful run, then run process_day exactly as the
+    # outage-closing run itself would (its own scan_runs row is written with started_at=t_close).
+    conn.scan_runs.append((t0, "succeeded"))
+    conn.clock = t_close
+    resolver_1 = scan.boundary_lag_resolver(conn, source["id"])
+    scan.process_day(conn, source, day, [], rule_versions, {}, None, observation_lag=resolver_1)
+    status_1 = json.loads(conn.activity_daily[-1]["cov"])["status"]
+    assert status_1 == "unassessable"  # the wide (8-day) gap correctly marks this crossing.
+
+    # A LATER run — only a short gap after the outage-closing run — re-processes the SAME day via
+    # the idempotent rescan window. It builds its OWN fresh resolver (exactly like a real run()
+    # call would), against the SAME (now-grown) history.
+    conn.clock = t_next
+    resolver_2 = scan.boundary_lag_resolver(conn, source["id"])
+    scan.process_day(conn, source, day, [], rule_versions, {}, None, observation_lag=resolver_2)
+    status_2 = json.loads(conn.activity_daily[-1]["cov"])["status"]
+    # The version boundary's own valid_to (t_close) never changed — the resolver must anchor to the
+    # gap that preceded t_close (8 days, still wide), NOT the short 1-day gap before t_next. The day
+    # must stay unassessable, never flip to a confident attribution.
+    assert status_2 == "unassessable"
 
 
 def test_run_returns_inventory_only_when_broker_not_configured(monkeypatch):
@@ -1138,7 +1719,15 @@ def test_run_writes_failed_run_row_on_athena_query_failure(monkeypatch):
     monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
     conn = FakeConn({
         "FROM sg_flow_sources": [[
-            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+            # Validation already carries partitionKeyTypes/scopeResolution (fully re-validated under
+            # the current schema) so this test exercises the Athena query failure path, not the
+            # unrelated self-heal-re-validation-failure path (round 8) — the single-response
+            # `FakeLambda` below returns `ok: False` for EVERY action including `validate`, which
+            # would otherwise make `run()` short-circuit with `awaiting_validation` before ever
+            # reaching `invoke_broker_query`.
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps({"status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["date"],
+                         "scopeResolution": {"account_id": None, "region": None}}), utc(2020, 1, 1)),
         ]],
         "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],

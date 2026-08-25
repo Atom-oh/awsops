@@ -91,4 +91,45 @@ describe('PUT /api/sg/flow-sources', () => {
       expect.objectContaining({ accountId: '123456789012' }), 'admin-1', expect.any(Object),
     );
   });
+
+  it('persists partitionKeyTypes from the broker validation result', async () => {
+    verifyUser.mockResolvedValue({ sub: 'admin-1' });
+    isAdmin.mockResolvedValue(true);
+    validateFlowSourceViaBroker.mockResolvedValue({
+      ok: true, status: 'valid', partitionKeys: ['dt'], partitionKeyTypes: ['date'], checkedAt: 'now',
+    });
+    upsertFlowSource.mockResolvedValue({ id: 1 });
+    const { PUT } = await import('./route');
+    const res = await PUT(req('PUT', {
+      accountId: '123456789012', region: 'ap-northeast-2', workgroup: 'primary',
+      databaseName: 'db1', tableName: 'tbl1',
+    }) as any);
+    expect(res.status).toBe(200);
+    expect(upsertFlowSource).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1',
+      expect.objectContaining({ partitionKeys: ['dt'], partitionKeyTypes: ['date'] }),
+    );
+  });
+
+  it('persists scopeResolution/scannedUnscoped from the broker validation result (item 1 follow-up fix)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'admin-1' });
+    isAdmin.mockResolvedValue(true);
+    validateFlowSourceViaBroker.mockResolvedValue({
+      ok: true, status: 'valid', partitionKeys: ['dt'], partitionKeyTypes: ['date'],
+      scopeResolution: { account_id: null, region: null }, scannedUnscoped: true, checkedAt: 'now',
+    });
+    upsertFlowSource.mockResolvedValue({ id: 1 });
+    const { PUT } = await import('./route');
+    const res = await PUT(req('PUT', {
+      accountId: '123456789012', region: 'ap-northeast-2', workgroup: 'primary',
+      databaseName: 'db1', tableName: 'tbl1',
+    }) as any);
+    expect(res.status).toBe(200);
+    expect(upsertFlowSource).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1',
+      expect.objectContaining({
+        scopeResolution: { account_id: null, region: null }, scannedUnscoped: true,
+      }),
+    );
+  });
 });

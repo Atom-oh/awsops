@@ -33,6 +33,19 @@ import boto3
 import sg_rule_matching as sm
 
 DELIVERY_LAG_HOURS = int(os.environ.get("SG_RULE_DELIVERY_LAG_HOURS", "6"))
+# item 3 follow-up fix: sg_rule_inventory_versions.valid_from/valid_to are observation timestamps
+# (set by THIS scan's own run time), not the actual rule-change timestamp — see
+# sm.day_coverage()'s docstring. The scan is nominally scheduled every SCAN_INTERVAL_HOURS (the
+# EventBridge daily-trigger cadence, `rate(24 hours)` in sg-rules.tf) — but item 2 follow-up fix
+# (round 2): this constant is NO LONGER fed into `sm.day_coverage()`'s `observation_lag` directly.
+# A fixed nominal cadence is wrong whenever scans are actually delayed or missed for multiple days
+# in a row — see `previous_successful_scan_gap()` below, which derives the REAL elapsed gap from
+# `sg_rule_scan_runs` instead. `SCAN_INTERVAL_HOURS` below is NOT wired into any runtime decision
+# in this module (or anywhere else) — it exists PURELY as documentation of the EventBridge
+# scheduled cadence (`rate(24 hours)` in sg-rules.tf), for a human reading this file to cross-check
+# against the actual Terraform schedule. If it's ever wired to something (e.g. an eligibility or
+# alerting threshold), update this comment accordingly.
+SCAN_INTERVAL_HOURS = int(os.environ.get("SG_RULE_SCAN_INTERVAL_HOURS", "24"))  # descriptive only
 MEMBERSHIP_STALENESS_DAYS = int(os.environ.get("SG_RULE_MEMBERSHIP_STALENESS_DAYS", "3"))
 RESCAN_WINDOW_DAYS = int(os.environ.get("SG_RULE_RESCAN_WINDOW_DAYS", "2"))
 MAX_QUERY_BYTES = int(os.environ.get("SG_RULE_ACTIVITY_MAX_QUERY_BYTES", "107374182400"))
@@ -293,6 +306,68 @@ def last_committed_day(conn, flow_source_id):
     return rows[0][0] if rows and rows[0][0] else None
 
 
+def previous_successful_scan_gap(conn, flow_source_id, before):
+    """Item 2 follow-up fix (round 2): the uncertainty window `sm.day_coverage()` applies to a
+    closed rule-inventory version must reflect the ACTUAL elapsed gap since the previous successful
+    scan for this source, not a fixed `SG_RULE_SCAN_INTERVAL_HOURS` constant — after a multi-day
+    scan outage (delayed/missed runs), the real rule-shape change could have happened anywhere in
+    the WHOLE gap, not just within one nominal cadence period.
+
+    Returns the `timedelta` gap between `before` (this run's own observation instant — the same
+    `now` value that closes any version in THIS call) and the most recent PRIOR `sg_rule_scan_runs`
+    row with `status='succeeded'` for this `flow_source_id`, or `None` when there is no reasonably
+    recent previous successful run to compare against (e.g. the very first scan for this source, or
+    Athena scanning was only just enabled). Callers must treat `None` as "unknown" and mark the
+    affected day `unassessable` rather than guessing a window (`sm.day_coverage`'s own contract)."""
+    rows = conn.run(
+        "SELECT max(started_at) FROM sg_rule_scan_runs "
+        "WHERE flow_source_id=:fid AND status='succeeded' AND started_at < :before",
+        fid=flow_source_id, before=before)
+    prev = rows[0][0] if rows and rows[0][0] else None
+    if prev is None:
+        return None
+    return before - prev
+
+
+def boundary_lag_resolver(conn, flow_source_id):
+    """Item 2 follow-up fix (round 3): `run()` used to resolve ONE `observation_lag` value — the
+    gap between `now` (this run's own observation instant) and the previous successful scan — and
+    thread that SAME value into `sm.day_coverage()` for EVERY version boundary evaluated across
+    EVERY day in the batch (the fresh day AND every day in the trailing rescan window). That is only
+    correct for a version boundary THIS run itself just closed; a boundary closed by some EARLIER
+    run (the common case for a rescan-window day being idempotently re-evaluated days or weeks
+    later) needs the gap that preceded THAT run, not the gap before today's.
+
+    Concretely: a 4-day scan outage means the run that finally closes an old version on day D
+    correctly sees a wide gap and marks the affected day `unassessable`. A day or two later, the
+    NEXT run's lag is short again — but its trailing rescan window (`RESCAN_WINDOW_DAYS`,
+    delete-then-insert, idempotent) revisits that SAME day. Passing that run's own short lag into
+    `day_coverage()` for a boundary closed by the OLD, wide-gap run would silently overwrite the
+    correct `unassessable` with a confident (wrong) attribution — precisely defeating the point of
+    resolving a real gap at all.
+
+    Fix: `sm.day_coverage()`'s `observation_lag` parameter now accepts a CALLABLE `f(valid_to) ->
+    timedelta|None`, invoked lazily per covering version's own `valid_to`. This returns exactly
+    that callable — for a given `valid_to`, it looks up the gap to the previous successful run
+    BEFORE `valid_to` itself (`previous_successful_scan_gap(conn, flow_source_id, before=valid_to)`)
+    — i.e. the gap that existed AT THE TIME the run that closed this specific boundary ran, not the
+    gap before whatever run happens to be re-evaluating the day today. If no prior successful run
+    can be found before `valid_to` (e.g. old `sg_rule_scan_runs` history was pruned), the resolver
+    returns `None` — `sm.day_coverage()`'s own contract then marks that day `unassessable` rather
+    than assuming a short/confident lag; missing history must never default to "looks fine."
+
+    Memoized per `valid_to` (a small dict, scoped to one `run()` call) since many rules can share
+    the exact same version-closing timestamp within one scan."""
+    cache = {}
+
+    def resolve(valid_to):
+        if valid_to not in cache:
+            cache[valid_to] = previous_successful_scan_gap(conn, flow_source_id, valid_to)
+        return cache[valid_to]
+
+    return resolve
+
+
 # ── Step 4-6: Athena query + matching for one day ─────────────────────────────────────────────────
 
 # `_safe_ident`/`build_day_select` now live in sg_rule_matching.py (a boto3-free pure module) so
@@ -355,6 +430,51 @@ def invoke_broker_query(lambda_client, broker_arn, flow_source_id, day):
         }
 
 
+def invoke_broker_validate(lambda_client, broker_arn, source):
+    """CI-review MAJOR fix (round 5): a source whose persisted `validation` predates the
+    `partitionKeyTypes`/`scopeResolution` fields (or the single-key date-shape gate those fields
+    back) reads `status: "valid"` from Aurora yet `sm.has_resolved_partition_strategy()` — applied
+    identically at scan time, with no migration/grandfathering branch — refuses it on every run.
+    Manually re-saving the source (which re-runs the web BFF's PUT-time validate call) fixes this,
+    but nothing forces that to happen, so a source can sit permanently refused indefinitely. `run()`
+    calls this to re-run the broker's OWN `validate` action — the exact check the web BFF's PUT
+    route already trusts — against the source's live schema, so a genuinely stale (never-rejected,
+    just never-rechecked) validation self-heals with no operator action required. Returns the
+    broker's raw `validate` response ({"ok": True, ...} on success, {"ok": False, "reason": ...}
+    otherwise) — callers must treat a failure as "leave the existing (still-refusing) validation in
+    place," never as a reason to proceed unvalidated."""
+    payload = {
+        "action": "validate", "account_id": source["account_id"], "region": source["region"],
+        "workgroup": source["workgroup"], "database": source["database_name"], "table": source["table_name"],
+    }
+    resp = lambda_client.invoke(FunctionName=broker_arn, Payload=json.dumps(payload).encode("utf-8"))
+    raw_payload = resp.get("Payload")
+    body = json.loads((raw_payload.read() if hasattr(raw_payload, "read") else raw_payload) or b"{}")
+    if resp.get("FunctionError") or "ok" not in body:
+        return {"ok": False, "reason": f"broker invocation error: FunctionError={resp.get('FunctionError')!r}, body={body!r}"}
+    return body
+
+
+def wrap_broker_validation_result(fresh):
+    """CI-review MAJOR fix (round 6): the broker's own `_validate` (`sg_rule_athena_broker.py`)
+    returns `{"ok": True, "columnMap": ..., "partitionKeyTypes": ..., "scopeResolution": ...}` —
+    it never sets a `status` key at all. `status: "valid"` is added only by the web BFF
+    (`web/lib/sg-rules.ts`'s `validateFlowSourceViaBroker`) when a human saves a source via the PUT
+    route. The round-5 self-heal path used to persist the broker's raw response verbatim, so the
+    JUST-self-healed row still had `validation.status != "valid"` — `query_by_source`'s own guard
+    (`sg_rule_athena_broker.py`'s `_query_by_source`) refused it in the SAME run, and `run()`'s own
+    `validation.status != "valid"` guard (above) exits with `awaiting_validation` on every
+    SUBSEQUENT run, permanently bricking the source (worse than before self-heal existed, since
+    there was previously no re-validation path that could scribble a broken shape over a
+    passing one). Mirrors the BFF's wrapping exactly: `ok: True` -> `status: "valid"` (+ a fresh
+    `checkedAt`), `ok: False` -> `status: "error"`, preserving every other field the broker (or
+    the BFF) returns."""
+    checked_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    if fresh.get("ok"):
+        return {**fresh, "status": "valid", "checkedAt": checked_at}
+    return {**fresh, "status": "error", "checkedAt": checked_at}
+
+
 def eni_group_ids_for_ip(memberships, ip):
     """memberships: list of {eni_id, group_ids, private_ips} for the resolved snapshot. Returns the
     union of group_ids of any ENI carrying `ip`."""
@@ -366,7 +486,8 @@ def eni_group_ids_for_ip(memberships, ip):
 
 
 def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vpc, earliest_snapshot_at,
-                 stale_vpcs=None, coverage_flags=None, peered_or_shared_vpc_ids_by_vpc=None):
+                 stale_vpcs=None, coverage_flags=None, peered_or_shared_vpc_ids_by_vpc=None,
+                 observation_lag=None, observed_at=None):
     """Matches `flows` (already-aggregated Athena rows) against every rule for this account/region,
     classifies the whole day per rule, and commits sg_rule_activity_daily + sg_rule_scan_runs in
     ONE transaction (delete-then-insert for the day — idempotent regardless of how many times this
@@ -413,10 +534,31 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     downgraded to `unassessable` for that day exactly like `flow_result_truncated`/
     `eni_snapshot_truncated` already are (an unattributed flow must not look identical to a
     genuinely-clean, fully-evidenced zero).
+
+    `observation_lag` (item 2 follow-up fix, round 2): the `timedelta` uncertainty window
+    `sm.day_coverage()` applies to a CLOSED rule-inventory version's day — resolved by the caller
+    (`run()`) from the ACTUAL gap to the previous successful scan (`previous_successful_scan_gap()`),
+    never a fixed nominal cadence. Defaults to `None` ("unknown gap" — every closed version's day is
+    then marked unassessable rather than guessing) when the caller doesn't resolve one.
+
+    `observed_at` (CI-review MAJOR fix, round 5): the `sg_rule_scan_runs.started_at` row this call
+    commits is what `previous_successful_scan_gap()` later reads to resolve THIS run's own
+    observation instant for some FUTURE run's `boundary_lag_resolver`. It must therefore be the same
+    `now` `run()` passed to `upsert_inventory_and_versions()` when it closed/opened rule-inventory
+    versions for this scan — NOT the wall-clock time this transaction happens to commit at. Those
+    two differ by however long the EC2 describes + Athena wait + matching took, and for a multi-day
+    batch, EVERY day's row gets stamped with the SAME single run-wide observation instant (there is
+    only one inventory snapshot per `run()` call, matching `upsert_inventory_and_versions`' own
+    per-run `now`). Using the commit-time wall clock instead would systematically UNDER-estimate the
+    gap a later run resolves via `previous_successful_scan_gap`, silently narrowing the very
+    uncertainty window items 2/3 exist to widen. Defaults to `dt.datetime.now(dt.timezone.utc)` only
+    for callers/tests that have no run-wide observation instant to pass (single-day, standalone
+    invocations) — `run()` itself always passes its own captured `now` explicitly.
     """
     stale_vpcs = stale_vpcs or set()
     coverage_flags = coverage_flags or {}
     peered_or_shared_vpc_ids_by_vpc = peered_or_shared_vpc_ids_by_vpc or {}
+    observed_at = observed_at or dt.datetime.now(dt.timezone.utc)
     flow_result_truncated = bool(coverage_flags.get("flow_result_truncated"))
     eni_snapshot_truncated = bool(coverage_flags.get("eni_snapshot_truncated"))
     unresolved_flow_count = 0
@@ -429,7 +571,7 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
     per_rule = {}
     any_crossing = False
     for rule_id, versions in rule_versions_by_id.items():
-        day_cov = sm.day_coverage(versions, day)
+        day_cov = sm.day_coverage(versions, day, observation_lag=observation_lag)
         per_rule[rule_id] = {
             "compatible": 0, "overlap": 0, "bytes": 0,
             "unassessable": day_cov["crossing"],  # fingerprint-epoch-crossing (day-level)
@@ -472,14 +614,27 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
         def _resolve(group_id):
             in_scope_ips = set()
             out_of_scope_hit = False
+            found_anywhere = False
             for other_vpc, snap in memberships_by_vpc.items():
                 in_scope = sm.eni_matches_vpc_scope(vpc_id, other_vpc, peered_or_shared)
                 for m in snap:
                     if group_id in (m.get("group_ids") or []):
+                        found_anywhere = True
                         if in_scope:
                             in_scope_ips.update(m.get("private_ips") or [])
                         else:
                             out_of_scope_hit = True
+            if not found_anywhere:
+                # Follow-up fix (item 6): the referenced group_id is not present ANYWHERE in this
+                # account/region's own membership snapshot data — this can be a LEGALLY
+                # cross-account or cross-region SG reference (AWS supports referencing an SG across
+                # accounts/regions via VPC peering), which this account/region's own snapshot data
+                # structurally cannot verify either way. Before this fix, "not found anywhere"
+                # fell through to `return in_scope_ips` (an empty set, not None), which
+                # `match_peer`/`sg_peer_ip_resolver` then treats as a confident, resolved-but-empty
+                # answer -> NO_MATCH -> a false `no_observed_evidence`. Resolving `None` here makes
+                # this genuinely UNASSESSABLE, matching the in-scope-but-elsewhere case just below.
+                return None
             if not in_scope_ips and out_of_scope_hit:
                 return None  # cross-VPC hit outside the known-legal scope -> unassessable
             return in_scope_ips
@@ -632,10 +787,11 @@ def process_day(conn, source, day, flows, rule_versions_by_id, memberships_by_vp
         conn.run(
             "INSERT INTO sg_rule_scan_runs "
             "(id, flow_source_id, status, partition_start, partition_end, rows_processed, coverage, started_at, finished_at) "
-            "VALUES (:id,:fid,'succeeded',:ps,:pe,:rows,:cov::jsonb,now(),now())",
+            "VALUES (:id,:fid,'succeeded',:ps,:pe,:rows,:cov::jsonb,:started_at,now())",
             id=run_id, fid=source["id"], ps=start, pe=end, rows=len(flows),
             cov=json.dumps({"fingerprint_epoch_crossing_any": any_crossing,
                              "unresolved_flow_count": unresolved_flow_count}),
+            started_at=observed_at,
         )
         conn.run("COMMIT")
     except Exception:
@@ -758,7 +914,60 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
                 "reason": f"source validation.status={source.get('validation', {}).get('status')!r} is not 'valid'"}
     lam = (lambda_client_factory or (lambda: boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))))()
 
+    # CI-review MAJOR fix (round 5, corrected round 7): distinguish a validation that predates the
+    # round-4/round-2 scope/type fields entirely — persisted before they existed, never re-run
+    # since — from one that was genuinely CHECKED under the CURRENT gate. The original round-5
+    # condition keyed self-heal on `not sm.has_resolved_partition_strategy(validation)`, which is
+    # `True` (no re-heal needed, by that check's own logic) for ANY Hive-style year/month/day
+    # layout regardless of `scopeResolution` — `has_resolved_partition_strategy` never looks at
+    # scope metadata at all. A pre-round-2 Hive-style source on a centralized/org-wide table
+    # therefore NEVER re-validated, permanently missing `scopeResolution`/`scannedUnscoped` and
+    # `_build_scope_predicate`'s account/region predicate — exactly the "scanned entirely unscoped,
+    # which used to be silent" defect the round-2 fix exists to close, just reopened for every
+    # legacy source the round-5 self-heal was supposed to reach. The correct staleness signal is
+    # simpler and doesn't depend on whether the CURRENT gate happens to already accept the layout:
+    # either `partitionKeyTypes` or `scopeResolution` being absent from the persisted validation
+    # means it predates the schema those fields belong to, full stop — self-heal by re-running the
+    # broker's own `validate` action rather than requiring a manual admin no-op re-save (the ONLY
+    # previously documented remediation) before it can ever scan again, or worse, silently keep
+    # scanning unscoped forever without anyone noticing.
+    validation = source.get("validation") or {}
+    if "partitionKeyTypes" not in validation or "scopeResolution" not in validation:
+        fresh = invoke_broker_validate(lam, broker_arn, source)
+        if fresh.get("ok"):
+            healed = wrap_broker_validation_result(fresh)
+            conn.run("UPDATE sg_flow_sources SET validation=:v WHERE id=:id",
+                      v=json.dumps(healed), id=source["id"])
+            source["validation"] = healed
+        else:
+            # CI-review MAJOR fix (round 8): the comment this replaces claimed that
+            # `has_resolved_partition_strategy` below would still refuse the scan exactly as it
+            # already would have, if re-validation fails and the stale validation is left in
+            # place — that is FALSE for a Hive-style year/month/day layout, which satisfies
+            # `has_resolved_partition_strategy` without needing `scopeResolution`/`partitionKeyTypes`
+            # at all. Falling through on a failed self-heal therefore let a pre-round-2 Hive-style
+            # centralized-table source scan UNSCOPED (stale `columnMap` has no account/region
+            # predicate) on every run where re-validation happens to fail (a transient Lambda/Glue
+            # error, or a table that now genuinely fails the current gate) — reopening exactly the
+            # "silently keep scanning unscoped forever" defect the round-2/6 fixes exist to close.
+            # A stale, never-fully-re-validated source must never be trusted to scan on its OLD
+            # validation once we know we can't confirm it against the current gate — refuse this
+            # run and retry re-validation on the next scheduled run, the same posture `run()`
+            # already takes for a source whose validation.status genuinely isn't 'valid'.
+            return {"status": "awaiting_validation",
+                    "reason": f"stale validation predates partitionKeyTypes/scopeResolution and "
+                              f"re-validation failed: {fresh.get('reason')!r} — refusing to scan on "
+                              "unconfirmed stale validation"}
+
     fid = source["id"]
+    # Item 2 follow-up fix (round 3): a SINGLE `observation_lag` value (the gap before THIS run's
+    # own `now`) used to be threaded into every day/version this call processes — correct only for
+    # a boundary this run itself just closed, and WRONG for a historical boundary a rescan-window
+    # day re-evaluates (see `boundary_lag_resolver`'s own docstring for the exact failure mode).
+    # Pass a per-boundary resolver instead — `sm.day_coverage()` now accepts either a plain
+    # timedelta/None (unchanged single-value behavior) or a callable, invoked lazily per covering
+    # version's own `valid_to`.
+    observation_lag = boundary_lag_resolver(conn, fid)
     watermark = last_committed_day(conn, fid)
     source_created_day = source["created_at"].date() if hasattr(source["created_at"], "date") else source["created_at"]
     next_day = sm.next_day_to_process(watermark, source_created_day)
@@ -792,7 +1001,8 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
         }
         try:
             res = process_day(conn, source, day, body.get("rows", []), rule_versions, memberships_by_vpc,
-                               None, stale_vpcs=stale_vpcs, coverage_flags=coverage_flags)
+                               None, stale_vpcs=stale_vpcs, coverage_flags=coverage_flags,
+                               observation_lag=observation_lag, observed_at=now)
         except Exception as e:  # noqa: BLE001 — one day's transaction failure must not crash run()
             # process_day() itself still raises on internal failure (its own rollback contract is
             # unchanged, see test_process_day_rolls_back_on_failure) — this is the caller-side

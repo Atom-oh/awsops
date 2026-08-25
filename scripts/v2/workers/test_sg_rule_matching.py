@@ -46,12 +46,49 @@ def test_day_crossing_when_version_changes_mid_day_never_a_lower_bound():
     assert cov["version"] is None
 
 
-def test_day_not_crossing_when_transition_is_on_an_adjacent_day():
+def test_day_not_crossing_when_transition_is_well_beyond_the_observation_lag():
+    # valid_to is 3 days after the day in question — with the default 1-day observation_lag, the
+    # actual rule-change instant (bounded to (valid_to - lag, valid_to]) cannot have fallen inside
+    # day 3/5, so the day is confidently covered by the earlier version.
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8, 0, 0)},
+        {"valid_from": utc(2026, 3, 8, 0, 0), "valid_to": None},
+    ]
+    cov = m.day_coverage(versions, date(2026, 3, 5))
+    assert cov["crossing"] is False
+
+
+def test_day_crossing_when_transition_observed_at_next_midnight_is_within_observation_lag():
+    # item 3 follow-up fix: valid_from/valid_to are OBSERVATION timestamps (this scan's own run
+    # time), not the actual change timestamp — a version closed at exactly the next day's midnight
+    # was, per the default 1-day scan cadence, possibly closed by a change that happened anywhere
+    # in the preceding 24h, i.e. during day 3/5 itself. The old behavior (crossing=False here) was
+    # exactly the false-confident-day bug this item fixes.
     versions = [
         {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 6, 0, 0)},
         {"valid_from": utc(2026, 3, 6, 0, 0), "valid_to": None},
     ]
     cov = m.day_coverage(versions, date(2026, 3, 5))
+    assert cov["crossing"] is True
+    assert cov["version"] is None
+
+
+def test_day_not_crossing_with_a_shorter_observation_lag_when_transition_is_outside_it():
+    # A scan cadence shorter than 1 day (observation_lag override) narrows the uncertainty window
+    # accordingly — a transition observed 6h after day-end is outside a 1h lag.
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 6, 6, 0)},
+        {"valid_from": utc(2026, 3, 6, 6, 0), "valid_to": None},
+    ]
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=timedelta(hours=1))
+    assert cov["crossing"] is False
+
+
+def test_day_not_crossing_when_covering_version_is_still_open():
+    # A still-open version (valid_to is None) keeps the pre-existing "no lower bound assumed"
+    # behavior — a change that hasn't happened yet can never retroactively taint this day.
+    versions = [{"valid_from": utc(2026, 1, 1), "valid_to": None}]
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=timedelta(days=1))
     assert cov["crossing"] is False
 
 
@@ -60,6 +97,95 @@ def test_day_crossing_when_no_version_covers_a_boundary():
     cov = m.day_coverage(versions, date(2026, 3, 5))
     assert cov["crossing"] is True
     assert cov["version"] is None
+
+
+# ── item 2 follow-up fix (round 2): observation_lag must reflect the ACTUAL gap since the previous
+#    successful scan, not a fixed nominal cadence — a multi-day scan outage must widen the window. ──
+
+def test_day_crossing_when_observation_lag_is_unknown_never_guesses():
+    # A closed version with no resolvable observation_lag (the caller found no reasonably recent
+    # previous successful scan) must never be trusted as confident — even though, with the OLD
+    # fixed-24h behavior, this exact valid_to (3 days after the day in question) would have been
+    # confidently NOT crossing (see test_day_not_crossing_when_transition_is_well_beyond_the_
+    # observation_lag above).
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8, 0, 0)},
+        {"valid_from": utc(2026, 3, 8, 0, 0), "valid_to": None},
+    ]
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=None)
+    assert cov["crossing"] is True
+    assert cov["version"] is None
+    assert cov["reason"] == "observation_lag_unknown"
+
+
+def test_day_crossing_after_a_multi_day_scan_gap_widens_the_window():
+    # Simulates a real multi-day scan outage: the previous successful scan was 4 days before the
+    # closing observation (valid_to) — a FIXED 24h/1-day lag would have missed this entirely and
+    # confidently attributed day 3/5 to the old version (the false-confidence bug this item fixes).
+    # With the real ~4-day gap threaded through as observation_lag, the uncertainty window covers
+    # day 3/5 and the day must be marked unassessable (crossing), not confidently resolved.
+    versions = [
+        {"valid_from": utc(2026, 1, 1), "valid_to": utc(2026, 3, 8, 0, 0)},
+        {"valid_from": utc(2026, 3, 8, 0, 0), "valid_to": None},
+    ]
+    real_gap = timedelta(days=4)  # scans were missed for several days before this observation
+    cov = m.day_coverage(versions, date(2026, 3, 5), observation_lag=real_gap)
+    assert cov["crossing"] is True
+    assert cov["version"] is None
+    assert cov["reason"] == "observation_lag_boundary"
+
+
+# ── item 3 follow-up fix (round 2): a genuinely `date`-typed Glue partition key must get a typed
+#    literal (Athena/Trino rejects comparing a `date` column to a bare string literal). ─────────────
+
+def test_date_literal_uses_typed_literal_for_a_date_typed_key():
+    assert m.date_literal("2026-03-05", "date") == "DATE '2026-03-05'"
+
+
+def test_date_literal_keeps_quoted_string_for_a_string_typed_key():
+    assert m.date_literal("2026-03-05", "string") == "'2026-03-05'"
+
+
+def test_build_partition_predicate_emits_date_literal_for_a_date_typed_single_key():
+    validation = {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}
+    predicate = m._build_partition_predicate(validation, date(2026, 3, 5))
+    assert "DATE '2026-03-05'" in predicate
+    assert "DATE '2026-03-06'" in predicate
+    assert "'2026-03-05'" not in predicate.replace("DATE '2026-03-05'", "")
+
+
+def test_build_partition_predicate_keeps_string_literal_for_a_string_typed_single_key():
+    validation = {"partitionKeys": ["dt"], "partitionKeyTypes": ["string"]}
+    predicate = m._build_partition_predicate(validation, date(2026, 3, 5))
+    assert "'2026-03-05'" in predicate
+    assert "DATE '2026-03-05'" not in predicate
+
+
+def test_build_partition_predicate_raises_on_an_unsafe_single_partition_key_name():
+    """MINOR fix: an unsafe/corrupted stored partition-key name that nonetheless passes the
+    date-type strategy gate (e.g. `has_resolved_partition_strategy` sees a confirmed `date` type)
+    used to fall back to `_safe_ident(dk_raw, "")` — silently building an empty/no-op predicate
+    instead of raising. For the `partition_keys` strategy this still failed closed via
+    `_partition_exists` returning `None`, but for `projection` (no existence check at all) it would
+    have run the query fully partition-unbounded. Now matches `scope_partition_expr_clauses`'
+    fail-closed posture (round 4) and raises `UnsafeIdentifier` instead."""
+    validation = {"partitionKeys": ["dt; DROP TABLE x"], "partitionKeyTypes": ["date"]}
+    with pytest.raises(m.UnsafeIdentifier):
+        m._build_partition_predicate(validation, date(2026, 3, 5))
+
+
+def test_build_partition_predicate_uses_a_range_not_an_exact_match_for_a_timestamp_typed_key():
+    """CI-review MAJOR fix (round 4): a `timestamp`-typed partition value is not guaranteed to sit
+    at exact midnight (e.g. an hourly-partitioned table) — an equality/IN predicate against
+    midnight-only literals would silently exclude every non-midnight partition value even though
+    the column validated as date-like. The predicate must be a half-open range spanning the whole
+    two-day window instead."""
+    validation = {"partitionKeys": ["ts"], "partitionKeyTypes": ["timestamp"]}
+    predicate = m._build_partition_predicate(validation, date(2026, 3, 5))
+    assert ">=" in predicate and "<" in predicate
+    assert "IN (" not in predicate
+    assert "TIMESTAMP '2026-03-05 00:00:00'" in predicate
+    assert "TIMESTAMP '2026-03-07 00:00:00'" in predicate  # exclusive upper bound covers D and D+1
 
 
 def test_classify_rule_day_crossing_downgrades_to_unassessable_not_lower_bound():
@@ -306,11 +432,78 @@ def test_build_day_select_raises_on_unsafe_table_name():
         m.build_day_select(source, date(2026, 3, 5))
 
 
+def test_scope_partition_expr_clauses_raises_on_unresolvable_account_id_column():
+    """MINOR fix (CI review round 4): a scope field marked `scopeResolution: "partition"` but whose
+    `columnMap` entry is missing/corrupted must raise `UnsafeIdentifier` (fail closed), not silently
+    drop the clause — dropping it would reopen the any-tenant existence-check gap `_partition_exists`'s
+    scoping exists to close, for exactly the corrupted-input case that's hardest to notice."""
+    validation = {
+        "partitionKeys": ["dt", "account-id"], "partitionKeyTypes": ["date", "string"],
+        "scopeResolution": {"account_id": "partition", "region": None},
+        "columnMap": {},  # corrupted: no "account_id" entry despite resolving as a partition key
+    }
+    source = {"account_id": "123456789012", "region": "ap-northeast-2"}
+    with pytest.raises(m.UnsafeIdentifier):
+        m.scope_partition_expr_clauses(validation, source)
+
+
 def test_build_day_select_never_selects_or_groups_by_srcport():
     """L4 finding #9(i): srcport is unused downstream and inflates group cardinality — must not
     appear in the query at all."""
     sql = m.build_day_select(_src(), date(2026, 3, 5))
     assert "srcport" not in sql
+
+
+# ── item 4 follow-up fix, MAJOR follow-up: the account/region scope predicate must actually be
+#    reachable — it is emitted whenever `validation.columnMap` carries BOTH resolved columns (which
+#    the broker's `_validate` now populates via its optional second resolution pass). ──────────────
+
+def test_build_day_select_scopes_to_the_sources_own_account_and_region():
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start",
+                      "account_id": "account_id", "region": "region"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert '"account_id" = \'123456789012\'' in sql
+    assert '"region" = \'ap-northeast-2\'' in sql
+
+
+def test_build_day_select_adds_no_scope_predicate_without_both_columns():
+    """A single-account table (no account_id/region columns) must be unchanged — no predicate."""
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert "123456789012" not in sql
+    assert "ap-northeast-2" not in sql
+
+
+# ── item 1 follow-up fix (round 2): each of account_id/region must be scoped INDEPENDENTLY — a
+#    table exposing only one of the two still gets that half of scoping, which round 1 (requiring
+#    both together) silently discarded entirely. ─────────────────────────────────────────────────
+
+def test_build_day_select_scopes_partially_when_only_account_id_resolved():
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start",
+                      "account_id": "account_id"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert '"account_id" = \'123456789012\'' in sql
+    assert "ap-northeast-2" not in sql
+
+
+def test_build_day_select_scopes_partially_when_only_region_resolved():
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start",
+                      "region": "region"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert '"region" = \'ap-northeast-2\'' in sql
+    assert "123456789012" not in sql
 
 
 # ── has_resolved_partition_strategy (L3 finding #8b) ──────────────────────────────────────────────
@@ -320,7 +513,73 @@ def test_has_resolved_partition_strategy_true_for_hive_style():
 
 
 def test_has_resolved_partition_strategy_true_for_single_date_key():
-    assert m.has_resolved_partition_strategy({"partitionKeys": ["dt"]}) is True
+    assert m.has_resolved_partition_strategy(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}) is True
+
+
+def test_has_resolved_partition_strategy_false_for_single_key_without_confirmed_type():
+    # item 7 follow-up fix: partitionKeyTypes missing entirely (an older/never-re-validated
+    # source) must not be assumed date-like — refuse rather than guess.
+    assert m.has_resolved_partition_strategy({"partitionKeys": ["dt"]}) is False
+
+
+def test_has_resolved_partition_strategy_false_for_single_key_with_non_date_type():
+    # item 7 follow-up fix: a bigint-typed lone key (e.g. an epoch-day column happening to be
+    # named `dt`) must not be treated as accepting an ISO date-string literal.
+    assert m.has_resolved_partition_strategy(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"]}) is False
+
+
+def test_has_resolved_partition_strategy_true_for_single_key_with_parameterized_varchar_type():
+    # CI-review MAJOR fix (round 6): a `varchar(10)` (length-parameterized) Glue type is still
+    # varchar — must resolve exactly like the bare `varchar` form does.
+    assert m.has_resolved_partition_strategy(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["varchar(10)"]}) is True
+    assert m.single_date_partition_key(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["varchar(10)"]}) == "dt"
+
+
+# ── is_date_like_partition_type (item 4 follow-up fix, round 2 — public accessor used by
+#    sg_rule_athena_broker._validate to reject a non-date-shaped single key at VALIDATE time). ──────
+
+def test_is_date_like_partition_type_true_for_date_and_timestamp_and_text_types():
+    assert m.is_date_like_partition_type("date") is True
+    assert m.is_date_like_partition_type("timestamp") is True
+    assert m.is_date_like_partition_type("string") is True
+    assert m.is_date_like_partition_type("varchar") is True
+    assert m.is_date_like_partition_type("char") is True
+
+
+def test_is_date_like_partition_type_false_for_bigint_and_unknown():
+    assert m.is_date_like_partition_type("bigint") is False
+    assert m.is_date_like_partition_type(None) is False
+
+
+def test_is_date_like_partition_type_normalizes_parameterized_glue_types():
+    """CI-review MAJOR fix (round 6): Glue/Hive legitimately types a column `varchar(10)`/
+    `char(20)` (length-parameterized) — an exact-string membership check regressed this to `False`
+    even though the underlying type IS varchar/char, permanently refusing a table that scanned fine
+    before this round's exact-match check existed."""
+    assert m.is_date_like_partition_type("varchar(10)") is True
+    assert m.is_date_like_partition_type("char(20)") is True
+    assert m.is_date_like_partition_type("VARCHAR(10)") is True
+    # Bare (non-parameterized) forms must keep working too.
+    assert m.is_date_like_partition_type("varchar") is True
+    assert m.is_date_like_partition_type("char") is True
+    # A genuinely non-date type must still correctly NOT classify as date-like, parameterized or not.
+    assert m.is_date_like_partition_type("boolean") is False
+    assert m.is_date_like_partition_type("array<string>") is False
+    assert m.is_date_like_partition_type("decimal(10,2)") is False
+
+
+def test_single_date_partition_key_accepts_string_typed_column():
+    assert m.single_date_partition_key(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["string"]}) == "dt"
+
+
+def test_single_date_partition_key_none_for_multi_key_without_hive_names():
+    assert m.single_date_partition_key(
+        {"partitionKeys": ["region", "tier"], "partitionKeyTypes": ["string", "string"]}) is None
 
 
 def test_has_resolved_partition_strategy_false_when_empty():

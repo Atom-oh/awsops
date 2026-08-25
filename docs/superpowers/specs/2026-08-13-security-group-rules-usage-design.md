@@ -118,14 +118,30 @@ An administrator configures each supported account and region inside Rules:
 - Glue table
 - enabled state
 
-The workgroup must already enforce a query-results S3 location. AWSops validates:
+The workgroup must already enforce a query-results S3 location AND its own
+`BytesScannedCutoffPerQuery` scan-bytes ceiling — AWS itself pre-emptively enforcing a cap, rather
+than relying solely on this feature's own post-hoc (query-already-ran, cost-already-incurred)
+budget check. AWSops validates:
 
 - workgroup exists and is usable
+- workgroup enforces a `BytesScannedCutoffPerQuery`
 - database and table exist
 - table location and schema are readable
 - canonical VPC Flow Log fields can be resolved without administrator-supplied SQL
 - the table exposes Glue partitions or partition projection that supports bounded time pruning
 - the caller has Athena, Glue, and S3 access
+
+Validation additionally records, and gates scanning on, a resolved `columnMap`/`partitionKeys`/
+`partitionKeyTypes`/`scopeResolution` (which of `account_id`/`region` resolved, and whether as a
+Glue partition key or a plain column). Because these fields were added after the feature first
+shipped, an existing `sg_flow_sources` row saved before they existed has no record of them and
+reads as unbound/unscannable at scan time even though it was never actually re-checked against
+this gate. An administrator re-save (the admin PUT route re-runs validation on every save) always
+fixes this, but the daily worker's own `run()` also self-heals it automatically: it detects that
+specific "stale, never re-checked" signature and re-invokes the broker's `validate` action against
+the live schema, persisting the fresh result with no operator action required. A source that WAS
+checked against the current gate and genuinely rejected (a real non-date-shaped key, for example)
+is not touched by self-heal and stays refused.
 
 Configuration is stored in Aurora and contains no credentials — the account/region source config
 references a target account only; the actual query execution uses the purpose-named policy described
@@ -367,6 +383,50 @@ already-permitted continuing traffic, never the allow/deny outcome (Flow Log's o
 already records what AWS actually permitted). Accepted as a bounded, disclosed imprecision; connection-
 level correlation is out of scope for this spec.
 
+**Follow-up correction (post-launch CI review, item 3): a single version technically covering the
+whole day is still not always confident.** The day-granularity rule above checks that ONE version's
+`[valid_from, valid_to)` spans start-of-day through end-of-day, but `valid_from`/`valid_to` are — per
+the detection-lag argument above — *observation* timestamps (the run time of the scan that first/last
+saw that fingerprint), not the actual change instant. If the version's `valid_to` is closed and falls
+within one scan interval (the daily cadence between successive snapshots) of that day's own end, the
+real change could have happened anywhere in `(valid_to - scan_interval, valid_to]` — a window that can
+overlap the day being matched even though the version's *observation* interval technically spans it.
+Concretely: a version closed at exactly the next day's midnight (`valid_to` = day D+1 00:00) was, under
+a 24h scan cadence, possibly closed by a change that happened anywhere in the preceding 24h — i.e.
+during day D itself — so day D cannot be confidently attributed to the version that merely appears to
+cover it. `sm.day_coverage()` now folds this into the same `unassessable` outcome (never a lower bound)
+whenever the covering version's `valid_to - observation_lag < end-of-day`; a still-open version
+(`valid_to IS NULL`) is unaffected — a change that hasn't happened yet can't retroactively taint a day.
+
+**Further follow-up correction (round-2 CI review, item 2): `observation_lag` is no longer a fixed
+constant.** The paragraph above originally derived `observation_lag` from a fixed nominal cadence
+(`SG_RULE_SCAN_INTERVAL_HOURS`, default 24h) — but that's wrong whenever scans are actually delayed
+or missed for multiple days in a row: the real change could have happened anywhere in the WHOLE gap
+since the previous successful scan, not just within one nominal cadence period (a Wednesday change
+first observed Friday would otherwise leave Wednesday/Thursday confidently, and wrongly, attributed
+to the old rule shape). `sg_rule_scan.py`'s `previous_successful_scan_gap()` now resolves the ACTUAL
+elapsed gap to the previous successful `sg_rule_scan_runs` row for this source and passes THAT in as
+`observation_lag`; when there's no reasonably recent previous successful run to compare against (the
+very first scan for a source, or Athena scanning only just enabled), `observation_lag` is `None` and
+`sm.day_coverage()` marks the day `unassessable` rather than guessing a window.
+
+**Further follow-up correction (CI review round 3/4, item 2): `observation_lag` is a per-boundary
+CALLABLE, not a single scalar resolved once per run.** The paragraph above describes
+`previous_successful_scan_gap()` as resolving one gap value that gets passed into
+`sm.day_coverage()` for the whole run — that was accurate for round 2's code, but round 3 replaced
+it because that single-scalar form is unsafe for the trailing rescan window: `run()` re-evaluates
+several days each pass, and each day's version boundary may have been CLOSED by a different, earlier
+run than the one currently executing. Passing today's own (possibly short) gap into
+`day_coverage()` for a boundary an EARLIER, wide-gap-after-an-outage run actually closed would
+silently overwrite a correct `unassessable` verdict with a confident (wrong) attribution the next
+time that day is idempotently re-evaluated. `sg_rule_scan.py`'s `boundary_lag_resolver()` fixes this
+by returning a memoized callable `f(valid_to) -> timedelta | None` instead of a value:
+`sm.day_coverage()` invokes it lazily per covering version's own `valid_to`, and the callable looks
+up `previous_successful_scan_gap(conn, flow_source_id, before=valid_to)` — the gap that existed AT
+THE TIME the run that closed THAT SPECIFIC boundary ran, not the gap before whichever run happens to
+be re-evaluating the day today. `run()` calls `boundary_lag_resolver()` once per scan and passes the
+resulting callable as `observation_lag` for every day/version pair it evaluates in that pass.
+
 Default outbound rules are displayed and marked protected from cleanup recommendations.
 
 ## Daily pipeline
@@ -382,7 +442,14 @@ For each source:
    **skipping any day less than `SG_RULE_DELIVERY_LAG_HOURS` (default 6h) old** — Flow Log delivery
    lags real time by minutes to hours, and scanning a day whose partition is still being written would
    silently read a partial day
-4. run one Athena query for that account/region/day batch, not one query per SG or rule
+4. run one Athena query for that account/region/day batch, not one query per SG or rule —
+   the query's own PARTITION predicate widens to `{D, D+1}` (Hive partitions are keyed by delivery
+   time, so a flow whose own `start` falls on day D can land in day D+1's partition file; the
+   row-level `start`/`end` filter, not this predicate, is what still authoritatively decides which
+   rows count as day D's traffic). This means the effective per-day scanned-PARTITION-file bound is
+   up to double a single day's own partition size — size the workgroup's `BytesScannedCutoffPerQuery`
+   (required at validation time — see **Flow Log source configuration** above) with that doubling
+   in mind, not against a single day's partition alone
 5. select and aggregate only fields needed for deterministic matching
 6. match accepted flows against candidate ingress or egress rules
 7. within one transaction: delete all `sg_rule_activity_daily` rows for
@@ -456,6 +523,28 @@ Rule matching covers:
   `no_observed_evidence` for every legitimately cross-VPC-referenced rule) and never scoped to "any VPC"
   (which is what let an ENI in an unrelated VPC match purely by coincidentally sharing the same RFC1918
   address). An ENI that resolves outside this VPC set is `unassessable`, not treated as a non-match.
+
+  **Follow-up correction (round-2 CI review, item 5/6): "per this repo's existing VPC topology data"
+  above is NOT data-backed today.** No `describe-vpc-peering-connections`/RAM data source exists in
+  this repository yet (`sg_rule_scan.py`'s `process_day` docstring and its `peered_or_shared_vpc_ids_by_vpc`
+  parameter say so directly), so the peering/shared-VPC PARTICIPANT SET this paragraph describes is
+  currently always empty in practice — every SG-reference resolution effectively scopes to the flow's
+  own VPC alone. This is the SAFE direction, not a broken feature: a `group_id` found ONLY outside
+  that (currently empty) known-legal scope — present elsewhere in the account/region's own
+  membership snapshot data, but not in a VPC this call can confirm is legally allowed to reference
+  it — already resolved `unassessable` before this PR (`sg_resolver_factory`'s
+  `if not in_scope_ips and out_of_scope_hit: return None` branch). **Round-5 CI review correction:**
+  the paragraph above previously attributed item 6's fix to that SAME pre-existing branch; item 6's
+  own contribution is the DIFFERENT `found_anywhere == False` case — a `group_id` that is not
+  present ANYWHERE in this account/region's own snapshot data at all (a legally possible
+  cross-account or cross-region SG reference, per AWS's own peering model, that this account/
+  region's snapshot structurally cannot verify either way). Before item 6, that case fell through to
+  `return in_scope_ips` (an empty set, not `None`), which `match_peer`/`sg_peer_ip_resolver` then
+  read as a confident, resolved-but-empty answer → a false `no_observed_evidence`; item 6 makes it
+  resolve `unassessable` instead, matching the in-scope-but-elsewhere case's own honest-degrade
+  posture rather than confidently guessing a non-match. Populating `peered_or_shared_vpc_ids_by_vpc`
+  from a real peering/RAM data source (closing the gap this paragraph originally implied was already
+  closed) remains a scoped, undone follow-up.
 - managed prefix lists when entries can be resolved read-only
 - ingress and egress
 - protocol and port ranges
@@ -588,8 +677,12 @@ Missing permissions degrade only that account/region source to `unassessable`.
 - rule-fingerprint change mid-window: day replace clears the prior fingerprint's row for that day
 - a day whose start-of-day and end-of-day versions differ sets `coverage.fingerprint_epoch_crossing`
   and downgrades that rule's counts for the day to `unassessable` — never a "lower bound" number
-- a day whose start-of-day and end-of-day versions agree matches confidently with no crossing flag,
-  even when a version transition happened on an adjacent day
+- a day whose start-of-day and end-of-day versions agree matches confidently with no crossing flag
+  — UNLESS that covering version's `valid_to` is closed and falls within `observation_lag` of the
+  day's own end, in which case the day is `unassessable` per the "Follow-up correction (item 3)"
+  above (the observation-timestamp uncertainty window can overlap this day even though a single
+  version's interval technically spans it); a version transition on an adjacent day that stays
+  outside that window still leaves the day confidently matched
 - per-flow `start` is never compared directly against `valid_from`/`valid_to` for matching (a single
   flow's timestamp cannot localize a change within a day given the pipeline's own detection lag — see
   "Why versioning"); matching is decided once per `(rule_id, observed_on)`, not per flow

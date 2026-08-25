@@ -12,6 +12,32 @@ case caused by unstated rule precedence — both fixed in the "Result semantics"
 inline 2026-08-19 review-fix notes). Owner: 오준석(Junseok Oh), who directed the panel review and
 approved this Status change after reviewing the findings and fixes.
 
+**Follow-up correction (round-2 CI review, item 6): shipped reality vs. this design, as of the PR
+#231/#233 CHANGELOG.** This document was written and approved before implementation and still reads,
+in places, as if the following are fully live — they are not, today:
+
+- **Live topology discovery (`fetch_live_topology`) is NOT implemented.** It is an intentional stub;
+  starting a NEW run (`POST /api/network-paths/[id]/runs`) is 503-gated by
+  `networkPathLiveTopologyCapabilityGate()` (`web/lib/network-path-gate.ts`, `status: "unimplemented"`)
+  until `LIVE_TOPOLOGY_IMPLEMENTED` is flipped to `true` in the same commit that gives it a real body.
+  Existing check definitions and prior run history remain viewable. The "Worker" and "Candidate cache
+  and live evidence" sections below describe the target design this stub will eventually fulfill, not
+  current behavior.
+- **Calico, Cilium, Istio, and the DNS/L7 layer are correctly-stubbed `unknown`, never guessed** — the
+  "Supported policy layers" section below lists these as supported layers; as shipped, they report `?`
+  rather than a real evaluation. This is the safe, honest direction (never a false `allowed`/`blocked`),
+  not silently dropped coverage — see `network_path_adapters.py`'s own docstrings for each stub.
+- **This is a per-layer guarantee today, not yet a full bidirectional-path one.** A candidate path can
+  still report an overall `allowed` based on less than the full policy surface for peering/TGW/VPN/DX-
+  fronted destinations whose own ENI isn't resolved, and for ALB/NLB-fronted targets (the target's own
+  SG is not independently checked past the target-group layer) — see `network_path.py`'s own "Known
+  structural gap" docstring section for the precise scope.
+
+None of this is a regression from what this spec originally promised being walked back silently — it
+is the honest, disclosed state of an in-progress feature that stays behind `network_path_check_enabled`
+(default false) precisely because these gaps are still open. See CHANGELOG.md's entries for
+`network_path_check_enabled` for the authoritative, dated record of what has actually shipped.
+
 ## Summary
 
 Add a dedicated, read-only Network Path Check workflow that answers:

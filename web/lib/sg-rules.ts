@@ -145,9 +145,25 @@ export interface ValidationResult {
   /** Actual Glue partition key names (Hive-style year/month/day, or a single date-typed key) —
    * lets the worker add a real partition predicate instead of relying on the `start` filter alone. */
   partitionKeys?: string[];
+  /** Glue catalog type for each entry in `partitionKeys`, same order (e.g. `["date"]`,
+   * `["string","string","string"]` for a Hive year/month/day scheme, or `["bigint"]`) — lets the
+   * worker refuse to treat a non-date-typed single partition key as an ISO-date column (item 7
+   * follow-up fix: `sm.single_date_partition_key`). */
+  partitionKeyTypes?: string[];
   /** Optional Flow Log fields actually present on this table (e.g. `bytes` may be absent on a
    * custom-format table) — lets the worker make `sum(bytes)` conditional instead of assuming it. */
   optionalFields?: string[];
+  /** Item 1 follow-up fix (round 2): how (if at all) `account_id`/`region` scoping resolved for
+   * this table — `"partition"` | `"column"` | `null` per field. Resolved from the UNION of Glue
+   * PartitionKeys and Columns (with hyphen aliases), independently per field — see the broker's
+   * `_validate` docstring. Persisted so operators can distinguish a genuinely single-account table
+   * from a mis-detected org-wide one, instead of the two looking identical. */
+  scopeResolution?: { account_id: 'partition' | 'column' | null; region: 'partition' | 'column' | null };
+  /** True when NEITHER account_id nor region scoping resolved — this source will be scanned fully
+   * unscoped (every account/region's rows in the table are read), which is expected/correct for a
+   * genuinely single-account table but worth an explicit operator-visible signal for a table that
+   * was meant to be centralized/org-wide. */
+  scannedUnscoped?: boolean;
   checkedAt: string;
 }
 
@@ -186,7 +202,9 @@ export async function validateFlowSourceViaBroker(input: FlowSourceInput): Promi
     }
     return {
       ok: true, status: 'valid', schemaFields: body.schemaFields, partitionStrategy: body.partitionStrategy,
-      columnMap: body.columnMap, partitionKeys: body.partitionKeys, optionalFields: body.optionalFields,
+      columnMap: body.columnMap, partitionKeys: body.partitionKeys, partitionKeyTypes: body.partitionKeyTypes,
+      optionalFields: body.optionalFields,
+      scopeResolution: body.scopeResolution, scannedUnscoped: body.scannedUnscoped,
       checkedAt,
     };
   } catch (e) {
