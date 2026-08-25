@@ -382,6 +382,18 @@ cover it. `sm.day_coverage()` now folds this into the same `unassessable` outcom
 whenever the covering version's `valid_to - observation_lag < end-of-day`; a still-open version
 (`valid_to IS NULL`) is unaffected — a change that hasn't happened yet can't retroactively taint a day.
 
+**Further follow-up correction (round-2 CI review, item 2): `observation_lag` is no longer a fixed
+constant.** The paragraph above originally derived `observation_lag` from a fixed nominal cadence
+(`SG_RULE_SCAN_INTERVAL_HOURS`, default 24h) — but that's wrong whenever scans are actually delayed
+or missed for multiple days in a row: the real change could have happened anywhere in the WHOLE gap
+since the previous successful scan, not just within one nominal cadence period (a Wednesday change
+first observed Friday would otherwise leave Wednesday/Thursday confidently, and wrongly, attributed
+to the old rule shape). `sg_rule_scan.py`'s `previous_successful_scan_gap()` now resolves the ACTUAL
+elapsed gap to the previous successful `sg_rule_scan_runs` row for this source and passes THAT in as
+`observation_lag`; when there's no reasonably recent previous successful run to compare against (the
+very first scan for a source, or Athena scanning only just enabled), `observation_lag` is `None` and
+`sm.day_coverage()` marks the day `unassessable` rather than guessing a window.
+
 Default outbound rules are displayed and marked protected from cleanup recommendations.
 
 ## Daily pipeline
@@ -397,7 +409,14 @@ For each source:
    **skipping any day less than `SG_RULE_DELIVERY_LAG_HOURS` (default 6h) old** — Flow Log delivery
    lags real time by minutes to hours, and scanning a day whose partition is still being written would
    silently read a partial day
-4. run one Athena query for that account/region/day batch, not one query per SG or rule
+4. run one Athena query for that account/region/day batch, not one query per SG or rule —
+   the query's own PARTITION predicate widens to `{D, D+1}` (Hive partitions are keyed by delivery
+   time, so a flow whose own `start` falls on day D can land in day D+1's partition file; the
+   row-level `start`/`end` filter, not this predicate, is what still authoritatively decides which
+   rows count as day D's traffic). This means the effective per-day scanned-PARTITION-file bound is
+   up to double a single day's own partition size — size the workgroup's `BytesScannedCutoffPerQuery`
+   (Feature gate / IAM sections) with that doubling in mind, not against a single day's partition
+   alone
 5. select and aggregate only fields needed for deterministic matching
 6. match accepted flows against candidate ingress or egress rules
 7. within one transaction: delete all `sg_rule_activity_daily` rows for
@@ -471,6 +490,18 @@ Rule matching covers:
   `no_observed_evidence` for every legitimately cross-VPC-referenced rule) and never scoped to "any VPC"
   (which is what let an ENI in an unrelated VPC match purely by coincidentally sharing the same RFC1918
   address). An ENI that resolves outside this VPC set is `unassessable`, not treated as a non-match.
+
+  **Follow-up correction (round-2 CI review, item 5/6): "per this repo's existing VPC topology data"
+  above is NOT data-backed today.** No `describe-vpc-peering-connections`/RAM data source exists in
+  this repository yet (`sg_rule_scan.py`'s `process_day` docstring and its `peered_or_shared_vpc_ids_by_vpc`
+  parameter say so directly), so the peering/shared-VPC PARTICIPANT SET this paragraph describes is
+  currently always empty in practice — every SG-reference resolution effectively scopes to the flow's
+  own VPC alone. This is the SAFE direction, not a broken feature: item 6's fix (see "Fixed" in the
+  CHANGELOG) makes an SG reference to a `group_id` that resolves outside that (currently empty) known-
+  legal scope but IS present somewhere else in the account/region's own membership snapshot data
+  resolve `unassessable` — never a confident `no_observed_evidence` and never a false cross-VPC match.
+  Populating `peered_or_shared_vpc_ids_by_vpc` from a real peering/RAM data source (closing the gap
+  this paragraph originally implied was already closed) remains a scoped, undone follow-up.
 - managed prefix lists when entries can be resolved read-only
 - ingress and egress
 - protocol and port ranges
