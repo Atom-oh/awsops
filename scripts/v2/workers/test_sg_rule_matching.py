@@ -350,6 +350,32 @@ def test_build_day_select_never_selects_or_groups_by_srcport():
     assert "srcport" not in sql
 
 
+# ── item 4 follow-up fix, MAJOR follow-up: the account/region scope predicate must actually be
+#    reachable — it is emitted whenever `validation.columnMap` carries BOTH resolved columns (which
+#    the broker's `_validate` now populates via its optional second resolution pass). ──────────────
+
+def test_build_day_select_scopes_to_the_sources_own_account_and_region():
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start",
+                      "account_id": "account_id", "region": "region"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert '"account_id" = \'123456789012\'' in sql
+    assert '"region" = \'ap-northeast-2\'' in sql
+
+
+def test_build_day_select_adds_no_scope_predicate_without_both_columns():
+    """A single-account table (no account_id/region columns) must be unchanged — no predicate."""
+    source = _src(validation={
+        "columnMap": {"interface_id": "interface_id", "log_status": "log_status", "start": "start"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+    })
+    sql = m.build_day_select(source, date(2026, 3, 5))
+    assert "123456789012" not in sql
+    assert "ap-northeast-2" not in sql
+
+
 # ── has_resolved_partition_strategy (L3 finding #8b) ──────────────────────────────────────────────
 
 def test_has_resolved_partition_strategy_true_for_hive_style():

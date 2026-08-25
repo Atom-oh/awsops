@@ -58,6 +58,7 @@ export async function PUT(req: NextRequest) {
       // resolved column aliases / partition keys / optional-field presence instead of hardcoded
       // assumptions (MAJOR fix — see sg-rules.ts's ValidationResult doc comments).
       columnMap: validation.columnMap ?? null, partitionKeys: validation.partitionKeys ?? null,
+      partitionKeyTypes: validation.partitionKeyTypes ?? null,
       optionalFields: validation.optionalFields ?? null,
       checkedAt: validation.checkedAt,
     });

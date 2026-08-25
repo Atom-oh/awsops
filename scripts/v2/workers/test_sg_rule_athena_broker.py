@@ -228,6 +228,62 @@ def test_validate_rejects_an_unregistered_account_id(monkeypatch):
         }, conn)
 
 
+# ── MAJOR fix: `_validate` must ALSO resolve the optional `account_id`/`region` columns into
+#    `columnMap`. They are not Flow Log fields, so the required-field loop can never put them there
+#    — and without them `sg_rule_matching._build_scope_predicate` is unreachable dead code, leaving
+#    a centralized/org-wide flow-log table scanned unscoped. ───────────────────────────────────────
+
+_CANONICAL_FLOW_COLUMNS = ["interface-id", "srcaddr", "dstaddr", "srcport", "dstport", "protocol",
+                            "action", "log-status", "start", "end"]
+
+
+def _validate_with_columns(monkeypatch, conn, columns):
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in columns]},
+                "PartitionKeys": [{"Name": "dt", "Type": "date"}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_resolves_optional_account_id_and_region_into_column_map(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_with_columns(
+        monkeypatch, conn, _CANONICAL_FLOW_COLUMNS + ["account_id", "region"])
+    assert result["columnMap"]["account_id"] == "account_id"
+    assert result["columnMap"]["region"] == "region"
+
+
+def test_validate_omits_account_id_and_region_when_the_table_has_no_such_columns(monkeypatch):
+    """Absence is not an error — a single-account table (the common case) simply gets no scope
+    predicate, exactly as before."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_with_columns(monkeypatch, conn, _CANONICAL_FLOW_COLUMNS)
+    assert "account_id" not in result["columnMap"]
+    assert "region" not in result["columnMap"]
+
+
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):
     """Even if a caller tries to smuggle account_id/query/database into the event, they are simply
     ignored — the broker only ever uses what it resolved from Aurora via flow_source_id."""
@@ -432,6 +488,104 @@ def test_partition_exists_returns_none_on_glue_error():
         FakeGlueRaises(), "db", "tbl", dt.date(2026, 3, 5),
         {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]})
     assert result is None
+
+
+def test_partition_exists_returns_none_on_an_unsafe_single_partition_key():
+    """A stored single partition key that fails `_safe_ident` is genuinely unverifiable — it must
+    return `None` (so the caller refuses the day and retries), never `True` ("partition confirmed
+    present"), which would let a corrupted stored identifier manufacture a confident zero-traffic
+    day. Glue must never be called at all for it."""
+    class FakeGlueNeverCalled:
+        def get_partitions(self, **kwargs):
+            raise AssertionError("Glue must never be called for an unsafe identifier")
+
+    result = broker._partition_exists(
+        FakeGlueNeverCalled(), "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["dt; DROP"], "partitionKeyTypes": ["date"]})
+    assert result is None
+
+
+# ── MAJOR fix: the existence-check window must match the QUERY window. ───────────────────────────
+#    `sg_rule_matching._build_partition_predicate` widens the query to partitions {D, D+1} (Hive
+#    partitions are keyed by delivery time, so day-D flows can land in D+1's partition file), so a
+#    check that only looked at day D would report `zero_partition_match` forever for a legitimately
+#    zero-traffic day D whose D+1 partition exists — permanently stalling the watermark.
+
+class FakeGluePartitions:
+    """Answers `get_partitions` from a set of ISO day strings that actually have a partition: it
+    simply reports a hit when the Expression mentions one of them, and records every Expression it
+    was handed so the built predicate itself can be asserted on."""
+    def __init__(self, existing_days):
+        self.existing_days = list(existing_days)
+        self.expressions = []
+
+    def get_partitions(self, DatabaseName, TableName, Expression, MaxResults):
+        self.expressions.append(Expression)
+        if any(d in Expression for d in self.existing_days):
+            return {"Partitions": [{"Values": ["x"]}]}
+        return {"Partitions": []}
+
+
+def test_partition_exists_true_when_only_the_next_day_partition_exists():
+    """Day D has no partition (zero traffic) but D+1's does — the widened check must find it and
+    return True, matching the query's own {D, D+1} predicate."""
+    glue = FakeGluePartitions(["2026-03-06"])
+    result = broker._partition_exists(
+        glue, "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]})
+    assert result is True
+    assert glue.expressions == ["dt IN ('2026-03-05', '2026-03-06')"]
+
+
+def test_partition_exists_false_when_neither_day_has_a_partition():
+    """Neither D nor D+1 has a partition — still the genuine "wrong partition-key mapping" signal
+    the caller wants (False), not None/True."""
+    glue = FakeGluePartitions([])
+    result = broker._partition_exists(
+        glue, "db", "tbl", dt.date(2026, 3, 5),
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["date"]})
+    assert result is False
+
+
+def test_partition_exists_hive_expression_covers_both_days_across_a_month_boundary():
+    """The Hive year/month/day branch must OR together D's and D+1's OWN year/month/day values —
+    each half carries its own values, so a month/year rollover is handled correctly."""
+    glue = FakeGluePartitions([])
+    broker._partition_exists(
+        glue, "db", "tbl", dt.date(2026, 3, 31),
+        {"partitionKeys": ["year", "month", "day"], "partitionKeyTypes": ["string"] * 3})
+    expr = glue.expressions[0]
+    assert "(year = '2026' AND month = '03' AND day = '31')" in expr
+    assert "(year = '2026' AND month = '04' AND day = '01')" in expr
+    assert " OR " in expr
+
+
+def test_query_by_source_commits_a_zero_traffic_day_when_only_the_next_day_partition_exists(monkeypatch):
+    """End-to-end of the same fix through `_query_by_source` (pattern of
+    `test_partition_keys_strategy_still_runs_glue_partition_check`, but with the REAL
+    `_partition_exists`): an empty Athena result for a day D with no partition of its own, whose
+    D+1 partition does exist, must commit as a genuine zero-traffic day — not
+    `zero_partition_match`."""
+    conn = FakeConn(_source_row({
+        "status": "valid", "columnMap": {"interface_id": "interface_id", "log_status": "log_status",
+                                          "start": "start"},
+        "partitionKeys": ["dt"], "partitionKeyTypes": ["date"], "optionalFields": [],
+        "partitionStrategy": "partition_keys",
+    }))
+    glue = FakeGluePartitions(["2026-03-06"])
+
+    class SessionWithGlue:
+        def client(self, name):
+            return glue if name == "glue" else object()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: SessionWithGlue())
+    monkeypatch.setattr(broker, "_run_athena_query",
+                         lambda *a, **k: {"ok": True, "athena": object(), "query_execution_id": "q1"})
+    monkeypatch.setattr(broker, "_fetch_page", lambda *a, **k: (["c1"], [], None))
+    result = broker._query_by_source({"flow_source_id": 1, "day": "2026-03-05"}, conn)
+    assert result["ok"] is True
+    assert "zero_partition_match" not in result
+    assert "partition_check_unverified" not in result
 
 
 def test_query_by_source_refuses_day_when_partition_check_is_unverifiable(monkeypatch):

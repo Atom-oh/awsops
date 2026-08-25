@@ -603,8 +603,12 @@ Missing permissions degrade only that account/region source to `unassessable`.
 - rule-fingerprint change mid-window: day replace clears the prior fingerprint's row for that day
 - a day whose start-of-day and end-of-day versions differ sets `coverage.fingerprint_epoch_crossing`
   and downgrades that rule's counts for the day to `unassessable` — never a "lower bound" number
-- a day whose start-of-day and end-of-day versions agree matches confidently with no crossing flag,
-  even when a version transition happened on an adjacent day
+- a day whose start-of-day and end-of-day versions agree matches confidently with no crossing flag
+  — UNLESS that covering version's `valid_to` is closed and falls within `observation_lag` of the
+  day's own end, in which case the day is `unassessable` per the "Follow-up correction (item 3)"
+  above (the observation-timestamp uncertainty window can overlap this day even though a single
+  version's interval technically spans it); a version transition on an adjacent day that stays
+  outside that window still leaves the day confidently matched
 - per-flow `start` is never compared directly against `valid_from`/`valid_to` for matching (a single
   flow's timestamp cannot localize a change within a day given the pipeline's own detection lag — see
   "Why versioning"); matching is decided once per `(rule_id, observed_on)`, not per flow

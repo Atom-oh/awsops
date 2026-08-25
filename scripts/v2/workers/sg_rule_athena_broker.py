@@ -188,6 +188,16 @@ def _validate(event, conn):
     if missing:
         raise BrokerError(f"table missing required Flow Log fields: {', '.join(missing)}")
 
+    # MAJOR fix: `sg_rule_matching._build_scope_predicate` scopes the generated day-SELECT to this
+    # source's own account_id/region, but ONLY when BOTH of those keys are present in
+    # `validation.columnMap` — and the required-field loop above can never put them there (they are
+    # not Flow Log fields, so they're not in `required`). Without this second, OPTIONAL pass the
+    # scope predicate was unreachable dead code and a centralized/org-wide flow-log table would be
+    # scanned unscoped. Absence is not an error: a single-account table simply has no such columns.
+    for optional_scope in ("account_id", "region"):
+        if optional_scope in columns:
+            resolved[optional_scope] = optional_scope
+
     partition_keys = [c["Name"] for c in tbl.get("PartitionKeys", [])]
     # item 7 follow-up fix: a single-key partition scheme (the non-Hive-style branch of
     # `_build_partition_predicate`/`_partition_exists`) is only safe to treat as a date column when
@@ -272,6 +282,13 @@ def _partition_exists(glue, database, table, day, validation):
     dk_raw = sm.single_date_partition_key(validation)  # item 7: only a CONFIRMED date-typed single key
     partition_keys = validation.get("partitionKeys") or []
     lower_keys = {k.lower(): k for k in partition_keys}
+    # MAJOR fix: `sg_rule_matching._build_partition_predicate` widens the QUERY's partition
+    # predicate to {D, D+1} (Hive partitions are keyed by delivery time, so day-D flows can land in
+    # day D+1's partition file), but this existence check used to look at day D alone in BOTH
+    # branches. A day D with legitimately zero traffic (hence no D partition) whose D+1 partition
+    # does exist would then be reported as "zero partitions matched" forever, permanently stalling
+    # the watermark. The check window must match the query window exactly.
+    next_day = day + _dt.timedelta(days=1)
     try:
         # MINOR fix: re-apply the SAME identifier-safety helper this module's own SQL builders
         # (`sg_rule_matching.build_day_select`/`build_day_skipdata_count_select`) use before ever
@@ -280,12 +297,16 @@ def _partition_exists(glue, database, table, day, validation):
             y = sm._safe_ident(lower_keys["year"], "year")
             mo = sm._safe_ident(lower_keys["month"], "month")
             d = sm._safe_ident(lower_keys["day"], "day")
-            expr = (f"{y} = '{day.year:04d}' AND {mo} = '{day.month:02d}' AND {d} = '{day.day:02d}'")
+            expr = (
+                f"({y} = '{day.year:04d}' AND {mo} = '{day.month:02d}' AND {d} = '{day.day:02d}')"
+                f" OR ({y} = '{next_day.year:04d}' AND {mo} = '{next_day.month:02d}' "
+                f"AND {d} = '{next_day.day:02d}')"
+            )
         elif dk_raw:
             dk = sm._safe_ident(dk_raw, "")
             if not dk:
-                return True  # unsafe identifier — not checkable, do not block on it
-            expr = f"{dk} = '{day.isoformat()}'"
+                return None  # unsafe identifier — genuinely unverifiable, per the 3-state contract above
+            expr = f"{dk} IN ('{day.isoformat()}', '{next_day.isoformat()}')"
         else:
             return True  # not a checkable single/hive-style scheme — do not block on it
         resp = glue.get_partitions(DatabaseName=database, TableName=table, Expression=expr, MaxResults=1)
