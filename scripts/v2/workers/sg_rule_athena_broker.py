@@ -304,18 +304,30 @@ def _validate(event, conn):
             # `enum`/`integer`/`injected` projection on a string-typed key passed through whenever
             # no `.format` param happened to be set (treated as "safe ISO default"). Both are
             # closed together: normalize the type before the string-like membership check, and
-            # explicitly require `projection.<col>.type` to be absent or `date` — anything else
-            # is rejected outright, matching this fix's own "rather than assume ISO, take the safer
-            # path" rationale.
+            # explicitly require `projection.<col>.type` to be `date` — anything else is rejected
+            # outright, matching this fix's own "rather than assume ISO, take the safer path"
+            # rationale.
+            #
+            # CI-review MAJOR fix (round 8): round 7 still ACCEPTED `projection.<col>.type` being
+            # ABSENT — but Athena requires this parameter for every partition column when
+            # `projection.enabled=true` (an enabled-projection table with a partition column
+            # missing its own `.type` is not a valid/queryable projection configuration per
+            # Athena's own documented contract, regardless of what this module assumes). A source
+            # missing it therefore validated `status: "valid"` here and then errored on EVERY real
+            # scan attempt — the exact "validates valid yet permanently refuses every scan" class
+            # this PR has already fixed at validation time in rounds 2, 4, and 5, reopened at this
+            # one remaining edge. Require the parameter to be PRESENT and exactly `date`.
             if strategy == "projection":
                 proj_type_param = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.type")
-                if proj_type_param and proj_type_param.strip().lower() != "date":
+                if not proj_type_param or proj_type_param.strip().lower() != "date":
                     raise BrokerError(
-                        f"partition key {remaining_key!r} is a PROJECTION column declared "
-                        f"projection.{remaining_key}.type={proj_type_param!r} — only a 'date'-typed "
-                        "projection (or no declared type) is supported; 'enum'/'integer'/'injected' "
-                        "values are not guaranteed ISO date strings, and assuming so would silently "
-                        "match zero rows every day [reason: projection_type_not_date]")
+                        f"partition key {remaining_key!r} is a PROJECTION column with "
+                        f"projection.{remaining_key}.type={proj_type_param!r} — Athena requires this "
+                        "parameter to be present and exactly 'date' for every projected partition "
+                        "column; a missing or non-'date' value is either an invalid/unqueryable "
+                        "projection configuration or one whose values ('enum'/'integer'/'injected') "
+                        "are not guaranteed ISO date strings, and either way every real scan would "
+                        "fail or silently match zero rows [reason: projection_type_not_date]")
                 if sm.is_string_like_partition_type(key_type):
                     proj_format = (tbl.get("Parameters", {}) or {}).get(f"projection.{remaining_key}.format")
                     if proj_format and proj_format.strip() != "yyyy-MM-dd":

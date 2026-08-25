@@ -645,7 +645,11 @@ def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_t
             return {}
 
         def get_table(self, DatabaseName, Name):
-            params = {"projection.enabled": "true"}
+            # Round-8 fix: `projection.dt.type` must be PRESENT and `date` for validation to pass
+            # at all — default it to the valid shape so tests exercising the format/type-normalization
+            # checks below don't have to restate it; a test that wants to exercise the `.type` gate
+            # itself passes an explicit override in `proj_format_params`.
+            params = {"projection.enabled": "true", "projection.dt.type": "date"}
             params.update(proj_format_params)
             return {"Table": {
                 "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
@@ -737,6 +741,18 @@ def test_validate_accepts_a_projection_key_explicitly_declared_date_typed(monkey
     result = _validate_projection_string_key(
         monkeypatch, conn, {"projection.dt.type": "date", "projection.dt.format": "yyyy-MM-dd"})
     assert result["ok"] is True
+
+
+def test_validate_rejects_a_projection_key_with_no_declared_type_at_all(monkeypatch):
+    """CI-review MAJOR fix (round 8): round 7 accepted an ABSENT `projection.<col>.type` as safe —
+    but Athena requires this parameter for every partition column when projection is enabled, so a
+    table missing it is not a valid/queryable projection configuration at all; such a source would
+    validate `status: "valid"` here and then error on every real scan. Must be rejected outright,
+    not just a declared non-`date` type."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_type_not_date"):
+        # None mimics the parameter being entirely absent (same falsy check as a missing key).
+        _validate_projection_string_key(monkeypatch, conn, {"projection.dt.type": None})
 
 
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):

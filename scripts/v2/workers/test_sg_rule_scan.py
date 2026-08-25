@@ -1478,6 +1478,42 @@ def test_run_self_heals_a_stale_hive_layout_source_missing_scope_resolution(monk
     assert persisted["scopeResolution"] == {"account_id": "partition", "region": "partition"}
 
 
+def test_run_refuses_the_scan_when_self_heal_re_validation_fails_for_a_hive_source(monkeypatch):
+    """CI-review MAJOR fix (round 8): when the staleness trigger fires and `invoke_broker_validate`
+    does NOT return `ok: true` (a transient Lambda/Glue error, or a table that now genuinely fails
+    the current gate), `run()` used to fall through and scan on the STALE validation, on the theory
+    that `has_resolved_partition_strategy` would refuse it downstream anyway — false for a
+    Hive-style year/month/day layout, which satisfies that check without `scopeResolution` at all.
+    Falling through therefore let a pre-round-2 Hive-style source on a centralized table scan
+    UNSCOPED on every run where re-validation happens to fail — reopening exactly the
+    'silently keep scanning unscoped forever' defect the round-2/6 fixes exist to close. A stale,
+    unconfirmed validation must refuse the run instead of being trusted."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    legacy_hive_validation = {"status": "valid", "partitionKeys": ["year", "month", "day"]}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps(legacy_hive_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fake_lambda = DispatchingFakeLambda({
+        "validate": {"ok": False, "reason": "transient Glue API error"},
+        "query_by_source": {"ok": True, "rows": []},  # must NEVER be reached
+    })
+    result = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    assert result["status"] == "awaiting_validation"
+    assert not [i for i in fake_lambda.invocations if i["action"] == "query_by_source"]
+    assert not [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+
+
 def test_run_does_not_revalidate_a_source_that_was_genuinely_checked_and_rejected(monkeypatch):
     """A validation that DOES carry `partitionKeyTypes` AND `scopeResolution` (it was fully checked
     under the current schema, and the type genuinely isn't date-shaped) must never be silently
@@ -1683,7 +1719,15 @@ def test_run_writes_failed_run_row_on_athena_query_failure(monkeypatch):
     monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
     conn = FakeConn({
         "FROM sg_flow_sources": [[
-            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps({"status": "valid"}), utc(2020, 1, 1)),
+            # Validation already carries partitionKeyTypes/scopeResolution (fully re-validated under
+            # the current schema) so this test exercises the Athena query failure path, not the
+            # unrelated self-heal-re-validation-failure path (round 8) — the single-response
+            # `FakeLambda` below returns `ok: False` for EVERY action including `validate`, which
+            # would otherwise make `run()` short-circuit with `awaiting_validation` before ever
+            # reaching `invoke_broker_query`.
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps({"status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["date"],
+                         "scopeResolution": {"account_id": None, "region": None}}), utc(2020, 1, 1)),
         ]],
         "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],

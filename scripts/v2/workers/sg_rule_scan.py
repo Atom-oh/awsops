@@ -939,9 +939,25 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
             conn.run("UPDATE sg_flow_sources SET validation=:v WHERE id=:id",
                       v=json.dumps(healed), id=source["id"])
             source["validation"] = healed
-        # A failed re-validation leaves the stale validation in place; `has_resolved_partition_
-        # strategy` below still refuses the scan exactly as it already would have — this path only
-        # ever helps a source that turns out to genuinely resolve, never masks a real rejection.
+        else:
+            # CI-review MAJOR fix (round 8): the comment this replaces claimed that
+            # `has_resolved_partition_strategy` below would still refuse the scan exactly as it
+            # already would have, if re-validation fails and the stale validation is left in
+            # place — that is FALSE for a Hive-style year/month/day layout, which satisfies
+            # `has_resolved_partition_strategy` without needing `scopeResolution`/`partitionKeyTypes`
+            # at all. Falling through on a failed self-heal therefore let a pre-round-2 Hive-style
+            # centralized-table source scan UNSCOPED (stale `columnMap` has no account/region
+            # predicate) on every run where re-validation happens to fail (a transient Lambda/Glue
+            # error, or a table that now genuinely fails the current gate) — reopening exactly the
+            # "silently keep scanning unscoped forever" defect the round-2/6 fixes exist to close.
+            # A stale, never-fully-re-validated source must never be trusted to scan on its OLD
+            # validation once we know we can't confirm it against the current gate — refuse this
+            # run and retry re-validation on the next scheduled run, the same posture `run()`
+            # already takes for a source whose validation.status genuinely isn't 'valid'.
+            return {"status": "awaiting_validation",
+                    "reason": f"stale validation predates partitionKeyTypes/scopeResolution and "
+                              f"re-validation failed: {fresh.get('reason')!r} — refusing to scan on "
+                              "unconfirmed stale validation"}
 
     fid = source["id"]
     # Item 2 follow-up fix (round 3): a SINGLE `observation_lag` value (the gap before THIS run's
