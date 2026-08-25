@@ -667,7 +667,7 @@ def _validate_projection_string_key(monkeypatch, conn, proj_format_params, key_t
     return broker._validate({
         "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
         "database": "db", "table": "tbl",
-    }, conn)
+    }, conn, now=now)
 
 
 def test_validate_rejects_a_projection_string_key_with_a_non_iso_date_format(monkeypatch):
@@ -765,6 +765,55 @@ def test_validate_rejects_a_projection_key_with_no_declared_range(monkeypatch):
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
     with pytest.raises(broker.BrokerError, match="projection_range_missing"):
         _validate_projection_string_key(monkeypatch, conn, {"projection.dt.range": None})
+
+
+# ── CI-review MAJOR fix (round 9, part b): `projection.<col>.range`'s PRESENCE was validated
+#    above, but never whether the declared window still covers the CURRENT date — a closed range
+#    whose end date has already passed is a common real misconfiguration (an admin sets up
+#    projection with a range and forgets to make it open-ended), and Athena will generate zero
+#    candidate partitions for any day past it — a genuinely empty (but wrong) result the
+#    `projection` strategy has no existence check to catch. Only the common, unambiguously-
+#    parseable closed-range-with-a-literal-ISO-end-date form is checked (see
+#    `_projection_range_upper_bound_expired`'s docstring for exactly which forms are left
+#    unvalidated on purpose). ─────────────────────────────────────────────────────────────────────
+
+def test_validate_rejects_a_projection_range_whose_closed_upper_bound_has_already_passed(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    now = dt.datetime(2026, 8, 25, tzinfo=dt.timezone.utc)
+    with pytest.raises(broker.BrokerError, match="projection_range_expired"):
+        _validate_projection_string_key(
+            monkeypatch, conn, {"projection.dt.range": "2020-01-01,2025-06-30"}, now=now)
+
+
+def test_validate_accepts_a_projection_range_whose_closed_upper_bound_is_still_current(monkeypatch):
+    """A closed range whose end date is still in the future must still validate — this is not a
+    regression on the round-8 presence check, just an additional staleness check on top of it."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    now = dt.datetime(2026, 8, 25, tzinfo=dt.timezone.utc)
+    result = _validate_projection_string_key(
+        monkeypatch, conn, {"projection.dt.range": "2020-01-01,2030-12-31"}, now=now)
+    assert result["ok"] is True
+
+
+def test_validate_accepts_a_projection_range_open_ended_at_now(monkeypatch):
+    """An open-ended `NOW`-anchored upper bound always covers the current date by construction and
+    must never be flagged as expired, regardless of what `now` is."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    now = dt.datetime(2099, 1, 1, tzinfo=dt.timezone.utc)
+    result = _validate_projection_string_key(
+        monkeypatch, conn, {"projection.dt.range": "2020-01-01,NOW"}, now=now)
+    assert result["ok"] is True
+
+
+def test_validate_accepts_a_projection_range_form_it_cannot_confidently_parse(monkeypatch):
+    """An unparseable/unrecognized upper-bound form (per this module's own narrower-than-ideal
+    range-syntax coverage) must not be guessed at — left unvalidated rather than risk a false
+    rejection of a legitimately-configured source."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    now = dt.datetime(2026, 8, 25, tzinfo=dt.timezone.utc)
+    result = _validate_projection_string_key(
+        monkeypatch, conn, {"projection.dt.range": "2020-01-01,enum-value"}, now=now)
+    assert result["ok"] is True
 
 
 # ── CI-review MAJOR fix (round 9): the round-7/8 projection.<col>.type/.format/.range gates all
