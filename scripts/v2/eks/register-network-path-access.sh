@@ -3,12 +3,16 @@
 # Check's resolve_live_identity() can GET a single named Pod or Node object
 # (scripts/v2/workers/network_path.py) — nothing more.
 #
-# Run this as an operator who holds cluster permissions (eks:CreateAccessEntry +
-# eks:UpdateAccessEntry) AND cluster-admin (or equivalent RBAC-write) k8s access to apply the
-# ClusterRole/ClusterRoleBinding below. AWSops deliberately does NOT create this access entry in
-# terraform — granting a principal k8s access is the cluster owner's call (read-only stance; the
-# apply principal may not own third-party clusters). Re-running is safe (already-exists is
-# tolerated).
+# Run this as an operator who holds cluster permissions — CI-review MINOR fix (round 24): the
+# prerequisite list previously named only eks:CreateAccessEntry/UpdateAccessEntry, but this
+# script's own round-20/21 logic also needs eks:DescribeAccessEntry (merged_kubernetes_groups),
+# eks:ListAssociatedAccessPolicies, and eks:DisassociateAccessPolicy (disassociate_stale_policies)
+# — full list: eks:CreateAccessEntry, eks:UpdateAccessEntry, eks:DescribeAccessEntry,
+# eks:ListAssociatedAccessPolicies, eks:DisassociateAccessPolicy — AND cluster-admin (or
+# equivalent RBAC-write) k8s access to apply the ClusterRole/ClusterRoleBinding below. AWSops
+# deliberately does NOT create this access entry in terraform — granting a principal k8s access
+# is the cluster owner's call (read-only stance; the apply principal may not own third-party
+# clusters). Re-running is safe (already-exists is tolerated).
 #
 # Usage:
 #   scripts/v2/eks/register-network-path-access.sh <cluster-name> [<cluster-name> ...]
@@ -27,7 +31,8 @@
 # that would grant cluster-wide Secret read to an automated agent"); this script was the one place
 # that violated its own repo's documented convention.
 #
-# Fix: bind the principal to a Kubernetes GROUP (`network-path-reader`) via `--kubernetes-groups`
+# Fix: bind the principal to a Kubernetes GROUP (`awsops-network-path-reader`, see the round-24
+# prefix fix below) via `--kubernetes-groups`
 # instead of an AWS-managed access policy, and authorize that group with a minimal ClusterRole
 # granting ONLY `get` on `nodes` and `pods` — no Secret access, no LIST/WATCH, no other resource
 # kind. See network-path-reader-rbac.yaml (applied separately via kubectl, since Access Entries
@@ -73,7 +78,10 @@
 set -euo pipefail
 
 CHDIR="$(cd "$(dirname "$0")/../../../terraform/v2/foundation" && pwd)"
-K8S_GROUP="network-path-reader"
+# CI-review MINOR fix (round 24): prefixed like the ClusterRole/Binding themselves — an
+# unprefixed generic group name could collide with a group a cluster already maps some other
+# principal into, silently widening that principal's grant too.
+K8S_GROUP="awsops-network-path-reader"
 RBAC_MANIFEST="$(cd "$(dirname "$0")" && pwd)/network-path-reader-rbac.yaml"
 # Policy ARNs this script's OWN earlier rounds are known to have associated on this Access Entry
 # (round 18's AdminView only — NOT AmazonEKSViewPolicy, which this script never associated; see
@@ -201,14 +209,14 @@ echo ""
 # any onboarding-provisioned `AmazonEKSViewPolicy` grant that principal legitimately carries for
 # unrelated reasons — reproducing on this script's own printed output the exact shared-principal
 # destructiveness rounds 21/22 fixed in the script's actual BEHAVIOR. The guidance is now scoped:
-# remove only the `network-path-reader` group (never the whole entry) for an overridden
+# remove only the "$K8S_GROUP" group (never the whole entry) for an overridden
 # principal, and only offer full entry deletion for the DEFAULT worker task role, with an
 # explicit warning to confirm nothing else is attached first.
 echo "To revoke access for this feature specifically (works for either principal):"
-echo "  # 1) remove ONLY the network-path-reader group (never the whole entry on a shared principal):"
+echo "  # 1) remove ONLY the $K8S_GROUP group (never the whole entry on a shared principal):"
 echo "  aws eks describe-access-entry --cluster-name <c> --principal-arn $ROLE_ARN \\"
 echo "    --query 'accessEntry.kubernetesGroups' --output text"
-echo "  # then re-run update-access-entry --kubernetes-groups with that list MINUS network-path-reader"
+echo "  # then re-run update-access-entry --kubernetes-groups with that list MINUS $K8S_GROUP"
 echo "  # (an empty resulting list is fine; it does not delete the entry)"
 if [ -n "$IS_DEFAULT_PRINCIPAL" ]; then
   echo "  # 2) this IS the default worker task role — full entry deletion is safe ONLY if"

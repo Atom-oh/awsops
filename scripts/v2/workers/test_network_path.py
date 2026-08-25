@@ -286,10 +286,10 @@ class TestFetchLiveTopology:
 
 # ── Gap 4: resolve_live_identity() — confirm source identity via live K8s/EC2 calls ─────────────
 
-def _pod_definition(namespace="default", pod_name="my-pod", cluster="my-cluster"):
+def _pod_definition(namespace="default", pod_name="my-pod", cluster="my-cluster", region="ap-northeast-2"):
     d = _definition()
     d["source"] = {
-        "kind": "pod", "account_id": "111111111111", "region": "ap-northeast-2",
+        "kind": "pod", "account_id": "111111111111", "region": region,
         "cluster": cluster, "namespace": namespace, "pod_name": pod_name,
         # user-supplied, must NOT be trusted once a live call succeeds/fails
         "eni_id": "eni-stale-user-supplied",
@@ -387,6 +387,16 @@ class TestResolveLiveIdentity:
         conn = FakeConn()
         d = _pod_definition(cluster="cluster/../admin")
         with pytest.raises(np.NetworkPathError, match="not a valid Kubernetes resource name"):
+            np.resolve_live_identity(np.resolve_identities(d), conn)
+
+    def test_refuses_an_invalid_region(self):
+        """CI-review MAJOR fix (round 24): `region` is a definition-authored identity field that
+        reaches `boto3.client("sts", region_name=region)` and a hand-built presigned STS URL —
+        the same trust boundary `_validate_k8s_name` already guards for cluster/namespace/pod/
+        node names, but `region` itself was never validated here at all."""
+        conn = FakeConn()
+        d = _pod_definition(region="us-east-1/../evil")
+        with pytest.raises(np.NetworkPathError, match="not a valid AWS region name"):
             np.resolve_live_identity(np.resolve_identities(d), conn)
 
     def test_accepts_a_dotted_ec2_style_node_name(self):

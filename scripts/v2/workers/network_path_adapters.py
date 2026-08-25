@@ -928,6 +928,18 @@ def _calico_selector_matches(selector, labels):
     selector = (selector or "").strip()
     if selector in ("", "all()"):
         return True
+    # CI-review MAJOR fix (round 24): a non-trivial selector needs REAL labels to evaluate any
+    # `==`/`!=`/`in`/`not in` term against — but the per-term loop below normalizes `labels or {}`,
+    # silently treating an absent (`None`) label set as an EMPTY-but-present one, so an `==` term
+    # confidently evaluates `False` and a `!=` term confidently `True` from data this adapter never
+    # actually has. This is the exact asymmetry round 20 already closed at each individual CALL
+    # SITE (`peer_labels is None`/`peer_namespace_labels is None` guards before calling this
+    # helper) — guarding it HERE closes it for every caller at once, including `eval_calico_policy`
+    # -> pod_labels, which the round-23 `k8s-calico` wiring passes as `data.get("pod_labels", {})`
+    # (silently defaulting to an empty dict on partially-populated candidate data, the same failure
+    # mode round 23 already fixed for `policies_fetched`).
+    if labels is None:
+        return None
     if "||" in selector or "has(" in selector or "(" in selector.replace("all()", ""):
         return None
     for term in (t.strip() for t in selector.split("&&")):
@@ -956,10 +968,11 @@ def _calico_selector_matches(selector, labels):
 
 def _calico_policy_type_applies(policy, direction):
     """Calico's `types` defaulting: when present, only that explicit list applies (case-insensitive,
-    same as core K8s). When OMITTED, Calico's own docs default `types` to `Ingress` UNLESS the
-    policy has egress rules (in which case `Egress` is also included) — this is NOT symmetric
-    rule-presence defaulting for both directions the way an earlier version of this comment
-    claimed.
+    same as core K8s). When OMITTED, Calico's own docs default `types` to a THREE-way rule: `Ingress`
+    applies unless the policy has EGRESS rules but NO ingress rules (an egress-only policy);
+    `Egress` applies iff the policy has egress rules. Equivalently: Ingress applies for the
+    no-rules case, the ingress-only case, AND the both-rules case — it is excluded ONLY for the
+    egress-only case.
 
     CI-review MAJOR fix (round 23): the earlier "symmetric rule presence" defaulting (`key in
     policy` for BOTH directions) inverted the verdict for the no-rules-at-all case — a
@@ -969,13 +982,22 @@ def _calico_policy_type_applies(policy, direction):
     Ingress and reduce to `blocked` — the old code returned `key in policy` -> `False` for
     Ingress, treating the policy as not selecting the pod at all and confidently `allowed`ing
     traffic a real cluster would default-deny. Egress's own defaulting (applies iff an `egress`
-    key is present) was already correct and is unchanged."""
+    key is present) was already correct and is unchanged.
+
+    CI-review MAJOR fix (round 24): the round-23 fix (`"egress" not in policy` for ingress) closed
+    the no-rules case but REGRESSED the both-rules case — a policy with BOTH `ingress` and
+    `egress` keys and omitted `types` now returned `False` for ingress (since `"egress" in
+    policy` was `True`), even though real Calico defaults such a policy to `[Ingress, Egress]`
+    (both apply). A genuinely ingress-governing policy was silently treated as not selecting the
+    pod, risking a confident `allowed` a real cluster would deny. Ingress is now excluded ONLY
+    for the true egress-only shape (`egress` present, `ingress` absent) — every other combination
+    (no rules, ingress-only, or both) correctly includes Ingress."""
     types = policy.get("types")
     if types:
         want = "ingress" if direction == "ingress" else "egress"
         return want in {str(t).lower() for t in types}
     if direction == "ingress":
-        return "egress" not in policy
+        return not ("egress" in policy and "ingress" not in policy)
     return "egress" in policy
 
 
@@ -1423,13 +1445,19 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # routing-policy model (which record in the set would actually answer a given query), so a
     # multi-record set where EVERY record is an unresolved CNAME/ALIAS pointer degrades to
     # `unknown` rather than guessing any one of them is the answer.
-    if len(matched) > 1 and all(
-            r.get("type") in ("CNAME", "ALIAS") and r.get("alias_target") for r in matched):
+    # CI-review MAJOR fix (round 24): the round-23 guard only fired when EVERY record in the set
+    # was a well-formed pointer (`alias_target` truthy) — a MIXED set (one CNAME/ALIAS record
+    # missing its own `alias_target`, plus other, unrelated records) bypassed it entirely, since
+    # `all(...)` is vacuously satisfied by neither-CNAME-nor-truthy-target entries failing the
+    # predicate. The multi-record ambiguity (which record answers) is real whenever ANY matched
+    # record is a CNAME/ALIAS pointer at all — well-formed or not — so the guard now fires on
+    # `any(...)` instead of `all(...)`.
+    if len(matched) > 1 and any(r.get("type") in ("CNAME", "ALIAS") for r in matched):
         return {"layer": "dns", "status": "unknown", "resource": host,
-                "summary": f"Route 53 has multiple CNAME/ALIAS pointer records for {host!r} "
-                           "(a weighted/failover/latency routing-policy set) — which one answers "
-                           "a given query, and whether its own target resolves, is not "
-                           "determinable from zone data without routing-policy modeling",
+                "summary": f"Route 53 has multiple records for {host!r} including a CNAME/ALIAS "
+                           "pointer (a weighted/failover/latency routing-policy set) — which one "
+                           "answers a given query, and whether the pointer's own target resolves, "
+                           "is not determinable from zone data without routing-policy modeling",
                 "evidence": matched}
     # A CNAME (or ALIAS — see round-22 fix below) with no further usable data at its target is
     # followed one hop, still within the already-fetched `records` set (no live DNS query is
@@ -1476,6 +1504,17 @@ def eval_route53_resolution(records, query_host, data_available=True):
                 "summary": f"Route 53 CNAME chain for {host!r} terminates at {out_of_zone_target!r}, "
                            "which is not in the fetched zone data — its own resolvability cannot be "
                            "confirmed from this zone alone", "evidence": matched}
+    # CI-review MAJOR fix (round 24): the chain-following loop's own condition requires
+    # `alias_target` to be TRUTHY to enter — but the declared record shape permits
+    # `alias_target: None` (or an absent key). A single matched CNAME/ALIAS record with no target
+    # data at all never enters the loop, falls through with `matched` unchanged, passes the
+    # `_R53_ADDRESS_TYPES` check below (ALIAS is an address type), and would otherwise reach a
+    # confident `allowed` — the exact "trust a pointer without confirming its target" class the
+    # round-18/22/23 fixes closed for every OTHER shape of this problem, left open for this one.
+    if len(matched) == 1 and matched[0].get("type") in ("CNAME", "ALIAS") and not matched[0].get("alias_target"):
+        return {"layer": "dns", "status": "unknown", "resource": host,
+                "summary": f"Route 53 record for {host!r} is a CNAME/ALIAS with no target data "
+                           "at all — its own resolvability cannot be confirmed", "evidence": matched}
 
     # CI-review MAJOR fix (round 18): a matched record whose TYPE doesn't actually indicate address
     # resolution (e.g. TXT, MX) used to still report a confident `allowed` — the presence of ANY
@@ -1547,7 +1586,13 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
         return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
                 "summary": "Ingress/Service/EndpointSlice data was not fetched — cannot evaluate",
                 "evidence": []}
-    req_host = request.get("host")
+    # CI-review MAJOR fix (round 24): `req_host` used to be compared raw against `rule_host` —
+    # DNS hostnames are case-insensitive and a trailing dot is a valid FQDN form, so `API.EXAMPLE.
+    # COM` or `api.example.com.` used to confidently fail to match `api.example.com` (including
+    # its wildcard form), producing a confident false `blocked`. Normalized the same way
+    # `eval_route53_resolution` already normalizes its own query host.
+    _req_host_raw = request.get("host")
+    req_host = _req_host_raw.rstrip(".").lower() if _req_host_raw else None
     req_path = request.get("path") or "/"
 
     # CI-review MAJOR fix (round 18): rule selection used to be plain first-match over the input
@@ -1559,23 +1604,34 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
     # com`) were also never matched at all (only bare equality), producing a confident false
     # `blocked` for a real wildcard-routed request.
     def _host_match(rule_host):
-        """Returns (matches, specificity) — higher specificity wins on a tie-break. `None` (no
-        host on the rule) is least specific; an exact match is most specific; `*.parent` is
-        in between (an exact, documented wildcard semantic — not a guess).
+        """Returns `(matches, specificity)` — higher specificity wins on a tie-break — or `None`
+        when this rule's host requirement genuinely cannot be evaluated (a host-scoped rule but
+        no request host at all). `None` `rule_host` (no host on the rule) is least specific; an
+        exact match is most specific; `*.parent` is in between (an exact, documented wildcard
+        semantic — not a guess).
 
         CI-review MAJOR fix (round 19): a Kubernetes Ingress wildcard host covers exactly ONE DNS
         label — `*.example.com` matches `api.example.com` but NOT `a.b.example.com`. The pre-fix
         check (`req_host.endswith(parent)`) matched a suffix of ANY depth, so a multi-label
         subdomain would confidently select a wildcard-routed backend the real Ingress controller
         would never route to. The label the wildcard covers is now required to be non-empty and
-        contain no further `.` (i.e. exactly one label between the request host and `parent`)."""
+        contain no further `.` (i.e. exactly one label between the request host and `parent`).
+
+        CI-review MAJOR fix (round 24): a `None` request host used to silently fail every
+        host-scoped rule as a confident non-match, so a request with no host at all could reach a
+        confident `blocked` from evidence ("no host supplied") that actually proves nothing —
+        this degrades to unresolvable (`None`) instead whenever the RULE is host-scoped and the
+        request supplies none."""
         if rule_host is None:
             return True, 0
-        if rule_host == req_host:
+        if req_host is None:
+            return None
+        rule_host_norm = str(rule_host).rstrip(".").lower()
+        if rule_host_norm == req_host:
             return True, 2
-        if rule_host.startswith("*."):
-            parent = rule_host[1:]  # ".example.com"
-            if req_host and req_host.endswith(parent):
+        if rule_host_norm.startswith("*."):
+            parent = rule_host_norm[1:]  # ".example.com"
+            if req_host.endswith(parent):
                 label = req_host[: -len(parent)]
                 if label and "." not in label:
                     return True, 1
@@ -1599,8 +1655,13 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
 
     candidates = []
     saw_unresolvable_path = False
+    saw_unresolvable_host = False
     for r in (ingress_rules or []):
-        host_ok, host_rank = _host_match(r.get("host"))
+        host_result = _host_match(r.get("host"))
+        if host_result is None:
+            saw_unresolvable_host = True
+            continue
+        host_ok, host_rank = host_result
         if not host_ok:
             continue
         path_result = _path_match(r)
@@ -1626,6 +1687,17 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
                            "ImplementationSpecific path_type this adapter cannot confidently "
                            "evaluate — its controller-defined precedence relative to any other "
                            "matching rule cannot be determined", "evidence": []}
+    # CI-review MAJOR fix (round 24): mirrors the `saw_unresolvable_path` guard above, for the
+    # symmetric host case — at least one host-SCOPED rule exists but the request supplies no host
+    # at all, so this adapter cannot rule out that the (unknown) real request host would have
+    # matched that rule instead of whatever no-host/catch-all rule this evaluator DID confidently
+    # select. Degrades unconditionally, the same way a controller-defined path ambiguity does.
+    if saw_unresolvable_host:
+        return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
+                "summary": "at least one Ingress rule is host-scoped, but the request supplies "
+                           "no host at all — cannot confidently rule out that rule taking "
+                           "precedence over whatever host-agnostic rule this adapter selected",
+                "evidence": []}
     if not candidates:
         return {"layer": "k8s-service-resolution", "status": "blocked", "resource": None,
                 "summary": f"no Ingress rule matches host={req_host!r} path={req_path!r}",

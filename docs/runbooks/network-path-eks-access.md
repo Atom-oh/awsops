@@ -42,7 +42,9 @@ cluster-wide Secret read to an automated agent") — round-19 CI review flagged 
 one place that violated its own repo's documented convention.
 
 **The fix:** bind the worker task role's Access Entry to a Kubernetes **group**
-(`network-path-reader`) via `--kubernetes-groups`, rather than an AWS-managed access policy, and
+(`awsops-network-path-reader` — prefixed like the ClusterRole/Binding themselves, round-24 CI
+review: an unprefixed generic name could collide with a group a cluster already maps some other
+principal into) via `--kubernetes-groups`, rather than an AWS-managed access policy, and
 author a minimal `ClusterRole` (`network-path-reader-rbac.yaml`) granting **only** `get` on
 `nodes` and `pods` to that group — no Secret access, no LIST/WATCH, no other resource kind. An
 Access Entry's `--kubernetes-groups` only establishes the IAM-principal → k8s-group mapping;
@@ -79,7 +81,7 @@ kubectl apply -f scripts/v2/eks/network-path-reader-rbac.yaml
 The script reads `terraform output -raw worker_task_role_arn` as its default (host-account case
 only) unless `ROLE_ARN` overrides it, then runs `aws eks create-access-entry` (or
 `update-access-entry` if the entry already exists) binding whichever role to the
-`network-path-reader` Kubernetes group — no AWS-managed access policy is associated (a stale one
+`awsops-network-path-reader` Kubernetes group — no AWS-managed access policy is associated (a stale one
 from an earlier run is actively disassociated, since `update-access-entry` alone doesn't remove
 it). The `kubectl apply` step is what actually authorizes that group (`get` on `nodes`/`pods`
 only) — run it once per cluster, against whichever cluster this Access Entry targets.
@@ -102,7 +104,7 @@ live-identity step no longer reports an AccessDenied.
 ## Revoke
 ```bash
 aws eks delete-access-entry --cluster-name <cluster-name> --principal-arn <principal-arn>
-# optional — only if no other principal is bound to the network-path-reader group on this cluster:
+# optional — only if no other principal is bound to the awsops-network-path-reader group on this cluster:
 kubectl delete -f scripts/v2/eks/network-path-reader-rbac.yaml
 ```
 

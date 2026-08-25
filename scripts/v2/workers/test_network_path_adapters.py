@@ -1009,6 +1009,16 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "unknown"
 
+    def test_missing_pod_labels_for_a_non_trivial_policy_selector_is_unknown_not_allowed(self):
+        """CI-review MAJOR fix (round 24): the `k8s-calico` wiring used to default `pod_labels`
+        to `{}` on absence — indistinguishable from a REAL confirmed-empty label set, so a
+        non-trivial policy selector confidently non-matched and the layer confidently `allowed`ed
+        from data this worker never actually fetched. `None` must degrade to `unknown`."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": []}]
+        r = ad.eval_calico_policy(policies, None, "ingress",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
     # ── CI-review MAJOR fix (round 20): two more Calico holes. ─────────────────────────────────
 
     def test_missing_peer_namespace_labels_for_namespace_selector_is_unknown_not_a_guess(self):
@@ -1161,6 +1171,17 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "blocked"
 
+    def test_both_ingress_and_egress_keys_with_omitted_types_still_selects_ingress(self):
+        """CI-review MAJOR fix (round 24): the round-23 fix regressed this case — a policy with
+        BOTH `ingress` and `egress` keys and omitted `types` real-Calico-defaults to
+        `[Ingress, Egress]` (both apply), but the round-23 formula (`"egress" not in policy`)
+        excluded Ingress here since an `egress` key IS present. A genuinely ingress-governing
+        policy must still select the pod for Ingress."""
+        policies = [{"selector": "role == 'web'", "ingress": [], "egress": []}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "blocked"  # selected for Ingress, no Allow rule matches
+
 
 # ── Gap 3: Route 53 resolution — REAL evaluation of already-fetched zone data ──────────────────
 
@@ -1300,6 +1321,27 @@ class TestRoute53Resolution:
         records = [
             {"name": "app.example.com", "type": "ALIAS", "alias_target": "primary.example.com", "failover": "PRIMARY"},
             {"name": "app.example.com", "type": "ALIAS", "alias_target": "secondary.example.com", "failover": "SECONDARY"},
+        ]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "unknown"
+
+    def test_alias_with_no_target_data_at_all_is_unknown_not_allowed(self):
+        """CI-review MAJOR fix (round 24): the chain-following loop's condition requires
+        `alias_target` to be truthy — a single matched ALIAS record with a missing/None target
+        never enters the loop and used to fall through to a confident `allowed` since ALIAS is
+        an address type. Its own resolvability was never actually confirmed."""
+        records = [{"name": "app.example.com", "type": "ALIAS", "alias_target": None}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "unknown"
+
+    def test_mixed_set_with_one_targetless_alias_and_others_is_unknown(self):
+        """CI-review MAJOR fix (round 24): the round-23 multi-pointer guard used `all(...)`,
+        vacuously satisfied-false by a mixed set (one CNAME/ALIAS record missing its own
+        `alias_target`, plus an unrelated record) — bypassing the guard entirely. Any CNAME/ALIAS
+        pointer in a multi-record set makes the set ambiguous, well-formed or not."""
+        records = [
+            {"name": "app.example.com", "type": "ALIAS", "alias_target": None},
+            {"name": "app.example.com", "type": "A"},
         ]
         r = ad.eval_route53_resolution(records, "app.example.com")
         assert r["status"] == "unknown"
@@ -1472,6 +1514,26 @@ class TestK8sServiceResolution:
         rules = [{"host": "*.example.com", "backend_service": "svc-a"}]
         r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "example.com", "path": "/"})
         assert r["status"] == "blocked"
+
+    def test_host_matching_is_case_insensitive_and_ignores_trailing_dot(self):
+        """CI-review MAJOR fix (round 24): DNS hostnames are case-insensitive and a trailing dot
+        is a valid FQDN form — a raw comparison confidently failed to match either variation."""
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"ports": [{"port": 80}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "APP.EXAMPLE.COM.", "path": "/"})
+        assert r["status"] == "allowed"
+
+    def test_missing_request_host_with_a_host_scoped_rule_present_is_unknown(self):
+        """CI-review MAJOR fix (round 24): a request with NO host at all used to silently fail
+        every host-scoped rule as a confident non-match, so a host-scoped-only rule set could
+        reach a confident `blocked` from evidence that actually proves nothing about the real
+        (unknown) request host."""
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"ports": [{"port": 80}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": None, "path": "/"})
+        assert r["status"] == "unknown"
 
     def test_wildcard_host_does_not_match_a_multi_label_subdomain(self):
         """CI-review MAJOR fix (round 19): a K8s Ingress wildcard covers exactly ONE DNS label —

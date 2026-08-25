@@ -94,6 +94,15 @@ _PROVIDER_ID_RE = re.compile(r'^aws:///[^/]+/(i-[0-9a-f]+)$')
 # `../`-style segment can never form.
 _K8S_NAME_RE = re.compile(r'^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$')
 
+# CI-review MAJOR fix (round 24): `region` is a definition-authored identity field (like
+# `cluster`/`namespace`/`pod_name`/`node_name` above) that reaches `boto3.client("sts",
+# region_name=region)`, the assumed session's `eks` client, and a hand-built
+# `f"https://sts.{region}.amazonaws.com/..."` presigned URL in `_default_k8s_get` — but unlike
+# those K8s-name fields, it was never validated at this trust boundary at all (only checked for
+# non-emptiness in `resolve_identities()`). Mirrors the sibling `sg_rule_matching._REGION_VALUE_RE`
+# (kept as a local copy per this module's own `_assumed_session` convention, not an import).
+_REGION_VALUE_RE = re.compile(r'^[a-z]{2,4}(-[a-z]+)+-\d$')
+
 # CI-review MAJOR fix (round 19, item 6, defense-in-depth): `_default_k8s_get` must never issue a
 # request to any K8s API path other than the two shapes `resolve_live_identity()` actually needs —
 # a Pod GET or a Node GET. `_validate_k8s_name` already constrains the interpolated
@@ -454,6 +463,8 @@ def resolve_live_identity(resolved, conn, k8s_get=None, ec2_lookup=None):
     cluster = _validate_k8s_name(cluster, "cluster")
 
     account_id, region = src["account_id"], src["region"]
+    if not isinstance(region, str) or not _REGION_VALUE_RE.match(region):
+        raise NetworkPathError(f"source.region {region!r} is not a valid AWS region name")
     external_id = None if account_id == HOST_ACCOUNT_ID else _account_external_id(conn, account_id)
     k8s_get = k8s_get or _default_k8s_get
     ec2_lookup = ec2_lookup or _default_ec2_lookup
@@ -719,8 +730,13 @@ _ADAPTER_BY_LAYER = {
     # worker never actually fetched — the exact contract violation this series exists to close.
     # `crd_present` still defaults `False` so a fully-empty data dict degrades honestly either
     # way, but the fail-open specifically needed partially-populated data to trigger.
+    # CI-review MAJOR fix (round 24): `pod_labels` used to default to `{}` on absence — silently
+    # indistinguishable from a real, confirmed-empty label set, letting every policy selector term
+    # confidently non-match and reach a confident `allowed`. `eval_calico_policy` (via
+    # `_calico_selector_matches`) now itself guards `pod_labels is None` -> `unknown`; the default
+    # here is removed so that guard actually fires on absent data instead of being pre-empted.
     "k8s-calico": lambda data, req: ad.eval_calico_policy(
-        data.get("policies", []), data.get("pod_labels", {}), data.get("direction", "egress"),
+        data.get("policies", []), data.get("pod_labels"), data.get("direction", "egress"),
         crd_present=data.get("crd_present", False), observed_api_version=data.get("api_version"),
         peer_labels=data.get("peer_labels"), peer_ip=data.get("peer_ip"),
         peer_namespace_labels=data.get("peer_namespace_labels"),
