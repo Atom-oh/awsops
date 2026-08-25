@@ -688,15 +688,22 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
     for policy in selecting:
         for rule in policy.get(key, []):
             port_match = _k8s_port_matches(rule, protocol, port)
-            if port_match is None:
-                # item 2b: a named port ("port": "http") this adapter cannot resolve — do not treat
-                # this rule as a confident non-match; remember it and keep scanning other rules.
-                saw_unresolvable_peer_data = True
-                continue
-            if not port_match:
+            # MINOR fix (round 2): a CONFIDENT port non-match (`False`) must still skip this rule
+            # immediately, exactly as before — the rule is irrelevant regardless of its peers, and
+            # evaluating peers anyway can surface an UNRELATED ambiguity (e.g. a bare podSelector
+            # peer whose namespace scoping can't be confirmed) that would incorrectly downgrade an
+            # otherwise-confident `blocked` to `unknown`. Only an UNRESOLVABLE port (`None` — a named
+            # port this adapter can't resolve) defers the decision to peer evaluation below, and even
+            # then only actually taints the verdict if some peer would otherwise be a confident
+            # match — a rule whose peers definitively don't match is still irrelevant regardless of
+            # whether its port could be resolved (item 2b's original concern, now scoped correctly).
+            if port_match is False:
                 continue
             peers = rule.get("from" if direction == "ingress" else "to", [])
             if not peers:  # an empty peer list on a present rule means "allow all" for that rule
+                if port_match is None:
+                    saw_unresolvable_peer_data = True
+                    continue
                 return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                         "summary": "matching NetworkPolicy rule allows all peers", "evidence": [rule]}
             for peer in peers:
@@ -732,11 +739,17 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
                         if policy_namespace != peer_namespace:
                             continue  # different namespace — bare podSelector cannot reach it
 
+                    if port_match is None:
+                        saw_unresolvable_peer_data = True
+                        continue
                     return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                             "summary": "matched pod_selector peer rule", "evidence": [peer]}
 
                 if has_ns_selector:
                     # namespaceSelector alone (no podSelector): matches every pod in that namespace.
+                    if port_match is None:
+                        saw_unresolvable_peer_data = True
+                        continue
                     return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                             "summary": "matched namespaceSelector peer rule", "evidence": [peer]}
 
@@ -751,6 +764,9 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
                     excepts = peer["ip_block"].get("except") or []
                     if any(_cidr_contains(ex, peer_ip) for ex in excepts):
                         continue  # excluded sub-range carves this peer back OUT of the allow
+                    if port_match is None:
+                        saw_unresolvable_peer_data = True
+                        continue
                     return {"layer": "k8s-networkpolicy", "status": "allowed", "resource": None,
                             "summary": "matched ipBlock peer rule", "evidence": [peer]}
     if saw_unresolvable_namespace_selector:

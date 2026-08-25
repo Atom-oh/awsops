@@ -589,6 +589,20 @@ class TestK8sNetworkPolicy:
                                         policy_namespace="ns", peer_namespace="ns")
         assert r["status"] == "allowed"
 
+    def test_named_port_unresolved_but_peer_definitely_mismatches_stays_confident_blocked(self):
+        """MINOR fix (round 2): the rule's own peer (podSelector `app: other`) definitively does not
+        match the flow's peer (`app: client`) regardless of port — this rule is irrelevant, and must
+        not taint the verdict to `unknown` just because ITS OWN port entry happens to be an
+        unresolvable named port. Only a rule whose peers WOULD otherwise match, but whose port can't
+        be resolved, should downgrade to `unknown` (see the two tests above)."""
+        policies = [{"pod_selector": {"app": "web"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {"app": "other"}}],
+             "ports": [{"protocol": "TCP", "port": "http"}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "web"}, "ingress",
+                                        peer_labels={"app": "client"}, protocol="tcp", port=80,
+                                        policy_namespace="ns", peer_namespace="ns")
+        assert r["status"] == "blocked"
+
     # ── item 2a: partial peer data (podSelector w/o peer_labels, ipBlock w/o peer_ip) -> unknown ──
 
     def test_pod_selector_peer_with_no_peer_labels_is_unknown_not_blocked(self):
