@@ -914,15 +914,25 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
                 "reason": f"source validation.status={source.get('validation', {}).get('status')!r} is not 'valid'"}
     lam = (lambda_client_factory or (lambda: boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))))()
 
-    # CI-review MAJOR fix (round 5): distinguish a validation that was genuinely CHECKED and
-    # rejected the date-shape (it already carries `partitionKeyTypes`, so `has_resolved_partition_
-    # strategy` correctly and permanently refuses it) from one that predates that field entirely —
-    # persisted before the round-4 fixes existed, never re-run since. The latter is a stale
-    # snapshot of an old, looser check, not a confirmed-bad source, and self-heals via the broker's
-    # own `validate` action rather than requiring a manual admin no-op re-save (the ONLY previously
-    # documented remediation) before it can ever scan again.
+    # CI-review MAJOR fix (round 5, corrected round 7): distinguish a validation that predates the
+    # round-4/round-2 scope/type fields entirely — persisted before they existed, never re-run
+    # since — from one that was genuinely CHECKED under the CURRENT gate. The original round-5
+    # condition keyed self-heal on `not sm.has_resolved_partition_strategy(validation)`, which is
+    # `True` (no re-heal needed, by that check's own logic) for ANY Hive-style year/month/day
+    # layout regardless of `scopeResolution` — `has_resolved_partition_strategy` never looks at
+    # scope metadata at all. A pre-round-2 Hive-style source on a centralized/org-wide table
+    # therefore NEVER re-validated, permanently missing `scopeResolution`/`scannedUnscoped` and
+    # `_build_scope_predicate`'s account/region predicate — exactly the "scanned entirely unscoped,
+    # which used to be silent" defect the round-2 fix exists to close, just reopened for every
+    # legacy source the round-5 self-heal was supposed to reach. The correct staleness signal is
+    # simpler and doesn't depend on whether the CURRENT gate happens to already accept the layout:
+    # either `partitionKeyTypes` or `scopeResolution` being absent from the persisted validation
+    # means it predates the schema those fields belong to, full stop — self-heal by re-running the
+    # broker's own `validate` action rather than requiring a manual admin no-op re-save (the ONLY
+    # previously documented remediation) before it can ever scan again, or worse, silently keep
+    # scanning unscoped forever without anyone noticing.
     validation = source.get("validation") or {}
-    if "partitionKeyTypes" not in validation and not sm.has_resolved_partition_strategy(validation):
+    if "partitionKeyTypes" not in validation or "scopeResolution" not in validation:
         fresh = invoke_broker_validate(lam, broker_arn, source)
         if fresh.get("ok"):
             healed = wrap_broker_validation_result(fresh)

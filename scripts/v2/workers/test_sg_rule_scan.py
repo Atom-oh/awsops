@@ -1259,11 +1259,15 @@ def test_run_one_broker_invoke_for_the_eligible_day(monkeypatch):
     monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
     conn = FakeConn({
         "FROM sg_flow_sources": [[
-            # A Hive-style year/month/day layout resolves `has_resolved_partition_strategy` without
-            # needing `partitionKeyTypes` at all, so this fixture (unlike a bare {"status":"valid"})
-            # never triggers the round-5 stale-validation self-heal path below.
+            # A Hive-style year/month/day layout that ALSO carries `scopeResolution` (round-7 fix:
+            # its absence alone — not just `partitionKeyTypes`'s — now triggers self-heal, since a
+            # Hive layout can satisfy `has_resolved_partition_strategy` without either field) — this
+            # fixture represents a source already fully re-validated under the current schema, so it
+            # never triggers the stale-validation self-heal path below.
             (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
-             json.dumps({"status": "valid", "partitionKeys": ["year", "month", "day"]}), utc(2020, 1, 1)),
+             json.dumps({"status": "valid", "partitionKeys": ["year", "month", "day"],
+                         "partitionKeyTypes": ["string", "string", "string"],
+                         "scopeResolution": {"account_id": None, "region": None}}), utc(2020, 1, 1)),
         ]],
         "FROM accounts": [[("ext-abc",)]],
         "FROM sg_rule_scan_runs": [[(None,)]],  # no watermark yet -> first run starts at source created day
@@ -1381,12 +1385,111 @@ def test_run_self_heals_a_stale_validation_missing_partition_key_types(monkeypat
     assert [i for i in second_run_lambda.invocations if i["action"] == "query_by_source"]
 
 
-def test_run_does_not_revalidate_a_source_that_was_genuinely_checked_and_rejected(monkeypatch):
-    """A validation that DOES carry `partitionKeyTypes` (it was checked, and the type genuinely
-    isn't date-shaped) must never be silently re-tried on every single run — that field's presence
-    is what distinguishes 'stale, never re-checked' from 'confirmed, permanently unscannable'."""
+def test_run_self_heals_a_legacy_hive_style_source_missing_scope_resolution(monkeypatch):
+    """CI-review MAJOR fix (round 7): the round-5 self-heal condition gated on
+    `not sm.has_resolved_partition_strategy(validation)` — but a Hive-style year/month/day layout
+    satisfies that check WITHOUT needing `partitionKeyTypes` OR `scopeResolution` at all (that
+    function never looks at scope metadata). A pre-round-2 Hive-style source on a centralized/
+    org-wide table therefore never re-validated under the round-5 condition, permanently missing
+    `scopeResolution`/`scannedUnscoped` and the account/region scope predicate — exactly the
+    'scanned entirely unscoped, which used to be silent' defect the round-2 fix exists to close.
+    `run()` must self-heal on `scopeResolution` being absent too, not just `partitionKeyTypes`."""
     monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
-    checked_and_rejected = {"status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"]}
+    # A pre-round-2 Hive-style validation: has_resolved_partition_strategy(this) is already True,
+    # so the OLD self-heal condition would skip it entirely.
+    legacy_hive_validation = {"status": "valid", "partitionKeys": ["year", "month", "day"]}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps(legacy_hive_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fresh_validation = {"ok": True, "partitionKeys": ["year", "month", "day"],
+                         "partitionKeyTypes": ["string", "string", "string"],
+                         "columnMap": {"account_id": "account_id", "region": "region"},
+                         "scopeResolution": {"account_id": "column", "region": "column"}}
+    fake_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    validate_calls = [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert len(validate_calls) == 1
+    update_calls = [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+    assert len(update_calls) == 1
+    persisted = json.loads(update_calls[0][1]["v"])
+    assert persisted["scopeResolution"] == {"account_id": "column", "region": "column"}
+
+
+def test_run_self_heals_a_stale_hive_layout_source_missing_scope_resolution(monkeypatch):
+    """CI-review MAJOR fix (round 7): a Hive-style year/month/day source persisted BEFORE round-2's
+    scope-resolution work satisfies `has_resolved_partition_strategy` WITHOUT needing
+    `partitionKeyTypes` or `scopeResolution` at all — so the original round-5 condition (`not
+    sm.has_resolved_partition_strategy(validation)`) never re-validated it, permanently stranding it
+    unscoped (no `account_id`/`region` predicate, no `scopeResolution`/`scannedUnscoped` markers) on
+    every run, exactly the pre-round-2 defect. `run()` must trigger self-heal for ANY source whose
+    persisted validation lacks `scopeResolution` — regardless of whether its partition strategy
+    already happens to resolve — and the healed validation must carry `scopeResolution` afterward."""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    # A real pre-PR-231 legacy row: Hive layout, `status: "valid"`, no `partitionKeyTypes` and no
+    # `scopeResolution` — `has_resolved_partition_strategy` returns True for this shape today.
+    legacy_hive_validation = {"status": "valid", "partitionKeys": ["year", "month", "day"]}
+    conn = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True,
+             json.dumps(legacy_hive_validation), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    fresh_validation = {
+        "ok": True, "partitionKeys": ["year", "month", "day"],
+        "partitionKeyTypes": ["string", "string", "string"], "columnMap": {},
+        "scopeResolution": {"account_id": "partition", "region": "partition"},
+    }
+    fake_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: fake_lambda,
+    )
+    # The self-heal must have fired even though `has_resolved_partition_strategy` would already
+    # accept the pre-heal Hive layout — the trigger is `scopeResolution`'s absence, not whether the
+    # partition strategy is resolved.
+    validate_calls = [i for i in fake_lambda.invocations if i["action"] == "validate"]
+    assert len(validate_calls) == 1
+    update_calls = [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
+    assert len(update_calls) == 1
+    persisted = json.loads(update_calls[0][1]["v"])
+    assert persisted["status"] == "valid"
+    assert persisted["scopeResolution"] == {"account_id": "partition", "region": "partition"}
+
+
+def test_run_does_not_revalidate_a_source_that_was_genuinely_checked_and_rejected(monkeypatch):
+    """A validation that DOES carry `partitionKeyTypes` AND `scopeResolution` (it was fully checked
+    under the current schema, and the type genuinely isn't date-shaped) must never be silently
+    re-tried on every single run — both fields' presence is what distinguishes 'stale, never
+    re-checked under the current schema' from 'confirmed, permanently unscannable'. (Round-7 CI
+    review fix: `scopeResolution`, not just `partitionKeyTypes`, must be present — a Hive-style
+    source can pass `has_resolved_partition_strategy` without either field, so gating self-heal on
+    that check being satisfied let legacy Hive sources skip re-validation forever and keep scanning
+    a centralized table unscoped.)"""
+    monkeypatch.setenv("SG_RULE_ATHENA_BROKER_ARN", "arn:aws:lambda:ap-northeast-2:123456789012:function:broker")
+    checked_and_rejected = {"status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"],
+                             "scopeResolution": {"account_id": None, "region": None}}
     conn = FakeConn({
         "FROM sg_flow_sources": [[
             (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps(checked_and_rejected), utc(2020, 1, 1)),
