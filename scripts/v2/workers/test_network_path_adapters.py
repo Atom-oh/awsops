@@ -1141,6 +1141,18 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "unknown"
 
+    def test_rule_with_a_malformed_action_value_is_unknown_not_a_guessed_deny(self):
+        """CI-review MINOR fix (round 26): the round-25 guard only caught an ABSENT `action` key
+        — a PRESENT-but-malformed value (e.g. a typo) used to fall through to `action != "allow"`,
+        which treats anything not spelled exactly `"allow"` as Deny/Pass-like. A garbled value
+        could just as easily have MEANT `Allow`; only the four real Calico actions are now
+        recognized as confidently non-Allow."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Alow", "source": {"nets": ["0.0.0.0/0"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
     def test_egress_source_side_selector_constraint_is_unknown_not_ignored(self):
         """Symmetric to round 20's ingress-side `destination` guard: for EGRESS, `destination` is
         the peer being matched, but `source` (the workload itself) can still carry its own
@@ -1245,6 +1257,29 @@ class TestRoute53Resolution:
         records = [{"name": "delegated.example.com", "type": "NS", "alias_target": None}]
         r = ad.eval_route53_resolution(records, "sub.delegated.example.com")
         assert r["status"] == "unknown"
+
+    def test_zone_apex_ns_with_soa_is_not_a_delegation_and_nxdomain_still_blocks(self):
+        """CI-review MAJOR fix (round 26): the round-25 delegation check misclassified the ZONE
+        APEX's own NS RRset as a delegation — every real hosted zone carries an authoritative NS
+        (and SOA) RRset at its apex, and the apex is frequently the closest encloser for any
+        flat, non-delegated name (e.g. `foo.example.com` closest-enclosed by `example.com`). A
+        delegation point never carries an SOA; the apex always does — NS-without-SOA is the real
+        signal. A genuine NXDOMAIN under a normal (non-delegated) apex must still `blocked`."""
+        records = [
+            {"name": "example.com", "type": "NS"},
+            {"name": "example.com", "type": "SOA"},
+        ]
+        r = ad.eval_route53_resolution(records, "foo.example.com")
+        assert r["status"] == "blocked"
+
+    def test_zone_apex_wildcard_synthesis_still_works_despite_apex_ns_soa(self):
+        records = [
+            {"name": "example.com", "type": "NS"},
+            {"name": "example.com", "type": "SOA"},
+            {"name": "*.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "foo.example.com")
+        assert r["status"] == "allowed"
 
     def test_closer_empty_non_terminal_without_its_own_wildcard_blocks_a_farther_wildcard(self):
         """CI-review MAJOR fix (round 20): RFC 4592 wildcard synthesis is valid ONLY from the

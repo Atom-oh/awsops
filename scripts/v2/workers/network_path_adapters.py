@@ -450,7 +450,9 @@ def eval_vpn_or_dx(kind, aws_side_state, route_present):
     CONFIRMED-down state, reporting a confident `blocked` for a layer this evaluator has no data
     on at all. `None` now degrades to `unknown`, mirroring this module's `_nacl_or_unknown` and
     every other "missing data, not a confirmed negative" layer — only an actually-observed
-    non-`up` state (e.g. `"down"`) still confidently blocks."""
+    non-`up` state (e.g. `"down"`) still confidently blocks. (Round 26 docstring fix: `route_present`
+    got the SAME `None`-vs-`False` treatment in round 25, below — this paragraph originally only
+    covered `aws_side_state`.)"""
     if aws_side_state is None:
         return {"layer": kind, "status": "unknown", "resource": None,
                 "summary": f"{kind} AWS-side attachment state was not fetched — cannot evaluate "
@@ -1030,7 +1032,11 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     Only `action: Allow` rules ever contribute a confident `allowed` — a `Deny`/`Log`/`Pass` rule
     that would otherwise match is simply skipped (not evaluated as a blocker), matching this
     feature's "never invent a confident `blocked` from a mechanism this adapter cannot fully model"
-    rule: Calico's real deny/pass precedence also depends on `order` across policies (lower order
+    rule. (Round-26 docstring fix: a rule whose `action` is ABSENT or unrecognized is not assumed
+    to be any of the four real Calico actions either — it vetoes a confident verdict the same
+    conservative way, since `action` is a required field on a real `Rule` and its absence/
+    malformation is partially-fetched data, not "no constraint.") Calico's real deny/pass
+    precedence also depends on `order` across policies (lower order
     wins, ties are undefined across tiers), which this bounded evaluator does not model — assigning
     a Deny/Pass rule an authoritative `blocked` here could be wrong relative to a differently-ordered
     Allow elsewhere. The final "no Allow rule matched" case still correctly reduces to `blocked`
@@ -1096,6 +1102,7 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     saw_pass_conflict = False
     saw_unresolvable_action = False
     matched_allow_rule = None
+    _CALICO_ACTIONS = {"allow", "deny", "log", "pass"}
     for policy in selecting:
         for rule in policy.get(key, []):
             match = _calico_rule_peer_match(rule, direction, peer_labels, peer_ip,
@@ -1108,11 +1115,19 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
             # possibly-matching) rule with no `action` at all is now treated the same way an
             # unmodeled Deny/Pass conflict already is — it vetoes a confident verdict rather than
             # being guessed as an Allow.
-            if rule.get("action") is None:
+            # CI-review MINOR fix (round 26): the round-25 guard only caught an ABSENT `action`
+            # key — a PRESENT-but-malformed value (`""`, a typo like `"Alow"`) fell through to
+            # `action != "allow"`, which treats anything not spelled exactly `"allow"` as
+            # Deny/Pass-like. A garbled value could just as easily have MEANT `Allow`; guessing
+            # it's a blocker is the same malformed-data class this round's rationale already
+            # covers for the absent-key case. Only the four real Calico actions are recognized;
+            # anything else is unresolvable, not assumed Deny/Pass.
+            raw_action = rule.get("action")
+            if raw_action is None or str(raw_action).lower() not in _CALICO_ACTIONS:
                 if match is not False:
                     saw_unresolvable_action = True
                 continue
-            action = str(rule["action"]).lower()
+            action = str(raw_action).lower()
             if action != "allow":
                 # CI-review MAJOR fix (round 17): a Deny/Log/Pass rule used to be skipped WITHOUT
                 # ever checking whether it matches this peer — see the docstring above for why a
@@ -1386,9 +1401,11 @@ def eval_route53_resolution(records, query_host, data_available=True):
     "health_check_status": "healthy"|"unhealthy"|None, "failover": "PRIMARY"|"SECONDARY"|None}].
     Matching: exact name match, else the RFC 4592 closest-encloser wildcard (see `_find`'s own
     comment — NOT every ancestor's wildcard independently, only the nearest ancestor that actually
-    exists in the zone), else (for a CNAME target) one hop of chain-following. Not a full
-    recursive resolver — this is read-only zone-data inspection, never an actual DNS query (spec's
-    "no active probe" boundary).
+    exists in the zone, and only when that encloser isn't itself an NS-delegation point), else
+    (for a CNAME/ALIAS target) chain-following across MULTIPLE hops, bounded by a cycle guard —
+    NOT just one hop (stale docstring fixed in round 26; the chain has followed multiple hops
+    since round 21's cycle-detection rewrite). Not a full recursive resolver — this is read-only
+    zone-data inspection, never an actual DNS query (spec's "no active probe" boundary).
     """
     if not data_available:
         return {"layer": "dns", "status": "unknown", "resource": None,
@@ -1460,7 +1477,19 @@ def eval_route53_resolution(records, query_host, data_available=True):
                 break
         if closest_encloser is None:
             return None
-        if any(str(r.get("type", "")).upper() == "NS" for r in by_name.get(closest_encloser, [])):
+        # CI-review MAJOR fix (round 26): an NS RRset alone does NOT mean a delegation — the
+        # zone's own APEX also carries an NS RRset (it is its own authoritative NS set, always
+        # present in real `ListResourceRecordSets` output per this function's own docstring), and
+        # the apex is frequently the closest encloser for any flat, non-delegated name in the
+        # zone (e.g. `foo.example.com` closest-enclosed by `example.com`). Treating that as a
+        # delegation broke the common flat-zone case: a genuine NXDOMAIN there now degraded to
+        # `unknown` instead of the confident `blocked` rounds 20/21 established, and apex wildcard
+        # synthesis (`*.example.com`) was made unreachable entirely. A real delegation point NEVER
+        # carries an SOA record (only the zone apex does) — so NS-without-SOA at the encloser is
+        # the actual delegation signal.
+        encloser_records = by_name.get(closest_encloser, [])
+        encloser_types = {str(r.get("type", "")).upper() for r in encloser_records}
+        if "NS" in encloser_types and "SOA" not in encloser_types:
             _delegated[0] = True
             return None
         wildcard = "*." + closest_encloser
@@ -1497,7 +1526,11 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # record is a CNAME/ALIAS pointer at all — well-formed or not — so the guard now fires on
     # `any(...)` instead of `all(...)`.
     def _multi_pointer_ambiguous(rows):
-        return len(rows) > 1 and any(r.get("type") in ("CNAME", "ALIAS") for r in rows)
+        # CI-review MINOR fix (round 26): the chain-loop condition and the NS-delegation check
+        # both normalize `type` with `str(...).upper()` — this comparison didn't, so a
+        # lowercase `"alias"`/`"cname"` (Route 53 itself always returns uppercase, but this
+        # evaluator's own contract doesn't require it) would silently bypass this guard.
+        return len(rows) > 1 and any(str(r.get("type", "")).upper() in ("CNAME", "ALIAS") for r in rows)
 
     if _multi_pointer_ambiguous(matched):
         return {"layer": "dns", "status": "unknown", "resource": host,
@@ -1519,7 +1552,7 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # own — it is exactly as much a pointer as a CNAME — so a dangling or in-zone-chained ALIAS
     # (its `alias_target` never actually checked) reported a confident `allowed` the same way the
     # round-18 fix closed for CNAME. ALIAS is now followed identically to CNAME.
-    while (len(matched) == 1 and matched[0].get("type") in ("CNAME", "ALIAS")
+    while (len(matched) == 1 and str(matched[0].get("type", "")).upper() in ("CNAME", "ALIAS")
            and matched[0].get("alias_target")):
         target = str(matched[0]["alias_target"]).rstrip(".").lower()
         if target in seen_names:
@@ -1572,7 +1605,8 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # `_R53_ADDRESS_TYPES` check below (ALIAS is an address type), and would otherwise reach a
     # confident `allowed` — the exact "trust a pointer without confirming its target" class the
     # round-18/22/23 fixes closed for every OTHER shape of this problem, left open for this one.
-    if len(matched) == 1 and matched[0].get("type") in ("CNAME", "ALIAS") and not matched[0].get("alias_target"):
+    if (len(matched) == 1 and str(matched[0].get("type", "")).upper() in ("CNAME", "ALIAS")
+            and not matched[0].get("alias_target")):
         return {"layer": "dns", "status": "unknown", "resource": host,
                 "summary": f"Route 53 record for {host!r} is a CNAME/ALIAS with no target data "
                            "at all — its own resolvability cannot be confirmed", "evidence": matched}
