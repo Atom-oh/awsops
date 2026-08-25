@@ -1159,10 +1159,34 @@ def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespac
     confidently `allowed` traffic to every port. `notProtocol` (a real rule-level field, independent
     of `EntityRule`) is added to the negation guard alongside the peer/port ones for the same
     reason `notNets`/`notSelector`/`notPorts` are guarded — this adapter cannot evaluate a negated
-    protocol match."""
+    protocol match.
+
+    CI-review MAJOR fix (round 20, part a): for INGRESS, `peer` is `source` (the sender) and
+    `dest` is `destination` (the protected workload) — two DIFFERENT EntityRules. Only `dest`'s
+    `ports`/`notPorts` were ever read; a real Calico ingress rule can ALSO constrain `destination.
+    nets`/`selector`/`namespaceSelector`/`notNets`/`notSelector` (which of the policy-selected
+    workloads THIS rule applies to), and none of that was evaluated at all — a rule allowing
+    `source.nets: [0.0.0.0/0]` only to `destination.nets: [10.0.1.0/24]` used to confidently
+    `allowed` a peer reaching a workload outside that net. Any of those fields present on
+    `destination`, for ingress, now forces `unknown` (this adapter has no signal for "is THIS
+    protected workload the one `destination` scopes to"). `ipVersion` (a real rule-level field,
+    unmodeled either way) is guarded the same way.
+
+    CI-review MAJOR fix (round 20, part b): the `namespaceSelector` branch passed
+    `peer_namespace_labels` straight into `_calico_selector_matches` without ever checking for
+    `None` first — that helper's own `labels or {}` normalization makes an absent-labels input
+    silently behave like an EMPTY (but present) label set, so every `==`/`in` term confidently
+    evaluates `False` and every `!=`/`not in` term confidently evaluates `True`. Unfetched
+    namespace labels thus produced a confident `blocked`/`allowed` instead of `unknown` — the
+    exact asymmetry the `selector`/`peer_labels` branch already guards against below. A `None`
+    `peer_namespace_labels` now short-circuits to unresolvable, mirroring that branch."""
     peer = rule.get("source" if direction == "ingress" else "destination") or {}
     dest = rule.get("destination") or {}
-    if rule.get("notProtocol") or dest.get("notPorts") or peer.get("notSelector") or peer.get("notNets"):
+    if (rule.get("notProtocol") or rule.get("ipVersion") is not None
+            or dest.get("notPorts") or peer.get("notSelector") or peer.get("notNets")):
+        return None
+    if direction == "ingress" and (dest.get("nets") or dest.get("selector") or dest.get("namespaceSelector")
+                                    or dest.get("notSelector") or dest.get("notNets")):
         return None
     rule_protocol = rule.get("protocol")
     if rule_protocol is not None and protocol is not None and str(rule_protocol).upper() != str(protocol).upper():
@@ -1176,6 +1200,8 @@ def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespac
     if not selector and not ns_selector and not nets:
         return None if port_match is None else True
     if ns_selector:
+        if peer_namespace_labels is None:
+            return None
         ns_match = _calico_selector_matches(ns_selector, peer_namespace_labels)
         if ns_match is None:
             return None
@@ -1214,9 +1240,11 @@ def eval_route53_resolution(records, query_host, data_available=True):
 
     `records`: [{"name": str, "type": "A"|"AAAA"|"CNAME"|"ALIAS"|..., "alias_target": str|None,
     "health_check_status": "healthy"|"unhealthy"|None, "failover": "PRIMARY"|"SECONDARY"|None}].
-    Matching: exact name match, else the name's own wildcard record (`*.<parent>`) one label up,
-    else (for a CNAME target) one hop of chain-following. Not a full recursive resolver — this is
-    read-only zone-data inspection, never an actual DNS query (spec's "no active probe" boundary).
+    Matching: exact name match, else the RFC 4592 closest-encloser wildcard (see `_find`'s own
+    comment — NOT every ancestor's wildcard independently, only the nearest ancestor that actually
+    exists in the zone), else (for a CNAME target) one hop of chain-following. Not a full
+    recursive resolver — this is read-only zone-data inspection, never an actual DNS query (spec's
+    "no active probe" boundary).
     """
     if not data_available:
         return {"layer": "dns", "status": "unknown", "resource": None,
@@ -1232,23 +1260,42 @@ def eval_route53_resolution(records, query_host, data_available=True):
     for r in records or []:
         by_name.setdefault(str(r.get("name", "")).rstrip(".").lower(), []).append(r)
 
+    # CI-review MAJOR fix (round 20): every ancestor level's wildcard is NOT independently
+    # eligible to synthesize an answer — RFC 4592 wildcard synthesis is valid only from the
+    # CLOSEST ENCLOSER (the nearest ancestor of the query name that actually exists in the zone,
+    # whether as a real owner name or as an "empty non-terminal" — a name with descendants but no
+    # RRset of its own). The round-19 fix (checking every ancestor wildcard, nearest first) traded
+    # a false `blocked` for a false `allowed`: if `b.example.com` exists in the zone (e.g. because
+    # `x.b.example.com` is a real record) but has no `*.b.example.com` wildcard child, a query for
+    # `a.b.example.com` is genuinely NXDOMAIN in real DNS — `b.example.com` IS the closest
+    # encloser, and its own lack of a wildcard child ends the search; a further-away
+    # `*.example.com` wildcard must NOT be allowed to answer instead. `_existing_nodes` derives
+    # every ancestor-node of every fetched record name (since any ancestor of a real owner name is
+    # itself a real node in the DNS tree, with or without its own RRset) — the closest encloser is
+    # the nearest one of those that is a strict ancestor of the query name.
+    _existing_nodes = set()
+    for k in by_name:
+        klabels = k.split(".")
+        for i in range(len(klabels)):
+            _existing_nodes.add(".".join(klabels[i:]))
+
     def _find(name, depth=0):
         if depth > 5:  # bounded CNAME-chain following — never loop forever on a misconfigured zone
             return None
         if name in by_name:
             return by_name[name]
-        # CI-review MAJOR fix (round 19): this used to check ONLY the immediate-parent wildcard
-        # (`*.` + everything after the first label) — for `a.b.example.com` that is `*.b.example.
-        # com`, never `*.example.com`. Per RFC 4592 wildcard synthesis, a wildcard at ANY ancestor
-        # level can answer a query with no closer/more-specific record, so a query name whose
-        # immediate parent has no wildcard but a higher ancestor does would incorrectly report a
-        # confident `blocked` ("NXDOMAIN against known zone data") for a name the zone genuinely
-        # resolves. Every ancestor level is now checked, nearest first.
         labels = name.split(".")
+        closest_encloser = None
         for i in range(1, len(labels)):
-            wildcard = "*." + ".".join(labels[i:])
-            if wildcard in by_name:
-                return by_name[wildcard]
+            candidate = ".".join(labels[i:])
+            if candidate in _existing_nodes:
+                closest_encloser = candidate
+                break
+        if closest_encloser is None:
+            return None
+        wildcard = "*." + closest_encloser
+        if wildcard in by_name:
+            return by_name[wildcard]
         return None
 
     matched = _find(host)
@@ -1416,12 +1463,21 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
             continue
         candidates.append((host_rank, path_rank, path_len, r))
 
+    # CI-review MAJOR fix (round 20): this used to consult `saw_unresolvable_path` only inside
+    # `if not candidates:` — but an ImplementationSpecific-with-path rule whose HOST matches is
+    # controller-defined behavior (e.g. an nginx regex path) that could take precedence over
+    # whatever Exact/Prefix/no-path rule this adapter DID confidently select, regardless of
+    # whether any such rule exists. Silently discarding it and returning a confident verdict for
+    # the selected candidate contradicted this function's own "degrades to unknown rather than
+    # being guessed" contract; it now degrades to `unknown` whenever ANY host-matching rule's
+    # path semantics are unresolvable, independent of whether other rules also matched.
+    if saw_unresolvable_path:
+        return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
+                "summary": f"an Ingress rule for host={req_host!r} uses an "
+                           "ImplementationSpecific path_type this adapter cannot confidently "
+                           "evaluate — its controller-defined precedence relative to any other "
+                           "matching rule cannot be determined", "evidence": []}
     if not candidates:
-        if saw_unresolvable_path:
-            return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
-                    "summary": f"an Ingress rule for host={req_host!r} uses an "
-                               "ImplementationSpecific path_type this adapter cannot confidently "
-                               "evaluate, and no other rule confidently matches", "evidence": []}
         return {"layer": "k8s-service-resolution", "status": "blocked", "resource": None,
                 "summary": f"no Ingress rule matches host={req_host!r} path={req_path!r}",
                 "evidence": []}
@@ -1450,7 +1506,20 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
     backend_port = matched_rule.get("backend_port")
     svc_ports = [p for p in (svc.get("ports") or []) if isinstance(p, dict)]
     if backend_port is None:
-        pass  # no port reference on the Ingress rule at all — nothing to validate against
+        # CI-review MAJOR fix (round 20): this function's OWN docstring states real K8s only
+        # accepts an omitted `backend_port` when the Service declares EXACTLY ONE port — but the
+        # code let a `None` backend_port through unconditionally, with no check against
+        # `svc_ports`'s actual length. An incomplete/malformed backend reference (or stale fixture
+        # data not actually admission-validated) against a multi-port Service used to report a
+        # confident `allowed` without ever proving which port the Ingress targets. A `None`
+        # backend_port against anything other than exactly one declared Service port now degrades
+        # to `unknown` instead.
+        if len(svc_ports) != 1:
+            return {"layer": "k8s-service-resolution", "status": "unknown", "resource": svc_name,
+                    "summary": f"Ingress backend for Service {svc_name!r} omits a port reference, "
+                               f"but the Service declares {len(svc_ports)} ports (not exactly "
+                               "one) — cannot confirm which port this backend targets",
+                    "evidence": svc_ports}
     elif isinstance(backend_port, str):
         if not any(p.get("name") == backend_port for p in svc_ports):
             return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,

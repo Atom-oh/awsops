@@ -15,6 +15,18 @@ the **cluster owner's** decision, and the terraform apply principal may not hold
 it out-of-band, same as the istio-read MCP's own access entry
 (`docs/runbooks/istio-agent-eks-access.md`).
 
+**CI-review MAJOR fix (round 20) — the principal to register depends on the SOURCE's account, NOT
+always the worker task role.** `_assumed_session()` (`network_path.py`) returns the worker task
+role's own credentials directly ONLY when the pod/node source's account is the HOST account —
+for a target/MEMBER-account source, it assumes that account's `AWSopsReadOnlyRole` instead, and
+`_default_k8s_get()`'s presigned bearer token is generated from whichever session was actually
+returned. Registering the worker task role's Access Entry (this script's default) does nothing
+for a member-account cluster's own EKS API — every GET still 403s, since the principal that
+actually authenticates there is `AWSopsReadOnlyRole`, not the worker task role. **Host-account
+cluster → register the worker task role (the default below). Member-account cluster → register
+that target account's `AWSopsReadOnlyRole` via `ROLE_ARN=arn:aws:iam::<member-acct>:role/
+AWSopsReadOnlyRole`.**
+
 **Why a minimal Kubernetes-group RBAC binding, not an AWS-managed access policy (unlike
 istio-read's `AmazonEKSViewPolicy`):** `resolve_live_identity()` GETs `/api/v1/nodes/{name}` — a
 **cluster-scoped** resource — plus one namespaced Pod GET. `AmazonEKSViewPolicy` mirrors the k8s
@@ -51,24 +63,37 @@ access policies or your own RBAC objects can).
 
 ## Grant (idempotent)
 ```bash
+# Host-account cluster (default — registers the worker task role):
 scripts/v2/eks/register-network-path-access.sh <cluster-name> [<cluster-name> ...]
 # or, if you can't run terraform output:
-ROLE_ARN=arn:aws:iam::<acct>:role/awsops-v2-worker-task \
+ROLE_ARN=arn:aws:iam::<host-acct>:role/awsops-v2-worker-task \
+  scripts/v2/eks/register-network-path-access.sh <cluster-name>
+
+# Member-account cluster (registers that account's AWSopsReadOnlyRole instead — see the callout
+# above; the worker task role is NOT the authenticating principal there):
+ROLE_ARN=arn:aws:iam::<member-acct>:role/AWSopsReadOnlyRole \
   scripts/v2/eks/register-network-path-access.sh <cluster-name>
 
 kubectl apply -f scripts/v2/eks/network-path-reader-rbac.yaml
 ```
-The script reads `terraform output -raw worker_task_role_arn`, then runs
-`aws eks create-access-entry` (or `update-access-entry` if the entry already exists) binding the
-role to the `network-path-reader` Kubernetes group — no AWS-managed access policy is associated.
-The `kubectl apply` step is what actually authorizes that group (`get` on `nodes`/`pods` only) —
-run it once per cluster.
+The script reads `terraform output -raw worker_task_role_arn` as its default (host-account case
+only) unless `ROLE_ARN` overrides it, then runs `aws eks create-access-entry` (or
+`update-access-entry` if the entry already exists) binding whichever role to the
+`network-path-reader` Kubernetes group — no AWS-managed access policy is associated (a stale one
+from an earlier run is actively disassociated, since `update-access-entry` alone doesn't remove
+it). The `kubectl apply` step is what actually authorizes that group (`get` on `nodes`/`pods`
+only) — run it once per cluster, against whichever cluster this Access Entry targets.
 
 ## Verify
 ```bash
-aws eks list-access-entries --cluster-name <cluster-name> | grep worker-task
-aws eks describe-access-entry --cluster-name <cluster-name> --principal-arn <worker-task-role-arn> \
+# <principal-arn> = whichever role you registered above (worker task role, or a member account's
+# AWSopsReadOnlyRole)
+aws eks list-access-entries --cluster-name <cluster-name>
+aws eks describe-access-entry --cluster-name <cluster-name> --principal-arn <principal-arn> \
   --query kubernetesGroups
+aws eks list-associated-access-policies --cluster-name <cluster-name> --principal-arn <principal-arn>
+  # should be EMPTY — a non-empty result means a stale AWS-managed policy (e.g. from an earlier
+  # AdminView-era run) is still attached and needs the script re-run or a manual disassociate
 kubectl get clusterrolebinding awsops-network-path-reader
 ```
 Then create a Network Path Check whose source is a pod/node on that cluster and confirm the run's
@@ -76,8 +101,7 @@ live-identity step no longer reports an AccessDenied.
 
 ## Revoke
 ```bash
-aws eks delete-access-entry --cluster-name <cluster-name> \
-  --principal-arn arn:aws:iam::<acct>:role/awsops-v2-worker-task
+aws eks delete-access-entry --cluster-name <cluster-name> --principal-arn <principal-arn>
 # optional — only if no other principal is bound to the network-path-reader group on this cluster:
 kubectl delete -f scripts/v2/eks/network-path-reader-rbac.yaml
 ```

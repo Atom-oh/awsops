@@ -32,6 +32,16 @@
 # granting ONLY `get` on `nodes` and `pods` — no Secret access, no LIST/WATCH, no other resource
 # kind. See network-path-reader-rbac.yaml (applied separately via kubectl, since Access Entries
 # alone establish the IAM-principal -> k8s-group mapping; RBAC authorization is still needed).
+#
+# CI-review MAJOR fix (round 20): the round-19 "converged" path only ran `update-access-entry
+# --kubernetes-groups` on an already-existing entry — but an AWS-managed access policy (e.g. the
+# round-18-era `AmazonEKSAdminViewPolicy`, with its cluster-wide Secret read) is associated via a
+# SEPARATE API (`associate-access-policy`) and is completely untouched by `update-access-entry`.
+# An entry left over from this script's own round-18 shape kept that policy while this script
+# printed a false "converged to least-privilege" claim. Every run now also lists and disassociates
+# any access policy still attached to the entry, so "converged" is actually true regardless of how
+# the entry got there. This needs `eks:ListAssociatedAccessPolicies` +
+# `eks:DisassociateAccessPolicy` in addition to the create/update permissions above.
 set -euo pipefail
 
 CHDIR="$(cd "$(dirname "$0")/../../../terraform/v2/foundation" && pwd)"
@@ -47,6 +57,26 @@ if [ "$#" -lt 1 ]; then
   echo "Usage: $0 <cluster-name> [<cluster-name> ...]" >&2
   exit 1
 fi
+
+disassociate_stale_policies() {
+  local cluster="$1"
+  local arns
+  arns=$(aws eks list-associated-access-policies --cluster-name "$cluster" --principal-arn "$ROLE_ARN" \
+    --query 'associatedAccessPolicies[].policyArn' --output text 2>/dev/null || true)
+  if [ -z "$arns" ]; then
+    return 0
+  fi
+  local arn
+  for arn in $arns; do
+    echo "  found stale associated access policy $arn — disassociating (least-privilege now comes"
+    echo "  from the RBAC manifest below, not an AWS-managed policy)"
+    if ! derr=$(aws eks disassociate-access-policy --cluster-name "$cluster" --principal-arn "$ROLE_ARN" \
+        --policy-arn "$arn" 2>&1); then
+      echo "  ERROR disassociating $arn on ${cluster}: $derr" >&2
+      exit 1
+    fi
+  done
+}
 
 echo "Principal: $ROLE_ARN"
 echo "Kubernetes group: $K8S_GROUP (authorized via $RBAC_MANIFEST — apply that manifest separately"
@@ -73,6 +103,7 @@ for C in "$@"; do
     echo "  ERROR creating access entry on ${C}: $err" >&2
     exit 1
   fi
+  disassociate_stale_policies "$C"
 done
 echo "Done. Now apply the RBAC manifest once per cluster (requires cluster-admin k8s access):"
 echo "  kubectl apply -f $RBAC_MANIFEST"

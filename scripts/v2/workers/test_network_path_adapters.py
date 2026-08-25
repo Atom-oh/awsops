@@ -1007,6 +1007,37 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "unknown"
 
+    # ── CI-review MAJOR fix (round 20): two more Calico holes. ─────────────────────────────────
+
+    def test_missing_peer_namespace_labels_for_namespace_selector_is_unknown_not_a_guess(self):
+        """A `None` peer_namespace_labels must not be silently treated as an EMPTY-but-present
+        label set (which `_calico_selector_matches`'s own `labels or {}` normalization would do,
+        making an `==` term confidently False and a `!=` term confidently True)."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"namespaceSelector": "team == 'platform'"}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_namespace_labels=None,
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_ingress_destination_nets_constraint_is_unknown_not_ignored(self):
+        """For ingress, `destination` (the protected workload) can carry its OWN `nets`/`selector`
+        constraint — a real Calico field this adapter does not model at all. A rule allowing
+        `source.nets: 0.0.0.0/0` only to `destination.nets: 10.0.1.0/24` must not confidently
+        `allowed` a peer reaching a workload outside that net; it must degrade to `unknown`."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"nets": ["0.0.0.0/0"]},
+             "destination": {"nets": ["10.0.1.0/24"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_rule_level_ip_version_is_unknown_not_ignored(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "ipVersion": 4, "source": {"nets": ["0.0.0.0/0"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
     def test_data_unavailable_is_unknown_not_allowed(self):
         r = ad.eval_calico_policy([], {}, "ingress", crd_present=True,
                                    observed_api_version=_CALICO_VERSION, data_available=False)
@@ -1045,6 +1076,20 @@ class TestRoute53Resolution:
         records = [{"name": "*.example.com", "type": "A"}]
         r = ad.eval_route53_resolution(records, "app.example.com")
         assert r["status"] == "allowed"
+
+    def test_closer_empty_non_terminal_without_its_own_wildcard_blocks_a_farther_wildcard(self):
+        """CI-review MAJOR fix (round 20): RFC 4592 wildcard synthesis is valid ONLY from the
+        CLOSEST encloser, not from any ancestor with a wildcard child. Here `b.example.com` is a
+        real node in the zone (it has a descendant, `x.b.example.com`) but has NO `*.b.example.com`
+        wildcard of its own — that makes `a.b.example.com` genuinely NXDOMAIN, even though a
+        FARTHER `*.example.com` wildcard exists; the round-19 fix (checking every ancestor,
+        nearest first) would have incorrectly synthesized from the farther wildcard."""
+        records = [
+            {"name": "x.b.example.com", "type": "A"},
+            {"name": "*.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "a.b.example.com")
+        assert r["status"] == "blocked"
 
     def test_ancestor_wildcard_beyond_the_immediate_parent_still_resolves(self):
         """CI-review MAJOR fix (round 19): the immediate parent of `a.b.example.com` is
@@ -1206,6 +1251,18 @@ class TestK8sServiceResolution:
         r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
         assert r["status"] == "allowed"
 
+    def test_no_backend_port_declared_against_a_multi_port_service_is_unknown(self):
+        """CI-review MAJOR fix (round 20): real K8s only accepts an omitted `backend_port` when
+        the Service declares EXACTLY ONE port — an omitted reference against a multi-port Service
+        is an incomplete/malformed backend that must not confidently `allowed` without proving
+        which port is actually targeted."""
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"selector": {"app": "a"},
+                               "ports": [{"port": 80}, {"port": 443}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "unknown"
+
     # ── CI-review MAJOR fix (round 18): Ingress rule selection used to be plain first-match — real
     #    K8s precedence is exact-host > wildcard-host > no-host, and Exact > longest-Prefix >
     #    ImplementationSpecific. ──────────────────────────────────────────────────────────────────
@@ -1279,6 +1336,23 @@ class TestK8sServiceResolution:
         rules = [{"host": "app.example.com", "path": "/api", "path_type": "ImplementationSpecific",
                    "backend_service": "svc-a"}]
         r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "app.example.com", "path": "/api/v1"})
+        assert r["status"] == "unknown"
+
+    def test_implementation_specific_rule_degrades_even_when_another_rule_confidently_matches(self):
+        """CI-review MAJOR fix (round 20): an unresolvable, host-matching ImplementationSpecific
+        rule must degrade the result to `unknown` even when a DIFFERENT rule (e.g. a catch-all
+        with no path filter) also confidently matches — its controller-defined precedence
+        relative to that other rule is exactly what this adapter cannot determine, so silently
+        picking the other rule's backend is still a guess."""
+        rules = [
+            {"host": "app.example.com", "path": "/api", "path_type": "ImplementationSpecific",
+             "backend_service": "svc-is"},
+            {"host": "app.example.com", "backend_service": "svc-catchall"},
+        ]
+        services = {"svc-catchall": {"ports": [{"port": 80}]}}
+        eps = {"svc-catchall": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps,
+                                            {"host": "app.example.com", "path": "/api/v1"})
         assert r["status"] == "unknown"
 
     def test_ambiguous_equally_specific_rules_to_different_services_is_unknown(self):
