@@ -1338,16 +1338,19 @@ class TestRoute53Resolution:
         r = ad.eval_route53_resolution(records, "delegated.example.com")
         assert r["status"] == "unknown"
 
-    def test_delegation_check_disarmed_when_no_soa_anywhere_in_the_fetched_set(self):
-        """CI-review MAJOR fix (round 28): the NS-without-SOA signal is only trustworthy when the
-        fetched set could plausibly carry an SOA at all — the repo's only Route 53 producer
-        (`sync_lambda.py`) filters to A/AAAA/CNAME only, so a real feeder built on it would emit
-        NS with NO SOA anywhere, which would otherwise misread every name in every zone as
-        delegated. With zero SOA rows in the whole payload, delegation detection is disarmed
-        entirely (falls through to ordinary NXDOMAIN handling) rather than guessed."""
+    def test_ns_without_soa_anywhere_in_the_payload_is_still_unknown_not_blocked(self):
+        """CI-review MAJOR fix (round 29): round 28's own fix over-corrected — it "disarmed" the
+        delegation check entirely whenever the fetched set had zero SOA rows anywhere, which made
+        this EXACT payload (the round-25 regression fixture) return a confident `blocked`
+        instead of `unknown`. But an NS row is still affirmative evidence resolution continues
+        elsewhere, regardless of whether this payload happens to carry an SOA row too — `blocked`
+        is exactly as wrong here as the round-26 apex misclassification was in the OTHER
+        direction. `_delegation_check_armed` now only changes the summary's wording (whether this
+        evaluator can rule out "producer never sends SOA" vs. a confirmed delegation), never the
+        `unknown`-vs-`blocked` status: NS-without-SOA always degrades to `unknown`."""
         records = [{"name": "delegated.example.com", "type": "NS"}]  # no SOA anywhere at all
         r = ad.eval_route53_resolution(records, "sub.delegated.example.com")
-        assert r["status"] == "blocked"
+        assert r["status"] == "unknown"
 
     def test_closer_empty_non_terminal_without_its_own_wildcard_blocks_a_farther_wildcard(self):
         """CI-review MAJOR fix (round 20): RFC 4592 wildcard synthesis is valid ONLY from the
