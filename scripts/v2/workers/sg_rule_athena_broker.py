@@ -102,25 +102,37 @@ def _projection_range_upper_bound_expired(range_param, now):
     Athena's projection range grammar supports several forms (`NOW`, `NOW-N/day`, arbitrary
     enum/integer bounds, etc.) that aren't all safely parseable here without guessing. Per the
     "safer path" contract used throughout this module: only the common, unambiguously-parseable
-    closed-range-with-a-literal-`yyyy-MM-dd`-end-date form is checked. Anything else (an open-ended
-    `NOW`-anchored upper bound, or an upper bound this function can't confidently parse as a plain
-    ISO date) is left unvalidated here rather than risk a false rejection — returns `None` in
-    those cases (a caller checks `is True` for "confirmed expired", `is False`/`None` are both
+    closed-range-with-a-literal-`yyyy-MM-dd`-end-date form is checked. Anything else (a bare,
+    exactly-`NOW`-anchored upper bound, or an upper bound this function can't confidently parse as
+    a plain ISO date) is left unvalidated here rather than risk a false rejection — returns `None`
+    in those cases (a caller checks `is True` for "confirmed expired", `is False`/`None` are both
     "no confirmed expiry, but not the same as an unparseable case").
 
+    CI-review MAJOR fix (round 11): this used to treat ANY upper bound starting with the string
+    `"NOW"` — including an OFFSET form like `NOW-45DAYS` — as "always covers the current date by
+    construction," which is true only for the bare, unmodified `NOW`. `NOW-45DAYS` anchors 45 days
+    BEFORE today and does NOT cover the current date at all; confidently asserting `False` (never
+    expired) for it violates this function's own never-guess contract and could mask a genuinely
+    expired range. Only an EXACT (case-insensitive) `NOW` with nothing else is treated as
+    confirmed-covers-now; any other `NOW`-prefixed form falls through to the unparseable `None`
+    case below, exactly like any other form this function doesn't confidently handle.
+
     Returns True (expired), False (confirmed still covers `now`), or None (couldn't confidently
-    tell — not the common closed-range-with-literal-end-date form).
+    tell — not the common closed-range-with-literal-end-date form, nor a bare `NOW`).
     """
     if not range_param or "," not in range_param:
         return None
     upper = range_param.rsplit(",", 1)[-1].strip()
-    if not upper or upper.upper().startswith("NOW"):
-        # Open-ended/anchored-to-now — always covers the current date by construction.
+    if upper.upper() == "NOW":
+        # Exactly NOW, unmodified — always covers the current date by construction.
         return False
+    if not upper:
+        return None
     try:
         upper_date = _dt.datetime.strptime(upper, "%Y-%m-%d").date()
     except ValueError:
-        return None  # not the plain-ISO-literal form this check confidently handles
+        return None  # not the plain-ISO-literal form this check confidently handles (includes
+        # any NOW-relative offset form like `NOW-45DAYS`, which this function does not parse)
     return upper_date < now.date()
 
 
@@ -277,33 +289,58 @@ def _validate(event, conn, now=None):
         raise BrokerError("table has no partition keys or partition projection — cannot bound a scan")
     strategy = "projection" if projection_enabled else "partition_keys"
 
-    # CI-review MAJOR fix (round 10, L2-1): the projection.<col>.type/.format/.range gates below
-    # (rounds 7/8/9) only ever ran over the date-candidate keys REMAINING after excluding
-    # account_id/region scope keys — they never checked the SCOPE keys themselves. Athena requires
-    # projection configuration for EVERY partition column once `projection.enabled=true`, so a
-    # projection-enabled centralized table partitioned `dt + account-id + region` (the exact
-    # layout the round-2 scope fix exists to support) validated `status: "valid"` with no check
-    # that `projection.account-id.*`/`projection.region.*` even exist — Athena then errors on every
-    # real query, reproducing this PR's own "validates valid yet permanently refuses" class for the
-    # intersection of its two headline scenarios. A scope key only needs a legal, PRESENT
-    # `projection.<col>.type` (unlike a date candidate, `enum`/`injected`/`integer` are all
-    # perfectly valid representations for an account-id/region value — there is no date-shape
-    # requirement here at all).
+    # CI-review MAJOR fix (round 10, L2-1; corrected round 11): the projection.<col>.type/.format/
+    # .range gates below (rounds 7/8/9) only ever ran over the date-candidate keys REMAINING after
+    # excluding account_id/region scope keys — they never checked the SCOPE keys themselves.
+    # Athena requires projection configuration for EVERY partition column once
+    # `projection.enabled=true`, so a projection-enabled centralized table partitioned
+    # `dt + account-id + region` (the exact layout the round-2 scope fix exists to support)
+    # validated `status: "valid"` with no check that `projection.account-id.*`/`projection.region.*`
+    # even exist — Athena then errors on every real query, reproducing this PR's own "validates
+    # valid yet permanently refuses" class for the intersection of its two headline scenarios.
+    #
+    # Round 10's first attempt accepted ANY of `enum/integer/date/injected` for a scope key — but
+    # `sm._build_scope_predicate`/`scope_partition_expr_clauses` always compare the source's own
+    # LITERAL string value (`"region" = 'ap-northeast-2'`). An `integer`- or `date`-typed
+    # projection column generates typed values that can never equal that literal string — the
+    # predicate matches zero rows on every real scan, and `enum` was accepted without ever
+    # confirming `projection.<col>.values` actually CONTAINS the source's own value. Since
+    # `projection` has no `_partition_exists` existence check, every such day would commit a
+    # confident false `no_observed_evidence` — precisely the failure mode this PR's contract most
+    # explicitly forbids, reintroduced by the very gate meant to close it. Only two projection
+    # types can ever generate a value equal to the source's own literal: `injected` (any string
+    # value is accepted verbatim, by definition representable), or `enum` whose declared
+    # `projection.<col>.values` list is confirmed to contain that exact literal.
     if strategy == "projection":
         proj_params = tbl.get("Parameters", {}) or {}
-        valid_projection_types = {"enum", "integer", "date", "injected"}
+        scope_literal_values = {"account_id": account_id, "region": region}
         for canonical in ("account_id", "region"):
             if scope_resolution.get(canonical) != "partition":
                 continue
             scope_col = resolved[canonical]
-            scope_type_param = proj_params.get(f"projection.{scope_col}.type")
-            if not scope_type_param or scope_type_param.strip().lower() not in valid_projection_types:
+            scope_type_param = str(proj_params.get(f"projection.{scope_col}.type") or "").strip().lower()
+            if scope_type_param == "injected":
+                continue  # any string value passes through untyped — always representable.
+            if scope_type_param == "enum":
+                declared_values = {
+                    v.strip() for v in str(proj_params.get(f"projection.{scope_col}.values") or "").split(",")
+                }
+                if scope_literal_values[canonical] in declared_values:
+                    continue
                 raise BrokerError(
-                    f"scope partition key {scope_col!r} ({canonical}) is a PROJECTION column with "
-                    f"projection.{scope_col}.type={scope_type_param!r} — Athena requires a legal "
-                    "projection type (enum/integer/date/injected) to be present for every "
-                    "partition column once projection is enabled; a missing or invalid value means "
-                    "every real scan would fail [reason: projection_scope_type_missing]")
+                    f"scope partition key {scope_col!r} ({canonical}) is a PROJECTION column typed "
+                    f"'enum' but its declared projection.{scope_col}.values does not include this "
+                    f"source's own value ({scope_literal_values[canonical]!r}) — the query predicate "
+                    "would never match, silently committing a confident false zero-traffic day "
+                    "[reason: projection_scope_enum_value_missing]")
+            raise BrokerError(
+                f"scope partition key {scope_col!r} ({canonical}) is a PROJECTION column with "
+                f"projection.{scope_col}.type={scope_type_param!r} — the query predicate always "
+                "compares this source's own literal string value, which only an 'injected' "
+                "projection (or an 'enum' whose values list contains that literal) can ever match; "
+                "'integer'/'date'/absent generates typed values that can never equal the literal, "
+                "silently matching zero rows on every real scan "
+                "[reason: projection_scope_type_not_representable]")
 
     # MAJOR fix (item 4, round 2; corrected item 1, round 3; extended to `projection`, round 5): a
     # partition-key layout is only a valid, scannable strategy when it resolves EXACTLY ONE
@@ -334,6 +371,29 @@ def _validate(event, conn, now=None):
         }
         remaining_keys = sm.partition_keys_excluding_scope(probe_validation)
         lower_remaining = {str(k).lower() for k in remaining_keys}
+        # CI-review MAJOR fix (round 11): the single-key (non-Hive) branch below has always
+        # required the Glue-catalog TYPE to be date-shaped (`sm.is_date_like_partition_type`)
+        # before trusting a lone key as a date column — but the Hive year/month/day branch NEVER
+        # checked the catalog type of those three columns AT ALL, in either strategy.
+        # `sm._build_partition_predicate`/`_partition_exists` always emit quoted STRING literals
+        # for the Hive branch (`"month" = '03'`), so an `int`/`bigint`-typed year/month/day column
+        # validates `status: "valid"` here and then has Trino reject `integer = varchar` on every
+        # real query — reproducing this PR's own "validates valid yet permanently refuses every
+        # scan" class a sixth time, for exactly the asymmetry between the two date-detection
+        # branches this validate-time gate was built to eliminate. Require each of year/month/day
+        # to be a string-like Glue catalog type (matching what the predicate builder assumes).
+        if {"year", "month", "day"} <= lower_remaining:
+            for hive_key in ("year", "month", "day"):
+                actual_key = next(k for k in remaining_keys if str(k).lower() == hive_key)
+                idx = next(i for i, k in enumerate(partition_keys) if k == actual_key)
+                catalog_type = partition_key_types[idx] if idx < len(partition_key_types) else ""
+                if not sm.is_string_like_partition_type(catalog_type):
+                    raise BrokerError(
+                        f"Hive-style partition key {actual_key!r} ({hive_key}) has Glue catalog "
+                        f"type {catalog_type!r} — the generated day predicate always compares a "
+                        "quoted STRING literal for year/month/day columns, which Trino rejects "
+                        "against a non-string-typed (e.g. int/bigint) column on every real query "
+                        "[reason: hive_key_not_string_typed]")
         # CI-review MAJOR fix (round 9): the projection-parameter validation added in rounds
         # 7/8 (below) lived ENTIRELY inside the single-key `else` branch of the
         # `{"year","month","day"} <= lower_remaining` check, so it never ran at all for a

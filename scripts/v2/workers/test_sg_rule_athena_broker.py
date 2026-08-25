@@ -813,7 +813,23 @@ def test_validate_accepts_a_projection_range_form_it_cannot_confidently_parse(mo
     now = dt.datetime(2026, 8, 25, tzinfo=dt.timezone.utc)
     result = _validate_projection_string_key(
         monkeypatch, conn, {"projection.dt.range": "2020-01-01,enum-value"}, now=now)
-    assert result["ok"] is True
+
+
+# ── CI-review MAJOR fix (round 11): `_projection_range_upper_bound_expired` used to treat ANY
+#    upper bound starting with "NOW" as "always covers the current date by construction" — true
+#    only for a BARE, unmodified NOW. An offset form like `NOW-45DAYS` anchors 45 days before
+#    today and does NOT cover the current date; confidently asserting False for it violated the
+#    function's own never-guess contract. ────────────────────────────────────────────────────────
+
+def test_projection_range_upper_bound_expired_returns_none_for_a_now_offset_form():
+    now = dt.datetime(2026, 8, 25, tzinfo=dt.timezone.utc)
+    assert broker._projection_range_upper_bound_expired("2020-01-01,NOW-45DAYS", now) is None
+
+
+def test_projection_range_upper_bound_expired_returns_false_only_for_bare_now():
+    now = dt.datetime(2026, 8, 25, tzinfo=dt.timezone.utc)
+    assert broker._projection_range_upper_bound_expired("2020-01-01,NOW", now) is False
+    assert broker._projection_range_upper_bound_expired("2020-01-01,now", now) is False
 
 
 # ── CI-review MAJOR fix (round 9): the round-7/8 projection.<col>.type/.format/.range gates all
@@ -821,7 +837,7 @@ def test_validate_accepts_a_projection_range_form_it_cannot_confidently_parse(mo
 #    PROJECTION layout skipped every one of them entirely, reproducing the "validates valid yet
 #    permanently refuses/false-zeros every scan" class this PR fixes elsewhere. ───────────────────
 
-def _validate_hive_projection(monkeypatch, conn, proj_params):
+def _validate_hive_projection(monkeypatch, conn, proj_params, key_type="string"):
     class FakeAthenaWorkGroup:
         def get_work_group(self, WorkGroup):
             return {"WorkGroup": {"Configuration": {
@@ -845,8 +861,8 @@ def _validate_hive_projection(monkeypatch, conn, proj_params):
             params.update(proj_params)
             return {"Table": {
                 "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
-                "PartitionKeys": [{"Name": "year", "Type": "string"}, {"Name": "month", "Type": "string"},
-                                  {"Name": "day", "Type": "string"}],
+                "PartitionKeys": [{"Name": "year", "Type": key_type}, {"Name": "month", "Type": key_type},
+                                  {"Name": "day", "Type": key_type}],
                 "Parameters": params,
             }}
 
@@ -919,6 +935,65 @@ def test_validate_does_not_require_digits_on_year(monkeypatch):
     assert result["ok"] is True
 
 
+# ── CI-review MAJOR fix (round 11): the single-key (non-Hive) branch has always required the
+#    Glue-catalog TYPE to be date-shaped before trusting a lone key as a date column, but the Hive
+#    year/month/day branch never checked the catalog type of those columns AT ALL, in EITHER
+#    strategy. The predicate builders always emit quoted STRING literals for Hive columns, so an
+#    int/bigint-typed year/month/day column validated `status: "valid"` and then errored on every
+#    real query (Trino rejects `integer = varchar`). ──────────────────────────────────────────────
+
+def test_validate_rejects_a_hive_projection_layout_with_int_typed_catalog_columns(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="hive_key_not_string_typed"):
+        _validate_hive_projection(monkeypatch, conn, {}, key_type="int")
+
+
+def _validate_hive_partition_keys_strategy(monkeypatch, conn, key_type):
+    """A plain (non-projection) Hive year/month/day layout — no `projection.enabled`, so the
+    `partition_keys` strategy resolves. Exercises the SAME catalog-type check, which now applies
+    regardless of strategy."""
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "year", "Type": key_type}, {"Name": "month", "Type": key_type},
+                                  {"Name": "day", "Type": key_type}],
+                "Parameters": {},
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_rejects_a_partition_keys_hive_layout_with_int_typed_catalog_columns(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="hive_key_not_string_typed"):
+        _validate_hive_partition_keys_strategy(monkeypatch, conn, key_type="int")
+
+
+def test_validate_accepts_a_partition_keys_hive_layout_with_string_typed_catalog_columns(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_hive_partition_keys_strategy(monkeypatch, conn, key_type="string")
+    assert result["ok"] is True
+
+
 # ── CI-review MAJOR fix (round 10, L2-1): the projection.<col>.type/.format/.range gates above
 #    only ever ran over the date-CANDIDATE keys remaining after excluding scope keys — they never
 #    checked the SCOPE keys (account_id/region) themselves, even though Athena requires projection
@@ -941,8 +1016,11 @@ def _validate_scoped_projection(monkeypatch, conn, proj_params):
                 "projection.enabled": "true",
                 "projection.dt.type": "date", "projection.dt.format": "yyyy-MM-dd",
                 "projection.dt.range": "2020-01-01,NOW",
-                "projection.account-id.type": "enum",
-                "projection.region.type": "enum",
+                # `injected` accepts any string value verbatim — always representable, unlike
+                # `integer`/`date` (which can never equal a literal account-id/region string) or
+                # `enum` (which additionally needs a `.values` list containing that exact literal).
+                "projection.account-id.type": "injected",
+                "projection.region.type": "injected",
             }
             params.update(proj_params)
             return {"Table": {
@@ -976,24 +1054,64 @@ def test_validate_rejects_a_scoped_projection_layout_missing_the_account_id_scop
     validate `status: "valid"` when the scope key itself has no projection configuration — Athena
     would error on every real query."""
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
-    with pytest.raises(broker.BrokerError, match="projection_scope_type_missing"):
+    with pytest.raises(broker.BrokerError, match="projection_scope_type_not_representable"):
         _validate_scoped_projection(monkeypatch, conn, {"projection.account-id.type": None})
 
 
 def test_validate_rejects_a_scoped_projection_layout_with_an_illegal_scope_type(monkeypatch):
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
-    with pytest.raises(broker.BrokerError, match="projection_scope_type_missing"):
+    with pytest.raises(broker.BrokerError, match="projection_scope_type_not_representable"):
         _validate_scoped_projection(monkeypatch, conn, {"projection.region.type": "not-a-real-type"})
 
 
-def test_validate_accepts_scope_keys_typed_injected_or_integer(monkeypatch):
-    """Unlike a date candidate, a scope key has no date-shape requirement — any legal Athena
-    projection type is fine."""
+# ── CI-review MAJOR fix (round 11): round 10 accepted ANY of enum/integer/date/injected for a
+#    scope key, but `_build_scope_predicate`/`scope_partition_expr_clauses` always compare the
+#    source's own LITERAL string value — only `injected` (any string, always representable) or an
+#    `enum` whose declared `.values` provably contains that literal can ever match; `integer`/
+#    `date` generate typed values that never equal a literal string and would silently match zero
+#    rows on every real scan. ─────────────────────────────────────────────────────────────────────
+
+def test_validate_rejects_an_integer_typed_scope_key_even_with_a_range(monkeypatch):
+    """The exact shape the round-10 test wrongly blessed: `projection.region.type=integer` can
+    never generate a value equal to the source's own region string, regardless of `.range`."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_scope_type_not_representable"):
+        _validate_scoped_projection(
+            monkeypatch, conn, {"projection.region.type": "integer", "projection.region.range": "0,1"})
+
+
+def test_validate_rejects_a_date_typed_scope_key(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_scope_type_not_representable"):
+        _validate_scoped_projection(
+            monkeypatch, conn,
+            {"projection.account-id.type": "date", "projection.account-id.format": "yyyy-MM-dd",
+             "projection.account-id.range": "2020-01-01,NOW"})
+
+
+def test_validate_rejects_an_enum_typed_scope_key_whose_values_omit_the_sources_own_literal(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_scope_enum_value_missing"):
+        _validate_scoped_projection(
+            monkeypatch, conn,
+            {"projection.region.type": "enum", "projection.region.values": "us-east-1,eu-west-1"})
+
+
+def test_validate_accepts_an_enum_typed_scope_key_whose_values_include_the_sources_own_literal(monkeypatch):
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
     result = _validate_scoped_projection(
         monkeypatch, conn,
-        {"projection.account-id.type": "injected", "projection.region.type": "integer",
-         "projection.region.range": "0,1"})
+        {"projection.region.type": "enum", "projection.region.values": "us-east-1,ap-northeast-2"})
+    assert result["ok"] is True
+
+
+def test_validate_accepts_injected_scope_keys(monkeypatch):
+    """`injected` accepts any string value verbatim — always representable, no `.values`
+    enumeration needed."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_scoped_projection(
+        monkeypatch, conn,
+        {"projection.account-id.type": "injected", "projection.region.type": "injected"})
     assert result["ok"] is True
 
 
