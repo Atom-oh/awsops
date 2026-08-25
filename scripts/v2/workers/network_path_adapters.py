@@ -1052,12 +1052,14 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     `unknown` instead of a confident `allowed`, mirroring this module's own "never invent" rule for
     the direction it was previously missing.
 
-    CI-review MAJOR fix (round 25): `action` is a REQUIRED field on a real Calico v3 `Rule` — a
-    rule with no `action` at all is malformed/partially-fetched data, not an absent constraint, and
-    must not be defaulted to `Allow`. A matching (or possibly-matching) actionless rule is now
-    treated exactly like the round-17 Deny/Pass veto above: it downgrades a would-be confident
-    `allowed` to `unknown`, and (absent any matching Allow) downgrades a would-be confident
-    `blocked` to `unknown` too, since its real action might itself have been an Allow.
+    CI-review MAJOR fix (round 25, amended in review): `action` is a REQUIRED field on a real
+    Calico v3 `Rule`, restricted to Allow/Deny/Log/Pass — a rule whose action is missing OR
+    present-but-unrecognized (empty string, a typo, a non-string) is malformed/partially-fetched
+    data, not an absent constraint, and must not be defaulted to `Allow`. A matching (or
+    possibly-matching) rule in either state is now treated exactly like the round-17 Deny/Pass veto
+    above: it downgrades a would-be confident `allowed` to `unknown`, and (absent any matching
+    Allow) downgrades a would-be confident `blocked` to `unknown` too, since its real action might
+    itself have been an Allow.
     """
     layer = "k8s-calico"
     if not crd_present:
@@ -1107,24 +1109,32 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     saw_deny_or_pass_conflict = False
     saw_pass_conflict = False
     saw_unresolvable_action = False
+    saw_unresolvable_action_rule = None
     matched_allow_rule = None
     for policy in selecting:
         for rule in policy.get(key, []):
             match = _calico_rule_peer_match(rule, direction, peer_labels, peer_ip,
                                              peer_namespace_labels, protocol, port)
-            # CI-review MAJOR fix (round 25): `action` is a REQUIRED field on a real Calico v3
-            # `Rule` — an absent `action` is malformed/partially-fetched data, not the absence of
-            # a constraint. Defaulting it to `"Allow"` let a bare rule like `{}` (no peer/port
-            # criteria at all, so `_calico_rule_peer_match` confidently matches ANY peer) reach a
-            # confident `allowed` for a rule whose real action might be `Deny`. A matching (or
-            # possibly-matching) rule with no `action` at all is now treated the same way an
-            # unmodeled Deny/Pass conflict already is — it vetoes a confident verdict rather than
-            # being guessed as an Allow.
-            if rule.get("action") is None:
+            # CI-review MAJOR fix (round 25, amended in review): `action` is a REQUIRED field on a
+            # real Calico v3 `Rule`, restricted to Allow/Deny/Log/Pass — an absent action is
+            # malformed/partially-fetched data, not the absence of a constraint, and a *present but
+            # unrecognized* value (empty string, a typo, a non-string) is exactly as untrustworthy:
+            # its real action might still have been Allow. Defaulting either case to `"Allow"` let a
+            # bare rule like `{}` (no peer/port criteria at all, so `_calico_rule_peer_match`
+            # confidently matches ANY peer) reach a confident `allowed` for a rule whose real action
+            # might be `Deny`. A matching (or possibly-matching) rule whose action is missing OR
+            # unrecognized is now treated the same way an unmodeled Deny/Pass conflict already is —
+            # it vetoes a confident verdict rather than being guessed as an Allow.
+            action_raw = rule.get("action")
+            recognized_action = isinstance(action_raw, str) and action_raw.lower() in (
+                "allow", "deny", "log", "pass")
+            if not recognized_action:
                 if match is not False:
                     saw_unresolvable_action = True
+                    if saw_unresolvable_action_rule is None:
+                        saw_unresolvable_action_rule = rule
                 continue
-            action = str(rule["action"]).lower()
+            action = action_raw.lower()
             if action != "allow":
                 # CI-review MAJOR fix (round 17): a Deny/Log/Pass rule used to be skipped WITHOUT
                 # ever checking whether it matches this peer — see the docstring above for why a
@@ -1149,27 +1159,32 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
                 matched_allow_rule = rule
     if matched_allow_rule is not None:
         if saw_deny_or_pass_conflict or saw_unresolvable_action:
+            evidence = [matched_allow_rule]
+            if saw_unresolvable_action_rule is not None:
+                evidence.append(saw_unresolvable_action_rule)
             return {"layer": layer, "status": "unknown", "resource": None,
                     "summary": "an Allow rule matches this peer, but a Deny/Pass rule (or a rule "
-                               "with no `action` at all, which this adapter cannot assume is an "
-                               "Allow) that also matches (or might match) it exists — Calico's "
-                               "real precedence between them depends on policy/rule `order`, "
-                               "which this adapter does not model", "evidence": [matched_allow_rule]}
+                               "with a missing or unrecognized `action`, which this adapter cannot "
+                               "assume is an Allow) that also matches (or might match) it exists — "
+                               "Calico's real precedence between them depends on policy/rule "
+                               "`order`, which this adapter does not model", "evidence": evidence}
         return {"layer": layer, "status": "allowed", "resource": None,
                 "summary": "matched Calico rule peer", "evidence": [matched_allow_rule]}
     # No Allow rule matched. A matching/possibly-matching DENY here still safely reduces to
     # `blocked` (dropping the packet needs no ordering model), but a matching/possibly-matching
     # PASS does not — it delegates elsewhere, so `saw_pass_conflict` vetoes the confident `blocked`
     # below (see `test_deny_action_rule_is_never_a_confident_blocker` for why plain Deny/no-match
-    # still safely falls through to `blocked`). A matching/possibly-matching rule with NO `action`
-    # at all is treated the same conservative way — its real action (possibly Allow) is unknown.
+    # still safely falls through to `blocked`). A matching/possibly-matching rule with a missing or
+    # unrecognized `action` is treated the same conservative way — its real action (possibly Allow)
+    # is unknown.
     if saw_unresolvable or saw_pass_conflict or saw_unresolvable_action:
+        evidence = [saw_unresolvable_action_rule] if saw_unresolvable_action_rule is not None else []
         return {"layer": layer, "status": "unknown", "resource": None,
                 "summary": "a candidate Calico rule could not be confidently evaluated due to "
                            "missing peer data, an unmodeled negation field, a matching `Pass` "
-                           "rule (which delegates to the next tier/profile), a rule with no "
-                           "`action` field at all, or a selector construct this adapter cannot "
-                           "parse", "evidence": []}
+                           "rule (which delegates to the next tier/profile), a rule with a missing "
+                           "or unrecognized `action` field, or a selector construct this adapter "
+                           "cannot parse", "evidence": evidence}
     return {"layer": layer, "status": "blocked", "resource": None,
             "summary": "pod is selected by >=1 Calico NetworkPolicy for this direction; no Allow "
                        "rule matched the peer", "evidence": []}

@@ -933,6 +933,28 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "allowed"
 
+    def test_matching_rule_with_an_unrecognized_action_value_is_unknown(self):
+        """A present-but-unrecognized `action` (empty string, a typo — anything outside
+        Allow/Deny/Log/Pass) is exactly as untrustworthy as a missing one: its real action might
+        still have been Allow, so it must not fall through to a confident `blocked`."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Denny", "source": {"selector": "role == 'frontend'"}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+        assert r["evidence"] == [policies[0]["ingress"][0]]
+
+    def test_matching_rule_with_a_non_string_action_value_is_unknown(self):
+        """A non-string `action` (e.g. malformed/partially-fetched data) must be treated the same
+        as a missing or unrecognized one, not crash on `.lower()`."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": 123, "source": {"selector": "role == 'frontend'"}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
     # ── CI-review MAJOR fix (round 18): three more holes in the Calico evaluator. ─────────────────
 
     def test_rule_level_protocol_mismatch_with_no_ports_is_not_a_match(self):
