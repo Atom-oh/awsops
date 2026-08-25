@@ -1132,6 +1132,15 @@ output "worker_ecr_uri" {
   value = one(aws_ecr_repository.worker[*].repository_url)
 }
 
+# CI-review MAJOR fix (round 18, L5): the Network Path Check live-identity feature (network-
+# path.tf) needs this ARN for its operator registration script/runbook — without an output, an
+# operator had no terraform-sourced way to name the correct principal for the out-of-band EKS
+# Access Entry, and network-path.tf's own comment cited the wrong precedent (istio-read's
+# AmazonEKSViewPolicy, which has NO cluster-scoped resources and 403s on a Node GET) as a result.
+output "worker_task_role_arn" {
+  value = one(aws_iam_role.worker_task[*].arn)
+}
+
 ############################################################
 # ai-cost aggregator — awsops-only Bedrock cost (Logs Insights -> ai_usage_daily).
 # Gated by var.ai_cost_tracking_enabled (local.act also requires workers_enabled, since it reuses

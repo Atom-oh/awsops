@@ -86,27 +86,6 @@ resource "aws_iam_role_policy" "worker_task_network_path_readonly_assume" {
           "elasticloadbalancing:DescribeTargetGroups",
           "elasticloadbalancing:DescribeTargetHealth",
           "route53resolver:ListResolverEndpoints",
-          # Gap 4 (PR #231 follow-up, live source-identity confirmation): describe-cluster is a
-          # plain read-only IAM action, additive to this SAME existing statement — it strictly
-          # extends the file's own established pattern (a tiny grant alongside the existing
-          # sts:AssumeRole extension), not a new trust relationship or new resource. It gives
-          # network_path.py's resolve_live_identity() the cluster endpoint + CA needed to presign
-          # a k8s-aws-v1. bearer token (identical mechanism to web/lib/eks-incluster.ts /
-          # scripts/v2/workers/insight/k8s_events.py).
-          #
-          # NOT covered by this grant, and deliberately NOT added here (genuine, unresolved infra
-          # gap — see the report): the worker task role (or AWSopsReadOnlyRole in a target account)
-          # still needs a K8s-level EKS Access Entry on the target cluster before any Pod/Node GET
-          # actually authorizes. Per eks.tf's own precedent for the istio-read MCP role, granting a
-          # principal K8s access is the CLUSTER OWNER's call, not something this apply principal can
-          # always make (may lack eks:CreateAccessEntry on a third-party cluster) — that access entry
-          # is registered out-of-band by the operator, the same way istio-read's is
-          # (docs/runbooks/istio-agent-eks-access.md's register-istio-access.sh pattern). Until that
-          # registration exists for a given cluster, a network_path check whose source is a pod/node
-          # on that cluster correctly fails closed with a bounded "could not resolve pod/node..."
-          # error (resolve_live_identity()'s own AccessDenied handling) rather than silently trusting
-          # the definition's stale fields.
-          "eks:DescribeCluster",
           # CI review item 7(b): _default_ec2_lookup()'s DescribeInstances call (resolving a
           # Node's real EC2 instance -> ENI/subnet/VPC) had no corresponding host-account grant
           # here — every host-account node/pod source would fail closed with AccessDenied. This
@@ -114,6 +93,42 @@ resource "aws_iam_role_policy" "worker_task_network_path_readonly_assume" {
           "ec2:DescribeInstances",
         ]
         Resource = "*"
+      },
+      {
+        # Gap 4 (PR #231 follow-up, live source-identity confirmation): describe-cluster is a
+        # plain read-only IAM action. It gives network_path.py's resolve_live_identity() the
+        # cluster endpoint + CA needed to presign a k8s-aws-v1. bearer token (identical mechanism
+        # to web/lib/eks-incluster.ts / scripts/v2/workers/insight/k8s_events.py).
+        #
+        # NOT covered by this grant, and deliberately NOT added here (genuine, unresolved infra
+        # gap — see the report): the worker task role (or AWSopsReadOnlyRole in a target account)
+        # still needs a K8s-level EKS Access Entry on the target cluster before any Pod/Node GET
+        # actually authorizes. Granting a principal K8s access is the CLUSTER OWNER's call, not
+        # something this apply principal can always make (may lack eks:CreateAccessEntry on a
+        # third-party cluster) — that access entry is registered out-of-band by the operator via
+        # scripts/v2/eks/register-network-path-access.sh (docs/runbooks/network-path-eks-access.md).
+        #
+        # CI-review MAJOR fix (round 18, L5): this comment used to cite eks.tf's istio-read MCP
+        # precedent (`AmazonEKSViewPolicy`) — that policy is the WRONG model here: it mirrors the
+        # k8s `view` ClusterRole, which has NO cluster-scoped resources at all (eks.tf's own
+        # comment: "listing nodes 403s"), but `resolve_live_identity()` GETs
+        # `/api/v1/nodes/{name}` — a cluster-scoped resource. An operator following the istio-read
+        # runbook would register the wrong policy and get 403 on every pod/node check. The correct
+        # precedent is eks.tf's OWN web task-role Access Entry (`AmazonEKSAdminViewPolicy`,
+        # cluster scope) — that is what the new runbook/script grant.
+        # Until that registration exists for a given cluster, a network_path check whose source is
+        # a pod/node on that cluster correctly fails closed with a bounded "could not resolve
+        # pod/node..." error (resolve_live_identity()'s own AccessDenied handling) rather than
+        # silently trusting the definition's stale fields.
+        #
+        # CI review MINOR fix: scoped to a cluster-ARN pattern (EKS supports resource-level
+        # permissions for DescribeCluster, unlike the plain Describe/List actions above) instead
+        # of the blanket "*" the rest of this statement needs — a small least-privilege tightening
+        # since this is the one action here that CAN be scoped.
+        Sid      = "DescribeEksClusterForLiveIdentity"
+        Effect   = "Allow"
+        Action   = ["eks:DescribeCluster"]
+        Resource = "arn:aws:eks:*:${local.acct}:cluster/*"
       }
     ]
   })

@@ -1025,6 +1025,7 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     key = "ingress" if direction == "ingress" else "egress"
     saw_unresolvable = False
     saw_deny_or_pass_conflict = False
+    saw_pass_conflict = False
     matched_allow_rule = None
     for policy in selecting:
         for rule in policy.get(key, []):
@@ -1038,6 +1039,13 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
                 # confident `allowed`, since this adapter has no model of cross-policy `order`.
                 if match is not False:
                     saw_deny_or_pass_conflict = True
+                    # CI-review MAJOR fix (round 18, part c): unlike Deny (which simply drops the
+                    # packet, so "no Allow matched" is safely `blocked` regardless), a matching
+                    # `Pass` rule delegates evaluation to the next tier/profile — which may itself
+                    # allow the traffic. Absent an Allow match, this must degrade to `unknown`, not
+                    # fall through to the same confident `blocked` a Deny would correctly get.
+                    if action == "pass":
+                        saw_pass_conflict = True
                 continue
             if match is False:
                 continue
@@ -1055,32 +1063,89 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
                                "does not model", "evidence": [matched_allow_rule]}
         return {"layer": layer, "status": "allowed", "resource": None,
                 "summary": "matched Calico rule peer", "evidence": [matched_allow_rule]}
-    # No Allow rule matched — this reduces to `blocked` regardless of whether any Deny/Pass rule
-    # also matched (a matching Deny/Pass here changes nothing: the confident-deny OUTCOME is the
-    # same either way, so `saw_deny_or_pass_conflict` — which exists only to veto a confident
-    # `allowed` — is irrelevant to this branch; see `test_deny_action_rule_is_never_a_confident_
-    # blocker` for why the absence of a matching Allow is itself always safely `blocked`).
-    if saw_unresolvable:
+    # No Allow rule matched. A matching/possibly-matching DENY here still safely reduces to
+    # `blocked` (dropping the packet needs no ordering model), but a matching/possibly-matching
+    # PASS does not — it delegates elsewhere, so `saw_pass_conflict` vetoes the confident `blocked`
+    # below (see `test_deny_action_rule_is_never_a_confident_blocker` for why plain Deny/no-match
+    # still safely falls through to `blocked`).
+    if saw_unresolvable or saw_pass_conflict:
         return {"layer": layer, "status": "unknown", "resource": None,
                 "summary": "a candidate Calico rule could not be confidently evaluated due to "
-                           "missing peer data or a selector construct this adapter cannot parse",
-                "evidence": []}
+                           "missing peer data, an unmodeled negation field, a matching `Pass` "
+                           "rule (which delegates to the next tier/profile), or a selector "
+                           "construct this adapter cannot parse", "evidence": []}
     return {"layer": layer, "status": "blocked", "resource": None,
             "summary": "pod is selected by >=1 Calico NetworkPolicy for this direction; no Allow "
                        "rule matched the peer", "evidence": []}
 
 
+def _normalize_calico_ports(ports):
+    """Build the `{"port", "endPort"}` dict shape `_k8s_port_matches` expects from Calico's native
+    `ports` list, which is plain ints/strings (`numorstring.Port` in the Calico CRD schema) — e.g.
+    `[80, 443]` or `["8080:9090", "http"]` — never core K8s's own `{"protocol", "port"}` dicts. A
+    dict entry (some test fixtures/callers already use that shape directly) passes through
+    unchanged; an int or a pure numeric string becomes `{"port": N}`; a `"N:M"` range becomes
+    `{"port": N, "endPort": M}`; anything else (a named port, e.g. `"http"`) is passed through as
+    `{"port": <name>}` so `_k8s_port_matches`'s own int() conversion failure marks it as an
+    unresolvable named port (`None`), never a guessed match/non-match."""
+    out = []
+    for p in ports or []:
+        if isinstance(p, dict):
+            out.append(p)
+            continue
+        s = str(p)
+        if ":" in s:
+            lo, _, hi = s.partition(":")
+            try:
+                out.append({"port": int(lo), "endPort": int(hi)})
+                continue
+            except ValueError:
+                pass
+        out.append({"port": p})
+    return out
+
+
 def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespace_labels, protocol, port):
-    """Whether `rule`'s port + peer (`selector`/`namespaceSelector`/`nets`) criteria match the
-    given peer — the SAME logic `eval_calico_policy` applies to an Allow rule, factored out so it
-    can ALSO be applied to a skipped Deny/Pass rule (round 17 fix, see that function's docstring).
-    Returns `True` (confirmed match), `False` (confirmed no match), or `None` (this adapter cannot
-    confidently tell — missing peer data, or a selector construct it cannot parse)."""
+    """Whether `rule`'s protocol/port + peer (`selector`/`namespaceSelector`/`nets`) criteria match
+    the given peer — the SAME logic `eval_calico_policy` applies to an Allow rule, factored out so
+    it can ALSO be applied to a skipped Deny/Pass rule (round 17 fix, see that function's
+    docstring). Returns `True` (confirmed match), `False` (confirmed no match), or `None` (this
+    adapter cannot confidently tell — missing peer data, an unmodeled negation field, or a selector
+    construct it cannot parse).
+
+    CI-review MAJOR fix (round 18, part a): unlike core K8s NetworkPolicy (where `protocol` lives
+    per-`ports`-entry), Calico carries a RULE-LEVEL `protocol` field independent of `ports` — a rule
+    with `protocol: UDP` and no `ports` used to reach `_k8s_port_matches({}, ...)`, whose own
+    "absent `ports` -> match any port" contract short-circuits to `True` before ever consulting the
+    protocol argument, so a UDP-only Allow rule confidently `allowed`ed TCP traffic. The rule's own
+    `protocol` is now checked directly, independent of whatever `_k8s_port_matches` decides about
+    `ports`. The old `protocol or rule.get("protocol")` fallback into `_k8s_port_matches` is
+    removed too — the CALLER's protocol is what per-`ports`-entry protocol should be compared to,
+    not the rule's own (which would make a rule always match itself).
+
+    CI-review MAJOR fix (round 18, part b): Calico's `notNets`/`notSelector`/`notPorts` peer/port
+    negation fields were silently ignored — a rule declaring `nets: [0.0.0.0/0], notNets:
+    [10.0.0.0/8]` reported a confident match for a 10.x peer this adapter cannot actually confirm is
+    excluded (or included, for a rule this adapter can't parse the negation of at all). Any of these
+    fields present makes the rule genuinely unresolvable, not a guessed match/non-match.
+
+    CI-review MAJOR fix (round 18, part a, follow-up): Calico's native `ports` entries are plain
+    ints/strings (e.g. `[80, 443]` or `["8080:9090"]`) — NOT the `{"protocol", "port"}` dict shape
+    `_k8s_port_matches` expects (that shape is core K8s NetworkPolicy's own). Passing Calico ports
+    straight through used to make every entry fail `isinstance` checks inside `_k8s_port_matches`
+    silently (an int has no `.get`), so a Calico rule with a real native `ports` list never actually
+    restricted anything. `_normalize_calico_ports` below builds the dict shape first."""
+    peer = rule.get("source" if direction == "ingress" else "destination") or {}
+    if rule.get("notPorts") or peer.get("notSelector") or peer.get("notNets"):
+        return None
+    rule_protocol = rule.get("protocol")
+    if rule_protocol is not None and protocol is not None and str(rule_protocol).upper() != str(protocol).upper():
+        return False
+    raw_ports = rule.get("ports")
     port_match = _k8s_port_matches(
-        {"ports": rule.get("ports")} if rule.get("ports") else {}, protocol or rule.get("protocol"), port)
+        {"ports": _normalize_calico_ports(raw_ports)} if raw_ports else {}, protocol, port)
     if port_match is False:
         return False
-    peer = rule.get("source" if direction == "ingress" else "destination") or {}
     selector, ns_selector, nets = peer.get("selector"), peer.get("namespaceSelector"), peer.get("nets")
     if not selector and not ns_selector and not nets:
         return None if port_match is None else True
@@ -1109,6 +1174,11 @@ def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespac
 
 
 # ── DNS/L7: Route 53 resolution ─────────────────────────────────────────────────────────────────
+
+# Record types whose presence actually indicates address resolution — TXT/MX/etc. prove nothing
+# about whether the name resolves to a reachable address (round-18 fix, see eval_route53_resolution).
+_R53_ADDRESS_TYPES = {"A", "AAAA", "ALIAS"}
+
 
 def eval_route53_resolution(records, query_host, data_available=True):
     """Real Route 53 resolution evaluation, given already-fetched hosted-zone record data (this
@@ -1155,6 +1225,7 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # already-fetched `records` set (no live DNS query is ever issued).
     seen_names = {host}
     cycle_detected = False
+    out_of_zone_target = None
     while len(matched) == 1 and matched[0].get("type") == "CNAME" and matched[0].get("alias_target"):
         target = str(matched[0]["alias_target"]).rstrip(".").lower()
         if target in seen_names:
@@ -1168,12 +1239,35 @@ def eval_route53_resolution(records, query_host, data_available=True):
         seen_names.add(target)
         nxt = _find(target)
         if nxt is None:
+            # CI-review MAJOR fix (round 18): an out-of-zone CNAME target used to fall through to
+            # the healthy/unhealthy check below using the STALE CNAME record itself (which carries
+            # no health-check/address data of its own) — reporting a confident `allowed` for a
+            # target this evaluator has no zone data on at all. The target's own resolvability is
+            # genuinely unknown from this zone's data (it could resolve fine in another zone, or be
+            # NXDOMAIN) — this must degrade to `unknown`, not `allowed`.
+            out_of_zone_target = target
             break
         matched = nxt
     if cycle_detected:
         return {"layer": "dns", "status": "unknown", "resource": host,
                 "summary": f"Route 53 CNAME chain for {host!r} forms a cycle — cannot confidently "
                            "resolve this record", "evidence": matched}
+    if out_of_zone_target is not None:
+        return {"layer": "dns", "status": "unknown", "resource": host,
+                "summary": f"Route 53 CNAME chain for {host!r} terminates at {out_of_zone_target!r}, "
+                           "which is not in the fetched zone data — its own resolvability cannot be "
+                           "confirmed from this zone alone", "evidence": matched}
+
+    # CI-review MAJOR fix (round 18): a matched record whose TYPE doesn't actually indicate address
+    # resolution (e.g. TXT, MX) used to still report a confident `allowed` — the presence of ANY
+    # record at this name proves nothing about whether it resolves to a reachable address.
+    non_address = [r for r in matched if str(r.get("type", "")).upper() not in _R53_ADDRESS_TYPES]
+    if non_address and len(non_address) == len(matched):
+        return {"layer": "dns", "status": "unknown", "resource": host,
+                "summary": f"Route 53 record(s) for {host!r} are type "
+                           f"{sorted({str(r.get('type')) for r in matched})} — not an address-"
+                           "resolving type (A/AAAA/ALIAS), so this proves nothing about actual "
+                           "resolution", "evidence": matched}
 
     unhealthy = [r for r in matched if r.get("health_check_status") == "unhealthy"]
     healthy_or_unchecked = [r for r in matched if r.get("health_check_status") != "unhealthy"]
@@ -1225,25 +1319,79 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
     req_host = request.get("host")
     req_path = request.get("path") or "/"
 
-    def _path_ok(rule):
+    # CI-review MAJOR fix (round 18): rule selection used to be plain first-match over the input
+    # list — Kubernetes Ingress precedence is neither insertion order nor host-agnostic: an exact
+    # host beats a wildcard host beats no host at all; among matching rules, `Exact` path beats
+    # `Prefix` beats `ImplementationSpecific`, and among `Prefix` matches the LONGEST path wins.
+    # Overlapping rules routing to different Services under first-match could silently select the
+    # wrong backend and report a confident wrong `allowed`/`blocked`. Wildcard hosts (`*.example.
+    # com`) were also never matched at all (only bare equality), producing a confident false
+    # `blocked` for a real wildcard-routed request.
+    def _host_match(rule_host):
+        """Returns (matches, specificity) — higher specificity wins on a tie-break. `None` (no
+        host on the rule) is least specific; an exact match is most specific; `*.parent` is
+        in between (an exact, documented wildcard semantic — not a guess)."""
+        if rule_host is None:
+            return True, 0
+        if rule_host == req_host:
+            return True, 2
+        if rule_host.startswith("*."):
+            parent = rule_host[1:]  # ".example.com"
+            if req_host and req_host.endswith(parent) and req_host != parent[1:]:
+                return True, 1
+        return False, -1
+
+    def _path_match(rule):
+        """Returns (matches, rank, path_len), or `None` when this rule's path semantics genuinely
+        cannot be confidently determined — an `ImplementationSpecific` path_type with an actual
+        path filter is controller-defined behavior this adapter does not guess at (round-18 fix;
+        it used to be silently treated as a Prefix match)."""
         rp = rule.get("path")
         if not rp:
-            return True
+            return True, 0, 0  # no path filter on this rule — least specific, always matches
         pt = rule.get("path_type", "ImplementationSpecific")
         if pt == "Exact":
-            return req_path == rp
+            return req_path == rp, 2, len(rp)
         if pt == "Prefix":
-            return req_path == rp.rstrip("/") or req_path.startswith(rp if rp.endswith("/") else rp + "/")
-        return req_path.startswith(rp)  # ImplementationSpecific: treat as a prefix, conservatively
+            matches = req_path == rp.rstrip("/") or req_path.startswith(rp if rp.endswith("/") else rp + "/")
+            return matches, 1, len(rp)
+        return None
 
-    matched_rule = next(
-        (r for r in (ingress_rules or [])
-         if (r.get("host") is None or r.get("host") == req_host) and _path_ok(r)),
-        None)
-    if matched_rule is None:
+    candidates = []
+    saw_unresolvable_path = False
+    for r in (ingress_rules or []):
+        host_ok, host_rank = _host_match(r.get("host"))
+        if not host_ok:
+            continue
+        path_result = _path_match(r)
+        if path_result is None:
+            saw_unresolvable_path = True
+            continue
+        path_ok, path_rank, path_len = path_result
+        if not path_ok:
+            continue
+        candidates.append((host_rank, path_rank, path_len, r))
+
+    if not candidates:
+        if saw_unresolvable_path:
+            return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
+                    "summary": f"an Ingress rule for host={req_host!r} uses an "
+                               "ImplementationSpecific path_type this adapter cannot confidently "
+                               "evaluate, and no other rule confidently matches", "evidence": []}
         return {"layer": "k8s-service-resolution", "status": "blocked", "resource": None,
                 "summary": f"no Ingress rule matches host={req_host!r} path={req_path!r}",
                 "evidence": []}
+
+    best = max(c[:3] for c in candidates)
+    tied = [c[3] for c in candidates if c[:3] == best]
+    distinct_backends = {t.get("backend_service") for t in tied}
+    if len(distinct_backends) > 1:
+        return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
+                "summary": f"multiple equally-specific Ingress rules for host={req_host!r} "
+                           f"path={req_path!r} route to different Services "
+                           f"{sorted(distinct_backends)} — precedence between them is ambiguous",
+                "evidence": tied}
+    matched_rule = tied[0]
     svc_name = matched_rule.get("backend_service")
     svc = (services or {}).get(svc_name)
     if svc is None:

@@ -111,6 +111,27 @@ class TestResolve:
         assert finishes[-1]["err"] == result["error"]
         assert "account_id" in finishes[-1]["err"]
 
+    # ── CI-review MAJOR fix (round 18): the resolve phase now performs DB I/O
+    #    (`_account_external_id()`'s `conn.run`) but used to catch only `NetworkPathError` — a
+    #    `conn.run` failure escaped uncaught, leaving `network_path_runs` stuck at
+    #    `running`/`resolve` instead of terminating the run visibly. ─────────────────────────────
+
+    def test_resolve_phase_db_error_terminates_the_run_instead_of_crashing_uncaught(self):
+        class ExplodingConn(FakeConn):
+            def run(self, sql, **kwargs):
+                if "FROM accounts" in sql:
+                    raise RuntimeError("connection reset by peer")
+                return super().run(sql, **kwargs)
+
+        conn = ExplodingConn()
+        result = np.run({"run_id": "r-explode", "definition": _pod_definition(),
+                          "source_account_id": "111111111111"}, conn)
+        assert result["status"] == "failed"
+        assert "connection reset" in result["error"]
+        finishes = conn.run_finishes()
+        assert finishes[-1]["s"] == "failed"
+        assert finishes[-1]["os"] == "failed"
+
     def test_run_rejects_a_definition_account_id_mismatched_against_the_checks_own_column(self):
         """CI-review MAJOR fix (round 17, item 5, second half): a check's declared source account
         must match (or be validated against) the account the check was actually created/authorized
@@ -565,6 +586,29 @@ class TestDefaultEc2Lookup:
         out = np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc")
         assert out["eni_id"] == "eni-primary"
 
+    # ── CI review MINOR fix: a pod IP carved out of a VPC-CNI prefix-delegation Ipv4Prefixes CIDR
+    #    (not its own discrete PrivateIpAddress) must still resolve to that ENI, not fail closed.
+
+    def test_pod_ip_inside_a_prefix_delegation_cidr_is_matched(self, monkeypatch):
+        self._patch_session(monkeypatch, [
+            {"NetworkInterfaceId": "eni-primary", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 0}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}]},
+            {"NetworkInterfaceId": "eni-prefix", "SubnetId": "subnet-2", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 1}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.2.1"}],
+             "Ipv4Prefixes": [{"Ipv4Prefix": "10.0.3.0/28"}]},
+        ])
+        out = np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc", pod_ip="10.0.3.7")
+        assert out["eni_id"] == "eni-prefix"
+
+    def test_pod_ip_outside_every_prefix_and_address_still_fails_closed(self, monkeypatch):
+        self._patch_session(monkeypatch, [
+            {"NetworkInterfaceId": "eni-primary", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 0}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}],
+             "Ipv4Prefixes": [{"Ipv4Prefix": "10.0.3.0/28"}]},
+        ])
+        with pytest.raises(np.NetworkPathError, match="does not match any network interface"):
+            np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc", pod_ip="10.0.99.9")
+
 
 # ── MINOR fix: the K8s GET must never follow a redirect with the same bearer token ──────────────
 
@@ -733,6 +777,39 @@ class TestVerify:
         evidence = steps[0]["evidence"]
         assert evidence
         assert evidence[0].get("password") == "[redacted]"
+
+    # ── CI-review MAJOR fix (round 18): `_nacl_or_unknown` used to guard only `nacl_forward` — an
+    #    empty `nacl_return` fell straight through to `ad.eval_nacl`, which reads that emptiness as
+    #    a confident deny on the return path, even though a real NACL always carries entries in
+    #    BOTH directions (missing return data is exactly as "we have no data" as missing forward
+    #    data). ─────────────────────────────────────────────────────────────────────────────────────
+
+    def test_nacl_layer_is_unknown_when_return_entries_are_missing_even_with_forward_present(self):
+        candidate = {"candidate_id": "c0", "kind": "resolved", "layer_plan": ["nacl"],
+                     "data": {"nacl": {
+                         "nacl_forward": [{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                         "nacl_return": [],
+                     }}}
+        steps = np.verify_candidate(candidate, {"protocol": "tcp", "port": 443}, deadline_at=1e18)
+        assert steps[0]["status"] == "unknown"
+
+    def test_nacl_layer_is_unknown_when_forward_entries_are_missing(self):
+        candidate = {"candidate_id": "c0", "kind": "resolved", "layer_plan": ["nacl"],
+                     "data": {"nacl": {
+                         "nacl_forward": [],
+                         "nacl_return": [{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                     }}}
+        steps = np.verify_candidate(candidate, {"protocol": "tcp", "port": 443}, deadline_at=1e18)
+        assert steps[0]["status"] == "unknown"
+
+    def test_nacl_layer_evaluates_normally_when_both_directions_present(self):
+        candidate = {"candidate_id": "c0", "kind": "resolved", "layer_plan": ["nacl"],
+                     "data": {"nacl": {
+                         "nacl_forward": [{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                         "nacl_return": [{"rule_number": 100, "protocol": "-1", "action": "allow"}],
+                     }}}
+        steps = np.verify_candidate(candidate, {"protocol": "tcp", "port": 443}, deadline_at=1e18)
+        assert steps[0]["status"] == "allowed"
 
     def test_evidence_item_count_capped(self):
         big_evidence = [{"i": i} for i in range(50)]

@@ -148,10 +148,16 @@ def _validate_k8s_name(value, field):
     definition into the K8s API GET path, and `cluster` additionally into the signed
     `x-k8s-aws-id` header, with no validation or escaping. A `../`-style segment let a check
     author steer the read to an arbitrary path under the assumed principal's Access Entry —
-    read-only, but an authorization-scope escape. Every one of these fields must be a valid
-    Kubernetes DNS-1123 label/subdomain (lowercase alphanumerics and hyphens, cannot start/end
-    with a hyphen) before it's used in a URL or header — that's what every real K8s resource name
-    already looks like, so this rejects nothing legitimate."""
+    read-only, but an authorization-scope escape. Every one of these fields is checked against
+    `_K8S_NAME_RE` before it's used in a URL or header.
+
+    Docs fix: this validator is shared with `cluster`, which is an EKS cluster name, not a
+    Kubernetes object name — EKS cluster naming permits uppercase letters and underscores (unlike
+    strict K8s DNS-1123 label/subdomain rules, which are lowercase-alphanumerics-and-hyphens
+    only). `_K8S_NAME_RE` (`^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$`) is deliberately the
+    broader superset so ONE validator covers both cases — it still rejects everything relevant to
+    path injection (`/`, whitespace, a leading/trailing separator) while accepting every legitimate
+    namespace/pod/node AND cluster name."""
     if not isinstance(value, str) or not _K8S_NAME_RE.match(value):
         raise NetworkPathError(f"{field} is not a valid Kubernetes resource name: {value!r}")
     return value
@@ -335,7 +341,16 @@ def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_i
     silently fall back to the instance's primary ENI -- the WRONG ENI for that pod, not a
     describable-but-unrelated one. A pod source must fail closed here rather than resolve to an
     ENI known not to be the pod's; only a bare node source (no `pod_ip` at all) uses the primary-
-    ENI fallback, since a Node genuinely IS its primary ENI."""
+    ENI fallback, since a Node genuinely IS its primary ENI.
+
+    MINOR fix (CI review): a pod's IP only ever matched against an ENI's own `PrivateIpAddresses`
+    -- this misses VPC-CNI *prefix delegation*, where a pod's IP is carved out of an ENI's
+    assigned `Ipv4Prefixes` CIDR block(s) rather than appearing as its own discrete secondary IP.
+    Every pod on a prefix-delegation-enabled cluster (the CNI's default mode on newer EKS add-on
+    versions) used to fail closed here with the SAME "unenumerated SG-for-Pods branch ENI"
+    message even though the real cause is unrelated (prefix delegation, not a branch ENI) -- the
+    CIDR check below fixes the false negative for the common case, and the error message below no
+    longer singles out branch ENIs specifically for whatever (now rarer) case still fails."""
     session = _assumed_session(account_id, region, external_id)
     ec2 = session.client("ec2")
     resp = ec2.describe_instances(InstanceIds=[instance_id])
@@ -346,15 +361,23 @@ def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_i
     enis = inst.get("NetworkInterfaces") or []
     eni = None
     if pod_ip:
-        eni = next(
-            (ni for ni in enis
-             if any(pa.get("PrivateIpAddress") == pod_ip for pa in ni.get("PrivateIpAddresses", []))),
-            None)
+        def _eni_owns_pod_ip(ni):
+            if any(pa.get("PrivateIpAddress") == pod_ip for pa in ni.get("PrivateIpAddresses", [])):
+                return True
+            # VPC-CNI prefix delegation: the pod's IP is carved out of an assigned /28 (or other)
+            # prefix on the ENI, not listed as a discrete PrivateIpAddress of its own.
+            prefixes = ni.get("Ipv4Prefixes") or []
+            return any(
+                ad._is_valid_ip(pod_ip) and ad._cidr_contains(p.get("Ipv4Prefix"), pod_ip)
+                for p in prefixes if p.get("Ipv4Prefix"))
+
+        eni = next((ni for ni in enis if _eni_owns_pod_ip(ni)), None)
         if eni is None:
             raise NetworkPathError(
                 f"pod IP {pod_ip} does not match any network interface attached to EC2 instance "
-                f"{instance_id} (e.g. an unenumerated SG-for-Pods branch ENI) -- refusing to guess "
-                "by falling back to the instance's primary ENI")
+                f"{instance_id} (checked both discrete secondary IPs and any VPC-CNI prefix-"
+                "delegation Ipv4Prefixes CIDRs; could also be an unenumerated SG-for-Pods branch "
+                "ENI) -- refusing to guess by falling back to the instance's primary ENI")
     else:
         eni = next((ni for ni in enis if (ni.get("Attachment") or {}).get("DeviceIndex") == 0), None)
     if eni is None:
@@ -572,8 +595,15 @@ def _nacl_or_unknown(data, req, layer="nacl"):
     (its first-match loop finds nothing -> a confident deny), so this wrapper makes the distinction
     explicit BEFORE calling into the adapter — the same "never invent a false verdict from missing
     data" rule every other adapter in this module already implements for its own missing-input case.
+
+    CI-review MAJOR fix (round 18): this guard used to check `nacl_forward` only — the SAME "a
+    real NACL always carries at least the implicit rule 32767, in BOTH directions" premise applies
+    equally to `nacl_return`, but an empty return list fell straight through to `ad.eval_nacl`,
+    which reads `ret is None`-shaped emptiness as a confident deny on the return path. Missing
+    return data is exactly as "we have no data for this candidate" as missing forward data — guard
+    both.
     """
-    if not data.get("nacl_forward"):
+    if not data.get("nacl_forward") or not data.get("nacl_return"):
         return {"layer": layer, "status": "unknown", "resource": None,
                 "summary": "no cached/live NACL entries available for this candidate", "evidence": []}
     return ad.eval_nacl(data.get("nacl_forward", []), data.get("nacl_return", []),
@@ -950,6 +980,15 @@ def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=
     except NetworkPathError as e:
         _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
         return {"run_id": run_id, "status": "failed", "error": str(e)}
+    except Exception as e:  # noqa: BLE001 — CI-review MAJOR fix (round 18): this phase now
+        # performs DB I/O (`_account_external_id()`'s `conn.run`), unlike when it only validated
+        # the definition's own fields — a `conn.run` failure used to escape this narrow
+        # `NetworkPathError`-only catch and crash uncaught, leaving `network_path_runs` stuck at
+        # `running`/`resolve` until the reaper eventually flips it minutes later. Mirrors the
+        # discover phase's own broad-`Exception` catch below, which exists for exactly this reason.
+        error_text = _redact_sensitive(f"{type(e).__name__}: {e}")
+        _finish_run(conn, run_id, "failed", overall_status="failed", error=error_text)
+        return {"run_id": run_id, "status": "failed", "error": error_text}
 
     _update_phase(conn, run_id, "discover")
     try:
