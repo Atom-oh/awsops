@@ -975,7 +975,10 @@ def fetch_live_topology(resolved, conn):
         `aws_side_state` the same as a confirmed-down one — a confident `blocked` fabricated from
         missing data, the exact failure mode this fetcher otherwise takes care to avoid for
         `sg`/`nacl`/`route` above. `eval_vpn_or_dx` now degrades a `None` `aws_side_state` to
-        `unknown`, so this fetcher's on-prem candidates correctly report unknown for that layer too.
+        `unknown` (round 19), and a `None` `route_present` the same way (round 25 — this wiring's
+        own `route_present` default was removed so the adapter's guard actually sees the absence
+        instead of a masking `False`), so this fetcher's on-prem candidates correctly report
+        unknown for either missing marker.
 
     Candidate `kind`: `resolved` only when discovery found the source (and, for an `aws_resource`
     destination, the destination) as a SINGLE unambiguous node — i.e. path-finding itself hit no

@@ -1152,6 +1152,11 @@ class TestCalicoPolicy:
         r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "unknown"
+        # CI-review MINOR fix (round 27): the diagnostic text used to assert the field was
+        # entirely absent even for a present-but-malformed value like "Alow" — verify the wording
+        # now correctly covers both cases.
+        assert "absent or unrecognized" in r["summary"]
+        assert "no `action` at all" not in r["summary"]
 
     def test_egress_source_side_selector_constraint_is_unknown_not_ignored(self):
         """Symmetric to round 20's ingress-side `destination` guard: for EGRESS, `destination` is
@@ -1280,6 +1285,34 @@ class TestRoute53Resolution:
         ]
         r = ad.eval_route53_resolution(records, "foo.example.com")
         assert r["status"] == "allowed"
+
+    def test_exact_match_below_a_delegation_cut_is_unknown_not_a_confident_allowed(self):
+        """CI-review MAJOR fix (round 27): the round-25/26 delegation check only ran on the
+        closest-encloser-MISS (NXDOMAIN) path — an EXACT match below a delegation cut (e.g. stale
+        parent-zone glue data: `ns.delegated.example.com A` alongside `delegated.example.com NS`,
+        no SOA) used to return `by_name[name]` immediately, bypassing every delegation check and
+        reaching a confident `allowed` even though the real answer is occluded in the child zone.
+        The delegation check now runs FIRST, over every strict ancestor, before exact-match."""
+        records = [
+            {"name": "delegated.example.com", "type": "NS"},
+            {"name": "ns.delegated.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "ns.delegated.example.com")
+        assert r["status"] == "unknown"
+
+    def test_delegation_cut_above_the_closest_existing_node_is_still_caught(self):
+        """CI-review MAJOR fix (round 27): the round-25/26 delegation check only inspected the
+        CLOSEST EXISTING node — a query one level below that (e.g. `x.ns.delegated.example.com`,
+        whose closest existing node is `ns.delegated.example.com`, itself one level below the
+        actual NS cut at `delegated.example.com`) never saw the delegation at all and reached a
+        confident `blocked` (NXDOMAIN). Walking every strict ancestor (not just the nearest
+        existing one) now catches a cut at any distance."""
+        records = [
+            {"name": "delegated.example.com", "type": "NS"},
+            {"name": "ns.delegated.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "x.ns.delegated.example.com")
+        assert r["status"] == "unknown"
 
     def test_closer_empty_non_terminal_without_its_own_wildcard_blocks_a_farther_wildcard(self):
         """CI-review MAJOR fix (round 20): RFC 4592 wildcard synthesis is valid ONLY from the

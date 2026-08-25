@@ -1154,8 +1154,9 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
         if saw_deny_or_pass_conflict or saw_unresolvable_action:
             return {"layer": layer, "status": "unknown", "resource": None,
                     "summary": "an Allow rule matches this peer, but a Deny/Pass rule (or a rule "
-                               "with no `action` at all, which this adapter cannot assume is an "
-                               "Allow) that also matches (or might match) it exists — Calico's "
+                               "whose `action` is absent or unrecognized, which this adapter "
+                               "cannot assume is an Allow) that also matches (or might match) it "
+                               "exists — Calico's "
                                "real precedence between them depends on policy/rule `order`, "
                                "which this adapter does not model", "evidence": [matched_allow_rule]}
         return {"layer": layer, "status": "allowed", "resource": None,
@@ -1170,9 +1171,9 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
         return {"layer": layer, "status": "unknown", "resource": None,
                 "summary": "a candidate Calico rule could not be confidently evaluated due to "
                            "missing peer data, an unmodeled negation field, a matching `Pass` "
-                           "rule (which delegates to the next tier/profile), a rule with no "
-                           "`action` field at all, or a selector construct this adapter cannot "
-                           "parse", "evidence": []}
+                           "rule (which delegates to the next tier/profile), a rule whose "
+                           "`action` field is absent or unrecognized, or a selector construct "
+                           "this adapter cannot parse", "evidence": []}
     return {"layer": layer, "status": "blocked", "resource": None,
             "summary": "pod is selected by >=1 Calico NetworkPolicy for this direction; no Allow "
                        "rule matched the peer", "evidence": []}
@@ -1456,6 +1457,30 @@ def eval_route53_resolution(records, query_host, data_available=True):
         # depth counter here — this function never recurses into itself, so a `depth` parameter
         # would always be 0 and never actually bound anything. Removed rather than left as
         # dead/misleading code.
+        labels = name.split(".")
+        # CI-review MAJOR fix (round 27): the round-25/26 delegation check only ever inspected the
+        # CLOSEST EXISTING encloser, and only ran on the NXDOMAIN (closest-encloser-miss) path —
+        # leaving the identical occlusion open on two other paths within this same function:
+        # (a) an EXACT match below a delegation cut (e.g. stale/glue data — `ns.delegated.example.
+        #     com A` alongside `delegated.example.com NS`, no SOA) used to hit the `name in
+        #     by_name` return immediately, never reaching any delegation check at all, and reached
+        #     a confident `allowed` even though the real answer is occluded in a child zone;
+        # (b) a cut ABOVE the closest existing node (e.g. `x.ns.delegated.example.com` whose
+        #     closest existing node is `ns.delegated.example.com`, one level below the actual NS
+        #     cut at `delegated.example.com`) never inspected anything past that nearest node, so
+        #     the delegation one level up was invisible.
+        # Both are the "same occlusion, one path over" pattern this series already treats as
+        # gate-worthy (rounds 22/24/25) — fixed by walking EVERY strict ancestor of the query name
+        # (not just the closest EXISTING one) for an NS-without-SOA cut, checked FIRST, before
+        # exact-match, empty-non-terminal, or wildcard handling get a chance to answer. The apex
+        # exemption (a real delegation point never carries an SOA; only the zone apex does — round
+        # 26) composes correctly here since it's evaluated per-ancestor.
+        for i in range(1, len(labels)):
+            ancestor = ".".join(labels[i:])
+            ancestor_types = {str(r.get("type", "")).upper() for r in by_name.get(ancestor, [])}
+            if "NS" in ancestor_types and "SOA" not in ancestor_types:
+                _delegated[0] = True
+                return None
         if name in by_name:
             return by_name[name]
         # CI-review MAJOR fix (round 21): the query name ITSELF can exist in the zone as an
@@ -1468,7 +1493,6 @@ def eval_route53_resolution(records, query_host, data_available=True):
         # synthesis from a farther ancestor.
         if name in _existing_nodes:
             return None
-        labels = name.split(".")
         closest_encloser = None
         for i in range(1, len(labels)):
             candidate = ".".join(labels[i:])
@@ -1476,21 +1500,6 @@ def eval_route53_resolution(records, query_host, data_available=True):
                 closest_encloser = candidate
                 break
         if closest_encloser is None:
-            return None
-        # CI-review MAJOR fix (round 26): an NS RRset alone does NOT mean a delegation — the
-        # zone's own APEX also carries an NS RRset (it is its own authoritative NS set, always
-        # present in real `ListResourceRecordSets` output per this function's own docstring), and
-        # the apex is frequently the closest encloser for any flat, non-delegated name in the
-        # zone (e.g. `foo.example.com` closest-enclosed by `example.com`). Treating that as a
-        # delegation broke the common flat-zone case: a genuine NXDOMAIN there now degraded to
-        # `unknown` instead of the confident `blocked` rounds 20/21 established, and apex wildcard
-        # synthesis (`*.example.com`) was made unreachable entirely. A real delegation point NEVER
-        # carries an SOA record (only the zone apex does) — so NS-without-SOA at the encloser is
-        # the actual delegation signal.
-        encloser_records = by_name.get(closest_encloser, [])
-        encloser_types = {str(r.get("type", "")).upper() for r in encloser_records}
-        if "NS" in encloser_types and "SOA" not in encloser_types:
-            _delegated[0] = True
             return None
         wildcard = "*." + closest_encloser
         if wildcard in by_name:
