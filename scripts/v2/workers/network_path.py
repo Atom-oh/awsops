@@ -62,13 +62,27 @@ own ENI isn't resolved, ALB/NLB-fronted targets (the target's OWN SG is not inde
 past `target-group`), or return-path routing on the destination side. A path can still report
 `allowed` based on less than the full bidirectional policy surface in those cases.
 """
+import base64
 import json
+import os
 import re
+import ssl
 import time
 import uuid
+from urllib.request import Request, urlopen
 
 import network_path_adapters as ad
 import network_path_reduce as reduce
+
+# Host account / readonly-role constants for the live-identity resolve phase below (Gap 4) — a
+# local copy of the same names sg_rule_scan.py/schedule_dispatcher.py already each keep independently
+# (this repo's established pattern: every worker module owns its own tiny copy rather than importing
+# a sibling job's module, since sibling job modules are edited independently and aren't meant to be
+# treated as shared libraries).
+HOST_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
+READONLY_ROLE_NAME = "AWSopsReadOnlyRole"
+_K8S_REQUEST_TIMEOUT_S = 4  # matches web/lib/eks-incluster.ts's K8S_REQUEST_TIMEOUT_MS bound
+_PROVIDER_ID_RE = re.compile(r'^aws:///[^/]+/(i-[0-9a-f]+)$')
 
 # MINOR fix: a raw AWS exception message persisted verbatim into the operator-readable
 # `network_path_runs.error` column can embed an ARN/account id/Athena-style UUID identifier — strip
@@ -164,6 +178,201 @@ def resolve_identities(definition):
         raise NetworkPathError(f"unsupported protocol: {protocol!r}")
 
     return {"source": src, "destination": dst, "request": {**req, "protocol": protocol}}
+
+
+# ── Phase 1b: live identity confirmation (Gap 4 / PR #231 follow-up) ────────────────────────────
+#
+# `resolve_identities()` above is deliberately left untouched — it stays pure schema
+# validation over the definition's OWN declared fields, exactly as every existing test exercises
+# it. This section adds a SEPARATE, additive confirmation step: when a saved check's source
+# declares a `cluster` (i.e. it was created against a live Kubernetes Pod/Node rather than a
+# directly-known ENI/subnet), `resolve_live_identity()` below re-derives the Pod's real IP/Node and
+# the Node's real ENI/subnet/VPC from a LIVE, read-only Kubernetes API GET + a live EC2 Describe —
+# instead of trusting the definition's own possibly-stale eni_id/subnet_id fields as already
+# verified (design spec's "Source identity" section: Pod IP, Node, ENI, subnet, VPC, VPC CNI/
+# SG-for-Pods). A source with no `cluster` declared is left exactly as `resolve_identities()`
+# already resolved it -- untouched, no live call attempted.
+#
+# Per spec's error-handling rule ("Identity cannot be resolved -> run completes `failed` with a
+# bounded, non-sensitive error"), every exception from the live K8s/EC2 calls below is caught and
+# re-raised as `NetworkPathError` with a `_redact_sensitive`-passed message -- this function NEVER
+# falls back to trusting the definition's stale fields as if they were verified live data.
+
+
+def _assumed_session(account_id, region, external_id=None):
+    """Role A (read-only cross-account) — the SAME AWSopsReadOnlyRole trust boundary
+    network-path.tf's own IAM grant documents (mirrors sg_rule_scan.py's `_assumed_session`, kept
+    as a local copy per this module's own convention — see the constants above)."""
+    import boto3
+    if account_id == HOST_ACCOUNT_ID:
+        return boto3.Session(region_name=region)
+    sts = boto3.client("sts", region_name=region)
+    kwargs = {
+        "RoleArn": f"arn:aws:iam::{account_id}:role/{READONLY_ROLE_NAME}",
+        "RoleSessionName": "awsops-network-path", "DurationSeconds": 3600,
+    }
+    if external_id:
+        kwargs["ExternalId"] = external_id
+    creds = sts.assume_role(**kwargs)["Credentials"]
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"], aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"], region_name=region,
+    )
+
+
+def _instance_id_from_provider_id(provider_id):
+    """A K8s Node's `spec.providerID` on EKS is `aws:///<az>/<instance-id>` -- extract the
+    instance id, or None if the field is absent/not in that shape (e.g. Fargate profile pods, whose
+    virtual Node has no describable EC2 instance at all)."""
+    m = _PROVIDER_ID_RE.match(provider_id or "")
+    return m.group(1) if m else None
+
+
+def _default_k8s_get(account_id, region, cluster, path, external_id=None):
+    """Read-only GET against the cluster's K8s API, authenticated via the SAME presigned-STS
+    `k8s-aws-v1.` bearer token pattern already established in this repo (identical mechanism to
+    web/lib/eks-incluster.ts's `eksToken`/`presignEksToken` and
+    scripts/v2/workers/insight/k8s_events.py's `_default_getter` — this is that same, precedented
+    approach, ported here for Pod/Node reads instead of Events). Requires the assumed session's
+    principal (AWSopsReadOnlyRole in a target account, or this worker's own task role in the host
+    account) to hold an EKS Access Entry on `cluster` — see the report for why that registration is
+    NOT created by this pass's terraform change (mirrors the istio-read MCP precedent: granting a
+    principal k8s access is the cluster owner's call, done out-of-band).
+    """
+    import boto3
+    from botocore.signers import RequestSigner
+    session = _assumed_session(account_id, region, external_id)
+    eks = session.client("eks")
+    c = eks.describe_cluster(name=cluster)["cluster"]
+    endpoint, ca = c["endpoint"], c["certificateAuthority"]["data"]
+    sts = session.client("sts")
+    signer = RequestSigner(sts.meta.service_model.service_id, region, "sts", "v4",
+                            sts._request_signer._credentials, sts._request_signer._event_emitter)
+    signed = signer.generate_presigned_url(
+        {"method": "GET",
+         "url": f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15",
+         "body": {}, "headers": {"x-k8s-aws-id": cluster}, "context": {}},
+        region_name=region, expires_in=60, operation_name="")
+    token = "k8s-aws-v1." + base64.urlsafe_b64encode(signed.encode()).rstrip(b"=").decode()
+    ctx = ssl.create_default_context(cadata=base64.b64decode(ca).decode())
+    req = Request(endpoint + path, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    with urlopen(req, timeout=_K8S_REQUEST_TIMEOUT_S, context=ctx) as r:  # noqa: S310 — fixed EKS https endpoint, GET only
+        return json.loads(r.read().decode())
+
+
+def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_id=None):
+    """Read-only `DescribeInstances` for the Node's resolved EC2 instance, returning that
+    instance's describable ENI/subnet/VPC. When `pod_ip` is given and matches one of the instance's
+    attached ENIs' private IPs (VPC CNI secondary-IP / SG-for-Pods branch-ENI placement), THAT ENI
+    is returned -- otherwise the instance's primary (device-index-0) ENI is used. Raises
+    NetworkPathError (never returns a guess) when the instance or a describable ENI isn't found."""
+    session = _assumed_session(account_id, region, external_id)
+    ec2 = session.client("ec2")
+    resp = ec2.describe_instances(InstanceIds=[instance_id])
+    instances = [i for r in (resp.get("Reservations") or []) for i in r.get("Instances", [])]
+    if not instances:
+        raise NetworkPathError(f"EC2 instance {instance_id} not found (DescribeInstances returned none)")
+    inst = instances[0]
+    enis = inst.get("NetworkInterfaces") or []
+    eni = None
+    if pod_ip:
+        eni = next(
+            (ni for ni in enis
+             if any(pa.get("PrivateIpAddress") == pod_ip for pa in ni.get("PrivateIpAddresses", []))),
+            None)
+    if eni is None:
+        eni = next((ni for ni in enis if (ni.get("Attachment") or {}).get("DeviceIndex") == 0), None)
+    if eni is None:
+        raise NetworkPathError(f"EC2 instance {instance_id} has no describable network interface")
+    return {
+        "instance_id": instance_id,
+        "eni_id": eni.get("NetworkInterfaceId"),
+        "subnet_id": eni.get("SubnetId") or inst.get("SubnetId"),
+        "vpc_id": eni.get("VpcId") or inst.get("VpcId"),
+    }
+
+
+def resolve_live_identity(resolved, k8s_get=None, ec2_lookup=None):
+    """Confirm a `pod`/`node` source's identity against the LIVE K8s/EC2 state (Gap 4) rather than
+    trusting the saved definition's own eni_id/subnet_id fields as already verified. No-op (returns
+    `resolved` unchanged) when the source declares no `cluster` -- that's the "directly-known
+    ENI/subnet" path `resolve_identities()` already fully resolves, untouched by this function.
+
+    On success, returns a new `resolved` dict whose `source` has been updated with the REAL
+    `pod_ip` (pod source only)/`node_name`/`instance_id`/`eni_id`/`subnet_id`/`vpc_id` -- these
+    values now come from a live GET/Describe, not from whatever the definition happened to declare.
+
+    Raises NetworkPathError on: pod/node not found, the pod having no assigned IP/node yet, the
+    K8s API/cluster being unreachable, the node having no resolvable EC2 providerID (e.g. a
+    Fargate-profile virtual node), or the resolved EC2 instance/ENI not being describable. Per
+    spec's "Identity cannot be resolved -> run completes `failed`" rule, this function never
+    degrades to trusting the definition's stale fields on any of these failures.
+    """
+    src = resolved["source"]
+    cluster = src.get("cluster")
+    if not cluster:
+        return resolved
+
+    account_id, region = src["account_id"], src["region"]
+    external_id = src.get("external_id")
+    k8s_get = k8s_get or _default_k8s_get
+    ec2_lookup = ec2_lookup or _default_ec2_lookup
+
+    pod_ip = None
+    if src["kind"] == "pod":
+        namespace, pod_name = src.get("namespace"), src.get("pod_name")
+        if not namespace or not pod_name:
+            raise NetworkPathError("pod source declares a cluster but is missing namespace/pod_name")
+        try:
+            pod = k8s_get(account_id, region, cluster, f"/api/v1/namespaces/{namespace}/pods/{pod_name}",
+                          external_id)
+        except Exception as e:  # noqa: BLE001 — any transport/auth/404 failure -> bounded failed run
+            raise NetworkPathError(_redact_sensitive(
+                f"could not resolve pod {namespace}/{pod_name} on cluster {cluster}: "
+                f"{type(e).__name__}: {e}")) from e
+        status = pod.get("status") or {}
+        pod_ip = status.get("podIP")
+        node_name = (pod.get("spec") or {}).get("nodeName")
+        if not pod_ip or not node_name:
+            raise NetworkPathError(
+                f"pod {namespace}/{pod_name} on cluster {cluster} has no assigned IP/node "
+                f"(phase={status.get('phase') or 'unknown'})")
+    elif src["kind"] == "node":
+        node_name = src.get("node_name")
+        if not node_name:
+            raise NetworkPathError("node source declares a cluster but is missing node_name")
+    else:
+        return resolved  # a cluster with neither pod nor node kind has nothing to confirm here
+
+    try:
+        node = k8s_get(account_id, region, cluster, f"/api/v1/nodes/{node_name}", external_id)
+    except Exception as e:  # noqa: BLE001
+        raise NetworkPathError(_redact_sensitive(
+            f"could not resolve node {node_name} on cluster {cluster}: {type(e).__name__}: {e}")) from e
+    instance_id = _instance_id_from_provider_id((node.get("spec") or {}).get("providerID"))
+    if not instance_id:
+        raise NetworkPathError(f"node {node_name} on cluster {cluster} has no resolvable EC2 providerID")
+
+    try:
+        placement = ec2_lookup(account_id, region, instance_id, pod_ip, external_id)
+    except NetworkPathError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise NetworkPathError(_redact_sensitive(
+            f"could not resolve EC2 instance {instance_id} for node {node_name}: "
+            f"{type(e).__name__}: {e}")) from e
+
+    confirmed = dict(src)
+    confirmed.update({
+        "node_name": node_name,
+        "instance_id": placement["instance_id"],
+        "eni_id": placement["eni_id"],
+        "subnet_id": placement["subnet_id"],
+        "vpc_id": placement.get("vpc_id"),
+    })
+    if pod_ip:
+        confirmed["pod_ip"] = pod_ip
+    return {**resolved, "source": confirmed}
 
 
 # ── Phase 2: discover ────────────────────────────────────────────────────────────────────────────
@@ -605,7 +814,8 @@ def fetch_live_topology(resolved, conn):
     return {"candidates": [candidate]}
 
 
-def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=time.monotonic):
+def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=time.monotonic,
+        k8s_get=None, ec2_lookup=None):
     """Entry point registered in handlers.py's REGISTRY. `payload`: {"run_id", "definition"}
     (definition = the run's `definition_snapshot`, already immutable per spec).
 
@@ -615,6 +825,10 @@ def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=
     connection `run()` already holds — `conn` can't be captured in a plain default-argument value at
     function-definition time, so the 1-arg-vs-2-arg fetchers are unified here via a small closure
     instead of changing every existing caller's fixture signature.
+
+    `k8s_get`/`ec2_lookup`, when supplied, are threaded straight into `resolve_live_identity()`
+    (Gap 4) — production leaves both `None` (the real presigned-STS K8s GET / boto3 EC2 Describe);
+    tests inject fakes exactly the same way existing tests inject `topology_fetcher`.
     """
     run_id = payload["run_id"]
     definition = payload["definition"]
@@ -622,6 +836,7 @@ def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=
 
     try:
         resolved = resolve_identities(definition)
+        resolved = resolve_live_identity(resolved, k8s_get=k8s_get, ec2_lookup=ec2_lookup)
     except NetworkPathError as e:
         _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
         return {"run_id": run_id, "status": "failed", "error": str(e)}

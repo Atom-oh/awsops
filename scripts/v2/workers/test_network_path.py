@@ -178,6 +178,183 @@ class TestFetchLiveTopology:
         assert c["dest_eni_known"] is False
 
 
+# ── Gap 4: resolve_live_identity() — confirm source identity via live K8s/EC2 calls ─────────────
+
+def _pod_definition(namespace="default", pod_name="my-pod", cluster="my-cluster"):
+    d = _definition()
+    d["source"] = {
+        "kind": "pod", "account_id": "111111111111", "region": "ap-northeast-2",
+        "cluster": cluster, "namespace": namespace, "pod_name": pod_name,
+        # user-supplied, must NOT be trusted once a live call succeeds/fails
+        "eni_id": "eni-stale-user-supplied",
+    }
+    return d
+
+
+def _node_definition(node_name="ip-10-0-1-5.ec2.internal", cluster="my-cluster"):
+    d = _definition()
+    d["source"] = {
+        "kind": "node", "account_id": "111111111111", "region": "ap-northeast-2",
+        "cluster": cluster, "node_name": node_name, "eni_id": "eni-stale-user-supplied",
+    }
+    return d
+
+
+class TestResolveLiveIdentity:
+    def test_no_cluster_declared_is_a_no_op(self):
+        """A source with no `cluster` is the pre-existing directly-known-ENI path — untouched."""
+        resolved = np.resolve_identities(_definition())
+        out = np.resolve_live_identity(resolved)
+        assert out is resolved
+
+    def test_successful_pod_resolution_populates_real_pod_node_eni_subnet_vpc(self):
+        pod_obj = {"status": {"podIP": "10.0.1.42", "phase": "Running"},
+                   "spec": {"nodeName": "ip-10-0-1-5.ec2.internal"}}
+        node_obj = {"spec": {"providerID": "aws:///ap-northeast-2a/i-0abc123def456"}}
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            if path.endswith("/pods/my-pod"):
+                return pod_obj
+            if path.endswith("/nodes/ip-10-0-1-5.ec2.internal"):
+                return node_obj
+            raise AssertionError(f"unexpected path {path}")
+
+        def fake_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_id=None):
+            assert instance_id == "i-0abc123def456"
+            assert pod_ip == "10.0.1.42"
+            return {"instance_id": instance_id, "eni_id": "eni-real123",
+                    "subnet_id": "subnet-real1", "vpc_id": "vpc-real1"}
+
+        resolved = np.resolve_identities(_pod_definition())
+        out = np.resolve_live_identity(resolved, k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
+        src = out["source"]
+        assert src["pod_ip"] == "10.0.1.42"
+        assert src["node_name"] == "ip-10-0-1-5.ec2.internal"
+        assert src["instance_id"] == "i-0abc123def456"
+        assert src["eni_id"] == "eni-real123"  # never the stale user-supplied value
+        assert src["subnet_id"] == "subnet-real1"
+        assert src["vpc_id"] == "vpc-real1"
+
+    def test_successful_node_resolution_populates_real_eni_subnet_vpc(self):
+        node_obj = {"spec": {"providerID": "aws:///ap-northeast-2a/i-0deadbeef000"}}
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            assert path.endswith("/nodes/ip-10-0-1-5.ec2.internal")
+            return node_obj
+
+        def fake_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_id=None):
+            assert pod_ip is None  # no pod IP for a bare node source
+            return {"instance_id": instance_id, "eni_id": "eni-node-real",
+                    "subnet_id": "subnet-node-real", "vpc_id": "vpc-node-real"}
+
+        resolved = np.resolve_identities(_node_definition())
+        out = np.resolve_live_identity(resolved, k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
+        assert out["source"]["eni_id"] == "eni-node-real"
+        assert "pod_ip" not in out["source"]
+
+    def test_pod_not_found_fails_with_bounded_error(self):
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            raise RuntimeError("HTTP 404: pods \"my-pod\" not found")
+
+        resolved = np.resolve_identities(_pod_definition())
+        with pytest.raises(np.NetworkPathError) as ei:
+            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+        assert "my-pod" in str(ei.value)
+        assert "not found" in str(ei.value) or "404" in str(ei.value)
+
+    def test_pod_with_no_assigned_ip_fails_with_bounded_error(self):
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            return {"status": {"phase": "Pending"}, "spec": {}}
+
+        resolved = np.resolve_identities(_pod_definition())
+        with pytest.raises(np.NetworkPathError) as ei:
+            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+        assert "Pending" in str(ei.value)
+
+    def test_node_ec2_instance_not_resolvable_fails_with_bounded_error(self):
+        node_obj = {"spec": {"providerID": "aws:///ap-northeast-2a/i-0abcdef01234"}}
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            return node_obj
+
+        def fake_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_id=None):
+            raise np.NetworkPathError(f"EC2 instance {instance_id} not found (DescribeInstances returned none)")
+
+        with pytest.raises(np.NetworkPathError) as ei:
+            np.resolve_live_identity(np.resolve_identities(_node_definition()),
+                                      k8s_get=fake_k8s_get, ec2_lookup=fake_ec2_lookup)
+        assert "i-0abcdef01234" in str(ei.value)
+        assert "not found" in str(ei.value)
+
+    def test_node_with_no_provider_id_fails_with_bounded_error(self):
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            return {"spec": {}}  # Fargate-profile virtual node, no EC2 providerID
+
+        resolved = np.resolve_identities(_node_definition())
+        with pytest.raises(np.NetworkPathError) as ei:
+            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+        assert "providerID" in str(ei.value)
+
+    def test_error_message_is_redacted(self):
+        """A raw exception embedding an ARN/account id must be redacted before it reaches the
+        bounded NetworkPathError message (same _redact_sensitive contract run() already applies)."""
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            raise RuntimeError(
+                "AccessDenied assuming arn:aws:iam::222222222222:role/AWSopsReadOnlyRole")
+
+        resolved = np.resolve_identities(_pod_definition())
+        with pytest.raises(np.NetworkPathError) as ei:
+            np.resolve_live_identity(resolved, k8s_get=fake_k8s_get)
+        assert "arn:aws:iam" not in str(ei.value)
+        assert "<arn-redacted>" in str(ei.value)
+
+    def test_run_fails_closed_when_live_identity_cannot_be_resolved(self):
+        """Full run() integration: a pod source declaring a cluster, with a k8s_get that raises,
+        must terminate the run as `failed` -- never falling back to the stale user-supplied eni_id
+        as though it were verified live data."""
+        conn = FakeConn()
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            raise RuntimeError("connection refused")
+
+        result = np.run({"run_id": "r-live-1", "definition": _pod_definition()}, conn,
+                         k8s_get=fake_k8s_get)
+        assert result["status"] == "failed"
+        assert conn.inserted_candidates() == []
+        finishes = conn.run_finishes()
+        assert finishes[-1]["s"] == "failed"
+        assert "eni-stale-user-supplied" not in (finishes[-1]["err"] or "")
+
+    def test_run_succeeds_with_live_resolved_identity(self):
+        """Full run() integration: a successful live resolution feeds the REAL eni_id into
+        discovery/topology — proving the confirmed identity, not the stale declared one, is what
+        the rest of the pipeline actually sees."""
+        conn = FakeConn()
+        pod_obj = {"status": {"podIP": "10.0.1.42", "phase": "Running"},
+                   "spec": {"nodeName": "ip-10-0-1-5.ec2.internal"}}
+        node_obj = {"spec": {"providerID": "aws:///ap-northeast-2a/i-0abc123def456"}}
+
+        def fake_k8s_get(account_id, region, cluster, path, external_id=None):
+            return pod_obj if path.endswith("/pods/my-pod") else node_obj
+
+        def fake_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_id=None):
+            return {"instance_id": instance_id, "eni_id": "eni-real123",
+                    "subnet_id": "subnet-real1", "vpc_id": "vpc-real1"}
+
+        seen_resolved = {}
+
+        def capture_topology(resolved):
+            seen_resolved.update(resolved)
+            return _topology_one_candidate()
+
+        result = np.run({"run_id": "r-live-2", "definition": _pod_definition()}, conn,
+                         topology_fetcher=capture_topology, k8s_get=fake_k8s_get,
+                         ec2_lookup=fake_ec2_lookup)
+        assert result["status"] == "succeeded"
+        assert seen_resolved["source"]["eni_id"] == "eni-real123"
+        assert seen_resolved["source"]["pod_ip"] == "10.0.1.42"
+
+
 # ── discover ─────────────────────────────────────────────────────────────────────────────────────
 
 class TestDiscover:

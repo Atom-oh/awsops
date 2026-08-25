@@ -81,6 +81,27 @@ resource "aws_iam_role_policy" "worker_task_network_path_readonly_assume" {
           "elasticloadbalancing:DescribeTargetGroups",
           "elasticloadbalancing:DescribeTargetHealth",
           "route53resolver:ListResolverEndpoints",
+          # Gap 4 (PR #231 follow-up, live source-identity confirmation): describe-cluster is a
+          # plain read-only IAM action, additive to this SAME existing statement — it strictly
+          # extends the file's own established pattern (a tiny grant alongside the existing
+          # sts:AssumeRole extension), not a new trust relationship or new resource. It gives
+          # network_path.py's resolve_live_identity() the cluster endpoint + CA needed to presign
+          # a k8s-aws-v1. bearer token (identical mechanism to web/lib/eks-incluster.ts /
+          # scripts/v2/workers/insight/k8s_events.py).
+          #
+          # NOT covered by this grant, and deliberately NOT added here (genuine, unresolved infra
+          # gap — see the report): the worker task role (or AWSopsReadOnlyRole in a target account)
+          # still needs a K8s-level EKS Access Entry on the target cluster before any Pod/Node GET
+          # actually authorizes. Per eks.tf's own precedent for the istio-read MCP role, granting a
+          # principal K8s access is the CLUSTER OWNER's call, not something this apply principal can
+          # always make (may lack eks:CreateAccessEntry on a third-party cluster) — that access entry
+          # is registered out-of-band by the operator, the same way istio-read's is
+          # (docs/runbooks/istio-agent-eks-access.md's register-istio-access.sh pattern). Until that
+          # registration exists for a given cluster, a network_path check whose source is a pod/node
+          # on that cluster correctly fails closed with a bounded "could not resolve pod/node..."
+          # error (resolve_live_identity()'s own AccessDenied handling) rather than silently trusting
+          # the definition's stale fields.
+          "eks:DescribeCluster",
         ]
         Resource = "*"
       }
