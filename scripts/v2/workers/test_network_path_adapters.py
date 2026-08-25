@@ -792,3 +792,192 @@ class TestMeshPolicyStub:
         ]:
             r = ad.eval_mesh_policy_stub(kind, version, present)
             assert r["status"] not in ("allowed", "blocked")
+
+
+# ── Gap 2: Calico — REAL evaluation (superset of core K8s NetworkPolicy semantics) ─────────────
+
+_CALICO_VERSION = "projectcalico.org/v3"
+
+
+class TestCalicoPolicy:
+    def test_crd_missing_is_unknown(self):
+        r = ad.eval_calico_policy([], {}, "ingress", crd_present=False)
+        assert r["status"] == "unknown"
+
+    def test_unsupported_version_is_unknown(self):
+        r = ad.eval_calico_policy([], {}, "ingress", crd_present=True, observed_api_version="v2alpha1")
+        assert r["status"] == "unknown"
+
+    def test_no_policy_selects_pod_default_allow(self):
+        # Matches core K8s NetworkPolicy semantics for the overlapping case: unselected -> allow.
+        r = ad.eval_calico_policy(
+            [{"selector": "role == 'other'", "types": ["Ingress"]}], {"role": "web"}, "ingress",
+            crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
+    def test_selected_default_deny_no_matching_rule(self):
+        r = ad.eval_calico_policy(
+            [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": []}],
+            {"role": "web"}, "ingress", crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "blocked"
+
+    def test_selector_equality_match_allows(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"selector": "role == 'frontend'"}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
+    def test_selector_equality_mismatch_blocks(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"selector": "role == 'frontend'"}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "backend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "blocked"
+
+    def test_nets_cidr_match_allows(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"nets": ["10.0.0.0/8"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.1.2.3",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
+    def test_deny_action_rule_is_never_a_confident_blocker(self):
+        # A Deny rule that would otherwise match a peer must not itself yield `blocked` -- Calico's
+        # real deny/pass precedence depends on cross-policy `order`, which this adapter doesn't
+        # model; the ABSENCE of a matching Allow still correctly reduces to blocked on its own.
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Deny", "source": {"selector": "role == 'frontend'"}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "blocked"  # no Allow rule matched (the Deny rule was skipped, not applied)
+
+    def test_unsupported_selector_construct_is_unknown_not_a_guess(self):
+        policies = [{"selector": "role == 'web' || tier == 'edge'", "types": ["Ingress"], "ingress": []}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_missing_peer_labels_for_selector_peer_is_unknown_not_blocked(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "source": {"selector": "role == 'frontend'"}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels=None,
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_data_unavailable_is_unknown_not_allowed(self):
+        r = ad.eval_calico_policy([], {}, "ingress", crd_present=True,
+                                   observed_api_version=_CALICO_VERSION, data_available=False)
+        assert r["status"] == "unknown"
+
+    def test_omitted_types_defaults_on_rule_presence_like_calico_docs(self):
+        # Calico's own omitted-types default differs from core K8s's (_policy_type_applies):
+        # symmetric rule-presence defaulting for BOTH directions, not "Ingress always applies".
+        policies = [{"selector": "role == 'web'", "egress": []}]  # no "types", no "ingress" key
+        ingress_result = ad.eval_calico_policy(policies, {"role": "web"}, "ingress",
+                                                crd_present=True, observed_api_version=_CALICO_VERSION)
+        egress_result = ad.eval_calico_policy(policies, {"role": "web"}, "egress",
+                                               crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert ingress_result["status"] == "allowed"  # no "ingress" key -> Ingress type doesn't apply
+        assert egress_result["status"] == "blocked"   # "egress" key present -> selected, no rule matches
+
+
+# ── Gap 3: Route 53 resolution — REAL evaluation of already-fetched zone data ──────────────────
+
+class TestRoute53Resolution:
+    def test_no_data_is_unknown(self):
+        r = ad.eval_route53_resolution([], "app.example.com", data_available=False)
+        assert r["status"] == "unknown"
+
+    def test_no_matching_record_is_blocked(self):
+        records = [{"name": "other.example.com", "type": "A"}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "blocked"
+
+    def test_exact_match_healthy_allows(self):
+        records = [{"name": "app.example.com", "type": "A", "health_check_status": None}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "allowed"
+
+    def test_wildcard_match_allows(self):
+        records = [{"name": "*.example.com", "type": "A"}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "allowed"
+
+    def test_all_unhealthy_blocks(self):
+        records = [{"name": "app.example.com", "type": "A", "health_check_status": "unhealthy"}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "blocked"
+
+    def test_mixed_health_is_conditional(self):
+        records = [
+            {"name": "app.example.com", "type": "A", "health_check_status": "unhealthy"},
+            {"name": "app.example.com", "type": "A", "health_check_status": "healthy"},
+        ]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "conditional"
+
+    def test_cname_chain_is_followed(self):
+        records = [
+            {"name": "app.example.com", "type": "CNAME", "alias_target": "lb.example.com"},
+            {"name": "lb.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "allowed"
+
+    def test_no_query_host_is_unknown(self):
+        r = ad.eval_route53_resolution([{"name": "app.example.com", "type": "A"}], None)
+        assert r["status"] == "unknown"
+
+
+# ── Gap 3: K8s Ingress -> Service -> EndpointSlice resolution — REAL evaluation ─────────────────
+
+class TestK8sServiceResolution:
+    def test_no_data_is_unknown(self):
+        r = ad.eval_k8s_service_resolution([], {}, {}, {"host": "app.example.com"}, data_available=False)
+        assert r["status"] == "unknown"
+
+    def test_no_matching_ingress_rule_is_blocked(self):
+        rules = [{"host": "other.example.com", "backend_service": "svc-a"}]
+        r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "blocked"
+
+    def test_missing_backend_service_is_blocked(self):
+        rules = [{"host": "app.example.com", "backend_service": "svc-missing"}]
+        r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "blocked"
+
+    def test_no_endpoints_is_blocked(self):
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"selector": {"app": "a"}}}
+        r = ad.eval_k8s_service_resolution(rules, services, {"svc-a": []}, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "blocked"
+
+    def test_all_endpoints_ready_allows(self):
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"selector": {"app": "a"}}}
+        eps = {"svc-a": [{"ready": True}, {"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "allowed"
+
+    def test_partial_ready_is_conditional(self):
+        rules = [{"host": "app.example.com", "backend_service": "svc-a"}]
+        services = {"svc-a": {"selector": {"app": "a"}}}
+        eps = {"svc-a": [{"ready": True}, {"ready": False}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "conditional"
+
+    def test_path_prefix_match(self):
+        rules = [{"host": "app.example.com", "path": "/api", "path_type": "Prefix",
+                   "backend_service": "svc-a"}]
+        services = {"svc-a": {"selector": {"app": "a"}}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps,
+                                            {"host": "app.example.com", "path": "/api/v1"})
+        assert r["status"] == "allowed"
+
+    def test_path_exact_mismatch_blocks(self):
+        rules = [{"host": "app.example.com", "path": "/api", "path_type": "Exact",
+                   "backend_service": "svc-a"}]
+        r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "app.example.com", "path": "/api/v1"})
+        assert r["status"] == "blocked"

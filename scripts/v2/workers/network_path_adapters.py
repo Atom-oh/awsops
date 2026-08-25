@@ -860,11 +860,21 @@ _SUPPORTED_CRD_VERSIONS = {
 
 
 def eval_mesh_policy_stub(kind, observed_api_version, crd_present):
-    """Bounded stub for Calico / Cilium egress gateways / Istio VirtualService, DestinationRule,
+    """Bounded stub for Cilium (policy + egress gateways) and Istio VirtualService, DestinationRule,
     Gateway, AuthorizationPolicy, PeerAuthentication. This is intentionally NOT a full live policy
-    evaluator (see the report: these are correctly-stubbed-`unknown`, not fully implemented) — it
-    never returns `allowed`/`blocked` for a schema it cannot fully parse, satisfying the spec's
+    evaluator (see the report: these stay correctly-stubbed-`unknown`, detection-only) — it never
+    returns `allowed`/`blocked` for a schema it cannot fully parse, satisfying the spec's
     "Unsupported versions, missing CRDs ... become `?`. They never become `O`."
+
+    Its three branches already distinguish "genuinely no mesh CRD installed" from "CRD present, but
+    an unsupported version" from "CRD present and a supported version, but not evaluated" via
+    `crd_present`/`observed_api_version` — the DETECTION half of gap 2's ask is already real here;
+    what remains a stub is the actual rule evaluation for Cilium/Istio (no code in this worker reads
+    live Cilium/Istio CRD content today — see the report for why: this worker has no live K8s client
+    at all, only whatever the topology fetcher/discover phase supplies in `data`). Calico now has its
+    OWN dedicated evaluator (`eval_calico_policy`, below) wired into network_path.py in place of this
+    stub — this function is kept for Cilium/Istio and for any caller that still wants the pre-Calico
+    stub behavior directly (e.g. the TestMeshPolicyStub suite exercising it with kind="calico").
     """
     layer = f"k8s-{kind}"
     if not crd_present:
@@ -876,3 +886,322 @@ def eval_mesh_policy_stub(kind, observed_api_version, crd_present):
                 "summary": f"unsupported {kind} apiVersion {observed_api_version!r}", "evidence": []}
     return {"layer": layer, "status": "unknown", "resource": None,
             "summary": f"{kind} policy evaluation is not implemented in this release", "evidence": []}
+
+
+# ── Kubernetes policy: Calico NetworkPolicy (projectcalico.org/v3) — REAL evaluation ────────────
+
+_CALICO_TERM_RE = re.compile(r"^\s*([\w./-]+)\s*(==|!=|not\s+in|in)\s*(.+?)\s*$")
+
+
+def _parse_calico_value_list(raw):
+    raw = raw.strip()
+    if raw.startswith("{") and raw.endswith("}"):
+        raw = raw[1:-1]
+    return [v.strip().strip("'\"") for v in raw.split(",") if v.strip()]
+
+
+def _calico_selector_matches(selector, labels):
+    """Evaluate a Calico label-selector STRING against `labels` (dict).
+
+    Returns `True`/`False` for a confidently-evaluated selector, or `None` when the selector uses a
+    construct this bounded parser cannot confidently evaluate — callers MUST treat `None` as
+    unresolvable (never as a confident non-match), matching every other "missing data -> never a
+    fabricated verdict" rule in this module.
+
+    Supported subset: `''`/`'all()'` (matches everything — Calico's own "select everything");
+    a FLAT `&&`-joined conjunction of `key == 'value'` / `key != 'value'` / `key in {'a','b'}` /
+    `key not in {'a','b'}` terms. Calico's selector language is a much larger boolean DSL
+    (`||`, `has()`/`!has()`, parenthesized grouping, glob-style operators) — none of that is
+    supported here; any of it makes this return `None` rather than guess.
+    """
+    selector = (selector or "").strip()
+    if selector in ("", "all()"):
+        return True
+    if "||" in selector or "has(" in selector or "(" in selector.replace("all()", ""):
+        return None
+    for term in (t.strip() for t in selector.split("&&")):
+        m = _CALICO_TERM_RE.match(term)
+        if not m:
+            return None
+        key, op, val = m.groups()
+        op = re.sub(r"\s+", " ", op.strip())
+        actual = (labels or {}).get(key)
+        if op == "==":
+            if actual != val.strip("'\""):
+                return False
+        elif op == "!=":
+            if actual == val.strip("'\""):
+                return False
+        elif op == "in":
+            if actual not in _parse_calico_value_list(val):
+                return False
+        elif op == "not in":
+            if actual in _parse_calico_value_list(val):
+                return False
+        else:  # pragma: no cover — regex only captures the 4 ops above
+            return None
+    return True
+
+
+def _calico_policy_type_applies(policy, direction):
+    """Calico's `types` defaulting: when present, only that explicit list applies (case-insensitive,
+    same as core K8s). When OMITTED, Calico's own docs default on RULE PRESENCE for BOTH directions
+    symmetrically (unlike core K8s's `_policy_type_applies`, which always defaults Ingress on
+    regardless of rule presence) — Ingress applies iff an `ingress` key is present, Egress iff an
+    `egress` key is present."""
+    types = policy.get("types")
+    if types:
+        want = "ingress" if direction == "ingress" else "egress"
+        return want in {str(t).lower() for t in types}
+    key = "ingress" if direction == "ingress" else "egress"
+    return key in policy
+
+
+def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observed_api_version=None,
+                        peer_labels=None, peer_ip=None, peer_namespace_labels=None,
+                        protocol=None, port=None, data_available=True):
+    """Real Calico NetworkPolicy (`projectcalico.org/v3`) evaluation — deliberately reuses
+    `eval_k8s_network_policy`'s port-matching (`_k8s_port_matches`) and CIDR/IP helpers
+    (`_cidr_contains`/`_is_valid_ip`), since Calico's policy model is a superset of core K8s
+    NetworkPolicy for the overlapping feature set (selector-based allow rules, default-deny-once-
+    selected, per-rule ports, CIDR/`nets` peers). It differs mainly in its label-selector language
+    (a string DSL, `_calico_selector_matches`) instead of core K8s's dict `matchLabels`, and in its
+    peer shape (`source`/`destination` carrying `selector`/`namespaceSelector`/`nets` together,
+    ANDed, rather than core K8s's `from`/`to` peer list of alternative OR'd peer entries).
+
+    `policies`: [{"selector": str, "types": ["Ingress","Egress"] (optional),
+    "ingress"/"egress": [{"action": "Allow"|"Deny"|"Log"|"Pass" (only "Allow" rules are ever
+    evaluated — see below), "source"/"destination": {"selector": str, "namespaceSelector": str,
+    "nets": [cidr, ...]}, "protocol": str, "ports": [...]}]}.
+
+    Only `action: Allow` rules ever contribute a confident `allowed` — a `Deny`/`Log`/`Pass` rule
+    that would otherwise match is simply skipped (not evaluated as a blocker), matching this
+    feature's "never invent a confident `blocked` from a mechanism this adapter cannot fully model"
+    rule: Calico's real deny/pass precedence also depends on `order` across policies (lower order
+    wins, ties are undefined across tiers), which this bounded evaluator does not model — assigning
+    a Deny/Pass rule an authoritative `blocked` here could be wrong relative to a differently-ordered
+    Allow elsewhere. The final "no Allow rule matched" case still correctly reduces to `blocked`
+    (mirrors `eval_k8s_network_policy`'s own default-deny-once-selected semantics), since the ABSENCE
+    of any matching Allow is itself confidently evaluable without needing Calico's ordering model.
+    """
+    layer = "k8s-calico"
+    if not crd_present:
+        return {"layer": layer, "status": "unknown", "resource": None,
+                "summary": "calico CRD not installed in this cluster", "evidence": []}
+    if observed_api_version not in _SUPPORTED_CRD_VERSIONS.get("calico", set()):
+        return {"layer": layer, "status": "unknown", "resource": None,
+                "summary": f"unsupported calico apiVersion {observed_api_version!r}", "evidence": []}
+    if not data_available:
+        return {"layer": layer, "status": "unknown", "resource": None,
+                "summary": "Calico NetworkPolicy data was not fetched for this pod/namespace — "
+                           "cannot evaluate (missing data, not a confirmed absence of policy)",
+                "evidence": []}
+
+    selecting = []
+    for p in policies:
+        match = _calico_selector_matches(p.get("selector"), pod_labels)
+        if match is None:
+            return {"layer": layer, "status": "unknown", "resource": None,
+                    "summary": "a Calico policy's own selector uses a construct this adapter cannot "
+                               "confidently evaluate (supported subset: '', 'all()', or a flat && "
+                               "chain of ==/!=/in/not-in terms)", "evidence": []}
+        if match and _calico_policy_type_applies(p, direction):
+            selecting.append(p)
+    if not selecting:
+        return {"layer": layer, "status": "allowed", "resource": None,
+                "summary": "no Calico NetworkPolicy selects this pod for this direction (default allow)",
+                "evidence": []}
+
+    key = "ingress" if direction == "ingress" else "egress"
+    saw_unresolvable = False
+    for policy in selecting:
+        for rule in policy.get(key, []):
+            if str(rule.get("action", "Allow")).lower() != "allow":
+                continue  # Deny/Log/Pass — not evaluated, see docstring
+            port_match = _k8s_port_matches(
+                {"ports": rule.get("ports")} if rule.get("ports") else {},
+                protocol or rule.get("protocol"), port)
+            if port_match is False:
+                continue
+            peer = rule.get("source" if direction == "ingress" else "destination") or {}
+            selector, ns_selector, nets = peer.get("selector"), peer.get("namespaceSelector"), peer.get("nets")
+            if not selector and not ns_selector and not nets:
+                if port_match is None:
+                    saw_unresolvable = True
+                    continue
+                return {"layer": layer, "status": "allowed", "resource": None,
+                        "summary": "matching Calico rule allows all peers", "evidence": [rule]}
+            if ns_selector:
+                ns_match = _calico_selector_matches(ns_selector, peer_namespace_labels)
+                if ns_match is None:
+                    saw_unresolvable = True
+                    continue
+                if not ns_match:
+                    continue
+            if selector:
+                if peer_labels is None:
+                    saw_unresolvable = True
+                    continue
+                pod_match = _calico_selector_matches(selector, peer_labels)
+                if pod_match is None:
+                    saw_unresolvable = True
+                    continue
+                if not pod_match:
+                    continue
+            if nets:
+                if peer_ip is None or not _is_valid_ip(peer_ip):
+                    saw_unresolvable = True
+                    continue
+                if not any(_cidr_contains(n, peer_ip) for n in nets):
+                    continue
+            if port_match is None:
+                saw_unresolvable = True
+                continue
+            return {"layer": layer, "status": "allowed", "resource": None,
+                    "summary": "matched Calico rule peer", "evidence": [rule]}
+    if saw_unresolvable:
+        return {"layer": layer, "status": "unknown", "resource": None,
+                "summary": "a candidate Calico rule could not be confidently evaluated due to "
+                           "missing peer data or a selector construct this adapter cannot parse",
+                "evidence": []}
+    return {"layer": layer, "status": "blocked", "resource": None,
+            "summary": "pod is selected by >=1 Calico NetworkPolicy for this direction; no Allow "
+                       "rule matched the peer", "evidence": []}
+
+
+# ── DNS/L7: Route 53 resolution ─────────────────────────────────────────────────────────────────
+
+def eval_route53_resolution(records, query_host, data_available=True):
+    """Real Route 53 resolution evaluation, given already-fetched hosted-zone record data (this
+    module makes no AWS calls itself — see the module docstring; a caller/orchestrator that has read
+    `ListResourceRecordSets` and, for ALIAS/failover records, health-check status is expected to
+    supply it here).
+
+    `records`: [{"name": str, "type": "A"|"AAAA"|"CNAME"|"ALIAS"|..., "alias_target": str|None,
+    "health_check_status": "healthy"|"unhealthy"|None, "failover": "PRIMARY"|"SECONDARY"|None}].
+    Matching: exact name match, else the name's own wildcard record (`*.<parent>`) one label up,
+    else (for a CNAME target) one hop of chain-following. Not a full recursive resolver — this is
+    read-only zone-data inspection, never an actual DNS query (spec's "no active probe" boundary).
+    """
+    if not data_available:
+        return {"layer": "dns", "status": "unknown", "resource": None,
+                "summary": "Route 53 record data was not fetched for this hosted zone — cannot "
+                           "evaluate (missing data, not a confirmed absence of a record)",
+                "evidence": []}
+    host = (query_host or "").rstrip(".").lower()
+    if not host:
+        return {"layer": "dns", "status": "unknown", "resource": None,
+                "summary": "no query host supplied; cannot evaluate Route 53 resolution",
+                "evidence": []}
+    by_name = {}
+    for r in records or []:
+        by_name.setdefault(str(r.get("name", "")).rstrip(".").lower(), []).append(r)
+
+    def _find(name, depth=0):
+        if depth > 5:  # bounded CNAME-chain following — never loop forever on a misconfigured zone
+            return None
+        if name in by_name:
+            return by_name[name]
+        wildcard = "*." + name.split(".", 1)[1] if "." in name else None
+        if wildcard and wildcard in by_name:
+            return by_name[wildcard]
+        return None
+
+    matched = _find(host)
+    if matched is None:
+        return {"layer": "dns", "status": "blocked", "resource": None,
+                "summary": f"no Route 53 record resolves {host!r} (NXDOMAIN against known zone data)",
+                "evidence": []}
+    # A CNAME with no further usable data at its target is followed one hop, still within the
+    # already-fetched `records` set (no live DNS query is ever issued).
+    seen_names = {host}
+    while len(matched) == 1 and matched[0].get("type") == "CNAME" and matched[0].get("alias_target"):
+        target = str(matched[0]["alias_target"]).rstrip(".").lower()
+        if target in seen_names:
+            break
+        seen_names.add(target)
+        nxt = _find(target)
+        if nxt is None:
+            break
+        matched = nxt
+
+    unhealthy = [r for r in matched if r.get("health_check_status") == "unhealthy"]
+    healthy_or_unchecked = [r for r in matched if r.get("health_check_status") != "unhealthy"]
+    if unhealthy and not healthy_or_unchecked:
+        return {"layer": "dns", "status": "blocked", "resource": host,
+                "summary": f"Route 53 record(s) for {host!r} all report an unhealthy health check",
+                "evidence": matched}
+    if unhealthy and healthy_or_unchecked:
+        return {"layer": "dns", "status": "conditional", "resource": host,
+                "summary": (
+                    f"Route 53 has both healthy and unhealthy record(s) for {host!r} (e.g. a "
+                    "failover/weighted set) — which one actually answers a given query is not "
+                    "resolved from zone data alone"),
+                "evidence": matched}
+    return {"layer": "dns", "status": "allowed", "resource": host,
+            "summary": f"Route 53 resolves {host!r}", "evidence": matched}
+
+
+# ── DNS/L7: Kubernetes Ingress -> Service -> EndpointSlice resolution ───────────────────────────
+
+def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, request, data_available=True):
+    """Real Ingress -> Service -> EndpointSlice resolution, given already-fetched K8s objects — this
+    module never calls the Kubernetes API itself (no code path in this worker holds a live K8s
+    client at all; see network_path.py's own docstring/report for why this layer stays unreachable
+    in practice until a live K8s read path is added upstream of this pure function). Implemented for
+    real now so that wiring is a data-plumbing change only, not a logic change, once such a read path
+    exists.
+
+    `ingress_rules`: [{"host": str|None, "path": str|None, "path_type": "Exact"|"Prefix"|"ImplementationSpecific",
+    "backend_service": str, "backend_port": int}].
+    `services`: {service_name: {"selector": {...}, "ports": [{"port": int, "target_port": int}]}}.
+    `endpoint_slices`: {service_name: [{"ready": bool}, ...]} (one entry per endpoint).
+    `request`: {"host": str|None, "path": str|None, "port": int|None}.
+    """
+    if not data_available:
+        return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
+                "summary": "Ingress/Service/EndpointSlice data was not fetched — cannot evaluate",
+                "evidence": []}
+    req_host = request.get("host")
+    req_path = request.get("path") or "/"
+
+    def _path_ok(rule):
+        rp = rule.get("path")
+        if not rp:
+            return True
+        pt = rule.get("path_type", "ImplementationSpecific")
+        if pt == "Exact":
+            return req_path == rp
+        if pt == "Prefix":
+            return req_path == rp.rstrip("/") or req_path.startswith(rp if rp.endswith("/") else rp + "/")
+        return req_path.startswith(rp)  # ImplementationSpecific: treat as a prefix, conservatively
+
+    matched_rule = next(
+        (r for r in (ingress_rules or [])
+         if (r.get("host") is None or r.get("host") == req_host) and _path_ok(r)),
+        None)
+    if matched_rule is None:
+        return {"layer": "k8s-service-resolution", "status": "blocked", "resource": None,
+                "summary": f"no Ingress rule matches host={req_host!r} path={req_path!r}",
+                "evidence": []}
+    svc_name = matched_rule.get("backend_service")
+    svc = (services or {}).get(svc_name)
+    if svc is None:
+        return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,
+                "summary": f"Ingress backend Service {svc_name!r} does not exist", "evidence": []}
+    eps = (endpoint_slices or {}).get(svc_name, [])
+    ready = [e for e in eps if e.get("ready")]
+    if not eps:
+        return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,
+                "summary": f"Service {svc_name!r} has no EndpointSlice entries (no pods matched its selector)",
+                "evidence": []}
+    if not ready:
+        return {"layer": "k8s-service-resolution", "status": "blocked", "resource": svc_name,
+                "summary": f"Service {svc_name!r} has {len(eps)} endpoint(s), none ready", "evidence": []}
+    if len(ready) < len(eps):
+        return {"layer": "k8s-service-resolution", "status": "conditional", "resource": svc_name,
+                "summary": f"Service {svc_name!r}: {len(ready)}/{len(eps)} endpoints ready",
+                "evidence": eps}
+    return {"layer": "k8s-service-resolution", "status": "allowed", "resource": svc_name,
+            "summary": f"Ingress resolves to Service {svc_name!r} with {len(ready)} ready endpoint(s)",
+            "evidence": eps}
