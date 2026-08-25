@@ -277,6 +277,34 @@ def _validate(event, conn, now=None):
         raise BrokerError("table has no partition keys or partition projection — cannot bound a scan")
     strategy = "projection" if projection_enabled else "partition_keys"
 
+    # CI-review MAJOR fix (round 10, L2-1): the projection.<col>.type/.format/.range gates below
+    # (rounds 7/8/9) only ever ran over the date-candidate keys REMAINING after excluding
+    # account_id/region scope keys — they never checked the SCOPE keys themselves. Athena requires
+    # projection configuration for EVERY partition column once `projection.enabled=true`, so a
+    # projection-enabled centralized table partitioned `dt + account-id + region` (the exact
+    # layout the round-2 scope fix exists to support) validated `status: "valid"` with no check
+    # that `projection.account-id.*`/`projection.region.*` even exist — Athena then errors on every
+    # real query, reproducing this PR's own "validates valid yet permanently refuses" class for the
+    # intersection of its two headline scenarios. A scope key only needs a legal, PRESENT
+    # `projection.<col>.type` (unlike a date candidate, `enum`/`injected`/`integer` are all
+    # perfectly valid representations for an account-id/region value — there is no date-shape
+    # requirement here at all).
+    if strategy == "projection":
+        proj_params = tbl.get("Parameters", {}) or {}
+        valid_projection_types = {"enum", "integer", "date", "injected"}
+        for canonical in ("account_id", "region"):
+            if scope_resolution.get(canonical) != "partition":
+                continue
+            scope_col = resolved[canonical]
+            scope_type_param = proj_params.get(f"projection.{scope_col}.type")
+            if not scope_type_param or scope_type_param.strip().lower() not in valid_projection_types:
+                raise BrokerError(
+                    f"scope partition key {scope_col!r} ({canonical}) is a PROJECTION column with "
+                    f"projection.{scope_col}.type={scope_type_param!r} — Athena requires a legal "
+                    "projection type (enum/integer/date/injected) to be present for every "
+                    "partition column once projection is enabled; a missing or invalid value means "
+                    "every real scan would fail [reason: projection_scope_type_missing]")
+
     # MAJOR fix (item 4, round 2; corrected item 1, round 3; extended to `projection`, round 5): a
     # partition-key layout is only a valid, scannable strategy when it resolves EXACTLY ONE
     # bound-able date candidate AFTER excluding whatever partition keys were already resolved as
@@ -334,6 +362,29 @@ def _validate(event, conn, now=None):
                         f"column missing projection.{actual_key}.range — Athena requires a range "
                         "for every projected partition column; without it the configuration is "
                         "invalid/unqueryable [reason: projection_hive_range_missing]")
+                # CI-review MAJOR fix (round 10, L4-1): the day-SELECT/existence-check predicates
+                # this module builds (`sm._build_partition_predicate`/`_partition_exists`) always
+                # compare ZERO-PADDED string literals (`"month" = '03'`, `"day" = '05'`) — but
+                # Athena's `integer`-typed partition projection generates UNPADDED values
+                # (`month=3`, not `month=03`) unless `projection.<col>.digits` is explicitly set.
+                # A gate-approved table missing `.digits` on month/day therefore matches ZERO rows
+                # on every real scan — and `projection` has no `_partition_exists` existence check
+                # to catch it, so each such day is committed as a confident false
+                # `no_observed_evidence` for real traffic: exactly the false-zero failure mode this
+                # PR's honest-degrade contract most explicitly forbids, reintroduced by this same
+                # gate. `year` is always 4 digits either way (no padding ambiguity), so only
+                # month/day need a digits check.
+                if hive_key in ("month", "day"):
+                    proj_digits = params.get(f"projection.{actual_key}.digits")
+                    if str(proj_digits).strip() != "2":
+                        raise BrokerError(
+                            f"Hive-style partition key {actual_key!r} ({hive_key}) is a PROJECTION "
+                            f"column with projection.{actual_key}.digits={proj_digits!r} — the "
+                            f"generated predicate compares a zero-padded 2-digit value; without "
+                            f"projection.{actual_key}.digits=2, Athena's unpadded integer "
+                            "projection values would match zero rows on every real scan, silently "
+                            "committing a confident false zero-traffic day "
+                            "[reason: projection_hive_digits_not_zero_padded]")
         if not ({"year", "month", "day"} <= lower_remaining):
             if len(remaining_keys) != 1:
                 raise BrokerError(

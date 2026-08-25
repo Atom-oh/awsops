@@ -838,7 +838,9 @@ def _validate_hive_projection(monkeypatch, conn, proj_params):
                 "projection.enabled": "true",
                 "projection.year.type": "integer", "projection.year.range": "2020,2030",
                 "projection.month.type": "integer", "projection.month.range": "1,12",
+                "projection.month.digits": "2",
                 "projection.day.type": "integer", "projection.day.range": "1,31",
+                "projection.day.digits": "2",
             }
             params.update(proj_params)
             return {"Table": {
@@ -881,6 +883,118 @@ def test_validate_rejects_a_hive_projection_layout_missing_a_key_range(monkeypat
     conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
     with pytest.raises(broker.BrokerError, match="projection_hive_range_missing"):
         _validate_hive_projection(monkeypatch, conn, {"projection.year.range": None})
+
+
+# ── CI-review MAJOR fix (round 10, L4-1): the day-SELECT/existence-check predicates always
+#    compare zero-padded string literals (`"month" = '03'`) — Athena's integer projection
+#    generates UNPADDED values unless `projection.<col>.digits` is set, so a gate-approved table
+#    missing it would match zero rows on every real scan and commit a confident false
+#    zero-traffic day (no existence check exists for `projection` sources to catch it). ──────────
+
+def test_validate_rejects_a_hive_projection_layout_missing_digits_on_month(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_hive_digits_not_zero_padded"):
+        _validate_hive_projection(monkeypatch, conn, {"projection.month.digits": None})
+
+
+def test_validate_rejects_a_hive_projection_layout_missing_digits_on_day(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_hive_digits_not_zero_padded"):
+        _validate_hive_projection(monkeypatch, conn, {"projection.day.digits": None})
+
+
+def test_validate_rejects_a_hive_projection_layout_with_wrong_digits_on_month(monkeypatch):
+    """`digits=1` would generate `month=3` for March, still mismatching the zero-padded `'03'`
+    predicate — only exactly `2` is safe."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_hive_digits_not_zero_padded"):
+        _validate_hive_projection(monkeypatch, conn, {"projection.month.digits": "1"})
+
+
+def test_validate_does_not_require_digits_on_year(monkeypatch):
+    """`year` is always 4 digits either way (no zero-padding ambiguity in the 2020-2030 range) —
+    no `projection.year.digits` requirement."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_hive_projection(monkeypatch, conn, {"projection.year.digits": None})
+    assert result["ok"] is True
+
+
+# ── CI-review MAJOR fix (round 10, L2-1): the projection.<col>.type/.format/.range gates above
+#    only ever ran over the date-CANDIDATE keys remaining after excluding scope keys — they never
+#    checked the SCOPE keys (account_id/region) themselves, even though Athena requires projection
+#    config for EVERY partition column once enabled. ──────────────────────────────────────────────
+
+def _validate_scoped_projection(monkeypatch, conn, proj_params):
+    class FakeAthenaWorkGroup:
+        def get_work_group(self, WorkGroup):
+            return {"WorkGroup": {"Configuration": {
+                "ResultConfiguration": {"OutputLocation": "s3://bucket/prefix/"},
+                "BytesScannedCutoffPerQuery": 10_000_000,
+            }}}
+
+    class FakeGlueTable:
+        def get_database(self, Name):
+            return {}
+
+        def get_table(self, DatabaseName, Name):
+            params = {
+                "projection.enabled": "true",
+                "projection.dt.type": "date", "projection.dt.format": "yyyy-MM-dd",
+                "projection.dt.range": "2020-01-01,NOW",
+                "projection.account-id.type": "enum",
+                "projection.region.type": "enum",
+            }
+            params.update(proj_params)
+            return {"Table": {
+                "StorageDescriptor": {"Columns": [{"Name": c} for c in _CANONICAL_FLOW_COLUMNS]},
+                "PartitionKeys": [{"Name": "dt", "Type": "string"},
+                                  {"Name": "account-id", "Type": "string"},
+                                  {"Name": "region", "Type": "string"}],
+                "Parameters": params,
+            }}
+
+    class FakeSessionValidate:
+        def client(self, name):
+            return FakeAthenaWorkGroup() if name == "athena" else FakeGlueTable()
+
+    monkeypatch.setattr(broker, "_assumed_session", lambda *a, **k: FakeSessionValidate())
+    return broker._validate({
+        "account_id": "123456789012", "region": "ap-northeast-2", "workgroup": "wg",
+        "database": "db", "table": "tbl",
+    }, conn)
+
+
+def test_validate_accepts_a_correctly_configured_scoped_projection_layout(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_scoped_projection(monkeypatch, conn, {})
+    assert result["ok"] is True
+    assert result["scopeResolution"] == {"account_id": "partition", "region": "partition"}
+
+
+def test_validate_rejects_a_scoped_projection_layout_missing_the_account_id_scope_type(monkeypatch):
+    """`dt + account-id + region` (the layout the round-2 scope fix exists to support) must not
+    validate `status: "valid"` when the scope key itself has no projection configuration — Athena
+    would error on every real query."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_scope_type_missing"):
+        _validate_scoped_projection(monkeypatch, conn, {"projection.account-id.type": None})
+
+
+def test_validate_rejects_a_scoped_projection_layout_with_an_illegal_scope_type(monkeypatch):
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    with pytest.raises(broker.BrokerError, match="projection_scope_type_missing"):
+        _validate_scoped_projection(monkeypatch, conn, {"projection.region.type": "not-a-real-type"})
+
+
+def test_validate_accepts_scope_keys_typed_injected_or_integer(monkeypatch):
+    """Unlike a date candidate, a scope key has no date-shape requirement — any legal Athena
+    projection type is fine."""
+    conn = FakeConn({"FROM accounts": [[("ext-1",)]]})
+    result = _validate_scoped_projection(
+        monkeypatch, conn,
+        {"projection.account-id.type": "injected", "projection.region.type": "integer",
+         "projection.region.range": "0,1"})
+    assert result["ok"] is True
 
 
 def test_query_by_source_never_accepts_a_caller_supplied_query_or_account(monkeypatch):
