@@ -893,6 +893,46 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "allowed"
 
+    # ── CI-review MAJOR fix (round 25): `action` is a required field on a real Calico v3 `Rule` —
+    #    an absent `action` on a matching (or possibly-matching) rule is malformed/partially-fetched
+    #    data, not the absence of an action-carrying rule, so it must veto a confident `allowed` the
+    #    same way an actual Deny/Log/Pass conflict already does. ─────────────────────────────────────
+
+    def test_matching_rule_with_no_action_at_all_is_unknown(self):
+        """A rule that matches the peer but carries no `action` key at all must not default to
+        Allow (Calico's own `Rule` schema requires `action`) — this adapter cannot assume a rule
+        with missing action data would really have been an Allow."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"source": {"selector": "role == 'frontend'"}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_actionless_matching_rule_downgrades_a_would_be_allowed_to_unknown(self):
+        """A later-listed Allow that would otherwise confidently match must not win over an
+        earlier actionless rule that also matches (or might match) — same precedence-uncertainty
+        argument as the round-17 Deny/Pass veto."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"source": {"selector": "role == 'frontend'"}},
+            {"action": "Allow", "source": {"selector": "role == 'frontend'"}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_actionless_rule_that_does_not_match_does_not_affect_a_matching_allow(self):
+        """An actionless rule that confidently does NOT match this peer must not spuriously
+        downgrade an Allow that does match — mirrors
+        test_a_non_matching_deny_rule_does_not_affect_a_matching_allow for the actionless case."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"source": {"selector": "role == 'other'"}},
+            {"action": "Allow", "source": {"selector": "role == 'frontend'"}},
+        ]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_labels={"role": "frontend"},
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
     # ── CI-review MAJOR fix (round 18): three more holes in the Calico evaluator. ─────────────────
 
     def test_rule_level_protocol_mismatch_with_no_ports_is_not_a_match(self):

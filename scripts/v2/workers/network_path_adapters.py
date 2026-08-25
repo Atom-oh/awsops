@@ -450,7 +450,12 @@ def eval_vpn_or_dx(kind, aws_side_state, route_present):
     CONFIRMED-down state, reporting a confident `blocked` for a layer this evaluator has no data
     on at all. `None` now degrades to `unknown`, mirroring this module's `_nacl_or_unknown` and
     every other "missing data, not a confirmed negative" layer — only an actually-observed
-    non-`up` state (e.g. `"down"`) still confidently blocks."""
+    non-`up` state (e.g. `"down"`) still confidently blocks.
+
+    CI-review MAJOR fix (round 25): `route_present` follows the identical tri-state contract as
+    `aws_side_state` above — callers must pass `None` (never `False`) when the route's presence
+    was not actually fetched; `False` means a confirmed absent route. Passing `False` for "unknown"
+    silently re-collapses the distinction this function exists to make."""
     if aws_side_state is None:
         return {"layer": kind, "status": "unknown", "resource": None,
                 "summary": f"{kind} AWS-side attachment state was not fetched — cannot evaluate "
@@ -1046,6 +1051,13 @@ def eval_calico_policy(policies, pod_labels, direction, crd_present=True, observ
     would be; if it matches (or its match can't be confidently ruled out), the result degrades to
     `unknown` instead of a confident `allowed`, mirroring this module's own "never invent" rule for
     the direction it was previously missing.
+
+    CI-review MAJOR fix (round 25): `action` is a REQUIRED field on a real Calico v3 `Rule` — a
+    rule with no `action` at all is malformed/partially-fetched data, not an absent constraint, and
+    must not be defaulted to `Allow`. A matching (or possibly-matching) actionless rule is now
+    treated exactly like the round-17 Deny/Pass veto above: it downgrades a would-be confident
+    `allowed` to `unknown`, and (absent any matching Allow) downgrades a would-be confident
+    `blocked` to `unknown` too, since its real action might itself have been an Allow.
     """
     layer = "k8s-calico"
     if not crd_present:
@@ -1477,8 +1489,11 @@ def eval_route53_resolution(records, query_host, data_available=True):
     # predicate. The multi-record ambiguity (which record answers) is real whenever ANY matched
     # record is a CNAME/ALIAS pointer at all — well-formed or not — so the guard now fires on
     # `any(...)` instead of `all(...)`.
+    # CI-review MINOR fix (round 25): normalize case here, in the one place this predicate is
+    # defined, rather than relying on every record's `type` already being upper-cased — the
+    # downstream address-type check (`_R53_ADDRESS_TYPES`) already normalizes with `.upper()`.
     def _multi_pointer_ambiguous(rows):
-        return len(rows) > 1 and any(r.get("type") in ("CNAME", "ALIAS") for r in rows)
+        return len(rows) > 1 and any(str(r.get("type") or "").upper() in ("CNAME", "ALIAS") for r in rows)
 
     if _multi_pointer_ambiguous(matched):
         return {"layer": "dns", "status": "unknown", "resource": host,
