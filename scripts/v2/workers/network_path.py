@@ -16,11 +16,19 @@ can even be created/enqueued. `handlers.py`'s `_network_path()` now ALSO checks 
 independent gate at the dispatch site, closing the gap this docstring used to falsely claim was
 already closed) — see handlers.py for that check.
 
-`fetch_live_topology()` below is NOT implemented in this pass (raises `NotImplementedError`) — see
-its own docstring. Because of that, `run()` treats ANY exception during discovery (not just
-`NetworkPathError`) as a terminal `failed` run, so a real invocation — should one ever reach this
-module while the feature is enabled but the fetcher is still a stub — ends in a visible `failed`
-row instead of crashing uncaught and leaving `network_path_runs` stuck at `running`/`discover`.
+`fetch_live_topology()` below now has a REAL, best-effort body — see its own docstring for exactly
+what it can and cannot discover from CACHED Aurora topology alone (`topology_nodes`/`topology_edges`,
+`class='infra'` — web/lib/infra-topology.ts's ontology). It deliberately does NOT make any live AWS
+or Kubernetes API call (staying inside this session's "no live AWS calls" scope) — the design spec's
+"re-read SG/NACL/routes/etc. live at run time" promise remains unimplemented; only the cached-
+topology-accelerator half of `discover` is real now. Because of that gap, `run()` still treats ANY
+exception during discovery (not just `NetworkPathError`) as a terminal `failed` run, so a caller
+whose Aurora connection fails, or any other unexpected fetcher error, ends in a visible `failed` row
+instead of crashing uncaught and leaving `network_path_runs` stuck at `running`/`discover`.
+`web/lib/network-path-gate.ts`'s `LIVE_TOPOLOGY_IMPLEMENTED` flag is deliberately left `false` — this
+pass ships a real, but still openly degraded (cache-only, no live re-read), fetcher, not the full
+live-topology guarantee that flag is meant to gate; flipping it is a separate, deliberate product
+decision this pass does not make.
 
 `network_path_check_enabled` has no governing ADR (docs-consistency fix, corrected after an earlier
 round left this ambiguous): code across this feature (this module, handlers.py, reaper.py, the
@@ -160,10 +168,15 @@ def resolve_identities(definition):
 
 # ── Phase 2: discover ────────────────────────────────────────────────────────────────────────────
 
-# Calico / Cilium / Istio — bounded stubs (single source of truth for both `_layer_plan_for`'s
-# L4 finding #12 wiring below AND `_ADAPTER_BY_LAYER`'s registration loop further down).
+# Mesh-policy layers (single source of truth for both `_layer_plan_for`'s L4 finding #12 wiring
+# below AND `_ADAPTER_BY_LAYER`'s registration below). "calico" gets a REAL evaluator
+# (`ad.eval_calico_policy`, wired explicitly further down) — it stays listed here because it's still
+# one of the layers `_layer_plan_for` inserts alongside the others whenever a candidate's
+# destination is a Kubernetes Pod/Service. "cilium"/"istio-*" stay bounded stubs (detection-only —
+# see `ad.eval_mesh_policy_stub`'s docstring for what "detection" already means today).
 _MESH_KINDS = ("calico", "cilium", "istio-virtualservice", "istio-destinationrule", "istio-gateway",
                "istio-authorizationpolicy", "istio-peerauthentication")
+_STUB_MESH_KINDS = tuple(k for k in _MESH_KINDS if k != "calico")
 _MESH_LAYERS = [f"k8s-{_kind}" for _kind in _MESH_KINDS]
 
 
@@ -180,6 +193,12 @@ def _layer_plan_for(destination_kind, topology_hint):
             plan.append("tgw")
         if topology_hint.get("via") == "alb":
             plan += ["alb-listener", "target-group"]
+        if topology_hint.get("via") == "k8s-service":
+            # Gap 3: Ingress -> Service -> EndpointSlice resolution (ad.eval_k8s_service_resolution
+            # is a real evaluator — see its docstring for why it's still unreachable in practice
+            # today: this worker has no live K8s client to populate `via`/the layer's own data at
+            # all; wiring is a data-plumbing change only once one exists).
+            plan.append("k8s-service-resolution")
         # L4 finding #13 (cheap mitigation): every layer above evaluates the SOURCE ENI's own
         # SG/NACL/route only — the destination side's ingress SG/NACL (and return routing for an
         # aws_resource destination) is a real, documented structural gap (a full bidirectional
@@ -250,13 +269,27 @@ def discover_candidates(resolved, topology):
 
 # ── Phase 3: verify ──────────────────────────────────────────────────────────────────────────────
 
+def _nacl_or_unknown(data, req, layer="nacl"):
+    """Gap 1 safety fix: a real NACL always carries entries (including the implicit deny-all rule
+    32767) — an EMPTY `nacl_forward` list from a topology fetcher means "we have no cached/live NACL
+    data for this candidate", not "this NACL genuinely has zero entries" (that state can't occur on
+    a real AWS NACL). `ad.eval_nacl` has no way to distinguish those two from an empty list alone
+    (its first-match loop finds nothing -> a confident deny), so this wrapper makes the distinction
+    explicit BEFORE calling into the adapter — the same "never invent a false verdict from missing
+    data" rule every other adapter in this module already implements for its own missing-input case.
+    """
+    if not data.get("nacl_forward"):
+        return {"layer": layer, "status": "unknown", "resource": None,
+                "summary": "no cached/live NACL entries available for this candidate", "evidence": []}
+    return ad.eval_nacl(data.get("nacl_forward", []), data.get("nacl_return", []),
+                         req["protocol"], req.get("port"), peer_ip=data.get("peer_ip"), layer=layer)
+
+
 _ADAPTER_BY_LAYER = {
     "sg": lambda data, req: ad.eval_security_group(
         data.get("sg_rules", []), req["protocol"], req.get("port"),
         peer_ip=data.get("peer_ip"), peer_sg_ids=data.get("peer_sg_ids")),
-    "nacl": lambda data, req: ad.eval_nacl(
-        data.get("nacl_forward", []), data.get("nacl_return", []), req["protocol"], req.get("port"),
-        peer_ip=data.get("peer_ip")),
+    "nacl": lambda data, req: _nacl_or_unknown(data, req, "nacl"),
     "route": lambda data, req: ad.eval_route(data.get("route_table", []), data.get("dest_cidr")),
     # L4 finding #13: destination-side SG/NACL pass for an aws_resource destination whose own ENI
     # is describable (`dest_eni_known` hint) — the SAME adapters as "sg"/"nacl" above, just given
@@ -265,9 +298,7 @@ _ADAPTER_BY_LAYER = {
     "sg-dst": lambda data, req: ad.eval_security_group(
         data.get("sg_rules", []), req["protocol"], req.get("port"),
         peer_ip=data.get("peer_ip"), peer_sg_ids=data.get("peer_sg_ids"), layer="sg-dst"),
-    "nacl-dst": lambda data, req: ad.eval_nacl(
-        data.get("nacl_forward", []), data.get("nacl_return", []), req["protocol"], req.get("port"),
-        peer_ip=data.get("peer_ip"), layer="nacl-dst"),
+    "nacl-dst": lambda data, req: _nacl_or_unknown(data, req, "nacl-dst"),
     "tgw": lambda data, req: ad.eval_tgw(
         data.get("attachment_state"), data.get("associated", False),
         data.get("propagation_enabled", False), data.get("route_entry")),
@@ -294,19 +325,42 @@ _ADAPTER_BY_LAYER = {
         # eval_k8s_network_policy's own docstring); neither is set by any fixture today, so this is
         # a no-op until the fetcher is implemented, deliberately not changing current behavior.
         policy_namespace=data.get("policy_namespace"), peer_namespace=data.get("peer_namespace")),
-    "dns": lambda data, req: {
-        "layer": "dns", "status": "unknown", "resource": None,
-        "summary": "DNS/L7 resolution not evaluated in this release", "evidence": [],
-    },
+    # Gap 3: real Route 53 evaluation (ad.eval_route53_resolution) — degrades to `unknown` on its
+    # own when the caller has no zone-record data (`records_fetched: False`), same pattern as
+    # k8s-networkpolicy's `data_available`. Nothing in this pass's `fetch_live_topology` (cached
+    # Aurora topology only, no live Route53 read) ever populates real records, so today this still
+    # reports `unknown` in practice — but the evaluator itself is now real, ready for that data the
+    # moment a caller supplies it (see the report).
+    "dns": lambda data, req: ad.eval_route53_resolution(
+        data.get("records", []), data.get("query_host"),
+        data_available=data.get("records_fetched", False)),
     "onprem-segment": lambda data, req: {
         "layer": "onprem-segment", "status": "unknown", "resource": None,
         "summary": "on-premises segment past the AWS boundary is always unknown (spec Explicit exclusions)",
         "evidence": [],
     },
+    # Gap 3: real Ingress -> Service -> EndpointSlice evaluation (ad.eval_k8s_service_resolution) —
+    # see network_path_adapters.py's docstring for why this worker can't populate real data for it
+    # yet (no live K8s client anywhere in this worker); `data_available` defaults False here for the
+    # same "no data plumbed in yet" reason as "dns" above.
+    "k8s-service-resolution": lambda data, req: ad.eval_k8s_service_resolution(
+        data.get("ingress_rules", []), data.get("services", {}), data.get("endpoint_slices", {}),
+        {"host": data.get("host"), "path": data.get("path"), "port": req.get("port")},
+        data_available=data.get("resolved_fetched", False)),
+    # Gap 2: Calico gets a REAL evaluator now (ad.eval_calico_policy) — wired explicitly rather than
+    # through the generic stub loop below, which stays for Cilium/Istio only.
+    "k8s-calico": lambda data, req: ad.eval_calico_policy(
+        data.get("policies", []), data.get("pod_labels", {}), data.get("direction", "egress"),
+        crd_present=data.get("crd_present", False), observed_api_version=data.get("api_version"),
+        peer_labels=data.get("peer_labels"), peer_ip=data.get("peer_ip"),
+        peer_namespace_labels=data.get("peer_namespace_labels"),
+        protocol=req.get("protocol"), port=req.get("port"),
+        data_available=data.get("policies_fetched", True)),
 }
 
-# Layers that are true bounded stubs (K8s mesh policy) route through the same shared stub evaluator.
-for _kind in _MESH_KINDS:
+# Cilium/Istio stay true bounded stubs (K8s mesh policy) routed through the shared stub evaluator —
+# Calico is excluded (see the explicit "k8s-calico" entry above).
+for _kind in _STUB_MESH_KINDS:
     _ADAPTER_BY_LAYER[f"k8s-{_kind}"] = (
         lambda data, req, _k=_kind: ad.eval_mesh_policy_stub(
             _k, data.get("api_version"), data.get("crd_present", False)))
@@ -431,24 +485,140 @@ def _finish_run(conn, run_id, status, overall_status=None, validation_bundle=Non
         err=error, id=run_id)
 
 
-def fetch_live_topology(resolved):  # pragma: no cover — thin AWS-calling boundary, not unit tested
-    """Production topology fetcher: reads cached `topology_nodes`/`topology_edges` for candidate
-    paths, then re-reads SG/NACL/routes/TGW/VPN/DX/Network Firewall/ELBv2/K8s policy live for the
-    specific candidate (spec: "Aurora topology is a candidate-path accelerator, not final
-    authority"). Not implemented in this pass — see the report. Tests inject a fixture topology
-    directly into discover_candidates()/run() instead of exercising this function.
+def _find_infra_node(conn, account_id, ref):
+    """Best-effort lookup of ONE cached-topology resource node whose id ends with `ref` (infra-class
+    node ids are `${resource_type}:${resource_id}` — web/lib/infra-topology.ts's `buildInfraGraph`;
+    there is no ENI-specific node kind in this graph today, so this only matches when `ref` (an ENI
+    id, IP, or subnet id) happens to literally be some inventoried resource's own id — reliable for
+    an `aws_resource` destination given directly by instance/RDS/ALB id, unreliable for a Pod's own
+    ENI id, which is rarely also a top-level inventoried resource id). Returns `None` on no match or
+    on an AMBIGUOUS match (more than one row) — an ambiguous match is exactly the "can't confidently
+    resolve a unique path" case the caller must degrade on, never guess by picking one arbitrarily.
     """
-    raise NotImplementedError(
-        "fetch_live_topology: live AWS/topology-table reads are not implemented in this pass; "
-        "see the report for scope")
+    if not ref:
+        return None
+    rows = conn.run(
+        "SELECT id, kind FROM topology_nodes WHERE class='infra' "
+        "AND (account_id=:a OR account_id='self') AND id LIKE :pat LIMIT 2",
+        a=account_id, pat=f"%:{ref}")
+    if len(rows) != 1:
+        return None
+    node_id, kind = rows[0]
+    return {"id": node_id, "kind": kind}
 
 
-def run(payload, conn, topology_fetcher=fetch_live_topology, deadline_s=GLOBAL_DEADLINE_S,
-        now=time.monotonic):
+def _infra_placement(conn, account_id, node_id):
+    """This candidate's cached `infra:in_vpc`/`infra:in_subnet`/`infra:uses_sg` edges (see
+    web/lib/infra-topology.ts) — resource<->vpc/subnet/sg MEMBERSHIP only, never rule/ACL/route
+    CONTENT (that's not in this table at all, see `fetch_live_topology`'s own docstring)."""
+    rows = conn.run(
+        "SELECT rel, target FROM topology_edges WHERE class='infra' "
+        "AND (account_id=:a OR account_id='self') AND source=:s",
+        a=account_id, s=node_id)
+    vpc = subnet = None
+    sg_ids = []
+    for rel, target in rows:
+        if rel == "infra:in_vpc":
+            vpc = target
+        elif rel == "infra:in_subnet":
+            subnet = target
+        elif rel == "infra:uses_sg":
+            sg_ids.append(target)
+    return {"vpc": vpc, "subnet": subnet, "sg_ids": sg_ids}
+
+
+def fetch_live_topology(resolved, conn):
+    """Best-effort candidate-path discovery from CACHED Aurora topology alone
+    (`topology_nodes`/`topology_edges`, `class='infra'` — web/lib/infra-topology.ts's ontology,
+    materialized by `graph-store.rebuildInfraGraph` from synced inventory). Deliberately makes NO
+    live AWS or Kubernetes API call — see this module's own top docstring for why that's the scope
+    of this pass, and the design spec's own "Follow-up correction" note that a full live re-read was
+    never actually shipped.
+
+    What this CAN honestly discover from the cached infra graph:
+      - whether the source and (for an `aws_resource` destination) destination each resolve to a
+        SINGLE, unambiguous inventoried resource node (`_find_infra_node`);
+      - that resource's VPC/subnet placement and attached Security Group ids
+        (`_infra_placement` — MEMBERSHIP only);
+      - whether source and destination share the same VPC (`same_vpc`).
+
+    What this CANNOT discover from the cached infra graph, and never fabricates:
+      - the actual CONTENT of any Security Group's rules, any NACL's entries, or any route table's
+        entries — `topology_edges` records only *that* a resource uses a given SG/subnet, never
+        *what* that SG/NACL/route table actually allows. Feeding the SG ids we DO know (as
+        `peer_sg_ids`) into `eval_security_group` alongside an EMPTY rule list would make that
+        adapter return a confident, FABRICATED `blocked` (no rule in an empty list ever matches) —
+        exactly the false verdict this feature's own "never invent O or X from missing data" rule
+        forbids. So this fetcher deliberately leaves the `sg`/`nacl`/`route` (and `sg-dst`/
+        `nacl-dst`) layers' `data` empty; every one of those adapters (or, for `nacl`/`nacl-dst`,
+        network_path.py's own `_nacl_or_unknown` wrapper) already degrades an empty/missing input to
+        `unknown` on its own — no adapter changes were needed to make that honest.
+      - TGW attachments, VPN/DX AWS-side state, Network Firewall policy, ELBv2 listener/target-group
+        config, or any Kubernetes policy/CRD content — none of these have a cached-topology
+        representation at all today; their layers are simply never added to `layer_plan` for a
+        candidate built by this fetcher (`_layer_plan_for` only adds `peering`/`tgw`/`network-
+        firewall`/`alb-listener` etc. when the topology hint says so, and this fetcher never sets
+        those hints, since it has no cached signal for any of them).
+
+    Candidate `kind`: `resolved` only when discovery found the source (and, for an `aws_resource`
+    destination, the destination) as a SINGLE unambiguous node — i.e. path-finding itself hit no
+    ambiguity, even though the DEPTH of what it found is shallow. `hypothesis` whenever a required
+    node could not be resolved uniquely (not found, or more than one candidate row) — per the design
+    spec, `hypothesis` is exactly for "ambiguous source ENI/subnet resolution... discovery could not
+    narrow to the single path this flow actually takes", which is precisely this case. Discovery
+    ALWAYS returns exactly one candidate (never zero) — a topology-fetcher contract discover_
+    candidates() itself enforces (see its own docstring): a genuine "found nothing" degrades to a
+    single `hypothesis` candidate with empty placement data, not an empty list.
+    """
+    src, dst = resolved["source"], resolved["destination"]
+    account_id = src.get("account_id")
+
+    src_node = _find_infra_node(conn, account_id, src.get("eni_id") or src.get("subnet_id"))
+    src_place = _infra_placement(conn, account_id, src_node["id"]) if src_node else {}
+
+    dst_node = None
+    if dst.get("kind") == "aws_resource":
+        dst_ref = dst.get("eni_id") or dst.get("ip") or dst.get("cidr")
+        dst_node = _find_infra_node(conn, account_id, dst_ref)
+    dst_place = _infra_placement(conn, account_id, dst_node["id"]) if dst_node else {}
+
+    same_vpc = bool(src_place.get("vpc")) and src_place.get("vpc") == dst_place.get("vpc")
+    dest_unresolved = dst.get("kind") == "aws_resource" and dst_node is None
+    kind = "hypothesis" if (src_node is None or dest_unresolved) else "resolved"
+
+    candidate = {
+        "kind": kind,
+        "via": "direct" if same_vpc else None,
+        "dest_eni_known": dst_node is not None,
+        "account_id": account_id,
+        "region": src.get("region"),
+        "data": {
+            # sg/nacl/route/sg-dst/nacl-dst: intentionally NO rule/entry/table content and NO
+            # peer_ip/peer_sg_ids — see the docstring above for why supplying the SG ids we DO know
+            # without matching rule content would fabricate a false `blocked`. Left empty so every
+            # adapter's own "missing data -> unknown" branch fires honestly.
+            # "placement" is informational only — never read by any adapter — exposing exactly what
+            # this fetcher actually determined, for callers/tests to inspect.
+            "placement": {"source": src_place, "destination": dst_place, "same_vpc": same_vpc},
+        },
+    }
+    return {"candidates": [candidate]}
+
+
+def run(payload, conn, topology_fetcher=None, deadline_s=GLOBAL_DEADLINE_S, now=time.monotonic):
     """Entry point registered in handlers.py's REGISTRY. `payload`: {"run_id", "definition"}
-    (definition = the run's `definition_snapshot`, already immutable per spec)."""
+    (definition = the run's `definition_snapshot`, already immutable per spec).
+
+    `topology_fetcher`, when supplied, is called as `topology_fetcher(resolved)` — a single-arg
+    callable, exactly as before this pass (existing tests inject a fixture this way). The REAL
+    default (`fetch_live_topology`) now takes `(resolved, conn)` since it needs the same Aurora
+    connection `run()` already holds — `conn` can't be captured in a plain default-argument value at
+    function-definition time, so the 1-arg-vs-2-arg fetchers are unified here via a small closure
+    instead of changing every existing caller's fixture signature.
+    """
     run_id = payload["run_id"]
     definition = payload["definition"]
+    fetcher = topology_fetcher or (lambda r: fetch_live_topology(r, conn))
 
     try:
         resolved = resolve_identities(definition)
@@ -458,15 +628,15 @@ def run(payload, conn, topology_fetcher=fetch_live_topology, deadline_s=GLOBAL_D
 
     _update_phase(conn, run_id, "discover")
     try:
-        topology = topology_fetcher(resolved)
+        topology = fetcher(resolved)
         candidates = discover_candidates(resolved, topology)
     except NetworkPathError as e:
         _finish_run(conn, run_id, "failed", overall_status="failed", error=str(e))
         return {"run_id": run_id, "status": "failed", "error": str(e)}
-    except Exception as e:  # noqa: BLE001 — MAJOR fix: fetch_live_topology is unimplemented in
-        # this pass (raises NotImplementedError) and any other unexpected fetcher failure must also
-        # terminate the run visibly rather than crash uncaught and leave network_path_runs stuck at
-        # running/discover until the reaper eventually flips it minutes later.
+    except Exception as e:  # noqa: BLE001 — an unexpected fetcher failure (e.g. the Aurora
+        # connection itself failing) must still terminate the run visibly rather than crash uncaught
+        # and leave network_path_runs stuck at running/discover until the reaper eventually flips it
+        # minutes later.
         error_text = _redact_sensitive(f"{type(e).__name__}: {e}")
         _finish_run(conn, run_id, "failed", overall_status="failed", error=error_text)
         return {"run_id": run_id, "status": "failed", "error": error_text}

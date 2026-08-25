@@ -12,11 +12,22 @@ import network_path_adapters as ad
 
 
 class FakeConn:
-    def __init__(self):
+    """`node_rows_by_ref`/`edge_rows_by_node` let a test seed `fetch_live_topology`'s two SELECTs
+    (against `topology_nodes`/`topology_edges`) without a real Aurora connection — keyed the same way
+    `_find_infra_node`/`_infra_placement` build their own query params (`pat="%:" + ref`,
+    `s=node_id`)."""
+    def __init__(self, node_rows_by_ref=None, edge_rows_by_node=None):
         self.calls = []
+        self.node_rows_by_ref = node_rows_by_ref or {}
+        self.edge_rows_by_node = edge_rows_by_node or {}
 
     def run(self, sql, **kwargs):
         self.calls.append((sql, kwargs))
+        if "FROM topology_nodes" in sql:
+            ref = kwargs.get("pat", "")[2:]  # strip the fixed "%:" prefix _find_infra_node builds
+            return self.node_rows_by_ref.get(ref, [])
+        if "FROM topology_edges" in sql:
+            return self.edge_rows_by_node.get(kwargs.get("s"), [])
         return []
 
     def inserted_steps(self):
@@ -91,6 +102,80 @@ class TestResolve:
         # just returned in run()'s in-memory result (which the caller/reaper never see again).
         assert finishes[-1]["err"] == result["error"]
         assert "account_id" in finishes[-1]["err"]
+
+
+# ── Gap 1: fetch_live_topology() — real, best-effort cached-topology discovery ─────────────────
+
+class TestFetchLiveTopology:
+    def test_same_vpc_known_sg_resolves_a_real_resolved_candidate(self):
+        """Source and destination ENIs both resolve to a single inventoried node in the SAME vpc,
+        with a known attached SG on the destination side -- discovery must surface that REAL
+        placement data (not fabricate a confident sg/nacl/route verdict from it, per the module's
+        own docstring)."""
+        conn = FakeConn(
+            node_rows_by_ref={
+                "eni-src": [("ec2:i-src", "ec2")],
+                "eni-dst": [("ec2:i-dst", "ec2")],
+            },
+            edge_rows_by_node={
+                "ec2:i-src": [("infra:in_vpc", "vpc-1"), ("infra:in_subnet", "subnet-1"),
+                              ("infra:uses_sg", "sg-src")],
+                "ec2:i-dst": [("infra:in_vpc", "vpc-1"), ("infra:in_subnet", "subnet-2"),
+                              ("infra:uses_sg", "sg-dst")],
+            },
+        )
+        resolved = np.resolve_identities(_definition(dest_kind="aws_resource"))
+        topo = np.fetch_live_topology(resolved, conn)
+        candidates = topo["candidates"]
+        assert len(candidates) == 1
+        c = candidates[0]
+        assert c["kind"] == "resolved"  # both endpoints resolved unambiguously -> no ambiguity found
+        assert c["via"] == "direct"
+        assert c["dest_eni_known"] is True
+        placement = c["data"]["placement"]
+        assert placement["same_vpc"] is True
+        assert placement["source"]["vpc"] == "vpc-1"
+        assert placement["destination"]["sg_ids"] == ["sg-dst"]
+        # Never a fabricated sg/nacl/route verdict from placement data alone.
+        assert "sg_rules" not in c["data"].get("sg", {})
+        assert "peer_sg_ids" not in c["data"].get("sg", {})
+
+    def test_ambiguous_node_match_degrades_to_hypothesis_not_a_guess(self):
+        """More than one cached node matches the same ref -> _find_infra_node refuses to pick one;
+        discovery must degrade to `hypothesis`, never silently resolve to an arbitrary match."""
+        conn = FakeConn(node_rows_by_ref={
+            "eni-src": [("ec2:i-src", "ec2")],
+            "eni-dst": [("ec2:i-dst-a", "ec2"), ("ec2:i-dst-b", "ec2")],  # ambiguous
+        })
+        resolved = np.resolve_identities(_definition(dest_kind="aws_resource"))
+        topo = np.fetch_live_topology(resolved, conn)
+        c = topo["candidates"][0]
+        assert c["kind"] == "hypothesis"
+        assert c["dest_eni_known"] is False
+
+    def test_sparse_topology_never_fabricates_a_confident_path(self):
+        """Zero seeded rows anywhere -- discovery must still return exactly one candidate (per
+        discover_candidates()'s own "always >=1 candidate" contract) tagged `hypothesis`, with empty
+        placement, never a confident sg/nacl/route verdict."""
+        conn = FakeConn()
+        resolved = np.resolve_identities(_definition(dest_kind="aws_resource"))
+        topo = np.fetch_live_topology(resolved, conn)
+        assert len(topo["candidates"]) == 1
+        c = topo["candidates"][0]
+        assert c["kind"] == "hypothesis"
+        assert c["data"]["placement"]["source"] == {}
+        assert c["data"]["placement"]["destination"] == {}
+        assert c["data"]["placement"]["same_vpc"] is False
+
+    def test_internet_destination_never_looked_up_as_an_infra_node(self):
+        """An internet/onprem destination has no ENI of its own to resolve -- fetch_live_topology
+        must not even attempt a destination-node lookup for it (dest_eni_known stays False, and no
+        FakeConn call is made keyed on the destination's ip/host)."""
+        conn = FakeConn(node_rows_by_ref={"eni-src": [("ec2:i-src", "ec2")]})
+        resolved = np.resolve_identities(_definition(dest_kind="internet"))
+        topo = np.fetch_live_topology(resolved, conn)
+        c = topo["candidates"][0]
+        assert c["dest_eni_known"] is False
 
 
 # ── discover ─────────────────────────────────────────────────────────────────────────────────────
@@ -342,20 +427,25 @@ class TestFullRun:
         assert bundle["unknown_layers"] == []  # sg/nacl/route are all inspectable and allowed here
 
 
-    def test_unimplemented_topology_fetcher_ends_in_terminal_failed_not_a_crash(self):
-        """MAJOR fix: fetch_live_topology() (the real default) raises NotImplementedError — run()
-        must not let that escape uncaught (which would leave network_path_runs stuck at
-        running/discover); it must be caught and turned into a terminal `failed` run, same as a
-        NetworkPathError."""
-        conn = FakeConn()
+    def test_default_topology_fetcher_uses_real_fetch_live_topology(self):
+        """Gap 1: fetch_live_topology() is no longer a stub — run()'s default fetcher now goes
+        through it (against the Aurora `conn` run() already holds) and, with zero seeded topology
+        rows, degrades honestly to a single `hypothesis` candidate rather than crashing or
+        fabricating a confident path. This replaces the old stub-era test that asserted a terminal
+        `failed`/NotImplementedError run."""
+        conn = FakeConn()  # no seeded node/edge rows -> nothing resolves
         result = np.run({"run_id": "run-3", "definition": _definition()}, conn)  # default fetcher
-        assert result["status"] == "failed"
-        assert "NotImplementedError" in result["error"]
-        finishes = conn.run_finishes()
-        assert finishes[-1]["s"] == "failed"
-        assert finishes[-1]["os"] == "failed"
-        assert conn.inserted_candidates() == []  # discovery never got far enough to write candidates
-        assert finishes[-1]["err"] == result["error"]  # MINOR fix: error text is now persisted
+        assert result["status"] == "succeeded"
+        candidates = conn.inserted_candidates()
+        assert len(candidates) == 1
+        assert candidates[0]["k"] == "hypothesis"  # nothing resolved -> honest ambiguity, not a guess
+        # sg/nacl/route all degrade to `unknown` (no cached rule/ACL/route content) -- never a
+        # fabricated allowed/blocked from empty data.
+        steps = conn.inserted_steps()
+        by_layer = {s["l"]: s["st"] for s in steps}
+        assert by_layer["sg"] == "unknown"
+        assert by_layer["nacl"] == "unknown"
+        assert by_layer["route"] == "unknown"
 
 
 # ── grep-verifiable: never calls the SSRF-risk active-probe helper ─────────────────────────────
