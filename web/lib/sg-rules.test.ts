@@ -153,6 +153,45 @@ describe('listRules', () => {
     expect(sql).toContain('act');
     expect(params).toContain(90);
   });
+
+  it('gap 5: round-trips vpc_id from sg_rule_inventory into RuleRow', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [{
+        account_id: '123456789012', region: 'ap-northeast-2', rule_id: 'sgr-1', group_id: 'sg-1',
+        vpc_id: 'vpc-aaa111', is_egress: false, protocol: 'tcp', from_port: 443, to_port: 443,
+        peer_kind: 'cidr', peer_value: '10.0.0.0/8', description: null,
+        compatible_match_count: 0, overlap_match_count: 0, last_observed_at: null,
+        has_source: false, any_unassessable: false,
+      }] })
+      .mockResolvedValueOnce({ rows: [{ n: 1 }] });
+    const { listRules } = await import('./sg-rules');
+    const { rows } = await listRules({});
+    expect(rows[0].vpc_id).toBe('vpc-aaa111');
+  });
+
+  it('gap 5: a row with no known VPC round-trips as null, never fabricated', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [{
+        account_id: '123456789012', region: 'ap-northeast-2', rule_id: 'sgr-2', group_id: 'sg-2',
+        vpc_id: null, is_egress: false, protocol: 'tcp', from_port: 443, to_port: 443,
+        peer_kind: 'cidr', peer_value: '10.0.0.0/8', description: null,
+        compatible_match_count: 0, overlap_match_count: 0, last_observed_at: null,
+        has_source: false, any_unassessable: false,
+      }] })
+      .mockResolvedValueOnce({ rows: [{ n: 1 }] });
+    const { listRules } = await import('./sg-rules');
+    const { rows } = await listRules({});
+    expect(rows[0].vpc_id).toBeNull();
+  });
+
+  it('gap 5: filters on vpcId via a bound parameter', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ n: 0 }] });
+    const { listRules } = await import('./sg-rules');
+    await listRules({ vpcId: 'vpc-aaa111' });
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toContain('ri.vpc_id =');
+    expect(params).toContain('vpc-aaa111');
+  });
 });
 
 describe('rulesToCsv', () => {

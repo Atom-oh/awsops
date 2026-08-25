@@ -6,7 +6,7 @@ const baseRun = (over: Partial<NetworkPathRunDetail> = {}): NetworkPathRunDetail
   id: 'run-1', check_id: 'chk-1', requested_by_sub: 'u-1',
   definition_snapshot: { source: {}, destination: {}, request: {} },
   status: 'running', phase: 'verify', overall_status: null, validation_bundle: null, worker_job_id: 'job-1',
-  created_at: '2026-08-19T00:00:00Z', finished_at: null,
+  created_at: '2026-08-19T00:00:00Z', finished_at: null, error: null,
   candidates: [{ candidate_id: 'c1', candidate_kind: 'primary', status: null, first_blocker: null }],
   steps: [
     { candidate_id: 'c1', account_id: '123456789012', region: 'ap-northeast-2', ordinal: 0, layer: 'security_group', status: 'allowed', resource: 'sg-1', summary: 'ok', evidence: null, observed_at: null },

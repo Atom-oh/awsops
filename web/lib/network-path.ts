@@ -197,9 +197,13 @@ export async function createRun(user: User, checkId: string): Promise<NetworkPat
   );
   const run: NetworkPathRunRow = ins.rows[0];
 
+  // CI-review MAJOR fix (round 17, item 5): `source_account_id` is threaded into the job payload
+  // alongside the immutable definition snapshot so the worker can bind `definition.source.account_id`
+  // to the check's OWN validated column (network_path.py's `run()`) rather than trusting an
+  // arbitrary account_id embedded in the (user-authored) definition at resolve time.
   const { job_id } = await enqueueJob(
     'network_path',
-    { run_id: runId, definition: snapshot },
+    { run_id: runId, definition: snapshot, source_account_id: check.source_account_id },
     { requestedBy: user.sub },
   );
   await getPool().query(`UPDATE network_path_runs SET worker_job_id = $1 WHERE id = $2`, [job_id, runId]);

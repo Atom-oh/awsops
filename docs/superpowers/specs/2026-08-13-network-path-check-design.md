@@ -12,21 +12,28 @@ case caused by unstated rule precedence — both fixed in the "Result semantics"
 inline 2026-08-19 review-fix notes). Owner: 오준석(Junseok Oh), who directed the panel review and
 approved this Status change after reviewing the findings and fixes.
 
-**Follow-up correction (round-2 CI review, item 6): shipped reality vs. this design, as of the PR
-#231/#233 CHANGELOG.** This document was written and approved before implementation and still reads,
-in places, as if the following are fully live — they are not, today:
+**Follow-up correction (round-2 CI review, item 6; updated round-17 CI review): shipped reality vs.
+this design, as of the PR #231/#233/#237 CHANGELOG.** This document was written and approved before
+implementation and still reads, in places, as if the following are fully live — they are not, today:
 
-- **Live topology discovery (`fetch_live_topology`) is NOT implemented.** It is an intentional stub;
-  starting a NEW run (`POST /api/network-paths/[id]/runs`) is 503-gated by
+- **Live topology discovery (`fetch_live_topology`) is real, but cache-only — a full live AWS/
+  Kubernetes re-read at run time is still deliberately unimplemented.** `fetch_live_topology()` now
+  does best-effort candidate-path discovery from CACHED Aurora topology (`topology_nodes`/
+  `topology_edges`, `class='infra'`) — no longer the `NotImplementedError` stub this section used to
+  describe. Starting a NEW run (`POST /api/network-paths/[id]/runs`) remains 503-gated by
   `networkPathLiveTopologyCapabilityGate()` (`web/lib/network-path-gate.ts`, `status: "unimplemented"`)
-  until `LIVE_TOPOLOGY_IMPLEMENTED` is flipped to `true` in the same commit that gives it a real body.
-  Existing check definitions and prior run history remain viewable. The "Worker" and "Candidate cache
-  and live evidence" sections below describe the target design this stub will eventually fulfill, not
-  current behavior.
-- **Calico, Cilium, Istio, and the DNS/L7 layer are correctly-stubbed `unknown`, never guessed** — the
-  "Supported policy layers" section below lists these as supported layers; as shipped, they report `?`
-  rather than a real evaluation. This is the safe, honest direction (never a false `allowed`/`blocked`),
-  not silently dropped coverage — see `network_path_adapters.py`'s own docstrings for each stub.
+  because the cached data can be stale relative to the account's current state — `LIVE_TOPOLOGY_
+  IMPLEMENTED` stays `false` until a genuine live AWS/K8s re-read path exists, a separate, deliberate
+  product decision from making the cache-only fetcher real. Existing check definitions and prior run
+  history remain viewable. Separately, a `pod`/`node` source declaring a `cluster` now DOES get its
+  identity (Pod IP/Node/ENI/subnet/VPC) confirmed against a live, read-only K8s/EC2 call
+  (`resolve_live_identity`, Gap 4) — this is additive identity confirmation, not the live discover-
+  phase re-read this bullet is about.
+- **Calico and Route 53 and K8s Ingress→Service→EndpointSlice are now REAL evaluators; Cilium and
+  Istio remain correctly-stubbed `unknown`, never guessed.** The "Supported policy layers" section
+  below lists all of these as supported layers; as shipped, only the mesh/DNS/L7 layers still listed
+  as stubs above report `?` rather than a real evaluation — see `network_path_adapters.py`'s own
+  docstrings for exactly what each real evaluator/stub covers.
 - **This is a per-layer guarantee today, not yet a full bidirectional-path one.** A candidate path can
   still report an overall `allowed` based on less than the full policy surface for peering/TGW/VPN/DX-
   fronted destinations whose own ENI isn't resolved, and for ALB/NLB-fronted targets (the target's own

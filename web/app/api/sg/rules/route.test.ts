@@ -56,4 +56,12 @@ describe('GET /api/sg/rules', () => {
     const text = await res.text();
     expect(text).toContain('sgr-1');
   });
+
+  it('gap 5: passes vpcId through to listRules as a filter', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u-1' });
+    listRules.mockResolvedValue({ rows: [], total: 0 });
+    const { GET } = await import('./route');
+    await GET(req('?vpcId=vpc-aaa111') as any);
+    expect(listRules).toHaveBeenCalledWith(expect.objectContaining({ vpcId: 'vpc-aaa111' }));
+  });
 });

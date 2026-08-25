@@ -13,6 +13,7 @@ Operational playbooks organized by scenario. Each follows symptoms → diagnosis
 | [multi-account-setup.md](multi-account-setup.md) | **⚠️ v1(legacy)** 신규 AWS 계정 추가 (Steampipe Aggregator) — v2는 onboard-target-account.md |
 | [onboard-target-account.md](onboard-target-account.md) | v2 타깃 계정 온보딩 (`AWSopsReadOnlyRole` + ExternalId) |
 | [istio-agent-eks-access.md](istio-agent-eks-access.md) | `istio-read` MCP의 EKS 클러스터 접근 부여 (agent Lambda role Access Entry) |
+| [network-path-eks-access.md](network-path-eks-access.md) | Network Path Check 라이브 identity 확인의 EKS 클러스터 Node/Pod 접근 부여 (worker task role / `AWSopsReadOnlyRole` Access Entry, AdminView) |
 | [k8sgpt-operator-install.md](k8sgpt-operator-install.md) | K8sGPT 오퍼레이터 아웃-오브-밴드 설치 (오퍼레이터 수동 작업, ADR-005 선례) |
 | [alert-pipeline-troubleshoot.md](alert-pipeline-troubleshoot.md) | 알림 파이프라인 장애 대응 (ADR-008/013) |
 | [cache-warmer-issues.md](cache-warmer-issues.md) | 캐시 워머 stale / 에러 대응 |

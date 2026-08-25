@@ -30,9 +30,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
  * run row, and enqueues the `network_path` job directly — this NEVER goes through the generic
  * POST /api/jobs (ADR-009 dedicated-route pattern, same as /api/diagnosis and /api/compliance/run).
  *
- * L2 finding #3 (round 2): a NEW run is refused outright while `fetch_live_topology()` remains
- * unimplemented (networkPathLiveTopologyCapabilityGate) — every such run would deterministically
- * end `failed`, so this route no longer enqueues jobs that are guaranteed to fail.
+ * L2 finding #3 (round 2): a NEW run is refused outright by `networkPathLiveTopologyCapabilityGate`
+ * — this is NOT because `fetch_live_topology()` is unimplemented (it is real now: a best-effort
+ * cache-only discovery from Aurora's synced topology, see `network-path-gate.ts`'s own comment).
+ * The gate stays closed because that cache-only fetcher does not yet satisfy this feature's
+ * original promise of a full LIVE AWS/Kubernetes re-read at run time, so a new run's results could
+ * be stale relative to the account's current state — a deliberate product decision (ship the
+ * cache-only accelerator, gate the live guarantee separately), not a guaranteed-failure avoidance.
+ * Existing checks and prior run history remain viewable regardless of this gate.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const user = await verifyUser(req.headers.get('cookie'));

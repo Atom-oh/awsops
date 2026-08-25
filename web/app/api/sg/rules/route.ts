@@ -25,6 +25,8 @@ export async function GET(req: Request) {
     if (!REGION_RE.test(region)) return NextResponse.json({ message: 'invalid region' }, { status: 400 });
     filter.region = region;
   }
+  const vpcId = sp.get('vpcId');
+  if (vpcId) filter.vpcId = vpcId.slice(0, 64);
   const sgId = sp.get('sgId');
   if (sgId) filter.sgId = sgId.slice(0, 64);
   const direction = sp.get('direction');

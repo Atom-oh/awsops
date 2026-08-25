@@ -15,11 +15,10 @@ import type { RuleRow, RuleStatus } from '@/lib/sg-rules';
 
 // /network/security-groups/rules — SG Rules screen (docs/superpowers/specs/
 // 2026-08-13-security-group-rules-usage-design.md "Rules page contents"). Reads GET /api/sg/rules
-// (the sg_rule_inventory + sg_rule_activity_daily read model). Known gap: the current
-// sg_rule_inventory schema does not carry a VPC id or SG name (only account/region/group_id/rule
-// fields — see web/lib/sg-rules.ts's RuleRow) so the "VPC" column and a VPC filter cannot be wired
-// honestly yet; the VPC cell renders as a dash rather than a fabricated value. This is a real data
-// gap, not a UI omission — flagged rather than worked around with a schema change out of scope here.
+// (the sg_rule_inventory + sg_rule_activity_daily read model). The "VPC" column/filter (gap 5) reads
+// sg_rule_inventory.vpc_id, populated by the daily worker from the ENI-membership snapshot it
+// already takes — a rule snapshotted before that fix, or whose SG currently has no attached ENI,
+// legitimately has no known VPC yet and renders as a dash rather than a fabricated value.
 
 const STATUSES: RuleStatus[] = ['observed_compatible', 'overlapping', 'no_observed_evidence', 'unassessable', 'not_configured'];
 const WINDOWS = [30, 90, 180] as const;
@@ -45,7 +44,7 @@ function StatusBadge({ status }: { status: RuleStatus }) {
 }
 
 interface Filters {
-  accountId: string; region: string; sgId: string; direction: '' | 'ingress' | 'egress';
+  accountId: string; region: string; vpcId: string; sgId: string; direction: '' | 'ingress' | 'egress';
   status: '' | RuleStatus; q: string; days: 30 | 90 | 180;
 }
 
@@ -53,6 +52,7 @@ function toCsvUrl(f: Filters): string {
   const sp = new URLSearchParams();
   if (f.accountId) sp.set('accountId', f.accountId);
   if (f.region) sp.set('region', f.region);
+  if (f.vpcId) sp.set('vpcId', f.vpcId);
   if (f.sgId) sp.set('sgId', f.sgId);
   if (f.direction) sp.set('direction', f.direction);
   if (f.status) sp.set('status', f.status);
@@ -67,6 +67,7 @@ function toApiUrl(f: Filters, page: number): string {
   const sp = new URLSearchParams();
   if (f.accountId) sp.set('accountId', f.accountId);
   if (f.region) sp.set('region', f.region);
+  if (f.vpcId) sp.set('vpcId', f.vpcId);
   if (f.sgId) sp.set('sgId', f.sgId);
   if (f.direction) sp.set('direction', f.direction);
   if (f.status) sp.set('status', f.status);
@@ -148,7 +149,7 @@ export default function SecurityGroupRulesPage() {
 function SecurityGroupRulesPageInner() {
   const { tt } = useI18n();
   const searchParams = useSearchParams();
-  const [filters, setFilters] = useState<Filters>({ accountId: '', region: '', sgId: '', direction: '', status: '', q: '', days: 90 });
+  const [filters, setFilters] = useState<Filters>({ accountId: '', region: '', vpcId: '', sgId: '', direction: '', status: '', q: '', days: 90 });
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<RuleRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -214,9 +215,9 @@ function SecurityGroupRulesPageInner() {
     group_id: r.group_id,
     account_id: r.account_id,
     region: r.region,
-    // VPC is not carried by sg_rule_inventory today — see file header comment. Rendered as a dash
-    // rather than fabricated so this gap stays visible instead of silently looking populated.
-    vpc: '—',
+    // vpc_id can legitimately be unknown (a rule snapshotted before the gap-5 fix, or an SG with no
+    // currently attached ENI) — rendered as a dash rather than fabricated in that case.
+    vpc: r.vpc_id ?? '—',
     direction: r.is_egress ? 'egress' : 'ingress',
     protocol: r.protocol,
     ports: r.from_port == null ? 'all' : r.from_port === r.to_port ? String(r.from_port) : `${r.from_port}-${r.to_port}`,
@@ -278,6 +279,7 @@ function SecurityGroupRulesPageInner() {
         <div className="flex flex-wrap items-center gap-2">
           <input placeholder={tt('계정 ID')} value={filters.accountId} onChange={(e) => setFilters((f) => ({ ...f, accountId: e.target.value }))} className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]" />
           <input placeholder={tt('리전')} value={filters.region} onChange={(e) => setFilters((f) => ({ ...f, region: e.target.value }))} className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]" />
+          <input placeholder="VPC ID" value={filters.vpcId} onChange={(e) => setFilters((f) => ({ ...f, vpcId: e.target.value }))} className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]" />
           <input placeholder="SG ID" value={filters.sgId} onChange={(e) => setFilters((f) => ({ ...f, sgId: e.target.value }))} className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]" />
           <select value={filters.direction} onChange={(e) => setFilters((f) => ({ ...f, direction: e.target.value as Filters['direction'] }))} className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]">
             <option value="">{tt('전체 방향')}</option>

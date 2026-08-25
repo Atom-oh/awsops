@@ -19,14 +19,17 @@ export function networkPathCheckGate(): NextResponse | null {
 }
 
 /**
- * Capability probe (L2 finding #3, round 2): `scripts/v2/workers/network_path.py`'s
- * `fetch_live_topology()` is not implemented in this release — it unconditionally raises
- * `NotImplementedError`, so every enabled, non-fixture-driven Network Path run deterministically
- * ends `failed`. Rather than ship a feature that is guaranteed to fail once enabled, this route
- * refuses to create a NEW run at all while the capability is absent — existing checks/definitions
- * and prior run history remain fully viewable (this only blocks `createRun`, per the design
- * discussion in the round-2 report). Flip `LIVE_TOPOLOGY_IMPLEMENTED` to `true` in the SAME commit
- * that gives `fetch_live_topology()` a real implementation — this is a code-level fact, not an
+ * Capability probe (L2 finding #3, round 2; corrected round 17). `scripts/v2/workers/
+ * network_path.py`'s `fetch_live_topology()` is REAL now — best-effort discovery from CACHED
+ * Aurora topology (`topology_nodes`/`topology_edges`, `class='infra'`), not the `NotImplementedError`
+ * stub this comment used to describe. What is STILL missing is the full live-topology guarantee
+ * this gate is meant to cover: a live AWS/Kubernetes re-read at run time (the design spec's
+ * original "re-read SG/NACL/routes/etc. live" promise) — `fetch_live_topology()` deliberately makes
+ * no live AWS/K8s call at all, so its output can be stale relative to the account's current state.
+ * `LIVE_TOPOLOGY_IMPLEMENTED` therefore stays `false` — this is a deliberate product decision (ship
+ * the cache-only accelerator now, gate the LIVE guarantee separately), not an oversight left behind
+ * by the round-17 pass that made the fetcher real. Flip it to `true` only in the same commit that
+ * gives Network Path a genuine live AWS/K8s re-read path — this is a code-level fact, not an
  * environment toggle, so it is not read from `process.env`.
  */
 const LIVE_TOPOLOGY_IMPLEMENTED = false;
@@ -36,9 +39,9 @@ export function networkPathLiveTopologyCapabilityGate(): NextResponse | null {
     return NextResponse.json(
       {
         status: 'unimplemented',
-        message: 'Network Path Check cannot start a new run yet — live topology discovery ' +
-          '(fetch_live_topology) is not implemented in this release. Existing checks and prior ' +
-          'run history remain viewable.',
+        message: 'Network Path Check cannot start a new run yet — discovery uses cached ' +
+          'topology data only; a full live AWS/Kubernetes re-read (fetch_live_topology) is not ' +
+          'implemented in this release. Existing checks and prior run history remain viewable.',
       },
       { status: 503 },
     );

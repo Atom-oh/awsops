@@ -234,6 +234,11 @@ export interface RuleRow {
   region: string;
   rule_id: string;
   group_id: string;
+  /** Gap-5 fix: the SG's VPC id, wired through from `sg_rule_inventory.vpc_id` — populated by the
+   * daily worker (scripts/v2/workers/sg_rule_scan.py) from the ENI-membership snapshot it already
+   * takes. Optional/nullable: rows snapshotted before this fix (or an SG with no ENI currently
+   * attached) legitimately have no known VPC yet. */
+  vpc_id?: string | null;
   is_egress: boolean;
   protocol: string;
   from_port: number | null;
@@ -267,6 +272,7 @@ export async function listRules(filter: RuleFilter): Promise<{ rows: RuleRow[]; 
   const bindWhere = (v: unknown) => { whereParams.push(v); return `$${whereParams.length}`; };
   if (filter.accountId) where.push(`ri.account_id = ${bindWhere(filter.accountId)}`);
   if (filter.region) where.push(`ri.region = ${bindWhere(filter.region)}`);
+  if (filter.vpcId) where.push(`ri.vpc_id = ${bindWhere(filter.vpcId)}`);
   if (filter.sgId) where.push(`ri.group_id = ${bindWhere(filter.sgId)}`);
   if (filter.direction) where.push(`ri.is_egress = ${bindWhere(filter.direction === 'egress')}`);
   if (filter.text) where.push(`(ri.rule_id ILIKE ${bindWhere(`%${filter.text}%`)} OR ri.description ILIKE ${bindWhere(`%${filter.text}%`)})`);
@@ -290,7 +296,7 @@ export async function listRules(filter: RuleFilter): Promise<{ rows: RuleRow[]; 
        WHERE observed_on >= (current_date - $${daysIdx}::int)
        GROUP BY account_id, region, rule_id
     )
-    SELECT ri.account_id, ri.region, ri.rule_id, ri.group_id, ri.is_egress, ri.protocol,
+    SELECT ri.account_id, ri.region, ri.rule_id, ri.group_id, ri.vpc_id, ri.is_egress, ri.protocol,
            ri.from_port, ri.to_port, ri.peer_kind, ri.peer_value, ri.description,
            COALESCE(a.compatible_match_count, 0) AS compatible_match_count,
            COALESCE(a.overlap_match_count, 0) AS overlap_match_count,
@@ -323,6 +329,7 @@ export async function listRules(filter: RuleFilter): Promise<{ rows: RuleRow[]; 
     else status = 'no_observed_evidence';
     return {
       account_id: r.account_id, region: r.region, rule_id: r.rule_id, group_id: r.group_id,
+      vpc_id: r.vpc_id ?? null,
       is_egress: r.is_egress, protocol: r.protocol, from_port: r.from_port, to_port: r.to_port,
       peer_kind: r.peer_kind, peer_value: r.peer_value, description: r.description,
       compatible_match_count: Number(r.compatible_match_count) || 0,
@@ -337,9 +344,9 @@ export async function listRules(filter: RuleFilter): Promise<{ rows: RuleRow[]; 
 
 /** CSV export of already-fetched rows (no re-query; caller passes listRules() output). */
 export function rulesToCsv(rows: RuleRow[]): string {
-  const header = ['account_id', 'region', 'rule_id', 'group_id', 'direction', 'protocol', 'from_port',
-    'to_port', 'peer_kind', 'peer_value', 'status', 'compatible_match_count', 'overlap_match_count',
-    'last_observed_at'];
+  const header = ['account_id', 'region', 'vpc_id', 'rule_id', 'group_id', 'direction', 'protocol',
+    'from_port', 'to_port', 'peer_kind', 'peer_value', 'status', 'compatible_match_count',
+    'overlap_match_count', 'last_observed_at'];
   const esc = (v: unknown) => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -347,8 +354,8 @@ export function rulesToCsv(rows: RuleRow[]): string {
   const lines = [header.join(',')];
   for (const r of rows) {
     lines.push([
-      r.account_id, r.region, r.rule_id, r.group_id, r.is_egress ? 'egress' : 'ingress', r.protocol,
-      r.from_port, r.to_port, r.peer_kind, r.peer_value, r.status, r.compatible_match_count,
+      r.account_id, r.region, r.vpc_id ?? '', r.rule_id, r.group_id, r.is_egress ? 'egress' : 'ingress',
+      r.protocol, r.from_port, r.to_port, r.peer_kind, r.peer_value, r.status, r.compatible_match_count,
       r.overlap_match_count, r.last_observed_at,
     ].map(esc).join(','));
   }
