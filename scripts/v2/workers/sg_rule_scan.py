@@ -455,6 +455,26 @@ def invoke_broker_validate(lambda_client, broker_arn, source):
     return body
 
 
+def wrap_broker_validation_result(fresh):
+    """CI-review MAJOR fix (round 6): the broker's own `_validate` (`sg_rule_athena_broker.py`)
+    returns `{"ok": True, "columnMap": ..., "partitionKeyTypes": ..., "scopeResolution": ...}` —
+    it never sets a `status` key at all. `status: "valid"` is added only by the web BFF
+    (`web/lib/sg-rules.ts`'s `validateFlowSourceViaBroker`) when a human saves a source via the PUT
+    route. The round-5 self-heal path used to persist the broker's raw response verbatim, so the
+    JUST-self-healed row still had `validation.status != "valid"` — `query_by_source`'s own guard
+    (`sg_rule_athena_broker.py`'s `_query_by_source`) refused it in the SAME run, and `run()`'s own
+    `validation.status != "valid"` guard (above) exits with `awaiting_validation` on every
+    SUBSEQUENT run, permanently bricking the source (worse than before self-heal existed, since
+    there was previously no re-validation path that could scribble a broken shape over a
+    passing one). Mirrors the BFF's wrapping exactly: `ok: True` -> `status: "valid"` (+ a fresh
+    `checkedAt`), `ok: False` -> `status: "error"`, preserving every other field the broker (or
+    the BFF) returns."""
+    checked_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    if fresh.get("ok"):
+        return {**fresh, "status": "valid", "checkedAt": checked_at}
+    return {**fresh, "status": "error", "checkedAt": checked_at}
+
+
 def eni_group_ids_for_ip(memberships, ip):
     """memberships: list of {eni_id, group_ids, private_ips} for the resolved snapshot. Returns the
     union of group_ids of any ENI carrying `ip`."""
@@ -905,9 +925,10 @@ def run(payload, conn, ec2_client_factory=None, lambda_client_factory=None):
     if "partitionKeyTypes" not in validation and not sm.has_resolved_partition_strategy(validation):
         fresh = invoke_broker_validate(lam, broker_arn, source)
         if fresh.get("ok"):
+            healed = wrap_broker_validation_result(fresh)
             conn.run("UPDATE sg_flow_sources SET validation=:v WHERE id=:id",
-                      v=json.dumps(fresh), id=source["id"])
-            source["validation"] = fresh
+                      v=json.dumps(healed), id=source["id"])
+            source["validation"] = healed
         # A failed re-validation leaves the stale validation in place; `has_resolved_partition_
         # strategy` below still refuses the scan exactly as it already would have — this path only
         # ever helps a source that turns out to genuinely resolve, never masks a real rejection.

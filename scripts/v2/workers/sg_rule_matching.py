@@ -339,14 +339,31 @@ def _safe_scope_value(value, pattern):
 # are accepted as "safe to bound a scan on.")
 _DATE_LIKE_PARTITION_TYPES = {"date", "string", "varchar", "char", "timestamp"}
 
+_TYPE_PARAM_SUFFIX_RE = re.compile(r'\(.*\)$')
+
+
+def _normalize_glue_type(type_str) -> str:
+    """CI-review MAJOR fix (round 6): Glue/Hive legitimately types a column `varchar(10)`/`char(20)`
+    (length-parameterized) — a lowercased exact-string membership check against
+    `_DATE_LIKE_PARTITION_TYPES` never matches those, even though the underlying type IS
+    varchar/char. This is a regression: base code (before this round's fixes) built the ISO-date
+    predicate for ANY lone partition key regardless of type, so a `varchar(10)` date-as-text column
+    scanned fine before, and a bare exact-match check now permanently refuses it (with no rescue
+    path — re-validation raises `BrokerError` too, since `sg_rule_athena_broker._validate` calls the
+    same `is_date_like_partition_type` at validate time). Strips a trailing parenthesized
+    length/precision suffix (`varchar(10)` -> `varchar`, `decimal(10,2)` -> `decimal`) before any
+    date-likeness comparison."""
+    return _TYPE_PARAM_SUFFIX_RE.sub("", str(type_str or "").strip().lower())
+
 
 def is_date_like_partition_type(type_str) -> bool:
     """Public accessor for `_DATE_LIKE_PARTITION_TYPES` — used by
     `sg_rule_athena_broker._validate` (item 4 follow-up fix, round 2) to reject a single-key
     partition strategy AT VALIDATION TIME when the Glue-catalog type isn't date-shaped, instead of
     letting it validate `status: "valid"` and then have the runtime scan
-    (`has_resolved_partition_strategy`) permanently refuse every real scan."""
-    return str(type_str or "").lower() in _DATE_LIKE_PARTITION_TYPES
+    (`has_resolved_partition_strategy`) permanently refuse every real scan. Normalizes away any
+    parameterized length/precision suffix first (round 6 fix, see `_normalize_glue_type`)."""
+    return _normalize_glue_type(type_str) in _DATE_LIKE_PARTITION_TYPES
 
 
 def partition_keys_excluding_scope(validation: dict) -> list:
@@ -399,7 +416,7 @@ def _single_partition_key_and_type(validation: dict):
         idx = next(i for i, k in enumerate(all_keys) if k == key)
     except StopIteration:
         return None, None
-    t = str(types[idx]).lower()
+    t = _normalize_glue_type(types[idx])
     if t not in _DATE_LIKE_PARTITION_TYPES:
         return None, None
     return key, t

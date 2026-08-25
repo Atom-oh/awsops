@@ -517,6 +517,15 @@ def test_has_resolved_partition_strategy_false_for_single_key_with_non_date_type
         {"partitionKeys": ["dt"], "partitionKeyTypes": ["bigint"]}) is False
 
 
+def test_has_resolved_partition_strategy_true_for_single_key_with_parameterized_varchar_type():
+    # CI-review MAJOR fix (round 6): a `varchar(10)` (length-parameterized) Glue type is still
+    # varchar — must resolve exactly like the bare `varchar` form does.
+    assert m.has_resolved_partition_strategy(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["varchar(10)"]}) is True
+    assert m.single_date_partition_key(
+        {"partitionKeys": ["dt"], "partitionKeyTypes": ["varchar(10)"]}) == "dt"
+
+
 # ── is_date_like_partition_type (item 4 follow-up fix, round 2 — public accessor used by
 #    sg_rule_athena_broker._validate to reject a non-date-shaped single key at VALIDATE time). ──────
 
@@ -531,6 +540,23 @@ def test_is_date_like_partition_type_true_for_date_and_timestamp_and_text_types(
 def test_is_date_like_partition_type_false_for_bigint_and_unknown():
     assert m.is_date_like_partition_type("bigint") is False
     assert m.is_date_like_partition_type(None) is False
+
+
+def test_is_date_like_partition_type_normalizes_parameterized_glue_types():
+    """CI-review MAJOR fix (round 6): Glue/Hive legitimately types a column `varchar(10)`/
+    `char(20)` (length-parameterized) — an exact-string membership check regressed this to `False`
+    even though the underlying type IS varchar/char, permanently refusing a table that scanned fine
+    before this round's exact-match check existed."""
+    assert m.is_date_like_partition_type("varchar(10)") is True
+    assert m.is_date_like_partition_type("char(20)") is True
+    assert m.is_date_like_partition_type("VARCHAR(10)") is True
+    # Bare (non-parameterized) forms must keep working too.
+    assert m.is_date_like_partition_type("varchar") is True
+    assert m.is_date_like_partition_type("char") is True
+    # A genuinely non-date type must still correctly NOT classify as date-like, parameterized or not.
+    assert m.is_date_like_partition_type("boolean") is False
+    assert m.is_date_like_partition_type("array<string>") is False
+    assert m.is_date_like_partition_type("decimal(10,2)") is False
 
 
 def test_single_date_partition_key_accepts_string_typed_column():

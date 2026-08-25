@@ -1318,7 +1318,13 @@ def test_run_self_heals_a_stale_validation_missing_partition_key_types(monkeypat
         "sg_rule_inventory_versions": [[]],
         "FROM sg_eni_membership_snapshots": [[]],
     })
-    fresh_validation = {"ok": True, "status": "valid", "partitionKeys": ["dt"], "partitionKeyTypes": ["date"]}
+    # CI-review MAJOR fix (round 6): the REAL broker `_validate` response (`sg_rule_athena_broker.
+    # py`'s `_validate`) never carries a `status` key at all — that wrapper is added only by the web
+    # BFF (`web/lib/sg-rules.ts`) at PUT-time. A fake that hand-writes `status: "valid"` here would
+    # mask exactly the bug this test exists to catch (the self-heal path persisting the broker's raw,
+    # `status`-less shape and permanently bricking the source on the very next run).
+    fresh_validation = {"ok": True, "partitionKeys": ["dt"], "partitionKeyTypes": ["date"],
+                         "columnMap": {}, "scopeResolution": {"account_id": None, "region": None}}
     fake_lambda = DispatchingFakeLambda({
         "validate": fresh_validation,
         "query_by_source": {"ok": True, "rows": []},
@@ -1335,10 +1341,44 @@ def test_run_self_heals_a_stale_validation_missing_partition_key_types(monkeypat
                                   "database": "db", "table": "tbl"}
     update_calls = [c for c in conn.calls if c[0].strip().startswith("UPDATE sg_flow_sources")]
     assert len(update_calls) == 1
-    assert json.loads(update_calls[0][1]["v"]) == fresh_validation
-    # The scan itself proceeded using the freshly-resolved (now scannable) strategy.
+    persisted = json.loads(update_calls[0][1]["v"])
+    # The persisted blob must be wrapped with `status: "valid"` — the raw broker response alone
+    # would make this source unscannable in the very next run (see the two guards this exercises
+    # below), which is the exact regression this test guards against.
+    assert persisted["status"] == "valid"
+    assert persisted["ok"] is True
+    assert persisted["partitionKeys"] == ["dt"]
+    assert persisted["partitionKeyTypes"] == ["date"]
+    assert "checkedAt" in persisted
+    # The scan itself proceeded using the freshly-resolved (now scannable) strategy — i.e. the SAME
+    # run's own `query_by_source` guard (`sg_rule_athena_broker.py`'s `_query_by_source`, which
+    # checks `validation.status != 'valid'`) did NOT refuse the just-self-healed row.
     query_calls = [i for i in fake_lambda.invocations if i["action"] == "query_by_source"]
     assert len(query_calls) >= 1
+    # A SUBSEQUENT run must also see the healed, valid-shaped validation — not fall back into
+    # `run()`'s own `validation.status != 'valid'` guard (which would exit with
+    # `awaiting_validation` before even reaching the self-heal block again).
+    second_run_lambda = DispatchingFakeLambda({
+        "validate": fresh_validation,  # must NOT be invoked again
+        "query_by_source": {"ok": True, "rows": []},
+    })
+    conn2 = FakeConn({
+        "FROM sg_flow_sources": [[
+            (1, "123456789012", "ap-northeast-2", "wg", "db", "tbl", True, json.dumps(persisted), utc(2020, 1, 1)),
+        ]],
+        "FROM accounts": [[("ext-abc",)]],
+        "FROM sg_rule_scan_runs": [[(None,)]],
+        "sg_rule_inventory_versions": [[]],
+        "FROM sg_eni_membership_snapshots": [[]],
+    })
+    result2 = scan.run(
+        {"account_id": "123456789012", "region": "ap-northeast-2"}, conn2,
+        ec2_client_factory=lambda *a, **k: FakeEc2(),
+        lambda_client_factory=lambda: second_run_lambda,
+    )
+    assert result2.get("status") != "awaiting_validation"
+    assert not [i for i in second_run_lambda.invocations if i["action"] == "validate"]
+    assert [i for i in second_run_lambda.invocations if i["action"] == "query_by_source"]
 
 
 def test_run_does_not_revalidate_a_source_that_was_genuinely_checked_and_rejected(monkeypatch):
