@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Relocated the security group usage analysis page from `/inventory/security_group` to its own top-level `/network/security-groups/usage` page — same `SgAnalysisSection`, unchanged behavior/IAM, moved out of the generic inventory-type page so it can sit alongside the new SG Rules page under one `security-groups` route group.
+- Relocated the security group usage analysis page from `/inventory/security_group` to its own top-level `/network/security-groups/usage` page — the embedded `SgAnalysisSection` component's own behavior/IAM is unchanged, but the new page itself additionally carries a relationship graph, a fixed-24h hits request, and a link to the Rules page; moved out of the generic inventory-type page so it can sit alongside the new SG Rules page under one `security-groups` route group.
 
 ### Fixed
 
@@ -585,7 +585,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Changed
 
-- 보안 그룹 사용 분석 페이지를 `/inventory/security_group`에서 별도의 최상위 페이지 `/network/security-groups/usage`로 이전 — 동일한 `SgAnalysisSection`, 동작/IAM 변경 없음. 범용 inventory-type 페이지에서 분리되어 신규 SG Rules 페이지와 같은 `security-groups` 라우트 그룹에 위치한다.
+- 보안 그룹 사용 분석 페이지를 `/inventory/security_group`에서 별도의 최상위 페이지 `/network/security-groups/usage`로 이전 — 내장된 `SgAnalysisSection` 컴포넌트 자체의 동작/IAM은 변경 없으나, 새 페이지 자체는 관계 그래프·고정 24시간 hits 요청·Rules 페이지 링크를 추가로 포함한다. 범용 inventory-type 페이지에서 분리되어 신규 SG Rules 페이지와 같은 `security-groups` 라우트 그룹에 위치한다.
 
 ### Fixed
 

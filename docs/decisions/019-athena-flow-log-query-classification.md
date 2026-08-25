@@ -332,7 +332,7 @@ and needs only its own remaining conditions (a BASELINE §2 row + one adapter-sa
 
 ## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
 - **Security**: 역할 A는 read-only 동사만 화이트리스트. 역할 B는 read/query 동사 + 두 개의 독립적으로 스코프된 S3 영역만 화이트리스트 — Flow Log 소스 위치(read만)와 워크그룹 결과 prefix(read+write 둘 다, Athena 자신이 자기가 쓴 결과를 다시 읽기 때문). 두 영역은 서로 다른(계정이 다를 수도 있는) 위치이며 섞이지 않는다. mutating 동사 명시적 배제, assume 주체를 전용 task role/broker Lambda로 격리(공유 워커 task role 배제). 역할 A의 cross-account 확장은 기존 신뢰 경계 재사용이지만, 역할 B는 이 저장소 최초의 write-capable cross-account 신뢰 관계임을 명시(위 Negative 참조).
-- **Reliability**: CloudWatch Logs Insights와 동일한 폴링+타임아웃+`StopQueryExecution` 취소 패턴 재사용 — 새 실패 모드 없음.
+- **Reliability**: CloudWatch Logs Insights와 동일한 폴링+타임아웃+`StopQueryExecution` 취소 패턴 재사용. 단, 3-상태 Glue 파티션 존재 확인(`_partition_exists`)은 Glue API 오류 시 그 날을 거부하고 워터마크 전진을 멈추는 의도된 신규 실패 모드를 도입한다(round-6/round-7 CI 리뷰 수정) — 거짓 `no_observed_evidence` 커밋보다 지연을 택하는 올바른 설계다. / Reuses the same polling+timeout+`StopQueryExecution` cancellation pattern as CloudWatch Logs Insights. One deliberate exception: the three-state Glue partition-existence check (`_partition_exists`) refuses the day and stalls watermark advancement on a Glue API error (round-6/round-7 CI review fixes) — a new, intentional failure mode, correctly preferring delay over committing a false `no_observed_evidence`.
 - **Operational Excellence**: 이 ADR + 멀티-AI 패널 리뷰로 spec이 요구한 governance 절차 충족. BASELINE §2에 `sg_rule_activity_enabled`를 일반 GATED 항목으로 등록(같은 PR).
 - **Cost**: 기본 OFF; 켜져도 스캔 바이트 상한 + 워크그룹 컷오프로 통제.
 - **Performance/Sustainability**: 일 1회 배치 쿼리(소스당), 상시 자원 추가 없음(워커 role IAM 정책 외).
