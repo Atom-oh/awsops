@@ -24,59 +24,205 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
-function definitionTextarea(label: string, value: string, onChange: (v: string) => void) {
-  return (
-    <label className="flex flex-col gap-1 text-[12px] text-ink-600">
-      {label}
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        rows={3}
-        className="rounded-md border border-ink-200 bg-card p-2 font-mono text-[11px]"
-      />
-    </label>
-  );
+// ── Structured source/destination/request selector ────────────────────────────────────────────
+//
+// Wire format built here matches the existing `NetworkPathDefinition` contract (source/destination/
+// request each an arbitrary JSON object — see lib/network-path.ts's validateDefinition, which only
+// checks the three keys are objects). No API/DB shape change was needed: this only replaces the
+// free-form JSON textarea UX with typed fields that assemble the same kind of plain object. The
+// concrete shapes below follow the spec's "Supported endpoints" list (source: EKS Pod/Node;
+// destination: AWS resource / internet IP-or-URL / on-prem IP-or-URL) and "Result semantics" section.
+type SourceKind = 'eks_pod' | 'eks_node';
+type DestKind = 'aws_resource' | 'internet' | 'on_prem';
+type Protocol = 'tcp' | 'udp' | 'icmp';
+
+interface FormState {
+  name: string;
+  sourceAccountId: string;
+  sourceKind: SourceKind;
+  sourceCluster: string;
+  sourceNamespace: string;
+  sourcePodName: string;
+  sourceNodeName: string;
+  destKind: DestKind;
+  destResourceId: string;
+  destHost: string;
+  destPath: string;
+  onPremHost: string;
+  protocol: Protocol;
+  port: string;
 }
 
-function CreateCheckForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
+const EMPTY_FORM: FormState = {
+  name: '',
+  sourceAccountId: '',
+  sourceKind: 'eks_pod',
+  sourceCluster: '',
+  sourceNamespace: '',
+  sourcePodName: '',
+  sourceNodeName: '',
+  destKind: 'aws_resource',
+  destResourceId: '',
+  destHost: '',
+  destPath: '',
+  onPremHost: '',
+  protocol: 'tcp',
+  port: '443',
+};
+
+/** Best-effort inverse of buildDefinition() — used to pre-fill the edit form from a saved check. */
+function formStateFromCheck(check: NetworkPathCheckRow): FormState {
+  const d = check.definition ?? { source: {}, destination: {}, request: {} };
+  const s = (d.source ?? {}) as Record<string, unknown>;
+  const dest = (d.destination ?? {}) as Record<string, unknown>;
+  const req = (d.request ?? {}) as Record<string, unknown>;
+  const sourceKind: SourceKind = s.kind === 'eks_node' ? 'eks_node' : 'eks_pod';
+  const destKind: DestKind = dest.kind === 'internet' || dest.kind === 'on_prem' ? (dest.kind as DestKind) : 'aws_resource';
+  return {
+    name: check.name,
+    sourceAccountId: check.source_account_id,
+    sourceKind,
+    sourceCluster: typeof s.cluster === 'string' ? s.cluster : '',
+    sourceNamespace: typeof s.namespace === 'string' ? s.namespace : '',
+    sourcePodName: typeof s.pod_name === 'string' ? s.pod_name : '',
+    sourceNodeName: typeof s.node_name === 'string' ? s.node_name : '',
+    destResourceId: typeof dest.resource_id === 'string' ? dest.resource_id : '',
+    destHost: destKind === 'internet' && typeof dest.host === 'string' ? dest.host : '',
+    destPath: typeof dest.path === 'string' ? dest.path : '',
+    onPremHost: destKind === 'on_prem' && typeof dest.host === 'string' ? dest.host : '',
+    destKind,
+    protocol: req.protocol === 'udp' || req.protocol === 'icmp' ? req.protocol : 'tcp',
+    port: typeof req.port === 'number' ? String(req.port) : '',
+  };
+}
+
+function buildDefinition(f: FormState) {
+  const source =
+    f.sourceKind === 'eks_pod'
+      ? { kind: 'eks_pod', cluster: f.sourceCluster, namespace: f.sourceNamespace, pod_name: f.sourcePodName }
+      : { kind: 'eks_node', cluster: f.sourceCluster, node_name: f.sourceNodeName };
+
+  const destination =
+    f.destKind === 'aws_resource'
+      ? { kind: 'aws_resource', resource_id: f.destResourceId }
+      : f.destKind === 'internet'
+      ? { kind: 'internet', host: f.destHost, ...(f.destPath ? { path: f.destPath } : {}) }
+      : { kind: 'on_prem', host: f.onPremHost };
+
+  const request: Record<string, unknown> = { protocol: f.protocol };
+  if (f.protocol !== 'icmp' && f.port.trim()) request.port = Number(f.port);
+  if (f.destKind === 'internet' && f.destPath) request.path = f.destPath;
+
+  return { source, destination, request };
+}
+
+const selectClass = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]';
+const inputClass = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]';
+
+function CheckForm({
+  existing,
+  onSaved,
+  onCancel,
+}: {
+  existing?: NetworkPathCheckRow;
+  onSaved: (saved: NetworkPathCheckRow) => void;
+  onCancel: () => void;
+}) {
   const { tt } = useI18n();
-  const [name, setName] = useState('');
-  const [sourceAccountId, setSourceAccountId] = useState('');
-  const [source, setSource] = useState('{\n  "kind": "eni",\n  "eni_id": ""\n}');
-  const [destination, setDestination] = useState('{\n  "kind": "eni",\n  "eni_id": ""\n}');
-  const [request, setRequest] = useState('{\n  "protocol": "tcp",\n  "port": 443\n}');
+  const [f, setF] = useState<FormState>(() => (existing ? formStateFromCheck(existing) : EMPTY_FORM));
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setF((prev) => ({ ...prev, [key]: value }));
+
+  const isHttpish = f.destKind === 'internet' && f.protocol === 'tcp';
 
   const submit = async () => {
     setBusy(true); setErr('');
     try {
-      const definition = {
-        source: JSON.parse(source || '{}'),
-        destination: JSON.parse(destination || '{}'),
-        request: JSON.parse(request || '{}'),
-      };
-      const r = await fetch('/api/network-paths', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name, source_account_id: sourceAccountId, definition }),
-      });
+      const definition = buildDefinition(f);
+      const body = { name: f.name, source_account_id: f.sourceAccountId, definition };
+      const r = existing
+        ? await fetch(`/api/network-paths/${existing.id}`, {
+            method: 'PATCH', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: body.name, definition }),
+          })
+        : await fetch('/api/network-paths', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
       const d = await r.json().catch(() => null);
       if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`);
-      onCreated();
+      onSaved(d.check);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
   return (
-    <Card title={tt('새 경로 점검 정의')} padded>
-      <div className="flex flex-col gap-2">
-        <input placeholder={tt('이름')} value={name} onChange={(e) => setName(e.target.value)} className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]" />
-        <input placeholder={tt('소스 계정 ID (12자리)')} value={sourceAccountId} onChange={(e) => setSourceAccountId(e.target.value)} className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px]" />
-        {definitionTextarea(tt('소스 (Source)'), source, setSource)}
-        {definitionTextarea(tt('목적지 + 요청 (Destination)'), destination, setDestination)}
-        {definitionTextarea(tt('요청 (Request: protocol/port)'), request, setRequest)}
+    <Card title={existing ? tt('경로 점검 정의 수정') : tt('새 경로 점검 정의')} padded>
+      <div className="flex flex-col gap-3">
+        <input placeholder={tt('이름')} value={f.name} onChange={(e) => set('name', e.target.value)} className={inputClass} />
+        <input
+          placeholder={tt('소스 계정 ID (12자리)')}
+          value={f.sourceAccountId}
+          disabled={!!existing}
+          onChange={(e) => set('sourceAccountId', e.target.value)}
+          className={`${inputClass} disabled:opacity-50`}
+        />
+
+        <div className="flex flex-col gap-1.5 rounded-md border border-ink-100 p-2">
+          <div className="text-[11px] font-semibold uppercase text-ink-400">{tt('소스 (Source)')}</div>
+          <select aria-label={tt('소스 종류')} value={f.sourceKind} onChange={(e) => set('sourceKind', e.target.value as SourceKind)} className={selectClass}>
+            <option value="eks_pod">{tt('EKS Pod')}</option>
+            <option value="eks_node">{tt('EKS Node')}</option>
+          </select>
+          <input placeholder={tt('클러스터')} value={f.sourceCluster} onChange={(e) => set('sourceCluster', e.target.value)} className={inputClass} />
+          {f.sourceKind === 'eks_pod' ? (
+            <>
+              <input placeholder={tt('네임스페이스')} value={f.sourceNamespace} onChange={(e) => set('sourceNamespace', e.target.value)} className={inputClass} />
+              <input placeholder={tt('Pod 이름')} value={f.sourcePodName} onChange={(e) => set('sourcePodName', e.target.value)} className={inputClass} />
+            </>
+          ) : (
+            <input placeholder={tt('노드 이름')} value={f.sourceNodeName} onChange={(e) => set('sourceNodeName', e.target.value)} className={inputClass} />
+          )}
+        </div>
+
+        <div className="flex flex-col gap-1.5 rounded-md border border-ink-100 p-2">
+          <div className="text-[11px] font-semibold uppercase text-ink-400">{tt('목적지 (Destination)')}</div>
+          <select aria-label={tt('목적지 종류')} value={f.destKind} onChange={(e) => set('destKind', e.target.value as DestKind)} className={selectClass}>
+            <option value="aws_resource">{tt('AWS 리소스')}</option>
+            <option value="internet">{tt('인터넷 IP 또는 URL')}</option>
+            <option value="on_prem">{tt('온프레미스 (VPN/DX)')}</option>
+          </select>
+          {f.destKind === 'aws_resource' && (
+            <input placeholder={tt('리소스 ARN 또는 ID')} value={f.destResourceId} onChange={(e) => set('destResourceId', e.target.value)} className={inputClass} />
+          )}
+          {f.destKind === 'internet' && (
+            <input placeholder={tt('호스트 또는 IP/URL')} value={f.destHost} onChange={(e) => set('destHost', e.target.value)} className={inputClass} />
+          )}
+          {f.destKind === 'on_prem' && (
+            <input placeholder={tt('온프레미스 IP 또는 URL')} value={f.onPremHost} onChange={(e) => set('onPremHost', e.target.value)} className={inputClass} />
+          )}
+        </div>
+
+        <div className="flex flex-col gap-1.5 rounded-md border border-ink-100 p-2">
+          <div className="text-[11px] font-semibold uppercase text-ink-400">{tt('요청 (Request)')}</div>
+          <select aria-label={tt('프로토콜')} value={f.protocol} onChange={(e) => set('protocol', e.target.value as Protocol)} className={selectClass}>
+            <option value="tcp">TCP</option>
+            <option value="udp">UDP</option>
+            <option value="icmp">ICMP</option>
+          </select>
+          {f.protocol !== 'icmp' && (
+            <input placeholder={tt('포트')} inputMode="numeric" value={f.port} onChange={(e) => set('port', e.target.value)} className={inputClass} />
+          )}
+          {isHttpish && (
+            <input placeholder={tt('경로 (선택, 예: /health)')} value={f.destPath} onChange={(e) => set('destPath', e.target.value)} className={inputClass} />
+          )}
+        </div>
+
         {err && <div className="text-[12px] text-rose-600">{err}</div>}
         <div className="flex items-center gap-2">
-          <button type="button" disabled={busy} onClick={submit} className="rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-50">{tt('생성')}</button>
+          <button type="button" disabled={busy} onClick={submit} className="rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-50">
+            {existing ? tt('저장') : tt('생성')}
+          </button>
           <button type="button" onClick={onCancel} className="rounded-md border border-ink-200 px-3 py-1.5 text-[12px]">{tt('취소')}</button>
         </div>
       </div>
@@ -147,6 +293,7 @@ export default function NetworkPathsPage() {
   const [checks, setChecks] = useState<NetworkPathCheckRow[]>([]);
   const [err, setErr] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editingCheck, setEditingCheck] = useState<NetworkPathCheckRow | null>(null);
   const [selectedCheck, setSelectedCheck] = useState<NetworkPathCheckRow | null>(null);
   const [runs, setRuns] = useState<NetworkPathRunRow[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -250,14 +397,27 @@ export default function NetworkPathsPage() {
         title={tt('경로 점검')}
         subtitle={tt('저장된 경로 점검 정의를 실행하고 결과 그래프 + 계층 체크리스트로 확인합니다')}
         right={
-          <button type="button" onClick={() => setCreating((v) => !v)} className="inline-flex items-center gap-1.5 rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-medium text-white">
+          <button type="button" onClick={() => { setEditingCheck(null); setCreating((v) => !v); }} className="inline-flex items-center gap-1.5 rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-medium text-white">
             <Plus size={13} />{tt('새 점검')}
           </button>
         }
       />
       <div className="px-8 py-8 flex flex-col gap-6">
         {err && <div className="text-[13px] text-rose-600">{err}</div>}
-        {creating && <CreateCheckForm onCreated={() => { setCreating(false); loadChecks(); }} onCancel={() => setCreating(false)} />}
+        {creating && (
+          <CheckForm onSaved={() => { setCreating(false); loadChecks(); }} onCancel={() => setCreating(false)} />
+        )}
+        {editingCheck && (
+          <CheckForm
+            existing={editingCheck}
+            onSaved={(saved) => {
+              setEditingCheck(null);
+              loadChecks();
+              setSelectedCheck((prev) => (prev && prev.id === saved.id ? saved : prev));
+            }}
+            onCancel={() => setEditingCheck(null)}
+          />
+        )}
 
         {enabled && checks.length === 0 && !creating && (
           <EmptyState message={tt('저장된 경로 점검이 없습니다 — 새 점검을 만들어 보세요.')} />
@@ -276,7 +436,14 @@ export default function NetworkPathsPage() {
                     </button>
                     {canEdit && (
                       <div className="flex items-center gap-1">
-                        <button type="button" title={tt('수정')} className="rounded p-1 text-ink-400 hover:text-ink-700"><Pencil size={13} /></button>
+                        <button
+                          type="button"
+                          title={tt('수정')}
+                          onClick={() => { setCreating(false); setEditingCheck(c); }}
+                          className="rounded p-1 text-ink-400 hover:text-ink-700"
+                        >
+                          <Pencil size={13} />
+                        </button>
                         <button type="button" title={tt('삭제')} onClick={() => deleteCheck(c)} className="rounded p-1 text-ink-400 hover:text-rose-600"><Trash2 size={13} /></button>
                       </div>
                     )}
