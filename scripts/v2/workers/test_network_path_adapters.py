@@ -95,6 +95,21 @@ class TestSecurityGroup:
         assert r["status"] == "allowed"
         assert r["resource"] == "sg-2"
 
+    # ── MINOR fix: a PRESENT-BUT-MALFORMED peer_ip (a failed identity parse, not a missing value)
+    #    must be treated the same as peer_ip=None — never silently fall through to `_cidr_contains`
+    #    as an ordinary non-match and yield a confident `blocked`. ─────────────────────────────────
+
+    def test_malformed_peer_ip_is_unknown_not_a_confident_blocked(self):
+        rules = [{"sg_id": "sg-1", "protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "0.0.0.0/0"}]
+        r = ad.eval_security_group(rules, "tcp", 443, peer_ip="not-an-ip", peer_sg_ids=None)
+        assert r["status"] == "unknown"
+
+    def test_malformed_peer_ip_with_confident_sg_reference_match_still_allows(self):
+        rules = [{"sg_id": "sg-1", "protocol": "tcp", "from_port": 5432, "to_port": 5432,
+                  "referenced_group_id": "sg-db"}]
+        r = ad.eval_security_group(rules, "tcp", 5432, peer_ip="999.999.999.999", peer_sg_ids=["sg-db"])
+        assert r["status"] == "allowed"
+
 
 # ── NACL ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -218,6 +233,15 @@ class TestNacl:
         ret = [{"rule_number": 100, "protocol": "-1", "action": "allow"}]
         r = ad.eval_nacl(fwd, ret, "tcp", 443, peer_ip="10.1.2.3")
         assert r["status"] == "allowed"
+
+    # ── MINOR fix: a malformed (not a parseable IP literal) peer_ip must be treated exactly like
+    #    peer_ip=None — not fall through as an ordinary CIDR non-match. ────────────────────────────
+
+    def test_cidr_scoped_forward_entry_with_malformed_peer_ip_is_unknown(self):
+        fwd = [{"rule_number": 100, "protocol": "-1", "cidr": "10.0.0.0/8", "action": "allow"},
+               {"rule_number": 32767, "action": "deny"}]
+        r = ad.eval_nacl(fwd, [], "tcp", 443, peer_ip="definitely-not-an-ip")
+        assert r["status"] == "unknown"
 
     def test_return_deny_covering_full_ephemeral_range_is_confidently_blocked(self):
         """A deny that genuinely spans the full 0-65535 ephemeral range (unrestricted) legitimately
@@ -633,6 +657,32 @@ class TestK8sNetworkPolicy:
             {"to": [{"ip_block": {"cidr": "10.0.0.0/8"}}]}]}]
         r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "egress", peer_ip=None)
         assert r["status"] == "unknown"
+
+    # ── MINOR fix: a malformed (unparseable) peer_ip on an ipBlock peer must be treated exactly
+    #    like peer_ip=None, not fall through to `_cidr_contains` as an ordinary non-match. ─────────
+
+    def test_ip_block_peer_with_malformed_peer_ip_is_unknown_not_blocked(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["egress"], "egress": [
+            {"to": [{"ip_block": {"cidr": "10.0.0.0/8"}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "egress", peer_ip="not-an-ip")
+        assert r["status"] == "unknown"
+
+    # ── MINOR fix: an EMPTY namespaceSelector/podSelector ({} — K8s' own "match everything")
+    #    must resolve as a vacuous match WITHOUT needing peer_labels/peer_namespace_labels, rather
+    #    than downgrading a decidable `allowed` to `unknown`. ───────────────────────────────────────
+
+    def test_empty_pod_selector_matches_without_any_peer_labels(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"pod_selector": {}, "namespace_selector": {}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress",
+                                        peer_labels=None, peer_namespace_labels=None)
+        assert r["status"] == "allowed"
+
+    def test_empty_namespace_selector_alone_matches_without_namespace_labels(self):
+        policies = [{"pod_selector": {"app": "orders"}, "policy_types": ["ingress"], "ingress": [
+            {"from": [{"namespace_selector": {}}]}]}]
+        r = ad.eval_k8s_network_policy(policies, {"app": "orders"}, "ingress", peer_namespace_labels=None)
+        assert r["status"] == "allowed"
 
     # ── item 2c: bare podSelector-only peer without namespace confirmation -> unknown ────────────
 

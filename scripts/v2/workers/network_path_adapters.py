@@ -58,6 +58,22 @@ def _cidr_contains(cidr, ip):
         return False
 
 
+def _is_valid_ip(ip):
+    """MINOR fix: the partial-peer guards below key only on `peer_ip is None` — a PRESENT-BUT-
+    MALFORMED `peer_ip` string (not a valid IPv4/IPv6 literal) used to fall through to
+    `_cidr_contains`, which swallows the `ValueError` and returns a plain `False`, i.e. an ordinary
+    non-match. That let a failed identity PARSE (as opposed to a genuinely missing one) still
+    produce a confident `blocked`/non-match verdict instead of `unknown`. Callers must treat a
+    malformed `peer_ip` exactly like `peer_ip is None` for gating purposes."""
+    if ip is None:
+        return False
+    try:
+        ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False
+
+
 # ── AWS L3/L4: Security Groups (ingress/egress, multi-SG union) ─────────────────────────────────
 
 def eval_security_group(rules, protocol, port, peer_ip=None, peer_sg_ids=None, layer="sg"):
@@ -79,6 +95,13 @@ def eval_security_group(rules, protocol, port, peer_ip=None, peer_sg_ids=None, l
     # normalized to a set for membership checks.
     peer_sg_ids_unresolved = peer_sg_ids is None
     peer_sg_ids = set(peer_sg_ids or [])
+    # MINOR fix: a present-but-malformed `peer_ip` (not a valid IP literal) must be treated the
+    # same as a missing one — a failed parse is not evidence of anything, and letting it reach
+    # `_cidr_contains` below (which silently swallows the ValueError as a plain non-match) could
+    # yield a confident `blocked` from bad data rather than `unknown`.
+    peer_ip_usable = peer_ip is not None and _is_valid_ip(peer_ip)
+    if not peer_ip_usable:
+        peer_ip = None
     if peer_ip is None and peer_sg_ids_unresolved:
         # MAJOR fix: missing/unparseable peer identity must map to `unknown`, never a confident
         # `blocked` — the module's own docstring gives exactly this reasoning for not reusing
@@ -161,6 +184,11 @@ def _first_match(entries, protocol, port, peer_ip=None):
     genuinely cannot proceed past this position without `peer_ip`; the caller must surface `unknown`,
     never invent a confident verdict from either side of that entry.
     """
+    # MINOR fix: a present-but-malformed `peer_ip` must be treated the same as a missing one — see
+    # `_is_valid_ip`'s docstring for why (a failed parse falls through to `_cidr_contains`'s
+    # swallowed-ValueError non-match otherwise, which is indistinguishable from a genuine miss).
+    if peer_ip is not None and not _is_valid_ip(peer_ip):
+        peer_ip = None
     for entry in sorted(entries, key=lambda e: e["rule_number"]):
         if entry["rule_number"] >= 32767:  # implicit default-deny catch-all
             return entry, False
@@ -719,23 +747,36 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
                 has_pod_selector = "pod_selector" in peer
                 has_ip_block = "ip_block" in peer
 
-                if has_ns_selector and peer_namespace_labels is None:
-                    # Can't evaluate a namespaceSelector peer without namespace label data — do
-                    # NOT fall through to a confident blocked; remember it and keep scanning other
-                    # peers/rules in case one of THEM produces a confident allow.
-                    saw_unresolvable_namespace_selector = True
-                    continue
-                if has_ns_selector and not _labels_match(peer["namespace_selector"], peer_namespace_labels):
-                    continue  # namespace doesn't match this peer's namespaceSelector — not this peer
+                if has_ns_selector:
+                    # MINOR fix: an EMPTY namespaceSelector (`{}` — no matchLabels/matchExpressions)
+                    # is Kubernetes' own "match every namespace" semantics, a vacuous match that
+                    # needs no namespace-label data at all. The old code checked
+                    # `peer_namespace_labels is None` before even looking at whether the selector
+                    # was trivial, turning a decidable `allowed` into an unnecessary `unknown`. Only
+                    # a genuinely non-trivial (non-empty) selector requires namespace-label data.
+                    ns_selector = peer["namespace_selector"]
+                    if ns_selector:
+                        if peer_namespace_labels is None:
+                            # Can't evaluate a namespaceSelector peer without namespace label data
+                            # — do NOT fall through to a confident blocked; remember it and keep
+                            # scanning other peers/rules in case one of THEM confidently allows.
+                            saw_unresolvable_namespace_selector = True
+                            continue
+                        if not _labels_match(ns_selector, peer_namespace_labels):
+                            continue  # namespace doesn't match this peer's namespaceSelector
 
                 if has_pod_selector:
-                    if peer_labels is None:
-                        # item 2a: can't evaluate a podSelector peer without peer label data —
-                        # unresolved, not a confident non-match.
-                        saw_unresolvable_peer_data = True
-                        continue
-                    if not _labels_match(peer["pod_selector"], peer_labels):
-                        continue  # labels genuinely don't match this peer — confident non-match
+                    # MINOR fix: same empty-selector vacuous-match treatment as namespaceSelector
+                    # above — `podSelector: {}` matches every pod and needs no peer_labels.
+                    pod_selector = peer["pod_selector"]
+                    if pod_selector:
+                        if peer_labels is None:
+                            # item 2a: can't evaluate a podSelector peer without peer label data —
+                            # unresolved, not a confident non-match.
+                            saw_unresolvable_peer_data = True
+                            continue
+                        if not _labels_match(pod_selector, peer_labels):
+                            continue  # labels genuinely don't match this peer — confident non-match
 
                     if not has_ns_selector:
                         # item 2c: a BARE podSelector (no namespaceSelector alongside it) is
@@ -763,8 +804,10 @@ def eval_k8s_network_policy(policies, pod_labels, direction, peer_labels=None, p
 
                 if has_ip_block:
                     cidr = peer["ip_block"].get("cidr")
-                    if peer_ip is None:
-                        # item 2a: can't evaluate an ipBlock peer without peer_ip — unresolved.
+                    # MINOR fix: a present-but-malformed peer_ip must be treated the same as a
+                    # missing one — see `_is_valid_ip`'s docstring.
+                    if peer_ip is None or not _is_valid_ip(peer_ip):
+                        # item 2a: can't evaluate an ipBlock peer without a valid peer_ip — unresolved.
                         saw_unresolvable_peer_data = True
                         continue
                     if not _cidr_contains(cidr, peer_ip):
