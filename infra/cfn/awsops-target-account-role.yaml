@@ -1,10 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   AWSops cross-account read-only role. Deploy this in each TARGET account you want AWSops to read
-  (cost, Bedrock metrics, inventory, etc.). The host AWSops web task role assumes this role via STS.
+  (cost, Bedrock metrics, inventory, etc.). The host AWSops web task role assumes this role via
+  STS; optionally, the host worker task role can be trusted too (WorkerTaskRoleArn, ADR-011
+  amended 2026-08-25) for the Network Path Check / SG Rules & Usage workers' own reads.
   ExternalId is OPTIONAL (ADR-011 amended 2026-06-26): omit it for 1st-party accounts — trust is
-  pinned to the exact host web task-role ARN; supply it for 3rd-party/shared accounts. Read-only only
-  (ReadOnlyAccess) — AWSops never mutates target-account resources.
+  pinned to the exact host task-role ARN(s) that are set; supply it for 3rd-party/shared accounts.
+  Read-only only (ReadOnlyAccess) — AWSops never mutates target-account resources.
 
 Parameters:
   HostTaskRoleArn:
@@ -16,8 +18,10 @@ Parameters:
     Default: ''
     # CI-review finding (network-path-check round 19, "explicitly UNVERIFIED" item): the worker
     # Fargate task role (awsops-v2-worker-task) is a DIFFERENT IAM principal than the web task
-    # role above, but it also assumes this SAME AWSopsReadOnlyRole — for the sg-rules Athena
-    # broker's worker (sg_rule_scan.py) and now the Network Path Check worker
+    # role above, but it also assumes this SAME AWSopsReadOnlyRole — for the sg-rules worker's
+    # own EC2/ENI-inventory-snapshot reads (sg_rule_scan.py; this is NOT the isolated Athena
+    # broker's own role — ADR-019's Role A/B separation keeps Athena access strictly on
+    # `AWSopsSgRuleAthenaRole`, untouched by this parameter) and the Network Path Check worker
     # (network_path.py's resolve_live_identity()/fetch_live_topology()) doing member-account
     # reads. Before this parameter existed, only the web task role was ever trusted, so a
     # member-account read from either worker's own task role would AccessDenied — a pre-existing
@@ -28,8 +32,9 @@ Parameters:
     Description: >
       OPTIONAL. ARN of the AWSops host WORKER Fargate task role (awsops-v2-worker-task), e.g.
       arn:aws:iam::<host>:role/awsops-v2-worker-task — needed only if this target account is used
-      as a source/destination for a worker-driven member-account read (sg-rules Athena scan or a
-      Network Path Check live-identity resolution). Leave empty otherwise.
+      as a source/destination for a worker-driven member-account read (the sg-rules worker's own
+      EC2/ENI-inventory reads, or a Network Path Check resolve_live_identity() call). Leave empty
+      otherwise.
   ExternalId:
     Type: String
     Default: ''

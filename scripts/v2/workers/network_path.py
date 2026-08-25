@@ -373,7 +373,15 @@ def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_i
     versions) used to fail closed here with the SAME "unenumerated SG-for-Pods branch ENI"
     message even though the real cause is unrelated (prefix delegation, not a branch ENI) -- the
     CIDR check below fixes the false negative for the common case, and the error message below no
-    longer singles out branch ENIs specifically for whatever (now rarer) case still fails."""
+    longer singles out branch ENIs specifically for whatever (now rarer) case still fails.
+
+    CI-review MAJOR fix (round 22): every check above was IPv4-only (`PrivateIpAddresses`/
+    `Ipv4Prefixes`) -- a pod/node on an IPv6 (or dual-stack) EKS cluster failed closed here on
+    EVERY live identity resolution, with the same misleading "unenumerated SG-for-Pods branch ENI"
+    message this docstring's own prefix-delegation fix already corrected for the IPv4 case. This
+    is fail-closed (never a false verdict), so it was a functionality gap rather than an exposure
+    -- but it made this feature unusable for an entire cluster family. The equivalent IPv6 fields
+    (`Ipv6Addresses`/`Ipv6Prefixes`) are now checked the same way."""
     session = _assumed_session(account_id, region, external_id)
     ec2 = session.client("ec2")
     resp = ec2.describe_instances(InstanceIds=[instance_id])
@@ -387,20 +395,23 @@ def _default_ec2_lookup(account_id, region, instance_id, pod_ip=None, external_i
         def _eni_owns_pod_ip(ni):
             if any(pa.get("PrivateIpAddress") == pod_ip for pa in ni.get("PrivateIpAddresses", [])):
                 return True
-            # VPC-CNI prefix delegation: the pod's IP is carved out of an assigned /28 (or other)
-            # prefix on the ENI, not listed as a discrete PrivateIpAddress of its own.
-            prefixes = ni.get("Ipv4Prefixes") or []
+            if any(pa.get("Ipv6Address") == pod_ip for pa in ni.get("Ipv6Addresses", [])):
+                return True
+            # VPC-CNI prefix delegation: the pod's IP is carved out of an assigned prefix on the
+            # ENI (IPv4 /28-or-other, or IPv6), not listed as a discrete address of its own.
+            prefixes = (ni.get("Ipv4Prefixes") or []) + (ni.get("Ipv6Prefixes") or [])
             return any(
-                ad._is_valid_ip(pod_ip) and ad._cidr_contains(p.get("Ipv4Prefix"), pod_ip)
-                for p in prefixes if p.get("Ipv4Prefix"))
+                ad._is_valid_ip(pod_ip) and ad._cidr_contains(p.get("Ipv4Prefix") or p.get("Ipv6Prefix"), pod_ip)
+                for p in prefixes if p.get("Ipv4Prefix") or p.get("Ipv6Prefix"))
 
         eni = next((ni for ni in enis if _eni_owns_pod_ip(ni)), None)
         if eni is None:
             raise NetworkPathError(
                 f"pod IP {pod_ip} does not match any network interface attached to EC2 instance "
-                f"{instance_id} (checked both discrete secondary IPs and any VPC-CNI prefix-"
-                "delegation Ipv4Prefixes CIDRs; could also be an unenumerated SG-for-Pods branch "
-                "ENI) -- refusing to guess by falling back to the instance's primary ENI")
+                f"{instance_id} (checked discrete secondary IPv4/IPv6 addresses and any VPC-CNI "
+                "prefix-delegation Ipv4Prefixes/Ipv6Prefixes CIDRs; could also be an unenumerated "
+                "SG-for-Pods branch ENI) -- refusing to guess by falling back to the instance's "
+                "primary ENI")
     else:
         eni = next((ni for ni in enis if (ni.get("Attachment") or {}).get("DeviceIndex") == 0), None)
     if eni is None:

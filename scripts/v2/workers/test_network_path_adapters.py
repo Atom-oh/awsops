@@ -1078,6 +1078,40 @@ class TestCalicoPolicy:
                                    crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "unknown"
 
+    # ── CI-review MAJOR fix (round 22): the rule-level protocol check and the port-entry match
+    #    were both re-litigating protocol against a value Calico's `ports` shape doesn't carry,
+    #    producing a confident false `blocked` for a genuinely matching UDP/numeric-protocol rule.
+
+    def test_udp_only_rule_with_destination_ports_still_allows_udp(self):
+        """CI-review MAJOR fix (round 22, part b): `_normalize_calico_ports` entries carry no
+        `protocol` key, so `_k8s_port_matches`'s own "absent per-entry protocol defaults to TCP"
+        contract used to reject every entry of a UDP-only rule's port restriction — even though
+        the rule-level protocol check just above had already confirmed the match."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "protocol": "UDP", "source": {"nets": ["0.0.0.0/0"]},
+             "destination": {"ports": [53]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   protocol="udp", port=53, crd_present=True,
+                                   observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
+    def test_numeric_protocol_spelling_matches_the_named_equivalent(self):
+        """CI-review MAJOR fix (round 22, part a): Calico's `protocol` is a `numorstring` —
+        `protocol: 17` is a valid spelling of UDP, but a bare textual comparison
+        (`str(17).upper() != "UDP"`) made this confidently NOT match."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "protocol": 17, "source": {"nets": ["0.0.0.0/0"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   protocol="udp", crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "allowed"
+
+    def test_unrecognized_numeric_protocol_is_unknown_not_a_guessed_mismatch(self):
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Allow", "protocol": 47, "source": {"nets": ["0.0.0.0/0"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   protocol="tcp", crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
     def test_egress_source_side_selector_constraint_is_unknown_not_ignored(self):
         """Symmetric to round 20's ingress-side `destination` guard: for EGRESS, `destination` is
         the peer being matched, but `source` (the workload itself) can still carry its own
@@ -1226,6 +1260,22 @@ class TestRoute53Resolution:
         records = [{"name": "app.example.com", "type": "TXT"}]
         r = ad.eval_route53_resolution(records, "app.example.com")
         assert r["status"] == "unknown"
+
+    # ── CI-review MAJOR fix (round 22): ALIAS is exactly as much a pointer as CNAME — it carries
+    #    no address data of its own — but was never chain-followed, only trusted terminally.
+
+    def test_out_of_zone_alias_target_is_unknown_not_allowed(self):
+        records = [{"name": "app.example.com", "type": "ALIAS", "alias_target": "external-lb.other-domain.com"}]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "unknown"
+
+    def test_in_zone_alias_target_is_followed_to_its_real_address_record(self):
+        records = [
+            {"name": "app.example.com", "type": "ALIAS", "alias_target": "lb.example.com"},
+            {"name": "lb.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "allowed"
 
 
 # ── Gap 3: K8s Ingress -> Service -> EndpointSlice resolution — REAL evaluation ─────────────────
@@ -1428,6 +1478,19 @@ class TestK8sServiceResolution:
             {"host": "app.example.com", "backend_service": "svc-b"},
         ]
         r = ad.eval_k8s_service_resolution(rules, {}, {}, {"host": "app.example.com", "path": "/"})
+        assert r["status"] == "unknown"
+
+    def test_ambiguous_equally_specific_rules_to_the_same_service_different_ports_is_unknown(self):
+        """CI-review MAJOR fix (round 22): the tie-break used to dedupe by `backend_service`
+        alone — two equally-specific rules to the SAME Service but DIFFERENT ports must still
+        degrade to `unknown`, not silently pick whichever rule happened to come first."""
+        rules = [
+            {"host": "app.example.com", "backend_service": "svc-a", "backend_port": 80},
+            {"host": "app.example.com", "backend_service": "svc-a", "backend_port": 443},
+        ]
+        services = {"svc-a": {"ports": [{"port": 80}, {"port": 443}]}}
+        eps = {"svc-a": [{"ready": True}]}
+        r = ad.eval_k8s_service_resolution(rules, services, eps, {"host": "app.example.com", "path": "/"})
         assert r["status"] == "unknown"
 
     def test_backend_port_by_name_declared_on_service_allows(self):

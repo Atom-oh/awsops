@@ -627,6 +627,31 @@ class TestDefaultEc2Lookup:
         with pytest.raises(np.NetworkPathError, match="does not match any network interface"):
             np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc", pod_ip="10.0.99.9")
 
+    # ── CI-review MAJOR fix (round 22): IPv6/dual-stack clusters were entirely unsupported here
+    #    (only PrivateIpAddresses/Ipv4Prefixes were checked) — every pod/node on such a cluster
+    #    failed closed on EVERY live identity resolution. ─────────────────────────────────────────
+
+    def test_pod_ipv6_address_discrete_match_is_used(self, monkeypatch):
+        self._patch_session(monkeypatch, [
+            {"NetworkInterfaceId": "eni-primary", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 0}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}]},
+            {"NetworkInterfaceId": "eni-v6", "SubnetId": "subnet-2", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 1}, "Ipv6Addresses": [{"Ipv6Address": "2001:db8::42"}]},
+        ])
+        out = np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc", pod_ip="2001:db8::42")
+        assert out["eni_id"] == "eni-v6"
+
+    def test_pod_ipv6_inside_a_prefix_delegation_cidr_is_matched(self, monkeypatch):
+        self._patch_session(monkeypatch, [
+            {"NetworkInterfaceId": "eni-primary", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 0}, "PrivateIpAddresses": [{"PrivateIpAddress": "10.0.0.5"}]},
+            {"NetworkInterfaceId": "eni-v6-prefix", "SubnetId": "subnet-2", "VpcId": "vpc-1",
+             "Attachment": {"DeviceIndex": 1},
+             "Ipv6Prefixes": [{"Ipv6Prefix": "2001:db8:1::/80"}]},
+        ])
+        out = np._default_ec2_lookup("111111111111", "ap-northeast-2", "i-0abc", pod_ip="2001:db8:1::7")
+        assert out["eni_id"] == "eni-v6-prefix"
+
 
 # ── MINOR fix: the K8s GET must never follow a redirect with the same bearer token ──────────────
 

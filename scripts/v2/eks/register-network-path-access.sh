@@ -54,20 +54,42 @@
 # about — this now MERGES with whatever groups are already present (never drops one), and only
 # disassociates the SPECIFIC policy ARNs this script's own earlier rounds are known to have
 # associated (`_KNOWN_STALE_POLICY_ARNS` below), not an unbounded "whatever is attached."
+#
+# CI-review MAJOR fix (round 22): `_KNOWN_STALE_POLICY_ARNS` wrongly included
+# `AmazonEKSViewPolicy` — no round of THIS script ever associated it; it is what
+# `register-istio-access.sh` associates for the agent Lambda role, and what the multi-account
+# onboarding docs provision for a MEMBER account's `AWSopsReadOnlyRole` (this script's own
+# README-documented `ROLE_ARN=` override target for that case). A compliant operator running this
+# script against `AWSopsReadOnlyRole` would have had its legitimate, documented EKS View grant
+# silently stripped while this script printed "converged" — destructive on a principal this
+# script does not own, the exact failure mode round 21 claimed to have closed. Fixed two ways:
+# (1) `AmazonEKSViewPolicy` is dropped from the known-stale list — only `AdminViewPolicy` (this
+# script's own round-18 shape) remains. (2) Auto-disassociation now runs ONLY when the effective
+# principal is the DEFAULT worker task role (i.e. `ROLE_ARN` was not overridden away from
+# `terraform output -raw worker_task_role_arn`) — for any overridden principal (the member-account
+# `AWSopsReadOnlyRole` case), this script only LISTS and reports what is attached, never
+# disassociates anything, since it has no basis for knowing what that principal's OTHER grants
+# (from onboarding, or any other process) legitimately need.
 set -euo pipefail
 
 CHDIR="$(cd "$(dirname "$0")/../../../terraform/v2/foundation" && pwd)"
 K8S_GROUP="network-path-reader"
 RBAC_MANIFEST="$(cd "$(dirname "$0")" && pwd)/network-path-reader-rbac.yaml"
 # Policy ARNs this script's OWN earlier rounds are known to have associated on this Access Entry
-# (round 18's AdminView; kept here rather than "whatever is currently attached" so a disassociate
-# never touches a policy some other, unrelated process put there).
-_KNOWN_STALE_POLICY_ARNS="arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+# (round 18's AdminView only — NOT AmazonEKSViewPolicy, which this script never associated; see
+# the round-22 comment above). Kept as a specific list rather than "whatever is currently
+# attached" so a disassociate never touches a policy some other, unrelated process put there.
+_KNOWN_STALE_POLICY_ARNS="arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
 
-ROLE_ARN="${ROLE_ARN:-$(terraform -chdir="$CHDIR" output -raw worker_task_role_arn 2>/dev/null || true)}"
+DEFAULT_ROLE_ARN="$(terraform -chdir="$CHDIR" output -raw worker_task_role_arn 2>/dev/null || true)"
+ROLE_ARN="${ROLE_ARN:-$DEFAULT_ROLE_ARN}"
 if [ -z "$ROLE_ARN" ] || [ "$ROLE_ARN" = "null" ]; then
   echo "ERROR: worker_task_role_arn unavailable (is workers_enabled + apply done?). Pass ROLE_ARN=..." >&2
   exit 1
+fi
+IS_DEFAULT_PRINCIPAL=""
+if [ -n "$DEFAULT_ROLE_ARN" ] && [ "$DEFAULT_ROLE_ARN" != "null" ] && [ "$ROLE_ARN" = "$DEFAULT_ROLE_ARN" ]; then
+  IS_DEFAULT_PRINCIPAL=1
 fi
 if [ "$#" -lt 1 ]; then
   echo "Usage: $0 <cluster-name> [<cluster-name> ...]" >&2
@@ -101,6 +123,18 @@ disassociate_stale_policies() {
     echo "  ERROR listing associated access policies on ${cluster} (cannot confirm 'converged' is" >&2
     echo "  actually true — refusing to report success): $arns" >&2
     exit 1
+  fi
+  if [ -z "$IS_DEFAULT_PRINCIPAL" ]; then
+    # An overridden principal (e.g. a member account's AWSopsReadOnlyRole) is NOT this script's
+    # to auto-converge — it may carry legitimate grants from onboarding or another process. List
+    # only, never disassociate.
+    if [ -n "$arns" ]; then
+      echo "  principal is an overridden ROLE_ARN (not the default worker task role) — found"
+      echo "  associated access policies but NOT auto-disassociating any of them (this script"
+      echo "  only owns least-privilege convergence for its OWN default principal):"
+      for arn in $arns; do echo "    $arn"; done
+    fi
+    return 0
   fi
   local arn found
   for arn in $arns; do
@@ -140,8 +174,12 @@ for C in "$@"; do
     # correct, so this script stays idempotent regardless of how the entry got there. Merged (not
     # replaced) so an unrelated group already on this shared principal's entry is never dropped.
     merged="$(merged_kubernetes_groups "$C")"
+    # shellcheck disable=SC2206 -- deliberate word-splitting of a space-separated group list;
+    # group names are drawn only from $K8S_GROUP and AWS's own kubernetesGroups response, never
+    # from unsanitized external input, but quoted to avoid pathname (glob) expansion.
+    read -r -a merged_arr <<< "$merged"
     if uerr=$(aws eks update-access-entry --cluster-name "$C" --principal-arn "$ROLE_ARN" \
-        --kubernetes-groups $merged 2>&1); then
+        --kubernetes-groups "${merged_arr[@]}" 2>&1); then
       echo "  access entry already existed; kubernetes-groups converged to: $merged"
     else
       echo "  ERROR updating kubernetes-groups on ${C}: $uerr" >&2

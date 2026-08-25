@@ -1116,6 +1116,27 @@ def _normalize_calico_ports(ports):
     return out
 
 
+# CI-review MAJOR fix (round 22): Calico's `protocol` field is a `numorstring` — a rule may spell
+# it either as a name ("TCP") or as its IANA protocol number ("6"/6). Only the IANA numbers this
+# repo's own layers actually distinguish are mapped; anything else is left unresolved rather than
+# guessed.
+_CALICO_PROTOCOL_NUMBERS = {1: "ICMP", 6: "TCP", 17: "UDP", 58: "ICMPV6", 132: "SCTP"}
+
+
+def _calico_protocol_name(value):
+    """Normalize a Calico `protocol` value to its uppercase name, or `None` if `value` is absent
+    or not a representation this adapter can confidently resolve (an unrecognized protocol
+    number, or a non-numeric string is passed through uppercased as a best-effort name match)."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return _CALICO_PROTOCOL_NUMBERS.get(value)
+    s = str(value)
+    if s.isdigit():
+        return _CALICO_PROTOCOL_NUMBERS.get(int(s))
+    return s.upper()
+
+
 def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespace_labels, protocol, port):
     """Whether `rule`'s protocol/port + peer (`selector`/`namespaceSelector`/`nets`) criteria match
     the given peer — the SAME logic `eval_calico_policy` applies to an Allow rule, factored out so
@@ -1218,12 +1239,32 @@ def _calico_rule_peer_match(rule, direction, peer_labels, peer_ip, peer_namespac
     # restriction fall through to a confident match/non-match it cannot actually support.
     if source_entity.get("ports") or source_entity.get("notPorts"):
         return None
-    rule_protocol = rule.get("protocol")
-    if rule_protocol is not None and protocol is not None and str(rule_protocol).upper() != str(protocol).upper():
+    # CI-review MAJOR fix (round 22, part a): Calico's `protocol` is a `numorstring` — `protocol:
+    # 6` is a valid IANA-number spelling of TCP, but `str(6).upper() != "TCP"` made this comparison
+    # confidently (and wrongly) `False` for a rule that actually matches, falling through to a
+    # confident `blocked` for traffic a real Allow rule would have allowed. Numeric protocol
+    # values are now normalized to their name via `_calico_protocol_name`; an unrecognized
+    # representation degrades to unresolvable (`None`) rather than a guessed mismatch.
+    rule_protocol_name = _calico_protocol_name(rule.get("protocol"))
+    if rule.get("protocol") is not None and rule_protocol_name is None:
+        return None
+    if rule_protocol_name is not None and protocol is not None and rule_protocol_name != str(protocol).upper():
         return False
     raw_ports = dest.get("ports")
+    # CI-review MAJOR fix (round 22, part b): `_normalize_calico_ports` builds `{"port": N}`
+    # entries with NO `protocol` key (Calico's native `ports` carries no per-entry protocol at
+    # all, unlike core K8s NetworkPolicy) — but `_k8s_port_matches` defaults an absent per-entry
+    # protocol to `"TCP"` (that function's own core-K8s-NetworkPolicy contract) and compares it
+    # against the CALLER's `protocol` argument. For a `protocol: UDP` rule with a `destination.
+    # ports` restriction, every normalized entry was defaulted to "TCP" and rejected against the
+    # UDP request, so `_k8s_port_matches` returned a confident `False` even though the rule-level
+    # protocol check just above already confirmed the match — reintroducing the exact round-18
+    # bug through the port path instead of the no-ports path. The rule-level protocol match is
+    # already fully handled above; `_k8s_port_matches` is now called with `protocol=None` so it
+    # evaluates port NUMBERS only, never re-litigating a protocol Calico's `ports` entries don't
+    # even carry.
     port_match = _k8s_port_matches(
-        {"ports": _normalize_calico_ports(raw_ports)} if raw_ports else {}, protocol, port)
+        {"ports": _normalize_calico_ports(raw_ports)} if raw_ports else {}, None, port)
     if port_match is False:
         return False
     selector, ns_selector, nets = peer.get("selector"), peer.get("namespaceSelector"), peer.get("nets")
@@ -1346,12 +1387,21 @@ def eval_route53_resolution(records, query_host, data_available=True):
         return {"layer": "dns", "status": "blocked", "resource": None,
                 "summary": f"no Route 53 record resolves {host!r} (NXDOMAIN against known zone data)",
                 "evidence": []}
-    # A CNAME with no further usable data at its target is followed one hop, still within the
-    # already-fetched `records` set (no live DNS query is ever issued).
+    # A CNAME (or ALIAS — see round-22 fix below) with no further usable data at its target is
+    # followed one hop, still within the already-fetched `records` set (no live DNS query is
+    # ever issued).
     seen_names = {host}
     cycle_detected = False
     out_of_zone_target = None
-    while len(matched) == 1 and matched[0].get("type") == "CNAME" and matched[0].get("alias_target"):
+    # CI-review MAJOR fix (round 22): only `type == "CNAME"` was ever chain-followed — an ALIAS
+    # record (Route 53's own AWS-target construct, e.g. pointing at an ALB/CloudFront/another
+    # record in the SAME zone) was treated as terminally address-resolving on its own, because
+    # `_R53_ADDRESS_TYPES` includes `"ALIAS"`. But an ALIAS record carries no address data of its
+    # own — it is exactly as much a pointer as a CNAME — so a dangling or in-zone-chained ALIAS
+    # (its `alias_target` never actually checked) reported a confident `allowed` the same way the
+    # round-18 fix closed for CNAME. ALIAS is now followed identically to CNAME.
+    while (len(matched) == 1 and matched[0].get("type") in ("CNAME", "ALIAS")
+           and matched[0].get("alias_target")):
         target = str(matched[0]["alias_target"]).rstrip(".").lower()
         if target in seen_names:
             # MINOR fix: a genuine CNAME cycle (target already seen in this chain) must not fall
@@ -1539,12 +1589,20 @@ def eval_k8s_service_resolution(ingress_rules, services, endpoint_slices, reques
 
     best = max(c[:3] for c in candidates)
     tied = [c[3] for c in candidates if c[:3] == best]
-    distinct_backends = {t.get("backend_service") for t in tied}
+    # CI-review MAJOR fix (round 22): this used to dedupe by `backend_service` alone — two
+    # equally-specific rules routing to the SAME Service but DIFFERENT `backend_port`s collapsed
+    # to one "backend," `tied[0]` was picked by input order, and this function's own port
+    # validation then ran against an arbitrary one of the two ports — an order-dependent
+    # confident verdict, the same "ambiguous precedence must degrade" contract this same tie-break
+    # already enforces across different Services. Backends are now compared as
+    # (backend_service, backend_port) pairs so a port-level tie is caught too.
+    distinct_backends = {(t.get("backend_service"), t.get("backend_port")) for t in tied}
     if len(distinct_backends) > 1:
         return {"layer": "k8s-service-resolution", "status": "unknown", "resource": None,
                 "summary": f"multiple equally-specific Ingress rules for host={req_host!r} "
-                           f"path={req_path!r} route to different Services "
-                           f"{sorted(distinct_backends)} — precedence between them is ambiguous",
+                           f"path={req_path!r} route to different Service/port combinations "
+                           f"{sorted(str(b) for b in distinct_backends)} — precedence between "
+                           "them is ambiguous",
                 "evidence": tied}
     matched_rule = tied[0]
     svc_name = matched_rule.get("backend_service")
