@@ -70,8 +70,16 @@ def eval_security_group(rules, protocol, port, peer_ip=None, peer_sg_ids=None, l
              candidate is `allowed` iff at least one rule (from ANY attached SG) matches.
     `peer_sg_ids`: SG ids attached to the peer ENI — matches a rule's `referenced_group_id`.
     """
+    # MINOR fix: `peer_sg_ids=None` (resolution failed/unknown) and `peer_sg_ids=[]` (resolution
+    # SUCCEEDED — the peer legitimately has zero SGs) are different signals; collapsing both into
+    # the same falsy empty set below (as the pre-fix code did at every check site) treated a
+    # confident "peer has no SGs, so no sg-reference rule can match" the same as "we don't know the
+    # peer's SGs" — the latter must stay `unknown`/unevaluable, the former is a legitimate
+    # confident non-match. `peer_sg_ids_unresolved` captures the ORIGINAL None-ness before it's
+    # normalized to a set for membership checks.
+    peer_sg_ids_unresolved = peer_sg_ids is None
     peer_sg_ids = set(peer_sg_ids or [])
-    if peer_ip is None and not peer_sg_ids:
+    if peer_ip is None and peer_sg_ids_unresolved:
         # MAJOR fix: missing/unparseable peer identity must map to `unknown`, never a confident
         # `blocked` — the module's own docstring gives exactly this reasoning for not reusing
         # `check_reachability`'s boolean-only return (never invent a false verdict). Without ANY
@@ -104,7 +112,7 @@ def eval_security_group(rules, protocol, port, peer_ip=None, peer_sg_ids=None, l
                 break
         ref_group = rule.get("referenced_group_id")
         if ref_group:
-            if not peer_sg_ids:
+            if peer_sg_ids_unresolved:
                 had_unevaluable_rule = True
             elif ref_group in peer_sg_ids:
                 matched = rule

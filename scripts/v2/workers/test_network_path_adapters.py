@@ -68,6 +68,23 @@ class TestSecurityGroup:
         assert r["status"] == "allowed"
         assert r["resource"] == "sg-2"
 
+    # ── MINOR fix: `peer_sg_ids=[]` (resolved successfully, peer legitimately has zero SGs) must
+    #    be a confident non-match, never conflated with `peer_sg_ids=None` (resolution failed). ────
+
+    def test_resolved_empty_peer_sg_ids_is_a_confident_no_match_not_unknown(self):
+        rules = [{"sg_id": "sg-1", "protocol": "tcp", "from_port": 5432, "to_port": 5432,
+                  "referenced_group_id": "sg-db"}]
+        r = ad.eval_security_group(rules, "tcp", 5432, peer_ip="10.1.2.3", peer_sg_ids=[])
+        # peer_sg_ids was successfully resolved to "no SGs" — the SG-reference rule confidently
+        # does not match (never `unknown`, unlike the peer_sg_ids=None case tested above).
+        assert r["status"] == "blocked"
+
+    def test_none_peer_sg_ids_stays_unknown_distinctly_from_the_empty_list_case(self):
+        rules = [{"sg_id": "sg-1", "protocol": "tcp", "from_port": 5432, "to_port": 5432,
+                  "referenced_group_id": "sg-db"}]
+        r = ad.eval_security_group(rules, "tcp", 5432, peer_ip="10.1.2.3", peer_sg_ids=None)
+        assert r["status"] == "unknown"
+
     def test_multi_sg_union(self):
         # Second SG's rule is the one that actually allows — union across all attached SGs.
         rules = [
