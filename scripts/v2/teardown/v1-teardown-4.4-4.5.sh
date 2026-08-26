@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -eu
 
 EXPECTED_ACCOUNT="180294183052"
 EXPECTED_REGION="ap-northeast-2"
@@ -28,6 +28,67 @@ if [ "$ACTUAL_ACCOUNT" != "$EXPECTED_ACCOUNT" ]; then
 fi
 echo "account=$ACTUAL_ACCOUNT confirmed; region pinned to $AWS_REGION for the rest of this script"
 
+# PRE-FLIGHT: this script implements Phase 4.4/4.5 only — it assumes Phase 4.3 (CFN stack deletion)
+# already completed. If an Awsops stack is still around, deleting its member resources out from
+# under CloudFormation is the wrong order, so abort.
+PRE_STACKS=$(aws cloudformation list-stacks --query "StackSummaries[?contains(StackName,'Awsops') && StackStatus != 'DELETE_COMPLETE']" --output json)
+if [ "$PRE_STACKS" != "[]" ]; then
+  echo "ABORT: an Awsops CloudFormation stack is still present — Phase 4.3 (stack deletion) has not completed. This script assumes Phase 4.3 already ran. Stacks: $PRE_STACKS" >&2
+  exit 1
+fi
+
+# Human-confirmation gate (the runbook's mandatory confirmation step): bare execution is a DRY RUN
+# that resolves live state and prints what WOULD be deleted. Real deletion requires CONFIRM=yes.
+# Every aws call below is guarded by `if`, so a read error can never trip set -e.
+if [ "${CONFIRM:-}" != "yes" ]; then
+  echo "=== DRY RUN (CONFIRM!=yes) — resolving current state, deleting nothing ==="
+  echo "--- Lambda functions ---"
+  for fn in awsops-terraform-mcp awsops-ecs-mcp awsops-iam-mcp awsops-aws-knowledge \
+            awsops-cost-mcp awsops-valkey-mcp awsops-network-mcp awsops-rds-mcp \
+            awsops-iac-mcp awsops-finops-mcp awsops-reachability-analyzer awsops-flow-monitor \
+            awsops-core-mcp awsops-cloudtrail-mcp awsops-dynamodb-mcp awsops-cloudwatch-mcp \
+            awsops-eks-mcp awsops-msk-mcp awsops-steampipe-query; do
+    if out=$(aws lambda get-function --function-name "$fn" --query 'Configuration.FunctionName' --output text 2>&1); then
+      echo "  would delete: $fn (exists)"
+    else
+      echo "  already gone: $fn"
+    fi
+  done
+  echo "--- deploy bucket ---"
+  if cnt=$(aws s3api list-objects-v2 --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --query 'KeyCount' --output text 2>&1); then
+    echo "  would empty + delete: awsops-deploy-180294183052 (approx $cnt objects — 1000 means 1000+ / paginated count)"
+  else
+    echo "  already gone or inaccessible: awsops-deploy-180294183052 ($cnt)"
+  fi
+  echo "--- AgentCore gateways ---"
+  for gw in awsops-container-gateway-zacu646nx6 awsops-cost-gateway-fgdtakwe7p \
+            awsops-data-gateway-9risks8vce awsops-iac-gateway-v3hlm5fivj \
+            awsops-monitoring-gateway-l4ejgy7qft awsops-network-gateway-tmsin1uggd \
+            awsops-ops-gateway-njfwx9vxqo awsops-security-gateway-hrzysflvmq; do
+    if gw_info=$(aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw" --query '{name:name,status:status}' --output json 2>&1); then
+      tgt_count=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text 2>&1)
+      echo "  would delete: $gw ($gw_info, $tgt_count target(s))"
+    else
+      echo "  already gone: $gw"
+    fi
+  done
+  echo "--- memory ---"
+  if mem_info=$(aws bedrock-agentcore-control get-memory --memory-id awsops_memory-IULWInAGhc --query '{id:id,status:status}' --output json 2>&1); then
+    echo "  would delete: awsops_memory-IULWInAGhc ($mem_info)"
+  else
+    echo "  already gone: awsops_memory-IULWInAGhc"
+  fi
+  echo "--- code interpreter ---"
+  if ci_info=$(aws bedrock-agentcore-control get-code-interpreter --code-interpreter-id awsops_code_interpreter-AIOOg6hlCQ --query 'status' --output text 2>&1); then
+    echo "  would delete: awsops_code_interpreter-AIOOg6hlCQ (status=$ci_info)"
+  else
+    echo "  already gone: awsops_code_interpreter-AIOOg6hlCQ"
+  fi
+  echo ""
+  echo "=== DRY-RUN complete — nothing deleted. Re-run with CONFIRM=yes to execute. ==="
+  exit 0
+fi
+
 # Re-run safety: a prior partial run (interrupted, transient error, Ctrl-C) may have already
 # deleted some resources. Re-running this script must finish the rest, not die on the first
 # "already gone" resource. delete_or_skip distinguishes "already deleted" (idempotent success)
@@ -38,6 +99,7 @@ echo "account=$ACTUAL_ACCOUNT confirmed; region pinned to $AWS_REGION for the re
 # NoSuchBucket) — it's just "... HeadBucket operation: Not Found", so "Not Found"/"(404)" must
 # be matched explicitly or resource_exists misclassifies a genuinely-absent bucket as a real error.
 NOT_FOUND_RE="ResourceNotFoundException|NoSuchBucket|NoSuchEntity|NotFoundException|Not Found|\(404\)|does not exist|could not be found|cannot be found"
+DELETE_IN_PROGRESS_RE="ConflictException|ResourceInUseException|already.*(deleting|being deleted)|DeleteInProgress"
 delete_or_skip() {
   local desc="$1"; shift
   local out
@@ -47,6 +109,10 @@ delete_or_skip() {
   fi
   if echo "$out" | grep -qiE "$NOT_FOUND_RE"; then
     echo "  already gone: $desc (treating as success — idempotent re-run)"
+    return 0
+  fi
+  if echo "$out" | grep -qiE "$DELETE_IN_PROGRESS_RE"; then
+    echo "  deletion already in progress: $desc (treating as success — idempotent re-run)"
     return 0
   fi
   echo "REAL ERROR deleting $desc:" >&2
@@ -85,9 +151,27 @@ for fn in "${LAMBDAS[@]}"; do
 done
 
 echo "=== 4.4: emptying + deleting v1 deploy bucket (35 objects, ~62MB, v1 diagnosis reports) ==="
-if resource_exists "bucket awsops-deploy-180294183052" aws s3api head-bucket --bucket "awsops-deploy-180294183052"; then
-  delete_or_skip "objects in awsops-deploy-180294183052" aws s3 rm "s3://awsops-deploy-180294183052" --recursive
-  delete_or_skip "bucket awsops-deploy-180294183052" aws s3api delete-bucket --bucket "awsops-deploy-180294183052"
+if resource_exists "bucket awsops-deploy-180294183052" aws s3api head-bucket --bucket "awsops-deploy-180294183052" --expected-bucket-owner "$EXPECTED_ACCOUNT"; then
+  # `aws s3 rm --recursive` cannot delete noncurrent versions/delete markers (so a versioned bucket
+  # never actually empties and delete-bucket then fails) and it accepts no --expected-bucket-owner.
+  # Drain via s3api list-object-versions + delete-objects instead, bounded so it can't spin forever.
+  emptied=0
+  for i in $(seq 1 100); do
+    page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' --output json)
+    count=$(echo "$page" | jq '.Objects | length')
+    if [ "$count" = "0" ] || [ -z "$count" ]; then
+      emptied=1
+      break
+    fi
+    delete_or_skip "batch of $count object version(s) in awsops-deploy-180294183052" \
+      aws s3api delete-objects --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" \
+      --delete "$(echo "$page" | jq -c '. + {Quiet:true}')"
+  done
+  if [ "$emptied" != "1" ]; then
+    echo "REAL ERROR: bucket awsops-deploy-180294183052 did not empty after 100 batches" >&2
+    exit 1
+  fi
+  delete_or_skip "bucket awsops-deploy-180294183052" aws s3api delete-bucket --bucket "awsops-deploy-180294183052" --expected-bucket-owner "$EXPECTED_ACCOUNT"
 fi
 
 echo "=== 4.5: AgentCore orphans (idempotent) ==="
@@ -102,6 +186,22 @@ for gw in "${GATEWAYS[@]}"; do
   if ! resource_exists "gateway $gw" aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw"; then
     continue
   fi
+  # Belt-and-braces: the hardcoded IDs above are v1 gateways, but re-resolve the name before any
+  # destructive call and refuse anything that isn't a v1 awsops-* gateway.
+  gw_name=$(aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw" --query name --output text)
+  case "$gw_name" in
+    awsops-v2-*)
+      echo "REFUSING to delete gateway $gw — resolved name '$gw_name' looks like a v2 gateway" >&2
+      SKIPPED+=("gateway:$gw (name assertion failed: $gw_name)")
+      continue
+      ;;
+    awsops-*) ;;
+    *)
+      echo "REFUSING to delete gateway $gw — resolved name '$gw_name' does not start with awsops-" >&2
+      SKIPPED+=("gateway:$gw (name assertion failed: $gw_name)")
+      continue
+      ;;
+  esac
   echo "  deleting targets"
   # AWS CLI --output text renders an empty/null query result as the literal string "None"
   # (not empty string) — without filtering that out, an already-empty target list is misread
@@ -115,7 +215,7 @@ for gw in "${GATEWAYS[@]}"; do
   attempts=0
   drained=false
   while [ "$attempts" -lt 60 ]; do
-    if ! remaining=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items)' --output text 2>&1); then
+    if ! remaining=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text 2>&1); then
       echo "REAL ERROR polling target count for $gw:" >&2
       echo "$remaining" >&2
       exit 1
@@ -167,17 +267,24 @@ echo "=== verification (this is the actual source of truth — re-checks live AW
 # entries quickly, and delete-memory is async).
 REMAINING_STACKS=$(aws cloudformation list-stacks --query "StackSummaries[?contains(StackName,'Awsops') && StackStatus != 'DELETE_COMPLETE']" --output json)
 REMAINING_LAMBDAS=$(aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].FunctionName" --output json)
-REMAINING_GATEWAYS=$(aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-')]" --output json)
+REMAINING_GATEWAYS=$(aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-') && status != 'DELETING']" --output json)
 REMAINING_MEMORIES=$(aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory') && status != 'DELETING']" --output json)
-REMAINING_INTERPRETERS=$(aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter']" --output json)
+REMAINING_INTERPRETERS=$(aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter' && status != 'DELETING']" --output json)
 echo "remaining stacks: $REMAINING_STACKS"
 echo "remaining orphan lambdas: $REMAINING_LAMBDAS"
 echo "remaining v1 gateways: $REMAINING_GATEWAYS"
 echo "remaining v1 memories: $REMAINING_MEMORIES"
 echo "remaining v1 interpreters: $REMAINING_INTERPRETERS"
 
-BUCKET_GONE=1
-resource_exists "bucket awsops-deploy-180294183052 (final check)" aws s3api head-bucket --bucket awsops-deploy-180294183052 && BUCKET_GONE=0 || true
+# Three-state (present / gone / indeterminate) instead of routing through resource_exists — a 403 or
+# throttle there hard-exits and kills the whole verification block instead of reporting a FAIL.
+if BUCKET_OUT=$(aws s3api head-bucket --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" 2>&1); then
+  BUCKET_STATE=present
+elif echo "$BUCKET_OUT" | grep -qiE "$NOT_FOUND_RE"; then
+  BUCKET_STATE=gone
+else
+  BUCKET_STATE=indeterminate
+fi
 
 # ALB/SQS are NOT deleted by this script (docs/runbooks/v1-decommission.md §4.5 requires a manual
 # CFN-stack-membership check first — if AwsopsStack owns them, 4.3's stack delete already removed
@@ -186,21 +293,35 @@ resource_exists "bucket awsops-deploy-180294183052 (final check)" aws s3api head
 # run on their continued presence — the ALB especially is billed (awsops-alb, internet-facing,
 # targeting the stopped v1 EC2) — so this can't be a silent skip the way a first draft of this
 # script left it.
-ALB_STATUS=$(aws elbv2 describe-load-balancers --names awsops-alb 2>&1 | tail -1)
-SQS1_STATUS=$(aws sqs get-queue-url --queue-name awsops-alert-queue 2>&1 | tail -1)
-SQS2_STATUS=$(aws sqs get-queue-url --queue-name awsops-alert-dlq 2>&1 | tail -1)
-echo "ALB: $ALB_STATUS"
-echo "SQS main: $SQS1_STATUS"
-echo "SQS dlq: $SQS2_STATUS"
-echo "bucket gone: $([ "$BUCKET_GONE" = "1" ] && echo yes || echo NO)"
+# Same three-state treatment: an AccessDenied/throttle is "indeterminate", never silently folded
+# into "confirmed present" or "confirmed gone".
+if ALB_OUT=$(aws elbv2 describe-load-balancers --names awsops-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>&1); then
+  ALB_STATE=present
+elif echo "$ALB_OUT" | grep -qiE "$NOT_FOUND_RE|LoadBalancerNotFound"; then
+  ALB_STATE=gone
+else
+  ALB_STATE=indeterminate
+fi
+if SQS1_OUT=$(aws sqs get-queue-url --queue-name awsops-alert-queue --query QueueUrl --output text 2>&1); then
+  SQS1_STATE=present
+elif echo "$SQS1_OUT" | grep -qiE "$NOT_FOUND_RE|NonExistentQueue|QueueDoesNotExist"; then
+  SQS1_STATE=gone
+else
+  SQS1_STATE=indeterminate
+fi
+if SQS2_OUT=$(aws sqs get-queue-url --queue-name awsops-alert-dlq --query QueueUrl --output text 2>&1); then
+  SQS2_STATE=present
+elif echo "$SQS2_OUT" | grep -qiE "$NOT_FOUND_RE|NonExistentQueue|QueueDoesNotExist"; then
+  SQS2_STATE=gone
+else
+  SQS2_STATE=indeterminate
+fi
+echo "ALB: $ALB_STATE ($ALB_OUT)"
+echo "SQS main: $SQS1_STATE ($SQS1_OUT)"
+echo "SQS dlq: $SQS2_STATE ($SQS2_OUT)"
+echo "bucket state: $BUCKET_STATE"
 
-ALB_GONE=1
-echo "$ALB_STATUS" | grep -qiE "$NOT_FOUND_RE|LoadBalancerNotFound" || ALB_GONE=0
-SQS_GONE=1
-echo "$SQS1_STATUS" | grep -qiE "$NOT_FOUND_RE|NonExistentQueue|QueueDoesNotExist" || SQS_GONE=0
-echo "$SQS2_STATUS" | grep -qiE "$NOT_FOUND_RE|NonExistentQueue|QueueDoesNotExist" || SQS_GONE=0
-
-V2_HEALTH=$(curl -sS -o /dev/null -w "%{http_code}" https://awsops-v2.atomai.click/api/health)
+V2_HEALTH=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://awsops-v2.atomai.click/api/health 2>/dev/null) || V2_HEALTH=000
 echo "v2 health: $V2_HEALTH"
 
 FAIL=0
@@ -209,9 +330,12 @@ FAIL=0
 [ "$REMAINING_GATEWAYS" != "[]" ] && { echo "FAIL: v1 gateways still present"; FAIL=1; }
 [ "$REMAINING_MEMORIES" != "[]" ] && { echo "FAIL: v1 memory still present"; FAIL=1; }
 [ "$REMAINING_INTERPRETERS" != "[]" ] && { echo "FAIL: v1 code interpreter still present"; FAIL=1; }
-[ "$BUCKET_GONE" != "1" ] && { echo "FAIL: v1 deploy bucket still present"; FAIL=1; }
-[ "$ALB_GONE" != "1" ] && { echo "FAIL: awsops-alb still present (billed!) — not deleted by this script, see docs/runbooks/v1-decommission.md §4.5"; FAIL=1; }
-[ "$SQS_GONE" != "1" ] && { echo "FAIL: awsops-alert-queue/awsops-alert-dlq still present — not deleted by this script, see docs/runbooks/v1-decommission.md §4.5"; FAIL=1; }
+[ "$BUCKET_STATE" = "present" ] && { echo "FAIL: v1 deploy bucket still present"; FAIL=1; }
+[ "$BUCKET_STATE" = "indeterminate" ] && { echo "FAIL: could not verify deploy bucket (indeterminate): $BUCKET_OUT"; FAIL=1; }
+[ "$ALB_STATE" = "present" ] && { echo "FAIL: awsops-alb still present (billed!) — not deleted by this script, see docs/runbooks/v1-decommission.md §4.5"; FAIL=1; }
+[ "$ALB_STATE" = "indeterminate" ] && { echo "FAIL: could not verify awsops-alb (indeterminate — presence NOT established): $ALB_OUT"; FAIL=1; }
+[ "$SQS1_STATE" = "present" ] || [ "$SQS2_STATE" = "present" ] && { echo "FAIL: awsops-alert-queue/awsops-alert-dlq still present — not deleted by this script, see docs/runbooks/v1-decommission.md §4.5"; FAIL=1; }
+[ "$SQS1_STATE" = "indeterminate" ] || [ "$SQS2_STATE" = "indeterminate" ] && { echo "FAIL: could not verify awsops-alert-queue/awsops-alert-dlq (indeterminate — presence NOT established)"; FAIL=1; }
 [ "$V2_HEALTH" != "200" ] && { echo "FAIL: v2 health check did not return 200 (got $V2_HEALTH)"; FAIL=1; }
 if [ "${#SKIPPED[@]}" -gt 0 ]; then
   echo "SKIPPED during this run:"
