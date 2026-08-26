@@ -33,11 +33,14 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 - Decision current truth = `docs/decisions/BASELINE.md`. New ADR = consolidated-ADR highest
   number + 1 (currently **020**); update BASELINE in the same PR.
 - ADR filename: `NNN-kebab-case-title.md`.
-- **Don't mix current truth (decisions/BASELINE + superpowers/reference) with old
-  plans/history.** `superpowers/plans|specs` and `superpowers/archive` contain
-  reversed/frozen-era/superseded documents — don't treat them as live guidance; anything about
-  mutation/autonomy is settled by ADR-005 FROZEN regardless.
+- **Don't mix current truth (`decisions/BASELINE.md` + `reference/`) with old plans/history.**
+  `superpowers/plans|specs` and `history/archive/` contain reversed/frozen-era/superseded
+  documents — don't treat them as live guidance; anything about mutation/autonomy is settled by
+  ADR-005 FROZEN regardless. (`docs/superpowers/reference/` is a separate, stale planning-era
+  copy — not the current-truth `docs/reference/`; don't confuse the two.)
 - Runbooks follow the rules in `docs/runbooks/CLAUDE.md`.
+- Watch for secrets/credentials in committed docs (account IDs, ARNs, live domains, tokens) and
+  reject them.
 
 ## Related Skills
 - `/sync-docs` — auto-sync CLAUDE.md

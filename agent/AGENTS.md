@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: c626ce339d24 · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 7666f35a099f · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -38,10 +38,11 @@ port 8080.
   The exec role is used directly for the host case by design.
 
 ## Review checklist
-1. No new AWS-mutating call, IAM change, or hardcoded secret (ADR-005 FROZEN boundary).
+1. No new AWS-mutating call, IAM change, or hardcoded secret/account-ID/ARN/domain (ADR-005
+   FROZEN boundary — flag any new tool performing create/update/delete/run-arbitrary-command).
 2. Any new gateway/tool wiring goes through the v2 provisioner
    (`scripts/v2/agentcore/{catalog,provision}.py`), not the older `create_targets.py` (v1/dark —
-   only 8 gateways, missing `external-obs`).
+   only 8 gateways, missing `external-obs`). Do not promote a dark v1 tool into v2 wiring.
 3. New routing keys or gateway aliases must be reflected in `web/lib/route.ts`'s `RULES`, not
    just in `agent.py`.
 4. Docker/Lambda images stay arm64.

@@ -25,8 +25,9 @@ re-introduce a hand-maintained table that goes stale again, read the actual sour
 - Root `CLAUDE.md`'s "AI (AgentCore)" bullet has the current-truth summary of both.
 
 ## Multi-Route Support
-- The classifier returns 1–3 routes.
-- Parallel gateway calls + result synthesis.
+- The classifier can return 1–3 routes, but multi-domain fan-out itself is gated behind
+  `hybrid_routing_enabled` and `MULTI_ROUTE_SYNTHESIS_ENABLED` (both default false) — don't
+  assume parallel gateway calls + synthesis run unconditionally.
 - Real-time response delivery via SSE streaming.
 
 ## Rules
@@ -34,3 +35,5 @@ re-introduce a hand-maintained table that goes stale again, read the actual sour
 - Gateway URL is selected dynamically from the `GATEWAYS` dict based on the payload.
 - The system prompt is role-specific, one per domain gateway.
 - Fallback: if the MCP connection fails, run without tools — direct Bedrock call.
+- Never embed secrets, AWS account IDs, ARNs, or live domains in source — they belong in
+  SSM/Secrets Manager and runtime env.

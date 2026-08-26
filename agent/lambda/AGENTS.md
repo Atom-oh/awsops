@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f5e8dd253b25 · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 295a67f98d50 · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -10,13 +10,25 @@ that's the source of truth for tool counts, not this doc.
 
 ## Rules
 - Gateway Targets must use Python/boto3 — the AWS CLI has inlinePayload issues.
-- Every target requires `credentialProviderConfigurations: GATEWAY_IAM_ROLE`.
-- VPC Lambda uses pg8000, not psycopg2, for `steampipe-query`. `istio_read_mcp.py` uses neither
-  — stdlib-only (urllib + ssl), no Steampipe/pg8000/third-party k8s client at all.
-- All Lambdas are read-only — **no exceptions in v2**.
+- Every **Lambda-backed** target requires `credentialProviderConfigurations: GATEWAY_IAM_ROLE`
+  (not universal — live ADR-017 `mcpServer` targets use `API_KEY` instead).
+- pg8000, not psycopg2, is this codebase's Lambda-compatible Postgres driver. The only live
+  user in this module is the v1/dark `aws_istio_mcp.py` (Steampipe-backed, superseded); the
+  current v2 pg8000 user is the flag-gated batch inventory sync,
+  `scripts/v2/steampipe/sync_lambda.py` — a different module. `istio_read_mcp.py` (the v2
+  replacement) uses neither pg8000 nor psycopg2 — stdlib-only.
+- **Read-only is absolute in v2 — no exceptions.** Mutating v1 tools stay dark, replaced by
+  describe-only v2 equivalents: `reachability.py` (writes a network-insights path) →
+  `reachability_read_mcp.py`; `aws_core_mcp.py`'s `call_aws` (arbitrary-CLI mutation vector) →
+  `core_helpers_mcp.py`; `aws_istio_mcp.py` (needs live Steampipe) → `istio_read_mcp.py`. Flag
+  any new tool performing create/update/delete/run-arbitrary-command — it does not belong here.
+  Do not promote a dark v1 tool into v2 wiring (`ai.tf`'s `local.agent_lambdas`).
 - `create_targets.py` is **v1/dark** (8 gateways, no `external-obs`) — the live v2 provisioner
   is `scripts/v2/agentcore/{catalog,provision}.py` (9 gateways). Don't cite `create_targets.py`
   as the current provisioning path.
+- Cross-account access goes through `cross_account.py` **only** — do not hand-roll AssumeRole in
+  an individual tool Lambda.
+- Never embed secrets, AWS account IDs, ARNs, or live domains in source.
 
 ## `execute_sql` — the read-only boundary is a DB role, not a lexical guard
 - Credentials come from the dedicated least-privilege `awsops_sql_reader` secret, never the

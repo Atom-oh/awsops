@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 72f7d76a5666 · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 19f7e3db1edd · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -32,3 +32,10 @@ an old plan says.
 ## Known false-positives
 - `docs/plans/`, `docs/superpowers/plans|specs`, and `docs/history/` containing frozen-era or
   superseded material is expected — that's their purpose, not drift to clean up.
+- `docs/superpowers/reference/` (a separate, stale planning-era copy) existing alongside the
+  current-truth `docs/reference/` is expected, not a duplicate to merge — don't cite the
+  `superpowers/` copy as current truth.
+
+## Additional rule
+- Docs tree only — no application logic. Watch for secrets/credentials in committed docs
+  (account IDs, ARNs, live domains, tokens) and reject them.

@@ -21,12 +21,32 @@ guard — see the section below.
 
 ## Rules
 - Gateway Targets: must use Python/boto3 — the CLI has inlinePayload issues.
-- `credentialProviderConfigurations: GATEWAY_IAM_ROLE` is required on every target.
-- VPC Lambda uses pg8000, not psycopg2, for `steampipe-query`. `istio_read_mcp.py` is a
-  separate case: it uses neither — stdlib-only (urllib + ssl) against the EKS k8s API, no
-  Steampipe/pg8000/third-party k8s client at all (`test_istio_read_mcp.py` asserts this).
-- All Lambdas are read-only — **no exceptions in v2**; v1's "reachability path-creation"
-  write exception is dark in v2, replaced by describe-only `reachability_read_mcp.py`.
+- `credentialProviderConfigurations: GATEWAY_IAM_ROLE` is required on every **Lambda-backed**
+  target. (Not universal: the live ADR-017 `mcpServer` targets — datadog/dynatrace/newrelic in
+  `catalog.py`'s `MCP_SERVER_TARGETS` — use `API_KEY` credential providers instead.)
+- pg8000, not psycopg2, is the Lambda-compatible Postgres driver in this codebase. Within this
+  module the only live user is the v1/dark `aws_istio_mcp.py` (Steampipe-backed, superseded).
+  The current v2 pg8000 user is the flag-gated batch inventory sync,
+  `scripts/v2/steampipe/sync_lambda.py` (D1, `steampipe_enabled`) — a different module, not an
+  AgentCore Gateway tool. `istio_read_mcp.py` (the live v2 replacement for `aws_istio_mcp.py`)
+  uses neither pg8000 nor psycopg2 — stdlib-only (urllib + ssl) against the EKS k8s API, no
+  Steampipe/third-party k8s client at all (`test_istio_read_mcp.py` asserts this).
+- **Read-only is absolute in v2 — no exceptions.** Any tool that mutates AWS state must not be
+  reachable. Mutating v1 tools stay dark, replaced by describe-only v2 equivalents:
+  - `reachability.py` (creates a network-insights path = write) → `reachability_read_mcp.py`
+    (describe-only, computed connectivity, static SG/NACL/route).
+  - `aws_core_mcp.py`'s `call_aws` (arbitrary CLI = a mutation vector) → `core_helpers_mcp.py`
+    (`prompt_understanding`/`suggest_aws_commands` only — no `call_aws`).
+  - `aws_istio_mcp.py` (needs live Steampipe) → `istio_read_mcp.py` (Istio CRDs via the EKS k8s
+    API, presigned-STS token, stdlib urllib/ssl).
+  - **Flag any new tool that performs create/update/delete/run-arbitrary-command** — it does
+    not belong here. **Do not promote a dark v1 tool into v2 wiring** (i.e. into `ai.tf`'s
+    `local.agent_lambdas`).
+- Cross-account access goes through `cross_account.py` **only** (STS AssumeRole, ~50-min
+  credential cache, ExternalId, audit logging) — do not hand-roll AssumeRole in an individual
+  tool Lambda.
+- Never embed secrets, AWS account IDs, ARNs, or live domains in source — they belong in
+  SSM/Secrets Manager and runtime env.
 - Tool schema format: `inlinePayload: [{name, description, inputSchema: {type, properties, required}}]`.
 
 ## `execute_sql` — the read-only boundary is a DB role
