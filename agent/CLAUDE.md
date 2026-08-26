@@ -25,11 +25,14 @@ re-introduce a hand-maintained table that goes stale again, read the actual sour
 - Root `CLAUDE.md`'s "AI (AgentCore)" bullet has the current-truth summary of both.
 
 ## Multi-Route Support
-- The classifier can return 1–3 routes, but multi-domain fan-out itself is gated behind the
-  single Terraform flag `hybrid_routing_enabled` (default false) — `workload.tf` sets the
-  `MULTI_ROUTE_SYNTHESIS_ENABLED` env var to `"true"` only when that flag is on; it's not a
-  second, independently-toggled gate. Don't assume parallel gateway calls + synthesis run
-  unconditionally.
+- The classifier can return 1–3 candidate routes, but actually fanning out to multiple
+  gateways and synthesizing their answers requires **two independent Terraform flags, both
+  default false, ANDed at runtime** (`web/app/api/chat/route.ts`'s
+  `doFanout = synthOn && hybridOn && ...`): `hybrid_routing_enabled` (ADR-038 — hybrid
+  classifier routing itself; sets `HYBRID_ROUTING_ENABLED`) and `multi_route_synthesis_enabled`
+  (ADR-044 — the cross-domain merge step, its own IAM `bedrock:InvokeModel` grant; sets
+  `MULTI_ROUTE_SYNTHESIS_ENABLED`). Neither implies the other — don't assume parallel gateway
+  calls + synthesis run unconditionally, and don't collapse these into a single flag.
 - Real-time response delivery via SSE streaming.
 
 ## Rules
