@@ -1,19 +1,25 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b635c5a68b4b · generated-at: 2026-08-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0d1c5dd2af19 · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
-# Decisions (`docs/decisions/`)
+# Decisions — Reviewer Context
 
-**Source of truth = `BASELINE.md`** (north star §0, invariants §1, gate/freeze register §2, decision index §3) + this directory's consolidated ADRs (`0NN-*.md`, single Status each). Start here.
+**Current truth = `BASELINE.md`** + the consolidated ADRs in this directory (`0NN-*.md`, highest
+currently **020**). Old ADR 001–046 bodies are not in the tree (git tag
+`adr-legacy-2026-06-22`) — never read them without an explicit request; resolve legacy numbers
+via `ADR-MAPPING.md`.
 
-Old ADR bodies (001–046) are **not in the tree** — preserved in git tag `adr-legacy-2026-06-22`, mapped in `ADR-MAPPING.md` (canonical, same directory; the copy under `../history/` is a link-compat pointer stub, not the source). **Do not read old bodies unless explicitly asked.**
+## Review checklist
+1. A new ADR = highest number + 1, single Status (Accepted), and **must update `BASELINE.md`
+   §3 (or §2) in the same PR** — an ADR without that update is "not live" (anti-drift).
+2. BASELINE §1/§2 is the deterministic source for read-only definitions and freeze/gate status
+   — don't take a single ADR's prose over it if they conflict.
+3. AWS resource mutation/autonomy is FROZEN (ADR-005). Relaxing it requires a new ADR + multi-AI
+   panel + a dated owner-override — never a docs-only PR.
+4. Bar for ADR content: "can an AI block/pass a PR from reading this document alone?"
 
-## Conventions a reviewer must enforce
-- New ADR number = current highest + 1 (currently 020).
-- ADR structure: single Status (Accepted) / Context / Decision / Consequences / 6 Pillars. No narrating the reversal chain — state only the current net decision.
-- **Same PR must update `BASELINE.md` §3 (or §2)** — an ADR without a BASELINE update is "not live" (anti-drift). Flag any ADR-adding PR missing this.
-- Litmus test for a new/changed ADR: "can an AI block/pass a PR from reading only this document?"
-
-## Boundaries / gotchas
-- Read-only scope and freeze/gate status are decided by `BASELINE.md` §1/§2 — treat those as authoritative over any other doc.
-- **AWS-resource mutation + autonomy is FROZEN (ADR-005).** Loosening it requires a new ADR + multi-AI panel + dated owner-override — never a doc-only reinterpretation. Flag any PR attempting to soften this via prose alone.
+## Known false-positives
+- A consolidated ADR citing a legacy number as `ADR-0NN[legacy 0XX]` is the documented
+  convention, not a typo.
+- Frozen-but-present substrate (e.g. remediation code) existing in the tree is intentional dark
+  code — the violation is *enabling* it, not its presence.
