@@ -25,8 +25,10 @@ Operational playbooks organized by scenario. Each follows symptoms → diagnosis
 ## Conventions
 - Filename: `kebab-case.md`, domain-then-topic order.
 - Structure: **symptoms → candidate causes → verification commands → action → related files/ADRs**.
-- Runbook *bodies* (the linked `*.md` files above) are bilingual Korean/English — this index
-  file itself follows the repo's CLAUDE.md-is-English-only rule (`docs/CLAUDE.md`).
+- Runbook *bodies* (the linked `*.md` files above) must be bilingual Korean/English (a small
+  number of existing runbooks are English-only and should be brought into line, not treated as
+  precedent) — this index file itself follows the repo's CLAUDE.md-is-English-only rule
+  (`docs/CLAUDE.md`).
 - Commands should be copy-paste ready.
 - Cite the related ADR number(s) at the bottom.
 

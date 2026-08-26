@@ -1,42 +1,28 @@
 # Agent Module
 
 ## Role
-Strands Agent for AgentCore Runtime. Connects to 8 role-based Gateways via MCP protocol.
+Strands Agent for AgentCore Runtime. Connects to 9 domain gateways via MCP protocol.
 
 ## Key Files
-- `agent.py` — Main entrypoint: dynamic Gateway selection via the `payload.gateway` parameter
+- `agent.py` — Main entrypoint: dynamic Gateway selection via the `payload.gateway` parameter;
+  `_resolve_gateway_key`/`_GATEWAY_ALIAS` handle the `observability`→`external-obs` chat-key
+  alias and the canonical-vs-`v2-`-prefixed key coexistence shim (see the do-not-"fix" note in
+  root `AGENTS.md`).
 - `streamable_http_sigv4.py` — MCP StreamableHTTP with AWS SigV4 signing
 - `Dockerfile` — Python 3.11-slim, arm64, port 8080
 - `requirements.txt` — strands-agents, boto3, bedrock-agentcore, psycopg2-binary
-- `lambda/` — 19 Lambda source files + `create_targets.py`
+- `lambda/` — Lambda source files (see `agent/lambda/CLAUDE.md` for the current provisioner and
+  tool-inventory sources)
 
-## 8 Gateways
-
-| Gateway | Tools | Description |
-|---------|-------|-------------|
-| **Network** | 17 | VPC, TGW, VPN, ENI, Reachability, Flow Logs |
-| **Container** | 24 | EKS, ECS, ECR, Istio service mesh |
-| **IaC** | 12 | CloudFormation, CDK, Terraform |
-| **Data** | 24 | DynamoDB, RDS, ElastiCache, MSK |
-| **Security** | 14 | IAM users/roles/policies, simulation |
-| **Monitoring** | 16 | CloudWatch metrics/alarms/logs, CloudTrail, Datasource diagnostics |
-| **Cost** | 9 | Cost Explorer, Pricing, Budgets, FinOps (Compute Optimizer, RI/SP, Trusted Advisor) |
-| **Ops** | 9 | AWS docs, CLI, Steampipe SQL |
-| **Total** | **125** | Across 19 Lambda functions |
-
-## 11 Routes (route.ts)
-
-1. `code` — Code Interpreter (Python sandbox)
-2. `network` — Network Gateway (VPC, TGW, VPN, ENI, Flow Logs)
-3. `container` — Container Gateway (EKS, ECS, Istio)
-4. `iac` — IaC Gateway (CloudFormation, CDK, Terraform)
-5. `data` — Data Gateway (DynamoDB, RDS, ElastiCache, MSK)
-6. `security` — Security Gateway (IAM, policies, simulation)
-7. `monitoring` — Monitoring Gateway (CloudWatch, CloudTrail)
-8. `cost` — Cost Gateway (Cost Explorer, Pricing, Budgets, FinOps)
-9. `datasource` — External datasources (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
-10. `aws-data` — Steampipe SQL + Bedrock (resource inventory queries)
-11. `general` — Ops Gateway + Bedrock fallback
+## Gateways and routes — don't hand-count them here
+The gateway count, per-gateway tool counts, and the chat routing-key list have drifted stale in
+this file before (9 domain gateways incl. `external-obs`; 16 chat-section keys). Rather than
+re-introduce a hand-maintained table that goes stale again, read the actual source:
+- Gateway/tool inventory: `scripts/v2/agentcore/catalog.py` (the live v2 provisioner catalog)
+  and `ai.tf`'s `local.agent_lambdas`.
+- Chat routing keys: `web/lib/route.ts`'s `RULES` (regex fast-path, first-match-wins) — the
+  `observability` key aliases to the `external-obs` gateway per ADR-004.
+- Root `CLAUDE.md`'s "AI (AgentCore)" bullet has the current-truth summary of both.
 
 ## Multi-Route Support
 - The classifier returns 1–3 routes.
@@ -46,5 +32,5 @@ Strands Agent for AgentCore Runtime. Connects to 8 role-based Gateways via MCP p
 ## Rules
 - Docker image must be arm64 (`docker buildx --platform linux/arm64`).
 - Gateway URL is selected dynamically from the `GATEWAYS` dict based on the payload.
-- The system prompt is role-specific: network/container/iac/data/security/monitoring/cost/ops.
+- The system prompt is role-specific, one per domain gateway.
 - Fallback: if the MCP connection fails, run without tools — direct Bedrock call.

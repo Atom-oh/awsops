@@ -27,7 +27,10 @@ AgentCore/workers. Partial S3 backend (`backend.hcl`) + count/flag gating.
   others.
 - Dependent flags are enforced via validation blocks (e.g. `datasource_diagnosis_enabled` →
   requires workers+agentcore+integrations).
-- `remediation_enabled`/`integrations_write_enabled` are **ADR-005 FROZEN — do not enable**.
+- `remediation_enabled` is **ADR-005 FROZEN — do not enable**. `integrations_write_enabled` is
+  a separate tier — **GATED under ADR-007** (external DATA write governance, not the ADR-005
+  AWS-mutation freeze), OFF by default; per BASELINE §2 it requires its own independent
+  control plane, no-AWS-mutation IAM, and SSRF/Secrets/DLP/human-gate controls.
 
 ## Rules
 - **No `-auto-approve` on shared infrastructure** — `plan -out tfplan`, then the controller

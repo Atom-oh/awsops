@@ -6,7 +6,9 @@ added 2026-06-18: `core_helpers` / `reachability_read` / `istio_read` — see th
 lists below.
 
 ## Key Files
-- `create_targets.py` — Creates all 20 Gateway Targets across 8 Gateways, Python/boto3.
+- `create_targets.py` — **v1/dark**: an older, hand-written Gateway Target creator (8 gateways,
+  no `external-obs`). The live v2 provisioner is `scripts/v2/agentcore/{catalog,provision}.py`
+  (9 gateways) — read those, not this file, for the current provisioning path.
 - `cross_account.py` — Cross-account STS AssumeRole helper (50-minute credential cache,
   ExternalId, audit logging).
 
@@ -20,7 +22,9 @@ guard — see the section below.
 ## Rules
 - Gateway Targets: must use Python/boto3 — the CLI has inlinePayload issues.
 - `credentialProviderConfigurations: GATEWAY_IAM_ROLE` is required on every target.
-- VPC Lambda uses pg8000, not psycopg2 (steampipe-query, istio-mcp).
+- VPC Lambda uses pg8000, not psycopg2, for `steampipe-query`. `istio_read_mcp.py` is a
+  separate case: it uses neither — stdlib-only (urllib + ssl) against the EKS k8s API, no
+  Steampipe/pg8000/third-party k8s client at all (`test_istio_read_mcp.py` asserts this).
 - All Lambdas are read-only — **no exceptions in v2**; v1's "reachability path-creation"
   write exception is dark in v2, replaced by describe-only `reachability_read_mcp.py`.
 - Tool schema format: `inlinePayload: [{name, description, inputSchema: {type, properties, required}}]`.
@@ -85,6 +89,7 @@ guard — see the section below.
   writes while still allowing control-plane calls.
 - **So do not try to "complete" this by adding more DANGER entries to these files.** A new
   lexical hole isn't privilege escalation (the ClickHouse connector has no DB-role boundary yet,
-  so there the guard is still the primary defense).
+  so there the guard is still the primary defense — a backslash-escape hardening idea for it is
+  noted as a follow-up, out of scope here).
 
 Detail: ADR-004 §7 amendment (2026-07-31).

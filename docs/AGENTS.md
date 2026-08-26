@@ -1,32 +1,34 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 5bd1c7c456b2 · generated-at: 2026-08-20 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 72f7d76a5666 · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
-## Module: `docs/`
+# Documentation — Reviewer Context
 
-Project documentation, organized by purpose. This directory is an index; each subdirectory carries its own CLAUDE.md/AGENTS.md.
+Project docs organized by purpose; each subdirectory has its own `CLAUDE.md`.
+`decisions/BASELINE.md` is the decision single source of truth (+ consolidated ADRs 001–020).
+`reference/` is current v2 design, one file per component. `plans/`, `superpowers/plans|specs`,
+and `history/` mix current, frozen, and superseded material — never treat them as live guidance
+on their own; anything about mutation/autonomy is settled by ADR-005 FROZEN regardless of what
+an old plan says.
 
-### Layout (what lives where)
-- `architecture.md`, `onboarding.md` — single-file references.
-- `decisions/` — **decision source of truth = `decisions/BASELINE.md`** + consolidated ADRs 001–020 + `ADR-MAPPING.md`. Old ADR 001–046 bodies are NOT in the tree (git tag `adr-legacy-2026-06-22`) — don't read them unless explicitly asked.
-- `reference/` — current per-component v2 design; **one file per component is the single source of truth**.
-- `runbooks/` — per-scenario operational response guides.
-- `reviews/` — code-review / cross-review outputs.
-- `plans/` — legacy planning docs; current plans live under `superpowers/plans/`.
-- `superpowers/specs/` — design specs (brainstorming output).
-- `superpowers/plans/` — implementation plans; a mix of **current and frozen/superseded** work (e.g. remediation plans 029–036 are frozen per ADR-005) — current truth is still `decisions/BASELINE.md`, not this directory.
-- `history/` — old execution/decision history (incl. `archive/`) — not current truth.
+## Conventions
+- New documents are bilingual Korean/English, with two exceptions: **all `CLAUDE.md`-type files
+  are English-only regardless of directory** (they're context files Claude Code auto-loads —
+  the goal is context-size savings), and implementation-facing design specs under
+  `docs/superpowers/specs/` are English-only. "Stays bilingual" is about a directory's body
+  content, never its `CLAUDE.md`.
+- New ADR = consolidated-ADR highest number + 1 (currently 020); update `BASELINE.md` in the
+  same PR.
+- Don't mix current truth (`decisions/BASELINE.md` + `reference/`) with old plans/history when
+  citing what's live.
 
-### Conventions a reviewer must enforce
-- **All new docs are bilingual** (Korean + English).
-- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing + 1 (currently 020; monotonic, no gaps/reuse). Same PR must update `decisions/BASELINE.md`.
-- Runbooks must follow `docs/runbooks/AGENTS.md` rules.
-- Design content belongs in `reference/` (one component = one file). Edit the reference file rather than adding parallel docs or reviving archived ones.
+## Review checklist
+1. A CLAUDE.md-type file added in Korean (or bilingual) anywhere in the repo is a convention
+   violation — flag it.
+2. A new ADR without a same-PR `BASELINE.md` update is "not live" (anti-drift) — flag it.
+3. Content sourced from `superpowers/plans|specs` or `history/` cited as current behavior
+   should be cross-checked against `decisions/BASELINE.md` before trusting it.
 
-### Boundaries / gotchas
-- `reference/` and `decisions/BASELINE.md` are authoritative; `history/` and frozen-era `superpowers/plans` entries are dead history — flag any change treating them as current, or splitting one component's design across multiple reference files.
-- AWS-resource mutation/autonomy is FROZEN (ADR-005) — flag any doc that reintroduces it as live guidance without a new ADR + owner-override.
-- Docs tree only — no application logic. Watch for secrets/credentials in committed docs (account IDs, ARNs, domains, tokens) and reject them.
-
-### v1 vs v2 scope note
-**v2 is live on `main`.** v1 (`src/`, CDK/EC2, `/awsops` basePath) is decommissioned per ADR-016 — its application code left the tree 2026-07-12 (`git tag v1-pre-code-removal-20260712`); only stopped AWS infra remains pending final teardown. v1 rules do NOT apply to v2. Confirm which stack a doc targets before applying its rules, but do not assume v1 "runs in parallel" — it doesn't.
+## Known false-positives
+- `docs/plans/`, `docs/superpowers/plans|specs`, and `docs/history/` containing frozen-era or
+  superseded material is expected — that's their purpose, not drift to clean up.
