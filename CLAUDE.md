@@ -65,6 +65,7 @@ Live environment: account `180294183052`, domain `awsops-v2.atomai.click`, reusi
 
 ### Operational Notes
 - **Concurrent sessions frequently switch branches** (docs-site deploys, etc). Check `git branch --show-current` before working. Uncommitted changes can be lost to an external reset/checkout, so **commit small units immediately**.
+- **`CHANGELOG.md` entries**: one bullet per feature per category, describing net user-visible behavior — never a PR number, CI-review-round number, or iteration count (those belong in git history/PR threads). A fix that supersedes an existing `[Unreleased]` entry amends that entry in place; it does not append a new one. This applies to both the `# English` and `# 한국어` sections (kept 1:1 — `web/lib/changelog.ts` falls back to the English body when a version's Korean section is missing).
 
 ## Gated files worth knowing
 - `remediation.tf` — remediation substrate (`remediation_enabled`·`integrations_write_enabled`) — **ADR-005 FROZEN, do-not-enable**
