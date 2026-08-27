@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 1d3896d58a07 · generated-at: 2026-08-25 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: dd372dc763d8 · generated-at: 2026-08-27 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -78,6 +78,7 @@ No repo-root `package.json` — the only one outside `web/`/`docs-site/` is `scr
 - **Cross-account self-assume trap (`agent/agent.py`/`cross_account.py`):** v2 is single-account, but if chat picks the host account, the agent used to force `target_account_id=<host>` and then self-assume `AWSopsReadOnlyRole` — a role that only exists in v1 *target* accounts, not the host — causing an `AccessDenied` the agent misdiagnosed as "cross-account blocked." `cross_account.get_role_arn()` now returns `None` when the target is the host (use the exec role directly instead). Do not "fix" this back to assuming a role on the host.
 
 ## Known false-positives (do not re-flag)
+- **`CHANGELOG.md` "parity"/"missing entry" findings** — the convention (stated at the top of the file) is one bullet per feature per category, amended in place by later fixes; do not flag a PR for not adding a new bullet, a PR/round number, or an iteration count when an existing feature-level entry already covers the net behavior. Conversely, DO flag a PR that reintroduces a PR number, CI-review-round number, or iteration count into an entry, or that appends a new bullet for a feature that already has a covering one instead of amending it.
 - `data/*.json`, `/awsops` basePath, Steampipe pg Pool references — these are v1 patterns; a v2 diff is exempt.
 - `steampipeAvailable()` returning `false` unconditionally, or `aws-data`/collector code paths appearing dead — intentional per ADR-001/010; live AWS reads go through AgentCore MCP tools instead.
 - The frozen `remediation.tf` / mutating-tool substrate existing in the tree — presence is fine, only *enabling* it is a violation.
