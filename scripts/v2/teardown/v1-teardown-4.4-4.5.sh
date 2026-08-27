@@ -28,6 +28,14 @@ if [ "$ACTUAL_ACCOUNT" != "$EXPECTED_ACCOUNT" ]; then
 fi
 echo "account=$ACTUAL_ACCOUNT confirmed; region pinned to $AWS_REGION for the rest of this script"
 
+# `jq` is a hard dependency (bucket-drain page parsing below) but was never checked for — a missing
+# binary would abort mid-run with a bash "command not found" instead of this script's own
+# fail-loud-before-any-mutation posture. Check it here, alongside the other pre-flight guards.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ABORT: jq is required (bucket-drain JSON parsing) but is not installed." >&2
+  exit 1
+fi
+
 # PRE-FLIGHT: this script implements Phase 4.4/4.5 only — it assumes Phase 4.3 (CFN stack deletion)
 # already completed. If an Awsops stack is still around, deleting its member resources out from
 # under CloudFormation is the wrong order, so abort.
@@ -39,7 +47,8 @@ fi
 
 # Human-confirmation gate (the runbook's mandatory confirmation step): bare execution is a DRY RUN
 # that resolves live state and prints what WOULD be deleted. Real deletion requires CONFIRM=yes.
-# Every aws call below is guarded by `if`, so a read error can never trip set -e.
+# Every read call in this DRY-RUN branch is individually guarded by `if`, so a read error here
+# can never trip set -e (the loop below just reports that resource as unreadable and moves on).
 if [ "${CONFIRM:-}" != "yes" ]; then
   echo "=== DRY RUN (CONFIRM!=yes) — resolving current state, deleting nothing ==="
   echo "--- Lambda functions ---"
@@ -55,10 +64,30 @@ if [ "${CONFIRM:-}" != "yes" ]; then
     fi
   done
   echo "--- deploy bucket ---"
-  if cnt=$(aws s3api list-objects-v2 --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --query 'KeyCount' --output text 2>&1); then
-    echo "  would empty + delete: awsops-deploy-180294183052 (approx $cnt objects — 1000 means 1000+ / paginated count)"
+  if head_out=$(aws s3api head-bucket --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" 2>&1); then
+    # CI-review MAJOR fix: this used to count via list-objects-v2 (current-version keys only) while
+    # the actual delete path below drains list-object-versions (ALL noncurrent versions + delete
+    # markers too) — on a versioned bucket the dry-run number could be far below what CONFIRM=yes
+    # actually destroys. Count via the SAME call the delete path uses, paginated (read-only —
+    # nothing is deleted here), bounded to the same 100-page cap as a sanity limit.
+    dry_total=0
+    dry_next_token=""
+    for i in $(seq 1 100); do
+      if [ -n "$dry_next_token" ]; then
+        dry_page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --starting-token "$dry_next_token" --query '{Objects: [Versions[].Key, DeleteMarkers[].Key][], NextToken: NextToken}' --output json)
+      else
+        dry_page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --query '{Objects: [Versions[].Key, DeleteMarkers[].Key][], NextToken: NextToken}' --output json)
+      fi
+      dry_total=$((dry_total + $(echo "$dry_page" | jq '.Objects | length')))
+      dry_next_token=$(echo "$dry_page" | jq -r '.NextToken // ""')
+      [ -z "$dry_next_token" ] && break
+    done
+    # This bucket is also documented (docs/runbooks/cognito-auth-issues.md) to hold CloudFront
+    # access-log content under cloudfront-logs/ — call that out explicitly rather than letting the
+    # operator confirm against a bare object count with no sense of what's actually in it.
+    echo "  would empty + delete: awsops-deploy-180294183052 ($dry_total object version(s)/delete marker(s) across all versions — includes cloudfront-logs/ CloudFront access-log content, see docs/runbooks/cognito-auth-issues.md)"
   else
-    echo "  already gone or inaccessible: awsops-deploy-180294183052 ($cnt)"
+    echo "  already gone or inaccessible: awsops-deploy-180294183052 ($head_out)"
   fi
   echo "--- AgentCore gateways ---"
   for gw in awsops-container-gateway-zacu646nx6 awsops-cost-gateway-fgdtakwe7p \
@@ -135,10 +164,30 @@ resource_exists() {
   echo "$out" >&2
   exit 1
 }
+poll_until_gone() {
+  # $1 = description (for logging), rest = a "get/describe this one resource" command (the same
+  # shape resource_exists expects). CI-review MAJOR fix: gateway/memory/code-interpreter deletion
+  # is ASYNC — the delete-* call succeeding only means deletion was accepted, not that the
+  # resource is actually gone yet (it can sit in DELETING, or stall/fail, indefinitely). Without
+  # confirming actual removal here, a stalled deletion produced a false "ALL CLEAR" later, since
+  # the verification block deliberately excludes DELETING-status resources on the (until now,
+  # unconfirmed) assumption this script's own deletions already succeeded. Polls up to 5 minutes;
+  # returns 0 once resource_exists reports the resource confirmed absent, 1 on timeout.
+  local desc="$1"
+  local attempts=0
+  while [ "$attempts" -lt 60 ]; do
+    if ! resource_exists "$desc" "${@:2}"; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 5
+  done
+  return 1
+}
 
 SKIPPED=()
 
-echo "=== 4.4: deleting 19 orphan v1 Lambda functions (18 *-mcp slices + steampipe-query, idempotent) ==="
+echo "=== 4.4: deleting 19 orphan v1 Lambda functions (15 *-mcp slices + aws-knowledge, reachability-analyzer, flow-monitor, steampipe-query, idempotent) ==="
 LAMBDAS=(
   awsops-terraform-mcp awsops-ecs-mcp awsops-iam-mcp awsops-aws-knowledge
   awsops-cost-mcp awsops-valkey-mcp awsops-network-mcp awsops-rds-mcp
@@ -233,31 +282,33 @@ for gw in "${GATEWAYS[@]}"; do
     continue
   fi
   delete_or_skip "gateway $gw" aws bedrock-agentcore-control delete-gateway --gateway-identifier "$gw"
+  # delete-gateway is async (same as delete-memory below) — confirm it's actually gone before
+  # moving on, or a stalled deletion silently reaches the verification block's status!=DELETING
+  # filter and produces a false ALL CLEAR (CI-review MAJOR fix; see poll_until_gone's docstring).
+  if ! poll_until_gone "gateway $gw" aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw"; then
+    echo "게이트웨이 삭제가 5분 넘게 안 끝남 — 이 게이트웨이는 건너뜀: $gw" >&2
+    SKIPPED+=("gateway:$gw (deletion never confirmed drained — rerun this script later to retry)")
+  fi
 done
 
 echo "--- deleting memory ---"
 delete_or_skip "memory awsops_memory-IULWInAGhc" aws bedrock-agentcore-control delete-memory --memory-id awsops_memory-IULWInAGhc
 # delete-memory is async (status goes to DELETING, not gone immediately) — a status of DELETING is
 # NOT "fully removed", it's still in progress and could stall or fail. Poll until it's actually
-# gone (get-memory returns not-found) before treating this as done, same pattern as the gateway
-# target drain above.
-attempts=0
-memory_drained=false
-while [ "$attempts" -lt 60 ]; do
-  if ! resource_exists "memory awsops_memory-IULWInAGhc" aws bedrock-agentcore-control get-memory --memory-id awsops_memory-IULWInAGhc; then
-    memory_drained=true
-    break
-  fi
-  attempts=$((attempts + 1))
-  sleep 5
-done
-if [ "$memory_drained" != true ]; then
+# gone (get-memory returns not-found) before treating this as done.
+if ! poll_until_gone "memory awsops_memory-IULWInAGhc" aws bedrock-agentcore-control get-memory --memory-id awsops_memory-IULWInAGhc; then
   echo "메모리 삭제가 5분 넘게 안 끝남 — rerun this script later to retry" >&2
   SKIPPED+=("memory:awsops_memory-IULWInAGhc (deletion never confirmed drained)")
 fi
 
 echo "--- deleting code interpreter ---"
 delete_or_skip "code interpreter awsops_code_interpreter-AIOOg6hlCQ" aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id awsops_code_interpreter-AIOOg6hlCQ
+# Same async-deletion gap as gateway/memory above — delete-code-interpreter succeeding is not
+# "gone yet" either; confirm before letting the verification block's DELETING filter trust it.
+if ! poll_until_gone "code interpreter awsops_code_interpreter-AIOOg6hlCQ" aws bedrock-agentcore-control get-code-interpreter --code-interpreter-id awsops_code_interpreter-AIOOg6hlCQ; then
+  echo "코드 인터프리터 삭제가 5분 넘게 안 끝남 — rerun this script later to retry" >&2
+  SKIPPED+=("code-interpreter:awsops_code_interpreter-AIOOg6hlCQ (deletion never confirmed drained)")
+fi
 
 echo ""
 echo "=== verification (this is the actual source of truth — re-checks live AWS state, not run-log assumptions) ==="
