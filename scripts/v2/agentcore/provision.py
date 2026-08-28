@@ -102,7 +102,9 @@ def ensure_gateways(ctrl, ac):
                     log(f"gateway:{key}", "UPDATED", "description drift")
                 except ClientError as e:
                     # Description convergence is cosmetic — never fail the provisioning run on it.
-                    log(f"gateway:{key}", "ERR", f"description update: {str(e)[:120]}")
+                    # WARN, not ERR: main() exits 1 on any ERR in the report (provision.py tail),
+                    # which would fail `make agentcore` over a label.
+                    log(f"gateway:{key}", "WARN", f"description update failed: {str(e)[:120]}")
             else:
                 log(f"gateway:{key}", "EXISTS", name)
             continue

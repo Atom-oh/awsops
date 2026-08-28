@@ -135,6 +135,11 @@ class TestGatewayDescriptionDrift(unittest.TestCase):
             ids = provision.ensure_gateways(ctrl, {"role_arn": "arn:aws:iam::1:role/r"})
         # Cosmetic convergence: the gateway id is still returned so provisioning continues.
         self.assertEqual({"ops": "gw-ops"}, ids)
+        # And it must be WARN, not ERR — main() exits 1 on any ERR in the report, which would
+        # fail `make agentcore` over a label (the exact regression the stop-hook caught).
+        statuses = {r[1] for r in provision.report}
+        self.assertIn("WARN", statuses)
+        self.assertNotIn("ERR", statuses)
 
 
 if __name__ == "__main__":
