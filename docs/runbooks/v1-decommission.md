@@ -280,9 +280,9 @@ aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID_BARE" --chang
 
 ## Phase 4 — 완전 삭제 (유예 후) / Full teardown (after grace period)
 
-§4.4/§4.5는 `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`로 감싸져 있다 — Lambda 19개·v1 배포 버킷·AgentCore 게이트웨이 8개·Memory·Code Interpreter 삭제를 하나의 idempotent 스크립트로 자동화한다. **§4.5의 ALB(`awsops-alb`)·SQS(`awsops-alert-queue`/`-dlq`) 정리는 이 스크립트에 자동화되어 있지 않다** — 존재 여부만 검증하고(남아 있으면 fail), 실제 삭제는 여전히 위 수동 절차를 따라야 한다. §4.4/§4.5의 필수 단계 (b)(ADR-016/gap-audit 조사 시점 목록과 대조)도 이 스크립트에는 없다 — 대신 하드코딩된 ID/이름에 계정·리전·v2-이름-거부 가드만 적용한다(목록 대조는 없음). **기본값은 DRY-RUN**(해석된 삭제 대상만 출력하고 아무것도 지우지 않음)이며, `CONFIRM=yes <script>`로만 실제 삭제를 수행한다. 이 스크립트의 검증 블록은 async DELETING 상태의 게이트웨이/메모리/인터프리터를 "아직 존재"로 세지 않는다 — §4.4/§4.5 하단의 "빈 결과 기대" 검증 명령도 같은 상태값을 감안해야 한다.
+§4.4/§4.5는 `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`로 감싸져 있다 — Lambda 21개·v1 배포 버킷·AgentCore 게이트웨이 8개·Memory·Code Interpreter 삭제를 하나의 idempotent 스크립트로 자동화한다(**이 스크립트가 4.4/§4.5의 이 부분들에 대해서는 아래 수동 절차보다 우선**한다 — ALB/SQS만 예외, 아래 참조). **§4.5의 ALB(`awsops-alb`)·SQS(`awsops-alert-queue`/`-dlq`) 정리는 이 스크립트에 자동화되어 있지 않다** — 존재 여부만 검증하고(남아 있으면 fail), 실제 삭제는 여전히 위 수동 절차를 따라야 한다. §4.4/§4.5의 필수 단계 (b)(조사 시점 목록과 대조)는 이 스크립트가 부분적으로 대체한다 — 삭제 전 하드코딩된 Lambda/게이트웨이 목록을 라이브 AWS 상태(검증 블록과 동일한 prefix 조회)와 자동 대조하여, 목록 밖의 v1 리소스가 있으면(실제로 이 대조 덕분에 `awsops-istio-mcp`/`awsops-datasource-diag-mcp` 2개가 원래 목록에서 빠져 있었음이 발견됐다) `AWSOPS_V1_TEARDOWN_CONFIRM=yes` 경로를 거부한다 — 다만 사람이 조사 시점 목록과 직접 대조하는 것은 아니라는 점은 여전히 다르다. **기본값은 DRY-RUN**(해석된 삭제 대상만 출력하고 아무것도 지우지 않음)이며, `AWSOPS_V1_TEARDOWN_CONFIRM=yes <script>`로만 실제 삭제를 수행한다(환경변수명은 흔한 `CONFIRM`을 상속받아 안전장치가 조용히 무력화되는 것을 막기 위해 이 스크립트 전용으로 네임스페이스됨). 이 스크립트의 검증 블록은 async DELETING 상태의 게이트웨이/메모리/인터프리터를 "아직 존재"로 세지 않는다 — §4.4/§4.5 하단의 "빈 결과 기대" 검증 명령도 이제 같은 상태값 필터를 적용한다(아래 참조).
 
-§4.4/§4.5 are wrapped by `scripts/v2/teardown/v1-teardown-4.4-4.5.sh` — it automates deleting the 19 orphan Lambdas, the v1 deploy bucket, and the 8 AgentCore gateways + Memory + Code Interpreter as one idempotent script. **§4.5's ALB (`awsops-alb`) / SQS (`awsops-alert-queue`/`-dlq`) teardown is NOT automated by this script** — it only verifies their absence (failing the run if either is still present); the actual deletion still follows the manual steps above. §4.4/§4.5's mandatory step (b) — comparing against the ADR-016/gap-audit investigation-time list — is also not reproduced; the script substitutes hardcoded IDs/names guarded only by account/region checks and a v2-name refusal, not a list comparison. **DRY-RUN by default** (prints the resolved deletion plan, deletes nothing); only `CONFIRM=yes <script>` performs actual deletions. Its verification block does not count async-DELETING gateways/memory/interpreter as "still present" — the "expect empty" verification commands later in §4.4/§4.5 should account for the same status value.
+§4.4/§4.5 are wrapped by `scripts/v2/teardown/v1-teardown-4.4-4.5.sh` — it automates deleting the 21 orphan Lambdas, the v1 deploy bucket, and the 8 AgentCore gateways + Memory + Code Interpreter as one idempotent script (**this script takes precedence over the manual procedure below for those parts of 4.4/§4.5** — ALB/SQS are the exception, see below). **§4.5's ALB (`awsops-alb`) / SQS (`awsops-alert-queue`/`-dlq`) teardown is NOT automated by this script** — it only verifies their absence (failing the run if either is still present); the actual deletion still follows the manual steps above. §4.4/§4.5's mandatory step (b) — comparing against the investigation-time list — is now PARTIALLY reproduced: before any deletion, the script diffs its own hardcoded Lambda/gateway lists against live AWS state (the same prefix queries the verification block uses) and refuses `AWSOPS_V1_TEARDOWN_CONFIRM=yes` if anything live falls outside them — this exact check is how `awsops-istio-mcp`/`awsops-datasource-diag-mcp` were found missing from the original list. It is still not a human comparing against the investigation-time snapshot, though. **DRY-RUN by default** (prints the resolved deletion plan, deletes nothing); only `AWSOPS_V1_TEARDOWN_CONFIRM=yes <script>` performs actual deletions (renamed from the too-generic `CONFIRM`, which risked silent inheritance from an unrelated tool/CI env defeating the dry-run default). Its verification block does not count async-DELETING gateways/memory/interpreter as "still present" — the "expect empty" verification commands later in §4.4/§4.5 now apply the same status filter too (see below).
 
 **✅ 완료(2026-08-25)** — 4.1~4.3(CFN 스택 `AwsopsStack` 삭제, ALB/SQS 포함)과 4.4/4.5(고아 Lambda 19개, v1 배포 버킷, AgentCore 게이트웨이 8개·Memory·Code Interpreter)까지 전부 실시간 AWS 상태 재조회로 검증 완료(`ALL CLEAR`). v2(`awsops-v2.atomai.click`) 헬스체크 200 정상. 남은 건 Phase 6(docs-site 아카이브 표기, 별도 미완료 트랙)뿐.
 
@@ -310,6 +310,8 @@ terraform -chdir=terraform/v2/foundation plan   # DomainARecord 관련 변경 �
 #     반드시 (a) 먼저 dry-run으로 목록만 뽑아 사람이 검토 → (b) ADR-016/gap-audit 조사 시점 목록과 대조 → (c) 그 다음 삭제.
 aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].{Name:FunctionName,Runtime:Runtime,Modified:LastModified}"
 # ↑ 이 출력을 육안 검토: v1 조사 시점(2026-07-08) 기준 py3.12 runtime의 *-mcp 슬라이스 18개 + steampipe-query 여야 한다.
+#   (2026-08-27 정정: 이 조사 시점 집계에서 awsops-istio-mcp/awsops-datasource-diag-mcp 2개가 누락되어 있었음이
+#   확인됨 — 실제로는 21개. scripts/v2/teardown/v1-teardown-4.4-4.5.sh의 LAMBDAS 배열이 현재 정확한 목록이다.)
 #   목록이 다르면(다른 py 버전/최근 수정/모르는 이름) 그 함수는 제외하고 개별 확인한다.
 # (a)~(b) 검토가 끝나기 전까지 빈 배열 — 그대로 실행해도 아무것도 지우지 않는다(안전한 기본값).
 # 검토 완료 후에만 실제 함수명으로 채운다. 예: CONFIRMED_ORPHAN_LAMBDAS=("awsops-foo-mcp" "awsops-bar-mcp")
@@ -419,14 +421,15 @@ aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bu
 ### 검증
 
 ```bash
-aws cloudformation list-stacks --query "StackSummaries[?contains(StackName,'Awsops')]"  # 빈 결과 기대
+aws cloudformation list-stacks --query "StackSummaries[?contains(StackName,'Awsops') && StackStatus != 'DELETE_COMPLETE']"  # 빈 결과 기대 (DELETE_COMPLETE 스택은 삭제 후에도 한동안 조회되므로 필터 필수)
 aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].FunctionName"  # 빈 결과 기대
 # v2 챗 cross-account 조회 정상 확인 (spoke 롤 생존 확인)
 
-# 4.5 잔존물 — 전부 빈 결과 기대
-aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-')]"
-aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory')]"
-aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter']"
+# 4.5 잔존물 — 전부 빈 결과 기대 (게이트웨이/메모리/인터프리터 삭제는 비동기이므로 DELETING 상태는 "아직 존재"로 세지 않는다 —
+# 스크립트의 검증 블록과 동일한 필터)
+aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-') && status != 'DELETING']"
+aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory') && status != 'DELETING']"
+aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter' && status != 'DELETING']"
 aws elbv2 describe-load-balancers --names awsops-alb   # 404/LoadBalancerNotFound 기대
 aws sqs get-queue-url --queue-name awsops-alert-queue  # QueueDoesNotExist 기대
 aws sqs get-queue-url --queue-name awsops-alert-dlq    # QueueDoesNotExist 기대

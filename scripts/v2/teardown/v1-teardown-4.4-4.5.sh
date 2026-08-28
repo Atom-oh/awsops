@@ -28,11 +28,11 @@ if [ "$ACTUAL_ACCOUNT" != "$EXPECTED_ACCOUNT" ]; then
 fi
 echo "account=$ACTUAL_ACCOUNT confirmed; region pinned to $AWS_REGION for the rest of this script"
 
-# `jq` is a hard dependency (bucket-drain page parsing below) but was never checked for — a missing
-# binary would abort mid-run with a bash "command not found" instead of this script's own
-# fail-loud-before-any-mutation posture. Check it here, alongside the other pre-flight guards.
+# `jq` is a hard dependency (bucket-drain page parsing, step-(b) inventory diff below) but was
+# never checked for — a missing binary would abort mid-run with a bash "command not found"
+# instead of this script's own fail-loud-before-any-mutation posture.
 if ! command -v jq >/dev/null 2>&1; then
-  echo "ABORT: jq is required (bucket-drain JSON parsing) but is not installed." >&2
+  echo "ABORT: jq is required (bucket-drain and inventory-diff JSON parsing) but is not installed." >&2
   exit 1
 fi
 
@@ -45,18 +45,67 @@ if [ "$PRE_STACKS" != "[]" ]; then
   exit 1
 fi
 
+# The two lists this script deletes from — declared HERE (not duplicated separately inside the
+# DRY-RUN branch below) so the dry-run preview and the real deletion path can never drift apart.
+#
+# CI-review fix: the ORIGINAL 19-name list was itself stale relative to this repo's own
+# `agent/lambda/create_targets.py`, which additionally registers `awsops-istio-mcp` (backed by
+# the pre-v2 `aws_istio_mcp.py` — v2's read-only rewrite is `istio_read_mcp.py`, deployed under
+# the DIFFERENT name `awsops-v2-istio-read` per `terraform/v2/foundation/ai.tf`) and
+# `awsops-datasource-diag-mcp` (backed by `datasource_diag_mcp.py`, which v2 does not deploy at
+# all — `network_path_adapters.py`'s own docstring explicitly disclaims calling it). Neither name
+# collides with anything v2 owns; both are confirmed v1-only orphans. 21 total.
+LAMBDAS=(
+  awsops-terraform-mcp awsops-ecs-mcp awsops-iam-mcp awsops-aws-knowledge
+  awsops-cost-mcp awsops-valkey-mcp awsops-network-mcp awsops-rds-mcp
+  awsops-iac-mcp awsops-finops-mcp awsops-reachability-analyzer awsops-flow-monitor
+  awsops-core-mcp awsops-cloudtrail-mcp awsops-dynamodb-mcp awsops-cloudwatch-mcp
+  awsops-eks-mcp awsops-msk-mcp awsops-steampipe-query
+  awsops-istio-mcp awsops-datasource-diag-mcp
+)
+GATEWAYS=(
+  awsops-container-gateway-zacu646nx6 awsops-cost-gateway-fgdtakwe7p
+  awsops-data-gateway-9risks8vce awsops-iac-gateway-v3hlm5fivj
+  awsops-monitoring-gateway-l4ejgy7qft awsops-network-gateway-tmsin1uggd
+  awsops-ops-gateway-njfwx9vxqo awsops-security-gateway-hrzysflvmq
+)
+
+# CI-review MAJOR fix: the runbook's mandatory step (b) — comparing live AWS inventory against
+# the investigation-time list BEFORE any deletion — was replaced by trusting the two hardcoded
+# arrays above outright, with nothing checking they still match live state. This runs the SAME
+# live prefix queries the verification block (near the bottom of this script) uses, in BOTH the
+# dry run and the real (CONFIRM) path, and reports any live v1 resource this script's own lists
+# don't know about — which is exactly how the missing istio-mcp/datasource-diag-mcp Lambdas above
+# were actually found. A live resource outside these lists would otherwise never be flagged by
+# name, yet the verification block's live prefix query would go on reporting it forever — a
+# permanently un-clearable FAIL with nothing pointing at the real cause.
+LIVE_LAMBDA_NAMES=$(aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].FunctionName" --output json)
+UNEXPECTED_LAMBDAS=$(comm -13 <(printf '%s\n' "${LAMBDAS[@]}" | sort -u) <(echo "$LIVE_LAMBDA_NAMES" | jq -r '.[]' | sort -u))
+LIVE_GATEWAY_IDS=$(aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-')].gatewayId" --output json)
+UNEXPECTED_GATEWAYS=$(comm -13 <(printf '%s\n' "${GATEWAYS[@]}" | sort -u) <(echo "$LIVE_GATEWAY_IDS" | jq -r '.[]' | sort -u))
+if [ -n "$UNEXPECTED_LAMBDAS" ] || [ -n "$UNEXPECTED_GATEWAYS" ]; then
+  echo "WARNING: live AWS state has v1 resource(s) outside this script's hardcoded lists — the runbook's mandatory step (b) has not been satisfied for these:" >&2
+  [ -n "$UNEXPECTED_LAMBDAS" ] && printf '  unexpected Lambda: %s\n' $UNEXPECTED_LAMBDAS >&2
+  [ -n "$UNEXPECTED_GATEWAYS" ] && printf '  unexpected gateway id: %s\n' $UNEXPECTED_GATEWAYS >&2
+  if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" = "yes" ]; then
+    echo "ABORT: refusing to delete anything until the unexpected resource(s) above are triaged and either added to this script's LAMBDAS/GATEWAYS arrays or excluded with a documented reason." >&2
+    exit 1
+  fi
+  echo "(dry run continues below for informational purposes; AWSOPS_V1_TEARDOWN_CONFIRM=yes will ABORT until this is resolved)" >&2
+fi
+
 # Human-confirmation gate (the runbook's mandatory confirmation step): bare execution is a DRY RUN
-# that resolves live state and prints what WOULD be deleted. Real deletion requires CONFIRM=yes.
+# that resolves live state and prints what WOULD be deleted. Real deletion requires
+# AWSOPS_V1_TEARDOWN_CONFIRM=yes.
+# CI-review MAJOR fix: this used to be a bare `CONFIRM` — a common, easily-inherited env var name
+# (an operator or CI runner exporting CONFIRM for some unrelated tool would silently defeat this
+# script's primary safety mechanism, the dry-run default). Namespaced to avoid collision.
 # Every read call in this DRY-RUN branch is individually guarded by `if`, so a read error here
 # can never trip set -e (the loop below just reports that resource as unreadable and moves on).
-if [ "${CONFIRM:-}" != "yes" ]; then
-  echo "=== DRY RUN (CONFIRM!=yes) — resolving current state, deleting nothing ==="
+if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" != "yes" ]; then
+  echo "=== DRY RUN (AWSOPS_V1_TEARDOWN_CONFIRM!=yes) — resolving current state, deleting nothing ==="
   echo "--- Lambda functions ---"
-  for fn in awsops-terraform-mcp awsops-ecs-mcp awsops-iam-mcp awsops-aws-knowledge \
-            awsops-cost-mcp awsops-valkey-mcp awsops-network-mcp awsops-rds-mcp \
-            awsops-iac-mcp awsops-finops-mcp awsops-reachability-analyzer awsops-flow-monitor \
-            awsops-core-mcp awsops-cloudtrail-mcp awsops-dynamodb-mcp awsops-cloudwatch-mcp \
-            awsops-eks-mcp awsops-msk-mcp awsops-steampipe-query; do
+  for fn in "${LAMBDAS[@]}"; do
     if out=$(aws lambda get-function --function-name "$fn" --query 'Configuration.FunctionName' --output text 2>&1); then
       echo "  would delete: $fn (exists)"
     else
@@ -67,9 +116,10 @@ if [ "${CONFIRM:-}" != "yes" ]; then
   if head_out=$(aws s3api head-bucket --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" 2>&1); then
     # CI-review MAJOR fix: this used to count via list-objects-v2 (current-version keys only) while
     # the actual delete path below drains list-object-versions (ALL noncurrent versions + delete
-    # markers too) — on a versioned bucket the dry-run number could be far below what CONFIRM=yes
-    # actually destroys. Count via the SAME call the delete path uses, paginated (read-only —
-    # nothing is deleted here), bounded to the same 100-page cap as a sanity limit.
+    # markers too) — on a versioned bucket the dry-run number could be far below what
+    # AWSOPS_V1_TEARDOWN_CONFIRM=yes actually destroys. Count via the SAME call the delete path
+    # uses, paginated (read-only — nothing is deleted here), bounded to the same 100-page cap as a
+    # sanity limit.
     dry_total=0
     dry_next_token=""
     for i in $(seq 1 100); do
@@ -90,10 +140,7 @@ if [ "${CONFIRM:-}" != "yes" ]; then
     echo "  already gone or inaccessible: awsops-deploy-180294183052 ($head_out)"
   fi
   echo "--- AgentCore gateways ---"
-  for gw in awsops-container-gateway-zacu646nx6 awsops-cost-gateway-fgdtakwe7p \
-            awsops-data-gateway-9risks8vce awsops-iac-gateway-v3hlm5fivj \
-            awsops-monitoring-gateway-l4ejgy7qft awsops-network-gateway-tmsin1uggd \
-            awsops-ops-gateway-njfwx9vxqo awsops-security-gateway-hrzysflvmq; do
+  for gw in "${GATEWAYS[@]}"; do
     if gw_info=$(aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw" --query '{name:name,status:status}' --output json 2>&1); then
       tgt_count=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text 2>&1)
       echo "  would delete: $gw ($gw_info, $tgt_count target(s))"
@@ -114,7 +161,7 @@ if [ "${CONFIRM:-}" != "yes" ]; then
     echo "  already gone: awsops_code_interpreter-AIOOg6hlCQ"
   fi
   echo ""
-  echo "=== DRY-RUN complete — nothing deleted. Re-run with CONFIRM=yes to execute. ==="
+  echo "=== DRY-RUN complete — nothing deleted. Re-run with AWSOPS_V1_TEARDOWN_CONFIRM=yes to execute. ==="
   exit 0
 fi
 
@@ -151,6 +198,7 @@ delete_or_skip() {
 resource_exists() {
   # $1 = description (for logging only), rest = a "get/describe this one resource" command.
   # Returns 0 (exists) or 1 (confirmed absent). A non-not-found error is a REAL failure (abort).
+  # Used for single-shot checks; poll_until_gone below does NOT use this (see its own comment).
   local desc="$1"; shift
   local out
   if out=$("$@" 2>&1); then
@@ -165,19 +213,27 @@ resource_exists() {
   exit 1
 }
 poll_until_gone() {
-  # $1 = description (for logging), rest = a "get/describe this one resource" command (the same
-  # shape resource_exists expects). CI-review MAJOR fix: gateway/memory/code-interpreter deletion
-  # is ASYNC — the delete-* call succeeding only means deletion was accepted, not that the
-  # resource is actually gone yet (it can sit in DELETING, or stall/fail, indefinitely). Without
-  # confirming actual removal here, a stalled deletion produced a false "ALL CLEAR" later, since
-  # the verification block deliberately excludes DELETING-status resources on the (until now,
-  # unconfirmed) assumption this script's own deletions already succeeded. Polls up to 5 minutes;
-  # returns 0 once resource_exists reports the resource confirmed absent, 1 on timeout.
-  local desc="$1"
+  # $1 = description (for logging), rest = a "get/describe this one resource" command.
+  # CI-review MAJOR fix: this used to call resource_exists in the poll loop, but resource_exists
+  # hard-exits (`exit 1`) on any non-not-found error — a SINGLE transient error (throttle, expired
+  # creds) anywhere across up to 60 iterations (5 minutes) killed the ENTIRE script well past
+  # deletions already accepted, skipping the SKIPPED summary and the whole verification block.
+  # This poll is self-contained instead: a transient error is treated the same conservative way
+  # this script treats any other "can't confidently tell" case — keep retrying, never abort here.
+  # Only a NOT_FOUND match ends the poll early (confirmed gone); running out of attempts (whether
+  # from genuine DELETING or from repeated errors) returns 1 to the caller, which routes to
+  # SKIPPED — caught by the verification block's own FAIL check, never a silent false success.
+  local desc="$1"; shift
   local attempts=0
+  local out
   while [ "$attempts" -lt 60 ]; do
-    if ! resource_exists "$desc" "${@:2}"; then
+    if out=$("$@" 2>&1); then
+      : # still exists — keep polling
+    elif echo "$out" | grep -qiE "$NOT_FOUND_RE"; then
+      echo "  already gone: $desc"
       return 0
+    else
+      echo "  transient error polling $desc (will retry): $out" >&2
     fi
     attempts=$((attempts + 1))
     sleep 5
@@ -187,19 +243,12 @@ poll_until_gone() {
 
 SKIPPED=()
 
-echo "=== 4.4: deleting 19 orphan v1 Lambda functions (15 *-mcp slices + aws-knowledge, reachability-analyzer, flow-monitor, steampipe-query, idempotent) ==="
-LAMBDAS=(
-  awsops-terraform-mcp awsops-ecs-mcp awsops-iam-mcp awsops-aws-knowledge
-  awsops-cost-mcp awsops-valkey-mcp awsops-network-mcp awsops-rds-mcp
-  awsops-iac-mcp awsops-finops-mcp awsops-reachability-analyzer awsops-flow-monitor
-  awsops-core-mcp awsops-cloudtrail-mcp awsops-dynamodb-mcp awsops-cloudwatch-mcp
-  awsops-eks-mcp awsops-msk-mcp awsops-steampipe-query
-)
+echo "=== 4.4: deleting 21 orphan v1 Lambda functions (17 *-mcp slices + aws-knowledge, reachability-analyzer, flow-monitor, steampipe-query, idempotent) ==="
 for fn in "${LAMBDAS[@]}"; do
   delete_or_skip "lambda:$fn" aws lambda delete-function --function-name "$fn"
 done
 
-echo "=== 4.4: emptying + deleting v1 deploy bucket (35 objects, ~62MB, v1 diagnosis reports) ==="
+echo "=== 4.4: emptying + deleting v1 deploy bucket (v1 diagnosis reports + cloudfront-logs/) ==="
 if resource_exists "bucket awsops-deploy-180294183052" aws s3api head-bucket --bucket "awsops-deploy-180294183052" --expected-bucket-owner "$EXPECTED_ACCOUNT"; then
   # `aws s3 rm --recursive` cannot delete noncurrent versions/delete markers (so a versioned bucket
   # never actually empties and delete-bucket then fails) and it accepts no --expected-bucket-owner.
@@ -224,12 +273,6 @@ if resource_exists "bucket awsops-deploy-180294183052" aws s3api head-bucket --b
 fi
 
 echo "=== 4.5: AgentCore orphans (idempotent) ==="
-GATEWAYS=(
-  awsops-container-gateway-zacu646nx6 awsops-cost-gateway-fgdtakwe7p
-  awsops-data-gateway-9risks8vce awsops-iac-gateway-v3hlm5fivj
-  awsops-monitoring-gateway-l4ejgy7qft awsops-network-gateway-tmsin1uggd
-  awsops-ops-gateway-njfwx9vxqo awsops-security-gateway-hrzysflvmq
-)
 for gw in "${GATEWAYS[@]}"; do
   echo "--- gateway $gw ---"
   if ! resource_exists "gateway $gw" aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw"; then
@@ -284,7 +327,7 @@ for gw in "${GATEWAYS[@]}"; do
   delete_or_skip "gateway $gw" aws bedrock-agentcore-control delete-gateway --gateway-identifier "$gw"
   # delete-gateway is async (same as delete-memory below) — confirm it's actually gone before
   # moving on, or a stalled deletion silently reaches the verification block's status!=DELETING
-  # filter and produces a false ALL CLEAR (CI-review MAJOR fix; see poll_until_gone's docstring).
+  # filter and produces a false ALL CLEAR.
   if ! poll_until_gone "gateway $gw" aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw"; then
     echo "게이트웨이 삭제가 5분 넘게 안 끝남 — 이 게이트웨이는 건너뜀: $gw" >&2
     SKIPPED+=("gateway:$gw (deletion never confirmed drained — rerun this script later to retry)")
