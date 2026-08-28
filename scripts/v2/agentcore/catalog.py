@@ -28,7 +28,9 @@ GATEWAY_DESCRIPTIONS = {
     "cost": "Cost Explorer, forecast, budgets, container cost",
     "monitoring": "CloudWatch, CloudTrail (AWS native only)",
     "iac": "CloudFormation, CDK, Terraform",
-    "ops": "Steampipe SQL listing/status/docs/inventory",
+    # No live Steampipe in v2 (ADR-001/010) — inventory-read over synced Aurora replaced
+    # v1's run_steampipe_query. Keep this in sync with the three ops targets below.
+    "ops": "AWS docs/knowledge, CLI suggestions, Aurora-backed inventory/topology & unused-resource reader",
     "external-obs": "External Observability & Integrations — routed (Prometheus + ClickHouse + Notion lambdas; Loki/Tempo/Mimir; + ADR-017 curated official-vendor MCP servers when official_mcp_enabled)",
 }
 
