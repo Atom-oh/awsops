@@ -36,6 +36,13 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# Moved up (was declared only in the CONFIRM-path section below) so the DRY-RUN branch's existence
+# checks can also use it — see the CI-review MAJOR fix on the DRY-RUN branch's own comment for why.
+# HeadBucket's 404 has no exception name in the CLI error text (unlike delete-bucket's
+# NoSuchBucket) — it's just "... HeadBucket operation: Not Found", so "Not Found"/"(404)" must be
+# matched explicitly or a not-found response gets misclassified as a real/indeterminate error.
+NOT_FOUND_RE="ResourceNotFoundException|NoSuchBucket|NoSuchEntity|NotFoundException|Not Found|\(404\)|does not exist|could not be found|cannot be found"
+
 # PRE-FLIGHT: this script implements Phase 4.4/4.5 only — it assumes Phase 4.3 (CFN stack deletion)
 # already completed. If an Awsops stack is still around, deleting its member resources out from
 # under CloudFormation is the wrong order, so abort.
@@ -114,14 +121,23 @@ fi
 # script's primary safety mechanism, the dry-run default). Namespaced to avoid collision.
 # Every read call in this DRY-RUN branch is individually guarded by `if`, so a read error here
 # can never trip set -e (the loop below just reports that resource as unreadable and moves on).
+# CI-review MAJOR fix: every existence check below used to collapse a failed read straight to
+# "already gone" — a throttle, expired credential, or AccessDenied printed the same line as a
+# genuinely deleted resource. This is the runbook's mandatory human-confirmation basis for an
+# IRREVERSIBLE deletion, so understating what AWSOPS_V1_TEARDOWN_CONFIRM=yes will destroy is
+# exactly backwards from this script's fail-loud posture (already correct in the verification
+# block's three-state present/gone/indeterminate treatment — the same NOT_FOUND_RE match now used
+# here too, not "any failure = gone").
 if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" != "yes" ]; then
   echo "=== DRY RUN (AWSOPS_V1_TEARDOWN_CONFIRM!=yes) — resolving current state, deleting nothing ==="
   echo "--- Lambda functions ---"
   for fn in "${LAMBDAS[@]}"; do
     if out=$(aws lambda get-function --function-name "$fn" --query 'Configuration.FunctionName' --output text 2>&1); then
       echo "  would delete: $fn (exists)"
-    else
+    elif echo "$out" | grep -qiE "$NOT_FOUND_RE"; then
       echo "  already gone: $fn"
+    else
+      echo "  INDETERMINATE (real error, not confirmed gone): $fn ($out)"
     fi
   done
   echo "--- deploy bucket ---"
@@ -147,7 +163,13 @@ if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" != "yes" ]; then
     # This bucket is also documented (docs/runbooks/cognito-auth-issues.md) to hold CloudFront
     # access-log content under cloudfront-logs/ — call that out explicitly rather than letting the
     # operator confirm against a bare object count with no sense of what's actually in it.
-    echo "  would empty + delete: awsops-deploy-180294183052 ($dry_total object version(s)/delete marker(s) across all versions — includes cloudfront-logs/ CloudFront access-log content, see docs/runbooks/cognito-auth-issues.md)"
+    # MINOR fix: the 100-page cap can exhaust with dry_next_token still set (more pages remain) —
+    # silently reporting that partial dry_total as "the" count understates it just like the
+    # confirm path's own 100-batch cap (which instead fails loud); mark it explicitly as a
+    # lower bound instead.
+    dry_count_label="$dry_total"
+    [ -n "$dry_next_token" ] && dry_count_label="≥$dry_total (truncated at 100 pages)"
+    echo "  would empty + delete: awsops-deploy-180294183052 ($dry_count_label object version(s)/delete marker(s) across all versions — includes cloudfront-logs/ CloudFront access-log content, see docs/runbooks/cognito-auth-issues.md)"
   else
     echo "  already gone or inaccessible: awsops-deploy-180294183052 ($head_out)"
   fi
@@ -164,21 +186,27 @@ if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" != "yes" ]; then
         tgt_count="unknown ($tgt_count)"
       fi
       echo "  would delete: $gw ($gw_info, $tgt_count target(s))"
-    else
+    elif echo "$gw_info" | grep -qiE "$NOT_FOUND_RE"; then
       echo "  already gone: $gw"
+    else
+      echo "  INDETERMINATE (real error, not confirmed gone): $gw ($gw_info)"
     fi
   done
   echo "--- memory ---"
   if mem_info=$(aws bedrock-agentcore-control get-memory --memory-id awsops_memory-IULWInAGhc --query '{id:id,status:status}' --output json 2>&1); then
     echo "  would delete: awsops_memory-IULWInAGhc ($mem_info)"
-  else
+  elif echo "$mem_info" | grep -qiE "$NOT_FOUND_RE"; then
     echo "  already gone: awsops_memory-IULWInAGhc"
+  else
+    echo "  INDETERMINATE (real error, not confirmed gone): awsops_memory-IULWInAGhc ($mem_info)"
   fi
   echo "--- code interpreter ---"
   if ci_info=$(aws bedrock-agentcore-control get-code-interpreter --code-interpreter-id awsops_code_interpreter-AIOOg6hlCQ --query 'status' --output text 2>&1); then
     echo "  would delete: awsops_code_interpreter-AIOOg6hlCQ (status=$ci_info)"
-  else
+  elif echo "$ci_info" | grep -qiE "$NOT_FOUND_RE"; then
     echo "  already gone: awsops_code_interpreter-AIOOg6hlCQ"
+  else
+    echo "  INDETERMINATE (real error, not confirmed gone): awsops_code_interpreter-AIOOg6hlCQ ($ci_info)"
   fi
   echo ""
   echo "=== DRY-RUN complete — nothing deleted. Re-run with AWSOPS_V1_TEARDOWN_CONFIRM=yes to execute. ==="
@@ -191,10 +219,6 @@ fi
 # from a REAL error (permission denied, wrong ARN, etc.) by inspecting the AWS CLI's own error
 # text — only a recognized not-found signature is swallowed; anything else re-raises and aborts
 # (fail loud), so this never silently treats a genuine failure as success.
-# HeadBucket's 404 has no exception name in the CLI error text (unlike delete-bucket's
-# NoSuchBucket) — it's just "... HeadBucket operation: Not Found", so "Not Found"/"(404)" must
-# be matched explicitly or resource_exists misclassifies a genuinely-absent bucket as a real error.
-NOT_FOUND_RE="ResourceNotFoundException|NoSuchBucket|NoSuchEntity|NotFoundException|Not Found|\(404\)|does not exist|could not be found|cannot be found"
 DELETE_IN_PROGRESS_RE="ConflictException|ResourceInUseException|already.*(deleting|being deleted)|DeleteInProgress"
 delete_or_skip() {
   local desc="$1"; shift
