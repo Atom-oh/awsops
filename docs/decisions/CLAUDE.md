@@ -1,17 +1,26 @@
-# 결정 (Decisions) — AI 안내
+# Decisions — AI Guidance
 
-**현행 진실 = [`BASELINE.md`](BASELINE.md)** + 이 디렉토리의 통합 ADR(`0NN-*.md`). 여기부터 읽는다.
+**Current truth = [`BASELINE.md`](BASELINE.md)** + the consolidated ADRs in this directory
+(`0NN-*.md`). Start there.
 
-- **BASELINE.md** = 북극성(§0) + 불변식(§1) + 게이트/동결 register(§2) + 결정 인덱스(§3). 읽기 시작점.
-- **0NN-*.md** = 통합 ADR(현행 결정 상세 + why). single Status.
-- **옛 ADR(001~046) 본문은 트리에 없다** — git tag `adr-legacy-2026-06-22` 보존. 매핑 [`ADR-MAPPING.md`](ADR-MAPPING.md)(canonical — `../history/` 쪽은 포인터 스텁). 복원: `git show adr-legacy-2026-06-22:docs/decisions/<옛파일>.md`. **명시 요청 없이는 옛 본문을 읽지 않는다.**
+- **BASELINE.md** = north star (§0) + invariants (§1) + gate/freeze register (§2) + decision
+  index (§3). The reading entry point.
+- **`0NN-*.md`** = a consolidated ADR (current decision detail + why). Single Status.
+- **Old ADR (001–046) bodies are not in the tree** — preserved at git tag
+  `adr-legacy-2026-06-22`. Mapping: [`ADR-MAPPING.md`](ADR-MAPPING.md) (canonical — the
+  `../history/` copy is a pointer stub). Restore with:
+  `git show adr-legacy-2026-06-22:docs/decisions/<old-file>.md`. **Do not read the old bodies
+  without an explicit request.**
 
-## 새 ADR 추가
-1. 번호 = 현재 최고번호 + 1 (현재 최고 = 020)
-2. 구조 = Status(단일·Accepted)/Context/Decision/Consequences/6 Pillars. 번복 체인 서술 금지(현행 net만).
-3. **같은 PR에서 `BASELINE.md` §3(또는 §2) 갱신 필수** — 갱신 없으면 "not live"(anti-drift).
-4. 기준 = "AI가 이 문서만 보고 PR을 막/통과시킬 수 있는가".
+## Adding a new ADR
+1. Number = current highest + 1 (currently **020**).
+2. Structure = Status (single, Accepted) / Context / Decision / Consequences / 6 Pillars. Do
+   not narrate the reversal chain — state only the current net decision.
+3. **Must update `BASELINE.md` §3 (or §2) in the same PR** — without it the ADR is "not live"
+   (anti-drift).
+4. Bar: "can an AI block/pass a PR from reading this document alone?"
 
-## 규칙
-- read-only 정의·동결/게이트는 BASELINE §1/§2가 결정론적 기준.
-- AWS 리소스 변경·자율 = FROZEN(ADR-005). 완화는 새 ADR+멀티-AI 패널+owner-override.
+## Rules
+- BASELINE §1/§2 is the deterministic source for read-only definitions and freeze/gate status.
+- AWS resource mutation/autonomy = FROZEN (ADR-005). Relaxing it requires a new ADR + multi-AI
+  panel + owner-override.

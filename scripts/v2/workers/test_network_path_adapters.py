@@ -354,6 +354,14 @@ class TestBoundaryClassification:
         r = ad.eval_vpn_or_dx("vpn", None, True)
         assert r["status"] == "unknown"
 
+    def test_missing_route_present_is_unknown_not_a_confident_block(self):
+        """CI-review MAJOR fix (round 25): the round-19 fix distinguished a missing
+        `aws_side_state` from a confirmed-down one, but left `route_present` on the old
+        `not route_present` shortcut — a genuinely unfetched route marker (`None`) reported the
+        same confident `blocked` as a CONFIRMED-absent route (`False`)."""
+        r = ad.eval_vpn_or_dx("vpn", "up", None)
+        assert r["status"] == "unknown"
+
 
 # ── Network Firewall ─────────────────────────────────────────────────────────────────────────────
 
@@ -1122,6 +1130,34 @@ class TestCalicoPolicy:
                                    protocol="tcp", crd_present=True, observed_api_version=_CALICO_VERSION)
         assert r["status"] == "unknown"
 
+    def test_rule_with_no_action_field_matching_the_peer_is_unknown_not_a_guessed_allow(self):
+        """CI-review MAJOR fix (round 25): `action` is a REQUIRED field on a real Calico v3
+        `Rule` — an absent `action` is malformed/partially-fetched data, not "no constraint."
+        A bare rule with no peer/port criteria at all would confidently match ANY peer; defaulting
+        the missing action to `Allow` let that reach a confident `allowed` for a rule whose real
+        action might be `Deny`."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [{}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+
+    def test_rule_with_a_malformed_action_value_is_unknown_not_a_guessed_deny(self):
+        """CI-review MINOR fix (round 26): the round-25 guard only caught an ABSENT `action` key
+        — a PRESENT-but-malformed value (e.g. a typo) used to fall through to `action != "allow"`,
+        which treats anything not spelled exactly `"allow"` as Deny/Pass-like. A garbled value
+        could just as easily have MEANT `Allow`; only the four real Calico actions are now
+        recognized as confidently non-Allow."""
+        policies = [{"selector": "role == 'web'", "types": ["Ingress"], "ingress": [
+            {"action": "Alow", "source": {"nets": ["0.0.0.0/0"]}}]}]
+        r = ad.eval_calico_policy(policies, {"role": "web"}, "ingress", peer_ip="10.0.0.5",
+                                   crd_present=True, observed_api_version=_CALICO_VERSION)
+        assert r["status"] == "unknown"
+        # CI-review MINOR fix (round 27): the diagnostic text used to assert the field was
+        # entirely absent even for a present-but-malformed value like "Alow" — verify the wording
+        # now correctly covers both cases.
+        assert "absent or unrecognized" in r["summary"]
+        assert "no `action` at all" not in r["summary"]
+
     def test_egress_source_side_selector_constraint_is_unknown_not_ignored(self):
         """Symmetric to round 20's ingress-side `destination` guard: for EGRESS, `destination` is
         the peer being matched, but `source` (the workload itself) can still carry its own
@@ -1218,6 +1254,104 @@ class TestRoute53Resolution:
         r = ad.eval_route53_resolution(records, "b.example.com")
         assert r["status"] == "blocked"
 
+    def test_name_under_an_ns_delegated_closest_encloser_is_unknown_not_blocked(self):
+        """CI-review MAJOR fix (round 25): if the closest encloser of the query name owns an NS
+        RRset, the query name falls under a zone DELEGATION — the real answer lives in a child
+        zone this evaluator was never given any data for. Returning a confident `blocked`
+        (NXDOMAIN) is wrong; the fetched NS record itself proves resolution continues elsewhere.
+        (Round 28: an apex SOA row is included so `_delegation_check_armed` — this evaluator's
+        own signal that the fetched set is a real zone sweep, not a producer that never emits
+        SOA at all — is set, matching every other delegation fixture in this class.)"""
+        records = [
+            {"name": "example.com", "type": "SOA"},
+            {"name": "delegated.example.com", "type": "NS", "alias_target": None},
+        ]
+        r = ad.eval_route53_resolution(records, "sub.delegated.example.com")
+        assert r["status"] == "unknown"
+
+    def test_zone_apex_ns_with_soa_is_not_a_delegation_and_nxdomain_still_blocks(self):
+        """CI-review MAJOR fix (round 26): the round-25 delegation check misclassified the ZONE
+        APEX's own NS RRset as a delegation — every real hosted zone carries an authoritative NS
+        (and SOA) RRset at its apex, and the apex is frequently the closest encloser for any
+        flat, non-delegated name (e.g. `foo.example.com` closest-enclosed by `example.com`). A
+        delegation point never carries an SOA; the apex always does — NS-without-SOA is the real
+        signal. A genuine NXDOMAIN under a normal (non-delegated) apex must still `blocked`."""
+        records = [
+            {"name": "example.com", "type": "NS"},
+            {"name": "example.com", "type": "SOA"},
+        ]
+        r = ad.eval_route53_resolution(records, "foo.example.com")
+        assert r["status"] == "blocked"
+
+    def test_zone_apex_wildcard_synthesis_still_works_despite_apex_ns_soa(self):
+        records = [
+            {"name": "example.com", "type": "NS"},
+            {"name": "example.com", "type": "SOA"},
+            {"name": "*.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "foo.example.com")
+        assert r["status"] == "allowed"
+
+    def test_exact_match_below_a_delegation_cut_is_unknown_not_a_confident_allowed(self):
+        """CI-review MAJOR fix (round 27): the round-25/26 delegation check only ran on the
+        closest-encloser-MISS (NXDOMAIN) path — an EXACT match below a delegation cut (e.g. stale
+        parent-zone glue data: `ns.delegated.example.com A` alongside `delegated.example.com NS`,
+        no SOA) used to return `by_name[name]` immediately, bypassing every delegation check and
+        reaching a confident `allowed` even though the real answer is occluded in the child zone.
+        The delegation check now runs FIRST, over every strict ancestor, before exact-match.
+        (Round 28: an apex SOA row is included so `_delegation_check_armed` is set.)"""
+        records = [
+            {"name": "example.com", "type": "SOA"},
+            {"name": "delegated.example.com", "type": "NS"},
+            {"name": "ns.delegated.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "ns.delegated.example.com")
+        assert r["status"] == "unknown"
+
+    def test_delegation_cut_above_the_closest_existing_node_is_still_caught(self):
+        """CI-review MAJOR fix (round 27): the round-25/26 delegation check only inspected the
+        CLOSEST EXISTING node — a query one level below that (e.g. `x.ns.delegated.example.com`,
+        whose closest existing node is `ns.delegated.example.com`, itself one level below the
+        actual NS cut at `delegated.example.com`) never saw the delegation at all and reached a
+        confident `blocked` (NXDOMAIN). Walking every strict ancestor (not just the nearest
+        existing one) now catches a cut at any distance.
+        (Round 28: an apex SOA row is included so `_delegation_check_armed` is set.)"""
+        records = [
+            {"name": "example.com", "type": "SOA"},
+            {"name": "delegated.example.com", "type": "NS"},
+            {"name": "ns.delegated.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "x.ns.delegated.example.com")
+        assert r["status"] == "unknown"
+
+    def test_query_name_itself_at_the_delegation_cut_is_unknown_not_allowed(self):
+        """CI-review MAJOR fix (round 28): the round-27 walk still used `range(1, ...)` — STRICT
+        ancestors only — so a query for the delegation cut NAME ITSELF (`delegated.example.com`,
+        which owns both the NS-without-SOA cut AND a same-owner `A` row — occluded parent-zone
+        glue, real shape) hit `name in by_name` before ever reaching the delegation check, and
+        reached a confident `allowed`. The walk now starts at `i=0` (the name itself)."""
+        records = [
+            {"name": "example.com", "type": "SOA"},
+            {"name": "delegated.example.com", "type": "NS"},
+            {"name": "delegated.example.com", "type": "A"},
+        ]
+        r = ad.eval_route53_resolution(records, "delegated.example.com")
+        assert r["status"] == "unknown"
+
+    def test_ns_without_soa_anywhere_in_the_payload_is_still_unknown_not_blocked(self):
+        """CI-review MAJOR fix (round 29): round 28's own fix over-corrected — it "disarmed" the
+        delegation check entirely whenever the fetched set had zero SOA rows anywhere, which made
+        this EXACT payload (the round-25 regression fixture) return a confident `blocked`
+        instead of `unknown`. But an NS row is still affirmative evidence resolution continues
+        elsewhere, regardless of whether this payload happens to carry an SOA row too — `blocked`
+        is exactly as wrong here as the round-26 apex misclassification was in the OTHER
+        direction. `_delegation_check_armed` now only changes the summary's wording (whether this
+        evaluator can rule out "producer never sends SOA" vs. a confirmed delegation), never the
+        `unknown`-vs-`blocked` status: NS-without-SOA always degrades to `unknown`."""
+        records = [{"name": "delegated.example.com", "type": "NS"}]  # no SOA anywhere at all
+        r = ad.eval_route53_resolution(records, "sub.delegated.example.com")
+        assert r["status"] == "unknown"
+
     def test_closer_empty_non_terminal_without_its_own_wildcard_blocks_a_farther_wildcard(self):
         """CI-review MAJOR fix (round 20): RFC 4592 wildcard synthesis is valid ONLY from the
         CLOSEST encloser, not from any ancestor with a wildcard child. Here `b.example.com` is a
@@ -1265,6 +1399,20 @@ class TestRoute53Resolution:
         ]
         r = ad.eval_route53_resolution(records, "app.example.com")
         assert r["status"] == "allowed"
+
+    def test_cname_hop_landing_on_a_multi_pointer_set_is_unknown_not_allowed(self):
+        """CI-review MAJOR fix (round 25): the multi-pointer ambiguity guard only ever ran on
+        the ENTRY name — a CNAME hop landing on a weighted/failover SET of >=2 ALIAS records
+        (ALIAS being an address type) exited the chain-following loop silently (its own
+        `len(matched) == 1` condition just stops matching) and reached the health-check block
+        with neither pointer's own target checked."""
+        records = [
+            {"name": "app.example.com", "type": "CNAME", "alias_target": "lb.example.com"},
+            {"name": "lb.example.com", "type": "ALIAS", "alias_target": "primary.example.com", "failover": "PRIMARY"},
+            {"name": "lb.example.com", "type": "ALIAS", "alias_target": "secondary.example.com", "failover": "SECONDARY"},
+        ]
+        r = ad.eval_route53_resolution(records, "app.example.com")
+        assert r["status"] == "unknown"
 
     def test_no_query_host_is_unknown(self):
         r = ad.eval_route53_resolution([{"name": "app.example.com", "type": "A"}], None)
