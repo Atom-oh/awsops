@@ -284,9 +284,7 @@ aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID_BARE" --chang
 
 §4.4/§4.5 are wrapped by `scripts/v2/teardown/v1-teardown-4.4-4.5.sh` — it automates deleting the 21 orphan Lambdas, the v1 deploy bucket, and the 8 AgentCore gateways + Memory + Code Interpreter as one idempotent script (**this script takes precedence over the manual procedure below for those parts of 4.4/§4.5** — ALB/SQS are the exception, see below). **§4.5's ALB (`awsops-alb`) / SQS (`awsops-alert-queue`/`-dlq`) teardown is NOT automated by this script** — it only verifies their absence (failing the run if either is still present); the actual deletion still follows the manual steps below (§4.5). §4.4/§4.5's mandatory step (b) — comparing against the investigation-time list — is now PARTIALLY reproduced: before any deletion, the script diffs its own hardcoded Lambda/gateway/memory/code-interpreter lists against live AWS state (the same prefix queries the verification block uses) and refuses `AWSOPS_V1_TEARDOWN_CONFIRM=yes` if anything live falls outside them. It is still not a human comparing against the investigation-time snapshot, though. (`awsops-istio-mcp`/`awsops-datasource-diag-mcp` being missing from the original Lambda list was found by cross-checking this repo's own `agent/lambda/create_targets.py`, not by this live diff — the live diff exists to catch the same class of omission going forward.) **DRY-RUN by default** (prints the resolved deletion plan, deletes nothing); only `AWSOPS_V1_TEARDOWN_CONFIRM=yes <script>` performs actual deletions (renamed from the too-generic `CONFIRM`, which risked silent inheritance from an unrelated tool/CI env defeating the dry-run default). Its verification block does not count async-DELETING gateways/memory/interpreter as "still present" — the "expect empty" verification commands later in §4.4/§4.5 now apply the same status filter too (see below).
 
-**✅ 완료(2026-08-25)** — 4.1~4.3(CFN 스택 `AwsopsStack` 삭제, ALB/SQS 포함)과 4.4/4.5(고아 Lambda 19개, v1 배포 버킷, AgentCore 게이트웨이 8개·Memory·Code Interpreter)까지 전부 실시간 AWS 상태 재조회로 검증 완료(`ALL CLEAR`). v2(`awsops-v2.atomai.click`) 헬스체크 200 정상. 남은 건 Phase 6(docs-site 아카이브 표기, 별도 미완료 트랙)뿐.
-
-**⚠️ 2026-08-27 후속 정정 — 위 ALL CLEAR는 19개 목록 기준이며 재확인 필요**: 이 실행 이후 `awsops-istio-mcp`/`awsops-datasource-diag-mcp` 2개가 원래 Lambda 목록(19개)에서 빠져 있었음이 `agent/lambda/create_targets.py` 소스 대조로 확인됐다(정확한 목록은 21개, 스크립트의 `LAMBDAS` 배열 참조). 이 두 Lambda가 2026-08-25 시점에 실제로 살아 있었는지는 **확인되지 않았다** — 그 실행이 쓴 19개 목록에는 처음부터 포함되지 않았기 때문에, 있었다면 놓쳤을 것이고 없었다면 위 ALL CLEAR는 그대로 유효하다. 어느 쪽인지 확정하려면 수정된 21개 목록으로 `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`를 재실행(먼저 DRY-RUN)해야 한다 — 그 전까지 Phase 4.4는 **미확정**으로 취급한다.
+**✅ 4.1~4.3 확정 완료(2026-08-25) / ⚠️ 4.4·4.5 미확정(2026-08-27 정정)** — 4.1~4.3(CFN 스택 `AwsopsStack` 삭제, ALB/SQS 포함)은 실시간 AWS 상태 재조회로 검증 완료. 4.4/4.5(고아 Lambda, v1 배포 버킷, AgentCore 게이트웨이 8개·Memory·Code Interpreter)는 2026-08-25에 함께 실행되어 당시 `ALL CLEAR`를 얻었으나(v2(`awsops-v2.atomai.click`) 헬스체크 200 정상 포함), **그 실행이 쓴 19개 Lambda 목록 자체가 부정확했음이 2026-08-27에 밝혀져 이 ALL CLEAR는 재확인 전까지 무효로 취급한다**: `agent/lambda/create_targets.py` 소스 대조로 `awsops-istio-mcp`/`awsops-datasource-diag-mcp` 2개가 원래 목록에서 빠져 있었음이 확인됐다(정확한 목록은 21개, 스크립트의 `LAMBDAS` 배열 참조). 이 두 Lambda가 2026-08-25 시점에 실제로 살아 있었는지는 **확인되지 않았다** — 있었다면 놓쳤을 것이고 없었다면 8/25의 결과는 그대로 유효하지만, 어느 쪽인지는 수정된 21개 목록으로 `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`를 재실행(먼저 DRY-RUN)해야만 확정된다 — 그 전까지 Phase 4.4/4.5는 **미확정**으로 취급한다. 남은 건 Phase 4.4/4.5 재확인 + Phase 6(docs-site 아카이브 표기, 별도 미완료 트랙)이다.
 
 ```bash
 # 4.1 스택 전수 확인
@@ -311,9 +309,11 @@ terraform -chdir=terraform/v2/foundation plan   # DomainARecord 관련 변경 �
 # 4.4 고아 리소스 개별 삭제 — blast radius 주의: "awsops-" prefix 매칭은 v1과 무관한 다른 Lambda까지 휩쓸 수 있다.
 #     반드시 (a) 먼저 dry-run으로 목록만 뽑아 사람이 검토 → (b) ADR-016/gap-audit 조사 시점 목록과 대조 → (c) 그 다음 삭제.
 aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].{Name:FunctionName,Runtime:Runtime,Modified:LastModified}"
-# ↑ 이 출력을 육안 검토: v1 조사 시점(2026-07-08) 기준 py3.12 runtime의 *-mcp 슬라이스 18개 + steampipe-query 여야 한다.
-#   (2026-08-27 정정: 이 조사 시점 집계에서 awsops-istio-mcp/awsops-datasource-diag-mcp 2개가 누락되어 있었음이
-#   확인됨 — 실제로는 21개. scripts/v2/teardown/v1-teardown-4.4-4.5.sh의 LAMBDAS 배열이 현재 정확한 목록이다.)
+# ↑ 이 출력을 육안 검토: (2026-08-27 정정) v1 조사 시점(2026-07-08) 집계는 "*-mcp 슬라이스 18개 + steampipe-query"
+#   였으나 그 구성 자체가 부정확했다 — awsops-istio-mcp/awsops-datasource-diag-mcp 2개가 누락돼 있었음이
+#   agent/lambda/create_targets.py 소스 대조로 확인됐다. 정확한 구성은 *-mcp 슬라이스 17개(awsops-istio-mcp,
+#   awsops-datasource-diag-mcp 포함) + aws-knowledge/reachability-analyzer/flow-monitor/steampipe-query
+#   4개 = 총 21개다. scripts/v2/teardown/v1-teardown-4.4-4.5.sh의 LAMBDAS 배열이 현재 정확한 목록이다.
 #   목록이 다르면(다른 py 버전/최근 수정/모르는 이름) 그 함수는 제외하고 개별 확인한다.
 # (a)~(b) 검토가 끝나기 전까지 빈 배열 — 그대로 실행해도 아무것도 지우지 않는다(안전한 기본값).
 # 검토 완료 후에만 실제 함수명으로 채운다. 예: CONFIRMED_ORPHAN_LAMBDAS=("awsops-foo-mcp" "awsops-bar-mcp")
