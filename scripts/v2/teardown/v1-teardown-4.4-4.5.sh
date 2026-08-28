@@ -71,24 +71,36 @@ GATEWAYS=(
 )
 
 # CI-review MAJOR fix: the runbook's mandatory step (b) — comparing live AWS inventory against
-# the investigation-time list BEFORE any deletion — was replaced by trusting the two hardcoded
-# arrays above outright, with nothing checking they still match live state. This runs the SAME
-# live prefix queries the verification block (near the bottom of this script) uses, in BOTH the
-# dry run and the real (CONFIRM) path, and reports any live v1 resource this script's own lists
-# don't know about — which is exactly how the missing istio-mcp/datasource-diag-mcp Lambdas above
-# were actually found. A live resource outside these lists would otherwise never be flagged by
-# name, yet the verification block's live prefix query would go on reporting it forever — a
-# permanently un-clearable FAIL with nothing pointing at the real cause.
+# the investigation-time list BEFORE any deletion — was replaced by trusting the hardcoded
+# LAMBDAS/GATEWAYS arrays (and the single hardcoded memory/interpreter id below) outright, with
+# nothing checking they still match live state. This runs the SAME live prefix queries the
+# verification block (near the bottom of this script) uses, in BOTH the dry run and the real
+# (AWSOPS_V1_TEARDOWN_CONFIRM) path, and reports any live v1 resource this script's own lists
+# don't know about. (The missing istio-mcp/datasource-diag-mcp Lambdas were actually found by a
+# static cross-check against this repo's own agent/lambda/create_targets.py, NOT by running this
+# live diff against real AWS state — this check is the general defense-in-depth version of that
+# same fix, for anything a future source-code cross-check wouldn't catch.) A live resource outside
+# these lists would otherwise never be flagged by name, yet the verification block's live prefix
+# query would go on reporting it forever — a permanently un-clearable FAIL with nothing pointing
+# at the real cause. Originally this only covered Lambdas/gateways; extended to memory/code
+# interpreter (each expected to have exactly ONE live v1 resource, or zero if already deleted) so
+# the pre-flight check and the verification block assert over the same universe.
 LIVE_LAMBDA_NAMES=$(aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].FunctionName" --output json)
 UNEXPECTED_LAMBDAS=$(comm -13 <(printf '%s\n' "${LAMBDAS[@]}" | sort -u) <(echo "$LIVE_LAMBDA_NAMES" | jq -r '.[]' | sort -u))
 LIVE_GATEWAY_IDS=$(aws bedrock-agentcore-control list-gateways --query "items[?starts_with(name,'awsops-') && !starts_with(name,'awsops-v2-')].gatewayId" --output json)
 UNEXPECTED_GATEWAYS=$(comm -13 <(printf '%s\n' "${GATEWAYS[@]}" | sort -u) <(echo "$LIVE_GATEWAY_IDS" | jq -r '.[]' | sort -u))
-if [ -n "$UNEXPECTED_LAMBDAS" ] || [ -n "$UNEXPECTED_GATEWAYS" ]; then
+LIVE_MEMORY_IDS=$(aws bedrock-agentcore-control list-memories --query "memories[?starts_with(id,'awsops_memory')].id" --output json)
+UNEXPECTED_MEMORIES=$(comm -13 <(printf '%s\n' "awsops_memory-IULWInAGhc" | sort -u) <(echo "$LIVE_MEMORY_IDS" | jq -r '.[]' | sort -u))
+LIVE_INTERPRETER_IDS=$(aws bedrock-agentcore-control list-code-interpreters --query "codeInterpreterSummaries[?name=='awsops_code_interpreter'].codeInterpreterId" --output json)
+UNEXPECTED_INTERPRETERS=$(comm -13 <(printf '%s\n' "awsops_code_interpreter-AIOOg6hlCQ" | sort -u) <(echo "$LIVE_INTERPRETER_IDS" | jq -r '.[]' | sort -u))
+if [ -n "$UNEXPECTED_LAMBDAS" ] || [ -n "$UNEXPECTED_GATEWAYS" ] || [ -n "$UNEXPECTED_MEMORIES" ] || [ -n "$UNEXPECTED_INTERPRETERS" ]; then
   echo "WARNING: live AWS state has v1 resource(s) outside this script's hardcoded lists — the runbook's mandatory step (b) has not been satisfied for these:" >&2
   [ -n "$UNEXPECTED_LAMBDAS" ] && printf '  unexpected Lambda: %s\n' $UNEXPECTED_LAMBDAS >&2
   [ -n "$UNEXPECTED_GATEWAYS" ] && printf '  unexpected gateway id: %s\n' $UNEXPECTED_GATEWAYS >&2
+  [ -n "$UNEXPECTED_MEMORIES" ] && printf '  unexpected memory id: %s\n' $UNEXPECTED_MEMORIES >&2
+  [ -n "$UNEXPECTED_INTERPRETERS" ] && printf '  unexpected code interpreter id: %s\n' $UNEXPECTED_INTERPRETERS >&2
   if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" = "yes" ]; then
-    echo "ABORT: refusing to delete anything until the unexpected resource(s) above are triaged and either added to this script's LAMBDAS/GATEWAYS arrays or excluded with a documented reason." >&2
+    echo "ABORT: refusing to delete anything until the unexpected resource(s) above are triaged and either added to this script's hardcoded lists or excluded with a documented reason." >&2
     exit 1
   fi
   echo "(dry run continues below for informational purposes; AWSOPS_V1_TEARDOWN_CONFIRM=yes will ABORT until this is resolved)" >&2
@@ -142,7 +154,15 @@ if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" != "yes" ]; then
   echo "--- AgentCore gateways ---"
   for gw in "${GATEWAYS[@]}"; do
     if gw_info=$(aws bedrock-agentcore-control get-gateway --gateway-identifier "$gw" --query '{name:name,status:status}' --output json 2>&1); then
-      tgt_count=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text 2>&1)
+      # CI-review MAJOR fix: bare `[]` (no backticks) on the right of `||` is NOT an empty-array
+      # JSON literal in JMESPath — it's the flatten operator applied to the CURRENT node (here,
+      # the whole response object), which on a non-array yields `null`; `length(null)` is then a
+      # JMESPath type error. Confirmed empirically (python jmespath lib): `items || []` on an
+      # empty `items` returns `None`, and `length()` on that raises. The backtick form
+      # `` `[]` `` is the actual JSON-literal empty array `length()` needs; verified to return 0.
+      if ! tgt_count=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || `[]`)' --output text 2>&1); then
+        tgt_count="unknown ($tgt_count)"
+      fi
       echo "  would delete: $gw ($gw_info, $tgt_count target(s))"
     else
       echo "  already gone: $gw"
@@ -261,9 +281,18 @@ if resource_exists "bucket awsops-deploy-180294183052" aws s3api head-bucket --b
       emptied=1
       break
     fi
-    delete_or_skip "batch of $count object version(s) in awsops-deploy-180294183052" \
-      aws s3api delete-objects --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" \
-      --delete "$(echo "$page" | jq -c '. + {Quiet:true}')"
+    # CI-review MAJOR fix: `--max-items 1000` only bounds the PRIMARY result key of a paginated
+    # call (`Versions`) — `DeleteMarkers` from the same aggregated page rides along uncounted, so
+    # on a bucket with delete markers this combined `.Objects` array can hold MORE than 1000
+    # entries. `delete-objects` hard-rejects a request over 1000 keys, which `delete_or_skip`
+    # then reports as a real error and `set -e` aborts the whole drain. Chunk to <=1000 per call.
+    chunk_offset=0
+    while [ "$chunk_offset" -lt "$count" ]; do
+      chunk=$(echo "$page" | jq -c ".Objects[$chunk_offset:$((chunk_offset + 1000))] | {Objects: ., Quiet: true}")
+      delete_or_skip "batch of $(echo "$chunk" | jq '.Objects | length') object version(s) in awsops-deploy-180294183052 (offset $chunk_offset of $count)" \
+        aws s3api delete-objects --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --delete "$chunk"
+      chunk_offset=$((chunk_offset + 1000))
+    done
   done
   if [ "$emptied" != "1" ]; then
     echo "REAL ERROR: bucket awsops-deploy-180294183052 did not empty after 100 batches" >&2
@@ -307,10 +336,19 @@ for gw in "${GATEWAYS[@]}"; do
   attempts=0
   drained=false
   while [ "$attempts" -lt 60 ]; do
-    if ! remaining=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || [])' --output text 2>&1); then
-      echo "REAL ERROR polling target count for $gw:" >&2
-      echo "$remaining" >&2
-      exit 1
+    # CI-review MAJOR fixes, two together: (1) same bare-`[]`-vs-backtick-`` `[]` `` JMESPath bug
+    # as the dry-run branch above — `length(items || [])` on a just-emptied target list (the
+    # SUCCESS case this loop is polling for) evaluated to `length(null)`, a JMESPath type error,
+    # which the old code treated as fatal — the confirmed run aborted at the exact moment
+    # draining succeeded. (2) that same "any error is fatal" `exit 1` also killed the whole
+    # script on a single transient throttle/credential blip, the identical class of bug
+    # poll_until_gone above was rewritten to tolerate — this loop still hard-aborted. Both fixed
+    # the same way now: a transient error retries within the attempt budget instead of exiting.
+    if ! remaining=$(aws bedrock-agentcore-control list-gateway-targets --gateway-identifier "$gw" --query 'length(items || `[]`)' --output text 2>&1); then
+      echo "  transient error polling target count for $gw (will retry): $remaining" >&2
+      attempts=$((attempts + 1))
+      sleep 5
+      continue
     fi
     if [ "$remaining" = "0" ]; then
       drained=true
