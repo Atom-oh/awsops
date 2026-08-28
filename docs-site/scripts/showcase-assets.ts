@@ -44,17 +44,17 @@ export const ASSETS: AssetSpec[] = [
       {
         left: 8, top: 976, width: 230, height: 48,
         fill: '#f4f6f8', text: '#526173', label: 'Demo operator',
-        sample: {left: 40, top: 995},
+        sample: {left: 17, top: 1015},
       },
       {
         left: 828, top: 167, width: 534, height: 201,
         fill: '#fff', text: '#526173', label: 'Recent AI conversation',
-        sample: {left: 900, top: 230},
+        sample: {left: 920, top: 201},
       },
       {
         left: 1378, top: 167, width: 504, height: 201,
         fill: '#fff', text: '#526173', label: 'AI analysis',
-        sample: {left: 1450, top: 230},
+        sample: {left: 1436, top: 201},
       },
     ],
   },
@@ -80,12 +80,12 @@ export const ASSETS: AssetSpec[] = [
       {
         left: 330, top: 26, width: 278, height: 44,
         fill: '#e8f8ee', text: '#17362b', label: 'DNS endpoint',
-        sample: {left: 400, top: 44},
+        sample: {left: 468, top: 30},
       },
       {
         left: 185, top: 186, width: 276, height: 46,
         fill: '#eaf1ff', text: '#1f3763', label: 'CloudFront',
-        sample: {left: 260, top: 206},
+        sample: {left: 321, top: 192},
       },
       {
         left: 620, top: 349, width: 282, height: 44,
@@ -95,22 +95,22 @@ export const ASSETS: AssetSpec[] = [
       {
         left: 480, top: 510, width: 270, height: 42,
         fill: '#f2e9ff', text: '#3e2a5c', label: 'Target group',
-        sample: {left: 560, top: 528},
+        sample: {left: 613, top: 511},
       },
       {
         left: 773, top: 510, width: 270, height: 42,
         fill: '#f2e9ff', text: '#3e2a5c', label: 'Target group',
-        sample: {left: 853, top: 528},
+        sample: {left: 906, top: 511},
       },
       {
         left: 480, top: 670, width: 270, height: 42,
         fill: '#e5f8f5', text: '#173d38', label: 'Healthy targets',
-        sample: {left: 560, top: 688},
+        sample: {left: 490, top: 673},
       },
       {
         left: 773, top: 670, width: 270, height: 42,
         fill: '#e5f8f5', text: '#173d38', label: 'Healthy targets',
-        sample: {left: 853, top: 688},
+        sample: {left: 1031, top: 673},
       },
     ],
   },
@@ -137,8 +137,10 @@ export const ASSETS: AssetSpec[] = [
   {
     source: path.join(SCREENSHOTS, 'operations', 'ai-diagnosis.png'),
     sourceWidth: 1920,
-    sourceHeight: 1080,
-    sourceSha256: 'e902a17f2333bbb5ea5ba9449692e3c1161590c5ffc0af86513313e3ee3242e5',
+    // Recaptured 2026-08-28 (PR #247) at 1920x1040 — 40px shorter than the other sources, hence
+    // per-asset dimensions in validateAssetSpecs. Crop bottom 128+900=1028 stays inside 1040.
+    sourceHeight: 1040,
+    sourceSha256: '0d683739e0c1c3feec568965d75af2e5678e6e8909a1642b5822016e2cd9db6c',
     output: 'ai-diagnosis.webp',
     // left shifted 40px earlier (was 568) so the video's Ken Burns zoom-in has a margin to eat
     // into before it reaches the "AWS 진단 리포트" heading, which otherwise sits flush against
@@ -146,16 +148,18 @@ export const ASSETS: AssetSpec[] = [
     crop: {left: 528, top: 128, width: 1360, height: 900},
     outputWidth: 1600,
     overlays: [
+      // The recaptured report (cost diagnosis) shows no account identifier anywhere inside the
+      // crop (verified pixel-by-pixel against the new source) — the old '호스트 계정 (mid)'
+      // mask covered an account ID the previous capture's report header displayed; it has no
+      // pixels to cover now and re-adding it would blank real report text.
       {
-        left: 230, top: 214, width: 275, height: 42,
-        fill: '#f4f6f8', text: '#18212d', label: '호스트 계정 (mid)',
-        sample: {left: 418, top: 235},
-      },
-      {
-        // Hides the sliver of the page's secondary settings panel exposed by the wider crop.
+        // Hides the sliver of the page's secondary settings panel (mailing-list "제거" button
+        // fragment) exposed by the wider crop. Sample sits on the dark button text at
+        // crop-rel (42,120) — the old (10,10) point is plain page background in the new
+        // capture, which the generator test rejects as "source sample unexpectedly matches fill".
         left: 0, top: 0, width: 44, height: 900,
         fill: '#f7f8fa', text: '#f7f8fa',
-        sample: {left: 10, top: 10},
+        sample: {left: 42, top: 120},
       },
     ],
   },
@@ -213,11 +217,11 @@ export function assertSourceMatchesSpec(asset: AssetSpec, source: Buffer): void 
   }
 }
 
-export function validateAssetSpecs(
-  sourceWidth: number,
-  sourceHeight: number,
-  assets: AssetSpec[] = ASSETS,
-): void {
+// Validates each spec against ITS OWN declared source dimensions (per-asset since PR #247's
+// 1920x1040 ai-diagnosis recapture — the fleet is no longer uniformly 1080p). Whether the
+// declared dimensions match the actual on-disk PNG is enforced separately, fail-closed, by
+// assertSourceMatchesSpec (hash + IHDR dims).
+export function validateAssetSpecs(assets: AssetSpec[] = ASSETS): void {
   const outputs = new Set<string>();
   for (const asset of assets) {
     if (outputs.has(asset.output)) {
@@ -236,18 +240,12 @@ export function validateAssetSpecs(
     if (!/^[a-f0-9]{64}$/.test(asset.sourceSha256)) {
       throw new Error(`invalid source SHA-256: ${asset.output}`);
     }
-    if (asset.sourceWidth !== sourceWidth || asset.sourceHeight !== sourceHeight) {
-      throw new Error(
-        `unexpected source dimensions for ${asset.output}: expected ${sourceWidth}x${sourceHeight}`,
-      );
-    }
-
     const {crop} = asset;
     if (
       crop.left < 0 ||
       crop.top < 0 ||
-      crop.left + crop.width > sourceWidth ||
-      crop.top + crop.height > sourceHeight
+      crop.left + crop.width > asset.sourceWidth ||
+      crop.top + crop.height > asset.sourceHeight
     ) {
       throw new Error(`crop outside source: ${asset.output}`);
     }
