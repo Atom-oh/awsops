@@ -58,7 +58,8 @@ fi
 # CI-review fix: the ORIGINAL 19-name list was itself stale relative to this repo's own
 # `agent/lambda/create_targets.py`, which additionally registers `awsops-istio-mcp` (backed by
 # the pre-v2 `aws_istio_mcp.py` — v2's read-only rewrite is `istio_read_mcp.py`, deployed under
-# the DIFFERENT name `awsops-v2-istio-read` per `terraform/v2/foundation/ai.tf`) and
+# the DIFFERENT name `awsops-v2-agent-istio-read` per `terraform/v2/foundation/ai.tf:845`
+# [`function_name = "${var.project}-agent-${each.key}"`]) and
 # `awsops-datasource-diag-mcp` (backed by `datasource_diag_mcp.py`, which v2 does not deploy at
 # all — `network_path_adapters.py`'s own docstring explicitly disclaims calling it). Neither name
 # collides with anything v2 owns; both are confirmed v1-only orphans. 21 total.
@@ -148,13 +149,23 @@ if [ "${AWSOPS_V1_TEARDOWN_CONFIRM:-}" != "yes" ]; then
     # AWSOPS_V1_TEARDOWN_CONFIRM=yes actually destroys. Count via the SAME call the delete path
     # uses, paginated (read-only — nothing is deleted here), bounded to the same 100-page cap as a
     # sanity limit.
+    # CI review claimed `[Versions[].Key, DeleteMarkers[].Key][]` (multi-select-list then flatten)
+    # leaves stray `null`s when one key is absent from the paginator's response, on the theory
+    # that JMESPath's flatten doesn't drop non-list/null multi-select results. Verified this
+    # directly against the jmespath.py reference implementation (what botocore/awscli actually
+    # run) across every combination of {absent, empty, populated} x {Versions, DeleteMarkers}:
+    # no case produces a null, and the fixed and original forms return byte-identical results in
+    # all of them — so the claimed defect does not reproduce. Switched to the flatten-then-project
+    # `[Versions,DeleteMarkers][].Key` form anyway, since it matches the delete path's own idiom
+    # (kept in sync below) and needs no absent-key reasoning to trust at a glance — not because the
+    # original was proven broken.
     dry_total=0
     dry_next_token=""
     for i in $(seq 1 100); do
       if [ -n "$dry_next_token" ]; then
-        dry_page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --starting-token "$dry_next_token" --query '{Objects: [Versions[].Key, DeleteMarkers[].Key][], NextToken: NextToken}' --output json)
+        dry_page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --starting-token "$dry_next_token" --query '{Objects: [Versions,DeleteMarkers][].Key, NextToken: NextToken}' --output json)
       else
-        dry_page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --query '{Objects: [Versions[].Key, DeleteMarkers[].Key][], NextToken: NextToken}' --output json)
+        dry_page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --query '{Objects: [Versions,DeleteMarkers][].Key, NextToken: NextToken}' --output json)
       fi
       dry_total=$((dry_total + $(echo "$dry_page" | jq '.Objects | length')))
       dry_next_token=$(echo "$dry_page" | jq -r '.NextToken // ""')
@@ -297,9 +308,17 @@ if resource_exists "bucket awsops-deploy-180294183052" aws s3api head-bucket --b
   # `aws s3 rm --recursive` cannot delete noncurrent versions/delete markers (so a versioned bucket
   # never actually empties and delete-bucket then fails) and it accepts no --expected-bucket-owner.
   # Drain via s3api list-object-versions + delete-objects instead, bounded so it can't spin forever.
+  # CI review claimed the multi-select-list-then-flatten query below leaves stray `null`s (and
+  # therefore an unterminating/failing drain) whenever the paginator omits an empty Versions or
+  # DeleteMarkers key. Verified against the jmespath.py reference implementation (what
+  # botocore/awscli actually evaluate --query with) across every {absent,empty,populated} x
+  # {Versions,DeleteMarkers} combination: no nulls appear, and this form and the
+  # flatten-then-project form below are byte-identical in every case — the claimed defect does
+  # not reproduce. Kept the flatten-then-project form anyway (matches the dry-run query above),
+  # not because the original was proven broken.
   emptied=0
   for i in $(seq 1 100); do
-    page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' --output json)
+    page=$(aws s3api list-object-versions --bucket awsops-deploy-180294183052 --expected-bucket-owner "$EXPECTED_ACCOUNT" --max-items 1000 --query '{Objects: [Versions,DeleteMarkers][].{Key:Key,VersionId:VersionId}}' --output json)
     count=$(echo "$page" | jq '.Objects | length')
     if [ "$count" = "0" ] || [ -z "$count" ]; then
       emptied=1
