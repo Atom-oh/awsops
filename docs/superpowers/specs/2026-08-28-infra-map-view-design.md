@@ -53,9 +53,11 @@ like the existing pages) with:
 - **Custom node cards** (`nodeTypes`): icon + name + secondary line (CIDR / AZ badge /
   instance type / engine) + status dot (EC2 state, NAT state, ALB state). Public subnets get
   a distinct accent (`map_public_ip_on_launch`).
-- **Edges**: containment/attachment drawn as real edges — IGW→VPC, TGW→VPC (attachment),
-  VPC→Subnet, Subnet→EC2/ALB/NLB/RDS (subnet membership; multi-subnet resources like ALB get
-  one edge per subnet), Subnet→NAT. K8s: Ingress→Service (rule backend), Service→Pod
+- **Edges**: containment/attachment drawn as real edges — IGW→VPC, TGW→VPC (attachment,
+  via the live `GET /api/tgw?ids=` describe; degrade to edge-less TGW nodes on failure),
+  VPC→Subnet, Subnet→EC2/ALB/NLB (subnet membership; multi-subnet resources like ALB get
+  one edge per subnet), VPC→RDS (the synced rds row carries `vpc_id` but no subnet ids —
+  only `db_subnet_group_name`), Subnet→NAT. K8s: Ingress→Service (rule backend), Service→Pod
   (endpoints IP join), Pod→Node (`spec.nodeName`).
 - **Cross-highlight**: clicking a node computes its closure (ancestors + descendants along
   edges) — closure nodes/edges stay full opacity, the rest dim to ~0.25. Clicking the selected
