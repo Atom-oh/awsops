@@ -136,9 +136,13 @@ test('topology and diagnosis have baked-in identifier replacements', () => {
       'Target group', 'Target group', 'Healthy targets', 'Healthy targets'],
   );
   // PR #247's recapture shows no account identifier inside the diagnosis crop (verified against
-  // the new pixels), so the old '호스트 계정 (mid)' identifier mask is gone by design — the one
-  // remaining overlay is the unlabeled left-sliver panel cover.
-  assert.deepEqual(diagnosis?.overlays.map((overlay) => overlay.label), [undefined]);
+  // the new pixels), so the old '호스트 계정 (mid)' identifier mask is gone by design. Assert
+  // only that the left-sliver panel cover is still present — deliberately NOT an exact list, so
+  // re-adding an identifier mask for a future capture can never fail this test (an exact
+  // no-mask lock would be backwards for a privacy guard).
+  assert.ok(diagnosis && diagnosis.overlays.length >= 1);
+  assert.ok(diagnosis.overlays.some((overlay) =>
+    overlay.left === 0 && overlay.width === 44 && overlay.height === diagnosis.crop.height));
 });
 
 test('topology overlays cover the complete resource label area', () => {

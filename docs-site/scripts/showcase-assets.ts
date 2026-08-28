@@ -139,6 +139,9 @@ export const ASSETS: AssetSpec[] = [
     sourceWidth: 1920,
     // Recaptured 2026-08-28 (PR #247) at 1920x1040 — 40px shorter than the other sources, hence
     // per-asset dimensions in validateAssetSpecs. Crop bottom 128+900=1028 stays inside 1040.
+    // NOTE: capture-screenshots.ts uses a fixed 1920x1080 viewport, so this capture came from a
+    // different window state — the next scripted re-capture will emit 1080-high and must re-pin
+    // BOTH this hash and this height (and re-verify the overlays) like any other recapture.
     sourceHeight: 1040,
     sourceSha256: '0d683739e0c1c3feec568965d75af2e5678e6e8909a1642b5822016e2cd9db6c',
     output: 'ai-diagnosis.webp',
