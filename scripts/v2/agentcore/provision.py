@@ -71,14 +71,40 @@ def gateway_url(gw_id, region):
 
 
 def ensure_gateways(ctrl, ac):
-    """9 gateways, idempotent by exact name. Returns {short_key: gateway_id}."""
-    existing = {g.get("name"): g.get("gatewayId") for g in _list_all(ctrl.list_gateways)}
+    """9 gateways, idempotent by exact name. Returns {short_key: gateway_id}.
+
+    Description drift converges too (PR #246 review): a catalog description edit used to apply
+    only at create_gateway — an already-live gateway kept the stale text forever (observed: the
+    ops gateway still advertised "Steampipe SQL ..." long after ADR-001/010 removed live
+    Steampipe). list_gateways already returns each gateway's description, so drift detection is
+    free; on mismatch, update_gateway is called with exactly the same required fields
+    create_gateway sends (name/roleArn/protocolType/authorizerType) — same converge-on-catalog
+    posture ensure_targets already has for tool schemas.
+    """
+    existing = {g.get("name"): g for g in _list_all(ctrl.list_gateways)}
     ids = {}
     for key in catalog.GATEWAYS:
         name = f"awsops-v2-{key}-gateway"  # v2-namespaced: isolate from v1 awsops-* in shared accounts
         if name in existing:
-            ids[key] = existing[name]
-            log(f"gateway:{key}", "EXISTS", name)
+            gw = existing[name]
+            ids[key] = gw.get("gatewayId")
+            want = catalog.GATEWAY_DESCRIPTIONS.get(key, key)
+            if gw.get("description") != want:
+                try:
+                    ctrl.update_gateway(
+                        gatewayIdentifier=gw.get("gatewayId"),
+                        name=name,
+                        roleArn=ac["role_arn"],
+                        protocolType="MCP",
+                        authorizerType="NONE",
+                        description=want,
+                    )
+                    log(f"gateway:{key}", "UPDATED", "description drift")
+                except ClientError as e:
+                    # Description convergence is cosmetic — never fail the provisioning run on it.
+                    log(f"gateway:{key}", "ERR", f"description update: {str(e)[:120]}")
+            else:
+                log(f"gateway:{key}", "EXISTS", name)
             continue
         try:
             resp = ctrl.create_gateway(
