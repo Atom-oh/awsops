@@ -1,7 +1,7 @@
 # AWSops 결정 베이스라인 (BASELINE) / Decision Baseline
 
 > **이것이 결정의 단일 현행 진실(single source of truth)이다.** AI·사람 모두 여기부터 읽는다. 상세 근거는 같은 디렉토리의 통합 ADR(`0NN-*.md`)을, 옛 이력은 `../history/`를 본다(명시 요청 없이는 읽지 않는다).
-> 범위 = **v2 현행 진실.** v1(CDK/EC2/Steampipe, `/awsops` basePath)은 **폐기 진행 중**(ADR-016, 2026-07-09 결정) — Phase 5(repo 코드 정리) 완료(2026-07-12, `src/`/`infra-cdk/` 등 제거), Phase 4(AWS 인프라 완전삭제)는 유예기간 종료 후 진행(§1 범위 참조).
+> 범위 = **v2 현행 진실.** v1(CDK/EC2/Steampipe, `/awsops` basePath)은 **폐기 진행 중**(ADR-016, 2026-07-09 결정) — Phase 5(repo 코드 정리) 완료(2026-07-12, `src/`/`infra-cdk/` 등 제거), Phase 4.1~4.3(CFN 스택 삭제, ALB/SQS) 완료(2026-08-25), **Phase 4.4/4.5(고아 Lambda·AgentCore 게이트웨이/Memory/Interpreter·배포 버킷)는 2026-08-27부로 미확정**(원래 19개 Lambda 목록에서 2개 누락이 발견되어 21개 목록으로 재실행 필요 — `docs/runbooks/v1-decommission.md` §Phase 4 참조)(§1 범위 참조).
 > This is the single current-truth for decisions. Read this first; ADRs (`0NN-*.md`) hold detail, `../history/` holds the frozen past.
 
 ---
@@ -40,7 +40,7 @@
 - **6기둥 매핑 규칙** — 모든 신규 기능/결정은 WA 6기둥 중 최소 하나를 개선해야 한다. PR/ADR은 어느 기둥인지 명시한다.
 - **flag 규율** — 위험·대형 기능은 `*_enabled` count/flag 게이트(기본 false → `plan`=무변경·$0). FROZEN 항목은 default false 유지가 invariant(§2).
 - **BASELINE 크기 예산** — 이 문서는 *index*이지 소설이 아니다. 상세 설계는 `../reference/`로, 결정 근거는 통합 ADR로, 옛 이력은 `../history/`로 위임한다. §3 줄 수가 늘면 토픽 통합/reference 추출.
-- **범위 = v2.** v1은 **ADR-016에 따라 단계적 폐기 진행 중**(Phase 0~5, `docs/runbooks/v1-decommission.md`) — **Phase 5(repo `src/`/`infra-cdk/` 등 코드 정리) 완료(2026-07-12)**, Phase 4(AWS 인프라 완전삭제)는 유예기간 종료 후 별도 진행. Phase 4 완료 전까지 v1 AWS 인프라(EC2/CloudFront, stop/disable 상태) 관련 논의는 이 BASELINE의 "현행 진실 위반"이 아니다.
+- **범위 = v2.** v1은 **ADR-016에 따라 단계적 폐기 진행 중**(Phase 0~5, `docs/runbooks/v1-decommission.md`) — **Phase 5(repo `src/`/`infra-cdk/` 등 코드 정리) 완료(2026-07-12)**, **Phase 4.1~4.3(CFN 스택 `AwsopsStack` 삭제, ALB/SQS) 완료(2026-08-25)**, **Phase 4.4/4.5(고아 Lambda 21개·AgentCore 게이트웨이 8개/Memory/Code Interpreter·배포 버킷)는 2026-08-27부로 미확정** — 2026-08-25 실행이 쓴 19개 Lambda 목록에서 `awsops-istio-mcp`/`awsops-datasource-diag-mcp` 2개가 빠져 있었음이 확인되어, 21개로 정정된 목록으로 `scripts/v2/teardown/v1-teardown-4.4-4.5.sh` 재실행이 완료돼야 Phase 4가 확정된다(ADR-016 §Phase 4 실행 기록, `docs/runbooks/v1-decommission.md` §Phase 4 참조). Phase 4.4/4.5 확정 전까지 v1 AWS 인프라(EC2/CloudFront는 이미 stop/disable) 관련 논의는 이 BASELINE의 "현행 진실 위반"이 아니다.
 - **anti-drift(C2)** — 새 ADR/flag 변경은 **같은 PR에서 §3(또는 §2) 갱신**이 필수다. 갱신 없으면 "not live". 옛 ADR 본문은 트리에 없다(git tag `adr-legacy-2026-06-22` 보존, 매핑 `../history/ADR-MAPPING.md`).
 
 ---

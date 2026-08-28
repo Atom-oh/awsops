@@ -30,7 +30,7 @@ v1은 계속 비용을 발생시킨다: EC2(m7g.2xlarge, 상시 실행, ~$235/�
    - **수용하는 데이터 손실**(명시): `data/config.json`(부서 ACL·브랜딩·자격증명), AI 대화 이력(`data/memory/`), `agentcore-stats.json`, `report-schedule.json`의 v1 항목 — backfill 대상 외로 원래부터 아웃오브스코프였으며, S3 아카이브도 하지 않는다(비용 대비 가치 낮음, owner 승인).
 3. **Phase 2(도메인 컷오버)** — Terraform으로 `awsops.atomai.click`을 v2 CloudFront의 추가 별칭(SAN)으로 편입, Route53 레코드를 v2 소유로 이전(`terraform import`). v1 CloudFront에서는 별칭 제거. 기존 URL이 계속 동작하되 v2를 가리키게 됨.
 4. **Phase 3(다크, 유예 시작)** — v1 EC2 **stop**(terminate 아님) + v1 CloudFront **disable**. 즉시 EC2 비용 절감(~$235/월). 1~2주 유예 관찰 — 문제 발생 시 EC2 start + CloudFront enable + 별칭 원복으로 롤백 가능.
-5. **Phase 4(완전 삭제, 유예 후)** — `cdk destroy AwsopsStack`(또는 스택별 삭제) + 스택 밖 고아 리소스(`awsops-*-mcp` Lambda 18개 py3.12, `awsops-cognito-auth` Lambda@Edge, `awsops-deploy-*` S3) 개별 삭제. **spoke 계정의 `AWSopsReadOnlyRole`, 공유 VPC/hosted zone/CDKToolkit, v2 리소스 전체는 삭제 대상이 아님** — v2의 cross-account 조회 경로가 spoke 롤을 계속 사용한다.
+5. **Phase 4(완전 삭제, 유예 후)** — `cdk destroy AwsopsStack`(또는 스택별 삭제) + 스택 밖 고아 리소스(`awsops-*-mcp` 등 Lambda(최초 조사 시점 19개 — 2026-08-27 정정: `awsops-istio-mcp`/`awsops-datasource-diag-mcp` 2개가 이 조사에서 누락되어 있었음이 확인됨, 정확한 목록은 21개, `docs/runbooks/v1-decommission.md` §Phase 4 참조), `awsops-cognito-auth` Lambda@Edge, `awsops-deploy-*` S3) 개별 삭제. **spoke 계정의 `AWSopsReadOnlyRole`, 공유 VPC/hosted zone/CDKToolkit, v2 리소스 전체는 삭제 대상이 아님** — v2의 cross-account 조회 경로가 spoke 롤을 계속 사용한다.
 6. **Phase 5(코드 정리, 별도 PR)** — Phase 4 완료 후 `src/`, `infra-cdk/`, v1 전용 스크립트(`scripts/0N-*.sh`), 루트의 v1 전용 빌드 설정(`next.config.mjs`/`tailwind.config.ts`/`postcss.config.mjs`/`.eslintrc.json`/`vitest.config.ts`/루트 `Dockerfile`)을 삭제하는 별도 PR. `agent/`는 부분 유지(`agent.py`, `agent/lambda/*.py`는 v2 `ai.tf`가 계속 참조) — v1 전용 부분(`agent/rca/`, `anthropic_loop.py` 등)만 대조 후 삭제.
 
 **Phase 2까지 apply되면 v2가 v1의 유일한 살아있는 프로덕션 진입점이 되고, Phase 4가 끝나면 v1은 AWS 계정에서 완전히 사라진다.**
@@ -75,6 +75,12 @@ v1은 계속 비용을 발생시킨다: EC2(m7g.2xlarge, 상시 실행, ~$235/�
 - 검증: `bash tests/run-all.sh`를 삭제 전 태그와 비교 — 신규 회귀 없음(오히려 삭제된 v1 스킬-등록 체크 4건이 사라져 실패 수 감소). `bash scripts/v2/merge-verify.sh`(pytest + web vitest 1600건 + terraform validate) 전부 PASS.
 - **Follow-up (PR #159)**: 위에서 3개 의존성으로 축소했던 루트 `package.json`을 그 유일한 소비자인 `scripts/v2/`로 완전히 이동(더 이상 루트에 존재하지 않음) — `make deps`는 `npm ci --prefix scripts/v2`로 갱신.
 - **AWS 측 v1 인프라(EC2/CFN/Lambda@Edge/S3)는 이번 실행과 무관하게 그대로 유지** — Phase 4는 원래 유예 일정대로 별도 진행.
+
+## Phase 4 실행 기록 (2026-08-25, 2026-08-27 정정) / Phase 4 execution record
+
+- **2026-08-25 1차 실행**: 4.1~4.3(CFN 스택 `AwsopsStack` 삭제, ALB/SQS 포함) 완료. 4.4/4.5(고아 Lambda, v1 배포 버킷, AgentCore 게이트웨이 8개·Memory·Code Interpreter)는 **19개 Lambda 목록**을 쓴 스크립트로 실행해 실시간 AWS 상태 재조회로 `ALL CLEAR` 확인(`docs/runbooks/v1-decommission.md` §Phase 4 완료 배너 참조).
+- **2026-08-27 정정**: `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`(PR #242) 작업 중 이 저장소 자체의 `agent/lambda/create_targets.py` 소스 대조로 `awsops-istio-mcp`/`awsops-datasource-diag-mcp` 2개가 19개 목록에서 누락되어 있었음을 발견(정확한 목록은 21개). 이 두 Lambda가 2026-08-25 시점에 실제로 살아 있었는지는 **미확인** — 그 실행이 쓴 19개 목록에는 처음부터 없었으므로 있었다면 놓쳤을 것이고, 없었다면 8/25의 `ALL CLEAR`는 그대로 유효하다.
+- **현재 상태 = Phase 4.1~4.3 확정 완료, Phase 4.4/4.5 미확정.** 21개로 정정된 목록으로 `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`를 재실행(DRY-RUN 먼저)해 `ALL CLEAR`를 다시 확인해야 Phase 4가 전체 확정된다. 재확인 완료 시 이 섹션에 실행 기록을 추가한다.
 
 ## Consequences / 결과
 
