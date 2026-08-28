@@ -86,5 +86,61 @@ class TestProvisionDrift(unittest.TestCase):
         self.assertEqual(provision.tool_fingerprint(a), provision.tool_fingerprint(b))
 
 
+def _run_gateways(deployed_description):
+    """ensure_gateways with one existing gateway whose live description is as given."""
+    ctrl = mock.Mock()
+    ctrl.list_gateways.return_value = {"items": [{
+        "name": "awsops-v2-ops-gateway", "gatewayId": "gw-ops",
+        "description": deployed_description}]}
+    provision.report.clear()
+    with mock.patch.object(provision.catalog, "GATEWAYS", ["ops"]), \
+         mock.patch.object(provision.catalog, "GATEWAY_DESCRIPTIONS", {"ops": "new text"}):
+        ids = provision.ensure_gateways(ctrl, {"role_arn": "arn:aws:iam::1:role/r"})
+    return ctrl, ids, {r[1] for r in provision.report}
+
+
+class TestGatewayDescriptionDrift(unittest.TestCase):
+    """PR #246 review: a catalog GATEWAY_DESCRIPTIONS edit must converge onto an already-live
+    gateway — previously the description was only applied at create_gateway, so the live ops
+    gateway kept advertising "Steampipe SQL ..." after the catalog was fixed."""
+
+    def test_stale_description_is_drift(self):
+        ctrl, ids, statuses = _run_gateways("Steampipe SQL listing/status/docs/inventory")
+        self.assertIn("UPDATED", statuses)
+        ctrl.update_gateway.assert_called_once()
+        kw = ctrl.update_gateway.call_args.kwargs
+        self.assertEqual("new text", kw["description"])
+        # Must send exactly the same required identity/config fields create_gateway uses —
+        # never invent different values that could clobber the live gateway.
+        self.assertEqual("awsops-v2-ops-gateway", kw["name"])
+        self.assertEqual("MCP", kw["protocolType"])
+        self.assertEqual("NONE", kw["authorizerType"])
+        self.assertEqual({"ops": "gw-ops"}, ids)
+
+    def test_matching_description_is_not_drift(self):
+        ctrl, ids, statuses = _run_gateways("new text")
+        self.assertEqual({"EXISTS"}, statuses)
+        ctrl.update_gateway.assert_not_called()
+        self.assertEqual({"ops": "gw-ops"}, ids)
+
+    def test_update_failure_never_fails_the_run(self):
+        ctrl = mock.Mock()
+        ctrl.list_gateways.return_value = {"items": [{
+            "name": "awsops-v2-ops-gateway", "gatewayId": "gw-ops", "description": "stale"}]}
+        ctrl.update_gateway.side_effect = provision.ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "no"}}, "UpdateGateway")
+        provision.report.clear()
+        with mock.patch.object(provision.catalog, "GATEWAYS", ["ops"]), \
+             mock.patch.object(provision.catalog, "GATEWAY_DESCRIPTIONS", {"ops": "new text"}):
+            ids = provision.ensure_gateways(ctrl, {"role_arn": "arn:aws:iam::1:role/r"})
+        # Cosmetic convergence: the gateway id is still returned so provisioning continues.
+        self.assertEqual({"ops": "gw-ops"}, ids)
+        # And it must be WARN, not ERR — main() exits 1 on any ERR in the report, which would
+        # fail `make agentcore` over a label (the exact regression the stop-hook caught).
+        statuses = {r[1] for r in provision.report}
+        self.assertIn("WARN", statuses)
+        self.assertNotIn("ERR", statuses)
+
+
 if __name__ == "__main__":
     unittest.main()
