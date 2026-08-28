@@ -102,7 +102,9 @@ export type Kind =
   | 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events' | 'endpoints'
   // EKS 탐색기 kinds (v1 K9s-style explorer parity). SECURITY: secrets stay REJECTED (the pinned
   // allow-list invariant); configmaps are METADATA-ONLY — the normalizer never carries data values.
-  | 'replicasets' | 'daemonsets' | 'statefulsets' | 'jobs' | 'configmaps' | 'pvcs';
+  | 'replicasets' | 'daemonsets' | 'statefulsets' | 'jobs' | 'configmaps' | 'pvcs'
+  // gap-audit L164 K8s map — networking.k8s.io routing metadata, read-only GET.
+  | 'ingresses';
 
 const KIND_PATH: Record<Kind, string> = {
   nodes: '/api/v1/nodes',
@@ -121,6 +123,7 @@ const KIND_PATH: Record<Kind, string> = {
   jobs: '/apis/batch/v1/jobs',
   configmaps: '/api/v1/configmaps',
   pvcs: '/api/v1/persistentvolumeclaims',
+  ingresses: '/apis/networking.k8s.io/v1/ingresses',
 };
 
 export function isKind(k: string): k is Kind {
@@ -137,7 +140,8 @@ export function isKind(k: string): k is Kind {
     k === 'statefulsets' ||
     k === 'jobs' ||
     k === 'configmaps' ||
-    k === 'pvcs'
+    k === 'pvcs' ||
+    k === 'ingresses'
   );
 }
 
@@ -157,6 +161,8 @@ function age(ts?: string): string {
 
 // minimal K8s shapes (only the fields we read)
 interface K8sList { items?: K8sItem[]; message?: string; kind?: string }
+// networking.k8s.io/v1 Ingress backend (read by normalizeIngress)
+interface IngressBackend { service?: { name?: string; port?: { number?: number; name?: string } } }
 interface K8sItem {
   metadata?: { name?: string; namespace?: string; creationTimestamp?: string; labels?: Record<string, string>;
     ownerReferences?: { kind?: string; name?: string }[] };
@@ -171,6 +177,7 @@ interface K8sItem {
     updatedReplicas?: number;
     capacity?: Record<string, string>;
     allocatable?: Record<string, string>;
+    loadBalancer?: { ingress?: { hostname?: string; ip?: string }[] };
   };
   spec?: {
     nodeName?: string;
@@ -182,6 +189,9 @@ interface K8sItem {
     initContainers?: { resources?: { requests?: Record<string, string> } }[];
     overhead?: Record<string, string>;
     taints?: { key?: string; value?: string; effect?: string }[];
+    ingressClassName?: string;
+    defaultBackend?: IngressBackend;
+    rules?: { http?: { paths?: { backend?: IngressBackend }[] } }[];
   };
   // core /api/v1 Endpoints: subsets[].addresses[].ip = the pod IPs backing the Service
   // (the Endpoints object name == the Service name). Read by normalizeEndpoint.
@@ -214,10 +224,15 @@ export interface StatefulSetRow { name: string; namespace: string; ready: string
 export interface JobRow { name: string; namespace: string; completions: string; status: string; age: string }
 export interface ConfigMapRow { name: string; namespace: string; keys: number; age: string }
 export interface PvcRow { name: string; namespace: string; status: string; volume: string; capacity: string; storageClass: string; age: string }
+/** Ingress routing metadata for the K8s map (gap-audit L164) — no secret-bearing fields. */
+export interface IngressRow {
+  name: string; namespace: string; className: string; lbHostname: string;
+  backends: { service: string; port: string }[]; age: string;
+}
 
 export type InClusterRow =
   | NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow | EndpointRow
-  | ReplicaSetRow | DaemonSetRow | StatefulSetRow | JobRow | ConfigMapRow | PvcRow;
+  | ReplicaSetRow | DaemonSetRow | StatefulSetRow | JobRow | ConfigMapRow | PvcRow | IngressRow;
 
 export function normalizeEndpoint(it: K8sItem): EndpointRow {
   const ips = (it.subsets ?? []).flatMap((s) => (s.addresses ?? []).map((a) => a.ip ?? '').filter(Boolean));
@@ -441,6 +456,32 @@ export function normalizePvc(it: K8sItem): PvcRow {
   };
 }
 
+export function normalizeIngress(it: K8sItem): IngressRow {
+  const backends: { service: string; port: string }[] = [];
+  const push = (b?: IngressBackend) => {
+    const s = b?.service;
+    if (s?.name) backends.push({ service: s.name, port: String(s.port?.number ?? s.port?.name ?? '') });
+  };
+  push(it.spec?.defaultBackend);
+  for (const r of it.spec?.rules ?? []) for (const p of r.http?.paths ?? []) push(p.backend);
+  const seen = new Set<string>();
+  const deduped = backends.filter((b) => {
+    const k = `${b.service}:${b.port}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  const lb = it.status?.loadBalancer?.ingress?.[0];
+  return {
+    name: it.metadata?.name ?? '',
+    namespace: it.metadata?.namespace ?? '',
+    className: it.spec?.ingressClassName ?? '',
+    lbHostname: lb?.hostname ?? lb?.ip ?? '',
+    backends: deduped,
+    age: age(it.metadata?.creationTimestamp),
+  };
+}
+
 const NORMALIZERS: Record<Kind, (it: K8sItem) => InClusterRow> = {
   nodes: normalizeNode,
   pods: normalizePod,
@@ -455,6 +496,7 @@ const NORMALIZERS: Record<Kind, (it: K8sItem) => InClusterRow> = {
   jobs: normalizeJob,
   configmaps: normalizeConfigMap,
   pvcs: normalizePvc,
+  ingresses: normalizeIngress,
 };
 
 /** HTTPS GET against the cluster K8s API, verifying TLS with the cluster CA. */

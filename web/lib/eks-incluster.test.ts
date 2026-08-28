@@ -18,6 +18,7 @@ import {
   normalizeNamespace,
   normalizeEvent,
   normalizeEndpoint,
+  normalizeIngress,
 } from './eks-incluster';
 
 describe('normalizeEndpoint', () => {
@@ -258,4 +259,42 @@ describe('normalizeEvent', () => {
     expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T00:00:00Z'));
   });
   it('events is a valid kind', () => { expect(isKind('events')).toBe(true); });
+});
+
+describe('ingresses kind (K8s map)', () => {
+  it('is an allowed kind', () => {
+    expect(isKind('ingresses')).toBe(true);
+  });
+
+  it('normalizeIngress carries class, LB hostname, and deduped backends (rules + defaultBackend)', () => {
+    const row = normalizeIngress({
+      metadata: { name: 'web', namespace: 'prod', creationTimestamp: new Date(Date.now() - 3600_000).toISOString() },
+      spec: {
+        ingressClassName: 'alb',
+        defaultBackend: { service: { name: 'fallback', port: { number: 80 } } },
+        rules: [
+          { http: { paths: [
+            { backend: { service: { name: 'web-svc', port: { number: 8080 } } } },
+            { backend: { service: { name: 'web-svc', port: { number: 8080 } } } }, // dup → 1
+          ] } },
+        ],
+      },
+      status: { loadBalancer: { ingress: [{ hostname: 'k8s-abc.elb.amazonaws.com' }] } },
+    } as never);
+    expect(row.name).toBe('web');
+    expect(row.namespace).toBe('prod');
+    expect(row.className).toBe('alb');
+    expect(row.lbHostname).toBe('k8s-abc.elb.amazonaws.com');
+    expect(row.backends).toEqual([
+      { service: 'fallback', port: '80' },
+      { service: 'web-svc', port: '8080' },
+    ]);
+  });
+
+  it('normalizeIngress tolerates missing spec/status', () => {
+    const row = normalizeIngress({ metadata: { name: 'bare', namespace: 'ns' } } as never);
+    expect(row.backends).toEqual([]);
+    expect(row.lbHostname).toBe('');
+    expect(row.className).toBe('');
+  });
 });
