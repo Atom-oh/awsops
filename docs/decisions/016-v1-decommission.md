@@ -76,6 +76,12 @@ v1은 계속 비용을 발생시킨다: EC2(m7g.2xlarge, 상시 실행, ~$235/�
 - **Follow-up (PR #159)**: 위에서 3개 의존성으로 축소했던 루트 `package.json`을 그 유일한 소비자인 `scripts/v2/`로 완전히 이동(더 이상 루트에 존재하지 않음) — `make deps`는 `npm ci --prefix scripts/v2`로 갱신.
 - **AWS 측 v1 인프라(EC2/CFN/Lambda@Edge/S3)는 이번 실행과 무관하게 그대로 유지** — Phase 4는 원래 유예 일정대로 별도 진행.
 
+## Phase 4 실행 기록 (2026-08-25, 2026-08-27 정정) / Phase 4 execution record
+
+- **2026-08-25 1차 실행**: 4.1~4.3(CFN 스택 `AwsopsStack` 삭제, ALB/SQS 포함) 완료. 4.4/4.5(고아 Lambda, v1 배포 버킷, AgentCore 게이트웨이 8개·Memory·Code Interpreter)는 **19개 Lambda 목록**을 쓴 스크립트로 실행해 실시간 AWS 상태 재조회로 `ALL CLEAR` 확인(`docs/runbooks/v1-decommission.md` §Phase 4 완료 배너 참조).
+- **2026-08-27 정정**: `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`(PR #242) 작업 중 이 저장소 자체의 `agent/lambda/create_targets.py` 소스 대조로 `awsops-istio-mcp`/`awsops-datasource-diag-mcp` 2개가 19개 목록에서 누락되어 있었음을 발견(정확한 목록은 21개). 이 두 Lambda가 2026-08-25 시점에 실제로 살아 있었는지는 **미확인** — 그 실행이 쓴 19개 목록에는 처음부터 없었으므로 있었다면 놓쳤을 것이고, 없었다면 8/25의 `ALL CLEAR`는 그대로 유효하다.
+- **현재 상태 = Phase 4.1~4.3 확정 완료, Phase 4.4/4.5 미확정.** 21개로 정정된 목록으로 `scripts/v2/teardown/v1-teardown-4.4-4.5.sh`를 재실행(DRY-RUN 먼저)해 `ALL CLEAR`를 다시 확인해야 Phase 4가 전체 확정된다. 재확인 완료 시 이 섹션에 실행 기록을 추가한다.
+
 ## Consequences / 결과
 
 ### Positive / 긍정
