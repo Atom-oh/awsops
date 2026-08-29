@@ -19,7 +19,13 @@ export interface MapNode {
 export interface MapEdge { source: string; target: string }
 export interface MapGraph { nodes: MapNode[]; edges: MapEdge[] }
 
-export interface InvRow { resource_id: string; region: string | null; data: Record<string, unknown> }
+export interface InvRow { resource_id: string; account_id?: string | null; region: string | null; data: Record<string, unknown> }
+
+/** Node id scoped by account+region — inventory_resources' key is (type, account, region, id). */
+export function invNodeId(kind: MapKind, r: InvRow): string {
+  return `${kind}:${r.account_id ?? 'self'}/${r.region ?? ''}/${r.resource_id}`;
+}
+
 export interface TgwAttachmentLite { tgwId: string; resourceType: string; resourceId: string }
 
 export interface InfraMapInput {
@@ -47,38 +53,50 @@ function lbSubnets(data: Record<string, unknown>): string[] {
 export function buildInfraMap(input: InfraMapInput): MapGraph {
   const nodes: MapNode[] = [];
   const edges: MapEdge[] = [];
-  const vpcIds = new Set(input.vpc.map((r) => r.resource_id));
-  const subnetIds = new Set(input.subnet.map((r) => r.resource_id));
-  const subnetVpc = new Map(input.subnet.map((r) => [r.resource_id, str(r.data.vpc_id)]));
+  const scopeKey = (r: InvRow, raw: string) => `${r.account_id ?? 'self'}|${r.region ?? ''}|${raw}`;
+  // raw AWS id, scoped to the row's own account+region → node id
+  const vpcNode = new Map(input.vpc.map((r) => [scopeKey(r, r.resource_id), invNodeId('vpc', r)]));
+  const subnetNode = new Map(input.subnet.map((r) => [scopeKey(r, r.resource_id), invNodeId('subnet', r)]));
+  const subnetVpc = new Map(input.subnet.map((r) => [scopeKey(r, r.resource_id), str(r.data.vpc_id)]));
+  // raw VPC id → node ids across all scopes (TGW attachments carry no account/region)
+  const vpcByRaw = new Map<string, string[]>();
+  for (const r of input.vpc) {
+    const list = vpcByRaw.get(r.resource_id) ?? [];
+    list.push(invNodeId('vpc', r));
+    vpcByRaw.set(r.resource_id, list);
+  }
   const label = (r: InvRow) => str(r.data.name) || r.resource_id;
   const byKey = <T>(key: (x: T) => string) => (a: T, b: T) => key(a).localeCompare(key(b));
 
   // ── column 0: External (IGW · TGW) ─────────────────────────────────────
   for (const r of [...input.igw].sort(byKey(label))) {
-    nodes.push({ id: `igw:${r.resource_id}`, kind: 'igw', column: 0, label: label(r), sub: r.resource_id, status: 'neutral', meta: r.data });
+    nodes.push({ id: invNodeId('igw', r), kind: 'igw', column: 0, label: label(r), sub: r.resource_id, status: 'neutral', meta: r.data });
     const atts = Array.isArray(r.data.attachments) ? (r.data.attachments as Record<string, unknown>[]) : [];
     for (const a of atts) {
-      const v = str(a.VpcId ?? a.vpc_id);
-      if (vpcIds.has(v)) edges.push({ source: `igw:${r.resource_id}`, target: `vpc:${v}` });
+      const v = vpcNode.get(scopeKey(r, str(a.VpcId ?? a.vpc_id)));
+      if (v) edges.push({ source: invNodeId('igw', r), target: v });
     }
   }
   for (const r of [...input.tgw].sort(byKey(label))) {
     nodes.push({
-      id: `tgw:${r.resource_id}`, kind: 'tgw', column: 0, label: label(r),
+      id: invNodeId('tgw', r), kind: 'tgw', column: 0, label: label(r),
       sub: str(r.data.description) || r.resource_id,
       status: str(r.data.state) === 'available' ? 'ok' : 'warn', meta: r.data,
     });
   }
   for (const a of input.tgwAttachments ?? []) {
-    if (a.resourceType === 'vpc' && vpcIds.has(a.resourceId)) {
-      edges.push({ source: `tgw:${a.tgwId}`, target: `vpc:${a.resourceId}` });
+    if (a.resourceType !== 'vpc') continue;
+    const matches = vpcByRaw.get(a.resourceId) ?? [];
+    if (matches.length !== 1) continue; // 0 = unknown vpc, >1 = ambiguous across scopes — never guess
+    for (const t of [...input.tgw]) {
+      if (t.resource_id === a.tgwId) edges.push({ source: invNodeId('tgw', t), target: matches[0] });
     }
   }
 
   // ── column 1: VPC ──────────────────────────────────────────────────────
   for (const r of [...input.vpc].sort(byKey(label))) {
     nodes.push({
-      id: `vpc:${r.resource_id}`, kind: 'vpc', column: 1, label: label(r),
+      id: invNodeId('vpc', r), kind: 'vpc', column: 1, label: label(r),
       sub: `${str(r.data.cidr_block)} · ${r.resource_id}`,
       badge: r.data.is_default === true ? 'default' : undefined, status: 'neutral', meta: r.data,
     });
@@ -89,13 +107,13 @@ export function buildInfraMap(input: InfraMapInput): MapGraph {
   for (const r of [...input.subnet].sort(byKey(subnetSort))) {
     const pub = r.data.map_public_ip_on_launch === true;
     nodes.push({
-      id: `subnet:${r.resource_id}`, kind: 'subnet', column: 2, label: label(r),
+      id: invNodeId('subnet', r), kind: 'subnet', column: 2, label: label(r),
       sub: str(r.data.cidr_block),
-      badge: [str(r.data.availability_zone), pub ? 'public' : ''].filter(Boolean).join(' · '),
+      badge: [str(r.data.availability_zone), pub ? 'auto-public-ip' : ''].filter(Boolean).join(' · '),
       status: 'neutral', meta: r.data,
     });
-    const v = str(r.data.vpc_id);
-    if (vpcIds.has(v)) edges.push({ source: `vpc:${v}`, target: `subnet:${r.resource_id}` });
+    const v = vpcNode.get(scopeKey(r, str(r.data.vpc_id)));
+    if (v) edges.push({ source: v, target: invNodeId('subnet', r) });
   }
 
   // ── column 3: Compute (EC2 · ALB · NLB · RDS; sorted by vpc, subnet, kind, name) ──
@@ -107,9 +125,9 @@ export function buildInfraMap(input: InfraMapInput): MapGraph {
     // The synced rds row carries vpc_id but no subnet ids (only db_subnet_group_name) —
     // RDS therefore attaches at the VPC.
     ...input.rds.map((r) => ({ r, kind: 'rds' as MapKind, subnets: [] as string[], vpc: str(r.data.vpc_id) })),
-  ].sort(byKey((c) => `${c.vpc || subnetVpc.get(c.subnets[0] ?? '') || ''}|${c.subnets[0] ?? ''}|${c.kind}|${label(c.r)}`));
+  ].sort(byKey((c) => `${c.vpc || subnetVpc.get(scopeKey(c.r, c.subnets[0] ?? '')) || ''}|${c.subnets[0] ?? ''}|${c.kind}|${label(c.r)}`));
   for (const c of compute) {
-    const id = `${c.kind}:${c.r.resource_id}`;
+    const id = invNodeId(c.kind, c.r);
     const d = c.r.data;
     const node: MapNode = { id, kind: c.kind, column: 3, label: label(c.r), status: 'neutral', meta: d };
     if (c.kind === 'ec2') {
@@ -126,22 +144,29 @@ export function buildInfraMap(input: InfraMapInput): MapGraph {
     nodes.push(node);
     let linked = false;
     for (const s of c.subnets) {
-      if (subnetIds.has(s)) { edges.push({ source: `subnet:${s}`, target: id }); linked = true; }
+      const sn = subnetNode.get(scopeKey(c.r, s));
+      if (sn) { edges.push({ source: sn, target: id }); linked = true; }
     }
-    if (!linked && vpcIds.has(c.vpc)) edges.push({ source: `vpc:${c.vpc}`, target: id });
+    if (!linked) {
+      const v = vpcNode.get(scopeKey(c.r, c.vpc));
+      if (v) edges.push({ source: v, target: id });
+    }
   }
 
   // ── column 4: NAT (sorted by vpc, subnet) ──────────────────────────────
   const natSort = (r: InvRow) => `${str(r.data.vpc_id)}|${str(r.data.subnet_id)}|${r.resource_id}`;
   for (const r of [...input.nat].sort(byKey(natSort))) {
-    const id = `nat:${r.resource_id}`;
+    const id = invNodeId('nat', r);
     nodes.push({
       id, kind: 'nat', column: 4, label: label(r), sub: r.resource_id,
       status: str(r.data.state) === 'available' ? 'ok' : 'warn', meta: r.data,
     });
-    const s = str(r.data.subnet_id);
-    if (subnetIds.has(s)) edges.push({ source: `subnet:${s}`, target: id });
-    else if (vpcIds.has(str(r.data.vpc_id))) edges.push({ source: `vpc:${str(r.data.vpc_id)}`, target: id });
+    const sn = subnetNode.get(scopeKey(r, str(r.data.subnet_id)));
+    if (sn) edges.push({ source: sn, target: id });
+    else {
+      const v = vpcNode.get(scopeKey(r, str(r.data.vpc_id)));
+      if (v) edges.push({ source: v, target: id });
+    }
   }
 
   return { nodes, edges };

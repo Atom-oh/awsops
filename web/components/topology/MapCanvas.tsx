@@ -4,9 +4,10 @@
 // Layout is deterministic: x from column index, y from per-column stacking order.
 import { useMemo, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { Position, type Node, type Edge, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type Edge, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { highlightClosure, searchMatches, type MapGraph, type MapKind, type MapNode } from '@/lib/infra-map';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 const Background = dynamic(() => import('@xyflow/react').then((m) => m.Background), { ssr: false });
@@ -74,6 +75,8 @@ function CardNode({ data }: NodeProps) {
       className="rounded-lg px-2.5 py-1.5"
       style={{ width: CARD_W, background: bg, border: `1.5px solid ${border}`, color: theme === 'dark' ? '#E8EDF2' : '#16202A' }}
     >
+      <Handle type="target" position={Position.Left} style={{ opacity: 0, pointerEvents: 'none' }} />
+      <Handle type="source" position={Position.Right} style={{ opacity: 0, pointerEvents: 'none' }} />
       <div className="flex items-center gap-1.5">
         {n.status && <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: STATUS_DOT[n.status] }} />}
         <span className="truncate text-[12px] font-semibold" title={n.label}>{n.label}</span>
@@ -89,6 +92,7 @@ const nodeTypes = { card: CardNode };
 
 export default function MapCanvas({ graph, columns, query, theme, onSelect }:
   { graph: MapGraph; columns: { title: string }[]; query: string; theme: 'light' | 'dark'; onSelect?: (node: MapNode | null) => void }) {
+  const { tt } = useI18n();
   const [selected, setSelected] = useState<string | null>(null);
 
   const lit = useMemo(() => {
@@ -150,7 +154,7 @@ export default function MapCanvas({ graph, columns, query, theme, onSelect }:
           onClick={() => { setSelected(null); onSelect?.(null); }}
           className="absolute right-3 top-3 z-10 rounded-md border border-ink-200 bg-card px-2 py-1 text-[11px] hover:bg-ink-50"
         >
-          선택 해제
+          {tt('선택 해제')}
         </button>
       )}
       <ReactFlow

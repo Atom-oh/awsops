@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import MapCanvas, { MapLegend } from '@/components/topology/MapCanvas';
 import { buildInfraMap, type InvRow, type TgwAttachmentLite } from '@/lib/infra-map';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { useTheme } from '@/lib/use-theme';
 
 const TYPES = ['internet_gateway', 'transit_gateway', 'vpc', 'subnet', 'ec2', 'alb', 'nlb', 'rds', 'nat_gateway'] as const;
@@ -17,10 +18,12 @@ interface InvPage { rows?: InvRow[] }
 
 export default function InfraMapView({ query }: { query: string }) {
   const [scope] = useActiveScope();
+  const { tt } = useI18n();
   // Only 'dark' is a dark theme (cobalt/teal are light variants) — same mapping as /topology.
   const theme = useTheme() === 'dark' ? 'dark' as const : 'light' as const;
   const [rows, setRows] = useState<Partial<Record<MapType, InvRow[]>> | null>(null);
   const [tgwAtt, setTgwAtt] = useState<TgwAttachmentLite[]>([]);
+  const [tgwNote, setTgwNote] = useState('');
   const [failed, setFailed] = useState<string[]>([]);
   const [capped, setCapped] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -28,7 +31,11 @@ export default function InfraMapView({ query }: { query: string }) {
   useEffect(() => {
     let live = true;
     setBusy(true);
+    setTgwAtt([]);
+    setTgwNote('');
     const scopeQ = scopeParams(scope);
+    // /api/tgw describes with the host account's credentials only — a non-host scope can't be enriched.
+    const hostScope = scope.accounts !== '__all__' && scope.accounts.length === 1 && scope.accounts[0] === 'self';
     Promise.all(TYPES.map(async (t) => {
       try {
         const r = await fetch(`/api/inventory/${t}?limit=${LIMIT}&${scopeQ}`);
@@ -57,7 +64,11 @@ export default function InfraMapView({ query }: { query: string }) {
       setBusy(false);
       // TGW attachments (live describe) — degrade to edge-less TGW nodes on failure.
       const tgwIds = (out.transit_gateway ?? []).map((r) => r.resource_id).filter((id) => /^tgw-[0-9a-f]+$/.test(id));
-      if (tgwIds.length > 0) {
+      if (tgwIds.length > 0 && !hostScope) {
+        if (live) setTgwNote('TGW 어태치먼트는 host 계정 스코프에서만 조회됩니다 — 엣지 없이 표시');
+      } else if (tgwIds.length > 0) {
+        // The server caps the describe at 20 ids — surface the truncation instead of silently dropping edges.
+        if (live && tgwIds.length > 20) setTgwNote('TGW 20개 초과 — 어태치먼트는 처음 20개까지만 조회됨');
         try {
           const r = await fetch(`/api/tgw?ids=${tgwIds.join(',')}`);
           if (r.ok) {
@@ -79,12 +90,13 @@ export default function InfraMapView({ query }: { query: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1 text-[11px] text-ink-500">
-        {busy && <span>불러오는 중…</span>}
-        {failed.length > 0 && <span className="text-red-600">조회 실패: {failed.join(', ')}</span>}
-        {capped.length > 0 && <span className="text-amber-600">500행 초과로 일부만 표시: {capped.join(', ')}</span>}
-        {graph && <span>노드 {graph.nodes.length.toLocaleString()} · 엣지 {graph.edges.length.toLocaleString()}</span>}
+        {busy && <span>{tt('불러오는 중…')}</span>}
+        {failed.length > 0 && <span className="text-red-600">{tt('조회 실패:')} {failed.join(', ')}</span>}
+        {capped.length > 0 && <span className="text-amber-600">{tt('500행 초과로 일부만 표시:')} {capped.join(', ')}</span>}
+        {tgwNote && <span className="text-amber-600">{tt(tgwNote)}</span>}
+        {graph && <span>{tt(`노드 ${graph.nodes.length.toLocaleString()} · 엣지 ${graph.edges.length.toLocaleString()}`)}</span>}
         {graph && <MapLegend graph={graph} theme={theme} />}
-        {graph && graph.nodes.length === 0 && !busy && <span>표시할 네트워크 리소스가 없습니다 (인벤토리 sync 확인).</span>}
+        {graph && graph.nodes.length === 0 && !busy && <span>{tt('표시할 네트워크 리소스가 없습니다 (인벤토리 sync 확인).')}</span>}
       </div>
       {graph && graph.nodes.length > 0 && (
         <MapCanvas graph={graph} columns={COLUMNS} query={query} theme={theme} />

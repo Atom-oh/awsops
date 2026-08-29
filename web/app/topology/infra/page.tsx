@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { Background, Controls, Position, type Node, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { layoutFlow } from '@/lib/flow-layout';
 import InfraMapView from '@/components/topology/InfraMapView';
 import K8sMapView from '@/components/topology/K8sMapView';
@@ -39,6 +40,7 @@ const LEGEND: { kind: string; label: string }[] = [
 
 /** 기존 배치 그래프 뷰 (materialized infra 그래프 전체 렌더) — 검색어는 페이지 헤더에서 내려받는다. */
 function GraphView({ q }: { q: string }) {
+  const { tt } = useI18n();
   const [activeAccount] = useActiveAccount();
   const [graph, setGraph] = useState<Graph | null>(null);
   const [err, setErr] = useState('');
@@ -108,21 +110,21 @@ function GraphView({ q }: { q: string }) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1 text-[11px] text-ink-500">
-        {busy && <span>불러오는 중…</span>}
-        {err && <span className="text-red-600">조회 실패: {err}</span>}
-        {graph && <span>노드 {graph.nodes.length.toLocaleString()} · 엣지 {graph.edges.length.toLocaleString()}</span>}
-        {q.trim() && <span className="font-semibold text-brand-700">매치 {matches.size}개</span>}
+        {busy && <span>{tt('불러오는 중…')}</span>}
+        {err && <span className="text-red-600">{tt('조회 실패:')} {err}</span>}
+        {graph && <span>{tt(`노드 ${graph.nodes.length.toLocaleString()} · 엣지 ${graph.edges.length.toLocaleString()}`)}</span>}
+        {q.trim() && <span className="font-semibold text-brand-700">{tt(`매치 ${matches.size}개`)}</span>}
         {LEGEND.map((l) => {
           const [bg, border] = COLORS[l.kind] ?? RESOURCE;
           return (
             <span key={l.kind} className="inline-flex items-center gap-1">
               <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: bg, border: `1px solid ${border}` }} />
-              {l.label}
+              {tt(l.label)}
             </span>
           );
         })}
-        {graph?.captured_at && <span>그래프 시점: {new Date(graph.captured_at).toLocaleString()}</span>}
-        {graph && graph.nodes.length === 0 && !busy && <span>인프라 그래프가 비어 있습니다 (materializer 미실행).</span>}
+        {graph?.captured_at && <span>{tt('그래프 시점:')} {new Date(graph.captured_at).toLocaleString()}</span>}
+        {graph && graph.nodes.length === 0 && !busy && <span>{tt('인프라 그래프가 비어 있습니다 (materializer 미실행).')}</span>}
       </div>
       <div className="min-h-0 flex-1">
         <ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.15 }} minZoom={0.05} proOptions={{ hideAttribution: true }}>
@@ -145,6 +147,7 @@ const SUBTITLES: Record<View, string> = {
 
 /** 계정 전체 인프라 배치 그래프 + 컬럼형 맵 뷰 (v1 Infra Map/K8s Map parity). */
 function InfraTopologyPageInner() {
+  const { tt } = useI18n();
   const router = useRouter();
   const params = useSearchParams();
   const raw = params.get('view');
@@ -155,8 +158,8 @@ function InfraTopologyPageInner() {
   return (
     <div className="flex h-full flex-col">
       <PageHeader
-        title="인프라 배치 그래프"
-        subtitle={SUBTITLES[view]}
+        title={tt('인프라 배치 그래프')}
+        subtitle={tt(SUBTITLES[view])}
         right={
           <div className="flex items-center gap-3 text-[12px] text-ink-600">
             <div className="flex overflow-hidden rounded-md border border-ink-200">
@@ -166,17 +169,17 @@ function InfraTopologyPageInner() {
                   onClick={() => setView(v)}
                   className={`px-2 py-1 ${view === v ? 'bg-brand-600 text-white' : 'bg-card hover:bg-ink-50'}`}
                 >
-                  {label}
+                  {tt(label)}
                 </button>
               ))}
             </div>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="검색 (id · 이름 · IP · 타입)…"
+              placeholder={tt('검색 (id · 이름 · IP · 타입)…')}
               className="w-56 rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
             />
-            <Link href="/topology" className="rounded-md border border-ink-200 bg-card px-2 py-1 hover:bg-ink-50">← 트래픽 흐름</Link>
+            <Link href="/topology" className="rounded-md border border-ink-200 bg-card px-2 py-1 hover:bg-ink-50">{tt('← 트래픽 흐름')}</Link>
           </div>
         }
       />
