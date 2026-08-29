@@ -195,7 +195,7 @@ interface K8sItem {
   };
   // core /api/v1 Endpoints: subsets[].addresses[].ip = the pod IPs backing the Service
   // (the Endpoints object name == the Service name). Read by normalizeEndpoint.
-  subsets?: { addresses?: { ip?: string }[] }[];
+  subsets?: { addresses?: { ip?: string; targetRef?: { kind?: string; name?: string; namespace?: string } }[] }[];
   // core /api/v1 Event fields (read by normalizeEvent)
   involvedObject?: { kind?: string; name?: string };
   reason?: string;
@@ -212,7 +212,12 @@ export interface DeploymentRow { name: string; namespace: string; ready: string;
 export interface ServiceRow { name: string; namespace: string; type: string; clusterIP: string; ports: string; age: string }
 export interface NamespaceRow { name: string; status: string; age: string }
 /** A Service's backing pod IPs. name == the Service name (Endpoints object name). */
-export interface EndpointRow { name: string; namespace: string; ips: string[] }
+export interface EndpointRow {
+  name: string; namespace: string; ips: string[];
+  /** Per-address pod identity when the API provides targetRef — preferred over the IP join
+   *  (multiple same-namespace hostNetwork pods can share one node IP). */
+  targets: { ip: string; pod?: string }[];
+}
 export interface EventRow {
   kind: string; object: string; reason: string; message: string;
   count: number; lastSeen: string; lastSeenTs: number;
@@ -235,8 +240,12 @@ export type InClusterRow =
   | ReplicaSetRow | DaemonSetRow | StatefulSetRow | JobRow | ConfigMapRow | PvcRow | IngressRow;
 
 export function normalizeEndpoint(it: K8sItem): EndpointRow {
-  const ips = (it.subsets ?? []).flatMap((s) => (s.addresses ?? []).map((a) => a.ip ?? '').filter(Boolean));
-  return { name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '', ips };
+  const addrs = (it.subsets ?? []).flatMap((s) => s.addresses ?? []);
+  const ips = addrs.map((a) => a.ip ?? '').filter(Boolean);
+  const targets = addrs
+    .filter((a) => a.ip)
+    .map((a) => ({ ip: a.ip as string, pod: a.targetRef?.kind === 'Pod' && a.targetRef.name ? a.targetRef.name : undefined }));
+  return { name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '', ips, targets };
 }
 
 function nodeRoles(labels: Record<string, string> = {}): string {

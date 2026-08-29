@@ -96,9 +96,11 @@ export default function MapCanvas({ graph, columns, query, theme, onSelect }:
   const [selected, setSelected] = useState<string | null>(null);
 
   const lit = useMemo(() => {
-    if (selected && graph.nodes.some((n) => n.id === selected)) return highlightClosure(graph, selected);
     const m = searchMatches(graph, query);
-    return m.size > 0 ? m : null; // null → nothing dimmed
+    if (m.size > 0) return m; // an active search wins over a prior selection
+    if (query.trim()) return null; // searching with no hits → dim nothing (empty-result state)
+    if (selected && graph.nodes.some((n) => n.id === selected)) return highlightClosure(graph, selected);
+    return null;
   }, [graph, selected, query]);
 
   const { nodes, edges } = useMemo(() => {

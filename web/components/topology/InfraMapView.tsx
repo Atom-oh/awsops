@@ -74,6 +74,10 @@ export default function InfraMapView({ query }: { query: string }) {
           if (r.ok) {
             const d: { attachments?: { tgwId: string; resourceType: string; resourceId: string; state?: string }[] } = await r.json();
             if (live) setTgwAtt((d.attachments ?? []).map((a) => ({ tgwId: a.tgwId, resourceType: a.resourceType, resourceId: a.resourceId, state: a.state })));
+            // A per-region describe failure means that region's attachments are MISSING, not empty —
+            // this note overwrites the >20 truncation one (degradation is the stronger signal).
+            const degraded = (d as { degradedRegions?: string[] }).degradedRegions ?? [];
+            if (live && degraded.length > 0) setTgwNote(`일부 리전 TGW 어태치먼트 조회 실패(${degraded.join(', ')}) — 해당 리전 엣지 누락 가능`);
           } else if (live) {
             setTgwNote('TGW 어태치먼트 조회 실패 — 연결 엣지가 표시되지 않을 수 있음');
           }

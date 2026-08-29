@@ -37,7 +37,7 @@ Three views on the existing page, selected by a segmented toggle (no new sidebar
 
 - **배치 그래프** (existing) — the current ReactFlow materialized-graph view, unchanged.
 - **인프라 맵** (new) — 5-column map.
-- **K8s 맵** (new) — 4-column map with a cluster selector (from `/api/eks` registered clusters).
+- **K8s 맵** (new) — 4-column map with a cluster selector (host-account `connected` clusters only — the in-cluster read path is host-scoped, so member-account clusters are not listed).
 
 The toggle state lives in the URL (`?view=graph|map|k8s`) so links/refresh preserve the view.
 
@@ -62,7 +62,9 @@ like the existing pages) with:
   (endpoints IP join), Pod→Node (`spec.nodeName`). TGW attachments resolve to a VPC node only
   when the raw VPC id maps to exactly ONE scope (ambiguous multi-scope matches are skipped,
   never guessed), and failed/deleting attachments draw no edge; a failed `/api/tgw` fetch
-  surfaces a warning chip instead of rendering edge-less TGWs as unattached.
+  surfaces a warning chip instead of rendering edge-less TGWs as unattached. The describe
+  itself reports per-region failures (`degradedRegions`) so a region-level AWS error also
+  surfaces as a chip rather than rendering as "unattached".
 - **Cross-highlight**: clicking a node computes its closure (ancestors + descendants along
   edges) — closure nodes/edges stay full opacity, the rest dim to ~0.25. Clicking the selected
   node again (or a Clear button) resets. Search box highlights all matching nodes

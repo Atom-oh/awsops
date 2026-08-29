@@ -27,10 +27,29 @@ describe('normalizeEndpoint', () => {
       metadata: { name: 'argocd-server', namespace: 'argocd' },
       subsets: [{ addresses: [{ ip: '10.2.37.47' }, { ip: '10.2.37.48' }] }, { addresses: [{ ip: '10.2.40.9' }] }],
     });
-    expect(r).toEqual({ name: 'argocd-server', namespace: 'argocd', ips: ['10.2.37.47', '10.2.37.48', '10.2.40.9'] });
+    expect(r).toEqual({
+      name: 'argocd-server', namespace: 'argocd', ips: ['10.2.37.47', '10.2.37.48', '10.2.40.9'],
+      targets: [
+        { ip: '10.2.37.47', pod: undefined },
+        { ip: '10.2.37.48', pod: undefined },
+        { ip: '10.2.40.9', pod: undefined },
+      ],
+    });
   });
   it('handles a headless/empty Endpoints object', () => {
-    expect(normalizeEndpoint({ metadata: { name: 'svc', namespace: 'ns' } })).toEqual({ name: 'svc', namespace: 'ns', ips: [] });
+    expect(normalizeEndpoint({ metadata: { name: 'svc', namespace: 'ns' } })).toEqual({ name: 'svc', namespace: 'ns', ips: [], targets: [] });
+  });
+  it('endpoint carries per-address pod targetRef', () => {
+    const row = normalizeEndpoint({
+      metadata: { name: 's', namespace: 'ns' },
+      subsets: [{ addresses: [
+        { ip: '10.0.0.1', targetRef: { kind: 'Pod', name: 'p1' } },
+        { ip: '10.0.0.2' },
+        { targetRef: { kind: 'Pod', name: 'no-ip' } },
+      ] }],
+    } as never);
+    expect(row.targets).toEqual([{ ip: '10.0.0.1', pod: 'p1' }, { ip: '10.0.0.2', pod: undefined }]);
+    expect(row.ips).toEqual(['10.0.0.1', '10.0.0.2']);
   });
 });
 

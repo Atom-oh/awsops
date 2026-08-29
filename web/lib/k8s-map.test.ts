@@ -13,7 +13,7 @@ const base = (): K8sMapInput => ({
     { name: 'lonely', namespace: 'prod', status: 'Pending', node: '', restarts: 0, age: '1m', cpuRequest: 0, memRequest: 0, diskRequest: 0 },
   ],
   nodes: [{ name: 'node-a', status: 'Ready', roles: '', version: 'v1.31', instanceType: 'm7g.large', zone: 'apne2-a', age: '9d', cpuCapacity: 4, cpuAllocatable: 4, memCapacity: 16384, memAllocatable: 15000, diskCapacity: 0, diskAllocatable: 0 }],
-  endpoints: [{ name: 'web-svc', namespace: 'prod', ips: ['10.0.2.10'] }],
+  endpoints: [{ name: 'web-svc', namespace: 'prod', ips: ['10.0.2.10'], targets: [{ ip: '10.0.2.10', pod: 'web-1' }] }],
 });
 
 describe('buildK8sMap', () => {
@@ -58,6 +58,28 @@ describe('buildK8sMap', () => {
     input.ingresses[0].backends = [{ service: 'web-svc', port: '8080' }, { service: 'web-svc', port: '9090' }];
     const g = buildK8sMap(input);
     expect(g.edges.filter((e) => e.source === 'ing:prod/web' && e.target === 'svc:prod/web-svc')).toHaveLength(1);
+  });
+
+  it('joins service→pod by targetRef, not by shared IP', () => {
+    const input = base();
+    // two hostNetwork pods sharing one node IP; targetRef names only web-1
+    input.pods.push({ name: 'host-2', namespace: 'prod', status: 'Running', node: 'node-a', restarts: 0, age: '1h', cpuRequest: 0, memRequest: 0, diskRequest: 0, podIP: '10.0.2.10' });
+    const g = buildK8sMap(input);
+    expect(g.edges.some((e) => e.source === 'svc:prod/web-svc' && e.target === 'pod:prod/web-1')).toBe(true);
+    expect(g.edges.some((e) => e.target === 'pod:prod/host-2')).toBe(false);
+    expect(g.nodes.find((n) => n.id === 'svc:prod/web-svc')?.badge).toContain('1 pod');
+  });
+
+  it('falls back to the IP join only when the IP maps to exactly one pod', () => {
+    const input = base();
+    input.endpoints = [{ name: 'web-svc', namespace: 'prod', ips: ['10.0.2.10'], targets: [{ ip: '10.0.2.10', pod: undefined }] }];
+    const g = buildK8sMap(input);
+    expect(g.edges.some((e) => e.source === 'svc:prod/web-svc' && e.target === 'pod:prod/web-1')).toBe(true);
+    // ambiguous shared IP → no edge, no guess
+    input.pods.push({ name: 'host-2', namespace: 'prod', status: 'Running', node: 'node-a', restarts: 0, age: '1h', cpuRequest: 0, memRequest: 0, diskRequest: 0, podIP: '10.0.2.10' });
+    const g2 = buildK8sMap(input);
+    expect(g2.edges.some((e) => e.source === 'svc:prod/web-svc' && e.target === 'pod:prod/web-1')).toBe(false);
+    expect(g2.nodes.find((n) => n.id === 'svc:prod/web-svc')?.badge).toContain('0 pods');
   });
 
   it('carries useful card fields (status/badge/sub)', () => {

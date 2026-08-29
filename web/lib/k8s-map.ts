@@ -28,6 +28,7 @@ export function buildK8sMap(input: K8sMapInput): MapGraph {
     if (!podByIp.has(k)) podByIp.set(k, []);
     podByIp.get(k)!.push(p);
   }
+  const podNames = new Set(input.pods.map((p) => `${p.namespace}/${p.name}`));
   const nodeNames = new Set(input.nodes.map((n) => n.name));
 
   // column 0 — Ingress
@@ -52,10 +53,16 @@ export function buildK8sMap(input: K8sMapInput): MapGraph {
     const id = `svc:${svc.namespace}/${svc.name}`;
     const ep = input.endpoints.find((e) => e.namespace === svc.namespace && e.name === svc.name);
     // v1 parity: the card badge carries the matched pod count (DISTINCT pods, not addresses).
+    // Prefer the Endpoints targetRef pod identity; fall back to the (namespace, IP) join ONLY
+    // when the IP resolves to exactly one pod — same-namespace hostNetwork pods share a node IP,
+    // and guessing among them would misattribute topology (never-misattribute norm).
     const matchedPods = new Set<string>();
-    for (const ip of ep?.ips ?? []) {
-      for (const p of podByIp.get(`${svc.namespace}|${ip}`) ?? []) {
-        matchedPods.add(`pod:${p.namespace}/${p.name}`);
+    for (const t of ep?.targets ?? []) {
+      if (t.pod && podNames.has(`${svc.namespace}/${t.pod}`)) {
+        matchedPods.add(`pod:${svc.namespace}/${t.pod}`);
+      } else if (!t.pod) {
+        const byIp = podByIp.get(`${svc.namespace}|${t.ip}`) ?? [];
+        if (byIp.length === 1) matchedPods.add(`pod:${byIp[0].namespace}/${byIp[0].name}`);
       }
     }
     const podN = matchedPods.size;

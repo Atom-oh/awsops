@@ -86,8 +86,10 @@ export function buildInfraMap(input: InfraMapInput): MapGraph {
   }
   for (const a of input.tgwAttachments ?? []) {
     if (a.resourceType !== 'vpc') continue;
-    // failed/deleting attachments are not live connectivity — never draw them as an edge.
-    if (a.state && ['failed', 'deleting', 'deleted', 'rejected'].includes(a.state)) continue;
+    // Only an 'available' attachment is live connectivity (allowlist — pending/initiating/
+    // pendingAcceptance/failed/deleting must not render as an existing edge). A row with no
+    // state field (older/partial sources) keeps drawing — unknown ≠ known-dead.
+    if (a.state && a.state !== 'available') continue;
     const matches = vpcByRaw.get(a.resourceId) ?? [];
     if (matches.length !== 1) continue; // 0 = unknown vpc, >1 = ambiguous across scopes — never guess
     for (const t of [...input.tgw]) {
