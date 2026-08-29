@@ -21,8 +21,17 @@ const QUERY_CONCURRENCY = 3; // sequential batches — don't hammer the connecto
 /** First numeric value in a normalized result — table value column or last point of the first series. */
 function statValue(r: NormalizedResult): number | null {
   if (r.shape === 'table') {
-    const v = r.rows?.[0]?.value;
-    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    // Prometheus/Loki instant results carry a `value` column, but ClickHouse keeps the original
+    // column names (e.g. `count()`), so fall back to the first finite numeric cell of row 0.
+    const row = r.rows?.[0];
+    if (!row) return null;
+    const direct = row.value;
+    if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+    for (const col of r.columns ?? []) {
+      const v = row[col.key];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+    }
+    return null;
   }
   if (r.shape === 'series' && r.series?.length) {
     const last = r.series[r.series.length - 1];
@@ -33,7 +42,7 @@ function statValue(r: NormalizedResult): number | null {
   return null;
 }
 
-export default function CardDashboard({ instanceId, onPick }: { instanceId: number; onPick?: (expr: string) => void }) {
+export default function CardDashboard({ instanceId }: { instanceId: number }) {
   const { tt } = useI18n();
   const [ready, setReady] = useState<ReadyCard[]>([]);
   const [unavailable, setUnavailable] = useState<UnavailableCard[]>([]);
@@ -84,34 +93,29 @@ export default function CardDashboard({ instanceId, onPick }: { instanceId: numb
           const st = states[c.cardKey];
           const r = st?.result;
           const stat = r ? statValue(r) : null;
-          const pickBtn = onPick ? (
-            <button
-              onClick={() => onPick(c.query.expr)}
-              className="rounded border border-ink-200 px-1.5 py-0.5 text-[10px] text-ink-500 hover:bg-ink-50"
-            >
-              {tt('Explore에서 열기')}
-            </button>
-          ) : undefined;
           // Chart components render their own Card (title/right slots) — don't double-wrap them.
           if (r && c.viz === 'timeseries' && r.shape === 'series' && r.series) {
             const keys = r.seriesKeys?.length ? r.seriesKeys : [r.seriesYKey || 'value'];
             return keys.length > 1 ? (
-              <MultiLineTrend key={c.cardKey} title={tt(c.title)} right={pickBtn} data={r.series} xKey={r.seriesXKey || 't'} series={keys.map((k) => ({ key: k }))} height={180} />
+              <MultiLineTrend key={c.cardKey} title={tt(c.title)} data={r.series} xKey={r.seriesXKey || 't'} series={keys.map((k) => ({ key: k }))} height={180} />
             ) : (
-              <AreaTrend key={c.cardKey} title={tt(c.title)} right={pickBtn} data={r.series} xKey={r.seriesXKey || 't'} yKey={keys[0]} />
+              <AreaTrend key={c.cardKey} title={tt(c.title)} data={r.series} xKey={r.seriesXKey || 't'} yKey={keys[0]} />
             );
           }
           return (
             <Card key={c.cardKey}>
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-[12px] font-semibold text-ink-700">{tt(c.title)}</span>
-                {pickBtn}
               </div>
               {!st && <div className="h-10 animate-pulse rounded bg-ink-100" />}
               {st?.error && (
                 <span className="text-[12px] text-red-600">{tt('카드 쿼리 실패:')} {st.error}</span>
               )}
-              {r && c.viz === 'table' && r.shape !== 'series' && (
+              {/* A successful-but-empty result must say so — a bare <table> with no rows renders a blank body. */}
+              {r && c.viz === 'table' && r.shape !== 'series' && (r.shape === 'empty' || (r.rows ?? []).length === 0) && (
+                <span className="text-[12px] text-ink-500">{r.note ? tt(r.note) : tt('결과 없음')}</span>
+              )}
+              {r && c.viz === 'table' && r.shape !== 'series' && r.shape !== 'empty' && (r.rows ?? []).length > 0 && (
                 <div className="max-h-40 overflow-auto text-[11px]">
                   <table className="w-full">
                     <tbody>
@@ -142,9 +146,9 @@ export default function CardDashboard({ instanceId, onPick }: { instanceId: numb
         })}
         {unavailable.map((c) => (
           <Card key={c.cardKey}>
-            <div className="opacity-45" title={`${tt('누락:')} ${c.missing.join(', ')}`}>
+            <div className="opacity-45" title={`${c.indeterminate ? tt('미확정:') : tt('누락:')} ${c.missing.join(', ')}`}>
               <span className="text-[12px] font-semibold text-ink-700">{tt(c.title)}</span>
-              <div className="text-[11px] text-ink-500">{tt('스키마에 필요한 항목이 없어 비활성')}</div>
+              <div className="text-[11px] text-ink-500">{c.indeterminate ? tt('스키마 캐시가 잘려 존재 여부 미확정') : tt('스키마에 필요한 항목이 없어 비활성')}</div>
             </div>
           </Card>
         ))}

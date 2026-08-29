@@ -44,20 +44,52 @@ def test_tempo_always_ready():
 
 
 def test_clickhouse_table_resolution_and_identifier_guard():
+    # SHOW TABLES fallback shape: an unqualified name still matches and is quoted
     good = {"tables": [{"name": "otel_traces", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}, {"name": "ServiceName"}]}]}
     by = {r["card_key"]: r for r in cc.build_cards("clickhouse", good)}
     assert by["otel_span_rate"]["status"] == "ready"
-    assert "FROM otel_traces" in by["otel_span_rate"]["query"]["expr"]
+    assert "FROM `otel_traces`" in by["otel_span_rate"]["query"]["expr"]
+    # the aggregate is aliased so the stat renderer's rows[0].value lookup finds it
+    assert "count() AS value" in by["otel_span_rate"]["query"]["expr"]
     assert by["top_services"]["status"] == "ready"
     # heuristic fallback: Timestamp+TraceId columns, non-otel name
     heur = {"tables": [{"name": "spans_v2", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}]}]}
     by2 = {r["card_key"]: r for r in cc.build_cards("clickhouse", heur)}
-    assert "FROM spans_v2" in by2["otel_span_rate"]["query"]["expr"]
+    assert "FROM `spans_v2`" in by2["otel_span_rate"]["query"]["expr"]
     assert by2["top_services"]["status"] == "unavailable"  # no ServiceName column
     # a table name failing the identifier charset is NEVER spliced
     evil = {"tables": [{"name": "otel_traces; DROP TABLE x", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}]}]}
     by3 = {r["card_key"]: r for r in cc.build_cards("clickhouse", evil)}
     assert by3["otel_span_rate"]["status"] == "unavailable"
+    # 3+ dot segments are rejected (only `table` or `db.table` are accepted)
+    deep = {"tables": [{"name": "a.b.c", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}]}]}
+    by4 = {r["card_key"]: r for r in cc.build_cards("clickhouse", deep)}
+    assert by4["otel_span_rate"]["status"] == "unavailable"
+    assert by4["top_services"]["status"] == "unavailable"
+
+
+def test_clickhouse_db_qualified_table_name():
+    # clickhouse_mcp introspection emits f"{database}.{name}" — the last segment must match
+    # otel_traces and every segment is quoted independently (`otel`.`otel_traces`).
+    qualified = {"tables": [{"name": "otel.otel_traces", "columns": [
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "ServiceName"}]}]}
+    by = {r["card_key"]: r for r in cc.build_cards("clickhouse", qualified)}
+    assert by["otel_span_rate"]["status"] == "ready"
+    assert by["top_services"]["status"] == "ready"
+    assert "FROM `otel`.`otel_traces`" in by["otel_span_rate"]["query"]["expr"]
+    assert "FROM `otel`.`otel_traces`" in by["top_services"]["query"]["expr"]
+
+
+def test_truncated_schema_yields_unknown_not_missing():
+    schema = {"metrics": ["a_metric"], "truncated": True}
+    rows = cc.build_cards("prometheus", schema)
+    unmatched = [r for r in rows if r["status"] != "ready"]
+    assert unmatched, "fixture must leave some cards unmatched"
+    assert all(r["status"] == "unknown" for r in unmatched)
+    assert all(r["missing"] for r in unmatched)  # still reports WHICH names were unmatched
+    # without the flag, the very same schema is a confident `unavailable`
+    plain = cc.build_cards("prometheus", {"metrics": ["a_metric"]})
+    assert all(r["status"] == "unavailable" for r in plain if r["status"] != "ready")
 
 
 def test_unknown_kind_and_missing_schema():

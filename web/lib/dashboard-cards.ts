@@ -7,7 +7,9 @@ import { getPool } from '@/lib/db';
 
 export interface CardQuery { tool: string; expr: string; range: { window: number; step: number } | null }
 export interface ReadyCard { cardKey: string; title: string; viz: 'stat' | 'timeseries' | 'table'; unit: string; query: CardQuery }
-export interface UnavailableCard { cardKey: string; title: string; missing: string[] }
+// `indeterminate` = the worker could not DETERMINE absence (the cached schema was truncated, so the
+// requirement may well exist) — the UI must say "미확정", not claim the item is missing.
+export interface UnavailableCard { cardKey: string; title: string; missing: string[]; indeterminate: boolean }
 export interface DashboardCards { ready: ReadyCard[]; unavailable: UnavailableCard[] }
 
 function asObj(v: unknown): Record<string, unknown> {
@@ -45,7 +47,11 @@ export async function getDashboardCards(integrationId: number): Promise<Dashboar
         query: asObj(r.query) as unknown as CardQuery,
       });
     } else {
-      unavailable.push({ cardKey: String(r.card_key), title: String(r.title), missing: asArr(r.missing).map(String) });
+      unavailable.push({
+        cardKey: String(r.card_key), title: String(r.title),
+        missing: asArr(r.missing).map(String),
+        indeterminate: r.status === 'unknown',
+      });
     }
   }
   return { ready, unavailable };

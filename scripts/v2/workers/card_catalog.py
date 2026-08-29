@@ -10,10 +10,14 @@ inject into a query.
 CARD_CATALOG_VERSION is mixed into the per-instance card schema hash
 (datasource_index._card_schema_version) so editing this catalog forces a rebuild even
 when the datasource's schema is unchanged.
+
+A truncated schema cache (schema.truncated) makes absence UNKNOWABLE: unmatched
+requirements become status "unknown", never a confident "missing" (honest-degrade).
 """
 import re
 
-CARD_CATALOG_VERSION = "v1"
+# v2: accept db-qualified table names (per-segment validated + quoted) — clickhouse_mcp introspection emits f"{database}.{name}"
+CARD_CATALOG_VERSION = "v2"
 
 _IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 _RANGE_1H = {"window": 3600, "step": 60}
@@ -52,6 +56,8 @@ _TEMPO_CARDS = [
 
 
 def _row(card_key, title, viz, unit, status, tool=None, expr=None, rng=None, missing=None):
+    """status is one of "ready" | "unavailable" | "unknown" ("unknown" = the requirement was not
+    found but the schema cache is truncated, so its absence could not be determined)."""
     return {
         "card_key": card_key, "title": title, "viz": viz, "unit": unit, "status": status,
         "query": ({"tool": tool, "expr": expr, "range": rng} if status == "ready" else None),
@@ -59,26 +65,40 @@ def _row(card_key, title, viz, unit, status, tool=None, expr=None, rng=None, mis
     }
 
 
-def _prom(kind, schema):
+def _absent_status(truncated):
+    """A requirement not found in the schema: confidently missing, or merely undetermined?"""
+    return "unknown" if truncated else "unavailable"
+
+
+def _quote_identifier(name):
+    """Backtick-quote a ClickHouse identifier per dot-separated segment (`db`.`table`) — mirrors
+    graph_catalog._quote_identifier. Wrapping the whole `db.table` string in one pair makes
+    ClickHouse read it as a SINGLE identifier containing a dot → UNKNOWN_TABLE."""
+    return ".".join("`" + part + "`" for part in str(name).split("."))
+
+
+def _prom(kind, schema, truncated=False):
     metrics = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
     tool = "prometheus_query" if kind == "prometheus" else "mimir_query"
     out = []
     for c in _PROM_CARDS:
         miss = [m for m in c["requires"] if m not in metrics]
         if miss:
-            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "unavailable", missing=miss))
+            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"],
+                            _absent_status(truncated), missing=miss))
         else:
             out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "ready", tool, c["expr"], c["range"]))
     return out
 
 
-def _loki(schema):
+def _loki(schema, truncated=False):
     labels = {l for l in (schema.get("labels") or []) if isinstance(l, str)}
     anchor = next((a for a in _LOKI_ANCHORS if a in labels), None)
     out = []
     for c in _LOKI_CARDS:
         if anchor is None:
-            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "unavailable", missing=_LOKI_ANCHORS))
+            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"],
+                            _absent_status(truncated), missing=_LOKI_ANCHORS))
         else:
             out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "ready",
                             "loki_query_range", c["expr_tpl"].format(anchor=anchor), _RANGE_1H))
@@ -91,30 +111,48 @@ def _tempo():
             for c in _TEMPO_CARDS]
 
 
-def _clickhouse(schema):
+def _valid_table_name(name):
+    """A table name is usable when it is 1 or 2 dot-separated segments (table or db.table — the
+    shape clickhouse_mcp introspection emits) and EVERY segment matches _IDENT."""
+    if not isinstance(name, str):
+        return False
+    parts = name.split(".")
+    return 1 <= len(parts) <= 2 and all(_IDENT.match(p) for p in parts)
+
+
+def _clickhouse(schema, truncated=False):
     tables = [t for t in (schema.get("tables") or []) if isinstance(t, dict)]
 
     def colnames(t):
         return {c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)}
 
-    target = next((t for t in tables if t.get("name") == "otel_traces"), None)
+    def basename(t):
+        n = t.get("name")
+        return str(n).split(".")[-1] if isinstance(n, str) else None
+
+    target = next((t for t in tables if basename(t) == "otel_traces"), None)
     if target is None:
         target = next((t for t in tables if {"Timestamp", "TraceId"} <= colnames(t)), None)
     name = target.get("name") if target else None
-    if not (isinstance(name, str) and _IDENT.match(name)):
+    if not _valid_table_name(name):
         missing = ["otel_traces (or a table with Timestamp+TraceId columns)"]
+        # A structurally invalid identifier is NOT an absence truncation could explain — it stays
+        # a confident `unavailable`. Only a genuinely absent table degrades to `unknown`.
+        status = "unavailable" if target is not None else _absent_status(truncated)
         return [
-            _row("otel_span_rate", "최근 1시간 스팬 수", "stat", "spans", "unavailable", missing=missing),
-            _row("top_services", "서비스별 스팬 Top5 (1h)", "table", "", "unavailable", missing=missing),
+            _row("otel_span_rate", "최근 1시간 스팬 수", "stat", "spans", status, missing=missing),
+            _row("top_services", "서비스별 스팬 Top5 (1h)", "table", "", status, missing=missing),
         ]
+    quoted = _quote_identifier(name)
     out = [_row("otel_span_rate", "최근 1시간 스팬 수", "stat", "spans", "ready", "clickhouse_query",
-                f"SELECT count() FROM {name} WHERE Timestamp > now() - INTERVAL 1 HOUR", None)]
+                f"SELECT count() AS value FROM {quoted} WHERE Timestamp > now() - INTERVAL 1 HOUR", None)]
     if "ServiceName" in colnames(target):
         out.append(_row("top_services", "서비스별 스팬 Top5 (1h)", "table", "", "ready", "clickhouse_query",
-                        f"SELECT ServiceName, count() AS spans FROM {name} "
+                        f"SELECT ServiceName, count() AS spans FROM {quoted} "
                         "WHERE Timestamp > now() - INTERVAL 1 HOUR GROUP BY ServiceName ORDER BY spans DESC LIMIT 5", None))
     else:
-        out.append(_row("top_services", "서비스별 스팬 Top5 (1h)", "table", "", "unavailable", missing=["ServiceName"]))
+        out.append(_row("top_services", "서비스별 스팬 Top5 (1h)", "table", "",
+                        _absent_status(truncated), missing=["ServiceName"]))
     return out
 
 
@@ -122,12 +160,14 @@ def build_cards(kind, schema):
     """Pure: kind + cached schema dict → card rows. Unknown kind / no schema → []."""
     if not isinstance(schema, dict):
         return []
+    truncated = schema.get("truncated") is True
     if kind in ("prometheus", "mimir"):
-        return _prom(kind, schema)
+        return _prom(kind, schema, truncated)
     if kind == "loki":
-        return _loki(schema)
+        return _loki(schema, truncated)
     if kind == "tempo":
+        # Tempo cards have no schema requirements — truncation cannot affect them.
         return _tempo()
     if kind == "clickhouse":
-        return _clickhouse(schema)
+        return _clickhouse(schema, truncated)
     return []

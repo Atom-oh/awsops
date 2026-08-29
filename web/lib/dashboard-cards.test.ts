@@ -18,13 +18,20 @@ describe('getDashboardCards', () => {
         query: JSON.stringify({ tool: 'prometheus_query', expr: 'x', range: { window: 3600, step: 60 } }), missing: '[]' },
       { card_key: 'memory_available', title: '가용 메모리', viz: 'timeseries', unit: 'bytes', status: 'unavailable',
         query: null, missing: ['node_memory_MemAvailable_bytes'] },
+      { card_key: 'pod_restarts', title: '최근 1시간 파드 재시작', viz: 'stat', unit: '', status: 'unknown',
+        query: null, missing: ['kube_pod_container_status_restarts_total'] },
     ] });
     const out = await getDashboardCards(7);
     expect(out.ready).toHaveLength(2);
     expect(out.ready[0].query.tool).toBe('prometheus_query');
     expect(out.ready[1].query.range).toEqual({ window: 3600, step: 60 });
-    expect(out.unavailable).toHaveLength(1);
+    expect(out.unavailable).toHaveLength(2);
     expect(out.unavailable[0].missing).toEqual(['node_memory_MemAvailable_bytes']);
+    // 'unavailable' = confidently missing; 'unknown' = truncated schema, absence undetermined
+    expect(out.unavailable[0].indeterminate).toBe(false);
+    expect(out.unavailable[1].cardKey).toBe('pod_restarts');
+    expect(out.unavailable[1].indeterminate).toBe(true);
+    expect(out.unavailable[1].missing).toEqual(['kube_pod_container_status_restarts_total']);
     const [sql, params] = query.mock.calls[0];
     expect(sql).toMatch(/FROM datasource_dashboard_cards/);
     expect(sql).toMatch(/account_id = 'self' AND integration_id = \$1/);

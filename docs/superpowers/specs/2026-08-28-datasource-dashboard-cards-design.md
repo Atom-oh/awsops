@@ -13,7 +13,8 @@ query JSONB shape). `/integrations/datasources/[id]` 상세 페이지 상단의 
 저장된 카드를 읽고, ready 카드마다 저장된 쿼리를 **조회 시점에 기존 `POST
 /api/datasources/query`로 라이브 실행**해 stat/시계열 카드로 렌더한다. 결정론적 카탈로그만
 사용(LLM 생성 없음 — 칩의 flag-gated LLM 폴백 패턴은 후속 결정), 신규 Terraform/IAM 없음,
-ULID 마이그레이션 1건.
+ULID 마이그레이션 1건. 카드 빌드는 기존 인덱스 잡의 `datasource_diagnosis_enabled`
+게이트(기본 false)를 그대로 따른다.
 
 ## Problem
 
@@ -115,6 +116,10 @@ cloned from the diag-signal ones minus budget logic. Same kinds as the index pip
 Instance deletion: `web/lib/datasources.ts` delete path adds
 `DELETE FROM datasource_dashboard_cards WHERE integration_id=$1` next to the diag-signals sweep.
 
+Card building inherits the index job's gate: it runs only when `datasource_diagnosis_enabled` is
+true (default false; requires `workers_enabled`/`agentcore_enabled`/`integrations_enabled`) — the
+"no new Terraform" claim means no NEW gate, not no gate.
+
 ### BFF read — `GET /api/datasources/[id]/cards`
 
 `web/lib/dashboard-cards.ts` `getDashboardCards(integrationId)` (clone of `diag-signals.ts`
@@ -136,8 +141,8 @@ New client component `web/components/datasources/CardDashboard.tsx` rendered abo
   area/line card reusing the Explore chart primitives (first ≤5 series); result-shape
   mismatch or query error → the card body shows an inline error state (never hides the card).
 - `unavailable` cards render dimmed with a "누락: …" tooltip (same UX as chips).
-- A per-card "Explore에서 열기" affordance copies the stored expr into the ExplorePanel query
-  box (callback prop), mirroring the chips' onPick.
+- An "open in Explore" affordance is NOT shipped — ExplorePanel exposes no external query setter
+  today; revisit if one is added.
 
 ### Testing
 
