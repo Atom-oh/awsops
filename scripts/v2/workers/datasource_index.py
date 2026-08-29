@@ -31,6 +31,7 @@ except ImportError:
     import signal_catalog as _cat  # flattened in the worker_src lambda bundle
 
 import graph_catalog as _graph_cat  # always flat next to this file — never under a package
+import card_catalog as _card_cat    # dashboard cards — flat, same packaging contract as graph_catalog
 import graph_querygen as _querygen  # hybrid LLM fallback (v1 scope: clickhouse trace_spans only)
 from datetime import datetime, timezone
 
@@ -177,6 +178,33 @@ def _graph_schema_version(schema):
     basis = (json.dumps(_canon(schema), sort_keys=True, separators=(",", ":")) + "|" + _graph_cat.CATALOG_VERSION
              + "|querygen=" + flag)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def _card_schema_version(schema):
+    """Stable cross-process hash of the FULL schema + card_catalog.CARD_CATALOG_VERSION. No feature
+    flag is mixed in — cards are deterministic-only (no LLM/generation mode to toggle), so only a
+    schema drift or a catalog edit should force a rebuild."""
+    basis = (json.dumps(_canon(schema), sort_keys=True, separators=(",", ":"))
+             + "|" + _card_cat.CARD_CATALOG_VERSION)
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema):
+    """Third pre-built family (dashboard cards) — mirrors _rebuild_graph_queries: schema-hash skip,
+    atomic upsert+sweep. Deterministic only; an empty build writes the version sentinel (db.py)."""
+    version = _card_schema_version(schema)
+    if wdb.read_card_schema_version(conn, iid) == version:
+        return {"cards_skipped": True}
+    rows = _card_cat.build_cards(kind, schema)
+    conn.run("BEGIN")
+    try:
+        written = wdb.upsert_dashboard_cards(conn, iid, rows, version)
+        wdb.sweep_dashboard_cards(conn, iid, written)
+        conn.run("COMMIT")
+    except Exception:
+        conn.run("ROLLBACK")
+        raise
+    return {"cards_built": len(rows), "cards_ready": sum(1 for r in rows if r["status"] == "ready")}
 
 
 _MAX_GENERATION_ATTEMPTS = 3   # TOTAL tries per schema_version PER ISO WEEK, retries included
@@ -710,6 +738,12 @@ def run(payload, conn):
 
         out.update(_rebuild_diag_signals(conn, wdb, iid, kind, schema))
         out.update(_rebuild_graph_queries(conn, wdb, iid, kind, schema))
+        try:
+            # Cards are the newest family — isolate their failure so signals/graph results still land.
+            out.update(_rebuild_dashboard_cards(conn, wdb, iid, kind, schema))
+        except Exception as e:  # noqa: BLE001 — surfaced on the job result, never sinks the run
+            logging.warning("[datasource_index] integration %s card build failed: %s", iid, e)
+            out["cards_error"] = str(e)[:200]
         return out
     except Exception as e:  # noqa: BLE001 — never sink the dispatcher; surface on the job result
         logging.warning("[datasource_index] integration %s failed: %s", iid, e)
