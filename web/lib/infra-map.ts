@@ -26,7 +26,7 @@ export function invNodeId(kind: MapKind, r: InvRow): string {
   return `${kind}:${r.account_id ?? 'self'}/${r.region ?? ''}/${r.resource_id}`;
 }
 
-export interface TgwAttachmentLite { tgwId: string; resourceType: string; resourceId: string }
+export interface TgwAttachmentLite { tgwId: string; resourceType: string; resourceId: string; state?: string }
 
 export interface InfraMapInput {
   igw: InvRow[]; tgw: InvRow[]; vpc: InvRow[]; subnet: InvRow[];
@@ -86,6 +86,8 @@ export function buildInfraMap(input: InfraMapInput): MapGraph {
   }
   for (const a of input.tgwAttachments ?? []) {
     if (a.resourceType !== 'vpc') continue;
+    // failed/deleting attachments are not live connectivity — never draw them as an edge.
+    if (a.state && ['failed', 'deleting', 'deleted', 'rejected'].includes(a.state)) continue;
     const matches = vpcByRaw.get(a.resourceId) ?? [];
     if (matches.length !== 1) continue; // 0 = unknown vpc, >1 = ambiguous across scopes — never guess
     for (const t of [...input.tgw]) {

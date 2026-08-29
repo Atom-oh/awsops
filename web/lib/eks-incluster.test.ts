@@ -291,6 +291,14 @@ describe('ingresses kind (K8s map)', () => {
     ]);
   });
 
+  it('normalizeIngress picks the first LB entry with a value', () => {
+    const row = normalizeIngress({
+      metadata: { name: 'w', namespace: 'ns' },
+      status: { loadBalancer: { ingress: [{}, { ip: '10.1.2.3' }] } },
+    } as never);
+    expect(row.lbHostname).toBe('10.1.2.3');
+  });
+
   it('normalizeIngress tolerates missing spec/status', () => {
     const row = normalizeIngress({ metadata: { name: 'bare', namespace: 'ns' } } as never);
     expect(row.backends).toEqual([]);

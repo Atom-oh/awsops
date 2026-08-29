@@ -471,7 +471,8 @@ export function normalizeIngress(it: K8sItem): IngressRow {
     seen.add(k);
     return true;
   });
-  const lb = it.status?.loadBalancer?.ingress?.[0];
+  // First entry with a non-empty hostname/ip — entry[0] can be an empty placeholder.
+  const lb = (it.status?.loadBalancer?.ingress ?? []).find((e) => e.hostname || e.ip);
   return {
     name: it.metadata?.name ?? '',
     namespace: it.metadata?.namespace ?? '',

@@ -53,11 +53,19 @@ describe('buildK8sMap', () => {
     expect(hl.has('pod:prod/lonely')).toBe(false);
   });
 
+  it('draws one ingress→service edge even for multi-port backends', () => {
+    const input = base();
+    input.ingresses[0].backends = [{ service: 'web-svc', port: '8080' }, { service: 'web-svc', port: '9090' }];
+    const g = buildK8sMap(input);
+    expect(g.edges.filter((e) => e.source === 'ing:prod/web' && e.target === 'svc:prod/web-svc')).toHaveLength(1);
+  });
+
   it('carries useful card fields (status/badge/sub)', () => {
     const g = buildK8sMap(base());
     const node = (id: string) => g.nodes.find((n) => n.id === id)!;
     expect(node('ing:prod/web').sub).toContain('k8s-x.elb.amazonaws.com');
     expect(node('svc:prod/web-svc').sub).toContain('172.20.0.10');
+    expect(node('svc:prod/web-svc').badge).toContain('1 pod'); // matched pod count (v1 parity)
     expect(node('pod:prod/web-1').status).toBe('ok'); // Running
     expect(node('pod:prod/lonely').status).toBe('warn'); // Pending
     expect(node('node:node-a').status).toBe('ok'); // Ready

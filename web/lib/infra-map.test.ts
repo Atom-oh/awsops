@@ -87,6 +87,12 @@ describe('buildInfraMap', () => {
     expect(g.nodes.find((n) => n.id === nid('subnet', 'subnet-a2'))?.label).toBe('subnet-a2');
   });
 
+  it('skips TGW attachment edges in failed/deleting states', () => {
+    const input = { ...fixture(), tgwAttachments: [{ tgwId: 'tgw-1', resourceType: 'vpc', resourceId: 'vpc-b', state: 'deleting' }] };
+    const g = buildInfraMap(input);
+    expect(g.edges.some((e) => e.source === nid('tgw', 'tgw-1'))).toBe(false);
+  });
+
   it('keeps same-named LBs in different regions as distinct nodes', () => {
     const a: InvRow = { resource_id: 'edge', region: 'ap-northeast-2', data: { name: 'edge', vpc_id: 'vpc-a', state_code: 'active', scheme: 'internal', availability_zones: [] } };
     const b: InvRow = { resource_id: 'edge', region: 'us-east-1', data: { name: 'edge', vpc_id: 'vpc-z', state_code: 'active', scheme: 'internal', availability_zones: [] } };

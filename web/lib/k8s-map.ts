@@ -1,5 +1,7 @@
 // Pure MapGraph builder for the K8s 4-column map (gap-audit L164):
 // Ingress → Service → Pod → Node. React-free (vitest).
+// Service→Pod joins use core Endpoints READY addresses only — unready selected pods render
+// disconnected, and very large (>1000-address) Endpoints objects can be truncated upstream.
 import type { MapGraph, MapNode, MapEdge } from './infra-map';
 import type { IngressRow, ServiceRow, EndpointRow } from './eks-incluster';
 import type { PodRow, NodeRow } from './eks-resources';
@@ -37,25 +39,33 @@ export function buildK8sMap(input: K8sMapInput): MapGraph {
       badge: `${ing.namespace}${ing.className ? ` · ${ing.className}` : ''}`,
       status: 'neutral', meta: { ...ing },
     });
+    const seenSvc = new Set<string>();
     for (const b of ing.backends) {
       const svcId = `svc:${ing.namespace}/${b.service}`;
-      if (svcIds.has(svcId)) edges.push({ source: id, target: svcId });
+      // one edge per service — multi-port backends would otherwise draw identical duplicate edges
+      if (svcIds.has(svcId) && !seenSvc.has(svcId)) { seenSvc.add(svcId); edges.push({ source: id, target: svcId }); }
     }
   }
 
   // column 1 — Service (+ service→pod via same-namespace Endpoints IP join)
   for (const svc of [...input.services].sort(bySort((s) => `${s.namespace}/${s.name}`))) {
     const id = `svc:${svc.namespace}/${svc.name}`;
-    nodes.push({
-      id, kind: 'service', column: 1, label: svc.name,
-      sub: `${svc.type} · ${svc.clusterIP}`, badge: svc.namespace, status: 'neutral', meta: { ...svc },
-    });
     const ep = input.endpoints.find((e) => e.namespace === svc.namespace && e.name === svc.name);
+    // v1 parity: the card badge carries the matched pod count (DISTINCT pods, not addresses).
+    const matchedPods = new Set<string>();
     for (const ip of ep?.ips ?? []) {
       for (const p of podByIp.get(`${svc.namespace}|${ip}`) ?? []) {
-        edges.push({ source: id, target: `pod:${p.namespace}/${p.name}` });
+        matchedPods.add(`pod:${p.namespace}/${p.name}`);
       }
     }
+    const podN = matchedPods.size;
+    nodes.push({
+      id, kind: 'service', column: 1, label: svc.name,
+      sub: `${svc.type} · ${svc.clusterIP}`,
+      badge: `${svc.namespace} · ${podN} pod${podN === 1 ? '' : 's'}`,
+      status: 'neutral', meta: { ...svc },
+    });
+    for (const target of matchedPods) edges.push({ source: id, target });
   }
 
   // column 2 — Pod (+ pod→node)

@@ -7,7 +7,6 @@ import MapCanvas, { MapLegend } from '@/components/topology/MapCanvas';
 import { buildK8sMap } from '@/lib/k8s-map';
 import type { IngressRow, ServiceRow, EndpointRow } from '@/lib/eks-incluster';
 import type { PodRow, NodeRow } from '@/lib/eks-resources';
-import { useActiveAccount, accountParam } from '@/lib/account-context';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { useTheme } from '@/lib/use-theme';
 
@@ -18,7 +17,6 @@ export default function K8sMapView({ query }: { query: string }) {
   // Only 'dark' is a dark theme (cobalt/teal are light variants) — same mapping as /topology.
   const theme = useTheme() === 'dark' ? 'dark' as const : 'light' as const;
   const { tt } = useI18n();
-  const [activeAccount] = useActiveAccount();
   const [clusters, setClusters] = useState<string[] | null>(null);
   const [cluster, setCluster] = useState('');
   const [err, setErr] = useState('');
@@ -31,8 +29,10 @@ export default function K8sMapView({ query }: { query: string }) {
     setCluster('');
     setData(null);
     setErr('');
-    const q = accountParam(activeAccount);
-    fetch(`/api/eks${q ? `?${q}` : ''}`)
+    // The in-cluster data path (clusterConn/access/authModes) is host-only and keyed by cluster
+    // name — listing member-account clusters here would either show them un-connectable or, on a
+    // name collision, render the WRONG cluster's data. Pin host scope like /eks/explorer does.
+    fetch('/api/eks?account=self')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d: { clusters?: { name: string; access?: string }[] }) => {
         if (!live) return;
@@ -43,7 +43,7 @@ export default function K8sMapView({ query }: { query: string }) {
       })
       .catch((e) => { if (live) { setClusters([]); setErr(String(e instanceof Error ? e.message : e)); } });
     return () => { live = false; };
-  }, [activeAccount]);
+  }, []);
 
   useEffect(() => {
     if (!cluster) return;
@@ -51,19 +51,26 @@ export default function K8sMapView({ query }: { query: string }) {
     setBusy(true);
     setData(null);
     setErr('');
-    Promise.all(KINDS.map(async (kind) => {
+    Promise.allSettled(KINDS.map(async (kind) => {
       const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=${kind}`);
       const d = await r.json();
       if (!r.ok) throw new Error(String(d?.message ?? r.status));
-      return d.rows as unknown[];
+      return [kind, d.rows as unknown[]] as const;
     }))
-      .then(([ingresses, services, pods, nodes, endpoints]) => {
-        if (live) setData({
-          ingresses: ingresses as IngressRow[], services: services as ServiceRow[],
-          pods: pods as PodRow[], nodes: nodes as NodeRow[], endpoints: endpoints as EndpointRow[],
+      .then((settled) => {
+        if (!live) return;
+        const rows: Record<string, unknown[]> = {};
+        const failedKinds: string[] = [];
+        settled.forEach((s, i) => {
+          if (s.status === 'fulfilled') rows[s.value[0]] = s.value[1];
+          else failedKinds.push(KINDS[i]);
         });
+        setData({
+          ingresses: (rows.ingresses ?? []) as IngressRow[], services: (rows.services ?? []) as ServiceRow[],
+          pods: (rows.pods ?? []) as PodRow[], nodes: (rows.nodes ?? []) as NodeRow[], endpoints: (rows.endpoints ?? []) as EndpointRow[],
+        });
+        if (failedKinds.length > 0) setErr(`일부 kind 조회 실패: ${failedKinds.join(', ')}`);
       })
-      .catch((e) => { if (live) { setData(null); setErr(String(e instanceof Error ? e.message : e)); } })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
   }, [cluster]);

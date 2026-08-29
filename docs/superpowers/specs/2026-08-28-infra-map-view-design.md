@@ -51,14 +51,18 @@ like the existing pages) with:
   by (vpc, subnet, kind, name), NAT by (vpc, subnet), so vertical proximity implies membership.
   No per-VPC banding in this iteration — edges carry the membership signal.
 - **Custom node cards** (`nodeTypes`): icon + name + secondary line (CIDR / AZ badge /
-  instance type / engine) + status dot (EC2 state, NAT state, ALB state). Public subnets get
-  a distinct accent (`map_public_ip_on_launch`).
+  instance type / engine) + status dot (EC2 state, NAT state, ALB state). Subnets with
+  `map_public_ip_on_launch` get an `auto-public-ip` badge (the flag governs auto-assign public
+  IP, not IGW reachability).
 - **Edges**: containment/attachment drawn as real edges — IGW→VPC, TGW→VPC (attachment,
   via the live `GET /api/tgw?ids=` describe; degrade to edge-less TGW nodes on failure),
   VPC→Subnet, Subnet→EC2/ALB/NLB (subnet membership; multi-subnet resources like ALB get
   one edge per subnet), VPC→RDS (the synced rds row carries `vpc_id` but no subnet ids —
   only `db_subnet_group_name`), Subnet→NAT. K8s: Ingress→Service (rule backend), Service→Pod
-  (endpoints IP join), Pod→Node (`spec.nodeName`).
+  (endpoints IP join), Pod→Node (`spec.nodeName`). TGW attachments resolve to a VPC node only
+  when the raw VPC id maps to exactly ONE scope (ambiguous multi-scope matches are skipped,
+  never guessed), and failed/deleting attachments draw no edge; a failed `/api/tgw` fetch
+  surfaces a warning chip instead of rendering edge-less TGWs as unattached.
 - **Cross-highlight**: clicking a node computes its closure (ancestors + descendants along
   edges) — closure nodes/edges stay full opacity, the rest dim to ~0.25. Clicking the selected
   node again (or a Clear button) resets. Search box highlights all matching nodes
@@ -89,7 +93,10 @@ invariant (secrets stay rejected; no data values carried beyond routing metadata
 
 - `web/lib/infra-map.ts` — `buildInfraMap(rows: InfraMapInput): MapGraph` where `MapGraph =
   { nodes: MapNode[], edges: MapEdge[] }`, `MapNode = { id, kind, column, label, sub?, badge?,
-  status?, meta }`. Also `highlightClosure(graph, selectedId): Set<string>` and
+  status?, meta }`. Node ids are account/region-scoped via `invNodeId(kind, row)`
+  (`` `${kind}:${account}/${region}/${resource_id}` ``) — `inventory_resources`' key spans
+  account/region and ALB/NLB resource_ids are bare names, so unscoped ids would collide.
+  Also `highlightClosure(graph, selectedId): Set<string>` and
   `searchMatches(graph, query): Set<string>` (matches label/id/meta values incl. IPs and
   instance types). No React imports.
 - `web/lib/k8s-map.ts` — `buildK8sMap({ ingresses, services, pods, nodes, endpoints }):
