@@ -1,0 +1,133 @@
+"""Deterministic dashboard-card catalog — the third pre-built-content family
+(next to diagnosis/signal_catalog.py and graph_catalog.py; flat next to
+datasource_index.py like graph_catalog, and bundled flat in workers.tf's archive_file).
+
+build_cards(kind, schema) is PURE: no DB, no AWS SDK, no egress. Expressions are module
+constants; the ONLY schema-derived splice is the ClickHouse table identifier, validated
+against _IDENT before use — a poisoned schema can only make a card `unavailable`, never
+inject into a query.
+
+CARD_CATALOG_VERSION is mixed into the per-instance card schema hash
+(datasource_index._card_schema_version) so editing this catalog forces a rebuild even
+when the datasource's schema is unchanged.
+"""
+import re
+
+CARD_CATALOG_VERSION = "v1"
+
+_IDENT = re.compile(r"^[A-Za-z0-9_]+$")
+_RANGE_1H = {"window": 3600, "step": 60}
+
+_PROM_CARDS = [
+    {"card_key": "up_targets", "title": "정상 타깃 수", "viz": "stat", "unit": "",
+     "requires": ["up"], "expr": "count(up == 1)", "range": None},
+    {"card_key": "cpu_usage", "title": "노드 CPU 사용률", "viz": "timeseries", "unit": "%",
+     "requires": ["node_cpu_seconds_total"],
+     "expr": '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', "range": _RANGE_1H},
+    {"card_key": "memory_available", "title": "가용 메모리", "viz": "timeseries", "unit": "bytes",
+     "requires": ["node_memory_MemAvailable_bytes"],
+     "expr": "sum(node_memory_MemAvailable_bytes)", "range": _RANGE_1H},
+    {"card_key": "container_cpu", "title": "네임스페이스별 컨테이너 CPU Top5", "viz": "timeseries", "unit": "cores",
+     "requires": ["container_cpu_usage_seconds_total"],
+     "expr": "topk(5, sum by (namespace) (rate(container_cpu_usage_seconds_total[5m])))", "range": _RANGE_1H},
+    {"card_key": "pod_restarts", "title": "최근 1시간 파드 재시작", "viz": "stat", "unit": "",
+     "requires": ["kube_pod_container_status_restarts_total"],
+     "expr": "sum(increase(kube_pod_container_status_restarts_total[1h]))", "range": None},
+]
+
+# First present label wins as the stream anchor — {job=~".+"} matches every stream that
+# HAS the label, which is the broadest read-only selector LogQL allows (no bare {}).
+_LOKI_ANCHORS = ["job", "app", "namespace"]
+_LOKI_CARDS = [
+    {"card_key": "log_volume", "title": "로그 볼륨 (5m)", "viz": "timeseries", "unit": "lines",
+     "expr_tpl": 'sum(count_over_time({{{anchor}=~".+"}}[5m]))'},
+    {"card_key": "error_rate", "title": "에러 로그 (5m)", "viz": "timeseries", "unit": "lines",
+     "expr_tpl": 'sum(count_over_time({{{anchor}=~".+"}} |~ "(?i)error" [5m]))'},
+]
+
+_TEMPO_CARDS = [
+    {"card_key": "slow_traces", "title": "느린 트레이스 (>1s)", "viz": "table", "expr": "{ duration > 1s }"},
+    {"card_key": "error_traces", "title": "에러 트레이스", "viz": "table", "expr": "{ status = error }"},
+]
+
+
+def _row(card_key, title, viz, unit, status, tool=None, expr=None, rng=None, missing=None):
+    return {
+        "card_key": card_key, "title": title, "viz": viz, "unit": unit, "status": status,
+        "query": ({"tool": tool, "expr": expr, "range": rng} if status == "ready" else None),
+        "missing": list(missing or []),
+    }
+
+
+def _prom(kind, schema):
+    metrics = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
+    tool = "prometheus_query" if kind == "prometheus" else "mimir_query"
+    out = []
+    for c in _PROM_CARDS:
+        miss = [m for m in c["requires"] if m not in metrics]
+        if miss:
+            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "unavailable", missing=miss))
+        else:
+            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "ready", tool, c["expr"], c["range"]))
+    return out
+
+
+def _loki(schema):
+    labels = {l for l in (schema.get("labels") or []) if isinstance(l, str)}
+    anchor = next((a for a in _LOKI_ANCHORS if a in labels), None)
+    out = []
+    for c in _LOKI_CARDS:
+        if anchor is None:
+            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "unavailable", missing=_LOKI_ANCHORS))
+        else:
+            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "ready",
+                            "loki_query_range", c["expr_tpl"].format(anchor=anchor), _RANGE_1H))
+    return out
+
+
+def _tempo():
+    # TraceQL structural queries need no specific tag — always ready once a tempo schema row exists.
+    return [_row(c["card_key"], c["title"], c["viz"], "", "ready", "tempo_search", c["expr"], None)
+            for c in _TEMPO_CARDS]
+
+
+def _clickhouse(schema):
+    tables = [t for t in (schema.get("tables") or []) if isinstance(t, dict)]
+
+    def colnames(t):
+        return {c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)}
+
+    target = next((t for t in tables if t.get("name") == "otel_traces"), None)
+    if target is None:
+        target = next((t for t in tables if {"Timestamp", "TraceId"} <= colnames(t)), None)
+    name = target.get("name") if target else None
+    if not (isinstance(name, str) and _IDENT.match(name)):
+        missing = ["otel_traces (or a table with Timestamp+TraceId columns)"]
+        return [
+            _row("otel_span_rate", "최근 1시간 스팬 수", "stat", "spans", "unavailable", missing=missing),
+            _row("top_services", "서비스별 스팬 Top5 (1h)", "table", "", "unavailable", missing=missing),
+        ]
+    out = [_row("otel_span_rate", "최근 1시간 스팬 수", "stat", "spans", "ready", "clickhouse_query",
+                f"SELECT count() FROM {name} WHERE Timestamp > now() - INTERVAL 1 HOUR", None)]
+    if "ServiceName" in colnames(target):
+        out.append(_row("top_services", "서비스별 스팬 Top5 (1h)", "table", "", "ready", "clickhouse_query",
+                        f"SELECT ServiceName, count() AS spans FROM {name} "
+                        "WHERE Timestamp > now() - INTERVAL 1 HOUR GROUP BY ServiceName ORDER BY spans DESC LIMIT 5", None))
+    else:
+        out.append(_row("top_services", "서비스별 스팬 Top5 (1h)", "table", "", "unavailable", missing=["ServiceName"]))
+    return out
+
+
+def build_cards(kind, schema):
+    """Pure: kind + cached schema dict → card rows. Unknown kind / no schema → []."""
+    if not isinstance(schema, dict):
+        return []
+    if kind in ("prometheus", "mimir"):
+        return _prom(kind, schema)
+    if kind == "loki":
+        return _loki(schema)
+    if kind == "tempo":
+        return _tempo()
+    if kind == "clickhouse":
+        return _clickhouse(schema)
+    return []
