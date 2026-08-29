@@ -51,27 +51,27 @@ CREATE TABLE IF NOT EXISTS datasource_dashboard_cards (
   integration_id bigint NOT NULL,
   card_key       text NOT NULL,
   title          text NOT NULL,
-  viz            text NOT NULL,          -- 'stat' | 'timeseries'
+  viz            text NOT NULL,          -- 'stat' | 'timeseries' | 'table'
   unit           text NOT NULL DEFAULT '',
-  status         text NOT NULL,          -- 'ready' | 'unavailable'
-  query          jsonb NOT NULL DEFAULT '{}'::jsonb,   -- {tool, expr, range:{window,step}|null}
-  missing        jsonb NOT NULL DEFAULT '[]'::jsonb,   -- missing metrics/labels/columns
+  status         text NOT NULL,          -- 'ready' | 'unavailable' | 'unknown' (truncated-schema indeterminate)
+  query          jsonb,                                 -- {tool, expr, range:{window,step}|null}; NULL when not ready
+  missing        jsonb NOT NULL DEFAULT '[]'::jsonb,   -- missing/undetermined metrics/labels/columns
   schema_version text NOT NULL DEFAULT '',
-  updated_at     timestamptz NOT NULL DEFAULT now(),
+  built_at       timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (account_id, integration_id, card_key)
 );
 ```
 
 Separate from `datasource_diag_signals` on purpose: that table's read path filters bookkeeping
 sentinel keys and gates LLM provenance; mixing a second content family into it couples two
-lifecycles. Cards carry no LLM rows, so no budget/sentinel machinery at all.
+lifecycles. Cards carry no LLM rows, so no budget machinery; an empty build DOES write the `__schema_version__` sentinel row (excluded on read) so a no-card schema is remembered, not rebuilt every run.
 
-### Card catalog — `scripts/v2/workers/diagnosis/card_catalog.py` (pure)
+### Card catalog — `scripts/v2/workers/card_catalog.py` (pure, flat like graph_catalog)
 
 `build_cards(kind, schema) -> list[row]`, same purity contract as `signal_catalog.build_signals`
 (no DB/boto3/egress; schema values can only make a card `unavailable`, never inject — all
 expressions are module constants; the ONLY schema-derived splice is the ClickHouse table name,
-validated against `^[A-Za-z0-9_]+$` before use, else `unavailable`). `CARD_CATALOG_VERSION` is
+validated per dot-segment against `^[A-Za-z0-9_]+$` (1–2 segments, `table` or `db.table` — clickhouse_mcp introspection emits db-qualified names) and spliced backtick-quoted per segment, else `unavailable`). `CARD_CATALOG_VERSION` is
 mixed into the schema hash so catalog edits force a rebuild.
 
 Initial deterministic catalog (per kind, matched against the cached schema shape):
