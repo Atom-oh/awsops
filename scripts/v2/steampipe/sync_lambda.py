@@ -18,6 +18,31 @@ def _log(event: str, **fields) -> None:
     print(json.dumps({"event": event, **fields}, default=str, sort_keys=True))
 
 
+_THROTTLING_CODES = {
+    "ec2throttledexception",
+    "limitexceededexception",
+    "priorrequestnotcomplete",
+    "provisionedthroughputexceededexception",
+    "requestlimitexceeded",
+    "slowdown",
+    "throttling",
+    "throttlingexception",
+    "toomanyrequestsexception",
+}
+
+
+def _is_throttling_error(exc: Exception) -> bool:
+    """Classify throttling from structured metadata only; never inspect/log raw message text."""
+    response = getattr(exc, "response", None)
+    error = response.get("Error", {}) if isinstance(response, dict) else {}
+    code = str(error.get("Code") or "").lower()
+    return (
+        code in _THROTTLING_CODES
+        or "throttl" in code
+        or "throttl" in type(exc).__name__.lower()
+    )
+
+
 # resource_type -> (steampipe SQL, resource_id column, region column). Waves add rows here.
 QUERIES = {
     "ec2": (
@@ -752,7 +777,11 @@ def sync(resource_type):
         if not got[0][0]:
             result = {"status": "busy", "type": resource_type}
             terminal_event = "inventory_sync_busy"
-            terminal_fields = {"resource_type": resource_type}
+            terminal_fields = {
+                "resource_type": resource_type,
+                "degraded": True,
+                "throttled": False,
+            }
         else:
             locked = True
             # NOTE (M4): inventory_sync_runs is a JOB-LEVEL ledger — one row per resource_type keyed
@@ -862,7 +891,14 @@ def sync(resource_type):
                     "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
             result = {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
             terminal_event = "inventory_sync_complete"
-            terminal_fields = {"resource_type": resource_type, "row_count": len(recs)}
+            terminal_fields = {
+                "resource_type": resource_type,
+                "row_count": len(recs),
+                "degraded": False,
+                "throttled": False,
+                "freshness": "healthy",
+                "age_minutes": 0,
+            }
     except Exception as e:
         if locked:
             # Keep the pre-existing result and Aurora-ledger contracts, but never put raw
@@ -885,6 +921,8 @@ def sync(resource_type):
             "error_category": error_category,
             "error": "inventory sync failed",
             "error_type": type(e).__name__,
+            "degraded": True,
+            "throttled": _is_throttling_error(e),
         }
     finally:
         cleanup_error = None
@@ -911,6 +949,8 @@ def sync(resource_type):
                 "error_category": "cleanup",
                 "error": "inventory sync cleanup failed",
                 "error_type": type(cleanup_error).__name__,
+                "degraded": True,
+                "throttled": _is_throttling_error(cleanup_error),
             }
         if terminal_fields is not None:
             terminal_fields["elapsed_ms"] = int((time.monotonic() - started) * 1000)

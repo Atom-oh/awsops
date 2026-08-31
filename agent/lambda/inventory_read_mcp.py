@@ -26,6 +26,24 @@ import os
 from cross_account import resolve_tool_name
 
 
+DEFAULT_INVENTORY_STALE_AFTER_MINUTES = 30
+
+
+def _inventory_stale_after_minutes(env=None):
+    """Read the non-secret stale threshold without letting malformed env crash the tool."""
+    source = os.environ if env is None else env
+    try:
+        value = int(source.get(
+            "INVENTORY_STALE_AFTER_MINUTES",
+            str(DEFAULT_INVENTORY_STALE_AFTER_MINUTES),
+        ))
+    except (TypeError, ValueError):
+        return DEFAULT_INVENTORY_STALE_AFTER_MINUTES
+    if value < 1 or value > 1440:
+        return DEFAULT_INVENTORY_STALE_AFTER_MINUTES
+    return value
+
+
 # ── Resource types the topology/unused detection reads (mirrors graph-store TYPE_TO_KEY) ──────────
 TOPOLOGY_TYPES = ["cloudfront", "alb", "nlb", "target_group", "ec2", "ebs", "security_group",
                   "route53", "lambda", "ecs_task", "s3"]
@@ -288,10 +306,71 @@ def _fetch_one_type(rtype, limit):
     return [_coerce(r.get("data")) for r in rows]
 
 
-def _sync_freshness():
-    rows = _execute("SELECT resource_type, status, finished_at, row_count FROM inventory_sync_runs "
-                    "WHERE account_id = 'self' ORDER BY resource_type")
+def _sync_freshness(resource_type=None):
+    """Return threshold-classified freshness per type using bound Data API parameters.
+
+    A failed current run may leave last-good inventory rows in place. In that case their latest
+    captured_at remains the best available successful-data timestamp; a successful zero-row run
+    uses the run's finished_at so an intentionally empty inventory is still healthy.
+    """
+    stale_after = _inventory_stale_after_minutes()
+    params = [{
+        "name": "stale_after_minutes",
+        "value": {"longValue": stale_after},
+    }]
+    type_filter = ""
+    if resource_type is not None:
+        type_filter = " WHERE per_type.resource_type = :rt"
+        params.append({"name": "rt", "value": {"stringValue": resource_type}})
+
+    rows = _execute(
+        "WITH types AS ("
+        "SELECT resource_type FROM inventory_sync_runs WHERE account_id = 'self' "
+        "UNION "
+        "SELECT resource_type FROM inventory_resources WHERE account_id = 'self'"
+        "), per_type AS ("
+        "SELECT types.resource_type, runs.status, runs.finished_at, runs.row_count, "
+        "COALESCE("
+        "CASE WHEN runs.status = 'succeeded' THEN runs.finished_at END, "
+        "MAX(resources.captured_at)"
+        ") AS latest_success_at "
+        "FROM types "
+        "LEFT JOIN inventory_sync_runs runs "
+        "ON runs.account_id = 'self' AND runs.resource_type = types.resource_type "
+        "LEFT JOIN inventory_resources resources "
+        "ON resources.account_id = 'self' AND resources.resource_type = types.resource_type "
+        "GROUP BY types.resource_type, runs.status, runs.finished_at, runs.row_count"
+        ") "
+        "SELECT resource_type, status, finished_at, row_count, latest_success_at, "
+        "CASE "
+        "WHEN latest_success_at IS NULL THEN 'unavailable' "
+        "WHEN latest_success_at < CURRENT_TIMESTAMP - "
+        "(:stale_after_minutes * INTERVAL '1 minute') THEN 'stale' "
+        "ELSE 'healthy' END AS freshness, "
+        "CASE WHEN latest_success_at IS NULL THEN NULL ELSE "
+        "GREATEST(0, FLOOR(EXTRACT(EPOCH FROM "
+        "(CURRENT_TIMESTAMP - latest_success_at)) / 60))::integer END AS age_minutes, "
+        ":stale_after_minutes AS stale_after_minutes "
+        "FROM per_type" + type_filter + " ORDER BY resource_type",
+        params=params,
+    )
     return rows
+
+
+def _freshness_for_type(resource_type):
+    rows = _sync_freshness(resource_type)
+    if rows:
+        return rows[0]
+    return {
+        "resource_type": resource_type,
+        "status": None,
+        "finished_at": None,
+        "row_count": None,
+        "latest_success_at": None,
+        "freshness": "unavailable",
+        "age_minutes": None,
+        "stale_after_minutes": _inventory_stale_after_minutes(),
+    }
 
 
 # ── Tool dispatch ─────────────────────────────────────────────────────────────────────────────────
@@ -343,7 +422,12 @@ def lambda_handler(event, context):
         except (TypeError, ValueError):
             limit = 200  # a hallucinated non-numeric limit must not 500
         rows = _fetch_one_type(rtype, limit)
-        result = {"resource_type": rtype, "count": len(rows), "resources": rows}
+        result = {
+            "resource_type": rtype,
+            "count": len(rows),
+            "resources": rows,
+            "freshness": _freshness_for_type(rtype),
+        }
         if rtype not in PROJECTIONS:
             # PR #197 review MAJOR: an unregistered type's `resources` entries only carry whatever
             # keys happen to be on SOME other type's projection allowlist — genuinely absent fields

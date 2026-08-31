@@ -40,21 +40,22 @@ completed 2026-08-02. Note the runtime nuance (matches the customer deck's slide
 the BFF-local live-Steampipe path is closed by design (ADR-001/010, `steampipeAvailable()`
 hard-`false`); the 9 gateway-routed keys answer via their own agents.
 
-**2026-08-31 rollout note (ADR-021):** Phase 1 has implemented the quota guard in code for
-the Steampipe inventory collector, but no production apply is performed here. **Direct AgentCore
-inventory/configuration control-plane API calls remain the current behavior until Phase 2 catalog
-retirement is deployed.** Aurora-backed inventory MCP targets, removal of direct inventory targets,
-and no-silent-fallback stale/unavailable responses are accepted future Phase 2 work, not live.
-Phase 3 cache work is also pending; after that complete rollout, only bounded CloudWatch metrics
-and logs remain live AWS exceptions. ADR-005's mutation/autonomy FROZEN posture is unchanged.
+**2026-08-31 rollout note (ADR-021):** Phase 1's quota guard, structured terminal state,
+and freshness threshold are implemented in the repository. The agent making this change did not
+run apply; controller deployment status must be verified separately. **Current truth is
+coexistence: the ops gateway's limited Aurora-backed `inventory-read-target` is already present
+alongside direct domain inventory/configuration control-plane targets.** `query_inventory` and
+`inventory_summary` disclose per-type freshness. Phase 2 expands domain-aware Aurora coverage and
+retires direct targets after parity; Aurora-only is not live. Phase 3 cache work is also pending.
+ADR-005's mutation/autonomy FROZEN posture is unchanged.
 
-**2026-08-31 롤아웃 노트(ADR-021):** Steampipe inventory collector의 Phase 1 쿼터 가드는
-코드에 구현됐지만 여기서 프로덕션 apply를 하지 않았다. **Phase 2 catalog retirement가
-배포될 때까지 직접 AgentCore inventory/configuration control-plane API 호출이 현행 동작이다.**
-Aurora 기반 inventory MCP target, direct inventory target 제거, stale/unavailable에서
-silent fallback 금지는 승인된 향후 Phase 2 작업이지 live가 아니다. Phase 3 cache 작업도
-pending이며, 전체 완료 후에도 live AWS 예외는 bounded CloudWatch metrics/logs뿐이다.
-ADR-005의 mutation/autonomy FROZEN 자세는 바뀌지 않는다.
+**2026-08-31 롤아웃 노트(ADR-021):** Phase 1 쿼터 가드, structured terminal state,
+freshness threshold는 저장소에 구현됐다. 이 변경을 수행한 에이전트는 apply를 실행하지
+않았고 controller 배포 상태는 별도 확인한다. **현재 ops gateway의 limited Aurora
+`inventory-read-target`이 direct domain inventory/configuration target과 공존한다.**
+`query_inventory`와 `inventory_summary`는 type별 freshness를 공개한다. Phase 2가
+domain-aware coverage를 확장하고 parity 뒤 direct target을 retirement하므로 Aurora-only는
+아직 live가 아니다. Phase 3 cache도 pending이며 ADR-005 FROZEN은 바뀌지 않는다.
 
 **Provisioner:** `scripts/v2/agentcore/{catalog.py, provision.py}` — `catalog.py` holds
 the 9 gateway names + the target tool schemas; `provision.py` does boto3 `list →
@@ -83,14 +84,15 @@ Terraform; `provision.py` overwrites with real values.
 
 - **ADR-004** — AgentCore gateways & runtime, incl. runtime-customizable agents & skills
   (Aurora catalog + resolver + registry-agnostic `agent.py`; built-in vs custom tiers;
-  per-account Agent Spaces; BYO-MCP). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
+  per-account Agent Spaces; BYO-MCP). [`../decisions/004-agentcore-gateways-runtime.md`](../decisions/004-agentcore-gateways-runtime.md)
 - **ADR-004** — gateway role split (note the **2026-06-03 correction: 7 → 8 gateways**).
-  [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
+  [`../decisions/004-agentcore-gateways-runtime.md`](../decisions/004-agentcore-gateways-runtime.md)
 - **ADR-003** — AI agent routing (hybrid routing & multi-route parallel synthesis; the
   classifier picks built-in routes + enabled custom agents).
-  [`../../decisions/003-ai-agent-routing.md`](../../decisions/003-ai-agent-routing.md)
-- **ADR-021** — quota-isolated inventory reads; Phase 1 code implemented, Phase 2/3 pending.
-  [`../../decisions/021-quota-isolated-inventory-reads.md`](../../decisions/021-quota-isolated-inventory-reads.md)
+  [`../decisions/003-ai-agent-routing.md`](../decisions/003-ai-agent-routing.md)
+- **ADR-021** — quota-isolated inventory reads; Phase 1 repository implementation complete,
+  limited ops Aurora reader coexists with direct targets, Phase 2/3 cutover pending.
+  [`../decisions/021-quota-isolated-inventory-reads.md`](../decisions/021-quota-isolated-inventory-reads.md)
 
 ## Key files / 핵심 파일
 

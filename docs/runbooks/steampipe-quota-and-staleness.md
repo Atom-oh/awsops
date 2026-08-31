@@ -1,8 +1,8 @@
 # Runbook — Steampipe 쿼터 및 인벤토리 신선도 / Steampipe Quota and Inventory Staleness
 
-Phase 1의 Steampipe 인벤토리 sync를 운영하는 절차다. **Phase 1은 코드 구현만 되었고 이 runbook은 프로덕션 apply를 수행하지 않는다.** AgentCore의 직접 inventory/configuration API 호출은 Phase 2 catalog retirement가 배포될 때까지 현재 동작으로 유지된다.
+Phase 1의 Steampipe 인벤토리 sync를 운영하는 절차다. Phase 1 구현은 저장소에 있다. **이 변경을 수행한 에이전트는 Terraform apply를 실행하지 않았으며, controller의 실제 배포 상태는 별도로 확인해야 한다.** 현재 ops gateway의 제한된 Aurora `inventory-read-target`은 direct domain inventory/configuration target과 공존한다.
 
-This runbook operates the Phase 1 Steampipe inventory sync. **Phase 1 is implemented in code only; this runbook does not perform a production apply.** Direct AgentCore inventory/configuration API calls remain current behavior until Phase 2 catalog retirement is deployed.
+This runbook operates the Phase 1 Steampipe inventory sync. Phase 1 is implemented in the repository. **The agent making this change did not run Terraform apply; the controller's actual deployment status must be verified separately.** The ops gateway's limited Aurora `inventory-read-target` currently coexists with direct domain inventory/configuration targets.
 
 ## 1. 변수와 기본값 / Variables and defaults
 
@@ -13,6 +13,7 @@ This runbook operates the Phase 1 Steampipe inventory sync. **Phase 1 is impleme
 | `steampipe_aws_bucket_size` | 4 | integer 1–40 | global burst capacity |
 | `steampipe_aws_fill_rate` | 2 | 0.1–20 req/s | token-bucket refill rate |
 | `steampipe_sync_reserved_concurrency` | 4 | integer 1–20 | inventory sync Lambda fan-out backpressure |
+| `inventory_stale_after_minutes` | 30 | integer 1–1440 | `inventory-read` per-type healthy/stale threshold |
 
 관련 고정 동작 / Related fixed behavior:
 
@@ -33,7 +34,7 @@ terraform -chdir=terraform/v2/foundation plan -out tfplan
 terraform -chdir=terraform/v2/foundation apply tfplan
 ```
 
-## 3. 생성된 `aws.spc` 검사 / Inspect generated `aws.spc`
+## 3. limiter 구성 확인 / Inspect limiter configuration
 
 정적 기본 파일은 `scripts/v2/steampipe/aws.spc`다. 실행 중 컨테이너는 Aurora account/Region scope를 읽어 기본 경로 `/home/steampipe/.steampipe/config/aws.spc`에 실제 구성을 생성한다.
 The checked-in default is `scripts/v2/steampipe/aws.spc`. The running container reads Aurora account/Region scope and renders the actual configuration at `/home/steampipe/.steampipe/config/aws.spc`.
@@ -44,24 +45,21 @@ The checked-in default is `scripts/v2/steampipe/aws.spc`. The running container 
 python3 -m pytest scripts/v2/steampipe/test_spc_render.py -q
 ```
 
-배포 후 ECS Exec 권한이 있는 운영자는 실제 task를 읽기 전용으로 확인할 수 있다. `<cluster>`와 `<task-arn>`은 해당 환경의 값으로 바꾼다.
-After deployment, an operator with ECS Exec permission may inspect the live task read-only. Replace `<cluster>` and `<task-arn>` with environment values.
+ECS Exec는 활성화하지 않는다. 시작 및 scope 재생성 때 컨테이너가 CloudWatch Logs에 남기는 `steampipe_limiter_config` JSON 이벤트로 effective 값을 확인한다.
+Do not enable ECS Exec. Inspect the `steampipe_limiter_config` JSON event emitted to CloudWatch Logs at startup and scope regeneration.
 
-```bash
-aws ecs execute-command \
-  --cluster <cluster> \
-  --task <task-arn> \
-  --container steampipe \
-  --interactive \
-  --command 'sed -n "1,120p" /home/steampipe/.steampipe/config/aws.spc'
+```text
+fields @timestamp, event, max_concurrency, bucket_size, fill_rate
+| filter event = "steampipe_limiter_config"
+| sort @timestamp desc
+| limit 20
 ```
 
 다음을 확인한다 / Confirm:
 
-- `plugin "aws"` block가 정확히 하나이다 / exactly one `plugin "aws"` block.
-- `limiter "awsops_global"`가 정확히 하나이다 / exactly one `limiter "awsops_global"`.
+- renderer test가 `plugin "aws"`와 `limiter "awsops_global"`가 정확히 하나임을 검증한다 / the renderer test verifies exactly one `plugin "aws"` and one `limiter "awsops_global"`.
 - `max_concurrency`, `bucket_size`, `fill_rate`가 approved Terraform values와 일치한다.
-- `scope =`가 없다. 계정·리전별 budget 증식이 아니라 하나의 global budget이어야 한다.
+- renderer test가 `scope =` 부재를 검증한다. 계정·리전별 budget 증식이 아니라 하나의 global budget이어야 한다 / the renderer test verifies no `scope =`, preserving one global budget.
 
 ## 4. 배포 순서 / Deployment order
 
@@ -93,23 +91,26 @@ Manual UI refresh uses the same `InvocationType=Event` path and Lambda reserved 
 
 CloudWatch Logs에서 다음 JSON event 이름을 조회한다:
 
+- `steampipe_limiter_config` — effective `max_concurrency`, `bucket_size`, `fill_rate`.
 - `inventory_sync_dispatch` — `type=all` fan-out이 시작됨.
-- `inventory_sync_complete` — `resource_type`, `row_count`, `elapsed_ms`.
-- `inventory_sync_busy` — 해당 type의 advisory lock이 이미 사용 중; retry storm을 만들지 않는다.
-- `inventory_sync_failed` — `resource_type`, `elapsed_ms`, `error_category`, `error_type`.
+- `inventory_sync_complete` — `resource_type`, `row_count`, `elapsed_ms`, `degraded=false`, `throttled=false`, `freshness=healthy`, `age_minutes=0`.
+- `inventory_sync_busy` — `degraded=true`, `throttled=false`; 해당 type의 advisory lock이 이미 사용 중이며 retry storm을 만들지 않는다.
+- `inventory_sync_failed` — `resource_type`, `elapsed_ms`, `error_category`, `error_type`, `degraded=true`, structured `throttled`; raw exception text는 로그에 쓰지 않는다.
 
 예시 Logs Insights query / Example Logs Insights query:
 
 ```text
-fields @timestamp, event, resource_type, row_count, elapsed_ms, error_category, error_type
-| filter event like /^inventory_sync_/
+fields @timestamp, event, resource_type, row_count, elapsed_ms, degraded, throttled,
+  freshness, age_minutes, error_category, error_type,
+  max_concurrency, bucket_size, fill_rate
+| filter event like /^inventory_sync_/ or event = "steampipe_limiter_config"
 | sort @timestamp desc
 | limit 100
 ```
 
-Aurora에서 `inventory_sync_runs`는 resource type별 마지막 실행 ledger이고, `inventory_resources.captured_at`은 account/region/resource row의 실제 수집 시각이다. stale 여부는 둘 다 보며, **30분을 초과한 마지막 성공 sync는 stale로 취급**한다. 성공 기록이 없으면 해당 type은 unavailable로 취급한다.
+Aurora에서 `inventory_sync_runs`는 resource type별 마지막 실행 ledger이고, `inventory_resources.captured_at`은 account/region/resource row의 실제 수집 시각이다. `inventory-read`의 `query_inventory`와 `inventory_summary`는 둘을 사용해 `inventory_stale_after_minutes`(기본 30분) 기준 `healthy|stale|unavailable`, `latest_success_at`, `age_minutes`를 공개한다.
 
-In Aurora, `inventory_sync_runs` is the per-resource-type run ledger and `inventory_resources.captured_at` is the actual collection time for an account/Region/resource row. Check both; a latest successful sync older than **30 minutes** is stale. No successful record means that type is unavailable.
+In Aurora, `inventory_sync_runs` is the per-resource-type run ledger and `inventory_resources.captured_at` is the actual collection time for an account/Region/resource row. `query_inventory` and `inventory_summary` use both to disclose `healthy|stale|unavailable`, `latest_success_at`, and `age_minutes` against `inventory_stale_after_minutes` (default 30).
 
 ```sql
 SELECT resource_type, status, finished_at, row_count, error
@@ -123,7 +124,7 @@ GROUP BY resource_type, account_id, region
 ORDER BY latest_captured_at ASC;
 ```
 
-Phase 1 does not reroute AgentCore inventory/configuration reads. Therefore stale Aurora inventory is an operational signal for the sync and web inventory surfaces, not permission to add a silent direct-API fallback. Phase 2 must return an explicit stale/unavailable response instead.
+The limited ops `inventory-read-target` already returns explicit freshness for `query_inventory` and `inventory_summary`; it never silently falls back to a live API. Direct domain targets still coexist until Phase 2 expands Aurora coverage and retires them. Aurora-only is not live.
 
 ## 6. 안전한 튜닝 / Safe tuning
 

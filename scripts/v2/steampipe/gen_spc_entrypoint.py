@@ -16,6 +16,7 @@ On Aurora-unreachable: bounded retry, then fail-closed (exit non-zero) — never
 empty/stale config. A background watchdog re-queries Aurora every SCOPE_WATCH_INTERVAL seconds and
 restarts Steampipe when account/region scope changes (MAJOR 3 fix — M3).
 """
+import json
 import os
 import signal
 import ssl
@@ -86,7 +87,14 @@ def fetch_rows():
 
 
 def _render_spc(rows):
-    return render_spc(rows, limiter_config_from_env())
+    limiter = limiter_config_from_env()
+    print(json.dumps({
+        "event": "steampipe_limiter_config",
+        "max_concurrency": limiter.max_concurrency,
+        "bucket_size": limiter.bucket_size,
+        "fill_rate": limiter.fill_rate,
+    }, sort_keys=True), file=sys.stderr)
+    return render_spc(rows, limiter)
 
 
 def write_spc(spc: str) -> None:

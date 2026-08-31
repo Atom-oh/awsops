@@ -10,6 +10,7 @@ fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 echo "# Steampipe fan-out terraform wiring"
 
 SP=terraform/v2/foundation/steampipe.tf
+AI=terraform/v2/foundation/ai.tf
 DT=terraform/v2/foundation/data.tf
 VARS=terraform/v2/foundation/variables.tf
 
@@ -30,6 +31,7 @@ check_number_variable "steampipe_aws_max_concurrency" 4
 check_number_variable "steampipe_aws_bucket_size" 4
 check_number_variable "steampipe_aws_fill_rate" 2
 check_number_variable "steampipe_sync_reserved_concurrency" 4
+check_number_variable "inventory_stale_after_minutes" 30
 
 grep -Eq 'STEAMPIPE_AWS_MAX_CONCURRENCY' "$SP" \
   && pass "Steampipe task gets STEAMPIPE_AWS_MAX_CONCURRENCY env" \
@@ -46,6 +48,10 @@ grep -Eq 'STEAMPIPE_AWS_FILL_RATE' "$SP" \
 grep -Eq 'reserved_concurrent_executions[[:space:]]*=[[:space:]]*var\.steampipe_sync_reserved_concurrency' "$SP" \
   && pass "inventory sync Lambda uses reserved concurrency variable" \
   || fail "inventory sync Lambda uses reserved concurrency variable"
+
+grep -Eq 'INVENTORY_STALE_AFTER_MINUTES[[:space:]]*=[[:space:]]*tostring\(var\.inventory_stale_after_minutes\)' "$AI" \
+  && pass "inventory-read Lambda gets INVENTORY_STALE_AFTER_MINUTES env" \
+  || fail "inventory-read Lambda gets INVENTORY_STALE_AFTER_MINUTES env"
 
 grep -Eq 'maximum_event_age_in_seconds[[:space:]]*=[[:space:]]*900' "$SP" \
   && pass "inventory sync Lambda expires delayed async events after 900 seconds" \

@@ -319,6 +319,16 @@ variable "steampipe_sync_reserved_concurrency" {
   }
 }
 
+variable "inventory_stale_after_minutes" {
+  type        = number
+  default     = 30
+  description = "Age in minutes after which inventory-read reports a resource type as stale."
+  validation {
+    condition     = floor(var.inventory_stale_after_minutes) == var.inventory_stale_after_minutes && var.inventory_stale_after_minutes >= 1 && var.inventory_stale_after_minutes <= 1440
+    error_message = "inventory_stale_after_minutes must be an integer from 1 to 1440."
+  }
+}
+
 variable "eks_auto_register_enabled" {
   type        = bool
   description = "EKS auto-register gate: EventBridge(CloudTrail AssociateAccessPolicy/DeleteAccessEntry for the task role) -> Lambda -> eks_registrations. Observe-only toward AWS (no resource mutation). Requires workers_enabled (pg8000 layer reuse). false (default) = 0 resources."

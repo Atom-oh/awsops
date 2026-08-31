@@ -40,19 +40,22 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
   `psql` from an in-VPC deploy host. Tracked by a `schema_migrations` table.
   Idempotent (`CREATE TABLE IF NOT EXISTS` throughout).
 - **App access**: **node-pg** (`web/lib/db.ts`). No *live* Steampipe in v2 — live AWS
-  queries go through AgentCore MCP Lambda tools; a flag-gated warm Steampipe→Aurora
-  inventory-sync batch (default off) is the only Steampipe usage (ADR-001).
-- **2026-08-31 rollout note (ADR-021)**: Phase 1's Steampipe global limiter and sync
-  backpressure are implemented in code, with no production apply performed here. Aurora is not
-  yet the AgentCore inventory/configuration MCP source: direct AgentCore inventory API calls
-  remain current behavior until Phase 2 catalog retirement is deployed. The accepted
-  Steampipe→Aurora→domain-MCP target and stale/unavailable no-fallback semantics are Phase 2+
-  work, not a present-live claim.
-  (2026-08-31 롤아웃 노트(ADR-021): Phase 1의 Steampipe 전역 limiter와 sync backpressure는
-  코드에 구현됐고 여기서 프로덕션 apply는 하지 않았다. Aurora는 아직 AgentCore
-  inventory/configuration MCP source가 아니며 Phase 2 catalog retirement가 배포될 때까지
-  직접 AgentCore inventory API 호출이 현행 동작이다. Steampipe→Aurora→domain MCP 목표와
-  stale/unavailable 시 live fallback 금지 의미론은 현재 live가 아닌 Phase 2+ 작업이다.)
+  queries go through AgentCore MCP Lambda tools; the ops gateway already has a limited
+  Aurora-backed `inventory-read-target`, while direct domain API targets remain registered.
+  A flag-gated warm Steampipe→Aurora inventory-sync batch (default off) is the only Steampipe
+  usage (ADR-001).
+- **2026-08-31 rollout note (ADR-021)**: Phase 1's limiter, backpressure, structured
+  terminal state, and freshness threshold are implemented in the repository. The agent making
+  this change did not run apply; controller deployment status must be verified separately.
+  Current truth is coexistence: the limited ops `inventory-read-target` serves Aurora data and
+  freshness while direct domain inventory/config targets remain live. Phase 2 expands
+  domain-aware Aurora coverage and retires those direct targets after parity; Aurora-only is not live.
+  (2026-08-31 롤아웃 노트(ADR-021): Phase 1 limiter, backpressure, structured terminal state,
+  freshness threshold는 저장소에 구현됐다. 이 변경을 수행한 에이전트는 apply를 실행하지
+  않았고 controller 배포 상태는 별도 확인한다. 현재 limited ops `inventory-read-target`이
+  Aurora 데이터/freshness를 제공하면서 direct domain target과 공존한다. Phase 2가
+  domain-aware coverage를 확장하고 parity 뒤 direct target을 retirement하므로
+  Aurora-only는 아직 live가 아니다.)
 
 ### ADR-001 schema tables / 스키마 테이블
 
@@ -75,9 +78,9 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 
 - **ADR-001** — Aurora replaces the v1 `data/*.json` state layer (NOT Steampipe).
   Defines the Phase 1 7-table schema and the ECS Fargate + Aurora split.
-  See [`../../decisions/001-v2-foundation.md`](../../decisions/001-v2-foundation.md).
+  See [`../decisions/001-v2-foundation.md`](../decisions/001-v2-foundation.md).
 - **ADR-021** — quota-limited inventory collection and the staged Aurora-backed MCP target.
-  See [`../../decisions/021-quota-isolated-inventory-reads.md`](../../decisions/021-quota-isolated-inventory-reads.md).
+  See [`../decisions/021-quota-isolated-inventory-reads.md`](../decisions/021-quota-isolated-inventory-reads.md).
 
 ## Key files / 핵심 파일
 

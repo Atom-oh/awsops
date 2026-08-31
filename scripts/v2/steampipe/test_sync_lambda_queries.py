@@ -4,6 +4,7 @@ import sys
 import types
 from pathlib import Path
 import pytest
+from botocore.exceptions import ClientError
 
 
 def load_sync_lambda():
@@ -239,6 +240,10 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
     assert terminal[0]["event"] == "inventory_sync_complete"
     assert terminal[0]["resource_type"] == "log_test_success"
     assert terminal[0]["row_count"] == 1
+    assert terminal[0]["degraded"] is False
+    assert terminal[0]["throttled"] is False
+    assert terminal[0]["freshness"] == "healthy"
+    assert terminal[0]["age_minutes"] == 0
     assert isinstance(terminal[0]["elapsed_ms"], int)
 
 
@@ -273,8 +278,48 @@ def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkey
     assert terminal[0]["error_category"] == "sync"
     assert terminal[0]["error"] == "inventory sync failed"
     assert terminal[0]["error_type"] == "RuntimeError"
+    assert terminal[0]["degraded"] is True
+    assert terminal[0]["throttled"] is False
     assert isinstance(terminal[0]["elapsed_ms"], int)
     assert "supersecret" not in output
+
+
+def test_sync_failure_marks_clienterror_throttling_without_logging_raw_error(capsys, monkeypatch):
+    """Throttling state must come from structured exception metadata, never raw exception text."""
+    mod = load_sync_lambda()
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            return []
+
+        def close(self):
+            pass
+
+    secret = "credential=supersecret"
+    throttled = ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": secret}},
+        "DescribeInstances",
+    )
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+    mod.SDK_SYNCS["log_test_throttled"] = (
+        lambda: (_ for _ in ()).throw(throttled)
+    )
+    mod._ALLOWED.add("log_test_throttled")
+
+    mod.sync("log_test_throttled")
+
+    output = capsys.readouterr().out
+    terminal = [
+        json.loads(line) for line in output.splitlines()
+        if json.loads(line)["event"] == "inventory_sync_failed"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0]["degraded"] is True
+    assert terminal[0]["throttled"] is True
+    assert terminal[0]["error_type"] == "ClientError"
+    assert secret not in output
 
 
 def test_sync_busy_logs_one_terminal_record(capsys, monkeypatch):
@@ -299,6 +344,8 @@ def test_sync_busy_logs_one_terminal_record(capsys, monkeypatch):
     assert records == [{
         "event": "inventory_sync_busy",
         "resource_type": "ec2",
+        "degraded": True,
+        "throttled": False,
         "elapsed_ms": records[0]["elapsed_ms"],
     }]
     assert isinstance(records[0]["elapsed_ms"], int)
@@ -336,6 +383,8 @@ def test_sync_logs_one_safe_failure_when_aurora_connection_fails(capsys, monkeyp
         "error_category": "lifecycle",
         "error": "inventory sync failed",
         "error_type": "RuntimeError",
+        "degraded": True,
+        "throttled": False,
         "elapsed_ms": terminal[0]["elapsed_ms"],
     }]
     assert isinstance(terminal[0]["elapsed_ms"], int)
@@ -366,6 +415,8 @@ def test_sync_logs_one_safe_failure_when_lock_acquisition_fails(capsys, monkeypa
     assert terminal[0]["error_category"] == "lifecycle"
     assert terminal[0]["error"] == "inventory sync failed"
     assert terminal[0]["error_type"] == "ValueError"
+    assert terminal[0]["degraded"] is True
+    assert terminal[0]["throttled"] is False
     assert len(terminal) == 1
     assert secret not in json.dumps(terminal)
 
@@ -405,6 +456,8 @@ def test_sync_logs_work_failure_when_failure_ledger_write_fails(capsys, monkeypa
     assert terminal[0]["error_category"] == "sync"
     assert terminal[0]["error"] == "inventory sync failed"
     assert terminal[0]["error_type"] == "ValueError"
+    assert terminal[0]["degraded"] is True
+    assert terminal[0]["throttled"] is False
     assert len(terminal) == 1
     output = json.dumps(terminal)
     assert work_secret not in output

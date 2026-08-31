@@ -2,6 +2,7 @@
 import os
 import sys
 import re
+import json
 import unittest.mock as mock
 import pytest
 
@@ -146,7 +147,7 @@ def test_limiter_env_rejects_non_finite_fill_rate(fill_rate):
 # not the pure render_spc tests above, which have no such dependency and must always collect/run.
 
 
-def test_entrypoint_renders_with_validated_limiter_config():
+def test_entrypoint_renders_with_validated_limiter_config_and_logs_effective_values(capsys):
     import gen_spc_entrypoint
 
     rows = [{"account_id": "123456789012"}]
@@ -157,6 +158,13 @@ def test_entrypoint_renders_with_validated_limiter_config():
 
     config.assert_called_once_with()
     render.assert_called_once_with(rows, limiter)
+    record = json.loads(capsys.readouterr().err)
+    assert record == {
+        "event": "steampipe_limiter_config",
+        "max_concurrency": 2,
+        "bucket_size": 3,
+        "fill_rate": 0.5,
+    }
 
 
 def test_no_aurora_secret_anywhere():

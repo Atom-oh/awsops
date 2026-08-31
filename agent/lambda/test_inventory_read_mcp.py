@@ -6,6 +6,7 @@ of inventory_resources, keyed by resource_type) so it is testable with fixtures 
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import inventory_read_mcp as inv  # noqa: E402
@@ -131,21 +132,108 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         self.assertIn("note", body)
 
     def test_query_inventory_binds_resource_type_as_parameter(self):
-        seen = {}
+        calls = []
         def fake(sql, params=None):
-            seen["sql"], seen["params"] = sql, params
+            calls.append((sql, params))
             return [{"data": {"name": "x"}}]
         inv._execute_override = fake
         out = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {"resource_type": "alb"}}, None)
         self.assertEqual(out["statusCode"], 200)
         # user input must be a bound Data API parameter, never inlined into SQL
-        self.assertEqual(seen["params"], [{"name": "rt", "value": {"stringValue": "alb"}}])
-        self.assertNotIn("alb", seen["sql"])
+        inventory_sql, inventory_params = next(
+            call for call in calls if "SELECT jsonb_build_object" in call[0]
+        )
+        self.assertEqual(inventory_params, [{"name": "rt", "value": {"stringValue": "alb"}}])
+        self.assertNotIn("alb", inventory_sql)
+
+    def test_query_inventory_discloses_bound_per_type_freshness(self):
+        calls = []
+
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            if "inventory_sync_runs" in sql:
+                return [{
+                    "resource_type": "alb",
+                    "status": "succeeded",
+                    "finished_at": "2026-08-31T00:00:00+00:00",
+                    "row_count": 1,
+                    "latest_success_at": "2026-08-31T00:00:00+00:00",
+                    "freshness": "stale",
+                    "age_minutes": 31,
+                    "stale_after_minutes": 30,
+                }]
+            return [{"data": {"name": "x"}}]
+
+        inv._execute_override = fake
+        with mock.patch.dict(os.environ, {"INVENTORY_STALE_AFTER_MINUTES": "30"}):
+            out = inv.lambda_handler(
+                {"tool_name": "query_inventory", "arguments": {"resource_type": "alb"}},
+                None,
+            )
+
+        import json as _j
+        body = _j.loads(out["body"])
+        self.assertEqual(body["freshness"]["resource_type"], "alb")
+        self.assertEqual(body["freshness"]["freshness"], "stale")
+        self.assertEqual(body["freshness"]["age_minutes"], 31)
+        freshness_call = next(call for call in calls if "inventory_sync_runs" in call[0])
+        self.assertEqual(
+            freshness_call[1],
+            [
+                {"name": "stale_after_minutes", "value": {"longValue": 30}},
+                {"name": "rt", "value": {"stringValue": "alb"}},
+            ],
+        )
+        self.assertNotIn("'alb'", freshness_call[0])
+
+    def test_inventory_summary_binds_threshold_and_returns_per_type_freshness(self):
+        calls = []
+
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            return [{
+                "resource_type": "ec2",
+                "status": "succeeded",
+                "finished_at": "2026-08-31T00:00:00+00:00",
+                "row_count": 2,
+                "latest_success_at": "2026-08-31T00:00:00+00:00",
+                "freshness": "healthy",
+                "age_minutes": 4,
+                "stale_after_minutes": 30,
+            }]
+
+        inv._execute_override = fake
+        with mock.patch.dict(os.environ, {"INVENTORY_STALE_AFTER_MINUTES": "30"}):
+            out = inv.lambda_handler({"tool_name": "inventory_summary"}, None)
+
+        import json as _j
+        body = _j.loads(out["body"])
+        self.assertEqual(body["sync"][0]["resource_type"], "ec2")
+        self.assertEqual(body["sync"][0]["freshness"], "healthy")
+        self.assertEqual(
+            calls[0][1],
+            [{"name": "stale_after_minutes", "value": {"longValue": 30}}],
+        )
+
+    def test_stale_threshold_env_defaults_and_rejects_invalid_values(self):
+        self.assertEqual(inv._inventory_stale_after_minutes({}), 30)
+        self.assertEqual(
+            inv._inventory_stale_after_minutes({"INVENTORY_STALE_AFTER_MINUTES": "45"}),
+            45,
+        )
+        for raw in ("0", "1441", "1.5", "not-a-number", ""):
+            with self.subTest(raw=raw):
+                self.assertEqual(
+                    inv._inventory_stale_after_minutes(
+                        {"INVENTORY_STALE_AFTER_MINUTES": raw}
+                    ),
+                    30,
+                )
 
     def test_query_inventory_returns_ecs_service_rows(self):
-        seen = {}
+        calls = []
         def fake(sql, params=None):
-            seen["sql"], seen["params"] = sql, params
+            calls.append((sql, params))
             return [{"data": {"service_name": "api", "desired_count": 2, "running_count": 1}}]
         inv._execute_override = fake
         import json as _j
@@ -154,8 +242,15 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         body = _j.loads(out["body"])
         self.assertEqual(body["resource_type"], "ecs_service")
         self.assertEqual(body["resources"][0]["service_name"], "api")
-        self.assertEqual(seen["params"], [{"name": "rt", "value": {"stringValue": "ecs_service"}}])
-        self.assertNotIn("ecs_service", seen["sql"])
+        inventory_sql, inventory_params = next(
+            call for call in calls
+            if "inventory_resources" in call[0] and "inventory_sync_runs" not in call[0]
+        )
+        self.assertEqual(
+            inventory_params,
+            [{"name": "rt", "value": {"stringValue": "ecs_service"}}],
+        )
+        self.assertNotIn("ecs_service", inventory_sql)
 
     def test_query_inventory_requires_resource_type(self):
         out = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {}}, None)
