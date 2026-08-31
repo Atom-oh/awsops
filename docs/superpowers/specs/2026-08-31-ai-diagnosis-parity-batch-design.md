@@ -121,8 +121,9 @@ them — the audit row predates that work. What actually remains:
   `enabled:false` contract). No body. Publishes one SNS message; returns `{messageId}`.
 - **Lib**: `web/lib/diagnosis-notify.ts` gains `publishTest()` — `PublishCommand` with the
   ASCII subject `[AWSops] Test Notification` (SNS rejects non-ASCII subjects — same
-  constraint as the worker's `_SUBJECT`) and a short bilingual body naming who triggered it
-  (admin email) and when (KST). A publish failure returns 502 with a SANITIZED message
+  constraint as the worker's `_SUBJECT`) and a short bilingual body. The triggering admin's
+  identity deliberately stays OUT of the body (it would broadcast an email address to every
+  subscriber) — the route's server log carries the audit trail. A publish failure returns 502 with a SANITIZED message
   ('publish failed' — SNS errors embed role/topic ARNs; the detail is logged server-side
   only). No silent success.
 - **IAM** (`terraform/v2/foundation/notify.tf`): add `sns:Publish` to the existing web-task

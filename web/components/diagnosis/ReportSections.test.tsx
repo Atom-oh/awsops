@@ -39,11 +39,13 @@ describe('splitSections', () => {
   it('returns zero sections for markdown with no h2 heading', () => {
     expect(splitSections('# 제목\n\n본문뿐').sections).toEqual([]);
   });
-  it('does not split on a ## line inside a code fence', () => {
+  it('does not split on a ## line inside a code fence (backtick or tilde)', () => {
     const md = '## A\n\n```\n## not a heading\n```\n\n## B\n\nb';
     const { sections } = splitSections(md);
     expect(sections.map((s) => s.title)).toEqual(['A', 'B']);
     expect(sections[0].body).toContain('## not a heading');
+    const tilde = splitSections('## A\n\n~~~\n## nope\n~~~\n\n## B\n\nb');
+    expect(tilde.sections.map((s) => s.title)).toEqual(['A', 'B']);
   });
   it('strips the localized TOC labels too', () => {
     const en = '# T\n\n**Table of Contents**\n\n- [A](#a)\n\n## A\n\nbody';

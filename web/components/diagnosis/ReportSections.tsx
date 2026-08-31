@@ -20,11 +20,11 @@ export function splitSections(markdown: string): { preamble: string; sections: R
   const sections: ReportSection[] = [];
   const preambleLines: string[] = [];
   let current: ReportSection | null = null;
-  // Fence-aware: a `## ` line inside an open ``` block is code, not a heading — splitting
-  // there would re-break what the worker's _balance_code_fences protected.
+  // Fence-aware: a `## ` line inside an open ``` or ~~~ block is code, not a heading —
+  // splitting there would re-break what the worker's _balance_code_fences protected.
   let fenceOpen = false;
   for (const line of lines) {
-    if (/^\s*```/.test(line)) fenceOpen = !fenceOpen;
+    if (/^\s*(```|~~~)/.test(line)) fenceOpen = !fenceOpen;
     const m = fenceOpen ? null : /^## (.+)$/.exec(line);
     if (m) {
       if (current) sections.push(current);
