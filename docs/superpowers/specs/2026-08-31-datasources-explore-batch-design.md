@@ -93,8 +93,11 @@ render hook). Non-numeric durations render as plain text (no bar), never NaN wid
 - L203 per-datasource connection settings (timeout/cache TTL/ClickHouse DB) — connector-path work.
 - L206 app-wide ko/en/zh i18n — platform decision; new strings here follow the existing
   Korean-literal `tt()` convention.
-- No new tables, Terraform, IAM, or connector changes. The only API change is additive
-  (`metadata`) plus the widened-but-still-density-capped range bound.
+- No new tables, Terraform, or IAM. Connector changes are limited to forwarding the existing
+  clamped `timeout` param on the prometheus/mimir RANGE paths (instant already read it) — they
+  ship with the normal agent-fleet deploy (`make agentcore`), and the widened 30d bound should
+  not be considered guarded until that deploy lands. The only web API change is additive
+  (`metadata`) plus the widened, per-kind-capped range bound.
 
 ## Testing
 - `web/lib/example-queries.test.ts` — every kind has 4 raw + 4 NL entries; exprs non-empty;

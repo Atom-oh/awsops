@@ -46,7 +46,11 @@ const RANGE_PRESETS: ReadonlyArray<readonly [string, number]> = [
   // (7d→2419s, 30d→10368s), inside the API's 5000-point density cap.
   ['7d', 604800], ['30d', 2592000],
 ];
-const autoStep = (w: number) => Math.max(1, Math.round(w / 250));
+// ~250 points for prom/mimir; Loki's connector caps each matrix series at 200 samples and
+// keeps the OLDEST ones, so target ≤180 points there — otherwise a 7d metric-LogQL chart
+// silently loses its newest ~1.4 days behind a generic truncation banner.
+const autoStep = (w: number, kind?: string) =>
+  Math.max(1, kind === 'loki' ? Math.ceil(w / 180) : Math.round(w / 250)); // ceil ONLY for loki — round is the long-standing prom/mimir behavior
 
 /** Query console for a datasource instance (PromQL/LogQL/TraceQL/SQL) + an AI NL→query assist.
  *  Read-only. When `instanceId` is given (the per-instance route) the picker is hidden. */
@@ -93,8 +97,9 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
     const q = queryOverride ?? query;  // a quick-query chip can run its expr without waiting on setQuery
     if (selId === '' || !q.trim()) return;
     const w = windowOverride ?? rangeWindow;
-    const range = canRange && w > 0 ? { window: w, step: autoStep(w) } : false;
-    const queriedKind = list.find((d) => d.id === selId)?.kind; // bind kind to THIS query, not the live selection
+    const kindNow = list.find((d) => d.id === selId)?.kind; // bind kind to THIS query, not the live selection
+    const range = canRange && w > 0 ? { window: w, step: autoStep(w, kindNow) } : false;
+    const queriedKind = kindNow;
     setBusy(true); setErr(''); setResult(null); setExecMs(null);
     try {
       const r = await fetch('/api/datasources/query', {
@@ -135,7 +140,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             scoped id isn't in the list yet. */}
         {(
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); setGenFrom(null); setExecMs(null); }}>
+            {/* switching instances resets the range to 즉시 — a 30d window carried onto Loki would 400 (per-kind 7d cap) */}
+            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); setGenFrom(null); setExecMs(null); setRangeWindow(0); }}>
               <option value="">{tt('데이터소스 선택…')}</option>
               {list.map((d) => (
                 <option key={d.id} value={d.id}>{d.name} ({d.kind}){d.isDefault ? ` ${tt('· 기본')}` : ''}</option>
@@ -175,7 +181,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
                 key={p}
                 type="button"
                 onClick={() => setNl(p)}
-                className="rounded-full border border-dashed border-ink-200 px-2.5 py-1 text-[12px] text-ink-500 hover:border-brand-400 hover:text-brand-700"
+                disabled={busy}
+                className="rounded-full border border-dashed border-ink-200 px-2.5 py-1 text-[12px] text-ink-500 hover:border-brand-400 hover:text-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {tt(p)}
               </button>
@@ -226,7 +233,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
                 type="button"
                 title={e.expr}
                 onClick={() => { setQuery(e.expr); setGenFrom(null); run(undefined, e.expr); }}
-                className="rounded-full border border-ink-200 px-2.5 py-1 text-[12px] text-ink-600 hover:border-brand-400 hover:text-brand-700"
+                disabled={busy}
+                className="rounded-full border border-ink-200 px-2.5 py-1 text-[12px] text-ink-600 hover:border-brand-400 hover:text-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {tt(e.label)}
               </button>
