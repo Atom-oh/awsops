@@ -761,6 +761,52 @@ def _inject_account(sql, account_id):
     return sql.format(account_id=account_id)
 
 
+def _finalize_sync_ledger(resource_type, status, row_count=None, error=None):
+    """Write one terminal ledger state on a fresh connection after main cleanup.
+
+    The running row and durable last-success fields must remain truthful if the work connection
+    cannot unlock/close or this final write fails. Closing the finalizer is best-effort once its
+    update has completed.
+    """
+    finalizer = None
+    try:
+        finalizer = _aurora()
+        if status == "succeeded":
+            finalizer.run(
+                "UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), "
+                "row_count=:n, error=NULL, last_success_at=now(), "
+                "last_success_row_count=:n "
+                "WHERE resource_type=:t AND account_id='self'",
+                t=resource_type,
+                n=row_count,
+            )
+        elif status == "partial":
+            finalizer.run(
+                "UPDATE inventory_sync_runs SET status='partial', finished_at=now(), "
+                "row_count=:n, error=NULL "
+                "WHERE resource_type=:t AND account_id='self'",
+                t=resource_type,
+                n=row_count,
+            )
+        elif status == "failed":
+            finalizer.run(
+                "UPDATE inventory_sync_runs SET status='failed', finished_at=now(), "
+                "row_count=:n, error=:e "
+                "WHERE resource_type=:t AND account_id='self'",
+                t=resource_type,
+                n=row_count,
+                e=error,
+            )
+        else:
+            raise ValueError(f"unknown inventory sync terminal status: {status}")
+    finally:
+        if finalizer is not None:
+            try:
+                finalizer.close()
+            except Exception:
+                pass
+
+
 def sync(resource_type):
     started = time.monotonic()
     if resource_type not in _ALLOWED:
@@ -770,8 +816,9 @@ def sync(resource_type):
     result = None
     terminal_event = None
     terminal_fields = None
-    prior_last_success_at = None
-    prior_last_success_row_count = None
+    pending_ledger_status = None
+    pending_ledger_row_count = None
+    pending_ledger_error = None
     try:
         adb = _aurora()
         # advisory lock per type (no Steampipe stampede); skip if busy
@@ -792,17 +839,14 @@ def sync(resource_type):
             # once. Per-account freshness is the captured_at on each inventory_resources row (which IS
             # keyed by real account_id), so no per-account state is lost.
             # mark running INSIDE the try so a throw here records 'failed' and the finally still unlocks
-            prior_success = adb.run(
+            adb.run(
                 "INSERT INTO inventory_sync_runs "
                 "(resource_type, status, started_at, finished_at, row_count, error) "
                 "VALUES (:t,'running',now(),NULL,NULL,NULL) "
                 "ON CONFLICT (resource_type, account_id) DO UPDATE SET "
-                "status='running', started_at=now(), finished_at=NULL, row_count=NULL, error=NULL "
-                "RETURNING last_success_at, last_success_row_count",
+                "status='running', started_at=now(), finished_at=NULL, row_count=NULL, error=NULL",
                 t=resource_type,
             )
-            if prior_success:
-                prior_last_success_at, prior_last_success_row_count = prior_success[0]
             expected_target_accounts = (
                 [] if resource_type in SDK_SYNCS else _enabled_target_accounts(adb)
             )
@@ -899,13 +943,8 @@ def sync(resource_type):
                     adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id=:acct AND region=:rg AND resource_id=:id",
                             t=resource_type, acct=acct, rg=rg, id=rid)
             if unreachable_accounts:
-                adb.run(
-                    "UPDATE inventory_sync_runs SET status='partial', finished_at=now(), "
-                    "row_count=:n, error=NULL "
-                    "WHERE resource_type=:t AND account_id='self'",
-                    t=resource_type,
-                    n=len(recs),
-                )
+                pending_ledger_status = "partial"
+                pending_ledger_row_count = len(recs)
                 result = {
                     "status": "partial",
                     "type": resource_type,
@@ -923,14 +962,8 @@ def sync(resource_type):
                     "age_minutes": None,
                 }
             else:
-                adb.run(
-                    "UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), "
-                    "row_count=:n, error=NULL, last_success_at=now(), "
-                    "last_success_row_count=:n "
-                    "WHERE resource_type=:t AND account_id='self'",
-                    t=resource_type,
-                    n=len(recs),
-                )
+                pending_ledger_status = "succeeded"
+                pending_ledger_row_count = len(recs)
                 result = {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
                 terminal_event = "inventory_sync_complete"
                 terminal_fields = {
@@ -956,12 +989,8 @@ def sync(resource_type):
             error = str(e)[:300]
             result = {"status": "failed", "type": resource_type, "error": error}
             error_category = "sync"
-            try:
-                adb.run("UPDATE inventory_sync_runs SET status='failed', finished_at=now(), error=:e "
-                        "WHERE resource_type=:t AND account_id='self'",
-                        t=resource_type, e=str(e)[:2000])
-            except Exception:
-                pass
+            pending_ledger_status = "failed"
+            pending_ledger_error = str(e)[:2000]
         else:
             result = {"status": "failed", "type": resource_type, "error": "inventory sync failed"}
             error_category = "lifecycle"
@@ -976,48 +1005,25 @@ def sync(resource_type):
         }
     finally:
         cleanup_error = None
-        cleanup_ledger_restored = False
-
-        def restore_cleanup_failure_ledger():
-            if adb is None or not locked:
-                return False
-            try:
-                adb.run(
-                    "UPDATE inventory_sync_runs SET status='failed', finished_at=now(), "
-                    "error='inventory sync cleanup failed', "
-                    "last_success_at=:last_success_at, "
-                    "last_success_row_count=:last_success_row_count "
-                    "WHERE resource_type=:t AND account_id='self'",
-                    t=resource_type,
-                    last_success_at=prior_last_success_at,
-                    last_success_row_count=prior_last_success_row_count,
-                )
-                return True
-            except Exception:
-                return False
-
         if adb is not None:
             if locked:
                 try:
                     adb.run("SELECT pg_advisory_unlock(hashtext(:t))", t=f"inv:{resource_type}")
                 except Exception as e:
                     cleanup_error = e
-                    # Once unlock fails this run is terminally failed. Restore durable success
-                    # before close, while the connection is still known to be usable.
-                    cleanup_ledger_restored = restore_cleanup_failure_ledger()
             try:
                 adb.close()
             except Exception as e:
                 if cleanup_error is None:
                     cleanup_error = e
         if cleanup_error is not None and terminal_fields is not None:
-            if not cleanup_ledger_restored:
-                restore_cleanup_failure_ledger()
             result = {
                 "status": "failed",
                 "type": resource_type,
                 "error": "inventory sync cleanup failed",
             }
+            pending_ledger_status = "failed"
+            pending_ledger_error = "inventory sync cleanup failed"
             terminal_event = "inventory_sync_failed"
             terminal_fields = {
                 "resource_type": resource_type,
@@ -1027,6 +1033,35 @@ def sync(resource_type):
                 "degraded": True,
                 "throttled": _is_throttling_error(cleanup_error),
             }
+        if locked and terminal_fields is not None and pending_ledger_status is not None:
+            try:
+                _finalize_sync_ledger(
+                    resource_type,
+                    pending_ledger_status,
+                    row_count=pending_ledger_row_count,
+                    error=pending_ledger_error,
+                )
+            except Exception as e:
+                # Preserve a real work/cleanup failure as the one terminal outcome. If the work
+                # itself was otherwise successful/partial, the failed finalizer becomes the
+                # lifecycle failure. In every case the durable row remains running with its
+                # previous last-success values because no terminal update ran on the main
+                # connection.
+                if terminal_event != "inventory_sync_failed":
+                    result = {
+                        "status": "failed",
+                        "type": resource_type,
+                        "error": "inventory sync failed",
+                    }
+                    terminal_event = "inventory_sync_failed"
+                    terminal_fields = {
+                        "resource_type": resource_type,
+                        "error_category": "lifecycle",
+                        "error": "inventory sync failed",
+                        "error_type": type(e).__name__,
+                        "degraded": True,
+                        "throttled": _is_throttling_error(e),
+                    }
         if terminal_fields is not None:
             terminal_fields["elapsed_ms"] = int((time.monotonic() - started) * 1000)
             _log(terminal_event, **terminal_fields)

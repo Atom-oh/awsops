@@ -183,3 +183,78 @@ and recreates the explicit-column `sql_reader.inventory_sync_runs` view without 
   commit.
 - A disposable PostgreSQL execution check was not available because the sandbox cannot access
   `/var/run/docker.sock`; migration static contracts and both offline runner checks passed.
+
+---
+
+## Fix Round 3
+
+### Status
+
+Eliminated premature terminal ledger writes on the main Aurora work connection. The main connection
+now writes only the `running` state and inventory/snapshot work. After advisory unlock and main
+close complete, a fresh short-lived Aurora connection finalizes exactly one of
+`succeeded|partial|failed`.
+
+No Terraform apply, AWS mutation, schema change, or ADR-005 capability change was performed.
+
+### RED evidence
+
+Command:
+
+```bash
+python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py -q
+```
+
+Result before the production change:
+
+```text
+9 failed, 18 passed in 0.21s
+```
+
+The failures proved that the old implementation:
+
+- opened only the main Aurora connection,
+- issued succeeded/partial/failed updates on that main connection,
+- could leave a fresh succeeded ledger after main close made the connection unusable,
+- did not surface a fresh-finalizer write failure, and
+- had no best-effort finalizer-close behavior to verify.
+
+### GREEN evidence
+
+| Command | Result |
+|---|---|
+| `python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py -q` | Passed: 27 tests |
+| `python3 -m pytest scripts/v2/steampipe -q` | Passed: 69 tests; 28 existing Python 3.9/Boto3 warnings |
+| `PYTHONPATH=agent/lambda python3 -m pytest agent/lambda/test_inventory_read_mcp.py agent/lambda/test_inventory_view_contract.py -q` | Passed: 40 tests |
+| `PYTHONPATH=agent/lambda python3 -m pytest scripts/v2/steampipe/test_inventory_freshness_migration.py agent/lambda/test_inventory_view_contract.py -q` | Passed: 12 tests |
+| `cd web && npx vitest run lib/inventory.test.ts app/api/inventory/'[type]'/route.test.ts app/api/inventory/summary/route.test.ts` | Passed: 3 files, 22 tests; existing Vite CJS warning only |
+| `python3 -m py_compile scripts/v2/steampipe/sync_lambda.py scripts/v2/steampipe/test_sync_lambda_queries.py` | Passed |
+| `git diff --check` | Passed |
+
+### Semantics
+
+- Full success, including a genuine zero-row result, is finalized only on the fresh connection and
+  advances `last_success_at` plus `last_success_row_count`.
+- Partial completion is finalized only on the fresh connection and does not modify durable
+  last-success fields.
+- Work failure is finalized only on the fresh connection and does not modify durable last-success
+  fields.
+- Unlock or main-close failure overrides any pending outcome to `failed`; the fresh connection
+  writes that failure without advancing last-success.
+- A realistic close-failure regression makes the main connection unusable, proves that no terminal
+  update was issued there, and verifies that the fresh finalizer records `failed`.
+- If finalizer connect/write fails, the caller emits one redacted failed terminal result while the
+  durable row remains `running` with its previous last-success fields; no false healthy success was
+  written.
+- Once a finalizer update succeeds, an error while closing that short-lived connection is
+  best-effort and does not downgrade the committed ledger state.
+- Existing single-terminal-log, redaction, throttling classification, and `BaseException`
+  re-raise/no-terminal-log behavior remain covered.
+
+### Concerns
+
+- Every locked sync now opens one additional short-lived Aurora connection for terminal
+  finalization. This is the controller-approved reliability tradeoff.
+- A finalizer outage intentionally leaves the current row `running`; reader freshness remains based
+  on the previous durable success and classifies the current state as degraded rather than falsely
+  healthy.
