@@ -134,6 +134,12 @@ def test_limiter_env_validation_fails_closed():
         limiter_config_from_env({"STEAMPIPE_AWS_FILL_RATE": "0"})
 
 
+@pytest.mark.parametrize("fill_rate", ["nan", "inf", "-inf"])
+def test_limiter_env_rejects_non_finite_fill_rate(fill_rate):
+    with pytest.raises(ValueError, match="STEAMPIPE_AWS_FILL_RATE"):
+        limiter_config_from_env({"STEAMPIPE_AWS_FILL_RATE": fill_rate})
+
+
 # --- Supervisor / blast-radius tests (gen_spc_entrypoint) ---
 # NOTE: gen_spc_entrypoint imports boto3 + pg8000.native. Import it LOCALLY inside each test below
 # (not at module level) so a CI environment missing those deps only fails these specific tests —

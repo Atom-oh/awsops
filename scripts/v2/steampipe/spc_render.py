@@ -8,6 +8,7 @@ regions is skipped (never the backwards ["*"]-on-empty). Non-host connections ca
 connection so existing `aws.*` queries transparently fan out. All rendered values are HCL-escaped.
 """
 from dataclasses import dataclass
+import math
 import os
 from typing import Mapping, Optional
 
@@ -26,6 +27,8 @@ def _bounded_number(name, raw, cast, low, high):
         value = cast(raw)
     except (TypeError, ValueError):
         raise ValueError(f"{name} must be numeric")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
     if value < low or value > high:
         raise ValueError(f"{name} must be between {low} and {high}")
     return value
