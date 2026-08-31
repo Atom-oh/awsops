@@ -22,6 +22,9 @@ export default function AssistantClient() {
   const chat = useChat();
   const params = useSearchParams();
   const wantedThread = params.get('thread');
+  // gap-audit L204: deep-link prefill (e.g. the Datasources tab's "AI로 진단" row action) —
+  // fills the composer for review only; never auto-sends.
+  const prefill = params.get('q');
   const inited = useRef(false);
   // Below lg the thread rail is a slide-in overlay (toggled from the header),
   // so the chat area is full-width on a phone. At lg+ the rail is always visible
@@ -105,7 +108,7 @@ export default function AssistantClient() {
               ? <PresetChips onPick={chat.send} />
               : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} onFollowUp={chat.followUp} />}
             <SessionStatsBar stats={chat.sessionStats()} />
-            <Composer disabled={chat.busy} onSend={chat.send} />
+            <Composer disabled={chat.busy} onSend={chat.send} seed={prefill ? { text: prefill, n: 1 } : undefined} />
           </div>
         </div>
       </div>
