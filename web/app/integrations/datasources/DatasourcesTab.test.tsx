@@ -42,4 +42,29 @@ describe('DatasourcesTab', () => {
     fireEvent.click(screen.getByText('＋ Add datasource'));
     expect(screen.getByText('데이터소스 추가')).toBeTruthy();
   });
+
+  it('renders KPI tiles rolled up from the fetched list (gap-audit L201)', async () => {
+    render(<DatasourcesTab canManage={false} />);
+    await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
+    expect(screen.getByText('총 데이터소스')).toBeTruthy();
+    expect(screen.getByText('연결됨')).toBeTruthy();
+    expect(screen.getByText('타입 종류')).toBeTruthy();
+    expect(screen.getByText('기본 데이터소스')).toBeTruthy();
+  });
+
+  it('re-fetches the list when the refresh button is clicked (gap-audit L202)', async () => {
+    render(<DatasourcesTab canManage={false} />);
+    await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
+    const before = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    fireEvent.click(screen.getByLabelText('새로고침'));
+    await waitFor(() => expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before + 1));
+  });
+
+  it('each row carries an AI-diagnose deep link with a prefilled prompt (gap-audit L204)', async () => {
+    render(<DatasourcesTab canManage={false} />);
+    await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
+    const links = screen.getAllByText('AI로 진단') as HTMLAnchorElement[];
+    expect(links[0].getAttribute('href')).toContain('/assistant?q=');
+    expect(decodeURIComponent(links[0].getAttribute('href')!)).toContain('prod-prom');
+  });
 });
