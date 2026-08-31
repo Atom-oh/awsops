@@ -16,11 +16,12 @@ requirements become status "unknown", never a confident "missing" (honest-degrad
 """
 import re
 
+# v4: trace discriminator requires a trace-ONLY column (Duration/ParentSpanId/SpanKind) — the
+# standard otel_logs table carries SpanId too, so SpanId must not qualify a table as traces.
 # v3: sum(up) (count(up==1) is an EMPTY vector during a total outage — must render 0, not "값 없음"),
-# clickhouse trace-table discrimination (SpanId/Duration — otel_logs also has Timestamp+TraceId),
 # schema `probed` support (definitive per-name presence despite the 500-name cap).
 # v2: accept db-qualified table names (per-segment validated + quoted) — clickhouse_mcp introspection emits f"{database}.{name}"
-CARD_CATALOG_VERSION = "v3"
+CARD_CATALOG_VERSION = "v4"
 
 _IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 _RANGE_1H = {"window": 3600, "step": 60}
@@ -147,11 +148,13 @@ def _clickhouse(schema, truncated=False):
         return str(n).split(".")[-1] if isinstance(n, str) else None
 
     def is_trace_table(t):
-        # SpanId/Duration discriminate a TRACE table — the standard otel_logs table also carries
-        # Timestamp+TraceId (+ServiceName), so matching on those alone confidently mislabels log
-        # rows as spans (a logs-only OTel pipeline would get "스팬 수" cards counting log lines).
+        # Only a trace-ONLY column (Duration/ParentSpanId/SpanKind) discriminates a TRACE table —
+        # the standard otel_logs table carries Timestamp+TraceId+SpanId (+ServiceName), so accepting
+        # SpanId as a discriminator confidently mislabels log rows as spans (a logs-only OTel
+        # pipeline would get "스팬 수" cards counting log lines). Mirrors graph_catalog, which
+        # requires Duration/ParentSpanId in _OTEL_REQUIRED_COLUMNS for the same reason.
         cols = colnames(t)
-        return {"Timestamp", "TraceId"} <= cols and bool({"SpanId", "Duration"} & cols)
+        return {"Timestamp", "TraceId"} <= cols and bool({"Duration", "ParentSpanId", "SpanKind"} & cols)
 
     # The exact-name match still requires Timestamp — the stored queries filter on it, so an
     # otel_traces table without it would be marked ready only to fail on every view.
@@ -160,7 +163,7 @@ def _clickhouse(schema, truncated=False):
         target = next((t for t in tables if is_trace_table(t)), None)
     name = target.get("name") if target else None
     if not _valid_table_name(name):
-        missing = ["otel_traces (or a table with Timestamp+TraceId and SpanId/Duration columns)"]
+        missing = ["otel_traces (or a table with Timestamp+TraceId and a Duration/ParentSpanId/SpanKind column)"]
         # A structurally invalid identifier is NOT an absence truncation could explain — it stays
         # a confident `unavailable`. Only a genuinely absent table degrades to `unknown`.
         status = "unavailable" if target is not None else _absent_status(truncated)

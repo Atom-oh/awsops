@@ -101,7 +101,7 @@ Initial deterministic catalog (per kind, matched against the cached schema shape
   2. `error_traces` — stat/list: `{ status = error }` (both require no specific tag — always ready
      when the schema row exists; tag-conditional variants are future work)
 - **clickhouse** (`tables[]` matching, SQL, tool `clickhouse_query`):
-  1. `otel_span_rate` — timeseries-ish stat: `SELECT count() FROM <traces_table> WHERE Timestamp > now() - INTERVAL 1 HOUR`
+  1. `otel_span_rate` — timeseries-ish stat: `SELECT count() AS value FROM <traces_table> WHERE Timestamp > now() - INTERVAL 1 HOUR` (the `AS value` alias is load-bearing — the stat renderer reads `rows[0].value`)
      where `<traces_table>` = the first table named `otel_traces` (exact, and it must carry a
      `Timestamp` column — the stored queries filter on it) else a table with `Timestamp` +
      `TraceId` AND a trace-discriminating column (`SpanId` or `Duration` — the standard
@@ -165,7 +165,7 @@ New client component `web/components/datasources/CardDashboard.tsx` rendered abo
   atomic upsert+sweep, empty-build sentinel.
 - `web/lib/dashboard-cards.test.ts` — read split + sentinel exclusion (clone diag-signals test).
 - `web/components/datasources/CardDashboard.test.tsx` — render states (ready/unavailable/error),
-  concurrency batching, onPick wiring (following DiagSignalChips.test.tsx conventions).
+  concurrency batching (following DiagSignalChips.test.tsx conventions).
 
 ## Out of scope
 

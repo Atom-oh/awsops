@@ -99,12 +99,12 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     ds = load_datasource(SLUG)
     assert_host_allowed(ds["endpoint"])
     base = ds["endpoint"].rstrip("/")
-    # output_format_json_quote_64bit_integers defaults to 1, which serializes (U)Int64 as JSON
-    # STRINGS ("42") — the web renderer's numeric paths (stat cards) accept only numbers, so a
-    # count() card would always show "값 없음". 0 keeps 64-bit values as JSON numbers; counts that
-    # would overflow IEEE754 (>2^53) are beyond any realistic dashboard window.
-    url = (f"{base}/?readonly=1&max_result_rows={max_rows}&default_format=JSON"
-           "&output_format_json_quote_64bit_integers=0")
+    # ClickHouse's default output_format_json_quote_64bit_integers=1 (Int64 as JSON STRINGS) is
+    # kept deliberately: this function serves EVERY consumer (Explore, graph queries, agent tools),
+    # and forcing JSON numbers would silently round UInt64 values above 2^53 (hash/ID columns) in
+    # Node's JSON.parse. Numeric consumers coerce string counts client-side (CardDashboard
+    # finiteCell) — precision-lossless for display, no connector-wide change needed.
+    url = f"{base}/?readonly=1&max_result_rows={max_rows}&default_format=JSON"
     if max_execution_time:
         url += f"&max_execution_time={max_execution_time}&timeout_overflow_mode=throw"
     headers = dict(auth_headers(ds))

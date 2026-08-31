@@ -52,29 +52,30 @@ def test_clickhouse_table_resolution_and_identifier_guard():
     # the aggregate is aliased so the stat renderer's rows[0].value lookup finds it
     assert "count() AS value" in by["otel_span_rate"]["query"]["expr"]
     assert by["top_services"]["status"] == "ready"
-    # heuristic fallback: Timestamp+TraceId+SpanId columns, non-otel name
-    heur = {"tables": [{"name": "spans_v2", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}, {"name": "SpanId"}]}]}
+    # heuristic fallback: Timestamp+TraceId + a trace-only column (Duration), non-otel name
+    heur = {"tables": [{"name": "spans_v2", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}, {"name": "Duration"}]}]}
     by2 = {r["card_key"]: r for r in cc.build_cards("clickhouse", heur)}
     assert "FROM `spans_v2`" in by2["otel_span_rate"]["query"]["expr"]
     assert by2["top_services"]["status"] == "unavailable"  # no ServiceName column
     # a table name failing the identifier charset is NEVER spliced
     evil = {"tables": [{"name": "otel_traces; DROP TABLE x", "columns": [
-        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "SpanId"}]}]}
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "Duration"}]}]}
     by3 = {r["card_key"]: r for r in cc.build_cards("clickhouse", evil)}
     assert by3["otel_span_rate"]["status"] == "unavailable"
     # 3+ dot segments are rejected (only `table` or `db.table` are accepted)
     deep = {"tables": [{"name": "a.b.c", "columns": [
-        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "SpanId"}]}]}
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "Duration"}]}]}
     by4 = {r["card_key"]: r for r in cc.build_cards("clickhouse", deep)}
     assert by4["otel_span_rate"]["status"] == "unavailable"
     assert by4["top_services"]["status"] == "unavailable"
 
 
 def test_clickhouse_logs_table_never_matches_as_traces():
-    # otel_logs carries Timestamp+TraceId+ServiceName too — without a trace-discriminating column
-    # (SpanId/Duration) the heuristic must NOT pick it, or log rows get reported as span counts.
+    # The REAL otel_logs shape: it carries Timestamp+TraceId+SpanId+ServiceName — SpanId alone must
+    # NOT qualify it as a trace table, or a logs-only pipeline reports log rows as span counts.
     logs_only = {"tables": [{"name": "otel.otel_logs", "columns": [
-        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "ServiceName"}, {"name": "Body"}]}]}
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "SpanId"},
+        {"name": "ServiceName"}, {"name": "Body"}]}]}
     by = {r["card_key"]: r for r in cc.build_cards("clickhouse", logs_only)}
     assert by["otel_span_rate"]["status"] == "unavailable"
     assert by["top_services"]["status"] == "unavailable"

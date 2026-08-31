@@ -167,34 +167,45 @@ class TestSchema(_Base):
         self.assertEqual(b["version"],"2.48.0")  # captured for version-aware DSL
 
     def test_schema_probe_metrics_decides_names_past_the_cap(self):
-        # 501 names trip the alphabetical cap; probe_metrics names are then checked individually —
-        # present ones merge into `metrics`, every decided name lands in `probed`, and a name whose
-        # probe FAILS stays out of `probed` (still undetermined, never confidently absent).
-        many = [f"m{i:04d}" for i in range(501)]
+        # 501 names trip the alphabetical cap; probe_metrics names are decided by LOCAL membership
+        # in the full in-memory list (no per-name network calls) — present names past the cap merge
+        # into `metrics`, and EVERY requested (valid) name lands in `probed` as definitive.
+        many = [f"m{i:04d}" for i in range(501)] + ["up"]
+        seq_len = {"n": 0}
 
         def fake(method, url, headers=None, body=None, timeout=None):
+            seq_len["n"] += 1
             if "buildinfo" in url:
                 return 200, {"status": "success", "data": {"version": "2.48.0"}}
             if url.endswith("/labels"):
                 return 200, {"status": "success", "data": ["job"]}
-            if "match%5B%5D=" not in url:
-                return 200, {"status": "success", "data": many}  # bulk name list (capped)
-            if "%22up%22" in url:
-                return 200, {"status": "success", "data": ["up"]}          # probed: present
-            if "node_cpu_seconds_total" in url:
-                return 200, {"status": "success", "data": []}              # probed: absent
-            return 500, {"raw": "probe down"}                              # probe failed
+            return 200, {"status": "success", "data": many}  # bulk name list (capped client-side)
         with mock.patch.object(pm, "http_json", side_effect=fake):
             out = pm.lambda_handler({"tool_name": "prometheus_schema", "arguments": {
-                "probe_metrics": ["up", "node_cpu_seconds_total", "kube_pod_container_status_restarts_total"]}}, None)
+                "probe_metrics": ["up", "node_cpu_seconds_total"]}}, None)
         b = json.loads(out["body"])
         self.assertTrue(b["truncated"])
         self.assertIn("up", b["metrics"])                                  # merged past the cap
         self.assertNotIn("node_cpu_seconds_total", b["metrics"])
-        self.assertEqual(b["probed"], ["node_cpu_seconds_total", "up"])    # failed probe excluded
+        self.assertEqual(b["probed"], ["node_cpu_seconds_total", "up"])    # both decided locally
+        self.assertEqual(seq_len["n"], 3)  # buildinfo + labels + names — zero probe traffic
 
-    def test_schema_untruncated_list_skips_probes(self):
-        # A complete name list is already definitive — no probe calls are made, no `probed` key.
+    def test_schema_failed_metric_fetch_degrades_to_truncated(self):
+        # A FAILED bulk name fetch is not an empty schema: truncated=true (absence undeterminable,
+        # cards degrade to "unknown") and nothing is probed — never a confident "unavailable".
+        seq = [(200, {"status": "success", "data": {"version": "2.48.0"}}),
+               (200, {"status": "success", "data": ["job"]}),
+               (500, {"raw": "names down"})]
+        with mock.patch.object(pm, "http_json", side_effect=lambda *a, **k: seq.pop(0)):
+            out = pm.lambda_handler({"tool_name": "prometheus_schema",
+                                     "arguments": {"probe_metrics": ["up"]}}, None)
+        b = json.loads(out["body"])
+        self.assertTrue(b["truncated"])
+        self.assertEqual(b["metrics"], [])
+        self.assertNotIn("probed", b)
+
+    def test_schema_complete_list_still_decides_probe_names(self):
+        # A complete name list decides probe names locally too — `probed` is definitive both ways.
         seq = [(200, {"status": "success", "data": {"version": "2.48.0"}}),
                (200, {"status": "success", "data": ["job"]}),
                (200, {"status": "success", "data": ["up"]})]
@@ -202,7 +213,8 @@ class TestSchema(_Base):
             out = pm.lambda_handler({"tool_name": "prometheus_schema",
                                      "arguments": {"probe_metrics": ["up", "absent_metric"]}}, None)
         b = json.loads(out["body"])
-        self.assertNotIn("probed", b)
+        self.assertFalse(b["truncated"])
+        self.assertEqual(b["probed"], ["absent_metric", "up"])
         self.assertEqual(seq, [])  # exactly 3 calls — nothing left over, no probe traffic
 
     def test_schema_buildinfo_down_still_returns_names(self):
