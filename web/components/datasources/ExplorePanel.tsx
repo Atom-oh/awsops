@@ -31,7 +31,7 @@ const PH: Record<string, string> = {
   mimir: 'PromQL… 예: up',
   loki: 'LogQL… 예: {job="varlogs"} |= "error"',
   tempo: 'TraceQL… 예: { duration > 500ms }',
-  clickhouse: 'SQL… 예: SELECT count() FROM system.tables',
+  clickhouse: 'SQL… 예: SHOW TABLES', // system.*는 커넥터가 사용자 쿼리에서 차단 — 예시로 제안하지 않는다
   jaeger: '트레이스 검색… 예: service=frontend&limit=20 (또는 서비스명만)',
   dynatrace: 'metricSelector… 예: builtin:host.cpu.usage:avg',
   datadog: '메트릭 쿼리… 예: avg:system.cpu.user{*}',
