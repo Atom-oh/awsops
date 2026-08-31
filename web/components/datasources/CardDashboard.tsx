@@ -18,9 +18,11 @@ interface CardState { result?: NormalizedResult; error?: string }
 
 const QUERY_CONCURRENCY = 3; // sequential batches — don't hammer the connector
 
-/** Finite number from a numeric cell — ClickHouse serializes 64-bit ints as JSON STRINGS unless the
- * connector disables quoting (it does now, but rows from an older connector deploy still arrive as
- * strings), so a numeric string counts; anything else (including '') is null, never NaN. */
+/** Finite number from a numeric cell — ClickHouse serializes 64-bit ints as JSON STRINGS (the
+ * connector deliberately KEEPS default quoting: forcing JSON numbers would silently round UInt64
+ * above 2^53 for every consumer), so this string coercion is load-bearing, not legacy tolerance.
+ * A numeric string counts; anything else (including '') is null, never NaN. Values above 2^53
+ * lose display precision here — acceptable for dashboard counts, do not reuse for identifiers. */
 function finiteCell(v: unknown): number | null {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (typeof v === 'string' && v.trim() !== '') {

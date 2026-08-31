@@ -21,8 +21,9 @@ const CARDS = {
 const INSTANT_RESULT = { result: { shape: 'table', rows: [{ metric: '', value: 7, timestamp: '2026-08-28T00:00:00Z' }], columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }, { key: 'timestamp', label: 'timestamp' }] } };
 const SERIES_RESULT = { result: { shape: 'series', series: [{ t: '08-28 00:00', node: 1 }, { t: '08-28 00:01', node: 2 }], seriesXKey: 't', seriesKeys: ['node'] } };
 // The count arrives as a STRING on purpose: ClickHouse quotes 64-bit ints in JSON by default
-// (output_format_json_quote_64bit_integers=1) — the connector now disables that, but statValue
-// must still coerce numeric strings so rows from an older connector deploy never render "값 없음".
+// (output_format_json_quote_64bit_integers=1) and the connector deliberately KEEPS that default
+// (JSON numbers would silently round UInt64 > 2^53) — statValue's string coercion is the
+// load-bearing path for every ClickHouse stat card, never legacy tolerance.
 const CH_COUNT_RESULT = { result: { shape: 'table', rows: [{ 'count()': '42' }], columns: [{ key: 'count()', label: 'count()' }] } };
 const EMPTY_RESULT = { result: { shape: 'empty', note: '트레이스 없음' } };
 
