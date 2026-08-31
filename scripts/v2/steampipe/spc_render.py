@@ -7,8 +7,43 @@ regions is skipped (never the backwards ["*"]-on-empty). Non-host connections ca
 (+ `assume_role_external_id` only when set; 1st-party omits it). An `aws` aggregator spans every per-account
 connection so existing `aws.*` queries transparently fan out. All rendered values are HCL-escaped.
 """
+from dataclasses import dataclass
+import os
+from typing import Mapping, Optional
 
 PLUGIN = "aws@0.142.0"
+
+
+@dataclass(frozen=True)
+class LimiterConfig:
+    max_concurrency: int = 4
+    bucket_size: int = 4
+    fill_rate: float = 2.0
+
+
+def _bounded_number(name, raw, cast, low, high):
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be numeric")
+    if value < low or value > high:
+        raise ValueError(f"{name} must be between {low} and {high}")
+    return value
+
+
+def limiter_config_from_env(env: Optional[Mapping[str, str]] = None) -> LimiterConfig:
+    source = os.environ if env is None else env
+    return LimiterConfig(
+        max_concurrency=_bounded_number(
+            "STEAMPIPE_AWS_MAX_CONCURRENCY",
+            source.get("STEAMPIPE_AWS_MAX_CONCURRENCY", "4"), int, 1, 20),
+        bucket_size=_bounded_number(
+            "STEAMPIPE_AWS_BUCKET_SIZE",
+            source.get("STEAMPIPE_AWS_BUCKET_SIZE", "4"), int, 1, 40),
+        fill_rate=_bounded_number(
+            "STEAMPIPE_AWS_FILL_RATE",
+            source.get("STEAMPIPE_AWS_FILL_RATE", "2"), float, 0.1, 20.0),
+    )
 
 
 def _hcl(s) -> str:
@@ -28,9 +63,19 @@ def _regions_list(regions) -> str:
     return "[" + ", ".join(_hcl(r) for r in regions) + "]"
 
 
-def render_spc(rows) -> str:
+def render_spc(rows, limiter: Optional[LimiterConfig] = None) -> str:
     """rows: list of {account_id, is_host, role_name, external_id, all_regions, regions[]}."""
+    limiter = limiter or LimiterConfig()
     blocks = []
+    blocks.append(
+        'plugin "aws" {\n'
+        '  limiter "awsops_global" {\n'
+        f"    max_concurrency = {limiter.max_concurrency}\n"
+        f"    bucket_size = {limiter.bucket_size}\n"
+        f"    fill_rate = {limiter.fill_rate}\n"
+        "  }\n"
+        "}"
+    )
     for r in rows:
         # The HOST always scans all regions (v1 parity) regardless of the flag — it has no
         # account_regions rows, and skipping it would empty the whole inventory (C1).

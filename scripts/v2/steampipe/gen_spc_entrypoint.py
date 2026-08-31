@@ -28,7 +28,7 @@ import boto3
 import pg8000.native
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from spc_render import render_spc  # noqa: E402
+from spc_render import limiter_config_from_env, render_spc  # noqa: E402
 
 SPC_PATH = os.environ.get("AWS_SPC_PATH", "/home/steampipe/.steampipe/config/aws.spc")
 AURORA_USER = os.environ.get("AURORA_USER", "steampipe_reader")
@@ -83,6 +83,10 @@ def fetch_rows():
         return [dict(zip(cols, r)) for r in rows]
     finally:
         conn.close()
+
+
+def _render_spc(rows):
+    return render_spc(rows, limiter_config_from_env())
 
 
 def write_spc(spc: str) -> None:
@@ -191,7 +195,7 @@ def _scope_watchdog(
     current = initial_spc
     while not stop.wait(SCOPE_WATCH_INTERVAL):
         try:
-            new_spc = render_spc(fetch_rows())
+            new_spc = _render_spc(fetch_rows())
             if new_spc == current:
                 continue
             print("[gen-spc] account scope changed — rewriting config and restarting steampipe",
@@ -235,7 +239,7 @@ def main() -> None:
               f"failing closed: {last}", file=sys.stderr)
         sys.exit(1)
 
-    spc = render_spc(rows)
+    spc = _render_spc(rows)
     write_spc(spc)
     print(f"[gen-spc] wrote {SPC_PATH} for {len(rows)} enabled account(s)", file=sys.stderr)
 
