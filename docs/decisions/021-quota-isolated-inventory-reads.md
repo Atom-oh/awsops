@@ -37,6 +37,31 @@ When Aurora inventory is stale or unavailable, it must not silently fall back to
 `inventory_sync_runs`는 current-run singleton row이지만 `last_success_at`과 `last_success_row_count`를 별도로 보존한다. 모든 expected host/target account가 도달 가능해야 full `succeeded`이며, 진짜 0-row도 full success로 기록된다. expected account 일부가 도달 불가하면 last-good row를 삭제하지 않고 current status를 `partial`로 기록하며 durable last-success를 전진시키지 않는다.
 `inventory_sync_runs` remains a singleton current-run row but separately preserves `last_success_at` and `last_success_row_count`. Full `succeeded` requires every expected host/target account to be reachable, including a genuine zero-row result. If an expected account is unreachable, the sync preserves its last-good rows, records current status `partial`, and does not advance durable last-success.
 
+### Migration-gated rollout / Migration 선행 롤아웃
+
+Terraform이 `inv-sync` Lambda source를 소유·패키징하며 새 running UPSERT는
+`inventory_sync_runs.run_token`을 요구한다. 따라서 기존 활성 환경은 새 Steampipe
+이미지를 roll 없이 먼저 push한 뒤 현재 foundation outputs로 `make migrate`를 실행하고,
+그 후에만 Lambda/task definition을 갱신하는 saved plan을 생성·검토·적용한다. 최초
+활성화는 foundation/Aurora를 `steampipe_enabled=false`로 먼저 만들고 migration을
+적용한 뒤 Steampipe image를 생성/push하고, 마지막 saved-plan apply에서만
+`steampipe_enabled=true`를 활성화한다. ECR이 아직 없으면 migration 뒤 repository-only
+bootstrap plan으로 ECR만 만들 수 있지만 Lambda/event rule은 만들면 안 된다.
+
+Terraform owns and packages the `inv-sync` Lambda source, and the new running UPSERT requires
+`inventory_sync_runs.run_token`. An existing enabled environment therefore pushes the new
+Steampipe image without rolling it, runs `make migrate` using the current foundation outputs, and
+only then creates/reviews/applies the saved plan that updates the Lambda/task definition. A
+first-time enablement creates the foundation/Aurora with `steampipe_enabled=false`, migrates first,
+creates/pushes the Steampipe image, and enables `steampipe_enabled=true` only in the final saved-plan
+apply. If the ECR repository does not yet exist, a repository-only bootstrap plan may create it
+after migration, but it must not create the Lambda/event rule.
+
+`make deploy`는 web ECS rollout만 수행하므로 이 Lambda 순서의 대체물이 아니다. 이 순서를
+지킬 수 없으면 새 Lambda를 배포하지 않는다.
+`make deploy` rolls only the web ECS service and is not a substitute for this Lambda ordering. If
+this order cannot be satisfied, do not deploy the new Lambda.
+
 ### Phase 1 기본값 / Phase 1 defaults
 
 Phase 1은 `steampipe_enabled=false`이면 인프라를 만들지 않는 기존 flag gate를 유지한다. 활성화 시 다음 보수적 기본값을 사용한다.

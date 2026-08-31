@@ -24,15 +24,22 @@ This runbook operates the Phase 1 Steampipe inventory sync. Phase 1 is implement
 
 ## 2. 적용 전 검토 / Review before deployment
 
-공유 인프라는 saved plan으로만 적용한다. `-auto-approve`를 사용하지 않는다.
-Apply shared infrastructure only from a saved plan. Do not use `-auto-approve`.
+공유 인프라는 saved plan으로만 적용하며 `-auto-approve`를 사용하지 않는다. 그러나 이
+변경에서는 **plan/apply 자체보다 Aurora migration이 먼저**다. Terraform이
+`scripts/v2/steampipe/sync_lambda.py`를 패키징하여 `inv-sync` Lambda를 갱신하고, 새
+running UPSERT는 migration이 추가하는 `inventory_sync_runs.run_token`을 요구하기
+때문이다.
 
-```bash
-terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
-terraform -chdir=terraform/v2/foundation plan -out tfplan
-# Controller-approved operation only:
-terraform -chdir=terraform/v2/foundation apply tfplan
-```
+Apply shared infrastructure only from a saved plan and never use `-auto-approve`. For this
+change, however, the Aurora migration must precede the plan/apply. Terraform packages
+`scripts/v2/steampipe/sync_lambda.py` and updates the `inv-sync` Lambda, whose new running UPSERT
+requires the `inventory_sync_runs.run_token` column created by the migration.
+
+`make deploy`는 migration 뒤 **web ECS service만** build/push/roll하므로 이 Lambda의
+배포 순서를 보장하지 않는다. 아래 순서를 만족할 수 없으면 새 Lambda를 배포하지 않는다.
+
+`make deploy` migrates and then builds/pushes/rolls only the **web ECS service**; it does not
+roll out this Lambda. If the order below cannot be satisfied, do not deploy the new Lambda.
 
 ## 3. limiter 구성 확인 / Inspect limiter configuration
 
@@ -63,18 +70,47 @@ fields @timestamp, event, max_concurrency, bucket_size, fill_rate
 
 ## 4. 배포 순서 / Deployment order
 
-1. Terraform saved plan을 검토하고 controller-approved `apply tfplan`을 수행한다.
-2. Steampipe ARM64 이미지를 build/push한다.
-3. ECS Steampipe service가 stable이 될 때까지 기다린다.
-4. sync 하나를 trigger한다.
-5. freshness와 lifecycle log를 확인한다.
+### 기존 활성 환경 / Existing environment (`steampipe_enabled=true`)
+
+1. 새 Steampipe ARM64 이미지를 기존 ECR repository에 build/push하되 ECS service를
+   rolling하지 않는다.
+2. 현재 foundation outputs를 사용해 `make migrate`를 실행하고 `run_token` migration이
+   완료됐는지 확인한다.
+3. 그 다음에야 새 Lambda package와 Steampipe task definition을 포함하는 saved Terraform
+   plan을 생성·검토하고 controller-approved `apply tfplan`을 수행한다.
+4. ECS Steampipe service가 stable이 될 때까지 기다린다.
+5. bounded async path로 sync 하나를 trigger하고 freshness/lifecycle log를 확인한다.
+
+1. Build/push the new ARM64 Steampipe image to the existing ECR repository without rolling the
+   ECS service.
+2. Run `make migrate` against the current foundation outputs and confirm the `run_token` migration
+   is applied.
+3. Only then create/review and controller-apply the saved Terraform plan that updates the Lambda
+   package and Steampipe task definition.
+4. Wait for the ECS Steampipe service to become stable.
+5. Trigger one sync through the bounded asynchronous path and verify freshness/lifecycle logs.
 
 ```bash
-# Step 2 is the repository image workflow; preserve linux/arm64.
+# Step 1: build/push only; do not force a service deployment.
 docker buildx build --platform linux/arm64 -f scripts/v2/steampipe/Dockerfile \
   -t <steampipe-ecr-uri>:<tag> --push scripts/v2/steampipe
 
-# Step 4: invoke one type through the existing bounded asynchronous path.
+# Step 2: schema first. This must complete before Terraform updates inv-sync.
+make migrate
+
+# Step 3: package/roll the Lambda and task definition only after migration.
+terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
+terraform -chdir=terraform/v2/foundation plan -out tfplan
+# Controller-approved operation only:
+terraform -chdir=terraform/v2/foundation apply tfplan
+
+# Step 4: use the current cluster and awsops-v2-steampipe service.
+aws ecs wait services-stable \
+  --cluster <ecs-cluster-name> \
+  --services awsops-v2-steampipe \
+  --region <region>
+
+# Step 5: invoke one type through the existing bounded asynchronous path.
 # Use the deployed inv-sync function name from Terraform output.
 aws lambda invoke \
   --cli-binary-format raw-in-base64-out \
@@ -82,6 +118,48 @@ aws lambda invoke \
   --invocation-type Event \
   --payload '{"type":"ec2"}' \
   /tmp/awsops-inv-sync-response.json
+```
+
+### 최초 활성화 / First-time enablement
+
+1. foundation/Aurora를 먼저 `steampipe_enabled=false`로 생성해 migration runner가 사용할
+   outputs를 확보한다. 이 상태에서는 sync Lambda/event rule이 없어야 한다.
+2. `make migrate`를 실행한다.
+3. migration 뒤 repository-only saved target plan으로 Steampipe ECR repository만 생성한다.
+   이 bootstrap apply는 Lambda, event rule, task definition, service를 만들지 않는다.
+4. Steampipe ARM64 이미지를 생성된 repository에 build/push한다.
+5. `steampipe_enabled=true`로 전체 saved plan을 새로 생성·검토하고 controller-approved
+   `apply tfplan`을 수행한다.
+6. service stability를 기다린 뒤 sync 하나를 trigger하고 freshness/log를 확인한다.
+
+1. Create the foundation/Aurora first with `steampipe_enabled=false`, so the migration runner has
+   valid outputs. No sync Lambda/event rule may exist in this state.
+2. Run `make migrate`.
+3. After migration, use a repository-only saved target plan to create only the Steampipe ECR
+   repository. This bootstrap apply must not create the Lambda, event rule, task definition, or
+   service.
+4. Build/push the ARM64 Steampipe image to that repository.
+5. Set `steampipe_enabled=true`, create/review a fresh full saved plan, and have the controller
+   apply it.
+6. Wait for service stability, trigger one sync, and verify freshness/logs.
+
+```bash
+# Preconditions: foundation/Aurora already exist with steampipe_enabled=false.
+make migrate
+
+# Repository-only bootstrap after migration; review the saved plan before applying it.
+terraform -chdir=terraform/v2/foundation plan \
+  -target=aws_ecr_repository.steampipe \
+  -var='steampipe_enabled=true' \
+  -out tfplan-steampipe-ecr
+terraform -chdir=terraform/v2/foundation apply tfplan-steampipe-ecr
+
+docker buildx build --platform linux/arm64 -f scripts/v2/steampipe/Dockerfile \
+  -t <steampipe-ecr-uri>:<tag> --push scripts/v2/steampipe
+
+# Now set steampipe_enabled=true in the reviewed configuration.
+terraform -chdir=terraform/v2/foundation plan -out tfplan
+terraform -chdir=terraform/v2/foundation apply tfplan
 ```
 
 수동 UI refresh도 동일한 `InvocationType=Event` 경로와 Lambda reserved concurrency를 사용한다. 대량 refresh를 별도 병렬 호출로 우회하지 않는다.

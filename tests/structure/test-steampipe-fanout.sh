@@ -13,6 +13,7 @@ SP=terraform/v2/foundation/steampipe.tf
 AI=terraform/v2/foundation/ai.tf
 DT=terraform/v2/foundation/data.tf
 VARS=terraform/v2/foundation/variables.tf
+RUNBOOK=docs/runbooks/steampipe-quota-and-staleness.md
 
 check_number_variable() {
   local name=$1
@@ -118,5 +119,17 @@ grep -Eq 'rds-ca-bundle\.pem' "$DOCKERFILE" \
 grep -Eq 'cafile=RDS_CA_BUNDLE' "$ENTRYPOINT" && ! grep -Eq 'verify_mode\s*=\s*ssl\.CERT_NONE' "$ENTRYPOINT" \
   && pass "gen_spc_entrypoint uses VERIFY_FULL (cafile), not CERT_NONE (M3)" \
   || fail "gen_spc_entrypoint uses VERIFY_FULL (cafile), not CERT_NONE (M3)"
+
+# The inv-sync Lambda package is owned by Terraform, while its running UPSERT depends on the
+# run_token column created by make migrate. Guard the operator contract against documenting
+# Terraform apply before the migration (which would create a schema/code incompatibility window).
+DEPLOY_ORDER=$(sed -n '/^## 4\. 배포 순서/,/^## 5\./p' "$RUNBOOK")
+MIGRATE_LINE=$(printf '%s\n' "$DEPLOY_ORDER" | grep -n -m1 '^make migrate' | cut -d: -f1)
+APPLY_LINE=$(printf '%s\n' "$DEPLOY_ORDER" | grep -n -m1 '^terraform -chdir=terraform/v2/foundation apply tfplan' | cut -d: -f1)
+if [ -n "$MIGRATE_LINE" ] && [ -n "$APPLY_LINE" ] && [ "$MIGRATE_LINE" -lt "$APPLY_LINE" ]; then
+  pass "runbook migrates Aurora before Terraform rolls the inv-sync Lambda"
+else
+  fail "runbook must place make migrate before apply tfplan in the deployment-order section"
+fi
 
 [ "$FAILS" -eq 0 ] || exit 1

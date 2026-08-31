@@ -63,6 +63,13 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
   Aurora 데이터/freshness를 제공하면서 direct domain target과 공존한다. Phase 2가
   domain-aware coverage를 확장하고 parity 뒤 direct target을 retirement하므로
   Aurora-only는 아직 live가 아니다.)
+- **ADR-021 deployment gate**: Terraform packages the `inv-sync` Lambda, whose running UPSERT
+  requires the migration-owned `inventory_sync_runs.run_token` column. Existing enabled
+  environments must push the image without rolling, run `make migrate` against current outputs,
+  and only then create/apply the saved plan. First-time enablement must establish Aurora with
+  `steampipe_enabled=false`, migrate, create/push the image, and enable the feature only in the
+  final saved-plan apply. `make deploy` rolls the web service, not this Lambda; if this order cannot
+  be met, do not deploy the new Lambda.
 
 ### ADR-001 schema tables / 스키마 테이블
 

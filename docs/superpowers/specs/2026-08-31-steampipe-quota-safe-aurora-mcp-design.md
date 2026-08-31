@@ -286,7 +286,24 @@ This decision changes read routing and quota isolation, not the product's read-o
 
 ## 13. Rollout and Rollback
 
-1. Deploy Phase 1 with existing MCP routing unchanged and observe at least one full sync cycle.
+Phase 1 schema/code rollout is migration-gated because Terraform packages the updated `inv-sync`
+Lambda and its running UPSERT requires the migration-owned `inventory_sync_runs.run_token` column.
+
+- Existing `steampipe_enabled=true` environment: build/push the new Steampipe image without rolling
+  the service; run `make migrate` using the current foundation outputs; then create/review/apply the
+  saved Terraform plan that updates the Lambda/task definition; wait for service stability; trigger
+  and verify one sync.
+- First-time enablement: create foundation/Aurora with `steampipe_enabled=false`; run
+  `make migrate`; create/push the Steampipe image; then create/review/apply the saved plan enabling
+  `steampipe_enabled=true`. If the gated ECR repository does not yet exist, create only that
+  repository with a post-migration repository-only bootstrap plan; do not create the sync
+  Lambda/event rule before migration.
+- `make deploy` rolls the web ECS service, not the Terraform-owned sync Lambda. If this order cannot
+  be satisfied, do not deploy the new Lambda.
+
+After that schema-safe Phase 1 rollout:
+
+1. Keep existing MCP routing unchanged and observe at least one full sync cycle.
 2. Deploy new sync fields/views and Aurora tools while old live tools remain registered.
 3. Compare outputs and freshness in shadow/parity tests.
 4. Update the AgentCore catalog to retire direct inventory/configuration tools.

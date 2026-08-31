@@ -322,5 +322,64 @@ made. No Terraform apply, AWS mutation, or ADR-005 capability change was perform
 - The controller environment still needs intact Terraform provider packages for `terraform
   validate`; this agent did not initialize/download providers or run apply.
 - Deployment must continue to run the amended migration before rolling the Lambda code, as the
-  running UPSERT now requires the new internal column. The existing `make deploy` ordering already
-  runs migrations first.
+  running UPSERT now requires the new internal column. Terraform owns/packages this Lambda;
+  `make deploy` rolls only the web ECS service and does not satisfy the ordering requirement.
+
+---
+
+## Fix Round 5
+
+### Status
+
+Corrected the migration-before-Lambda rollout contract in the runbook, ADR-021, approved design,
+Aurora reference, and Task 5 plan. No production code changed. No Terraform apply, AWS mutation,
+service rollout, image push, or ADR-005 capability change was performed.
+
+### Root cause and binding order
+
+Terraform owns and packages `scripts/v2/steampipe/sync_lambda.py`, while the updated running UPSERT
+requires the migration-owned `inventory_sync_runs.run_token` column. `make deploy` runs migrations
+and rolls only the web ECS service, so it cannot order this Lambda deployment.
+
+- Existing `steampipe_enabled=true`: build/push the new Steampipe image without rolling it →
+  `make migrate` using current foundation outputs → create/review/apply the saved plan updating the
+  Lambda/task definition → wait stable → trigger and verify one sync.
+- First-time enablement: foundation/Aurora with `steampipe_enabled=false` → `make migrate` →
+  repository-only post-migration ECR bootstrap if needed → build/push image → full saved-plan apply
+  enabling `steampipe_enabled=true` → wait stable → trigger and verify one sync.
+- If this ordering cannot be met, the new Lambda must not be deployed.
+
+### RED evidence
+
+After adding the focused structure assertion but before correcting the runbook:
+
+```text
+not ok - runbook must place make migrate before apply tfplan in the deployment-order section
+```
+
+### Files
+
+- Operator/decision/reference: `docs/runbooks/steampipe-quota-and-staleness.md`,
+  `docs/decisions/021-quota-isolated-inventory-reads.md`, and
+  `docs/reference/03-data-aurora.md`.
+- Approved sources: the Phase 1 design and Task 5 implementation plan.
+- Static guard: `tests/structure/test-steampipe-fanout.sh`.
+- Evidence: this Task 5 report.
+
+### Verification
+
+| Command/check | Result |
+|---|---|
+| Scoped `TBD`/`TODO`/`PLACEHOLDER` scan of ADR-021, Aurora reference, runbook, and approved design | Passed: no matches |
+| Local Markdown link existence check for those documents | Passed |
+| Precise runbook section-4 order check | Passed: first `make migrate` precedes first `apply tfplan` (relative lines 29 < 35) |
+| `bash tests/structure/test-steampipe-fanout.sh` | Passed, including the new migration-before-Lambda documentation assertion |
+| `git diff --check` | Passed |
+
+### Concerns
+
+- First-time enablement needs a repository-only saved target plan after migration because the
+  Steampipe ECR repository is itself gated by `steampipe_enabled`. That bootstrap is explicitly
+  limited to ECR; the sync Lambda/event rule remain absent until the final full saved-plan apply.
+- Controller deployment and post-deploy sync verification remain operator actions; this round
+  changed documentation and a static structure assertion only.

@@ -520,8 +520,15 @@ The runbook must include:
 - how to identify stale inventory,
 - safe tuning rule: lowering limits is immediate; raising requires observed production headroom,
 - rollback by restoring defaults/catalog without destructive database changes,
-- deployment order: Terraform saved plan/apply → build/push Steampipe image → wait stable → trigger
-  one sync → verify freshness.
+- migration-gated deployment order:
+  - existing `steampipe_enabled=true`: build/push the Steampipe image without rolling →
+    `make migrate` using current foundation outputs → create/review/apply the saved Terraform plan
+    that updates the Lambda/task definition → wait stable → trigger and verify one sync,
+  - first-time enablement: foundation/Aurora with `steampipe_enabled=false` → `make migrate` →
+    create/push the image (repository-only post-migration bootstrap plan if ECR does not yet exist)
+    → saved-plan apply enabling `steampipe_enabled=true`,
+  - never create/enable the sync Lambda/event rule before migration; `make deploy` is not the
+    Lambda rollout mechanism; if the order cannot be satisfied, do not deploy the new Lambda.
 
 - [ ] **Step 3: Run documentation and repository consistency checks**
 
