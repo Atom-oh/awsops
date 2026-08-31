@@ -301,6 +301,21 @@ def test_render_section_appends_lang_rule(monkeypatch):
     assert "한국어로 작성" in captured["prompt"]
 
 
+def test_render_section_localizes_deep_titles(monkeypatch):
+    # Non-ko reports must not ship Korean deep-section headings (round-2 review MAJOR).
+    monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "body")
+    from diagnosis import sections as S
+    sec = next(x for x in S.DEEP_SECTIONS if x["key"] == "identity_access")
+    assert report.render_section(sec, {}, report.MODEL_ID, 100, lang="en")["title"] == "IAM & Identity Deep-Dive"
+    assert report.render_section(sec, {}, report.MODEL_ID, 100)["title"] == "IAM & 자격 증명 심층"  # ko unchanged
+    # English base titles pass through for every lang.
+    base = next(x for x in S.SECTIONS if x["key"] == "executive_summary")
+    assert report.render_section(base, {}, report.MODEL_ID, 100, lang="ja")["title"] == "Executive Summary"
+    # every deep Korean title has all 3 translations (lockstep completeness)
+    for key, m in S.TITLES_I18N.items():
+        assert set(m) == {"en", "zh", "ja"}, key
+
+
 def test_build_markdown_localizes_document_chrome():
     rendered = [{"key": "a", "title": "A", "body": "b"}]
     md_en = report.build_markdown(rendered, account="123456789012", tier="mid", lang="en")

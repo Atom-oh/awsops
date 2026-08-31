@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle, AlertTriangle, XCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import ReportMarkdown from './ReportMarkdown';
 import { useI18n } from '@/components/shell/LanguageProvider';
@@ -67,6 +67,8 @@ export default function ReportSections({ markdown }: { markdown: string }) {
   const { preamble, sections } = useMemo(() => splitSections(markdown), [markdown]);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const refs = useRef<(HTMLElement | null)[]>([]);
+  // Switching to another report must not carry report A's collapsed indexes onto report B.
+  useEffect(() => { setCollapsed(new Set()); }, [markdown]);
 
   // No sections (legacy/degraded markdown) → the original continuous document, unchanged.
   if (sections.length === 0) return <ReportMarkdown markdown={markdown} />;

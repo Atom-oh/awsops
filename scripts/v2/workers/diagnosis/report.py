@@ -21,7 +21,7 @@ _RENDER_CONCURRENCY = max(1, int(os.environ.get("DIAGNOSIS_RENDER_CONCURRENCY", 
 from . import sources as src
 from . import invariants as inv
 from . import db as ddb
-from .sections import SECTIONS, DEEP_SECTIONS, INTENDED_VS_ACTUAL_SECTION, LANG_RULES
+from .sections import SECTIONS, DEEP_SECTIONS, INTENDED_VS_ACTUAL_SECTION, LANG_RULES, localized_title
 
 # Inference-profile id — a BARE id ("anthropic.claude-...") throws ValidationException on
 # Claude 4.x invoke_model. Uses global.* profiles invoked from ap-northeast-2 (matches agent/agent.py)
@@ -167,7 +167,7 @@ def render_section(section, collected, model_id, max_tokens, lang="ko"):
     ctx_json = _redact(json.dumps(ctx, ensure_ascii=False, default=str))  # [GATE-FIX] redact pre-LLM
     prompt = section["prompt"] + " " + LANG_RULES.get(lang, LANG_RULES["ko"])
     body = _normalize_headings(_balance_code_fences(_bedrock_render(prompt, ctx_json, model_id, max_tokens)))
-    return {"key": section["key"], "title": section["title"], "body": body}
+    return {"key": section["key"], "title": localized_title(section, lang), "body": body}
 
 
 def _is_empty(data):
@@ -310,8 +310,13 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
             return i, render_section(sec, collected, model_id, max_tokens, lang)
         except Exception as e:  # noqa: BLE001 — one section must never fail the whole report
             print(f"diagnosis: section '{sec.get('key')}' render failed (degraded): {e}", file=sys.stderr)
-            return i, {"key": sec.get("key"), "title": sec["title"],
-                       "body": f"_이 섹션 생성에 실패했습니다 (degraded): {e}_"}
+            # 'degraded' stays verbatim — the UI severity heuristic keys on it in every language.
+            fail = {"ko": "이 섹션 생성에 실패했습니다 (degraded)",
+                    "en": "This section failed to render (degraded)",
+                    "zh": "此章节生成失败 (degraded)",
+                    "ja": "このセクションの生成に失敗しました (degraded)"}
+            return i, {"key": sec.get("key"), "title": localized_title(sec, lang),
+                       "body": f"_{fail.get(lang, fail['ko'])}: {e}_"}
 
     rendered_by_idx, done = {}, 0
     with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(catalog))) as ex:

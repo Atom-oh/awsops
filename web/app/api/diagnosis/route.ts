@@ -90,7 +90,9 @@ export async function POST(req: Request) {
   // rolling-deploy discontinuity the note above warns about, so default-ko requests ALSO check
   // the pre-lang legacy format on the read side (an old pod's same-hour run stays deduped
   // during the deploy window). Writes use only the new format; drop the fallback after one
-  // release.
+  // release. NOTE: this key is also the route's per-hour Bedrock spend guard — adding lang
+  // raises the per-(user,tier,model,scope) dedup ceiling 4× by design (a language switch is a
+  // genuinely different report).
   const key = `report:${identity(user)}:${tier}:${model}:${scope}:${lang}:${hour}`;
   const legacyKey = lang === 'ko' ? `report:${identity(user)}:${tier}:${model}:${scope}:${hour}` : null;
 

@@ -2,9 +2,9 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22) — consolidated. consolidates: 017, 026, 028. amended 2026-07-19 (i18n scope: ko/en → ko/en/zh/ja; corrected the "AI response language via `lang`" claim to reflect the actual not-yet-wired state) amended 2026-08-31 (diagnosis reports now honor an end-to-end `lang` parameter; chat/AgentCore streaming responses remain unwired)
+Accepted (2026-06-22) — consolidated. consolidates: 017, 026, 028. amended 2026-07-19 (i18n scope: ko/en → ko/en/zh/ja; corrected the "AI response language via `lang`" claim to reflect the actual not-yet-wired state); amended 2026-08-31 (diagnosis reports honor `lang` for section bodies, section titles, and document chrome — the data-coverage appendix body stays Korean by design [operator diagnostics]; chat/AgentCore streaming responses remain unwired)
 
-채택됨 (2026-06-22) — 통합. 통합 대상: 017(캐시 워머 프리워밍), 026(i18n LanguageProvider), 028(CloudFront CACHING_DISABLED). 개정 2026-07-19 (i18n 범위: ko/en → ko/en/zh/ja; "AI 응답 언어 `lang` 연동" 서술을 실제 미연동 상태에 맞게 정정) 개정 2026-08-31 (진단 리포트는 `lang` 파라미터가 end-to-end 연동됨; 챗/AgentCore 스트리밍 응답은 여전히 미연동)
+채택됨 (2026-06-22) — 통합. 통합 대상: 017(캐시 워머 프리워밍), 026(i18n LanguageProvider), 028(CloudFront CACHING_DISABLED). 개정 2026-07-19 (i18n 범위: ko/en → ko/en/zh/ja; "AI 응답 언어 `lang` 연동" 서술을 실제 미연동 상태에 맞게 정정); 개정 2026-08-31 (진단 리포트는 섹션 본문·섹션 제목·문서 chrome에 `lang` 연동 — 데이터 커버리지 부록 본문은 의도적으로 한국어 유지[운영 진단용]; 챗/AgentCore 스트리밍 응답은 여전히 미연동)
 
 > 이 ADR은 세 개의 횡단 결정을 하나로 합친다. 단일 Status를 가지며, 각 결정의 현행(net) 상태만 기술한다. 세부 v1 메커니즘 이력은 통합된 원본 ADR(017/026/028)에 보존된다.
 >

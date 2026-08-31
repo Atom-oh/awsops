@@ -99,7 +99,7 @@
 | [011](011-multi-account.md) | 멀티 어카운트 | STS AssumeRole(AWSopsReadOnlyRole; ExternalId = 3rd-party 필수 / 1st-party는 task-role ARN 핀 시 선택, amended 2026-06-26), read-only fan-out | 보안 |
 | [012](012-cost-finops.md) | Cost / FinOps | Cost Explorer probe + FinOps MCP + Bedrock 비용 귀속 | 비용최적화 |
 | [013](013-alerting-notification.md) | 알림·통지 | 웹훅 HMAC + SNS 통지(diagnosis_notify LIVE) + 리포트 다운로드 | 운영우수성 |
-| [014](014-cross-cutting-cache-i18n-cdn.md) | 횡단: 캐시·i18n·CDN | 프리워밍·i18n(ko/en/zh/ja, UI copy only, amended 2026-07-19)·CloudFront CACHING_DISABLED | 성능효율성 |
+| [014](014-cross-cutting-cache-i18n-cdn.md) | 횡단: 캐시·i18n·CDN | 프리워밍·i18n(ko/en/zh/ja — UI copy + 진단 리포트 lang[2026-08-31]; 챗 응답은 미연동)·CloudFront CACHING_DISABLED | 성능효율성 |
 | [015](015-operational-self-healing.md) | 운영 자가치유 | 호스트 자기 서비스 force-new-deployment 자율 복구(Aurora secret 회전), default-off·IAM 1 ARN·secret-id fail-closed; **ADR-005 불완화**(별개 범주) | 안정성·보안 |
 | [016](016-v1-decommission.md) | v1 레거시 폐기 | 5단계 폐기(데이터확보→도메인컷오버→정지/유예→삭제→코드정리) + `awsops.atomai.click` v2 컷오버; owner 지시, ADR-005 무관(수동 작업) | 비용최적화·운영우수성 |
 | [017](017-curated-official-mcp-presets.md) | 큐레이션 공식 MCP 프리셋 | (개정 2026-08-05) 벤더 호스팅 3종(Datadog·Dynatrace·New Relic)만 external-obs `mcpServer` target + 런타임 fail-closed 툴 allowlist(GATED); ClickHouse는 공식 `mcp-clickhouse`를 런타임 stdio 내장(`CLICKHOUSE_OFFICIAL_MCP`, Datasources 자격증명 재사용) — 자체 람다의 SSRF/read-only 1차 방어를 대체 없이 잃어 **FROZEN(do-not-enable)**; Tempo/Jaeger 자체 람다 유지, Grafana/Splunk 미지원, `custom_mcp`(임의 BYO) 폐기 불변 | 운영우수성·보안 |

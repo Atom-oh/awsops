@@ -20,5 +20,5 @@
 
 ## Rules
 - New live-AWS-query layers should clone `nfm.ts`'s TTL-cache + in-flight-dedupe pattern.
-- Adding/changing a language starts at `SUPPORTED_LANGS` — TS consumers break at compile time, but the 3 lockstep sites above require manual updates.
+- Adding/changing a language starts at `SUPPORTED_LANGS` — TS consumers break at compile time, but the 4 lockstep sites above require manual updates.
 - DB access must go through `getPool()` — never create a new pool or use the master secret.

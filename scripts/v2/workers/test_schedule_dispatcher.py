@@ -100,8 +100,13 @@ def test_precise_next_run_math():
     ho = sd._precise_next_run("weekly", {"hour": 9})
     now_kst = datetime.now(sd._KST)
     assert ho.hour == 9 and 6 <= (ho - now_kst).days <= 7
-    mo = sd._precise_next_run("monthly", {"hour": 9})
-    assert mo.hour == 9 and mo.day == min(now_kst.day, 28) and mo.month != now_kst.month or mo.year != now_kst.year
+    # monthly hour-only: reuse the CLAIMED date (Postgres month-end clamp is authoritative —
+    # Jan 31 → Feb 28) and pin only the hour; without a claimed value there is nothing better
+    # than the claim, so no refinement (None).
+    claimed = datetime(2026, 2, 28, 3, 0, tzinfo=sd._KST)
+    mo = sd._precise_next_run("monthly", {"hour": 9}, claimed)
+    assert (mo.year, mo.month, mo.day, mo.hour) == (2026, 2, 28, 9)
+    assert sd._precise_next_run("monthly", {"hour": 9}) is None
 
 
 def test_detail_schedule_gets_followup_next_run_update(monkeypatch):

@@ -30,7 +30,7 @@ The left sidebar lists your recent reports:
 - An auto-generated **title**, the **id**, **depth (Tier)**, **model**, **status**, and **creation date** (KST)
 
 ### Report body
-- The body renders as **markdown** with a **table of contents (TOC)**.
+- The body renders as collapsible **section cards** with severity icons and a sticky **table of contents (TOC)** sidebar on the right.
 - Use the top buttons to export as **MD / DOCX / PDF**.
 
 ### Insight badges
@@ -47,13 +47,13 @@ The left sidebar lists your recent reports:
 3. If you chose **Deep**, optionally specify the model (**Sonnet** / **Opus**).
 4. Press the **진단 실행 (Run diagnosis)** button to start generation.
 5. Watch the stages on the progress bar; when it finishes, review the report that opens automatically.
-6. Navigate sections with the **table of contents** on the left, and export as **MD / DOCX / PDF** from the top.
+6. Navigate sections with the **table of contents** sidebar on the right (section cards collapse/expand), and export as **MD / DOCX / PDF** from the top.
 7. Edit the **title** and **tags** or delete the report if needed (when you have permission).
 
 ## Tips
 
 :::tip Duplicate-run protection
-If you run the same conditions (depth and model) again within the hour, the existing report is returned instead of generating a new one, along with a duplicate-run notice.
+If you run the same conditions (depth, model, and language) again within the hour, the existing report is returned instead of generating a new one, along with a duplicate-run notice.
 :::
 
 :::info Permissions

@@ -52,7 +52,7 @@ def _int_in(v, lo, hi):
     return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
 
 
-def _precise_next_run(schedule_type, cfg):
+def _precise_next_run(schedule_type, cfg, claimed_next=None):
     """Next occurrence honoring the config detail fields (gap L51): dayOfWeek 0-6 (JS getDay
     convention, 0=Sun, KST) for weekly/biweekly, dayOfMonth 1-28 (KST) for monthly, hour 0-23
     (KST) for all. The precise weekday/date branch runs only when the cadence's PARTNER field
@@ -72,12 +72,19 @@ def _precise_next_run(schedule_type, cfg):
     h = hour if has_hour else 0
     now = datetime.now(_KST)
     if not has_partner:
-        # hour-only: coarse interval date (mirrors the claim SQL's advance) with the hour pinned.
+        # hour-only: reuse the DATE the claim SQL already wrote (Postgres `+ interval '1 month'`
+        # clamps month-ends correctly — Jan 31 → Feb 28/29) and pin only the hour. Re-deriving the
+        # date here diverged from the claim on month-ends (a min(day,28) clamp permanently shifted
+        # day-30/31 schedules). Without the claimed value (direct calls/tests), fall back to a
+        # plain interval — weekly/biweekly are day-exact; monthly keeps the claim's value by
+        # returning None (no refinement needed when we can't do better than the claim).
+        if isinstance(claimed_next, datetime):
+            base = claimed_next.astimezone(_KST)
+            return base.replace(hour=h, minute=0, second=0, microsecond=0)
         if schedule_type in ("weekly", "biweekly"):
             cand = now + timedelta(days=7 if schedule_type == "weekly" else 14)
-        else:
-            cand = (now.replace(day=1) + timedelta(days=32)).replace(day=min(now.day, 28))
-        return cand.replace(hour=h, minute=0, second=0, microsecond=0)
+            return cand.replace(hour=h, minute=0, second=0, microsecond=0)
+        return None
     if schedule_type in ("weekly", "biweekly"):
         py_target = (dow + 6) % 7  # JS 0=Sun → python weekday() 0=Mon
         cand = now.replace(hour=h, minute=0, second=0, microsecond=0) \
@@ -239,7 +246,7 @@ def lambda_handler(_event, _ctx):
                 # (the coarse advance still prevents an immediate re-claim). The `next_run_at =
                 # :c` guard makes a user's concurrent save between claim and refinement win
                 # instead of being overwritten.
-                nxt = _precise_next_run(_schedule_type, _coerce_config(config))
+                nxt = _precise_next_run(_schedule_type, _coerce_config(config), claimed_next)
                 if nxt is not None:
                     conn.run(
                         "UPDATE report_schedules SET next_run_at = :n "

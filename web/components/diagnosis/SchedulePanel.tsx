@@ -51,6 +51,11 @@ export default function SchedulePanel() {
     return () => { alive = false; };
   }, []);
 
+  // A schedule without a stored lang defaults to the CURRENT UI language (matches the manual-run
+  // default) — resolved at render/save time, not at load, so the provider's post-mount
+  // localStorage hydration is reflected. A stored lang always wins.
+  const uiLang = (['ko', 'en', 'zh', 'ja'] as const).includes(lang as 'ko') ? lang : 'ko';
+
   if (!sched) return null;
 
   const patch = (p: Partial<Schedule>) => { setSched({ ...sched, ...p }); setSaved(false); };
@@ -68,7 +73,7 @@ export default function SchedulePanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           scheduleType: sched.scheduleType, enabled: sched.enabled, tier: sched.tier, model: sched.model,
-          lang: sched.lang ?? 'ko', // the select displays ko as default — persist what is shown
+          lang: sched.lang ?? uiLang, // persist exactly what the select displays
           ...(typeof sched.hour === 'number' ? { hour: sched.hour } : {}),
           ...detail,
         }),
@@ -138,7 +143,7 @@ export default function SchedulePanel() {
         </select>
         <select
           aria-label={tt('리포트 언어')}
-          value={sched.lang ?? 'ko'}
+          value={sched.lang ?? uiLang}
           onChange={(e) => patch({ lang: e.target.value })}
           className={selectCls}
         >

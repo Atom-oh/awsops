@@ -46,7 +46,8 @@ describe('POST /api/diagnosis/subscribers/test', () => {
     const res = await POST(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ messageId: 'm1' });
-    expect(publishTest).toHaveBeenCalledWith('arn:aws:sns:ap-northeast-2:1:t', 'admin@x.io');
+    // Topic ARN only — the admin's identity must NOT reach the message (broadcast to subscribers).
+    expect(publishTest).toHaveBeenCalledWith('arn:aws:sns:ap-northeast-2:1:t');
   });
   it('502 with a SANITIZED message on a publish failure — never a silent success, never ARN leakage', async () => {
     publishTest.mockRejectedValue(new Error('boom arn:aws:iam::1:role/x'));

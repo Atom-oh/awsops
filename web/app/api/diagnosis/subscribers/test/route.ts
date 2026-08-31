@@ -17,7 +17,9 @@ export async function POST(request: Request) {
   const arn = topicArn();
   if (!arn) return NextResponse.json({ message: 'notifications disabled' }, { status: 404 });
   try {
-    const messageId = await publishTest(arn, user.email ?? user.sub);
+    // Audit trail stays server-side; the message body deliberately omits the admin's identity.
+    console.info(`diagnosis test publish triggered by ${user.email ?? user.sub}`);
+    const messageId = await publishTest(arn);
     return NextResponse.json({ messageId: messageId ?? null });
   } catch (e) {
     // Log the detail server-side only — SNS auth errors embed role/topic ARNs (sibling routes

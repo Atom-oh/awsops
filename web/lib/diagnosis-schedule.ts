@@ -45,7 +45,16 @@ export function computeNextRun(type: ScheduleFreq, fromISO: string, detail?: Sch
     const d = new Date(fromISO);
     if (type === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
     else if (type === 'biweekly') d.setUTCDate(d.getUTCDate() + 14);
-    else d.setUTCMonth(d.getUTCMonth() + 1);
+    else {
+      // Overflow-safe month add — raw setUTCMonth turns Jan 31 into Mar 3 (skipping February).
+      // Clamp to the target month's last day instead (matches Postgres `+ interval '1 month'`,
+      // which the dispatcher's claim SQL uses for subsequent runs).
+      const day = d.getUTCDate();
+      d.setUTCDate(1);
+      d.setUTCMonth(d.getUTCMonth() + 1);
+      const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      d.setUTCDate(Math.min(day, lastDay));
+    }
     if (h === null) return d.toISOString();
     // hour-only: pin the KST wall-clock hour on the interval date.
     const k = kstParts(d.getTime());

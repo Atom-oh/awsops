@@ -64,8 +64,11 @@ same gap. Report body language is what changes; section keys/ids stay ASCII.
     (`LANG_RULES: {ko,en,zh,ja}`) appended per render;
   - `report.py _TITLE_PROMPT` (title in the report language);
   - `build_markdown` / `_coverage_note` document chrome (title line, 생성 일시 label, 목차
-    label, coverage heading) via a small per-lang chrome map. Section prompt *bodies* stay
-    as they are — the lang instruction governs the output language (v1 did the same).
+    label, coverage heading) via a small per-lang chrome map, and the 7 Korean deep-section
+    titles via `TITLES_I18N` (section keys stay stable; the degraded-section placeholder is
+    localized too, keeping 'degraded' verbatim for the UI severity heuristic). Section prompt
+    *bodies* stay as they are — the lang instruction governs the output language (v1 did the
+    same). The data-coverage appendix body stays Korean by design (operator diagnostics).
   - This map is a NEW manual i18n lockstep site (alongside `agent/agent.py`'s map and
     `bedrock-direct.ts`) — recorded in web/lib/CLAUDE.md's list in this PR.
 - **Schedules**: `config` JSONB gains optional `lang` — PUT validation (same allowlist),

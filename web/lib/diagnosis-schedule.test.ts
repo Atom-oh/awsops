@@ -50,6 +50,11 @@ describe('computeNextRun', () => {
     // a monthly hour-only must NOT jump to the 1st of the month.
     expect(computeNextRun('monthly', from, { hour: 9 })).not.toContain('-07-01');
   });
+  it('monthly interval clamps month-ends instead of overflowing (Jan 31 → Feb 28, not Mar 3)', () => {
+    expect(computeNextRun('monthly', '2026-01-31T00:00:00.000Z')).toBe('2026-02-28T00:00:00.000Z');
+    // hour pin composes with the clamp (2026-01-31T00:00Z = Jan 31 09:00 KST → Feb 28 10:00 KST).
+    expect(computeNextRun('monthly', '2026-01-31T00:00:00.000Z', { hour: 10 })).toBe('2026-02-28T01:00:00.000Z');
+  });
 });
 
 describe('readSchedule', () => {
