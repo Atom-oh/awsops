@@ -666,6 +666,14 @@ export type Highlight =
   | { kind: 'distinct'; label: string; col: string }
   | { kind: 'sum'; label: string; col: string; suffix?: string; fmt?: 'bytes' }
   | { kind: 'sumWhere'; label: string; col: string; where: string; eq: string; suffix?: string; tone?: 'accent' | 'danger' }
+  | { kind: 'countGt'; label: string; col: string; gt: number; tone?: 'accent' | 'danger' }
+  | { kind: 'avg'; label: string; col: string; suffix?: string }
+  // percent: count(cell==eq)/rows as 'NN% (n/total)'. Variant thresholds (v1 parity, L100):
+  // 100% → accent, ≥80% → default, <80% → danger; 0 rows → '—'.
+  | { kind: 'percent'; label: string; col: string; eq: string }
+  // sumProductWhere: Σ(colA×colB) over rows matching where==eq — per-row factors, so a
+  // custom-CPU-options instance counts its ACTUAL vCPUs, not the type default (L103).
+  | { kind: 'sumProductWhere'; label: string; cols: [string, string]; where: string; eq: string; suffix?: string }
   | { kind: 'deprecatedRuntime'; label: string; col: string };
 
 export interface HighlightCard { label: string; value: string | number; variant: 'default' | 'accent' | 'danger' }
@@ -728,6 +736,36 @@ export function computeHighlights(rows: Array<Record<string, unknown>>, highligh
           .reduce((acc, r) => acc + (Number(cell(r, h.col)) || 0), 0);
         return { label: h.label, value: `${Math.round(total).toLocaleString()}${h.suffix ?? ''}`, variant: tone(h.tone, total) };
       }
+      case 'countGt': {
+        const n = rows.filter((r) => {
+          const v = Number(cell(r, h.col));
+          return Number.isFinite(v) && v > h.gt;
+        }).length;
+        return { label: h.label, value: n, variant: tone(h.tone, n) };
+      }
+      case 'avg': {
+        const nums = rows.map((r) => Number(cell(r, h.col))).filter((n) => Number.isFinite(n));
+        if (!nums.length) return { label: h.label, value: '—', variant: 'default' };
+        const mean = Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
+        return { label: h.label, value: `${mean.toLocaleString()}${h.suffix ?? ''}`, variant: 'default' };
+      }
+      case 'percent': {
+        if (!rows.length) return { label: h.label, value: '—', variant: 'default' };
+        const n = rows.filter((r) => sv(cell(r, h.col)).trim().toLowerCase() === h.eq.toLowerCase()).length;
+        const pct = Math.round((n / rows.length) * 100);
+        const variant: HighlightCard['variant'] = pct === 100 ? 'accent' : pct >= 80 ? 'default' : 'danger';
+        return { label: h.label, value: `${pct}% (${n}/${rows.length})`, variant };
+      }
+      case 'sumProductWhere': {
+        const total = rows
+          .filter((r) => sv(cell(r, h.where)).trim().toLowerCase() === h.eq.toLowerCase())
+          .reduce((acc, r) => {
+            const a = Number(cell(r, h.cols[0]));
+            const b = Number(cell(r, h.cols[1]));
+            return acc + (Number.isFinite(a) && Number.isFinite(b) ? a * b : 0);
+          }, 0);
+        return { label: h.label, value: `${Math.round(total).toLocaleString()}${h.suffix ?? ''}`, variant: 'default' };
+      }
       case 'deprecatedRuntime': {
         const n = rows.filter((r) => isDeprecatedRuntime(cell(r, h.col))).length;
         return { label: h.label, value: n, variant: n > 0 ? 'danger' : 'default' };
@@ -743,17 +781,27 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'countWhere', label: '중지됨', col: 'instance_state', eq: 'stopped', tone: 'danger' },
     { kind: 'countTruthy', label: '퍼블릭 IP', col: 'public_ip_address' },
     { kind: 'distinct', label: '타입 종류', col: 'instance_type' },
+    { kind: 'sumProductWhere', label: '실행 중 총 vCPU', cols: ['cpu_options_core_count', 'cpu_options_threads_per_core'], where: 'instance_state', eq: 'running' },
   ],
   rds: [
     { kind: 'countWhere', label: '가용', col: 'status', eq: 'available', tone: 'accent' },
     { kind: 'countWhere', label: 'Multi-AZ', col: 'multi_az', eq: 'true', tone: 'accent' },
     { kind: 'countWhere', label: '퍼블릭 노출', col: 'publicly_accessible', eq: 'true', tone: 'danger' },
     { kind: 'distinct', label: '엔진 종류', col: 'engine' },
+    { kind: 'sum', label: '총 스토리지', col: 'allocated_storage', suffix: ' GB' },
   ],
   lambda: [
     { kind: 'countWhere', label: '활성', col: 'state', eq: 'active', tone: 'accent' },
     { kind: 'deprecatedRuntime', label: 'EOL 런타임', col: 'runtime' },
+    { kind: 'countGt', label: '타임아웃 >300s', col: 'timeout', gt: 300, tone: 'danger' },
+    { kind: 'avg', label: '평균 메모리', col: 'memory_size', suffix: ' MB' },
     { kind: 'distinct', label: '런타임 종류', col: 'runtime' },
+  ],
+  ecs_cluster: [
+    { kind: 'countWhere', label: 'ACTIVE', col: 'status', eq: 'active', tone: 'accent' },
+    { kind: 'sum', label: '실행 태스크', col: 'running_tasks_count' },
+    { kind: 'sum', label: '활성 서비스', col: 'active_services_count' },
+    { kind: 'sum', label: '컨테이너 인스턴스', col: 'registered_container_instances_count' },
   ],
   ecs_task: [
     { kind: 'countWhere', label: 'RUNNING', col: 'last_status', eq: 'running', tone: 'accent' },
@@ -770,6 +818,7 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
   ebs_volume: [
     { kind: 'countWhere', label: '사용 중', col: 'state', eq: 'in-use', tone: 'accent' },
     { kind: 'countWhere', label: '미암호화', col: 'encrypted', eq: 'false', tone: 'danger' },
+    { kind: 'percent', label: '암호화율', col: 'encrypted', eq: 'true' },
     { kind: 'sum', label: '총 용량', col: 'size', suffix: ' GB' },
     { kind: 'countWhere', label: '유휴 볼륨', col: 'state', eq: 'available', tone: 'danger' },
     { kind: 'sumWhere', label: '유휴(낭비) 용량', col: 'size', where: 'state', eq: 'available', suffix: ' GB', tone: 'danger' },

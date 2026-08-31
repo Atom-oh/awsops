@@ -207,6 +207,44 @@ describe('computeHighlights (per-type highlight cards)', () => {
     const rows = [{ size: 100 }, { size: 50 }, { size: '20' }];
     expect(computeHighlights(rows, [{ kind: 'sum', label: 't', col: 'size', suffix: ' GB' }])[0].value).toBe('170 GB');
   });
+  it('countGt counts strictly-greater numeric cells; non-numeric never matches (L134)', () => {
+    const rows = [{ t: 300 }, { t: 301 }, { t: '900' }, { t: 'x' }, { t: null }];
+    const [c] = computeHighlights(rows, [{ kind: 'countGt', label: 'long', col: 't', gt: 300, tone: 'danger' }]);
+    expect(c).toEqual({ label: 'long', value: 2, variant: 'danger' }); // 300 itself excluded
+  });
+  it('avg averages finite numeric cells only; empty → — (L230)', () => {
+    const rows = [{ m: 128 }, { m: '256' }, { m: 'n/a' }];
+    expect(computeHighlights(rows, [{ kind: 'avg', label: 'mem', col: 'm', suffix: ' MB' }])[0].value).toBe('192 MB');
+    expect(computeHighlights([], [{ kind: 'avg', label: 'mem', col: 'm' }])[0].value).toBe('—');
+  });
+  it('percent renders NN% (n/total) with 100/80 thresholds (L100)', () => {
+    const enc = (n: number, total: number) =>
+      computeHighlights(
+        Array.from({ length: total }, (_, i) => ({ e: i < n ? 'true' : 'false' })),
+        [{ kind: 'percent', label: '암호화율', col: 'e', eq: 'true' }],
+      )[0];
+    expect(enc(4, 4)).toEqual({ label: '암호화율', value: '100% (4/4)', variant: 'accent' });
+    expect(enc(4, 5)).toEqual({ label: '암호화율', value: '80% (4/5)', variant: 'default' });
+    expect(enc(3, 5)).toEqual({ label: '암호화율', value: '60% (3/5)', variant: 'danger' });
+    expect(computeHighlights([], [{ kind: 'percent', label: 'x', col: 'e', eq: 'true' }])[0].value).toBe('—');
+  });
+  it('sumProductWhere sums colA×colB over matching rows; non-numeric factor → 0 (L103)', () => {
+    const rows = [
+      { s: 'running', a: 2, b: 2 },   // 4
+      { s: 'running', a: '4', b: 1 }, // 4
+      { s: 'stopped', a: 8, b: 8 },   // filtered
+      { s: 'running', a: 'x', b: 2 }, // 0
+    ];
+    expect(computeHighlights(rows, [{ kind: 'sumProductWhere', label: 'vCPU', cols: ['a', 'b'], where: 's', eq: 'running' }])[0].value).toBe('8');
+  });
+  it('HIGHLIGHTS gained the batch-7 entries (ec2 vCPU · ebs % · lambda gt/avg · rds sum · ecs_cluster band)', () => {
+    expect(HIGHLIGHTS.ec2.some((h) => h.kind === 'sumProductWhere')).toBe(true);
+    expect(HIGHLIGHTS.ebs_volume.some((h) => h.kind === 'percent')).toBe(true);
+    expect(HIGHLIGHTS.lambda.some((h) => h.kind === 'countGt')).toBe(true);
+    expect(HIGHLIGHTS.lambda.some((h) => h.kind === 'avg')).toBe(true);
+    expect(HIGHLIGHTS.rds.some((h) => h.kind === 'sum')).toBe(true);
+    expect((HIGHLIGHTS.ecs_cluster ?? []).filter((h) => h.kind === 'sum')).toHaveLength(3);
+  });
   it('deprecatedRuntime counts EOL Lambda runtimes (danger when > 0)', () => {
     const rows = [{ r: 'python3.7' }, { r: 'nodejs20.x' }, { r: 'go1.x' }];
     expect(computeHighlights(rows, [{ kind: 'deprecatedRuntime', label: 'eol', col: 'r' }])[0]).toEqual({ label: 'eol', value: 2, variant: 'danger' });
@@ -224,8 +262,15 @@ describe('computeHighlights (per-type highlight cards)', () => {
         ...[spec.stateKey, spec.distKey, spec.distKey2, spec.barKey?.col].filter((k): k is string => Boolean(k)),
       ]);
       for (const h of hls) {
-        const root = h.col.split('.')[0];
-        expect(cols.has(root) || VIRTUAL.has(root), `${type}.${h.col}`).toBe(true);
+        const refs = [
+          ...('col' in h && h.col ? [h.col] : []),
+          ...('cols' in h && Array.isArray(h.cols) ? h.cols : []),
+          ...('where' in h && h.where ? [h.where] : []),
+        ];
+        for (const ref of refs) {
+          const root = ref.split('.')[0];
+          expect(cols.has(root) || VIRTUAL.has(root), `${type}.${ref}`).toBe(true);
+        }
       }
     }
   });
