@@ -8,6 +8,10 @@ export interface InvType {
   label: string; group: string; columns: InvColumn[]; stateKey?: string; distKey?: string;
   /** Optional second distribution dimension — rendered as a second donut beside the first. */
   distKey2?: string;
+  /** Semantic slice colors for the distKey2 donut, keyed by the RAW cell value (case-sensitive —
+   *  the donut buckets raw values, unlike countWhere's case-insensitive compare). Unmapped
+   *  values fall back to the positional palette. */
+  distKey2Colors?: Record<string, string>;
   /** Optional Top-N metric bar chart: numeric column ranked desc over the row set. */
   barKey?: { col: string; label: string };
   sections?: { label: string; keys: string[] }[];
@@ -84,7 +88,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ] },
   ecr: { label: 'ECR Repositories', group: 'Compute', distKey: 'image_tag_mutability', columns: [
     { key: 'repository_uri', label: 'URI' }, { key: 'image_tag_mutability', label: 'Tag mutability' },
-    { key: 'created_at', label: 'Created' } ],
+    { key: 'scan_on_push', label: 'Scan on Push' }, { key: 'created_at', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'repository_name', 'account_id', 'region', 'arn', 'registry_id', 'repository_uri', 'created_at'] },
       { label: 'Config', keys: ['image_tag_mutability', 'image_scanning_configuration', 'lifecycle_policy'] },
@@ -426,7 +430,10 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ],
     filterKeys: ['region', 'type'] },
 
-  cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', distKey2: 'state_value', columns: [
+  cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', distKey2: 'state_value',
+    // Semantic alarm-state colors (gap-audit L190): green OK / red ALARM / gray INSUFFICIENT_DATA
+    // — the palette otherwise assigns colors by slice size, so ALARM could render green.
+    distKey2Colors: { OK: '#01A88D', ALARM: '#D13212', INSUFFICIENT_DATA: '#9AA6B2' }, columns: [
     { key: 'state_value', label: 'State' }, { key: 'metric_name', label: 'Metric' }, { key: 'namespace', label: 'Namespace' },
     { key: 'threshold', label: 'Threshold' }, { key: 'state_reason', label: 'Reason' }, { key: 'actions_enabled', label: 'Actions' } ],
     sections: [

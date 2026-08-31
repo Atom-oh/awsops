@@ -230,7 +230,7 @@ export default function InventoryTypePage() {
     ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
     : null;
   const donut2 = spec.distKey2 && spec.distKey2 !== spec.distKey && distData2.length > 0
-    ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" />
+    ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
     : null;
   // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
   const barData = spec.barKey
