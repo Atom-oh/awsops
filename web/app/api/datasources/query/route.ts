@@ -66,8 +66,10 @@ export async function POST(request: Request) {
   if (r && typeof r === 'object') {
     const window = Number((r as { window?: unknown }).window);
     const step = Number((r as { step?: unknown }).step);
-    if (!Number.isInteger(window) || window < 60 || window > 86400) {
-      return json({ error: 'range.window must be an integer in [60, 86400] seconds' }, 400);
+    // Upper bound widened to 30d (gap-audit L86, v1 parity) — the point-density cap below stays
+    // the real cost/DoS guard; a 30d window at the UI's ~250-point autoStep is ~10368s steps.
+    if (!Number.isInteger(window) || window < 60 || window > 2592000) {
+      return json({ error: 'range.window must be an integer in [60, 2592000] seconds' }, 400);
     }
     if (!Number.isInteger(step) || step < 1 || step > 86400) {
       return json({ error: 'range.step must be an integer in [1, 86400] seconds' }, 400);
@@ -90,8 +92,10 @@ export async function POST(request: Request) {
   }
 
   try {
+    const t0 = Date.now();
     const result = await invokeMcpLambdaTool({ kind, tool, args, connConfig });
-    return json({ result: normalizeResult(kind, tool, result) }, 200);
+    // Additive metadata for the Explore result bar (gap-audit L88) — existing consumers read only `result`.
+    return json({ result: normalizeResult(kind, tool, result), metadata: { executionTimeMs: Date.now() - t0, tool } }, 200);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : 'query failed' }, 502);
   }
