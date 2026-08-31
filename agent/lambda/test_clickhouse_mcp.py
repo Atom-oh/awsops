@@ -126,6 +126,8 @@ class TestTools(unittest.TestCase):
         self.assertEqual(captured["method"], "POST")
         self.assertIn("readonly=1", captured["url"])
         self.assertIn("max_result_rows=2", captured["url"])
+        # 64-bit ints must arrive as JSON numbers, not strings — stat cards render only numbers
+        self.assertIn("output_format_json_quote_64bit_integers=0", captured["url"])
         self.assertIn("FORMAT JSON", captured["body"])
         self.assertEqual(captured["headers"]["Authorization"][:6], "Basic ")
 

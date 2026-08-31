@@ -1,5 +1,11 @@
 # Datasource Dashboard Cards Implementation Plan
 
+> **HISTORICAL — superseded by the spec.** The as-built contract diverged from this plan in a few
+> deliberate ways (flat `card_catalog.py` next to `datasource_index.py`, `CARD_CATALOG_VERSION`
+> bumped past "v1", nullable `query` column, no `onPick` affordance — declared out of scope by the
+> spec). Where this plan and the spec disagree, the spec + code win:
+> `docs/superpowers/specs/2026-08-28-datasource-dashboard-cards-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** On datasource registration (and every daily index run), pre-build an expected dashboard-card set from the cached schema with each card's query stored, and render it as a live-executing card dashboard on `/integrations/datasources/[id]`.

@@ -95,6 +95,30 @@ class TestSchema(_Base):
         self.assertIn("metrics",b); self.assertIn("labels",b)
         self.assertEqual(b["version"],"2.11.0")  # captured for version-aware PromQL
 
+    def test_schema_probe_metrics_decides_names_past_the_cap(self):
+        # Mirrors test_prometheus_mcp: 501 names trip the cap; probe_metrics names are decided
+        # individually (present → merged into metrics, decided → `probed`, failed probe → excluded).
+        many = [f"m{i:04d}" for i in range(501)]
+
+        def fake(method, url, headers=None, body=None, timeout=None):
+            if "buildinfo" in url:
+                return 200, {"status": "success", "data": {"version": "2.11.0"}}
+            if url.endswith("/labels"):
+                return 200, {"status": "success", "data": ["job"]}
+            if "match%5B%5D=" not in url:
+                return 200, {"status": "success", "data": many}
+            if "%22up%22" in url:
+                return 200, {"status": "success", "data": ["up"]}
+            return 200, {"status": "success", "data": []}
+        with mock.patch.object(mm, "http_json", side_effect=fake):
+            out = mm.lambda_handler({"tool_name": "mimir_schema", "arguments": {
+                "probe_metrics": ["up", "node_cpu_seconds_total"]}}, None)
+        b = json.loads(out["body"])
+        self.assertTrue(b["truncated"])
+        self.assertIn("up", b["metrics"])
+        self.assertNotIn("node_cpu_seconds_total", b["metrics"])
+        self.assertEqual(b["probed"], ["node_cpu_seconds_total", "up"])
+
     def test_instance_id_resolves_per_instance_credential_blind(self):
         mm.load_datasource.reset_mock()
         with mock.patch.object(mm,"http_json",return_value=(200,{"status":"success","data":{"resultType":"vector","result":[]}})):

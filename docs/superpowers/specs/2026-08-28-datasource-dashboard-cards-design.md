@@ -77,7 +77,16 @@ mixed into the schema hash so catalog edits force a rebuild.
 Initial deterministic catalog (per kind, matched against the cached schema shape):
 
 - **prometheus / mimir** (`metrics[]` matching, PromQL, tool `prometheus_query`/`mimir_query`):
-  1. `up_targets` — stat: `count(up == 1)` / timeseries `sum(up)` (requires `up`)
+  Matching is against `schema.metrics` PLUS the connector's per-name probe results: the
+  `{kind}_schema` tools accept `probe_metrics` (datasource_index passes
+  `card_catalog.required_metrics()`), and when the bulk name list is truncated (alphabetical
+  500-name cap — every kube-prometheus stack exceeds it) each named metric is probed
+  individually via a `match[]`-scoped `__name__/values` lookup. Probed-present names merge into
+  `metrics`; every name decided either way lands in `schema.probed`, which the catalog treats as
+  DEFINITIVE — a probed-and-absent requirement is a confident `unavailable` even under
+  truncation (only unprobed misses stay `unknown`).
+  1. `up_targets` — stat: `sum(up)` (requires `up`; NOT `count(up == 1)`, which is an empty
+     instant vector during a total outage and would render "값 없음" instead of the honest 0)
   2. `cpu_usage` — timeseries: `100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)`
      (requires `node_cpu_seconds_total`; unit %)
   3. `memory_available` — timeseries: `sum(node_memory_MemAvailable_bytes)` (unit bytes)
@@ -93,8 +102,11 @@ Initial deterministic catalog (per kind, matched against the cached schema shape
      when the schema row exists; tag-conditional variants are future work)
 - **clickhouse** (`tables[]` matching, SQL, tool `clickhouse_query`):
   1. `otel_span_rate` — timeseries-ish stat: `SELECT count() FROM <traces_table> WHERE Timestamp > now() - INTERVAL 1 HOUR`
-     where `<traces_table>` = the first table named `otel_traces` (exact) else a table with both
-     `Timestamp` and `TraceId` columns; validated identifier, else `unavailable`
+     where `<traces_table>` = the first table named `otel_traces` (exact, and it must carry a
+     `Timestamp` column — the stored queries filter on it) else a table with `Timestamp` +
+     `TraceId` AND a trace-discriminating column (`SpanId` or `Duration` — the standard
+     `otel_logs` table also carries Timestamp+TraceId+ServiceName, and matching on those alone
+     would confidently report log rows as span counts); validated identifier, else `unavailable`
   2. `top_services` — table/stat: `SELECT ServiceName, count() AS spans FROM <traces_table> WHERE Timestamp > now() - INTERVAL 1 HOUR GROUP BY ServiceName ORDER BY spans DESC LIMIT 5`
      (requires `ServiceName` column)
 

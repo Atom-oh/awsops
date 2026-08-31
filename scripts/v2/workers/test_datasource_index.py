@@ -1367,6 +1367,22 @@ class TestReintrospectRejectsErrorEnvelopes:
         monkeypatch.setattr(dsi, "_lambda_invoke", boom)
         assert _REAL_REINTROSPECT("clickhouse", 7) is None
 
+    def test_prom_kinds_pass_card_required_probe_metrics(self, monkeypatch):
+        # prometheus/mimir schema fetches must name the card-required metrics so the connector
+        # probes each one past its 500-name cap; other kinds must NOT grow the argument.
+        captured = {}
+
+        def capture(kind, tool, arguments=None):
+            captured[kind] = arguments
+            return {"metrics": ["up"]} if kind in ("prometheus", "mimir") else {"tables": []}
+        monkeypatch.setattr(dsi, "_lambda_invoke", capture)
+        import card_catalog as _cc
+        for kind in ("prometheus", "mimir"):
+            assert _REAL_REINTROSPECT(kind, 7) == {"metrics": ["up"]}
+            assert captured[kind]["probe_metrics"] == _cc.required_metrics()
+        _REAL_REINTROSPECT("clickhouse", 7)
+        assert "probe_metrics" not in captured["clickhouse"]
+
 
 class TestLambdaInvokeEnvelopeValidation:
     """_lambda_invoke must raise (never return the body) on a FunctionError or a non-2xx statusCode —

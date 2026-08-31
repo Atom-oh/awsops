@@ -151,6 +151,23 @@ def prometheus_series(args):
     return ok({"series": series[:MAX_SERIES], "truncated": len(series) > MAX_SERIES})
 
 
+def _probe_metric_names(creds, base, names):
+    """Definitive per-name existence probes: each name is checked with a match[]-scoped
+    __name__/values lookup (cheap — one series selector). Returns (present, probed) sets; a name
+    whose probe FAILED is excluded from `probed` entirely, so callers keep treating it as
+    undetermined rather than confidently absent."""
+    present, probed = set(), set()
+    for m in names:
+        try:
+            vals = _get(creds, f"{base}/label/__name__/values", {"match[]": f'{{__name__="{m}"}}'})
+        except _ApiError:
+            continue
+        probed.add(m)
+        if isinstance(vals, list) and m in vals:
+            present.add(m)
+    return present, probed
+
+
 def prometheus_schema(args):
     creds = _ds()
     base = "/api/v1"
@@ -169,8 +186,22 @@ def prometheus_schema(args):
         metrics = []
     labels = labels if isinstance(labels, list) else []
     metrics = metrics if isinstance(metrics, list) else []
-    return ok({"version": version, "metrics": metrics[:500], "labels": labels[:200],
-               "truncated": len(metrics) > 500 or len(labels) > 200})
+    out = {"version": version, "metrics": metrics[:500], "labels": labels[:200],
+           "truncated": len(metrics) > 500 or len(labels) > 200}
+    # The alphabetical 500-name cap drops everything past it (every kube-prometheus stack has far
+    # more), which left requirement matching (dashboard cards) inert on real instances. When the
+    # caller names the metrics it cares about, probe each capped-out name individually so
+    # presence/absence stays DEFINITIVE despite the truncation. `probed` lists the names whose
+    # existence was decided either way; probed-present names are merged into `metrics`.
+    probe = args.get("probe_metrics") if isinstance(args, dict) else None
+    if isinstance(probe, list) and len(metrics) > 500:
+        wanted = [m for m in (str(x).strip() for x in probe)
+                  if m and re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$", m)][:24]
+        kept = set(out["metrics"])
+        present, probed = _probe_metric_names(creds, base, [m for m in wanted if m not in kept])
+        out["metrics"] = out["metrics"] + sorted(present)
+        out["probed"] = sorted(probed | (set(wanted) & kept))
+    return ok(out)
 
 
 def prometheus_health(args):

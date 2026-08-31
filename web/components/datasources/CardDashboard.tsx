@@ -18,6 +18,18 @@ interface CardState { result?: NormalizedResult; error?: string }
 
 const QUERY_CONCURRENCY = 3; // sequential batches — don't hammer the connector
 
+/** Finite number from a numeric cell — ClickHouse serializes 64-bit ints as JSON STRINGS unless the
+ * connector disables quoting (it does now, but rows from an older connector deploy still arrive as
+ * strings), so a numeric string counts; anything else (including '') is null, never NaN. */
+function finiteCell(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 /** First numeric value in a normalized result — table value column or last point of the first series. */
 function statValue(r: NormalizedResult): number | null {
   if (r.shape === 'table') {
@@ -25,19 +37,18 @@ function statValue(r: NormalizedResult): number | null {
     // column names (e.g. `count()`), so fall back to the first finite numeric cell of row 0.
     const row = r.rows?.[0];
     if (!row) return null;
-    const direct = row.value;
-    if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+    const direct = finiteCell(row.value);
+    if (direct !== null) return direct;
     for (const col of r.columns ?? []) {
-      const v = row[col.key];
-      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      const v = finiteCell(row[col.key]);
+      if (v !== null) return v;
     }
     return null;
   }
   if (r.shape === 'series' && r.series?.length) {
     const last = r.series[r.series.length - 1];
     const key = r.seriesKeys?.[0] ?? r.seriesYKey ?? 'value';
-    const v = last[key];
-    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    return finiteCell(last[key]);
   }
   return null;
 }

@@ -16,15 +16,21 @@ requirements become status "unknown", never a confident "missing" (honest-degrad
 """
 import re
 
+# v3: sum(up) (count(up==1) is an EMPTY vector during a total outage — must render 0, not "값 없음"),
+# clickhouse trace-table discrimination (SpanId/Duration — otel_logs also has Timestamp+TraceId),
+# schema `probed` support (definitive per-name presence despite the 500-name cap).
 # v2: accept db-qualified table names (per-segment validated + quoted) — clickhouse_mcp introspection emits f"{database}.{name}"
-CARD_CATALOG_VERSION = "v2"
+CARD_CATALOG_VERSION = "v3"
 
 _IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 _RANGE_1H = {"window": 3600, "step": 60}
 
 _PROM_CARDS = [
+    # sum(up), not count(up == 1): up∈{0,1} makes them equal while any target is up, but during a
+    # TOTAL outage count(up == 1) is an empty instant vector (renders "값 없음") whereas sum(up)
+    # still evaluates over the down series and renders the honest 0.
     {"card_key": "up_targets", "title": "정상 타깃 수", "viz": "stat", "unit": "",
-     "requires": ["up"], "expr": "count(up == 1)", "range": None},
+     "requires": ["up"], "expr": "sum(up)", "range": None},
     {"card_key": "cpu_usage", "title": "노드 CPU 사용률", "viz": "timeseries", "unit": "%",
      "requires": ["node_cpu_seconds_total"],
      "expr": '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', "range": _RANGE_1H},
@@ -77,15 +83,25 @@ def _quote_identifier(name):
     return ".".join("`" + part + "`" for part in str(name).split("."))
 
 
+def required_metrics():
+    """Union of every Prometheus/Mimir card requirement — callers (datasource_index) pass this as
+    `probe_metrics` to `{kind}_schema` so a truncated 500-name list still yields definitive
+    matches (the cap is alphabetical, so on real instances the required names are capped out)."""
+    return sorted({m for c in _PROM_CARDS for m in c["requires"]})
+
+
 def _prom(kind, schema, truncated=False):
     metrics = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
+    # Names the connector probed INDIVIDUALLY (schema.probed) have definitive presence/absence even
+    # when the bulk name list is truncated — only unprobed misses degrade to "unknown".
+    probed = {m for m in (schema.get("probed") or []) if isinstance(m, str)}
     tool = "prometheus_query" if kind == "prometheus" else "mimir_query"
     out = []
     for c in _PROM_CARDS:
         miss = [m for m in c["requires"] if m not in metrics]
         if miss:
-            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"],
-                            _absent_status(truncated), missing=miss))
+            status = "unavailable" if all(m in probed for m in miss) else _absent_status(truncated)
+            out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], status, missing=miss))
         else:
             out.append(_row(c["card_key"], c["title"], c["viz"], c["unit"], "ready", tool, c["expr"], c["range"]))
     return out
@@ -130,12 +146,21 @@ def _clickhouse(schema, truncated=False):
         n = t.get("name")
         return str(n).split(".")[-1] if isinstance(n, str) else None
 
-    target = next((t for t in tables if basename(t) == "otel_traces"), None)
+    def is_trace_table(t):
+        # SpanId/Duration discriminate a TRACE table — the standard otel_logs table also carries
+        # Timestamp+TraceId (+ServiceName), so matching on those alone confidently mislabels log
+        # rows as spans (a logs-only OTel pipeline would get "스팬 수" cards counting log lines).
+        cols = colnames(t)
+        return {"Timestamp", "TraceId"} <= cols and bool({"SpanId", "Duration"} & cols)
+
+    # The exact-name match still requires Timestamp — the stored queries filter on it, so an
+    # otel_traces table without it would be marked ready only to fail on every view.
+    target = next((t for t in tables if basename(t) == "otel_traces" and "Timestamp" in colnames(t)), None)
     if target is None:
-        target = next((t for t in tables if {"Timestamp", "TraceId"} <= colnames(t)), None)
+        target = next((t for t in tables if is_trace_table(t)), None)
     name = target.get("name") if target else None
     if not _valid_table_name(name):
-        missing = ["otel_traces (or a table with Timestamp+TraceId columns)"]
+        missing = ["otel_traces (or a table with Timestamp+TraceId and SpanId/Duration columns)"]
         # A structurally invalid identifier is NOT an absence truncation could explain — it stays
         # a confident `unavailable`. Only a genuinely absent table degrades to `unknown`.
         status = "unavailable" if target is not None else _absent_status(truncated)

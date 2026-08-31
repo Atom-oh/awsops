@@ -166,6 +166,45 @@ class TestSchema(_Base):
         self.assertIn("metrics",b); self.assertIn("labels",b)
         self.assertEqual(b["version"],"2.48.0")  # captured for version-aware DSL
 
+    def test_schema_probe_metrics_decides_names_past_the_cap(self):
+        # 501 names trip the alphabetical cap; probe_metrics names are then checked individually —
+        # present ones merge into `metrics`, every decided name lands in `probed`, and a name whose
+        # probe FAILS stays out of `probed` (still undetermined, never confidently absent).
+        many = [f"m{i:04d}" for i in range(501)]
+
+        def fake(method, url, headers=None, body=None, timeout=None):
+            if "buildinfo" in url:
+                return 200, {"status": "success", "data": {"version": "2.48.0"}}
+            if url.endswith("/labels"):
+                return 200, {"status": "success", "data": ["job"]}
+            if "match%5B%5D=" not in url:
+                return 200, {"status": "success", "data": many}  # bulk name list (capped)
+            if "%22up%22" in url:
+                return 200, {"status": "success", "data": ["up"]}          # probed: present
+            if "node_cpu_seconds_total" in url:
+                return 200, {"status": "success", "data": []}              # probed: absent
+            return 500, {"raw": "probe down"}                              # probe failed
+        with mock.patch.object(pm, "http_json", side_effect=fake):
+            out = pm.lambda_handler({"tool_name": "prometheus_schema", "arguments": {
+                "probe_metrics": ["up", "node_cpu_seconds_total", "kube_pod_container_status_restarts_total"]}}, None)
+        b = json.loads(out["body"])
+        self.assertTrue(b["truncated"])
+        self.assertIn("up", b["metrics"])                                  # merged past the cap
+        self.assertNotIn("node_cpu_seconds_total", b["metrics"])
+        self.assertEqual(b["probed"], ["node_cpu_seconds_total", "up"])    # failed probe excluded
+
+    def test_schema_untruncated_list_skips_probes(self):
+        # A complete name list is already definitive — no probe calls are made, no `probed` key.
+        seq = [(200, {"status": "success", "data": {"version": "2.48.0"}}),
+               (200, {"status": "success", "data": ["job"]}),
+               (200, {"status": "success", "data": ["up"]})]
+        with mock.patch.object(pm, "http_json", side_effect=lambda *a, **k: seq.pop(0)):
+            out = pm.lambda_handler({"tool_name": "prometheus_schema",
+                                     "arguments": {"probe_metrics": ["up", "absent_metric"]}}, None)
+        b = json.loads(out["body"])
+        self.assertNotIn("probed", b)
+        self.assertEqual(seq, [])  # exactly 3 calls — nothing left over, no probe traffic
+
     def test_schema_buildinfo_down_still_returns_names(self):
         # version is best-effort: a buildinfo error → version null, names still returned.
         seq=[(500,{"raw":"nope"}),  # buildinfo fails

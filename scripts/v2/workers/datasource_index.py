@@ -116,7 +116,15 @@ def _reintrospect(kind, integration_id):
     ANY failure OR a response that doesn't look like a real schema (never raises) — the caller falls
     back to the cached schema."""
     try:
-        body = _lambda_invoke(kind, f"{kind}_schema", {"instance_id": integration_id})
+        args = {"instance_id": integration_id}
+        if kind in ("prometheus", "mimir"):
+            # The connector's bulk name list is alphabetically capped at 500 — on real instances the
+            # card-required names are capped out, leaving every prom/mimir card permanently
+            # "unknown". Naming them here makes the connector probe each one individually, so the
+            # returned schema carries definitive presence (merged into `metrics`) / absence
+            # (listed in `probed`) for exactly the names card_catalog matches on.
+            args["probe_metrics"] = _card_cat.required_metrics()
+        body = _lambda_invoke(kind, f"{kind}_schema", args)
         return body if _looks_like_schema(kind, body) else None
     except Exception:  # noqa: BLE001 — a flaky/down connector must never block the daily rebuild
         return None

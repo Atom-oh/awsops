@@ -20,7 +20,10 @@ const CARDS = {
 // POST /api/datasources/query normalizes server-side → { result: NormalizedResult }.
 const INSTANT_RESULT = { result: { shape: 'table', rows: [{ metric: '', value: 7, timestamp: '2026-08-28T00:00:00Z' }], columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }, { key: 'timestamp', label: 'timestamp' }] } };
 const SERIES_RESULT = { result: { shape: 'series', series: [{ t: '08-28 00:00', node: 1 }, { t: '08-28 00:01', node: 2 }], seriesXKey: 't', seriesKeys: ['node'] } };
-const CH_COUNT_RESULT = { result: { shape: 'table', rows: [{ 'count()': 42 }], columns: [{ key: 'count()', label: 'count()' }] } };
+// The count arrives as a STRING on purpose: ClickHouse quotes 64-bit ints in JSON by default
+// (output_format_json_quote_64bit_integers=1) — the connector now disables that, but statValue
+// must still coerce numeric strings so rows from an older connector deploy never render "값 없음".
+const CH_COUNT_RESULT = { result: { shape: 'table', rows: [{ 'count()': '42' }], columns: [{ key: 'count()', label: 'count()' }] } };
 const EMPTY_RESULT = { result: { shape: 'empty', note: '트레이스 없음' } };
 
 function stubFetch({ failExpr }: { failExpr?: string } = {}) {
@@ -80,7 +83,7 @@ describe('CardDashboard', () => {
     expect(screen.getByText('스키마에 필요한 항목이 없어 비활성')).toBeTruthy();
   });
 
-  it('reads a stat from the first numeric cell when there is no `value` column', async () => {
+  it('reads a stat from the first numeric cell when there is no `value` column, coercing a string count', async () => {
     render(<CardDashboard instanceId={7} />);
     await waitFor(() => expect(screen.getByText('42')).toBeTruthy());
   });

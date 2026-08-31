@@ -52,20 +52,45 @@ def test_clickhouse_table_resolution_and_identifier_guard():
     # the aggregate is aliased so the stat renderer's rows[0].value lookup finds it
     assert "count() AS value" in by["otel_span_rate"]["query"]["expr"]
     assert by["top_services"]["status"] == "ready"
-    # heuristic fallback: Timestamp+TraceId columns, non-otel name
-    heur = {"tables": [{"name": "spans_v2", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}]}]}
+    # heuristic fallback: Timestamp+TraceId+SpanId columns, non-otel name
+    heur = {"tables": [{"name": "spans_v2", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}, {"name": "SpanId"}]}]}
     by2 = {r["card_key"]: r for r in cc.build_cards("clickhouse", heur)}
     assert "FROM `spans_v2`" in by2["otel_span_rate"]["query"]["expr"]
     assert by2["top_services"]["status"] == "unavailable"  # no ServiceName column
     # a table name failing the identifier charset is NEVER spliced
-    evil = {"tables": [{"name": "otel_traces; DROP TABLE x", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}]}]}
+    evil = {"tables": [{"name": "otel_traces; DROP TABLE x", "columns": [
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "SpanId"}]}]}
     by3 = {r["card_key"]: r for r in cc.build_cards("clickhouse", evil)}
     assert by3["otel_span_rate"]["status"] == "unavailable"
     # 3+ dot segments are rejected (only `table` or `db.table` are accepted)
-    deep = {"tables": [{"name": "a.b.c", "columns": [{"name": "Timestamp"}, {"name": "TraceId"}]}]}
+    deep = {"tables": [{"name": "a.b.c", "columns": [
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "SpanId"}]}]}
     by4 = {r["card_key"]: r for r in cc.build_cards("clickhouse", deep)}
     assert by4["otel_span_rate"]["status"] == "unavailable"
     assert by4["top_services"]["status"] == "unavailable"
+
+
+def test_clickhouse_logs_table_never_matches_as_traces():
+    # otel_logs carries Timestamp+TraceId+ServiceName too — without a trace-discriminating column
+    # (SpanId/Duration) the heuristic must NOT pick it, or log rows get reported as span counts.
+    logs_only = {"tables": [{"name": "otel.otel_logs", "columns": [
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "ServiceName"}, {"name": "Body"}]}]}
+    by = {r["card_key"]: r for r in cc.build_cards("clickhouse", logs_only)}
+    assert by["otel_span_rate"]["status"] == "unavailable"
+    assert by["top_services"]["status"] == "unavailable"
+    # Duration is an equally valid discriminator
+    dur = {"tables": [{"name": "spans", "columns": [
+        {"name": "Timestamp"}, {"name": "TraceId"}, {"name": "Duration"}]}]}
+    by2 = {r["card_key"]: r for r in cc.build_cards("clickhouse", dur)}
+    assert by2["otel_span_rate"]["status"] == "ready"
+
+
+def test_clickhouse_exact_name_requires_timestamp():
+    # An otel_traces-NAMED table without Timestamp must not be marked ready — its stored queries
+    # filter on Timestamp and would fail on every view.
+    no_ts = {"tables": [{"name": "otel_traces", "columns": [{"name": "TraceId"}, {"name": "SpanId"}]}]}
+    by = {r["card_key"]: r for r in cc.build_cards("clickhouse", no_ts)}
+    assert by["otel_span_rate"]["status"] == "unavailable"
 
 
 def test_clickhouse_db_qualified_table_name():
@@ -90,6 +115,31 @@ def test_truncated_schema_yields_unknown_not_missing():
     # without the flag, the very same schema is a confident `unavailable`
     plain = cc.build_cards("prometheus", {"metrics": ["a_metric"]})
     assert all(r["status"] == "unavailable" for r in plain if r["status"] != "ready")
+
+
+def test_probed_names_are_definitive_despite_truncation():
+    # A truncated schema normally degrades unmatched requirements to "unknown" — but a name the
+    # connector probed INDIVIDUALLY (schema.probed) is definitively absent → confident "unavailable".
+    schema = {"metrics": ["up"], "truncated": True,
+              "probed": ["up", "node_cpu_seconds_total", "node_memory_MemAvailable_bytes"]}
+    by = {r["card_key"]: r for r in cc.build_cards("prometheus", schema)}
+    assert by["up_targets"]["status"] == "ready"
+    assert by["cpu_usage"]["status"] == "unavailable"          # probed and absent — definitive
+    assert by["memory_available"]["status"] == "unavailable"   # probed and absent — definitive
+    assert by["pod_restarts"]["status"] == "unknown"           # not probed — still undetermined
+
+
+def test_required_metrics_covers_every_prom_card():
+    req = cc.required_metrics()
+    assert req == sorted(req)
+    for c in cc._PROM_CARDS:
+        assert all(m in req for m in c["requires"])
+
+
+def test_up_targets_uses_sum_not_count():
+    # count(up == 1) is an EMPTY vector during a total outage (renders "값 없음"); sum(up) renders 0.
+    by = {r["card_key"]: r for r in cc.build_cards("prometheus", {"metrics": ["up"]})}
+    assert by["up_targets"]["query"]["expr"] == "sum(up)"
 
 
 def test_unknown_kind_and_missing_schema():
