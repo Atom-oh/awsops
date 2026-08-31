@@ -142,7 +142,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
         {(
           <div className="flex flex-wrap items-center gap-2">
             {/* switching instances resets the range to 즉시 — a 30d window carried onto Loki would 400 (per-kind 7d cap) */}
-            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); setGenFrom(null); setExecMs(null); setRangeWindow(0); }}>
+            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy || genBusy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); setGenFrom(null); setExecMs(null); setRangeWindow(0); }}>
               <option value="">{tt('데이터소스 선택…')}</option>
               {list.map((d) => (
                 <option key={d.id} value={d.id}>{d.name} ({d.kind}){d.isDefault ? ` ${tt('· 기본')}` : ''}</option>

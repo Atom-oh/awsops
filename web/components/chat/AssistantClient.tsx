@@ -24,8 +24,11 @@ export default function AssistantClient() {
   const wantedThread = params.get('thread');
   // gap-audit L204: deep-link prefill (e.g. the Datasources tab's "AI로 진단" row action) —
   // fills the composer for review only; never auto-sends.
-  // clamp: first URL-controlled composer seed — cap crafted-link payload size
-  const prefill = (params.get('q') ?? '').slice(0, 500) || null;
+  // First URL-controlled composer seed: accept ONLY the shape this feature emits — a single-line
+  // section-pinned prompt (`/<section> …`, ≤500 chars). Anything else is ignored, closing the
+  // crafted-link freeform-prefill vector while keeping the diagnose deep links working.
+  const rawQ = (params.get('q') ?? '').slice(0, 500);
+  const prefill = /^\/[a-z][a-z-]* [^\r\n]+$/.test(rawQ) ? rawQ : null;
   const inited = useRef(false);
   // Below lg the thread rail is a slide-in overlay (toggled from the header),
   // so the chat area is full-width on a phone. At lg+ the rail is always visible
