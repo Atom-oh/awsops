@@ -103,6 +103,19 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
     const inst = first ? (walk(first, 'instance_id') as string | undefined) : undefined;
     return { attached_to: inst ?? 'Unattached' };
   },
+  // scan_on_push (gap-audit L107): Yes/No from the JSONB scanning config. A missing/malformed
+  // config means scanning is off (the API default), so 'No' — never undefined (keeps the column
+  // filterable and the No count honest). The truthiness test deliberately mirrors
+  // computeHighlights' countTruthy FALSY set (inventory-types.ts), so a config carrying `1` or
+  // "True" can never read KPI-enabled but column-'No'.
+  ecr: (r) => {
+    const v = walk(r.image_scanning_configuration, 'scan_on_push');
+    return {
+      scan_on_push: v != null
+        && !['', 'false', 'null', 'undefined', '0', 'none', 'no', 'disabled'].includes(String(v).trim().toLowerCase())
+        ? 'Yes' : 'No',
+    };
+  },
   ecs_task: (r) => {
     // Fargate on-demand (ap-northeast-2): $/vCPU-h + $/GB-h — v1 constants (config-overridable in v1).
     const VCPU_H = 0.04656;
