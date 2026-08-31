@@ -456,3 +456,40 @@ def test_sync_cleanup_failure_replaces_success_with_one_safe_terminal_failure(
     assert terminal[0]["error_type"] == error_type
     assert len(terminal) == 1
     assert secret not in json.dumps(terminal)
+
+
+@pytest.mark.parametrize(
+    "termination",
+    [KeyboardInterrupt("stop"), SystemExit(73)],
+)
+def test_sync_reraises_base_exception_after_best_effort_cleanup_without_terminal_log(
+    capsys, monkeypatch, termination
+):
+    """A BaseException must not be replaced by lifecycle logging or cleanup errors."""
+    mod = load_sync_lambda()
+    cleanup = []
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "pg_advisory_unlock" in sql:
+                cleanup.append("unlock")
+            return []
+
+        def close(self):
+            cleanup.append("close")
+
+    def raise_termination():
+        raise termination
+
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+    mod.SDK_SYNCS["log_test_base_exception"] = raise_termination
+    mod._ALLOWED.add("log_test_base_exception")
+
+    with pytest.raises(type(termination)) as caught:
+        mod.sync("log_test_base_exception")
+
+    assert caught.value is termination
+    assert cleanup == ["unlock", "close"]
+    assert capsys.readouterr().out == ""

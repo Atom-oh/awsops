@@ -899,7 +899,7 @@ def sync(resource_type):
             except Exception as e:
                 if cleanup_error is None:
                     cleanup_error = e
-        if cleanup_error is not None:
+        if cleanup_error is not None and terminal_fields is not None:
             result = {
                 "status": "failed",
                 "type": resource_type,
@@ -912,8 +912,9 @@ def sync(resource_type):
                 "error": "inventory sync cleanup failed",
                 "error_type": type(cleanup_error).__name__,
             }
-        terminal_fields["elapsed_ms"] = int((time.monotonic() - started) * 1000)
-        _log(terminal_event, **terminal_fields)
+        if terminal_fields is not None:
+            terminal_fields["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+            _log(terminal_event, **terminal_fields)
     return result
 
 
