@@ -2,13 +2,16 @@
 # 인벤토리 KPI/차트 퀵윈 배치 — 스펙 수준 v1 패리티 갭 8건
 
 **Status:** Approved 2026-08-31 (batch selected by owner). Branch `feat/inventory-kpi-batch`.
+**WA pillar:** Operational Excellence (fleet KPI visibility); Security (encryption-rate / scan-on-push posture tiles).
 Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L103 (ec2 running vCPU KPI),
 L100 (ebs encryption % KPI), L134 (lambda long-timeout KPI), L230 (lambda avg-memory KPI),
 L109 (ecs_cluster KPI band), L107 (ecr scan-on-push column), L239 (rds total storage KPI),
 L190 (cloudwatch alarm-state donut semantic colors).
 Also ticks as ALREADY SHIPPED (stale audit rows, verified against current code):
 L212 (ecr tag-immutability KPI — `HIGHLIGHTS.ecr` has it), L238 (rds storage-by-instance bar —
-`rds.barKey` exists), L108 (ecs weighted view — covered by `ecs_cluster.barKey` Top-N running-tasks bar).
+`rds.barKey` exists), L108 (ecs weighted view — **owner-accepted substitute**: the
+`ecs_cluster.barKey` Top-N running-tasks bar instead of the weighted pie, per the audit row's
+inline note).
 
 ## 요약 (한국어)
 
@@ -26,9 +29,13 @@ L212 (ecr tag-immutability KPI — `HIGHLIGHTS.ecr` has it), L238 (rds storage-b
   `memory_size` avg MB (L230).
 - `{ kind: 'percent'; label; col; eq: string; }` — `count(cell==eq) / count(rows)` as
   `NN% (n/total)`; variant from the RAW ratio: every row matching → accent, ratio ≥0.8 →
-  default, else danger; 0 rows → '—'. A rate that rounds to 100% without being a complete
-  match displays one decimal (499/500 → '99.8%'), so a near-complete fleet never reads '100%'.
-  → ebs `encrypted == 'true'` 암호화율 (L100).
+  default, else danger; 0 rows → '—'. Displays ONE DECIMAL whenever rounding would cross into a
+  different threshold class than the raw ratio (499/500 → '99.8%', 399/500 → '79.8%', 1/1000 →
+  '0.1%'), so a near-complete fleet never reads '100%' and an 80%-rounded rate never contradicts
+  its danger tone. `computeHighlights` takes an `opts?: { capped?: boolean }` third argument
+  (the page passes `allRows.length >= ROW_LIMIT`): a 500-row-capped sample can never render
+  'accent' and its value is labeled ' 표본', so a capped sample is never presented as fleet-wide
+  completeness. → ebs `encrypted == 'true'` 암호화율 (L100).
 - `{ kind: 'sumProductWhere'; label; cols: [string, string]; where; eq; suffix? }` —
   Σ(colA × colB) over rows matching where==eq; a row with a non-numeric factor contributes 0.
   → ec2 running vCPU = `cpu_options_core_count × cpu_options_threads_per_core` where
@@ -46,7 +53,11 @@ L212 (ecr tag-immutability KPI — `HIGHLIGHTS.ecr` has it), L238 (rds storage-b
 ### ECR scan-on-push column (L107)
 `web/lib/inventory-derived.ts` gains an `ecr` deriver: `scan_on_push: 'Yes' | 'No'` from
 `image_scanning_configuration.scan_on_push` (JSON-string tolerant, same cell semantics as
-highlights). `ecr.columns` gains `{ key: 'scan_on_push', label: 'Scan on Push' }`.
+highlights). `ecr.columns` gains `{ key: 'scan_on_push', label: 'Scan on Push (Basic)' }` — the
+label says Basic because this is the repository-level basic scanning setting; registry-level
+Inspector enhanced scanning is out of scope here. The deriver's truthiness test deliberately
+mirrors `countTruthy`'s FALSY set, so a config carrying `1` or `"True"` can never read
+KPI-enabled but column-'No'.
 
 ### CloudWatch alarm-state donut semantic colors (L190)
 `InvType` gains optional `distKey2Colors?: Record<string, string>`; the inventory page passes

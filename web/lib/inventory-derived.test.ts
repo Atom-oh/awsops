@@ -9,6 +9,11 @@ describe('deriveRow ecr scan_on_push', () => {
   it('Yes when the config arrives as a JSON string with PascalCase key', () => {
     expect(deriveRow('ecr', { image_scanning_configuration: '{"ScanOnPush": "true"}' }).scan_on_push).toBe('Yes');
   });
+  // Truthiness mirrors countTruthy's FALSY set — 1 / "True" must not read KPI-enabled but column-'No'.
+  it('Yes for a numeric 1 and a capitalized "True" (countTruthy parity)', () => {
+    expect(deriveRow('ecr', { image_scanning_configuration: { scan_on_push: 1 } }).scan_on_push).toBe('Yes');
+    expect(deriveRow('ecr', { image_scanning_configuration: '{"ScanOnPush": "True"}' }).scan_on_push).toBe('Yes');
+  });
   it('No when scan_on_push is false', () => {
     expect(deriveRow('ecr', { image_scanning_configuration: { scan_on_push: false } }).scan_on_push).toBe('No');
   });

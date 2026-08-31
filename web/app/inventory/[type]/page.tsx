@@ -126,7 +126,9 @@ export default function InventoryTypePage() {
   // Per-type highlight cards (tailored top KPIs from synced columns). Empty → fall
   // back to the generic state tiles, so unconfigured types render as before.
   const highlightCards = useMemo(
-    () => (HIGHLIGHTS[type] ? computeHighlights(allRows, HIGHLIGHTS[type]) : []),
+    () => (HIGHLIGHTS[type]
+      ? computeHighlights(allRows, HIGHLIGHTS[type], { capped: allRows.length >= ROW_LIMIT })
+      : []),
     [allRows, type],
   );
 

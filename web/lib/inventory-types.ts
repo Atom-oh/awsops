@@ -88,10 +88,11 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ] },
   ecr: { label: 'ECR Repositories', group: 'Compute', distKey: 'image_tag_mutability', columns: [
     { key: 'repository_uri', label: 'URI' }, { key: 'image_tag_mutability', label: 'Tag mutability' },
-    { key: 'scan_on_push', label: 'Scan on Push' }, { key: 'created_at', label: 'Created' } ],
+    // Repository-level basic scanning setting — registry-level Inspector enhanced scanning is not represented here.
+    { key: 'scan_on_push', label: 'Scan on Push (Basic)' }, { key: 'created_at', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'repository_name', 'account_id', 'region', 'arn', 'registry_id', 'repository_uri', 'created_at'] },
-      { label: 'Config', keys: ['image_tag_mutability', 'image_scanning_configuration', 'lifecycle_policy'] },
+      { label: 'Config', keys: ['image_tag_mutability', 'scan_on_push', 'image_scanning_configuration', 'lifecycle_policy'] },
       { label: 'Security', keys: ['encryption_configuration'] },
       { label: 'Tags', keys: ['tags'] },
     ],
@@ -677,8 +678,11 @@ export type Highlight =
   | { kind: 'avg'; label: string; col: string; suffix?: string }
   // percent: count(cell==eq)/rows as 'NN% (n/total)'. Variant comes from the RAW ratio (v1
   // parity, L100): every row matching → accent, ratio ≥0.8 → default, else danger; 0 rows → '—'.
-  // A rate that rounds to 100% without being a complete match displays one decimal (e.g.
-  // 499/500 → '99.8%'), so a near-complete fleet never reads as a finished '100%'.
+  // Displays ONE DECIMAL whenever rounding would move the rate into a different threshold class
+  // than the raw ratio (e.g. 499/500 → '99.8%', 399/500 → '79.8%'), so a near-complete fleet
+  // never reads as a finished '100%' and an 80%-rounded rate never contradicts its danger tone.
+  // When the row set is a capped sample (opts.capped), the rate can never render 'accent' and the
+  // value is marked ' 표본' — a 500-row-capped sample is not fleet-wide completeness.
   | { kind: 'percent'; label: string; col: string; eq: string }
   // sumProductWhere: Σ(colA×colB) over rows matching where==eq — per-row factors, so a
   // custom-CPU-options instance counts its ACTUAL vCPUs, not the type default (L103).
@@ -717,7 +721,11 @@ function humanBytes(n: number): string {
 }
 
 /** Compute highlight cards from the full row set. Pure — unit-tested. */
-export function computeHighlights(rows: Array<Record<string, unknown>>, highlights: Highlight[]): HighlightCard[] {
+export function computeHighlights(
+  rows: Array<Record<string, unknown>>,
+  highlights: Highlight[],
+  opts?: { capped?: boolean },
+): HighlightCard[] {
   const tone = (t: 'accent' | 'danger' | undefined, n: number): HighlightCard['variant'] =>
     t === 'danger' ? (n > 0 ? 'danger' : 'default') : t === 'accent' ? 'accent' : 'default';
   return highlights.map((h) => {
@@ -766,16 +774,26 @@ export function computeHighlights(rows: Array<Record<string, unknown>>, highligh
       case 'percent': {
         if (!rows.length) return { label: h.label, value: '—', variant: 'default' };
         const n = rows.filter((r) => sv(cell(r, h.col)).trim().toLowerCase() === h.eq.toLowerCase()).length;
+        // A capped row set is a sample, not the fleet — a complete match can never claim the
+        // accented all-clear.
+        const capped = !!opts?.capped;
         // Variant from the RAW ratio, never the rounded pct: 499/500 rounds to 100% but is
         // not a complete match, so it must not read as 'accent'.
         const variant: HighlightCard['variant'] =
-          n === rows.length ? 'accent' : n / rows.length >= 0.8 ? 'default' : 'danger';
-        const rounded = Math.round((n / rows.length) * 100);
-        // A rate that rounds to 100 without being complete shows one decimal (e.g. 99.8%).
-        const pctStr = rounded === 100 && n !== rows.length
-          ? ((n / rows.length) * 100).toFixed(1)
-          : String(rounded);
-        return { label: h.label, value: `${pctStr}% (${n}/${rows.length})`, variant };
+          n === rows.length && !capped ? 'accent' : n / rows.length >= 0.8 ? 'default' : 'danger';
+        const ratio = n / rows.length;
+        const rounded = Math.round(ratio * 100);
+        // Show one decimal whenever rounding would cross a threshold class the raw ratio is not
+        // in (rounded 100 but incomplete, rounded ≥80 but raw <0.8, rounded 0 but nonzero).
+        const crosses = (rounded === 100 && n !== rows.length)
+          || (rounded >= 80 && ratio < 0.8)
+          || (rounded === 0 && n > 0);
+        const pctStr = crosses ? (ratio * 100).toFixed(1) : String(rounded);
+        return {
+          label: h.label,
+          value: `${pctStr}% (${n}/${rows.length}${capped ? ' 표본' : ''})`,
+          variant,
+        };
       }
       case 'sumProductWhere': {
         const total = rows
@@ -809,7 +827,8 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'countWhere', label: 'Multi-AZ', col: 'multi_az', eq: 'true', tone: 'accent' },
     { kind: 'countWhere', label: '퍼블릭 노출', col: 'publicly_accessible', eq: 'true', tone: 'danger' },
     { kind: 'distinct', label: '엔진 종류', col: 'engine' },
-    { kind: 'sum', label: '총 스토리지', col: 'allocated_storage', suffix: ' GB' },
+    // Aurora reports a nominal allocated_storage placeholder — this is provisioned storage, not Aurora usage.
+    { kind: 'sum', label: '총 프로비저닝 스토리지', col: 'allocated_storage', suffix: ' GB' },
   ],
   lambda: [
     { kind: 'countWhere', label: '활성', col: 'state', eq: 'active', tone: 'accent' },

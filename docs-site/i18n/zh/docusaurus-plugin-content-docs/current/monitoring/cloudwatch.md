@@ -20,7 +20,7 @@ import Screenshot from '@site/src/components/Screenshot';
 - **INSUFFICIENT_DATA**: 数据不足的告警数（灰色）
 
 ### 可视化
-- **Alarm State Distribution**: 按状态划分的告警比例饼图
+- **Alarm State Distribution**: 按状态划分的告警比例饼图（语义颜色：OK 绿 · ALARM 红 · INSUFFICIENT_DATA 灰）
 - **Alarms by Namespace**: 按命名空间划分的告警数量柱状图
 
 ### 告警列表

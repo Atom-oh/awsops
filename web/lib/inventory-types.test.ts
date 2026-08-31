@@ -234,11 +234,19 @@ describe('computeHighlights (per-type highlight cards)', () => {
     // 499/500 = 99.8% — rounds to 100 but is NOT complete → one decimal + 'default'
     const near = [...Array(499).fill({ e: 'true' }), { e: 'false' }];
     expect(pct(near)).toEqual({ label: 'enc', value: '99.8% (499/500)', variant: 'default' });
-    // 399/500 = 79.8% — below the 0.8 raw-ratio bar → danger
+    // 399/500 = 79.8% — rounds to 80 but is below the 0.8 raw-ratio bar → one decimal + danger
     const low = [...Array(399).fill({ e: 'true' }), ...Array(101).fill({ e: 'false' })];
-    expect(pct(low)).toEqual({ label: 'enc', value: '80% (399/500)', variant: 'danger' });
-    // complete match stays accent at a real 100%
+    expect(pct(low)).toEqual({ label: 'enc', value: '79.8% (399/500)', variant: 'danger' });
+    // complete match stays accent at a real 100% (uncapped)
     expect(pct(Array(500).fill({ e: 'true' }))).toEqual({ label: 'enc', value: '100% (500/500)', variant: 'accent' });
+    // low end: rounds to 0 but is nonzero → one decimal + danger
+    const tiny = [{ e: 'true' }, ...Array(999).fill({ e: 'false' })];
+    expect(pct(tiny)).toEqual({ label: 'enc', value: '0.1% (1/1000)', variant: 'danger' });
+  });
+  it('percent on a capped sample never claims the accented all-clear', () => {
+    const rows = Array(500).fill({ e: 'true' });
+    const card = computeHighlights(rows, [{ kind: 'percent', label: 'enc', col: 'e', eq: 'true' }], { capped: true })[0];
+    expect(card).toEqual({ label: 'enc', value: '100% (500/500 표본)', variant: 'default' });
   });
   it('avg excludes null/empty cells (Number(null) === 0 would skew the mean)', () => {
     const rows = [{ m: 100 }, { m: null }, { m: '' }];

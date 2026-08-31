@@ -20,7 +20,7 @@ A page for viewing AWS CloudWatch alarm states at a glance and examining detaile
 - **INSUFFICIENT_DATA**: Number of alarms with insufficient data (gray)
 
 ### Visualizations
-- **Alarm State Distribution**: Pie chart showing alarm distribution by state
+- **Alarm State Distribution**: Pie chart showing alarm distribution by state (semantic colors: OK green · ALARM red · INSUFFICIENT_DATA gray)
 - **Alarms by Namespace**: Bar chart showing alarm count by namespace
 
 ### Alarm List
