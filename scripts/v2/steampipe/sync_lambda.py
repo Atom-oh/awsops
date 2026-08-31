@@ -8,9 +8,15 @@ from datetime import datetime, timezone
 import os
 import re
 import ssl
+import time
 import boto3
 import pg8000.native
 from botocore.exceptions import ClientError
+
+
+def _log(event: str, **fields) -> None:
+    print(json.dumps({"event": event, **fields}, default=str, sort_keys=True))
+
 
 # resource_type -> (steampipe SQL, resource_id column, region column). Waves add rows here.
 QUERIES = {
@@ -731,6 +737,7 @@ def _inject_account(sql, account_id):
 
 
 def sync(resource_type):
+    started = time.monotonic()
     if resource_type not in _ALLOWED:
         return {"error": f"unknown type {resource_type}"}
     adb = _aurora()
@@ -738,6 +745,8 @@ def sync(resource_type):
         # advisory lock per type (no Steampipe stampede); skip if busy
         got = adb.run("SELECT pg_try_advisory_lock(hashtext(:t))", t=f"inv:{resource_type}")
         if not got[0][0]:
+            _log("inventory_sync_busy", resource_type=resource_type,
+                 elapsed_ms=int((time.monotonic() - started) * 1000))
             return {"status": "busy", "type": resource_type}
         try:
             # NOTE (M4): inventory_sync_runs is a JOB-LEVEL ledger — one row per resource_type keyed
@@ -845,11 +854,16 @@ def sync(resource_type):
                     "AND captured_at::date = CURRENT_DATE", t=resource_type)
             adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
                     "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
+            _log("inventory_sync_complete", resource_type=resource_type, row_count=len(recs),
+                 elapsed_ms=int((time.monotonic() - started) * 1000))
             return {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
         except Exception as e:
             adb.run("UPDATE inventory_sync_runs SET status='failed', finished_at=now(), error=:e "
                     "WHERE resource_type=:t AND account_id='self'", t=resource_type, e=str(e)[:2000])
-            return {"status": "failed", "type": resource_type, "error": str(e)[:300]}
+            error = str(e)[:300]
+            _log("inventory_sync_failed", resource_type=resource_type, error=error,
+                 elapsed_ms=int((time.monotonic() - started) * 1000))
+            return {"status": "failed", "type": resource_type, "error": error}
         finally:
             adb.run("SELECT pg_advisory_unlock(hashtext(:t))", t=f"inv:{resource_type}")
     finally:
@@ -859,6 +873,7 @@ def sync(resource_type):
 def lambda_handler(event, ctx):
     rtype = (event or {}).get("type", "all")
     if rtype == "all":
+        _log("inventory_sync_dispatch", type_count=len(QUERIES) + len(SDK_SYNCS))
         for rt in list(QUERIES) + list(SDK_SYNCS):
             _lambda.invoke(FunctionName=ctx.invoked_function_arn, InvocationType="Event",
                            Payload=json.dumps({"type": rt}).encode())

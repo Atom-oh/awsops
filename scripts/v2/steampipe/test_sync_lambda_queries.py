@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -170,3 +171,129 @@ def test_opensearch_query_carries_the_l153_detail_columns():
     ):
         assert col in sql, col
     assert "off_peak_window_options" not in sql
+
+
+def test_log_is_structured_json(capsys):
+    """Missing field-safe JSON formatting would make downstream log parsing unreliable."""
+    mod = load_sync_lambda()
+
+    mod._log("inventory_sync_complete", resource_type="ec2", row_count=3, elapsed_ms=12)
+
+    record = json.loads(capsys.readouterr().out)
+    assert record == {
+        "event": "inventory_sync_complete",
+        "resource_type": "ec2",
+        "row_count": 3,
+        "elapsed_ms": 12,
+    }
+
+
+def test_all_dispatch_logs_type_count(capsys):
+    """Dropping the all-type dispatch record would hide fan-out breadth from operators."""
+    mod = load_sync_lambda()
+
+    class FakeLambda:
+        def invoke(self, **kwargs):
+            return {}
+
+    class FakeContext:
+        invoked_function_arn = "arn:aws:lambda:ap-northeast-2:123456789012:function:sync"
+
+    mod._lambda = FakeLambda()
+    mod.lambda_handler({"type": "all"}, FakeContext())
+
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    hit = next(record for record in records if record["event"] == "inventory_sync_dispatch")
+    assert hit["type_count"] == len(mod.QUERIES) + len(mod.SDK_SYNCS)
+
+
+def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatch):
+    """Omitting or duplicating a successful terminal log loses sync outcome observability."""
+    mod = load_sync_lambda()
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "SELECT account_id, region, resource_id" in sql:
+                return []
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+    monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    mod.SDK_SYNCS["log_test_success"] = lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
+    mod._ALLOWED.add("log_test_success")
+
+    result = mod.sync("log_test_success")
+
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    terminal = [record for record in records if record["event"].startswith("inventory_sync_") and
+                record["event"] != "inventory_sync_dispatch"]
+    assert result == {"status": "succeeded", "type": "log_test_success", "row_count": 1}
+    assert len(terminal) == 1
+    assert terminal[0]["event"] == "inventory_sync_complete"
+    assert terminal[0]["resource_type"] == "log_test_success"
+    assert terminal[0]["row_count"] == 1
+    assert isinstance(terminal[0]["elapsed_ms"], int)
+
+
+def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkeypatch):
+    """A failed sync without a bounded terminal error would be opaque or leak sensitive details."""
+    mod = load_sync_lambda()
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            return []
+
+        def close(self):
+            pass
+
+    failure = "x" * 400
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+    mod.SDK_SYNCS["log_test_failure"] = lambda: (_ for _ in ()).throw(RuntimeError(failure))
+    mod._ALLOWED.add("log_test_failure")
+
+    result = mod.sync("log_test_failure")
+
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    terminal = [record for record in records if record["event"].startswith("inventory_sync_") and
+                record["event"] != "inventory_sync_dispatch"]
+    assert result == {"status": "failed", "type": "log_test_failure", "error": failure[:300]}
+    assert len(terminal) == 1
+    assert terminal[0]["event"] == "inventory_sync_failed"
+    assert terminal[0]["resource_type"] == "log_test_failure"
+    assert terminal[0]["error"] == failure[:300]
+    assert isinstance(terminal[0]["elapsed_ms"], int)
+
+
+def test_sync_busy_logs_one_terminal_record(capsys, monkeypatch):
+    """A lock-contention return without a terminal log would conceal backpressure events."""
+    mod = load_sync_lambda()
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(False,)]
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+
+    result = mod.sync("ec2")
+
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert result == {"status": "busy", "type": "ec2"}
+    assert records == [{
+        "event": "inventory_sync_busy",
+        "resource_type": "ec2",
+        "elapsed_ms": records[0]["elapsed_ms"],
+    }]
+    assert isinstance(records[0]["elapsed_ms"], int)
