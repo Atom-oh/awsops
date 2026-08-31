@@ -69,6 +69,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
 
   const ds = list.find((d) => d.id === selId) ?? null;
   const canRange = ds ? RANGE_KINDS.has(ds.kind) : false;
+  // Loki has no per-request upstream timeout — the API caps it at 7d, so don't offer 30d.
+  const presets = ds?.kind === 'loki' ? RANGE_PRESETS.filter(([, s]) => s <= 604800) : RANGE_PRESETS;
   const queryIsMultiline = ds?.kind === 'clickhouse';
 
   useEffect(() => {
@@ -147,7 +149,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
                 disabled={busy}
                 onChange={(e) => { const w = Number(e.target.value); setRangeWindow(w); run(w); }}
               >
-                {RANGE_PRESETS.map(([label, sec]) => (
+                {presets.map(([label, sec]) => (
                   <option key={sec} value={sec}>{tt(label)}</option>
                 ))}
               </select>

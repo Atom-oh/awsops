@@ -13,6 +13,14 @@ interface Instance {
   id: number; name: string; kind: string; endpoint?: string | null; authType?: string | null; isDefault?: boolean; connected?: boolean;
 }
 
+// Chat section per datasource kind (the deep-link prompt pins it with a leading /section —
+// free-text routing would misroute: '연결' matches the network rule, and jaeger/datadog/dynatrace
+// have no default-enabled connector target, so those kinds get no link at all).
+const DIAGNOSE_SECTION: Record<string, string> = {
+  prometheus: 'observability', clickhouse: 'observability',
+  loki: 'monitoring', mimir: 'monitoring', tempo: 'monitoring',
+};
+
 // The Datasources tab: manage instances (multi-per-type, named) + drill into Explore. Read-visible to
 // all authenticated users; mutating actions are admin-only (canManage).
 export default function DatasourcesTab({ canManage = false }: { canManage?: boolean }) {
@@ -128,9 +136,9 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                       credential) — a non-default row's diagnosis would confidently describe the
                       WRONG datasource under this row's name. Scope the link to defaults until
                       the tool path is instance-aware. */}
-                  {i.isDefault && (
+                  {i.isDefault && DIAGNOSE_SECTION[i.kind] && (
                     <Link
-                      href={`/assistant?q=${encodeURIComponent(`${i.name} (${i.kind}) 데이터소스 연결 상태를 진단해줘`)}`}
+                      href={`/assistant?q=${encodeURIComponent(`/${DIAGNOSE_SECTION[i.kind]} ${i.name} (${i.kind}) 데이터소스 상태를 진단해줘`)}`}
                       className="text-[12px] text-purple-600 hover:underline mr-3"
                     >
                       {tt('AI로 진단')}

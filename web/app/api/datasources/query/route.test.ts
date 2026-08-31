@@ -120,7 +120,7 @@ describe('POST /api/datasources/query', () => {
     expect(typeof call.args.step).toBe('string');
     expect(Number(call.args.end) - Number(call.args.start)).toBe(300);
     expect(call.args.step).toBe('2');
-    // upstream evaluation is bounded too, under the connector's 12s HTTP timeout
+    // forwarded to the connector, which clamps and passes it upstream on instant AND range paths
     expect(call.args.timeout).toBe('10s');
   });
 
@@ -154,6 +154,8 @@ describe('POST /api/datasources/query', () => {
     expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 2592000, step: 10368 } }))).status).toBe(200);
     // the density cap is still the DoS guard at the widened bound
     expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 2592000, step: 500 } }))).status).toBe(400); // 5184 points
+    expect((await POST(req({ slug: 'loki', query: '{job="x"}', range: { window: 2592000, step: 10368 } }))).status).toBe(400); // loki capped at 7d
+    expect((await POST(req({ slug: 'loki', query: '{job="x"}', range: { window: 604800, step: 2419 } }))).status).toBe(200);
   });
 
   it('returns executionTimeMs metadata alongside the result (gap-audit L88)', async () => {

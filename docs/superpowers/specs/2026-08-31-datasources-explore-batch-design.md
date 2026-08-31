@@ -46,6 +46,8 @@ exported for unit tests. Metric-LogQL results keep the existing prom-style rende
   **2592000** (30d). The existing `ceil(window/step) ≤ 5000` cap still bounds returned points
   (upstream scan cost is bounded by each connector's own limits/timeouts); `step ≤ 86400`
   unchanged (30d/86400 = 30 points still renders).
+  Per-kind bound: prometheus/mimir allow 30d and forward a clamped upstream `timeout` on both
+  instant and range paths; Loki (no per-request timeout API) is capped at 7d.
 
 ### L88 — Query result metadata bar
 - The query route measures the connector call: `const t0 = Date.now(); … invokeMcpLambdaTool …`
@@ -71,8 +73,10 @@ Cleared when the user edits the query textarea manually, dismisses it, or switch
 re-fetch without page reload), disabled while loading.
 
 ### L204 — Per-row "AI로 진단" action
-Each datasource row gains a link to
-`/assistant?q=${encodeURIComponent(`${name} (${kind}) 데이터소스 연결 상태를 진단해줘`)}`.
+Each kind's DEFAULT datasource row (supported kinds: prometheus/clickhouse/loki/mimir/tempo)
+gains a link to /assistant?q= with a section-pinned prompt — the chat gateway path resolves
+each kind's default instance, so a non-default row's diagnosis would describe the wrong
+datasource, and unpinned free text would misroute ('연결' matches the network rule).
 `AssistantClient` (which already uses `useSearchParams`) reads `q` once at init and prefills
 the composer input — **prefill only, never auto-send** (the user reviews and presses send).
 Requires a small `setInput`/initial-input hook on the chat composer; if `useChat` exposes no

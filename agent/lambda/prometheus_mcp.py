@@ -131,7 +131,11 @@ def prometheus_query_range(args):
     start = _parse_time(args.get("start"), default_delta=3600)
     end = _parse_time(args.get("end"))
     step = str(args.get("step") or "60").strip()
-    data = _get(_ds(), "/api/v1/query_range", {"query": query, "start": start, "end": end, "step": step})
+    params = {"query": query, "start": start, "end": end, "step": step}
+    timeout = _timeout_param(args.get("timeout"))
+    if timeout:
+        params["timeout"] = timeout
+    data = _get(_ds(), "/api/v1/query_range", params)
     bounded, truncated = _bound(data)
     return ok({"truncated": truncated, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
 

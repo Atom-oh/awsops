@@ -73,11 +73,16 @@ export async function POST(request: Request) {
     const window = Number((r as { window?: unknown }).window);
     const step = Number((r as { step?: unknown }).step);
     // Upper bound widened to 30d (gap-audit L86, v1 parity) — the point-density cap below still
-    // bounds RETURNED points; upstream scan cost over a 30d window is bounded by the connectors'
-    // own limits/timeouts (Loki line/byte budget, prometheus per-series point cap).
+    // bounds RETURNED points; upstream evaluation is bounded by the forwarded prometheus/mimir
+    // `timeout` param (range + instant) and, for Loki, by the tighter 7d window below (Loki accepts
+    // no per-request timeout).
     // A 30d window at the UI's ~250-point autoStep is ~10368s steps.
-    if (!Number.isInteger(window) || window < 60 || window > 2592000) {
-      return json({ error: 'range.window must be an integer in [60, 2592000] seconds' }, 400);
+    // Per-kind upper bound (review): prometheus/mimir get 30d WITH a forwarded upstream `timeout`
+    // (their connectors clamp it 1..60s on BOTH instant and range paths); Loki has no per-request
+    // upstream timeout, so its widened bound stays at 7d.
+    const maxWindow = kind === 'loki' ? 604800 : 2592000;
+    if (!Number.isInteger(window) || window < 60 || window > maxWindow) {
+      return json({ error: `range.window must be an integer in [60, ${maxWindow}] seconds` }, 400);
     }
     if (!Number.isInteger(step) || step < 1 || step > 86400) {
       return json({ error: 'range.step must be an integer in [1, 86400] seconds' }, 400);

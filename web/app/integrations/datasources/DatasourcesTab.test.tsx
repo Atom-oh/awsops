@@ -83,7 +83,26 @@ describe('DatasourcesTab', () => {
     expect(screen.getAllByText('AI로 진단')).toHaveLength(1);
     const links = screen.getAllByText('AI로 진단') as HTMLAnchorElement[];
     expect(links[0].getAttribute('href')).toContain('/assistant?q=');
+    // the prompt is section-pinned (leading /section) so free-text routing can't misroute it
+    const q = decodeURIComponent(links[0].getAttribute('href')!.replace('/assistant?q=', ''));
+    expect(q.startsWith('/observability ')).toBe(true);
+    expect(q).toContain('prod-prom');
+    expect(q).not.toContain('stg-prom');
+  });
+
+  it('renders NO diagnose link for a kind without a connector section (jaeger)', async () => {
+    const multi = [
+      { id: 1, name: 'prod-prom', kind: 'prometheus', authType: 'none', isDefault: true, connected: true },
+      { id: 9, name: 'jg', kind: 'jaeger', isDefault: true, connected: true },
+    ];
+    global.fetch = vi.fn(async (url: string) => ({
+      ok: true, status: 200, json: async () => (url === '/api/datasources' ? { datasources: multi } : {}),
+    })) as unknown as typeof fetch;
+    render(<DatasourcesTab canManage={false} />);
+    await waitFor(() => expect(screen.getByText('jg')).toBeTruthy());
+    // both rows are defaults, but only the supported kind (prometheus) gets a link
+    expect(screen.getAllByText('AI로 진단')).toHaveLength(1);
+    const links = screen.getAllByText('AI로 진단') as HTMLAnchorElement[];
     expect(decodeURIComponent(links[0].getAttribute('href')!)).toContain('prod-prom');
-    expect(decodeURIComponent(links[0].getAttribute('href')!)).not.toContain('stg-prom');
   });
 });
