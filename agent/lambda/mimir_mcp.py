@@ -115,8 +115,12 @@ def mimir_query_range(args):
     query = (args.get("query") or "").strip()
     if not query:
         return err("query (PromQL) required")
-    data = _get(_ds(), f"{BASE}/query_range", {"query": query, "start": _parse_time(args.get("start"), 3600),
-                                               "end": _parse_time(args.get("end")), "step": str(args.get("step") or "60")})
+    params = {"query": query, "start": _parse_time(args.get("start"), 3600),
+              "end": _parse_time(args.get("end")), "step": str(args.get("step") or "60")}
+    timeout = _timeout_param(args.get("timeout"))
+    if timeout:
+        params["timeout"] = timeout
+    data = _get(_ds(), f"{BASE}/query_range", params)
     bounded, tr = _bound(data)
     return ok({"truncated": tr, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
 
