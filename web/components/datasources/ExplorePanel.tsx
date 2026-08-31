@@ -42,8 +42,9 @@ const selectCls = 'rounded-md border border-ink-200 bg-card px-2.5 py-1.5 text-[
 // Explore range presets: label → window seconds (0 = instant snapshot). Step auto-derived for ~250 points.
 const RANGE_PRESETS: ReadonlyArray<readonly [string, number]> = [
   ['즉시', 0], ['5m', 300], ['15m', 900], ['1h', 3600], ['6h', 21600], ['24h', 86400],
-  // gap-audit L86 (v1 parity): multi-day trend exploration — autoStep keeps ~250 points
-  // (7d→2419s, 30d→10368s), inside the API's 5000-point density cap.
+  // gap-audit L86 (v1 parity): multi-day trend exploration — autoStep keeps ~250 points for
+  // prom/mimir (7d→2419s, 30d→10368s) and ≤180 for loki (its connector keeps only the oldest
+  // 200 samples/series), inside the API's 5000-point density cap.
   ['7d', 604800], ['30d', 2592000],
 ];
 // ~250 points for prom/mimir; Loki's connector caps each matrix series at 200 samples and
