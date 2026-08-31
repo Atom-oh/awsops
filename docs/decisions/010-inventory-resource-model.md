@@ -21,6 +21,8 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
   (A **type registry** defines which resource types are surfaced; this registry drives both what the inventory sync collects and the navigation.)
 - **flag-gated Steampipe Fargate sync → Aurora** — `steampipe_enabled` 플래그로 게이트된 Steampipe Fargate 워커가 인벤토리를 수집하여 Aurora `inventory_resources` 테이블로 적재한다(기본 false → $0). 라이브 쿼리는 별도로 AgentCore MCP Lambda 도구가 담당한다.
   (A `steampipe_enabled`-gated Steampipe Fargate worker collects inventory and loads it into the Aurora `inventory_resources` table (default false → $0). Live queries remain the responsibility of AgentCore MCP Lambda tools.)
+- **2026-08-31 rollout note (ADR-021)** — Phase 1의 전역 Steampipe limiter와 sync backpressure는 코드에 구현됐지만 이 변경에서 프로덕션 apply는 수행하지 않았다. 따라서 **Phase 2 catalog retirement가 배포될 때까지 직접 AgentCore inventory/configuration API 호출이 현행 동작**이다. Aurora 기반 MCP 인벤토리 읽기와 silent live fallback 금지는 Phase 2 계약이며 아직 live가 아니다.
+  (**2026-08-31 rollout note (ADR-021)** — Phase 1's global Steampipe limiter and sync backpressure are implemented in code, but this change performs no production apply. Therefore **direct AgentCore inventory/configuration API calls remain current behavior until Phase 2 catalog retirement is deployed**. Aurora-backed MCP inventory reads and the prohibition on silent live fallback are Phase 2 contracts, not live behavior.)
 
 ### 2. SCP 차단 컬럼 처리 (쿼리 견고성) / SCP-blocked column handling (query robustness)
 - `aws.spc`(Steampipe 커넥션 설정)에서 테이블 수준 오류를 위한 `ignore_error_codes`를 설정한다.

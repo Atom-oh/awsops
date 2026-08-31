@@ -31,6 +31,9 @@ v2는 이 모놀리식을 Terraform 기반 MSA로 재구축한다. 옛 결정들
 5. **라이브 AWS 조회 = AgentCore MCP Lambda 도구.** v2에 라이브 Steampipe는 없다. flag-gated warm Steampipe 인벤토리 sync(Fargate + sync Lambda → Aurora)는 배치 로더로만 존재하며 기본 off다. v1의 pg-Pool/VPC-Lambda 호스트 가정(ADR-001/005)은 v2에서 무의미.
    (Live AWS queries = AgentCore MCP Lambda tools. No live Steampipe in v2. A flag-gated warm Steampipe inventory-sync (Fargate + sync Lambda → Aurora) exists as a batch loader only, default off. The v1 pg-Pool / VPC-Lambda host assumptions (ADR-001/005) are moot in v2.)
 
+   **2026-08-31 롤아웃 노트(ADR-021):** Phase 1 쿼터 가드는 코드에 구현됐지만 여기서 프로덕션 apply를 하지 않았다. 별도로 배포되는 Phase 2 catalog retirement 전까지 직접 AgentCore inventory/configuration API 호출이 현행 동작이다. 승인된 향후 경로는 quota-limited Steampipe→Aurora→domain MCP이나 아직 live가 아니며 ADR-005도 바뀌지 않는다.
+   (**2026-08-31 rollout note (ADR-021):** Phase 1's quota guard is implemented in code but has not been production-applied here. Direct AgentCore inventory/configuration API calls remain the current behavior until the separately deployed Phase 2 catalog retirement. The accepted future path is quota-limited Steampipe→Aurora→domain MCP; it is not live yet, and ADR-005 is unchanged.)
+
 6. **엣지 = 비공개.** CloudFront(TLS) → **VPC Origin `https-only:443`** → **내부 ALB HTTPS:443**(리전 ACM) → HTTP → Fargate. 공개 ALB 없음. ALB SG는 CloudFront 관리형 SG에서 443 허용.
    (Edge = private. CloudFront (TLS) → VPC Origin `https-only:443` → internal ALB HTTPS:443 (regional ACM) → Fargate. No public ALB. ALB SG allows 443 from the CloudFront managed SG.)
 

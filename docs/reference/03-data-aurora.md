@@ -42,6 +42,17 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 - **App access**: **node-pg** (`web/lib/db.ts`). No *live* Steampipe in v2 — live AWS
   queries go through AgentCore MCP Lambda tools; a flag-gated warm Steampipe→Aurora
   inventory-sync batch (default off) is the only Steampipe usage (ADR-001).
+- **2026-08-31 rollout note (ADR-021)**: Phase 1's Steampipe global limiter and sync
+  backpressure are implemented in code, with no production apply performed here. Aurora is not
+  yet the AgentCore inventory/configuration MCP source: direct AgentCore inventory API calls
+  remain current behavior until Phase 2 catalog retirement is deployed. The accepted
+  Steampipe→Aurora→domain-MCP target and stale/unavailable no-fallback semantics are Phase 2+
+  work, not a present-live claim.
+  (2026-08-31 롤아웃 노트(ADR-021): Phase 1의 Steampipe 전역 limiter와 sync backpressure는
+  코드에 구현됐고 여기서 프로덕션 apply는 하지 않았다. Aurora는 아직 AgentCore
+  inventory/configuration MCP source가 아니며 Phase 2 catalog retirement가 배포될 때까지
+  직접 AgentCore inventory API 호출이 현행 동작이다. Steampipe→Aurora→domain MCP 목표와
+  stale/unavailable 시 live fallback 금지 의미론은 현재 live가 아닌 Phase 2+ 작업이다.)
 
 ### ADR-001 schema tables / 스키마 테이블
 
@@ -65,6 +76,8 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 - **ADR-001** — Aurora replaces the v1 `data/*.json` state layer (NOT Steampipe).
   Defines the Phase 1 7-table schema and the ECS Fargate + Aurora split.
   See [`../../decisions/001-v2-foundation.md`](../../decisions/001-v2-foundation.md).
+- **ADR-021** — quota-limited inventory collection and the staged Aurora-backed MCP target.
+  See [`../../decisions/021-quota-isolated-inventory-reads.md`](../../decisions/021-quota-isolated-inventory-reads.md).
 
 ## Key files / 핵심 파일
 

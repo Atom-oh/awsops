@@ -40,6 +40,22 @@ completed 2026-08-02. Note the runtime nuance (matches the customer deck's slide
 the BFF-local live-Steampipe path is closed by design (ADR-001/010, `steampipeAvailable()`
 hard-`false`); the 9 gateway-routed keys answer via their own agents.
 
+**2026-08-31 rollout note (ADR-021):** Phase 1 has implemented the quota guard in code for
+the Steampipe inventory collector, but no production apply is performed here. **Direct AgentCore
+inventory/configuration control-plane API calls remain the current behavior until Phase 2 catalog
+retirement is deployed.** Aurora-backed inventory MCP targets, removal of direct inventory targets,
+and no-silent-fallback stale/unavailable responses are accepted future Phase 2 work, not live.
+Phase 3 cache work is also pending; after that complete rollout, only bounded CloudWatch metrics
+and logs remain live AWS exceptions. ADR-005's mutation/autonomy FROZEN posture is unchanged.
+
+**2026-08-31 롤아웃 노트(ADR-021):** Steampipe inventory collector의 Phase 1 쿼터 가드는
+코드에 구현됐지만 여기서 프로덕션 apply를 하지 않았다. **Phase 2 catalog retirement가
+배포될 때까지 직접 AgentCore inventory/configuration control-plane API 호출이 현행 동작이다.**
+Aurora 기반 inventory MCP target, direct inventory target 제거, stale/unavailable에서
+silent fallback 금지는 승인된 향후 Phase 2 작업이지 live가 아니다. Phase 3 cache 작업도
+pending이며, 전체 완료 후에도 live AWS 예외는 bounded CloudWatch metrics/logs뿐이다.
+ADR-005의 mutation/autonomy FROZEN 자세는 바뀌지 않는다.
+
 **Provisioner:** `scripts/v2/agentcore/{catalog.py, provision.py}` — `catalog.py` holds
 the 9 gateway names + the target tool schemas; `provision.py` does boto3 `list →
 create/update` for Runtime, the 9 gateways, the target slices, Memory, and the Code
@@ -73,6 +89,8 @@ Terraform; `provision.py` overwrites with real values.
 - **ADR-003** — AI agent routing (hybrid routing & multi-route parallel synthesis; the
   classifier picks built-in routes + enabled custom agents).
   [`../../decisions/003-ai-agent-routing.md`](../../decisions/003-ai-agent-routing.md)
+- **ADR-021** — quota-isolated inventory reads; Phase 1 code implemented, Phase 2/3 pending.
+  [`../../decisions/021-quota-isolated-inventory-reads.md`](../../decisions/021-quota-isolated-inventory-reads.md)
 
 ## Key files / 핵심 파일
 
