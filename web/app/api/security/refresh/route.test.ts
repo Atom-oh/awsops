@@ -20,7 +20,7 @@ describe('POST /api/security/refresh', () => {
   it('202 invokes triggerSync for each security type', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     process.env.INV_SYNC_FUNCTION = 'awsops-v2-inv-sync';
-    triggerSync.mockResolvedValue({ status: 'succeeded' });
+    triggerSync.mockResolvedValue({ status: 'queued' });
     const { POST } = await import('./route');
     const res = await POST(req());
     expect(res.status).toBe(202);

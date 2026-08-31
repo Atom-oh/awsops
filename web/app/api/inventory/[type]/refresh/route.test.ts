@@ -22,14 +22,17 @@ describe('POST refresh', () => {
     const { POST } = await import('./route');
     expect((await POST(req(), ctx)).status).toBe(401);
   });
-  it('syncs then returns fresh rows', async () => {
+  it('queues a sync and returns currently stored rows', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
-    triggerSync.mockResolvedValue({ status: 'succeeded', row_count: 2 });
+    triggerSync.mockResolvedValue({ status: 'queued' });
     readResources.mockResolvedValue({ rows: [{ resource_id: 'i-1' }], run: { status: 'succeeded' } });
     const { POST } = await import('./route');
     const res = await POST(req(), ctx);
     expect(res.status).toBe(200);
-    expect((await res.json()).rows.length).toBe(1);
+    expect(await res.json()).toMatchObject({
+      rows: [{ resource_id: 'i-1' }],
+      sync: { status: 'queued' },
+    });
     expect(triggerSync).toHaveBeenCalledWith('ec2');
   });
   it('503 when sync fails', async () => {

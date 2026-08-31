@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   if (!process.env.INV_SYNC_FUNCTION) {
     return Response.json({ status: 'unconfigured', message: 'inventory sync disabled' }, { status: 503 });
   }
-  // Re-sync each security type; a single failing type must not fail the whole refresh.
+  // Enqueue each security type; a single failing enqueue must not fail the whole request.
   await Promise.all(TYPES.map((t) => triggerSync(t).catch(() => null)));
   return Response.json({ status: 'refreshing', types: TYPES }, { status: 202 });
 }

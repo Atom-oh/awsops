@@ -15,7 +15,7 @@ export async function POST(request: Request, { params }: { params: { type: strin
   const gate = await assertInventoryTypeAllowed(params.type, user);
   if (gate) return Response.json({ status: 'error', message: gate.message }, { status: gate.status });
   try {
-    const sync = await triggerSync(params.type); // warm Steampipe -> Aurora (seconds); 'busy' if locked
+    const sync = await triggerSync(params.type); // enqueue bounded Steampipe -> Aurora refresh
     const page = await readResources(params.type, { limit: 100, offset: 0 });
     return Response.json({ ...page, sync });
   } catch (e) {
