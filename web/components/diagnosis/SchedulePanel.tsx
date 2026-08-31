@@ -68,7 +68,7 @@ export default function SchedulePanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           scheduleType: sched.scheduleType, enabled: sched.enabled, tier: sched.tier, model: sched.model,
-          ...(sched.lang ? { lang: sched.lang } : {}),
+          lang: sched.lang ?? 'ko', // the select displays ko as default — persist what is shown
           ...(typeof sched.hour === 'number' ? { hour: sched.hour } : {}),
           ...detail,
         }),

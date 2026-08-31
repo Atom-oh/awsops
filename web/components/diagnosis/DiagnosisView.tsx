@@ -66,9 +66,14 @@ export default function DiagnosisView() {
   const [tier, setTier] = useState<'light' | 'mid' | 'deep'>('mid');
   const [model, setModel] = useState<'sonnet' | 'opus'>('sonnet'); // deep-tier model choice
   // Report output language (gap L50) — defaults to the current UI language (all 4 are supported).
-  const [reportLang, setReportLang] = useState<'ko' | 'en' | 'zh' | 'ja'>(
-    (['ko', 'en', 'zh', 'ja'] as const).includes(lang as 'ko') ? (lang as 'ko') : 'ko',
-  );
+  // The provider hydrates `lang` from localStorage AFTER mount, so keep syncing until the user
+  // explicitly picks a language (their choice then wins).
+  const [reportLang, setReportLang] = useState<'ko' | 'en' | 'zh' | 'ja'>('ko');
+  const [reportLangTouched, setReportLangTouched] = useState(false);
+  useEffect(() => {
+    if (reportLangTouched) return;
+    setReportLang((['ko', 'en', 'zh', 'ja'] as const).includes(lang as 'ko') ? (lang as 'ko') : 'ko');
+  }, [lang, reportLangTouched]);
 
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress; title?: string | null; tags?: string[]; can_edit?: boolean } | null>(null);
@@ -218,7 +223,7 @@ export default function DiagnosisView() {
           <select
             aria-label={tt('리포트 언어')}
             value={reportLang}
-            onChange={(e) => setReportLang(e.target.value as typeof reportLang)}
+            onChange={(e) => { setReportLangTouched(true); setReportLang(e.target.value as typeof reportLang); }}
             className="rounded-md border border-ink-200 bg-card px-2 py-1 text-sm text-ink-700"
           >
             <option value="ko">한국어</option>

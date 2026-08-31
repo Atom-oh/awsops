@@ -86,10 +86,16 @@ export async function POST(req: Request) {
   // gets a SECOND Bedrock run. A fallback lookup only covered one direction, which is why the
   // key itself is left alone (PR #195 review MAJOR). requested_by below is the immutable sub.
   // `lang` is part of the key — otherwise a language switch within the hour would be silently
-  // deduped onto the previous language's report.
+  // deduped onto the previous language's report. Changing the key format re-creates the exact
+  // rolling-deploy discontinuity the note above warns about, so default-ko requests ALSO check
+  // the pre-lang legacy format on the read side (an old pod's same-hour run stays deduped
+  // during the deploy window). Writes use only the new format; drop the fallback after one
+  // release.
   const key = `report:${identity(user)}:${tier}:${model}:${scope}:${lang}:${hour}`;
+  const legacyKey = lang === 'ko' ? `report:${identity(user)}:${tier}:${model}:${scope}:${hour}` : null;
 
-  const existing = await reportForIdempotencyKey(key);
+  const existing = (await reportForIdempotencyKey(key))
+    ?? (legacyKey ? await reportForIdempotencyKey(legacyKey) : null);
   if (existing) {
     return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }

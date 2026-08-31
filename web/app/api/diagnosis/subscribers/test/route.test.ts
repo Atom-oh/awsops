@@ -19,7 +19,9 @@ const req = () => new Request('http://x/api/diagnosis/subscribers/test', {
 beforeEach(() => {
   verifyUser.mockReset(); isAdmin.mockReset(); topicArn.mockReset(); publishTest.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u1', email: 'admin@x.io' });
-  isAdmin.mockReturnValue(true);
+  // ASYNC mock — isAdmin returns Promise<boolean>; a sync mock would mask a missing await
+  // (a Promise is always truthy), which is exactly the regression this file must catch.
+  isAdmin.mockResolvedValue(true);
   topicArn.mockReturnValue('arn:aws:sns:ap-northeast-2:1:t');
   publishTest.mockResolvedValue('m1');
 });
@@ -31,7 +33,7 @@ describe('POST /api/diagnosis/subscribers/test', () => {
     expect(publishTest).not.toHaveBeenCalled();
   });
   it('403 non-admin', async () => {
-    isAdmin.mockReturnValue(false);
+    isAdmin.mockResolvedValue(false);
     expect((await POST(req())).status).toBe(403);
     expect(publishTest).not.toHaveBeenCalled();
   });
@@ -46,10 +48,10 @@ describe('POST /api/diagnosis/subscribers/test', () => {
     expect(await res.json()).toEqual({ messageId: 'm1' });
     expect(publishTest).toHaveBeenCalledWith('arn:aws:sns:ap-northeast-2:1:t', 'admin@x.io');
   });
-  it('502 with the SDK error on a publish failure — never a silent success', async () => {
-    publishTest.mockRejectedValue(new Error('boom'));
+  it('502 with a SANITIZED message on a publish failure — never a silent success, never ARN leakage', async () => {
+    publishTest.mockRejectedValue(new Error('boom arn:aws:iam::1:role/x'));
     const res = await POST(req());
     expect(res.status).toBe(502);
-    expect((await res.json()).message).toContain('boom');
+    expect((await res.json()).message).toBe('publish failed'); // SDK detail stays server-side
   });
 });

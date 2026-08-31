@@ -73,6 +73,9 @@ export default function SubscribersPanel() {
         const j = await r.json().catch(() => ({}));
         setMsg(tt('테스트 발송에 실패했습니다.') + (j?.message ? ` (${j.message})` : ''));
       }
+    } catch {
+      // A network-level rejection must surface too — never a silent failure.
+      setMsg(tt('테스트 발송에 실패했습니다.'));
     } finally {
       setBusy(false);
     }

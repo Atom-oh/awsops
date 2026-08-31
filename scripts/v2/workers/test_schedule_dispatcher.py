@@ -54,7 +54,7 @@ def test_enqueues_a_linked_report_per_due_schedule(monkeypatch):
     # report_schedules.user_sub now stores identity() (email-preferring) per the round-2 pentest fix
     # in web/app/api/diagnosis/schedule/route.ts — the column name is legacy, the value isn't
     # necessarily a raw Cognito sub. u1 here stands in for that stored identity value.
-    rows = [("u1", "weekly", {"tier": "deep", "model": "opus"}), ("u2", "monthly", {"tier": "mid"})]
+    rows = [("u1", "weekly", {"tier": "deep", "model": "opus"}, "T1"), ("u2", "monthly", {"tier": "mid"}, "T2")]
     conn, inserted, sqs = _wire(monkeypatch, rows)
     out = sd.lambda_handler({}, None)
     assert out == {"due": 2, "enqueued": 2, "failed": 0}
@@ -75,7 +75,7 @@ def test_enqueues_a_linked_report_per_due_schedule(monkeypatch):
 
 def test_lang_forwarded_and_fail_closed(monkeypatch):
     # gap L50: config.lang rides into the report payload; an invalid value fails closed to ko.
-    rows = [("u1", "weekly", {"tier": "mid", "lang": "en"}), ("u2", "weekly", {"tier": "mid", "lang": "xx"})]
+    rows = [("u1", "weekly", {"tier": "mid", "lang": "en"}, "T1"), ("u2", "weekly", {"tier": "mid", "lang": "xx"}, "T2")]
     _conn, inserted, _sqs = _wire(monkeypatch, rows)
     sd.lambda_handler({}, None)
     assert inserted[0][2]["lang"] == "en"
@@ -96,17 +96,25 @@ def test_precise_next_run_math():
     assert m.day == 15 and m.hour == 9 and m > datetime.now(sd._KST)
     # bool must not read as an int detail value (True would otherwise mean dayOfWeek=1)
     assert sd._precise_next_run("weekly", {"dayOfWeek": True}) is None
+    # hour-only keeps the coarse interval date with the hour pinned — never invents a run date.
+    ho = sd._precise_next_run("weekly", {"hour": 9})
+    now_kst = datetime.now(sd._KST)
+    assert ho.hour == 9 and 6 <= (ho - now_kst).days <= 7
+    mo = sd._precise_next_run("monthly", {"hour": 9})
+    assert mo.hour == 9 and mo.day == min(now_kst.day, 28) and mo.month != now_kst.month or mo.year != now_kst.year
 
 
 def test_detail_schedule_gets_followup_next_run_update(monkeypatch):
     # gap L51: after a successful enqueue, a config with detail fields refines next_run_at via a
     # follow-up UPDATE; a detail-less config keeps the coarse claim advance (no follow-up).
-    rows = [("u1", "weekly", {"tier": "mid", "dayOfWeek": 1, "hour": 9}), ("u2", "weekly", {"tier": "mid"})]
+    rows = [("u1", "weekly", {"tier": "mid", "dayOfWeek": 1, "hour": 9}, "T1"), ("u2", "weekly", {"tier": "mid"}, "T2")]
     conn, _inserted, _sqs = _wire(monkeypatch, rows)
     sd.lambda_handler({}, None)
     followups = [(sql, kw) for sql, kw in conn.calls if sql.startswith("UPDATE report_schedules SET next_run_at")]
     assert len(followups) == 1
     assert followups[0][1]["u"] == "u1" and followups[0][1]["t"] == "weekly"
+    assert followups[0][1]["c"] == "T1"  # guarded on the claimed next_run_at (concurrent user save wins)
+    assert "next_run_at = :c" in followups[0][0]
 
 
 def test_no_due_rows_enqueues_nothing(monkeypatch):
@@ -129,7 +137,7 @@ def test_lineage_parent_is_scoped_by_owner_and_account(monkeypatch):
     # reports a different diff depending on who started it (PR #203). The dispatcher can only offer
     # the sub (it has no token, hence no email), so the assertion is: bound, and bound to the sub.
     monkeypatch.setattr(sd, "HOST_ACCOUNT", "180294183052")
-    rows = [("u1", "weekly", {"tier": "mid"})]
+    rows = [("u1", "weekly", {"tier": "mid"}, "T1")]
     conn, _inserted, _sqs = _wire(monkeypatch, rows)
     sd.lambda_handler({}, None)
     sql, kw = next(c for c in conn.calls if c[0].startswith("INSERT INTO diagnosis_reports"))
@@ -159,7 +167,7 @@ def test_lineage_parent_is_scoped_by_owner_and_account(monkeypatch):
 
 def test_string_config_is_tolerated(monkeypatch):
     # pg8000 may hand back JSONB as a string — must not throw after the claim advanced next_run_at.
-    rows = [("u1", "weekly", '{"tier": "deep", "model": "opus"}')]
+    rows = [("u1", "weekly", '{"tier": "deep", "model": "opus"}', "T1")]
     _conn, inserted, sqs = _wire(monkeypatch, rows)
     out = sd.lambda_handler({}, None)
     assert out == {"due": 1, "enqueued": 1, "failed": 0}
@@ -167,7 +175,7 @@ def test_string_config_is_tolerated(monkeypatch):
 
 
 def test_per_row_failure_marks_report_failed_and_continues(monkeypatch):
-    rows = [("bad", "weekly", {}), ("good", "weekly", {})]
+    rows = [("bad", "weekly", {}, "T1"), ("good", "weekly", {}, "T2")]
     conn, _inserted, sqs = _wire(monkeypatch, rows, fail_for={"bad"})
     out = sd.lambda_handler({}, None)
     assert out["due"] == 2 and out["enqueued"] == 1 and out["failed"] == 1

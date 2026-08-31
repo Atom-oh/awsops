@@ -59,6 +59,7 @@ describe('SchedulePanel', () => {
       expect(body.dayOfWeek).toBe(1);
       expect(body.hour).toBe(9);
       expect(body.dayOfMonth).toBeUndefined(); // weekly PUT must not carry the monthly-only field
+      expect(body.lang).toBe('ko'); // the displayed default is persisted, not omitted
     });
   });
 

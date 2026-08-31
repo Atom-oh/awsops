@@ -45,7 +45,7 @@ def _title_prompt(lang="ko"):
     return (
         f"아래 AWS 진단 리포트를 읽고, 가장 중요한 핵심 1가지만 담은 {name} 제목 한 줄(40자 이내)과 "
         f"관련 태그 3~5개({name})를 만들어라. 반드시 JSON 객체만 출력하라(설명 금지): "
-        '{"title": "한 줄 제목", "tags": ["태그1", "태그2"]}'
+        '{"title": "...", "tags": ["...", "..."]}'  # neutral skeleton — no ko example values to leak into non-ko titles
     )
 
 

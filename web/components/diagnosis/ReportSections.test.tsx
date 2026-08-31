@@ -39,6 +39,12 @@ describe('splitSections', () => {
   it('returns zero sections for markdown with no h2 heading', () => {
     expect(splitSections('# 제목\n\n본문뿐').sections).toEqual([]);
   });
+  it('does not split on a ## line inside a code fence', () => {
+    const md = '## A\n\n```\n## not a heading\n```\n\n## B\n\nb';
+    const { sections } = splitSections(md);
+    expect(sections.map((s) => s.title)).toEqual(['A', 'B']);
+    expect(sections[0].body).toContain('## not a heading');
+  });
   it('strips the localized TOC labels too', () => {
     const en = '# T\n\n**Table of Contents**\n\n- [A](#a)\n\n## A\n\nbody';
     expect(splitSections(en).preamble).not.toContain('Table of Contents');
@@ -46,12 +52,17 @@ describe('splitSections', () => {
 });
 
 describe('sectionSeverity', () => {
-  it('critical beats warning beats ok', () => {
+  it('matches the verbatim markers only; critical beats warning', () => {
     expect(sectionSeverity('[Critical] 위반 and [Warning]')).toBe('critical');
-    expect(sectionSeverity('취약 항목 존재')).toBe('critical');
     expect(sectionSeverity('[Warning] 주의가 필요')).toBe('warning');
-    expect(sectionSeverity('전환을 recommend합니다')).toBe('warning');
     expect(sectionSeverity('모두 정상입니다')).toBe('ok');
+  });
+  it('does NOT false-positive on the prompt-mandated 심각도 table column or prose keywords', () => {
+    expect(sectionSeverity('| 항목 | 심각도 | 권고 |\n| a | Info | b |')).toBe('ok');
+    expect(sectionSeverity('취약점 없음, 전환을 recommend하지 않음')).toBe('ok');
+  });
+  it('a degraded/failed section body never reads green', () => {
+    expect(sectionSeverity('_이 섹션 생성에 실패했습니다 (degraded): boom_')).toBe('warning');
   });
 });
 

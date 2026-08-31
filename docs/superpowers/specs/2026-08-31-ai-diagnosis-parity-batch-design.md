@@ -33,11 +33,11 @@ Client-side only — the stored markdown format is unchanged.
 - Sticky TOC sidebar (right side, hidden below `lg:`): section titles + severity icons;
   click scrolls to the card (`scrollIntoView({behavior:'smooth'})`) and expands it if
   collapsed.
-- Severity per section (v1 parity: keyword counts over the section body, case-insensitive):
-  critical match (`/critical|심각|취약|violation|위반/i`) → XCircle red; else warning match
-  (`/warning|주의|경고|권장|recommend/i`) → AlertTriangle amber; else CheckCircle green.
-  This is a display heuristic, not a verdict — the icon carries a title tooltip saying
-  "본문 키워드 기반" so it can't be read as a scored severity.
+- Severity per section: the VERBATIM `[Critical]`/`[Warning]` markers only (the prompts
+  prescribe them in every language and `LANG_RULES` keeps them verbatim — prose keywords
+  false-positive on the prompt-mandated '심각도' table column); a degraded/failed section body
+  renders the warning icon, never green. This is a display heuristic, not a verdict — the icon
+  carries a title tooltip saying "본문 키워드 기반" so it can't be read as a scored severity.
 - Fallback: markdown with no `## ` heading (legacy/failed shapes) renders exactly as today
   (single `ReportMarkdown`).
 - `DiagnosisView` swaps `<ReportMarkdown>` for `<ReportSections>` in the completed-report
@@ -50,8 +50,9 @@ v2's `SUPPORTED_LANGS` already ships a ja UI — a ja UI user getting a ko-only 
 same gap. Report body language is what changes; section keys/ids stay ASCII.
 
 - **UI**: language `<select>` in `DiagnosisView`'s run controls (below tier), defaulting to
-  the current UI language. The chosen lang is sent in the POST body and echoed in the report
-  list row (small badge) via the existing `ReportRow` shape if available.
+  the current UI language (synced post-hydration until the user picks one). The chosen lang is
+  sent in the POST body and applies to that run only — no report-list badge (the language is
+  visible in the report body itself).
 - **BFF** `web/app/api/diagnosis/route.ts`: accept `body.lang` against the 4-value allowlist
   (400 otherwise; missing → 'ko'); **include `lang` in the idempotency key** (today's key
   `report:{identity}:{tier}:{model}:{scope}:{hour}` would silently dedupe a language switch
@@ -87,9 +88,12 @@ No schema migration — the detail fields live in the existing `report_schedules
   is (its coarse interval advance is the double-claim guard). After a successful claim,
   when the claimed row's `config` carries detail fields, compute the precise next
   occurrence in Python (KST) and issue a follow-up
-  `UPDATE report_schedules SET next_run_at = %s WHERE user_sub = %s AND schedule_type = %s`
-  — idempotent, single hourly Lambda, and a crash between the two UPDATEs degrades to
-  today's coarse interval (never a double run, never a stall).
+  `UPDATE report_schedules SET next_run_at = %s WHERE user_sub = %s AND schedule_type = %s
+  AND next_run_at = %s` (guarded on the claimed value so a user's concurrent save between the
+  claim and the refinement is never overwritten) — idempotent, single hourly Lambda, and a
+  crash between the two UPDATEs degrades to today's coarse interval (never a double run,
+  never a stall). An `hour` without its cadence partner field (dayOfWeek/dayOfMonth) keeps
+  the coarse interval date with the hour pinned in KST — it never invents a run date.
 - **UI** (`SchedulePanel`): dayOfWeek select (weekly/biweekly), dayOfMonth select 1–28
   (monthly), hour select 00–23시 (KST) — and render the already-fetched `lastRunAt`
   ("최근 실행: …", KST) next to the existing 다음 실행 line.
@@ -115,8 +119,9 @@ them — the audit row predates that work. What actually remains:
 - **Lib**: `web/lib/diagnosis-notify.ts` gains `publishTest()` — `PublishCommand` with the
   ASCII subject `[AWSops] Test Notification` (SNS rejects non-ASCII subjects — same
   constraint as the worker's `_SUBJECT`) and a short bilingual body naming who triggered it
-  (admin email) and when (KST). Best-effort error surface: route returns 502 with the SDK
-  error message on failure (no silent success).
+  (admin email) and when (KST). A publish failure returns 502 with a SANITIZED message
+  ('publish failed' — SNS errors embed role/topic ARNs; the detail is logged server-side
+  only). No silent success.
 - **IAM** (`terraform/v2/foundation/notify.tf`): add `sns:Publish` to the existing web-task
   policy `task_diagnosis_notify`, scoped to the one diagnosis topic ARN (the policy — and
   the topic itself — already exist only when `diagnosis_notify_enabled=true`). This is a
@@ -148,5 +153,5 @@ them — the audit row predates that work. What actually remains:
 - `SchedulePanel.test.tsx` (extend): detail controls render per cadence; lastRunAt shown.
 - `SubscribersPanel.test.tsx` (new): test-send button gating + POST wiring.
 - Python: `test_schedule_dispatcher.py` (extend) — precise next-run follow-up UPDATE;
-  `diagnosis/test_report.py`/`test_sections_wadd.py` (extend) — lang threading + chrome map.
+  `diagnosis/test_report.py` (extend) — lang threading + chrome map.
 - Full `npm test` + `tsc` + `npm run build`; gap-audit ticks with a batch-8 note.

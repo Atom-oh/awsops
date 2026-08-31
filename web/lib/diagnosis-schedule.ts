@@ -31,37 +31,42 @@ const KST_OFFSET_MS = 9 * 3600_000;
 const kstParts = (utcMs: number) => new Date(utcMs + KST_OFFSET_MS); // read its getUTC* as KST fields
 
 /** Next run as a UTC ISO string. Without detail fields: `from` + one interval (weekly=+7d,
- *  biweekly=+14d, monthly=+1 month — today's behavior). With detail fields: the next KST
- *  occurrence honoring dayOfWeek/dayOfMonth/hour, strictly in the future (mirrors the
- *  dispatcher's `_precise_next_run` so the BFF-computed first run and the worker-computed
- *  subsequent runs agree). */
+ *  biweekly=+14d, monthly=+1 month — today's behavior). The precise weekday/date branch runs
+ *  only when the cadence's PARTNER field is present (`dayOfWeek` for weekly/biweekly,
+ *  `dayOfMonth` for monthly) — an `hour` alone keeps the interval behavior with the run hour
+ *  pinned in KST, never inventing a run date. Mirrors the dispatcher's `_precise_next_run` so
+ *  the BFF-computed first run and the worker-computed subsequent runs agree. */
 export function computeNextRun(type: ScheduleFreq, fromISO: string, detail?: ScheduleDetail): string {
-  const hasDetail = detail && [detail.dayOfWeek, detail.dayOfMonth, detail.hour]
-    .some((v) => typeof v === 'number');
-  if (!hasDetail) {
+  const h = typeof detail?.hour === 'number' && detail.hour >= 0 && detail.hour <= 23 ? detail.hour : null;
+  const hasPartner = type === 'monthly'
+    ? typeof detail?.dayOfMonth === 'number' && detail.dayOfMonth >= 1 && detail.dayOfMonth <= 28
+    : typeof detail?.dayOfWeek === 'number' && detail.dayOfWeek >= 0 && detail.dayOfWeek <= 6;
+  if (!hasPartner) {
     const d = new Date(fromISO);
     if (type === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
     else if (type === 'biweekly') d.setUTCDate(d.getUTCDate() + 14);
     else d.setUTCMonth(d.getUTCMonth() + 1);
-    return d.toISOString();
+    if (h === null) return d.toISOString();
+    // hour-only: pin the KST wall-clock hour on the interval date.
+    const k = kstParts(d.getTime());
+    const pinned = Date.UTC(k.getUTCFullYear(), k.getUTCMonth(), k.getUTCDate(), h, 0, 0);
+    return new Date(pinned - KST_OFFSET_MS).toISOString();
   }
   const nowMs = new Date(fromISO).getTime();
   const now = kstParts(nowMs);
-  const h = typeof detail!.hour === 'number' && detail!.hour >= 0 && detail!.hour <= 23 ? detail!.hour : 0;
+  const hh = h ?? 0;
   let cand: Date;
   if (type === 'weekly' || type === 'biweekly') {
-    const target = typeof detail!.dayOfWeek === 'number' && detail!.dayOfWeek >= 0 && detail!.dayOfWeek <= 6
-      ? detail!.dayOfWeek : now.getUTCDay();
+    const target = detail!.dayOfWeek as number;
     cand = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(),
-      now.getUTCDate() + ((target - now.getUTCDay()) + 7) % 7, h, 0, 0));
+      now.getUTCDate() + ((target - now.getUTCDay()) + 7) % 7, hh, 0, 0));
     if (cand.getTime() - KST_OFFSET_MS <= nowMs) cand = new Date(cand.getTime() + 7 * 86400_000);
     if (type === 'biweekly') cand = new Date(cand.getTime() + 7 * 86400_000);
   } else {
-    const d = typeof detail!.dayOfMonth === 'number' && detail!.dayOfMonth >= 1 && detail!.dayOfMonth <= 28
-      ? detail!.dayOfMonth : 1;
-    cand = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), d, h, 0, 0));
+    const d = detail!.dayOfMonth as number;
+    cand = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), d, hh, 0, 0));
     if (cand.getTime() - KST_OFFSET_MS <= nowMs) {
-      cand = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, d, h, 0, 0));
+      cand = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, d, hh, 0, 0));
     }
   }
   // cand's getUTC* fields carry KST wall-clock values → shift back to real UTC.

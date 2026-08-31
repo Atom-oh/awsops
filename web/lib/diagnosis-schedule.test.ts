@@ -42,6 +42,14 @@ describe('computeNextRun', () => {
   it('empty detail object keeps the pure-interval behavior', () => {
     expect(computeNextRun('weekly', from, {})).toBe('2026-06-25T00:00:00.000Z');
   });
+  it('hour-only keeps the interval date and pins the KST hour (never invents a run date)', () => {
+    // weekly interval lands on 2026-06-25 09:00 KST; hour 10 pins the wall clock → 01:00 UTC.
+    expect(computeNextRun('weekly', from, { hour: 10 })).toBe('2026-06-25T01:00:00.000Z');
+    // monthly interval lands on 2026-07-18 09:00 KST; hour 9 is a no-op pin.
+    expect(computeNextRun('monthly', from, { hour: 9 })).toBe('2026-07-18T00:00:00.000Z');
+    // a monthly hour-only must NOT jump to the 1st of the month.
+    expect(computeNextRun('monthly', from, { hour: 9 })).not.toContain('-07-01');
+  });
 });
 
 describe('readSchedule', () => {

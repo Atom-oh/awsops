@@ -33,7 +33,7 @@ _CLAIM_SQL = (
     "  WHEN 'biweekly' THEN interval '14 days' "
     "  ELSE interval '1 month' END) "
     "WHERE enabled = true AND next_run_at <= now() "
-    "RETURNING user_sub, schedule_type, config"
+    "RETURNING user_sub, schedule_type, config, next_run_at"
 )
 
 
@@ -48,25 +48,38 @@ def _coerce_config(config):
     return config if isinstance(config, dict) else {}
 
 
+def _int_in(v, lo, hi):
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+
+
 def _precise_next_run(schedule_type, cfg):
     """Next occurrence honoring the config detail fields (gap L51): dayOfWeek 0-6 (JS getDay
     convention, 0=Sun, KST) for weekly/biweekly, dayOfMonth 1-28 (KST) for monthly, hour 0-23
-    (KST) for all. Returns an aware KST datetime, or None when the config carries no detail
-    field — the caller then keeps the coarse interval the claim SQL already wrote (today's
-    behavior). Runs AFTER the advance-first claim, as a follow-up UPDATE: idempotent, and a
-    crash between the two UPDATEs degrades to the coarse interval (never a double run)."""
+    (KST) for all. The precise weekday/date branch runs only when the cadence's PARTNER field
+    is present — an `hour` alone keeps the coarse interval with the run hour pinned (KST),
+    never inventing a run date. Returns an aware KST datetime, or None when the config carries
+    no usable detail field — the caller then keeps the coarse interval the claim SQL already
+    wrote (today's behavior). Runs AFTER the advance-first claim, as a follow-up UPDATE:
+    idempotent, and a crash between the two UPDATEs degrades to the coarse interval (never a
+    double run)."""
     dow = cfg.get("dayOfWeek")
     dom = cfg.get("dayOfMonth")
     hour = cfg.get("hour")
-    if not any(isinstance(v, int) and not isinstance(v, bool) for v in (dow, dom, hour)):
+    has_hour = _int_in(hour, 0, 23)
+    has_partner = _int_in(dom, 1, 28) if schedule_type == "monthly" else _int_in(dow, 0, 6)
+    if not has_partner and not has_hour:
         return None
-    h = hour if isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23 else 0
+    h = hour if has_hour else 0
     now = datetime.now(_KST)
+    if not has_partner:
+        # hour-only: coarse interval date (mirrors the claim SQL's advance) with the hour pinned.
+        if schedule_type in ("weekly", "biweekly"):
+            cand = now + timedelta(days=7 if schedule_type == "weekly" else 14)
+        else:
+            cand = (now.replace(day=1) + timedelta(days=32)).replace(day=min(now.day, 28))
+        return cand.replace(hour=h, minute=0, second=0, microsecond=0)
     if schedule_type in ("weekly", "biweekly"):
-        # Default weekday when only `hour` is set: keep today's weekday (JS convention 0=Sun).
-        target_js = dow if isinstance(dow, int) and not isinstance(dow, bool) and 0 <= dow <= 6 \
-            else (now.weekday() + 1) % 7
-        py_target = (target_js + 6) % 7  # JS 0=Sun → python weekday() 0=Mon
+        py_target = (dow + 6) % 7  # JS 0=Sun → python weekday() 0=Mon
         cand = now.replace(hour=h, minute=0, second=0, microsecond=0) \
             + timedelta(days=(py_target - now.weekday()) % 7)
         if cand <= now:
@@ -74,10 +87,9 @@ def _precise_next_run(schedule_type, cfg):
         if schedule_type == "biweekly":
             cand += timedelta(days=7)
         return cand
-    d = dom if isinstance(dom, int) and not isinstance(dom, bool) and 1 <= dom <= 28 else 1
-    cand = now.replace(day=d, hour=h, minute=0, second=0, microsecond=0)
+    cand = now.replace(day=dom, hour=h, minute=0, second=0, microsecond=0)
     if cand <= now:  # 1-28 always exists in every month, so a +32d/day-reset hop is safe
-        cand = (cand.replace(day=1) + timedelta(days=32)).replace(day=d)
+        cand = (cand.replace(day=1) + timedelta(days=32)).replace(day=dom)
     return cand
 
 
@@ -218,19 +230,21 @@ def lambda_handler(_event, _ctx):
         due = conn.run(_CLAIM_SQL)  # atomic claim+advance
         enqueued, failed = [], []
         for row in due or []:
-            owner_sub, _schedule_type, config = row[0], row[1], row[2]
+            owner_sub, _schedule_type, config, claimed_next = row[0], row[1], row[2], row[3]
             try:
                 enqueued.append(_enqueue_report(conn, owner_sub, config))
                 # L51: when the config carries detail fields, refine the coarse interval the
                 # claim already wrote to the precise next occurrence (KST). Follow-up UPDATE by
                 # the unique (user_sub, schedule_type) key — idempotent; skipped on enqueue failure
-                # (the coarse advance still prevents an immediate re-claim).
+                # (the coarse advance still prevents an immediate re-claim). The `next_run_at =
+                # :c` guard makes a user's concurrent save between claim and refinement win
+                # instead of being overwritten.
                 nxt = _precise_next_run(_schedule_type, _coerce_config(config))
                 if nxt is not None:
                     conn.run(
                         "UPDATE report_schedules SET next_run_at = :n "
-                        "WHERE user_sub = :u AND schedule_type = :t",
-                        n=nxt, u=owner_sub, t=_schedule_type,
+                        "WHERE user_sub = :u AND schedule_type = :t AND next_run_at = :c",
+                        n=nxt, u=owner_sub, t=_schedule_type, c=claimed_next,
                     )
             except Exception as exc:  # noqa: BLE001 — one bad row must not block the rest
                 print(f"schedule_dispatcher: enqueue failed for {owner_sub}: {exc}")

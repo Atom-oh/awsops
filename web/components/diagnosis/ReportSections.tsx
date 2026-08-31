@@ -20,8 +20,12 @@ export function splitSections(markdown: string): { preamble: string; sections: R
   const sections: ReportSection[] = [];
   const preambleLines: string[] = [];
   let current: ReportSection | null = null;
+  // Fence-aware: a `## ` line inside an open ``` block is code, not a heading — splitting
+  // there would re-break what the worker's _balance_code_fences protected.
+  let fenceOpen = false;
   for (const line of lines) {
-    const m = /^## (.+)$/.exec(line);
+    if (/^\s*```/.test(line)) fenceOpen = !fenceOpen;
+    const m = fenceOpen ? null : /^## (.+)$/.exec(line);
     if (m) {
       if (current) sections.push(current);
       current = { title: m[1].trim(), body: '' };
@@ -40,12 +44,15 @@ export function splitSections(markdown: string): { preamble: string; sections: R
   return { preamble, sections };
 }
 
-// Severity from body keywords (v1 parity — a DISPLAY heuristic over the LLM prose, not a scored
-// verdict; the icon tooltip says so). [Critical]/[Warning] markers are prompt-prescribed verbatim.
+// Severity from the VERBATIM [Critical]/[Warning] markers only — the prompts prescribe them in
+// every language (LANG_RULES keeps them verbatim), so they are the language-stable signal. Prose
+// keywords false-positived on the prompt-mandated '심각도' table column header (every well-formed
+// Korean section read red). A degraded/failed section must never read green. Still a DISPLAY
+// heuristic, not a scored verdict — the icon tooltip says so.
 export type Severity = 'critical' | 'warning' | 'ok';
 export function sectionSeverity(body: string): Severity {
-  if (/critical|심각|취약|violation|위반/i.test(body)) return 'critical';
-  if (/warning|주의|경고|권장|recommend/i.test(body)) return 'warning';
+  if (/\[critical\]/i.test(body)) return 'critical';
+  if (/\[warning\]/i.test(body) || /degraded|섹션 생성에 실패/i.test(body)) return 'warning';
   return 'ok';
 }
 
