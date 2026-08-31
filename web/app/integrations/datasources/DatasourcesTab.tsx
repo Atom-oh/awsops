@@ -59,8 +59,11 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
   // gap-audit L201: KPI roll-up from the already-fetched list — no extra API call.
   const connectedN = list.filter((i) => i.connected).length;
   const kindN = new Set(list.map((i) => i.kind)).size;
-  const defaultRaw = list.find((i) => i.isDefault)?.name;
-  const defaultName = defaultRaw ? `★ ${defaultRaw}` : '—';
+  // Defaults are PER KIND — one arbitrary name would misrepresent the set, so show the count
+  // (with every kind: name pair in a tooltip) once there's more than one.
+  const defaults = list.filter((i) => i.isDefault);
+  const defaultVal = defaults.length === 0 ? '—'
+    : defaults.length === 1 ? `★ ${defaults[0].name}` : `★ ${defaults.length}`;
 
   return (
     <div className="space-y-3">
@@ -86,7 +89,9 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
         <StatTile label={tt('총 데이터소스')} value={list.length} />
         <StatTile label={tt('연결됨')} value={connectedN} />
         <StatTile label={tt('타입 종류')} value={kindN} />
-        <StatTile label={tt('기본 데이터소스')} value={defaultName} />
+        <div title={defaults.map((d) => `${d.kind}: ${d.name}`).join(', ')}>
+          <StatTile label={tt('기본 데이터소스')} value={defaultVal} />
+        </div>
       </div>
 
       <Card className="overflow-hidden">

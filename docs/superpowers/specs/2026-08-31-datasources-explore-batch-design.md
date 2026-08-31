@@ -43,8 +43,9 @@ exported for unit tests. Metric-LogQL results keep the existing prom-style rende
 - `ExplorePanel` `RANGE_PRESETS` gains `['7d', 604800]`, `['30d', 2592000]` — `autoStep`
   already targets ~250 points (7d→2419s, 30d→10368s steps).
 - `POST /api/datasources/query` raises the `range.window` upper bound from 86400 to
-  **2592000** (30d). The existing `ceil(window/step) ≤ 5000` density cap stays and remains the
-  real cost/DoS guard; `step ≤ 86400` unchanged (30d/86400 = 30 points still renders).
+  **2592000** (30d). The existing `ceil(window/step) ≤ 5000` cap still bounds returned points
+  (upstream scan cost is bounded by each connector's own limits/timeouts); `step ≤ 86400`
+  unchanged (30d/86400 = 30 points still renders).
 
 ### L88 — Query result metadata bar
 - The query route measures the connector call: `const t0 = Date.now(); … invokeMcpLambdaTool …`

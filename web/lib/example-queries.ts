@@ -31,10 +31,13 @@ export const EXAMPLE_QUERIES: Record<string, ExampleQuery[]> = {
     { label: '전체 최근 트레이스', expr: '{}' },
   ],
   clickhouse: [
-    { label: '테이블 목록', expr: 'SELECT database, name, total_rows FROM system.tables WHERE database NOT IN (\'system\') ORDER BY total_rows DESC LIMIT 20' },
-    { label: '최근 1시간 스팬 수', expr: 'SELECT count() AS value FROM otel_traces WHERE Timestamp > now() - INTERVAL 1 HOUR' },
-    { label: '서비스별 스팬 Top10', expr: 'SELECT ServiceName, count() AS spans FROM otel_traces WHERE Timestamp > now() - INTERVAL 1 HOUR GROUP BY ServiceName ORDER BY spans DESC LIMIT 10' },
-    { label: '느린 스팬 Top10', expr: 'SELECT ServiceName, SpanName, Duration FROM otel_traces WHERE Timestamp > now() - INTERVAL 1 HOUR ORDER BY Duration DESC LIMIT 10' },
+    // system.* is connector-blocked for user queries (clickhouse_mcp DANGER tokens) — SHOW is the
+    // permitted way to enumerate; schema-specific trace queries come from the pre-built cards/chips
+    // (card_catalog / diag signals resolve the real table from the cached schema).
+    { label: '테이블 목록', expr: 'SHOW TABLES' },
+    { label: '데이터베이스 목록', expr: 'SHOW DATABASES' },
+    { label: '서버 버전', expr: 'SELECT version() AS version' },
+    { label: '현재 DB · 시간', expr: 'SELECT currentDatabase() AS db, now() AS now' },
   ],
   jaeger: [
     { label: '서비스 트레이스 20건', expr: 'service=frontend&limit=20' },
@@ -61,7 +64,9 @@ export const AI_EXAMPLES: Record<string, string[]> = {
   mimir: ['네임스페이스별 CPU 상위 5개', '최근 1시간 파드 재시작 횟수', '디스크 여유 공간이 적은 노드', '전체 타깃 상태'],
   loki: ['최근 에러 로그 보여줘', '특정 잡의 로그 볼륨 추이', '경고 이상 로그만 필터', 'OOM 관련 로그 찾기'],
   tempo: ['500ms 넘게 걸린 트레이스', '에러가 난 트레이스', 'HTTP 500 응답 스팬', '가장 최근 트레이스'],
-  clickhouse: ['최근 1시간 스팬 수', '서비스별 스팬 상위 10개', '가장 느린 스팬 10개', '테이블별 행 수'],
+  // NL prompts go through the AI generator, which sees the cached schema — table-specific asks are
+  // fine HERE (unlike the raw chips above, which must stay schema-agnostic).
+  clickhouse: ['테이블 목록 보여줘', '데이터베이스 목록', '최근 1시간 스팬 수 (트레이스 테이블에서)', '서비스별 스팬 상위 10개'],
   jaeger: ['frontend 서비스 최근 트레이스', '에러 태그가 붙은 트레이스', '1초 넘게 걸린 요청', '특정 오퍼레이션 트레이스'],
   dynatrace: ['호스트 CPU 사용률 평균', '서비스 응답시간 추이', '실패율이 높은 서비스', '메모리 사용률'],
   datadog: ['전체 CPU 사용률', '컨테이너별 CPU 사용', '메모리 사용량 추이', '로드 애버리지'],

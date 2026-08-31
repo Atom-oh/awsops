@@ -252,8 +252,10 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
 function ResultView({ result, kind, execMs }: { result: NormalizedResult; kind?: string; execMs?: number | null }) {
   const { tt } = useI18n();
   // gap-audit L88: result metadata strip — rows/series count · execution time · language · shape.
+  // series: `rows` carries one row per series (uncapped) — seriesKeys is capped at 8 for the chart,
+  // so counting keys would understate the real series count.
   const rowCount = result.shape === 'series'
-    ? (result.seriesKeys?.length ?? (result.series ? 1 : 0))
+    ? (result.rows?.length ?? result.seriesKeys?.length ?? (result.series ? 1 : 0))
     : (result.rows?.length ?? 0);
   const countLabel = result.shape === 'series' ? tt(`${rowCount}개 시리즈`) : tt(`${rowCount}개 행`);
   // Line/Bar toggle for multi-series range results (v1 parity).
@@ -273,7 +275,8 @@ function ResultView({ result, kind, execMs }: { result: NormalizedResult; kind?:
     <div className="space-y-3">
       <p className="text-[12px] text-ink-400">
         {countLabel}
-        {typeof execMs === 'number' && <> · {execMs.toLocaleString()}ms</>}
+        {/* BFF→connector round trip, not pure engine time. */}
+        {typeof execMs === 'number' && <> · {tt('왕복')} {execMs.toLocaleString()}ms</>}
         {kind && QUERY_LANGUAGE[kind] && <> · {QUERY_LANGUAGE[kind]}</>}
         <> · {result.shape}</>
       </p>
@@ -315,8 +318,8 @@ function ResultView({ result, kind, execMs }: { result: NormalizedResult; kind?:
       {result.shape === 'logs' && result.rows && (
         <LogStreamView rows={result.rows} />
       )}
-      {result.shape === 'traces' && result.rows && (
-        <TraceTable rows={result.rows} />
+      {result.shape === 'traces' && result.rows && result.columns && (
+        <TraceTable rows={result.rows} columns={result.columns} />
       )}
       {result.shape === 'table' && result.columns && result.rows && (
         <DataTable columns={result.columns} rows={result.rows} />
@@ -325,47 +328,59 @@ function ResultView({ result, kind, execMs }: { result: NormalizedResult; kind?:
   );
 }
 
-/** Tempo/Jaeger trace rows with a proportional duration bar (gap-audit L205, v1 parity).
- *  Non-numeric durations render as plain text — never a NaN-width bar. */
-function TraceTable({ rows }: { rows: Record<string, unknown>[] }) {
-  const { tt } = useI18n();
-  const durations = rows.map((r) => Number(r.durationMs)).filter((n) => Number.isFinite(n) && n >= 0);
-  const max = durations.length ? Math.max(...durations) : 0;
+/** Tempo/Jaeger trace rows rendered from the normalizer's own columns, with a proportional
+ *  duration bar on the durationMs cell (gap-audit L205, v1 parity). An empty/non-numeric raw
+ *  duration renders as plain text — the bar requires a NON-EMPTY numeric value (Number('') is 0,
+ *  which must not paint a measured-looking bar). */
+function TraceTable({ rows, columns }: { rows: Record<string, unknown>[]; columns: { key: string; label: string }[] }) {
+  const durs = rows
+    .map((r) => r.durationMs)
+    .filter((v) => v !== '' && v != null && Number.isFinite(Number(v)))
+    .map(Number)
+    .filter((n) => n >= 0);
+  const max = durs.length ? Math.max(...durs) : 0;
   return (
     <Card className="overflow-hidden">
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr className="border-b border-ink-100 text-left text-[11px] uppercase tracking-wide text-ink-400">
-            <th className="px-3 py-2">Trace ID</th>
-            <th className="px-3 py-2">Service</th>
-            <th className="px-3 py-2">Name</th>
-            <th className="px-3 py-2">{tt('소요시간')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => {
-            const d = Number(r.durationMs);
-            const ok = Number.isFinite(d) && d >= 0 && max > 0;
-            return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="border-b border-ink-100 text-left text-[11px] uppercase tracking-wide text-ink-400">
+              {columns.map((c) => <th key={c.key} className="px-3 py-2">{c.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
               <tr key={i} className="border-b border-ink-50">
-                <td className="px-3 py-1.5 font-mono text-[11px] text-ink-500">{String(r.traceID ?? '')}</td>
-                <td className="px-3 py-1.5 text-ink-700">{String(r.rootServiceName ?? '')}</td>
-                <td className="px-3 py-1.5 text-ink-700">{String(r.rootTraceName ?? '')}</td>
-                <td className="px-3 py-1.5">
-                  <span className="flex items-center gap-2">
-                    <span className="w-16 shrink-0 text-right font-mono text-[12px] text-ink-800">{String(r.durationMs ?? '')}</span>
-                    {ok && (
-                      <span className="h-2 flex-1 rounded bg-ink-100">
-                        <span className="block h-2 rounded bg-brand-400" style={{ width: `${Math.max(2, Math.round((d / max) * 100))}%` }} />
-                      </span>
-                    )}
-                  </span>
-                </td>
+                {columns.map((c) => {
+                  const raw = r[c.key];
+                  if (c.key === 'durationMs') {
+                    const nonEmpty = raw !== '' && raw != null;
+                    const d = Number(raw);
+                    const ok = nonEmpty && Number.isFinite(d) && d >= 0 && max > 0;
+                    return (
+                      <td key={c.key} className="px-3 py-1.5">
+                        <span className="flex items-center gap-2">
+                          <span className="w-16 shrink-0 text-right font-mono text-[12px] text-ink-800">{String(raw ?? '')}</span>
+                          {ok && (
+                            <span className="h-2 w-24 shrink-0 rounded bg-ink-100">
+                              <span className="block h-2 rounded bg-brand-400" style={{ width: `${Math.max(2, Math.round((d / max) * 100))}%` }} />
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                    );
+                  }
+                  return (
+                    <td key={c.key} className={`px-3 py-1.5 ${c.key === 'traceID' ? 'font-mono text-[11px] text-ink-500' : 'text-ink-700'}`}>
+                      {String(raw ?? '')}
+                    </td>
+                  );
+                })}
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }

@@ -50,6 +50,21 @@ describe('DatasourcesTab', () => {
     expect(screen.getByText('연결됨')).toBeTruthy();
     expect(screen.getByText('타입 종류')).toBeTruthy();
     expect(screen.getByText('기본 데이터소스')).toBeTruthy();
+    // single default in this scenario → the tile names it
+    expect(screen.getByText('★ prod-prom')).toBeTruthy();
+  });
+
+  it('shows the default COUNT when several kinds each have their own default', async () => {
+    const multi = [
+      { id: 1, name: 'prod-prom', kind: 'prometheus', authType: 'none', isDefault: true, connected: true },
+      { id: 3, name: 'prod-loki', kind: 'loki', authType: 'none', isDefault: true, connected: true },
+    ];
+    global.fetch = vi.fn(async (url: string) => ({
+      ok: true, status: 200, json: async () => (url === '/api/datasources' ? { datasources: multi } : {}),
+    })) as unknown as typeof fetch;
+    render(<DatasourcesTab canManage={false} />);
+    await waitFor(() => expect(screen.getByText('prod-loki')).toBeTruthy());
+    expect(screen.getByText('★ 2')).toBeTruthy();
   });
 
   it('re-fetches the list when the refresh button is clicked (gap-audit L202)', async () => {

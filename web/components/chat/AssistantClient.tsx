@@ -24,7 +24,8 @@ export default function AssistantClient() {
   const wantedThread = params.get('thread');
   // gap-audit L204: deep-link prefill (e.g. the Datasources tab's "AI로 진단" row action) —
   // fills the composer for review only; never auto-sends.
-  const prefill = params.get('q');
+  // clamp: first URL-controlled composer seed — cap crafted-link payload size
+  const prefill = (params.get('q') ?? '').slice(0, 500) || null;
   const inited = useRef(false);
   // Below lg the thread rail is a slide-in overlay (toggled from the header),
   // so the chat area is full-width on a phone. At lg+ the rail is always visible
@@ -35,7 +36,9 @@ export default function AssistantClient() {
     if (inited.current) return;
     inited.current = true;
     chat.toggleThreads(); // page always shows the thread column → load list + keep it fresh post-send
-    const tid = wantedThread ?? localStorage.getItem('awsops_chat_thread');
+    // a ?q= deep link opens a FRESH conversation — appending a diagnosis prompt to an unrelated
+    // restored thread would feed its history to the agent
+    const tid = wantedThread ?? (prefill ? null : localStorage.getItem('awsops_chat_thread'));
     if (tid) void chat.selectThread(tid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

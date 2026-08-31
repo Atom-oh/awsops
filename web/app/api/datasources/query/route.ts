@@ -66,8 +66,10 @@ export async function POST(request: Request) {
   if (r && typeof r === 'object') {
     const window = Number((r as { window?: unknown }).window);
     const step = Number((r as { step?: unknown }).step);
-    // Upper bound widened to 30d (gap-audit L86, v1 parity) — the point-density cap below stays
-    // the real cost/DoS guard; a 30d window at the UI's ~250-point autoStep is ~10368s steps.
+    // Upper bound widened to 30d (gap-audit L86, v1 parity) — the point-density cap below still
+    // bounds RETURNED points; upstream scan cost over a 30d window is bounded by the connectors'
+    // own limits/timeouts (Loki line/byte budget, prometheus per-series point cap).
+    // A 30d window at the UI's ~250-point autoStep is ~10368s steps.
     if (!Number.isInteger(window) || window < 60 || window > 2592000) {
       return json({ error: 'range.window must be an integer in [60, 2592000] seconds' }, 400);
     }

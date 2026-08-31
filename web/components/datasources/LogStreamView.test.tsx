@@ -30,7 +30,7 @@ describe('LogStreamView', () => {
 
   it('renders a line-count header and every log line', () => {
     render(<LogStreamView rows={rows} />);
-    expect(screen.getByText('로그 2줄')).toBeTruthy(); // line count header
+    expect(screen.getByText(/로그 2줄/)).toBeTruthy(); // displayed-line-count header
     expect(screen.getByText('error: boom')).toBeTruthy();
     expect(screen.getByText('ok')).toBeTruthy();
   });

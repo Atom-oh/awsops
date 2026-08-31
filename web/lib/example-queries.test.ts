@@ -23,6 +23,13 @@ describe('example-queries catalog', () => {
     }
   });
 
+  it('keeps the clickhouse raw chips connector-safe and schema-agnostic', () => {
+    // The clickhouse connector blocks `system.` as a DANGER token for user queries, and the
+    // otel table name is deployment-specific — neither may appear in a curated chip.
+    expect(EXAMPLE_QUERIES.clickhouse.some((e) => /system\./i.test(e.expr))).toBe(false);
+    expect(EXAMPLE_QUERIES.clickhouse.some((e) => /otel_traces/.test(e.expr))).toBe(false);
+  });
+
   it('maps every kind to a query language name', () => {
     for (const k of KINDS) expect(QUERY_LANGUAGE[k], k).toBeTruthy();
     expect(QUERY_LANGUAGE.prometheus).toBe('PromQL');
