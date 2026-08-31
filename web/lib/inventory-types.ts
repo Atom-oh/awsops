@@ -675,8 +675,10 @@ export type Highlight =
   | { kind: 'sumWhere'; label: string; col: string; where: string; eq: string; suffix?: string; tone?: 'accent' | 'danger' }
   | { kind: 'countGt'; label: string; col: string; gt: number; tone?: 'accent' | 'danger' }
   | { kind: 'avg'; label: string; col: string; suffix?: string }
-  // percent: count(cell==eq)/rows as 'NN% (n/total)'. Variant thresholds (v1 parity, L100):
-  // 100% → accent, ≥80% → default, <80% → danger; 0 rows → '—'.
+  // percent: count(cell==eq)/rows as 'NN% (n/total)'. Variant comes from the RAW ratio (v1
+  // parity, L100): every row matching → accent, ratio ≥0.8 → default, else danger; 0 rows → '—'.
+  // A rate that rounds to 100% without being a complete match displays one decimal (e.g.
+  // 499/500 → '99.8%'), so a near-complete fleet never reads as a finished '100%'.
   | { kind: 'percent'; label: string; col: string; eq: string }
   // sumProductWhere: Σ(colA×colB) over rows matching where==eq — per-row factors, so a
   // custom-CPU-options instance counts its ACTUAL vCPUs, not the type default (L103).
@@ -751,7 +753,12 @@ export function computeHighlights(rows: Array<Record<string, unknown>>, highligh
         return { label: h.label, value: n, variant: tone(h.tone, n) };
       }
       case 'avg': {
-        const nums = rows.map((r) => Number(cell(r, h.col))).filter((n) => Number.isFinite(n));
+        // Exclude null/undefined/blank cells — Number(null) === 0 would skew the mean.
+        const nums = rows
+          .map((r) => cell(r, h.col))
+          .filter((v) => v != null && String(v).trim() !== '')
+          .map(Number)
+          .filter((n) => Number.isFinite(n));
         if (!nums.length) return { label: h.label, value: '—', variant: 'default' };
         const mean = Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
         return { label: h.label, value: `${mean.toLocaleString()}${h.suffix ?? ''}`, variant: 'default' };
@@ -759,9 +766,16 @@ export function computeHighlights(rows: Array<Record<string, unknown>>, highligh
       case 'percent': {
         if (!rows.length) return { label: h.label, value: '—', variant: 'default' };
         const n = rows.filter((r) => sv(cell(r, h.col)).trim().toLowerCase() === h.eq.toLowerCase()).length;
-        const pct = Math.round((n / rows.length) * 100);
-        const variant: HighlightCard['variant'] = pct === 100 ? 'accent' : pct >= 80 ? 'default' : 'danger';
-        return { label: h.label, value: `${pct}% (${n}/${rows.length})`, variant };
+        // Variant from the RAW ratio, never the rounded pct: 499/500 rounds to 100% but is
+        // not a complete match, so it must not read as 'accent'.
+        const variant: HighlightCard['variant'] =
+          n === rows.length ? 'accent' : n / rows.length >= 0.8 ? 'default' : 'danger';
+        const rounded = Math.round((n / rows.length) * 100);
+        // A rate that rounds to 100 without being complete shows one decimal (e.g. 99.8%).
+        const pctStr = rounded === 100 && n !== rows.length
+          ? ((n / rows.length) * 100).toFixed(1)
+          : String(rounded);
+        return { label: h.label, value: `${pctStr}% (${n}/${rows.length})`, variant };
       }
       case 'sumProductWhere': {
         const total = rows

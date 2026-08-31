@@ -17,7 +17,7 @@ AWS CloudWatch 알람의 상태를 한눈에 파악하고 세부 설정을 확�
 ### 알람 상태 요약
 - **OK**: 정상 상태의 알람 수 (초록)
 - **ALARM**: 트리거된 알람 수 (빨강)
-- **INSUFFICIENT_DATA**: 데이터 부족 알람 수 (주황)
+- **INSUFFICIENT_DATA**: 데이터 부족 알람 수 (회색)
 
 ### 시각화
 - **Alarm State Distribution**: 상태별 알람 비율 파이 차트

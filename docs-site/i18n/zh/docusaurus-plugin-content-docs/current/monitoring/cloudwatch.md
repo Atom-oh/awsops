@@ -17,7 +17,7 @@ import Screenshot from '@site/src/components/Screenshot';
 ### 告警状态摘要
 - **OK**: 处于正常状态的告警数（绿色）
 - **ALARM**: 已触发的告警数（红色）
-- **INSUFFICIENT_DATA**: 数据不足的告警数（橙色）
+- **INSUFFICIENT_DATA**: 数据不足的告警数（灰色）
 
 ### 可视化
 - **Alarm State Distribution**: 按状态划分的告警比例饼图

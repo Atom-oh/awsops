@@ -1,5 +1,5 @@
-# Inventory KPI/chart quick-win batch — 7 spec-level v1-parity gaps
-# 인벤토리 KPI/차트 퀵윈 배치 — 스펙 수준 v1 패리티 갭 7건
+# Inventory KPI/chart quick-win batch — 8 spec-level v1-parity gaps
+# 인벤토리 KPI/차트 퀵윈 배치 — 스펙 수준 v1 패리티 갭 8건
 
 **Status:** Approved 2026-08-31 (batch selected by owner). Branch `feat/inventory-kpi-batch`.
 Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L103 (ec2 running vCPU KPI),
@@ -12,7 +12,7 @@ L212 (ecr tag-immutability KPI — `HIGHLIGHTS.ecr` has it), L238 (rds storage-b
 
 ## 요약 (한국어)
 
-인벤토리 페이지의 KPI/차트 소규모 갭 7건을 한 PR로 복원한다. 전부 이미 sync된 컬럼 위의
+인벤토리 페이지의 KPI/차트 소규모 갭 8건을 한 PR로 복원한다. 전부 이미 sync된 컬럼 위의
 클라이언트 계산(`computeHighlights` kind 확장 + `HIGHLIGHTS`/spec 항목 + ecr 파생 컬럼 +
 도넛 시맨틱 컬러)이며, 신규 API/테이블/Terraform 없음.
 
@@ -25,7 +25,9 @@ L212 (ecr tag-immutability KPI — `HIGHLIGHTS.ecr` has it), L238 (rds storage-b
   rows with non-numeric cells excluded from the denominator; 0 rows → '—'. → lambda
   `memory_size` avg MB (L230).
 - `{ kind: 'percent'; label; col; eq: string; }` — `count(cell==eq) / count(rows)` as
-  `NN% (n/total)`; variant: 100% → accent, ≥80% → default, <80% → danger; 0 rows → '—'.
+  `NN% (n/total)`; variant from the RAW ratio: every row matching → accent, ratio ≥0.8 →
+  default, else danger; 0 rows → '—'. A rate that rounds to 100% without being a complete
+  match displays one decimal (499/500 → '99.8%'), so a near-complete fleet never reads '100%'.
   → ebs `encrypted == 'true'` 암호화율 (L100).
 - `{ kind: 'sumProductWhere'; label; cols: [string, string]; where; eq; suffix? }` —
   Σ(colA × colB) over rows matching where==eq; a row with a non-numeric factor contributes 0.
@@ -48,7 +50,7 @@ highlights). `ecr.columns` gains `{ key: 'scan_on_push', label: 'Scan on Push' }
 
 ### CloudWatch alarm-state donut semantic colors (L190)
 `InvType` gains optional `distKey2Colors?: Record<string, string>`; the inventory page passes
-it to the second donut's existing `colorMap` prop. `cloudwatch_alarm.distKey2Colors =
+it to the second donut's existing `colors` prop. `cloudwatch_alarm.distKey2Colors =
 { OK: '#01A88D', ALARM: '#D13212', INSUFFICIENT_DATA: '#9AA6B2' }` (semantic, matches the
 STATUS_DOT palette). Name-cased per the synced `state_value` values (verify casing from the
 sync data — countWhere uses lowercase eq with case-insensitive compare; the donut buckets use

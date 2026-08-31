@@ -228,6 +228,22 @@ describe('computeHighlights (per-type highlight cards)', () => {
     expect(enc(3, 5)).toEqual({ label: '암호화율', value: '60% (3/5)', variant: 'danger' });
     expect(computeHighlights([], [{ kind: 'percent', label: 'x', col: 'e', eq: 'true' }])[0].value).toBe('—');
   });
+  it('percent judges the raw ratio: a near-100 fleet is neither accent nor "100%"', () => {
+    const pct = (rows: Record<string, unknown>[]) =>
+      computeHighlights(rows, [{ kind: 'percent', label: 'enc', col: 'e', eq: 'true' }])[0];
+    // 499/500 = 99.8% — rounds to 100 but is NOT complete → one decimal + 'default'
+    const near = [...Array(499).fill({ e: 'true' }), { e: 'false' }];
+    expect(pct(near)).toEqual({ label: 'enc', value: '99.8% (499/500)', variant: 'default' });
+    // 399/500 = 79.8% — below the 0.8 raw-ratio bar → danger
+    const low = [...Array(399).fill({ e: 'true' }), ...Array(101).fill({ e: 'false' })];
+    expect(pct(low)).toEqual({ label: 'enc', value: '80% (399/500)', variant: 'danger' });
+    // complete match stays accent at a real 100%
+    expect(pct(Array(500).fill({ e: 'true' }))).toEqual({ label: 'enc', value: '100% (500/500)', variant: 'accent' });
+  });
+  it('avg excludes null/empty cells (Number(null) === 0 would skew the mean)', () => {
+    const rows = [{ m: 100 }, { m: null }, { m: '' }];
+    expect(computeHighlights(rows, [{ kind: 'avg', label: 'mem', col: 'm' }])[0].value).toBe('100');
+  });
   it('sumProductWhere sums colA×colB over matching rows; non-numeric factor → 0 (L103)', () => {
     const rows = [
       { s: 'running', a: 2, b: 2 },   // 4
