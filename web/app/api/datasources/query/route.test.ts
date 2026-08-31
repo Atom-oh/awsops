@@ -63,6 +63,8 @@ describe('POST /api/datasources/query', () => {
     expect(call.tool).toBe('clickhouse_query');
     expect(call.args.sql).toBe('SELECT 1');
     expect(call.args.query).toBeUndefined();
+    // the `timeout` arg is prometheus/mimir-only — clickhouse's connector never reads it
+    expect(call.args.timeout).toBeUndefined();
   });
 
   it('range flag selects *_query_range; tempo always uses tempo_search', async () => {
@@ -118,6 +120,8 @@ describe('POST /api/datasources/query', () => {
     expect(typeof call.args.step).toBe('string');
     expect(Number(call.args.end) - Number(call.args.start)).toBe(300);
     expect(call.args.step).toBe('2');
+    // upstream evaluation is bounded too, under the connector's 12s HTTP timeout
+    expect(call.args.timeout).toBe('10s');
   });
 
   it('range object with out-of-bounds window or step → 400 and no invoke', async () => {

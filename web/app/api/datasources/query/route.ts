@@ -58,6 +58,12 @@ export async function POST(request: Request) {
 
   const args: Record<string, unknown> = { [spec.arg]: query, ...(spec.extra ?? {}) };
 
+  // Upstream execution bound (review hardening): prometheus/mimir accept a `timeout` API param
+  // (connector clamps 1..60s) — pass one under the connector's own 12s HTTP timeout so the
+  // upstream engine stops evaluating when the client gives up. Scoped strictly to the kinds
+  // whose connector reads it, so no other kind sees an unknown arg.
+  if (kind === 'prometheus' || kind === 'mimir') args.timeout = '10s';
+
   // Range mode: absent/false = instant; true = legacy 1h range (connector default);
   // { window, step } = explicit time range. An object range is validated regardless of kind (so a bad
   // window/step is a 400, not a silent instant); start/end are computed from the request clock.

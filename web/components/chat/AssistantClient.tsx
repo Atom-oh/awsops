@@ -36,10 +36,15 @@ export default function AssistantClient() {
     if (inited.current) return;
     inited.current = true;
     chat.toggleThreads(); // page always shows the thread column → load list + keep it fresh post-send
-    // a ?q= deep link opens a FRESH conversation — appending a diagnosis prompt to an unrelated
-    // restored thread would feed its history to the agent
-    const tid = wantedThread ?? (prefill ? null : localStorage.getItem('awsops_chat_thread'));
-    if (tid) void chat.selectThread(tid);
+    if (prefill) {
+      // A ?q= deep link is a genuinely FRESH conversation: newChat() rotates the persisted
+      // AgentCore session id (server-side memory) and clears the thread — and it wins over a
+      // crafted ?thread= in the same URL, which would otherwise seed an existing conversation.
+      chat.newChat();
+    } else {
+      const tid = wantedThread ?? localStorage.getItem('awsops_chat_thread');
+      if (tid) void chat.selectThread(tid);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

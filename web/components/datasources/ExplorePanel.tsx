@@ -234,7 +234,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
         <DiagSignalChips
           instanceId={selId === '' ? undefined : selId}
           kind={ds?.kind}
-          onPick={(expr) => { setQuery(expr); run(undefined, expr); }}
+          onPick={(expr) => { setQuery(expr); setGenFrom(null); run(undefined, expr); }}
         />
         <div className="flex items-center gap-2">
           <Button onClick={() => run()} disabled={busy || !ds || !query.trim()}>{busy ? tt('실행 중…') : tt('실행')}</Button>

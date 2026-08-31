@@ -44,6 +44,22 @@ describe('LogStreamView', () => {
     expect(screen.getByText('+1')).toBeTruthy();
   });
 
+  it('sorts interleaved multi-stream rows newest-first (the header claims 최신순)', () => {
+    const interleaved = [
+      { timestamp: '2026-08-31T00:00:00.000Z', line: 'older', labels: '{job="a"}' },
+      { timestamp: '2026-08-31T00:00:02.000Z', line: 'newest', labels: '{job="b"}' },
+      { timestamp: '2026-08-31T00:00:01.000Z', line: 'middle', labels: '{job="a"}' },
+    ];
+    render(<LogStreamView rows={interleaved} />);
+    const lines = screen.getAllByText(/older|newest|middle/).map((el) => el.textContent);
+    expect(lines).toEqual(['newest', 'middle', 'older']);
+  });
+
+  it('prefers structured _labelPairs over the parsed string (quote-containing values survive)', () => {
+    render(<LogStreamView rows={[{ timestamp: '2026-08-31T00:00:00.000Z', line: 'x', labels: '{}', _labelPairs: [{ key: 'msg', value: 'a"b' }] }]} />);
+    expect(screen.getByText('msg=a"b')).toBeTruthy();
+  });
+
   it('renders nothing for empty rows', () => {
     const { container } = render(<LogStreamView rows={[]} />);
     expect(container.textContent).toBe('');

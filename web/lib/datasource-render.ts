@@ -107,7 +107,15 @@ function loki(body: Record<string, unknown>): NormalizedResult {
     const values = Array.isArray(so.values) ? (so.values as unknown[][]) : [];
     for (const pair of values) {
       const ns = num(pair[0]);
-      rows.push({ timestamp: new Date(ns / 1e6).toISOString(), line: String(pair[1] ?? ''), labels });
+      // `_labelPairs` is additive display metadata (structured stream labels — quote-containing
+      // values survive it, unlike the flat `labels` string the generic table path still shows).
+      // The DataTable renders only `columns`, so it ignores this field.
+      rows.push({
+        timestamp: new Date(ns / 1e6).toISOString(),
+        line: String(pair[1] ?? ''),
+        labels,
+        _labelPairs: isObj(so.stream) ? Object.entries(so.stream as Record<string, unknown>).map(([k, v]) => ({ key: k, value: String(v) })) : [],
+      });
     }
   }
   if (!rows.length) return { shape: 'empty', truncated, note: '로그 없음' };

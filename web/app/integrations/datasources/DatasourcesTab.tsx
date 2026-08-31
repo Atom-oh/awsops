@@ -124,12 +124,18 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                 </td>
                 <td className="px-3 py-2">{i.isDefault ? <span className="text-amber-600">★ default</span> : (canManage && <button className="text-[12px] text-brand-600 hover:underline" onClick={() => onSetDefault(i)} disabled={busyId === i.id}>set default</button>)}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
-                  <Link
-                    href={`/assistant?q=${encodeURIComponent(`${i.name} (${i.kind}) 데이터소스 연결 상태를 진단해줘`)}`}
-                    className="text-[12px] text-purple-600 hover:underline mr-3"
-                  >
-                    {tt('AI로 진단')}
-                  </Link>
+                  {/* The chat gateway path resolves each kind's DEFAULT instance (kind-mirror
+                      credential) — a non-default row's diagnosis would confidently describe the
+                      WRONG datasource under this row's name. Scope the link to defaults until
+                      the tool path is instance-aware. */}
+                  {i.isDefault && (
+                    <Link
+                      href={`/assistant?q=${encodeURIComponent(`${i.name} (${i.kind}) 데이터소스 연결 상태를 진단해줘`)}`}
+                      className="text-[12px] text-purple-600 hover:underline mr-3"
+                    >
+                      {tt('AI로 진단')}
+                    </Link>
+                  )}
                   <Link href={`/integrations/datasources/${i.id}`} className="text-[12px] text-brand-600 hover:underline mr-3">Explore →</Link>
                   {canManage && <button className="text-[12px] text-ink-600 hover:underline mr-3" onClick={() => setForm({ mode: 'edit', value: { id: i.id, name: i.name, kind: i.kind, endpoint: i.endpoint ?? '', authType: i.authType ?? 'none' } })}>Edit</button>}
                   {canManage && <button className="text-[12px] text-rose-600 hover:underline" onClick={() => onDelete(i)} disabled={busyId === i.id}>Delete</button>}

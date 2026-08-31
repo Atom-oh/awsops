@@ -75,11 +75,15 @@ describe('DatasourcesTab', () => {
     await waitFor(() => expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before + 1));
   });
 
-  it('each row carries an AI-diagnose deep link with a prefilled prompt (gap-audit L204)', async () => {
+  it('carries an AI-diagnose deep link ONLY on the DEFAULT row (gap-audit L204)', async () => {
     render(<DatasourcesTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
+    // INSTANCES has two prometheus rows but only id 1 (prod-prom) is default — the chat gateway
+    // resolves the kind's default, so a stg-prom link would diagnose the wrong datasource.
+    expect(screen.getAllByText('AI로 진단')).toHaveLength(1);
     const links = screen.getAllByText('AI로 진단') as HTMLAnchorElement[];
     expect(links[0].getAttribute('href')).toContain('/assistant?q=');
     expect(decodeURIComponent(links[0].getAttribute('href')!)).toContain('prod-prom');
+    expect(decodeURIComponent(links[0].getAttribute('href')!)).not.toContain('stg-prom');
   });
 });

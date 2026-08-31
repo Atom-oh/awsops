@@ -7,7 +7,11 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 // shading, 500px scrollable container, line-count header. Metric-LogQL results never reach
 // this component (the normalizer routes them through the prom renderer as series/table).
 
-export interface LogRow { timestamp?: unknown; line?: unknown; labels?: unknown }
+export interface LabelPair { key: string; value: string }
+// `_labelPairs` carries the normalizer's structured stream labels ({ key, value }[]). Declared
+// `unknown` (narrowed at use) so a NormalizedResult.rows list (Record<string, unknown>[]) stays
+// assignable to LogRow[] — a concrete optional type would fail that index-signature check.
+export interface LogRow { timestamp?: unknown; line?: unknown; labels?: unknown; _labelPairs?: unknown }
 
 /** Parse the normalizer's labelStr output (`{k="v", k2="v2"}`) into pairs. Malformed → []. */
 export function parseLokiLabels(labels: string): { key: string; value: string }[] {
@@ -31,6 +35,9 @@ const MAX_BADGES = 3;
 export default function LogStreamView({ rows }: { rows: LogRow[] }) {
   const { tt } = useI18n();
   if (!rows.length) return null;
+  // The normalizer flattens Loki streams block-by-block (no cross-stream order) — sort here so
+  // the "최신순" header is actually true. ISO timestamps compare lexically; blanks sort last.
+  const sorted = [...rows].sort((a, b) => String(b.timestamp ?? '').localeCompare(String(a.timestamp ?? '')));
   return (
     <Card className="overflow-hidden">
       <div className="border-b border-ink-100 px-3 py-2 text-[12px] text-ink-500">
@@ -38,8 +45,11 @@ export default function LogStreamView({ rows }: { rows: LogRow[] }) {
         {tt(`로그 ${rows.length.toLocaleString()}줄 — 최신순, 표시 상한 적용 가능`)}
       </div>
       <div className="max-h-[500px] overflow-auto">
-        {rows.map((r, i) => {
-          const labels = parseLokiLabels(String(r.labels ?? ''));
+        {sorted.map((r, i) => {
+          // Structured pairs when the normalizer supplied them; the string parse is the fallback
+          // for callers without them (quote-containing values only survive the structured path).
+          const pairs = r._labelPairs;
+          const labels = Array.isArray(pairs) && pairs.length ? (pairs as LabelPair[]) : parseLokiLabels(String(r.labels ?? ''));
           const shown = labels.slice(0, MAX_BADGES);
           const overflow = labels.length - shown.length;
           return (
