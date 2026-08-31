@@ -209,6 +209,61 @@ def test_all_dispatch_logs_type_count(capsys):
     assert hit["type_count"] == len(mod.QUERIES) + len(mod.SDK_SYNCS)
 
 
+def test_new_run_token_is_opaque_uuid_hex():
+    """A predictable or reused ownership token would not isolate stale finalizers."""
+    mod = load_sync_lambda()
+
+    first = mod._new_run_token()
+    second = mod._new_run_token()
+
+    assert first != second
+    assert len(first) == 32
+    assert len(second) == 32
+    int(first, 16)
+    int(second, 16)
+
+
+@pytest.mark.parametrize("status", ["succeeded", "partial", "failed"])
+def test_every_terminal_finalizer_uses_run_token_compare_and_set(
+    monkeypatch, status
+):
+    """Removing the token predicate or RETURNING lets a stale invocation overwrite a newer run."""
+    mod = load_sync_lambda()
+    calls = []
+    closed = []
+    run_token = "a" * 32
+
+    class FinalizerAurora:
+        def run(self, sql, **kwargs):
+            calls.append((sql, kwargs))
+            return [(1,)]
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(mod, "_aurora", FinalizerAurora)
+
+    updated = mod._finalize_sync_ledger(
+        resource_type="ec2",
+        run_token=run_token,
+        status=status,
+        row_count=3,
+        error="safe failure",
+    )
+
+    assert updated is True
+    assert closed == [True]
+    assert len(calls) == 1
+    sql, params = calls[0]
+    normalized = " ".join(sql.split())
+    assert (
+        "WHERE resource_type=:t AND account_id='self' "
+        "AND run_token=:run_token"
+    ) in normalized
+    assert normalized.endswith("RETURNING 1")
+    assert params["run_token"] == run_token
+
+
 def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatch):
     """Omitting or duplicating a successful terminal log loses sync outcome observability."""
     mod = load_sync_lambda()
@@ -225,6 +280,8 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
                 return [(True,)]
             if "SELECT account_id, region, resource_id" in sql:
                 return []
+            if "RETURNING 1" in sql:
+                return [(1,)]
             return []
 
         def close(self):
@@ -259,8 +316,16 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
         "SET status='succeeded'" in sql
         and "last_success_at=now()" in sql
         and "last_success_row_count=:n" in sql
+        and "run_token=:run_token" in sql
+        and "RETURNING 1" in sql
         for sql in finalizer_sql
     )
+    running = next(
+        (sql, params) for sql, params in connections[0].sql_log
+        if "INSERT INTO inventory_sync_runs" in sql
+    )
+    assert "run_token" in running[0]
+    assert running[1]["run_token"] == connections[1].sql_log[-1][1]["run_token"]
 
 
 def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(
@@ -298,7 +363,7 @@ def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(
     class FinalizerAurora:
         def run(self, sql, **kwargs):
             finalizer_calls.append((sql, kwargs))
-            return []
+            return [(1,)]
 
         def close(self):
             pass
@@ -397,7 +462,7 @@ def test_zero_row_success_is_durable_across_later_failure(capsys, monkeypatch):
     class FinalizerAurora:
         def run(self, sql, **kwargs):
             finalizer_calls.append((sql, kwargs))
-            return []
+            return [(1,)]
 
         def close(self):
             pass
@@ -484,6 +549,8 @@ def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkey
         def run(self, sql, **kwargs):
             if "pg_try_advisory_lock" in sql:
                 return [(True,)]
+            if "RETURNING 1" in sql:
+                return [(1,)]
             return []
 
         def close(self):
@@ -521,6 +588,8 @@ def test_sync_failure_marks_clienterror_throttling_without_logging_raw_error(cap
         def run(self, sql, **kwargs):
             if "pg_try_advisory_lock" in sql:
                 return [(True,)]
+            if "RETURNING 1" in sql:
+                return [(1,)]
             return []
 
         def close(self):
@@ -741,7 +810,7 @@ def test_sync_cleanup_failure_replaces_success_with_one_safe_terminal_failure(
     class FinalizerAurora:
         def run(self, sql, **kwargs):
             finalizer_calls.append((sql, kwargs))
-            return []
+            return [(1,)]
 
         def close(self):
             pass
@@ -823,7 +892,7 @@ def test_main_close_failure_uses_fresh_finalizer_after_connection_becomes_unusab
             finalizer_calls.append((sql, kwargs))
             if "SET status='failed'" in sql:
                 ledger["status"] = "failed"
-            return []
+            return [(1,)]
 
         def close(self):
             pass
@@ -938,6 +1007,147 @@ def test_finalizer_write_failure_leaves_running_without_false_success(capsys, mo
     assert "supersecret" not in json.dumps(terminal)
 
 
+def test_stale_finalizer_cannot_overwrite_newer_run(capsys, monkeypatch):
+    """Run B can acquire the released lock and finalize before run A opens its fresh finalizer;
+    A's token must then lose the CAS without changing B's row or leaking ownership identifiers."""
+    mod = load_sync_lambda()
+    token_a = "a" * 32
+    token_b = "b" * 32
+    sensitive_account = "222222222222"
+    tokens = iter([token_a, token_b])
+    ledger = {
+        "status": "succeeded",
+        "run_token": "prior",
+        "row_count": 9,
+        "last_success_row_count": 9,
+    }
+    running_tokens = []
+    finalizer_calls = []
+    nested_result = {}
+    lock_held = False
+    triggered = False
+    collection_count = 0
+
+    monkeypatch.setattr(
+        mod, "_new_run_token", lambda: next(tokens), raising=False
+    )
+    monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+
+    def fetch_inventory():
+        nonlocal collection_count
+        collection_count += 1
+        rows = [
+            {
+                "id": f"r-{collection_count}-{index}",
+                "region": "ap-northeast-2",
+                "account_id": sensitive_account,
+            }
+            for index in range(collection_count)
+        ]
+        return rows, "id", "region"
+
+    mod.SDK_SYNCS["cas_interleaving_test"] = fetch_inventory
+    mod._ALLOWED.add("cas_interleaving_test")
+
+    class MainAurora:
+        def __init__(self, trigger_b=False):
+            self.trigger_b = trigger_b
+
+        def run(self, sql, **kwargs):
+            nonlocal lock_held
+            if "pg_try_advisory_lock" in sql:
+                assert lock_held is False
+                lock_held = True
+                return [(True,)]
+            if "INSERT INTO inventory_sync_runs" in sql:
+                ledger.update(
+                    status="running",
+                    run_token=kwargs.get("run_token"),
+                    row_count=None,
+                )
+                running_tokens.append(kwargs.get("run_token"))
+            if "SELECT account_id, region, resource_id" in sql:
+                return []
+            if "pg_advisory_unlock" in sql:
+                assert lock_held is True
+                lock_held = False
+                return [(True,)]
+            return []
+
+        def close(self):
+            nonlocal triggered
+            if self.trigger_b and not triggered:
+                triggered = True
+                nested_result["value"] = mod.sync("cas_interleaving_test")
+
+    class FinalizerAurora:
+        def __init__(self, name):
+            self.name = name
+
+        def run(self, sql, **kwargs):
+            finalizer_calls.append((self.name, sql, kwargs))
+            has_cas = (
+                "run_token=:run_token" in sql
+                and "RETURNING 1" in sql
+            )
+            if has_cas and ledger["run_token"] != kwargs.get("run_token"):
+                return []
+            if "SET status='succeeded'" in sql:
+                ledger.update(
+                    status="succeeded",
+                    row_count=kwargs["n"],
+                    last_success_row_count=kwargs["n"],
+                )
+            elif "SET status='partial'" in sql:
+                ledger.update(status="partial", row_count=kwargs["n"])
+            elif "SET status='failed'" in sql:
+                ledger.update(status="failed", row_count=kwargs["n"])
+            return [(1,)]
+
+        def close(self):
+            pass
+
+    connections = iter([
+        MainAurora(trigger_b=True),
+        MainAurora(),
+        FinalizerAurora("B"),
+        FinalizerAurora("A"),
+    ])
+    monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
+
+    result = mod.sync("cas_interleaving_test")
+    records = _terminal_records(capsys)
+
+    assert nested_result["value"] == {
+        "status": "succeeded",
+        "type": "cas_interleaving_test",
+        "row_count": 2,
+    }
+    assert result == {
+        "status": "failed",
+        "type": "cas_interleaving_test",
+        "error": "inventory sync superseded",
+    }
+    assert running_tokens == [token_a, token_b]
+    assert ledger == {
+        "status": "succeeded",
+        "run_token": token_b,
+        "row_count": 2,
+        "last_success_row_count": 2,
+    }
+    assert [name for name, _, _ in finalizer_calls] == ["B", "A"]
+    assert records[-1]["event"] == "inventory_sync_failed"
+    assert records[-1]["error_category"] == "superseded"
+    assert records[-1]["error"] == "inventory sync superseded"
+    assert records[-1]["degraded"] is True
+    assert records[-1]["throttled"] is False
+    output = json.dumps(records)
+    assert token_a not in output
+    assert token_b not in output
+    assert sensitive_account not in output
+
+
 def test_finalizer_close_failure_does_not_downgrade_committed_success(capsys, monkeypatch):
     """Once the fresh connection commits the terminal update, its close is best-effort."""
     mod = load_sync_lambda()
@@ -957,7 +1167,7 @@ def test_finalizer_close_failure_does_not_downgrade_committed_success(capsys, mo
     class FinalizerAurora:
         def run(self, sql, **kwargs):
             finalizer_calls.append((sql, kwargs))
-            return []
+            return [(1,)]
 
         def close(self):
             raise OSError("best-effort close failed password=supersecret")

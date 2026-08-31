@@ -15,6 +15,11 @@ def _migration():
 def test_migration_adds_durable_success_fields_and_partial_status():
     sql = _migration()
     assert re.search(
+        r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+run_token\s+text",
+        sql,
+        re.I,
+    )
+    assert re.search(
         r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+last_success_at\s+timestamptz",
         sql,
         re.I,
@@ -65,6 +70,7 @@ def test_migration_recreates_safe_reader_view_without_error_text():
     ):
         assert re.search(rf"\b{column}\b", columns), column
     assert not re.search(r"\berror\b", columns)
+    assert not re.search(r"\brun_token\b", columns)
     assert re.search(
         r"GRANT\s+SELECT\s+ON\s+sql_reader\.inventory_sync_runs\s+TO\s+awsops_sql_reader",
         sql,

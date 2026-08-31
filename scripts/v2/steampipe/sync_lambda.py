@@ -9,6 +9,7 @@ import os
 import re
 import ssl
 import time
+import uuid
 import boto3
 import pg8000.native
 from botocore.exceptions import ClientError
@@ -761,44 +762,59 @@ def _inject_account(sql, account_id):
     return sql.format(account_id=account_id)
 
 
-def _finalize_sync_ledger(resource_type, status, row_count=None, error=None):
+def _new_run_token():
+    return uuid.uuid4().hex
+
+
+def _finalize_sync_ledger(
+    resource_type, run_token, status, row_count=None, error=None
+):
     """Write one terminal ledger state on a fresh connection after main cleanup.
 
     The running row and durable last-success fields must remain truthful if the work connection
-    cannot unlock/close or this final write fails. Closing the finalizer is best-effort once its
-    update has completed.
+    cannot unlock/close, this final write fails, or a newer run has replaced this run's ownership
+    token. Closing the finalizer is best-effort once its update has completed.
     """
     finalizer = None
     try:
         finalizer = _aurora()
         if status == "succeeded":
-            finalizer.run(
+            updated = finalizer.run(
                 "UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), "
                 "row_count=:n, error=NULL, last_success_at=now(), "
                 "last_success_row_count=:n "
-                "WHERE resource_type=:t AND account_id='self'",
+                "WHERE resource_type=:t AND account_id='self' "
+                "AND run_token=:run_token RETURNING 1",
                 t=resource_type,
                 n=row_count,
+                run_token=run_token,
             )
         elif status == "partial":
-            finalizer.run(
+            updated = finalizer.run(
                 "UPDATE inventory_sync_runs SET status='partial', finished_at=now(), "
                 "row_count=:n, error=NULL "
-                "WHERE resource_type=:t AND account_id='self'",
+                "WHERE resource_type=:t AND account_id='self' "
+                "AND run_token=:run_token RETURNING 1",
                 t=resource_type,
                 n=row_count,
+                run_token=run_token,
             )
         elif status == "failed":
-            finalizer.run(
+            updated = finalizer.run(
                 "UPDATE inventory_sync_runs SET status='failed', finished_at=now(), "
                 "row_count=:n, error=:e "
-                "WHERE resource_type=:t AND account_id='self'",
+                "WHERE resource_type=:t AND account_id='self' "
+                "AND run_token=:run_token RETURNING 1",
                 t=resource_type,
                 n=row_count,
                 e=error,
+                run_token=run_token,
             )
         else:
             raise ValueError(f"unknown inventory sync terminal status: {status}")
+        if len(updated) > 1:
+            raise RuntimeError("inventory sync finalizer updated multiple rows")
+        return len(updated) == 1
     finally:
         if finalizer is not None:
             try:
@@ -819,7 +835,9 @@ def sync(resource_type):
     pending_ledger_status = None
     pending_ledger_row_count = None
     pending_ledger_error = None
+    run_token = None
     try:
+        run_token = _new_run_token()
         adb = _aurora()
         # advisory lock per type (no Steampipe stampede); skip if busy
         got = adb.run("SELECT pg_try_advisory_lock(hashtext(:t))", t=f"inv:{resource_type}")
@@ -841,11 +859,13 @@ def sync(resource_type):
             # mark running INSIDE the try so a throw here records 'failed' and the finally still unlocks
             adb.run(
                 "INSERT INTO inventory_sync_runs "
-                "(resource_type, status, started_at, finished_at, row_count, error) "
-                "VALUES (:t,'running',now(),NULL,NULL,NULL) "
+                "(resource_type, status, started_at, finished_at, row_count, error, run_token) "
+                "VALUES (:t,'running',now(),NULL,NULL,NULL,:run_token) "
                 "ON CONFLICT (resource_type, account_id) DO UPDATE SET "
-                "status='running', started_at=now(), finished_at=NULL, row_count=NULL, error=NULL",
+                "status='running', started_at=now(), finished_at=NULL, row_count=NULL, error=NULL, "
+                "run_token=:run_token",
                 t=resource_type,
+                run_token=run_token,
             )
             expected_target_accounts = (
                 [] if resource_type in SDK_SYNCS else _enabled_target_accounts(adb)
@@ -1035,12 +1055,28 @@ def sync(resource_type):
             }
         if locked and terminal_fields is not None and pending_ledger_status is not None:
             try:
-                _finalize_sync_ledger(
+                finalized = _finalize_sync_ledger(
                     resource_type,
+                    run_token,
                     pending_ledger_status,
                     row_count=pending_ledger_row_count,
                     error=pending_ledger_error,
                 )
+                if not finalized:
+                    result = {
+                        "status": "failed",
+                        "type": resource_type,
+                        "error": "inventory sync superseded",
+                    }
+                    terminal_event = "inventory_sync_failed"
+                    terminal_fields = {
+                        "resource_type": resource_type,
+                        "error_category": "superseded",
+                        "error": "inventory sync superseded",
+                        "error_type": "SupersededRun",
+                        "degraded": True,
+                        "throttled": False,
+                    }
             except Exception as e:
                 # Preserve a real work/cleanup failure as the one terminal outcome. If the work
                 # itself was otherwise successful/partial, the failed finalizer becomes the

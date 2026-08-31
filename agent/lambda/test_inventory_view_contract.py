@@ -139,6 +139,7 @@ class TestInventoryViewContract(unittest.TestCase):
         ):
             self.assertRegex(columns, rf"\b{column}\b")
         self.assertNotRegex(columns, r"\berror\b")
+        self.assertNotRegex(columns, r"\brun_token\b")
 
 
     def test_a_projection_is_dollar_quoted_so_its_inner_quotes_survive(self):

@@ -96,6 +96,8 @@ CloudWatch Logs에서 다음 JSON event 이름을 조회한다:
 - `inventory_sync_complete` — full success이면 `degraded=false`, `freshness=healthy`, `age_minutes=0`; expected account 일부가 도달 불가한 partial이면 `degraded=true`, `freshness=degraded`, `age_minutes=null`, `unreachable_account_count`가 있고 account ID는 없다.
 - `inventory_sync_busy` — `degraded=true`, `throttled=false`; 해당 type의 advisory lock이 이미 사용 중이며 retry storm을 만들지 않는다.
 - `inventory_sync_failed` — `resource_type`, `elapsed_ms`, `error_category`, `error_type`, `degraded=true`, structured `throttled`; raw exception text는 로그에 쓰지 않는다.
+  - `error_category=superseded`는 이 실행이 lock을 해제한 뒤 더 새 실행이 같은 ledger row를 교체했다는 뜻이다. stale finalizer는 새 row를 수정하지 않고 안전한 degraded failure 하나만 기록하며 run token/account ID를 로그에 쓰지 않는다.
+  - `error_category=superseded` means a newer run replaced the singleton ledger row after this invocation released its lock. The stale finalizer leaves that newer row untouched, records one safe degraded failure, and logs neither the run token nor account IDs.
 
 예시 Logs Insights query / Example Logs Insights query:
 
@@ -109,9 +111,9 @@ fields @timestamp, event, resource_type, row_count, unreachable_account_count,
 | limit 100
 ```
 
-Aurora에서 `inventory_sync_runs`는 resource type별 current-run ledger이며 `last_success_at`/`last_success_row_count`는 running/failed/partial 뒤에도 마지막 full success를 보존한다. 성공한 0-row 실행도 이 필드로 남는다. 현재 row가 있으면 reader는 가장 오래된 `inventory_resources.captured_at`을 사용해 preserved stale row를 새 row가 가리지 못하게 하고, row가 없으면 durable `last_success_at`을 사용한다. `query_inventory`와 `inventory_summary`는 `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, `age_minutes`를 공개한다.
+Aurora에서 `inventory_sync_runs`는 resource type별 current-run ledger이며 `last_success_at`/`last_success_row_count`는 running/failed/partial 뒤에도 마지막 full success를 보존한다. 성공한 0-row 실행도 이 필드로 남는다. 각 allowed sync는 내부 non-secret opaque `run_token`을 running UPSERT에 저장하고, advisory unlock/main close 뒤의 fresh finalizer는 같은 token을 조건으로 둔 compare-and-set `UPDATE ... RETURNING`만 수행한다. 따라서 더 새 실행이 row를 교체하면 stale finalizer는 0 rows를 받고 새 상태를 덮어쓰지 않는다. 현재 row가 있으면 reader는 가장 오래된 `inventory_resources.captured_at`을 사용해 preserved stale row를 새 row가 가리지 못하게 하고, row가 없으면 durable `last_success_at`을 사용한다. `query_inventory`와 `inventory_summary`는 `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, `age_minutes`를 공개한다.
 
-In Aurora, `inventory_sync_runs` is the per-type current-run ledger; `last_success_at` and `last_success_row_count` preserve the latest full success across running/failed/partial attempts, including a successful zero-row inventory. Where current rows exist, the reader uses the oldest `inventory_resources.captured_at` so newer rows cannot hide preserved stale rows; with no rows it uses durable `last_success_at`. `query_inventory` and `inventory_summary` disclose `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, and `age_minutes`.
+In Aurora, `inventory_sync_runs` is the per-type current-run ledger; `last_success_at` and `last_success_row_count` preserve the latest full success across running/failed/partial attempts, including a successful zero-row inventory. Each allowed sync stores an internal, non-secret opaque `run_token` in the running UPSERT. After advisory unlock and main-connection close, the fresh finalizer performs only a compare-and-set `UPDATE ... RETURNING` for that token, so a stale finalizer gets zero rows and cannot overwrite a newer run. Where current rows exist, the reader uses the oldest `inventory_resources.captured_at` so newer rows cannot hide preserved stale rows; with no rows it uses durable `last_success_at`. `query_inventory` and `inventory_summary` disclose `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, and `age_minutes`.
 
 - `unavailable`: no durable last success and no current data.
 - `stale`: effective data age is greater than `inventory_stale_after_minutes` (default 30).
@@ -131,8 +133,8 @@ GROUP BY resource_type, account_id, region
 ORDER BY oldest_captured_at ASC;
 ```
 
-`sql_reader.inventory_sync_runs`는 위 safe operational columns만 명시적으로 노출하며 `error` text를 노출하지 않는다.
-`sql_reader.inventory_sync_runs` explicitly exposes only the safe operational columns above and never exposes `error` text.
+`sql_reader.inventory_sync_runs`는 위 safe operational columns만 명시적으로 노출하며 `error` text와 내부 `run_token`을 노출하지 않는다.
+`sql_reader.inventory_sync_runs` explicitly exposes only the safe operational columns above and never exposes `error` text or the internal `run_token`.
 
 The limited ops `inventory-read-target` already returns explicit freshness for `query_inventory` and `inventory_summary`; it never silently falls back to a live API. Direct domain targets still coexist until Phase 2 expands Aurora coverage and retires them. Aurora-only is not live.
 

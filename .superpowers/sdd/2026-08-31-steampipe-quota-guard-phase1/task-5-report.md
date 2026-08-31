@@ -258,3 +258,69 @@ The failures proved that the old implementation:
 - A finalizer outage intentionally leaves the current row `running`; reader freshness remains based
   on the previous durable success and classifies the current state as degraded rather than falsely
   healthy.
+
+---
+
+## Fix Round 4
+
+### Status
+
+Closed the post-unlock stale-finalizer race with per-run compare-and-set ownership. Each allowed
+sync invocation generates a UUID-hex `run_token`, stores it in the singleton running ledger row,
+and passes it to the fresh-connection finalizer. Succeeded, partial, and failed terminal updates
+all require the same token and use `RETURNING 1`.
+
+A zero-row result is now a safe `superseded` failure: the stale invocation does not modify the
+newer row and emits one redacted degraded terminal record without token or account identifiers.
+The existing freshness migration was amended in place; no second migration or `schema.sql` edit was
+made. No Terraform apply, AWS mutation, or ADR-005 capability change was performed.
+
+### RED evidence
+
+| Command | Result before production changes |
+|---|---|
+| `python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py -q` | Failed as intended: 6 failed, 26 passed. Missing token generation/finalizer argument, missing CAS predicate/`RETURNING`, and run A still returned success after overwriting run B. |
+| `PYTHONPATH=agent/lambda python3 -m pytest scripts/v2/steampipe/test_inventory_freshness_migration.py agent/lambda/test_inventory_view_contract.py -q` | Failed as intended: 1 failed, 11 passed because the unmerged durability migration did not add `run_token`. |
+
+### GREEN evidence
+
+| Command | Result |
+|---|---|
+| `python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py -q` | Passed: 32 tests |
+| `PYTHONPATH=agent/lambda python3 -m pytest scripts/v2/steampipe/test_inventory_freshness_migration.py agent/lambda/test_inventory_view_contract.py -q` | Passed: 12 tests |
+| `python3 -m pytest scripts/v2/steampipe -q` | Passed: 74 tests; 33 existing Python 3.9/Boto3 warnings |
+| `PYTHONPATH=agent/lambda python3 -m pytest agent/lambda/test_inventory_read_mcp.py agent/lambda/test_inventory_view_contract.py -q` | Passed: 40 tests |
+| `cd agent && python3 -m pytest test_agent.py -q` | Passed: 55 tests |
+| Focused inventory/migration Vitest (6 files) | Passed: 46 tests; existing Vite CJS warning only |
+| `cd web && npx vitest run` | Passed: 231 files, 2260 tests; 1 live-routing test skipped; existing expected stderr fixtures and Vite CJS warning only |
+| `bash tests/structure/test-steampipe-fanout.sh` | Passed |
+| `node scripts/v2/migrate.mjs --status` | Passed; recognizes 52 valid migration files and still exactly one inventory-freshness ULID migration |
+| `DRY_RUN=1 OFFLINE=1 node scripts/v2/migrate.mjs` field scan | Passed; emitted the amended migration with `run_token`, `last_success_at`, and `last_success_row_count` |
+| Docs placeholder scan, ADR-link scan, `python3 -m py_compile ...`, and `git diff --check` | Passed |
+| `terraform fmt -check terraform/v2/foundation/steampipe.tf terraform/v2/foundation/ai.tf terraform/v2/foundation/variables.tf` | Passed |
+| `terraform -chdir=terraform/v2/foundation validate` | Blocked by the existing environment limitation: cached `archive 2.8.0`, `aws 6.47.0`, and `random 3.9.0` provider packages are missing/corrupted |
+
+### Concurrency and durability semantics
+
+- The running INSERT/UPSERT replaces `run_token` together with the current-run state while leaving
+  durable last-success fields unchanged.
+- Every fresh succeeded/partial/failed finalizer uses
+  `WHERE resource_type=:t AND account_id='self' AND run_token=:run_token RETURNING 1`.
+- The interleaving regression makes run B replace/finalize the row during run A's main-connection
+  close. B retains its token, terminal status, and row count; A receives zero rows and returns/logs
+  `error_category=superseded`.
+- A normal matching-token finalizer returns exactly one row. More than one row is treated as an
+  invariant/write failure; connection/write failures retain the prior safe failure behavior.
+- Structured logs contain neither token value nor account IDs. The explicit-column
+  `sql_reader.inventory_sync_runs` view exposes neither `run_token` nor `error`.
+- Existing zero-row success, partial/unreachable-account preservation, cleanup-failure override,
+  finalizer-close best effort, finalizer-write failure, and `BaseException` cleanup/re-raise
+  semantics remain covered.
+
+### Concerns
+
+- The controller environment still needs intact Terraform provider packages for `terraform
+  validate`; this agent did not initialize/download providers or run apply.
+- Deployment must continue to run the amended migration before rolling the Lambda code, as the
+  running UPSERT now requires the new internal column. The existing `make deploy` ordering already
+  runs migrations first.

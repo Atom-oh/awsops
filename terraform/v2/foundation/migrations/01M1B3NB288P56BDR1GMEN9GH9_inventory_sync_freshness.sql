@@ -1,6 +1,10 @@
 -- since: 2.0.0
 -- Durable inventory freshness: keep the latest full-success timestamp/count even though
--- inventory_sync_runs is a singleton current-run ledger row.
+-- inventory_sync_runs is a singleton current-run ledger row. The opaque per-run token lets a
+-- fresh-connection finalizer update only the run that installed the current running state.
+
+ALTER TABLE inventory_sync_runs
+  ADD COLUMN IF NOT EXISTS run_token text;
 
 ALTER TABLE inventory_sync_runs
   ADD COLUMN IF NOT EXISTS last_success_at timestamptz;
