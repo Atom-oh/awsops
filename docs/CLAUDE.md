@@ -17,7 +17,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 | [superpowers/plans/](superpowers/plans/) | Implementation plans (writing-plans output) — **a mix of current and frozen/superseded**; frozen-era plans (029–036 remediation, etc.) are not live (ADR-005 FROZEN); current truth is `decisions/BASELINE.md` |
 | [history/](history/) | Old history — `archive/` (execution history), etc. Not current truth |
 | [guides/](guides/) | AI test question sets (`ai-test-questions.md`, `ai-testing.md`), test coverage plan (`test-coverage-plan.md`), install/onboarding/troubleshooting guides |
-| [api-reference.md](api-reference.md) | Full API route index (root `CLAUDE.md` calls this the 94-route index) |
+| [api-reference.md](api-reference.md) | Full API route index (root `CLAUDE.md` calls this the 95-route index) |
 
 ## Conventions
 - All new documents are **bilingual Korean/English** — exceptions: (a) **all `CLAUDE.md`-type
