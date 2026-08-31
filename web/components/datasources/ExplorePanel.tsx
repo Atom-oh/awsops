@@ -1,6 +1,8 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import DiagSignalChips from './DiagSignalChips';
+import LogStreamView from './LogStreamView';
+import { EXAMPLE_QUERIES, AI_EXAMPLES, QUERY_LANGUAGE } from '@/lib/example-queries';
 import { Search } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
@@ -40,6 +42,9 @@ const selectCls = 'rounded-md border border-ink-200 bg-card px-2.5 py-1.5 text-[
 // Explore range presets: label → window seconds (0 = instant snapshot). Step auto-derived for ~250 points.
 const RANGE_PRESETS: ReadonlyArray<readonly [string, number]> = [
   ['즉시', 0], ['5m', 300], ['15m', 900], ['1h', 3600], ['6h', 21600], ['24h', 86400],
+  // gap-audit L86 (v1 parity): multi-day trend exploration — autoStep keeps ~250 points
+  // (7d→2419s, 30d→10368s), inside the API's 5000-point density cap.
+  ['7d', 604800], ['30d', 2592000],
 ];
 const autoStep = (w: number) => Math.max(1, Math.round(w / 250));
 
@@ -57,6 +62,10 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
   const [busy, setBusy] = useState(false);
   const [nl, setNl] = useState('');
   const [genBusy, setGenBusy] = useState(false);
+  // gap-audit L88: connector execution time from the query API (additive metadata field).
+  const [execMs, setExecMs] = useState<number | null>(null);
+  // gap-audit L200: what the last successful AI generation was drafted from (null = no banner).
+  const [genFrom, setGenFrom] = useState<string | null>(null);
 
   const ds = list.find((d) => d.id === selId) ?? null;
   const canRange = ds ? RANGE_KINDS.has(ds.kind) : false;
@@ -84,7 +93,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
     const w = windowOverride ?? rangeWindow;
     const range = canRange && w > 0 ? { window: w, step: autoStep(w) } : false;
     const queriedKind = list.find((d) => d.id === selId)?.kind; // bind kind to THIS query, not the live selection
-    setBusy(true); setErr(''); setResult(null);
+    setBusy(true); setErr(''); setResult(null); setExecMs(null);
     try {
       const r = await fetch('/api/datasources/query', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -94,6 +103,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
       if (!r.ok) throw new Error(b.error || tt(`오류 ${r.status}`));
       setResultKind(queriedKind);
       setResult(b.result as NormalizedResult);
+      setExecMs(typeof b.metadata?.executionTimeMs === 'number' ? b.metadata.executionTimeMs : null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : tt('쿼리 실패'));
     } finally { setBusy(false); }
@@ -110,7 +120,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
       });
       const b = await r.json();
       if (!r.ok) throw new Error(b.error || tt(`오류 ${r.status}`));
-      if (b.query) setQuery(b.query);
+      if (b.query) { setQuery(b.query); setGenFrom(nl); }
     } catch (e) {
       setErr(e instanceof Error ? e.message : tt('AI 생성 실패'));
     } finally { setGenBusy(false); }
@@ -123,7 +133,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             scoped id isn't in the list yet. */}
         {(
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); }}>
+            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); setGenFrom(null); setExecMs(null); }}>
               <option value="">{tt('데이터소스 선택…')}</option>
               {list.map((d) => (
                 <option key={d.id} value={d.id}>{d.name} ({d.kind}){d.isDefault ? ` ${tt('· 기본')}` : ''}</option>
@@ -156,13 +166,33 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             {genBusy ? tt('생성 중…') : tt('AI로 생성')}
           </Button>
         </div>
+        {ds && (AI_EXAMPLES[ds.kind] ?? []).length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {(AI_EXAMPLES[ds.kind] ?? []).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setNl(p)}
+                className="rounded-full border border-dashed border-ink-200 px-2.5 py-1 text-[12px] text-ink-500 hover:border-brand-400 hover:text-brand-700"
+              >
+                {tt(p)}
+              </button>
+            ))}
+          </div>
+        )}
+        {genFrom && (
+          <div className="flex items-center justify-between rounded-md border border-purple-200 bg-purple-50 px-3 py-1.5 text-[12px] text-purple-800">
+            <span>{tt(`AI 생성됨 — "${genFrom}"에서 ${QUERY_LANGUAGE[ds?.kind ?? ''] ?? '쿼리'}를 생성했습니다. 실행 전 검토하세요.`)}</span>
+            <button type="button" className="ml-2 shrink-0 text-purple-500 hover:text-purple-800" onClick={() => setGenFrom(null)} aria-label={tt('닫기')}>×</button>
+          </div>
+        )}
         <div className="relative w-full">
           <span className="pointer-events-none absolute left-2.5 top-2.5 inline-flex text-ink-400">
             <Search size={14} />
           </span>
           <textarea
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); setGenFrom(null); }}
             placeholder={ds ? tt(PH[ds.kind] ?? '쿼리를 입력하세요') : tt('먼저 데이터소스를 선택하세요')}
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -185,6 +215,22 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             )}
           />
         </div>
+        {ds && (EXAMPLE_QUERIES[ds.kind] ?? []).length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-ink-400">{tt('예제:')}</span>
+            {(EXAMPLE_QUERIES[ds.kind] ?? []).map((e) => (
+              <button
+                key={e.label}
+                type="button"
+                title={e.expr}
+                onClick={() => { setQuery(e.expr); setGenFrom(null); run(undefined, e.expr); }}
+                className="rounded-full border border-ink-200 px-2.5 py-1 text-[12px] text-ink-600 hover:border-brand-400 hover:text-brand-700"
+              >
+                {tt(e.label)}
+              </button>
+            ))}
+          </div>
+        )}
         <DiagSignalChips
           instanceId={selId === '' ? undefined : selId}
           kind={ds?.kind}
@@ -198,13 +244,18 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
         </div>
         {err && <p className="text-[13px] text-rose-600">{err}</p>}
       </Card>
-      {result && <ResultView result={result} kind={resultKind} />}
+      {result && <ResultView result={result} kind={resultKind} execMs={execMs} />}
     </div>
   );
 }
 
-function ResultView({ result, kind }: { result: NormalizedResult; kind?: string }) {
+function ResultView({ result, kind, execMs }: { result: NormalizedResult; kind?: string; execMs?: number | null }) {
   const { tt } = useI18n();
+  // gap-audit L88: result metadata strip — rows/series count · execution time · language · shape.
+  const rowCount = result.shape === 'series'
+    ? (result.seriesKeys?.length ?? (result.series ? 1 : 0))
+    : (result.rows?.length ?? 0);
+  const countLabel = result.shape === 'series' ? tt(`${rowCount}개 시리즈`) : tt(`${rowCount}개 행`);
   // Line/Bar toggle for multi-series range results (v1 parity).
   const [chartType, setChartType] = useState<'line' | 'bar'>('line');
   // Instant prom/mimir vector (metric/value rows) → a ranked bar above the table. Gated by kind so
@@ -220,6 +271,12 @@ function ResultView({ result, kind }: { result: NormalizedResult; kind?: string 
       : null;
   return (
     <div className="space-y-3">
+      <p className="text-[12px] text-ink-400">
+        {countLabel}
+        {typeof execMs === 'number' && <> · {execMs.toLocaleString()}ms</>}
+        {kind && QUERY_LANGUAGE[kind] && <> · {QUERY_LANGUAGE[kind]}</>}
+        <> · {result.shape}</>
+      </p>
       {result.truncated && (
         <p className="text-[12px] text-amber-700">{tt('결과가 잘렸습니다(상한 도달) — 쿼리를 좁혀 다시 시도하세요.')}</p>
       )}
@@ -255,9 +312,60 @@ function ResultView({ result, kind }: { result: NormalizedResult; kind?: string 
       {barRows && (
         <HBarList title={tt('상위 결과')} data={barRows} labelKey="metric" valueKey="value" />
       )}
-      {(result.shape === 'table' || result.shape === 'logs' || result.shape === 'traces') && result.columns && result.rows && (
+      {result.shape === 'logs' && result.rows && (
+        <LogStreamView rows={result.rows} />
+      )}
+      {result.shape === 'traces' && result.rows && (
+        <TraceTable rows={result.rows} />
+      )}
+      {result.shape === 'table' && result.columns && result.rows && (
         <DataTable columns={result.columns} rows={result.rows} />
       )}
     </div>
+  );
+}
+
+/** Tempo/Jaeger trace rows with a proportional duration bar (gap-audit L205, v1 parity).
+ *  Non-numeric durations render as plain text — never a NaN-width bar. */
+function TraceTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const { tt } = useI18n();
+  const durations = rows.map((r) => Number(r.durationMs)).filter((n) => Number.isFinite(n) && n >= 0);
+  const max = durations.length ? Math.max(...durations) : 0;
+  return (
+    <Card className="overflow-hidden">
+      <table className="w-full text-[13px]">
+        <thead>
+          <tr className="border-b border-ink-100 text-left text-[11px] uppercase tracking-wide text-ink-400">
+            <th className="px-3 py-2">Trace ID</th>
+            <th className="px-3 py-2">Service</th>
+            <th className="px-3 py-2">Name</th>
+            <th className="px-3 py-2">{tt('소요시간')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const d = Number(r.durationMs);
+            const ok = Number.isFinite(d) && d >= 0 && max > 0;
+            return (
+              <tr key={i} className="border-b border-ink-50">
+                <td className="px-3 py-1.5 font-mono text-[11px] text-ink-500">{String(r.traceID ?? '')}</td>
+                <td className="px-3 py-1.5 text-ink-700">{String(r.rootServiceName ?? '')}</td>
+                <td className="px-3 py-1.5 text-ink-700">{String(r.rootTraceName ?? '')}</td>
+                <td className="px-3 py-1.5">
+                  <span className="flex items-center gap-2">
+                    <span className="w-16 shrink-0 text-right font-mono text-[12px] text-ink-800">{String(r.durationMs ?? '')}</span>
+                    {ok && (
+                      <span className="h-2 flex-1 rounded bg-ink-100">
+                        <span className="block h-2 rounded bg-brand-400" style={{ width: `${Math.max(2, Math.round((d / max) * 100))}%` }} />
+                      </span>
+                    )}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </Card>
   );
 }
