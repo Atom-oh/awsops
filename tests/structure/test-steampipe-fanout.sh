@@ -11,6 +11,49 @@ echo "# Steampipe fan-out terraform wiring"
 
 SP=terraform/v2/foundation/steampipe.tf
 DT=terraform/v2/foundation/data.tf
+VARS=terraform/v2/foundation/variables.tf
+
+check_number_variable() {
+  local name=$1
+  local default=$2
+  local block
+
+  block=$(sed -n "/^variable \"$name\" {/,/^}$/p" "$VARS")
+  printf '%s\n' "$block" | grep -Eq 'type[[:space:]]*=[[:space:]]*number' \
+    && printf '%s\n' "$block" | grep -Eq "default[[:space:]]*=[[:space:]]*$default" \
+    && printf '%s\n' "$block" | grep -Eq 'validation[[:space:]]*\{' \
+    && pass "$name is a validated number variable with default $default" \
+    || fail "$name is a validated number variable with default $default"
+}
+
+check_number_variable "steampipe_aws_max_concurrency" 4
+check_number_variable "steampipe_aws_bucket_size" 4
+check_number_variable "steampipe_aws_fill_rate" 2
+check_number_variable "steampipe_sync_reserved_concurrency" 4
+
+grep -Eq 'STEAMPIPE_AWS_MAX_CONCURRENCY' "$SP" \
+  && pass "Steampipe task gets STEAMPIPE_AWS_MAX_CONCURRENCY env" \
+  || fail "Steampipe task gets STEAMPIPE_AWS_MAX_CONCURRENCY env"
+
+grep -Eq 'STEAMPIPE_AWS_BUCKET_SIZE' "$SP" \
+  && pass "Steampipe task gets STEAMPIPE_AWS_BUCKET_SIZE env" \
+  || fail "Steampipe task gets STEAMPIPE_AWS_BUCKET_SIZE env"
+
+grep -Eq 'STEAMPIPE_AWS_FILL_RATE' "$SP" \
+  && pass "Steampipe task gets STEAMPIPE_AWS_FILL_RATE env" \
+  || fail "Steampipe task gets STEAMPIPE_AWS_FILL_RATE env"
+
+grep -Eq 'reserved_concurrent_executions[[:space:]]*=[[:space:]]*var\.steampipe_sync_reserved_concurrency' "$SP" \
+  && pass "inventory sync Lambda uses reserved concurrency variable" \
+  || fail "inventory sync Lambda uses reserved concurrency variable"
+
+grep -Eq 'maximum_event_age_in_seconds[[:space:]]*=[[:space:]]*900' "$SP" \
+  && pass "inventory sync Lambda expires delayed async events after 900 seconds" \
+  || fail "inventory sync Lambda expires delayed async events after 900 seconds"
+
+grep -Eq 'maximum_retry_attempts[[:space:]]*=[[:space:]]*0' "$SP" \
+  && pass "inventory sync Lambda disables asynchronous retries" \
+  || fail "inventory sync Lambda disables asynchronous retries"
 
 grep -q 'AURORA_ENDPOINT' "$SP" && grep -q 'AURORA_DATABASE' "$SP" \
   && pass "steampipe task gets AURORA_ENDPOINT + AURORA_DATABASE env" \
