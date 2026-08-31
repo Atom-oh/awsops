@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import SchedulePanel from './SchedulePanel';
 import SubscribersPanel from './SubscribersPanel';
-import ReportMarkdown from './ReportMarkdown';
+import ReportSections from './ReportSections';
 import IntentPanel from './IntentPanel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -206,6 +206,7 @@ export default function DiagnosisView() {
       <aside className="w-64 shrink-0 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <select
+            aria-label={tt('진단 티어')}
             value={tier}
             onChange={(e) => setTier(e.target.value as 'light' | 'mid' | 'deep')}
             className="rounded-md border border-ink-200 bg-card px-2 py-1 text-sm text-ink-700"
@@ -374,7 +375,7 @@ export default function DiagnosisView() {
               </div>
             </div>
             {view.summary && <ReportInsights summary={view.summary} />}
-            <ReportMarkdown markdown={view.markdown} />
+            <ReportSections markdown={view.markdown} />
           </>
         ) : view?.status === 'running' ? (
           <ProgressPanel progress={view.progress} stalled={pollTicks >= LONG_AFTER} />

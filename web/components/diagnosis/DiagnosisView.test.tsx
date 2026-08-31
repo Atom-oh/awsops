@@ -69,7 +69,7 @@ describe('DiagnosisView — deep tier + model selection', () => {
   it('offers a Deep tier option and a model radio (default Sonnet) only for deep', async () => {
     mockCapture();
     render(<DiagnosisView />);
-    const select = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    const select = (await screen.findByLabelText('진단 티어')) as HTMLSelectElement;
     expect(within(select).getByRole('option', { name: /deep/i })).toBeTruthy();
     expect(screen.queryByRole('radio')).toBeNull(); // mid → no model radio
     fireEvent.change(select, { target: { value: 'deep' } });
@@ -80,21 +80,21 @@ describe('DiagnosisView — deep tier + model selection', () => {
   it('omits model in the POST body for mid', async () => {
     const posts = mockCapture();
     render(<DiagnosisView />);
-    await screen.findByRole('combobox');
+    await screen.findByLabelText('진단 티어');
     fireEvent.click(screen.getByRole('button', { name: /진단 실행/ }));
     await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toEqual({ tier: 'mid' });
+    expect(posts[0]).toEqual({ tier: 'mid', lang: 'ko' }); // lang rides on every run (gap L50)
   });
 
   it('posts the selected model for deep (opus)', async () => {
     const posts = mockCapture();
     render(<DiagnosisView />);
-    const select = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    const select = (await screen.findByLabelText('진단 티어')) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'deep' } });
     fireEvent.click(screen.getByRole('radio', { name: /opus/i }));
     fireEvent.click(screen.getByRole('button', { name: /진단 실행/ }));
     await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toEqual({ tier: 'deep', model: 'opus' });
+    expect(posts[0]).toEqual({ tier: 'deep', model: 'opus', lang: 'ko' });
   });
 
   it('shows the model in the report list for a deep report', async () => {

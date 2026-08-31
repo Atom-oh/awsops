@@ -73,6 +73,42 @@ def test_enqueues_a_linked_report_per_due_schedule(monkeypatch):
     assert conn.closed is True
 
 
+def test_lang_forwarded_and_fail_closed(monkeypatch):
+    # gap L50: config.lang rides into the report payload; an invalid value fails closed to ko.
+    rows = [("u1", "weekly", {"tier": "mid", "lang": "en"}), ("u2", "weekly", {"tier": "mid", "lang": "xx"})]
+    _conn, inserted, _sqs = _wire(monkeypatch, rows)
+    sd.lambda_handler({}, None)
+    assert inserted[0][2]["lang"] == "en"
+    assert inserted[1][2]["lang"] == "ko"
+
+
+def test_precise_next_run_math():
+    # gap L51: KST occurrences honoring dayOfWeek (JS 0=Sun) / dayOfMonth / hour; None without detail.
+    assert sd._precise_next_run("weekly", {}) is None
+    assert sd._precise_next_run("weekly", {"tier": "mid"}) is None
+    n = sd._precise_next_run("weekly", {"dayOfWeek": 0, "hour": 6})
+    assert n.tzinfo is not None and n.hour == 6 and (n.weekday() + 1) % 7 == 0  # Sunday 06:00 KST
+    from datetime import datetime
+    assert n > datetime.now(sd._KST)
+    b = sd._precise_next_run("biweekly", {"dayOfWeek": 0, "hour": 6})
+    assert (b - n).days == 7  # biweekly = the weekly occurrence + one extra week
+    m = sd._precise_next_run("monthly", {"dayOfMonth": 15, "hour": 9})
+    assert m.day == 15 and m.hour == 9 and m > datetime.now(sd._KST)
+    # bool must not read as an int detail value (True would otherwise mean dayOfWeek=1)
+    assert sd._precise_next_run("weekly", {"dayOfWeek": True}) is None
+
+
+def test_detail_schedule_gets_followup_next_run_update(monkeypatch):
+    # gap L51: after a successful enqueue, a config with detail fields refines next_run_at via a
+    # follow-up UPDATE; a detail-less config keeps the coarse claim advance (no follow-up).
+    rows = [("u1", "weekly", {"tier": "mid", "dayOfWeek": 1, "hour": 9}), ("u2", "weekly", {"tier": "mid"})]
+    conn, _inserted, _sqs = _wire(monkeypatch, rows)
+    sd.lambda_handler({}, None)
+    followups = [(sql, kw) for sql, kw in conn.calls if sql.startswith("UPDATE report_schedules SET next_run_at")]
+    assert len(followups) == 1
+    assert followups[0][1]["u"] == "u1" and followups[0][1]["t"] == "weekly"
+
+
 def test_no_due_rows_enqueues_nothing(monkeypatch):
     _conn, inserted, sqs = _wire(monkeypatch, [])
     assert sd.lambda_handler({}, None) == {"due": 0, "enqueued": 0, "failed": 0}

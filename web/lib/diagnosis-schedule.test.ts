@@ -19,6 +19,29 @@ describe('computeNextRun', () => {
   it('weekly adds 7 days', () => expect(computeNextRun('weekly', from)).toBe('2026-06-25T00:00:00.000Z'));
   it('biweekly adds 14 days', () => expect(computeNextRun('biweekly', from)).toBe('2026-07-02T00:00:00.000Z'));
   it('monthly adds 1 calendar month', () => expect(computeNextRun('monthly', from)).toBe('2026-07-18T00:00:00.000Z'));
+
+  // Detail fields (gap L51): KST occurrences, strictly in the future. `from` above is
+  // 2026-06-18T00:00:00Z = 2026-06-18 09:00 KST, a Thursday (JS getDay 4).
+  it('weekly + dayOfWeek/hour lands on the next KST occurrence (future-strict)', () => {
+    // Thursday 10:00 KST is later today → today 10:00 KST = 01:00 UTC.
+    expect(computeNextRun('weekly', from, { dayOfWeek: 4, hour: 10 })).toBe('2026-06-18T01:00:00.000Z');
+    // Thursday 09:00 KST equals "now" → pushed a full week out.
+    expect(computeNextRun('weekly', from, { dayOfWeek: 4, hour: 9 })).toBe('2026-06-25T00:00:00.000Z');
+    // Sunday (0) 06:00 KST → 2026-06-21 06:00 KST = 2026-06-20T21:00:00Z.
+    expect(computeNextRun('weekly', from, { dayOfWeek: 0, hour: 6 })).toBe('2026-06-20T21:00:00.000Z');
+  });
+  it('biweekly adds one extra week past the next occurrence', () => {
+    expect(computeNextRun('biweekly', from, { dayOfWeek: 0, hour: 6 })).toBe('2026-06-27T21:00:00.000Z');
+  });
+  it('monthly + dayOfMonth/hour picks this month if future, else next month (KST)', () => {
+    // 25th 09:00 KST = 2026-06-25T00:00:00Z (still ahead of Jun 18).
+    expect(computeNextRun('monthly', from, { dayOfMonth: 25, hour: 9 })).toBe('2026-06-25T00:00:00.000Z');
+    // 5th already passed in June → July 5th 09:00 KST.
+    expect(computeNextRun('monthly', from, { dayOfMonth: 5, hour: 9 })).toBe('2026-07-05T00:00:00.000Z');
+  });
+  it('empty detail object keeps the pure-interval behavior', () => {
+    expect(computeNextRun('weekly', from, {})).toBe('2026-06-25T00:00:00.000Z');
+  });
 });
 
 describe('readSchedule', () => {

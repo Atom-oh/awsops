@@ -286,6 +286,28 @@ describe('POST /api/diagnosis — idempotency conflict must not strand the secon
     // Switching this to the sub created a rolling-deploy discontinuity for no benefit.
     expect((reportForIdempotencyKey as any).mock.calls[0][0]).toContain('report:u@x.io:');
   });
+
+  // Report output language (gap L50).
+  it('400s an explicit invalid lang instead of silently swapping the language', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid', lang: 'fr' }) as any);
+    expect(res.status).toBe(400);
+    expect(enqueueJob as any).not.toHaveBeenCalled();
+  });
+  it('defaults lang to ko and threads a valid lang into the payload + idempotency key', async () => {
+    const { POST } = await import('./route');
+    await POST(req({ tier: 'mid' }) as any);
+    expect((enqueueJob as any).mock.calls[0][1]).toMatchObject({ lang: 'ko' });
+    expect((reportForIdempotencyKey as any).mock.calls[0][0]).toContain(':ko:');
+    vi.clearAllMocks();
+    (createReport as any).mockResolvedValue(42);
+    (reportForIdempotencyKey as any).mockResolvedValue(null);
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued' });
+    await POST(req({ tier: 'mid', lang: 'en' }) as any);
+    expect((enqueueJob as any).mock.calls[0][1]).toMatchObject({ lang: 'en' });
+    // lang is part of the key — a same-hour language switch must NOT dedupe onto the ko report.
+    expect((reportForIdempotencyKey as any).mock.calls[0][0]).toContain(':en:');
+  });
 });
 
 // PR #195 review MAJOR: reportForIdempotencyKey filters deleted_at, so a soft-deleted report is

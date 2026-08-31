@@ -222,7 +222,7 @@ def test_generate_parallel_preserves_order_and_isolates_section_failure(monkeypa
                         lambda conn, scope="self": [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
     monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
 
-    def fake_render(section, collected, model_id, max_tokens):
+    def fake_render(section, collected, model_id, max_tokens, lang="ko"):
         if section["key"] == "cost_overview":
             raise RuntimeError("boom")  # one section blows up
         return {"key": section["key"], "title": section["title"], "body": f"BODY::{section['key']}"}
@@ -280,6 +280,35 @@ def test_render_section_uses_only_its_sources(monkeypatch):
     # context must include cost but not inventory (section only declares 'cost')
     assert "mtd_by_service" in captured["context"]
     assert "by_type" not in captured["context"]
+
+
+def test_render_section_appends_lang_rule(monkeypatch):
+    # Report output language (gap L50): the prompt gets the per-lang instruction appended; an
+    # unknown lang falls back to Korean (fail-closed).
+    captured = {}
+
+    def fake_invoke(prompt, context_json, *a, **k):
+        captured["prompt"] = prompt
+        return "본문"
+
+    monkeypatch.setattr(report, "_bedrock_render", fake_invoke)
+    sec = {"key": "x", "title": "X", "sources": [], "prompt": "p."}
+    report.render_section(sec, {}, report.MODEL_ID, 100)  # default ko
+    assert "한국어로 작성" in captured["prompt"]
+    report.render_section(sec, {}, report.MODEL_ID, 100, lang="en")
+    assert "in English" in captured["prompt"]
+    report.render_section(sec, {}, report.MODEL_ID, 100, lang="xx")  # unknown → ko
+    assert "한국어로 작성" in captured["prompt"]
+
+
+def test_build_markdown_localizes_document_chrome():
+    rendered = [{"key": "a", "title": "A", "body": "b"}]
+    md_en = report.build_markdown(rendered, account="123456789012", tier="mid", lang="en")
+    assert "AWS Diagnosis Report" in md_en
+    assert "**Table of Contents**" in md_en
+    assert "Generated:" in md_en
+    md_ko = report.build_markdown(rendered, account="123456789012", tier="mid")
+    assert "AWS 진단 리포트" in md_ko and "**목차**" in md_ko
 
 
 def test_render_section_closes_unclosed_code_fence(monkeypatch):
