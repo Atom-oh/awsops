@@ -10,9 +10,11 @@ connector work) and L206 (app-wide ko/en/zh i18n — [L], platform decision).
 
 ## 요약 (한국어)
 
-Explore 콘솔과 Datasources 관리 탭의 v1 패리티 소규모 갭 9건을 한 PR로 복원한다. 전부 기존
-read-only 경로 위의 프론트엔드 + 쿼리 API의 소폭 확장(범위 상한 30d, 실행시간 메타데이터)이며,
-신규 테이블/Terraform/커넥터 변경 없음.
+Explore 콘솔과 Datasources 관리 탭의 v1 패리티 소규모 갭 9건을 한 PR로 복원한다. 대부분 기존
+read-only 경로 위의 프론트엔드 + 쿼리 API의 소폭 확장(범위 상한 30d — per-kind, 실행시간
+메타데이터)이며, 신규 테이블/IAM 없음. 커넥터 변경은 prometheus/mimir RANGE 경로의 기존
+`timeout` 파라미터 전달 1건뿐이고 **`terraform apply`로 배포**된다(§Out of scope 참조) —
+apply 전까지 30d 상한은 업스트림 타임아웃 가드 없이 동작한다.
 
 ## Decisions (per item)
 

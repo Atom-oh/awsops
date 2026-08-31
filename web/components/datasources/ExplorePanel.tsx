@@ -367,7 +367,7 @@ function TraceTable({ rows, columns }: { rows: Record<string, unknown>[]; column
                   if (c.key === 'durationMs') {
                     const nonEmpty = raw !== '' && raw != null;
                     const d = Number(raw);
-                    const ok = nonEmpty && Number.isFinite(d) && d >= 0 && max > 0;
+                    const ok = nonEmpty && Number.isFinite(d) && d > 0 && max > 0; // d === 0 must not paint a measured-looking 2% bar
                     return (
                       <td key={c.key} className="px-3 py-1.5">
                         <span className="flex items-center gap-2">
