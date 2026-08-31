@@ -770,6 +770,8 @@ def sync(resource_type):
     result = None
     terminal_event = None
     terminal_fields = None
+    prior_last_success_at = None
+    prior_last_success_row_count = None
     try:
         adb = _aurora()
         # advisory lock per type (no Steampipe stampede); skip if busy
@@ -790,10 +792,20 @@ def sync(resource_type):
             # once. Per-account freshness is the captured_at on each inventory_resources row (which IS
             # keyed by real account_id), so no per-account state is lost.
             # mark running INSIDE the try so a throw here records 'failed' and the finally still unlocks
-            adb.run("INSERT INTO inventory_sync_runs (resource_type, status, started_at, finished_at, row_count, error) "
-                    "VALUES (:t,'running',now(),NULL,NULL,NULL) "
-                    "ON CONFLICT (resource_type, account_id) DO UPDATE SET status='running', started_at=now(), "
-                    "finished_at=NULL, error=NULL", t=resource_type)
+            prior_success = adb.run(
+                "INSERT INTO inventory_sync_runs "
+                "(resource_type, status, started_at, finished_at, row_count, error) "
+                "VALUES (:t,'running',now(),NULL,NULL,NULL) "
+                "ON CONFLICT (resource_type, account_id) DO UPDATE SET "
+                "status='running', started_at=now(), finished_at=NULL, row_count=NULL, error=NULL "
+                "RETURNING last_success_at, last_success_row_count",
+                t=resource_type,
+            )
+            if prior_success:
+                prior_last_success_at, prior_last_success_row_count = prior_success[0]
+            expected_target_accounts = (
+                [] if resource_type in SDK_SYNCS else _enabled_target_accounts(adb)
+            )
             # SDK-sourced types bypass Steampipe; both paths yield list[dict] rows (recs).
             if resource_type in SDK_SYNCS:
                 recs, id_col, region_col = SDK_SYNCS[resource_type]()
@@ -847,6 +859,7 @@ def sync(resource_type):
             # (`present`). An account with 0 rows from the aggregator may have suffered a transient
             # connection failure — pruning it would silently discard its last-good inventory (M5).
             present = {a for (a, _, _) in seen}
+            unreachable_accounts = set()
             # M-2 (round 8): host ('self') protection must be SYMMETRIC with target accounts, not
             # an unconditional `| {'self'}`. An earlier version force-included 'self' on the
             # reasoning "host uses IAM task-role creds (not AssumeRole), always succeeds" — but
@@ -863,6 +876,8 @@ def sync(resource_type):
             if 'self' not in present:
                 if resource_type in SDK_SYNCS or _account_reachable(_caller_account()):
                     present.add('self')
+                else:
+                    unreachable_accounts.add('self')
             # M2 (round 6): an enabled TARGET account that contributed 0 rows this run is
             # ambiguous under the M5 guard above — it might be genuinely empty (e.g. all its EC2
             # instances were terminated) or its aggregator connection might be transiently
@@ -872,33 +887,68 @@ def sync(resource_type):
             # reachable + 0 rows = genuinely empty (include in present so its stale rows get
             # pruned); unreachable = protect its last-good inventory (leave excluded).
             if resource_type not in SDK_SYNCS:
-                for acct_id in _enabled_target_accounts(adb):
-                    if acct_id not in present and _account_reachable(acct_id):
-                        present.add(acct_id)
+                for acct_id in expected_target_accounts:
+                    if acct_id not in present:
+                        if _account_reachable(acct_id):
+                            present.add(acct_id)
+                        else:
+                            unreachable_accounts.add(acct_id)
             existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
             for acct, rg, rid in existing:
                 if str(acct) in present and (str(acct), str(rg), str(rid)) not in seen:
                     adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id=:acct AND region=:rg AND resource_id=:id",
                             t=resource_type, acct=acct, rg=rg, id=rid)
-            adb.run("UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), row_count=:n, error=NULL "
-                    "WHERE resource_type=:t AND account_id='self'", t=resource_type, n=len(recs))
+            if unreachable_accounts:
+                adb.run(
+                    "UPDATE inventory_sync_runs SET status='partial', finished_at=now(), "
+                    "row_count=:n, error=NULL "
+                    "WHERE resource_type=:t AND account_id='self'",
+                    t=resource_type,
+                    n=len(recs),
+                )
+                result = {
+                    "status": "partial",
+                    "type": resource_type,
+                    "row_count": len(recs),
+                    "unreachable_account_count": len(unreachable_accounts),
+                }
+                terminal_event = "inventory_sync_complete"
+                terminal_fields = {
+                    "resource_type": resource_type,
+                    "row_count": len(recs),
+                    "unreachable_account_count": len(unreachable_accounts),
+                    "degraded": True,
+                    "throttled": False,
+                    "freshness": "degraded",
+                    "age_minutes": None,
+                }
+            else:
+                adb.run(
+                    "UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), "
+                    "row_count=:n, error=NULL, last_success_at=now(), "
+                    "last_success_row_count=:n "
+                    "WHERE resource_type=:t AND account_id='self'",
+                    t=resource_type,
+                    n=len(recs),
+                )
+                result = {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
+                terminal_event = "inventory_sync_complete"
+                terminal_fields = {
+                    "resource_type": resource_type,
+                    "row_count": len(recs),
+                    "degraded": False,
+                    "throttled": False,
+                    "freshness": "healthy",
+                    "age_minutes": 0,
+                }
             # Daily inventory_snapshots row (dashboard "리소스 추세" chart, self-scoped only —
             # see _self_count). One row per (account, day, type): delete same-day then insert,
             # matching backfill-v1.mjs's convention — a resource type can sync more than once a day.
-            adb.run("DELETE FROM inventory_snapshots WHERE account_id='self' AND resource_type=:t "
-                    "AND captured_at::date = CURRENT_DATE", t=resource_type)
-            adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
-                    "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
-            result = {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
-            terminal_event = "inventory_sync_complete"
-            terminal_fields = {
-                "resource_type": resource_type,
-                "row_count": len(recs),
-                "degraded": False,
-                "throttled": False,
-                "freshness": "healthy",
-                "age_minutes": 0,
-            }
+            if 'self' in present:
+                adb.run("DELETE FROM inventory_snapshots WHERE account_id='self' AND resource_type=:t "
+                        "AND captured_at::date = CURRENT_DATE", t=resource_type)
+                adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
+                        "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
     except Exception as e:
         if locked:
             # Keep the pre-existing result and Aurora-ledger contracts, but never put raw
@@ -926,18 +976,43 @@ def sync(resource_type):
         }
     finally:
         cleanup_error = None
+        cleanup_ledger_restored = False
+
+        def restore_cleanup_failure_ledger():
+            if adb is None or not locked:
+                return False
+            try:
+                adb.run(
+                    "UPDATE inventory_sync_runs SET status='failed', finished_at=now(), "
+                    "error='inventory sync cleanup failed', "
+                    "last_success_at=:last_success_at, "
+                    "last_success_row_count=:last_success_row_count "
+                    "WHERE resource_type=:t AND account_id='self'",
+                    t=resource_type,
+                    last_success_at=prior_last_success_at,
+                    last_success_row_count=prior_last_success_row_count,
+                )
+                return True
+            except Exception:
+                return False
+
         if adb is not None:
             if locked:
                 try:
                     adb.run("SELECT pg_advisory_unlock(hashtext(:t))", t=f"inv:{resource_type}")
                 except Exception as e:
                     cleanup_error = e
+                    # Once unlock fails this run is terminally failed. Restore durable success
+                    # before close, while the connection is still known to be usable.
+                    cleanup_ledger_restored = restore_cleanup_failure_ledger()
             try:
                 adb.close()
             except Exception as e:
                 if cleanup_error is None:
                     cleanup_error = e
         if cleanup_error is not None and terminal_fields is not None:
+            if not cleanup_ledger_restored:
+                restore_cleanup_failure_ledger()
             result = {
                 "status": "failed",
                 "type": resource_type,

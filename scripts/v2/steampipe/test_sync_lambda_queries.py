@@ -224,7 +224,8 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+    adb = FakeAurora()
+    monkeypatch.setattr(mod, "_aurora", lambda: adb)
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
     monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
     mod.SDK_SYNCS["log_test_success"] = lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
@@ -245,6 +246,181 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
     assert terminal[0]["freshness"] == "healthy"
     assert terminal[0]["age_minutes"] == 0
     assert isinstance(terminal[0]["elapsed_ms"], int)
+
+
+def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(
+    capsys, monkeypatch
+):
+    """An expected account that answers neither the aggregate query nor its own probe makes the
+    run partial: preserve its old rows/last-success state and disclose only an unreachable count."""
+    mod = load_sync_lambda()
+    mod._ACCOUNT_CACHE["id"] = "111111111111"
+    calls = []
+
+    class FakeAurora:
+        last_success_at = "prior-success"
+        last_success_row_count = 7
+
+        def run(self, sql, **kwargs):
+            calls.append((sql, kwargs))
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "last_success_at=now()" in sql or "last_success_at=NULL" in sql:
+                self.last_success_at = "overwritten"
+            if "last_success_row_count=:n" in sql or "last_success_row_count=NULL" in sql:
+                self.last_success_row_count = "overwritten"
+            if "SELECT account_id, region, resource_id" in sql:
+                return [
+                    ("self", "ap-northeast-2", "old-host"),
+                    ("222222222222", "ap-northeast-2", "last-good-target"),
+                ]
+            return []
+
+        def close(self):
+            pass
+
+    class FakeSteampipe:
+        columns = [
+            {"name": "id"},
+            {"name": "region"},
+            {"name": "account_id"},
+        ]
+
+        def run(self, sql):
+            return [("new-host", "ap-northeast-2", "111111111111")]
+
+        def close(self):
+            pass
+
+    adb = FakeAurora()
+    monkeypatch.setattr(mod, "_aurora", lambda: adb)
+    monkeypatch.setattr(mod, "_steampipe", FakeSteampipe)
+    monkeypatch.setattr(mod, "_enabled_target_accounts", lambda adb: ["222222222222"])
+    monkeypatch.setattr(mod, "_account_reachable", lambda account_id: False)
+    mod.QUERIES["partial_account_test"] = ("SELECT id, region, account_id", "id", "region")
+    mod._ALLOWED.add("partial_account_test")
+
+    result = mod.sync("partial_account_test")
+
+    assert result == {
+        "status": "partial",
+        "type": "partial_account_test",
+        "row_count": 1,
+        "unreachable_account_count": 1,
+    }
+    partial_updates = [
+        (sql, params) for sql, params in calls
+        if "UPDATE inventory_sync_runs SET status='partial'" in sql
+    ]
+    assert len(partial_updates) == 1
+    assert "last_success_at" not in partial_updates[0][0]
+    assert "last_success_row_count" not in partial_updates[0][0]
+    assert adb.last_success_at == "prior-success"
+    assert adb.last_success_row_count == 7
+    assert not any(
+        "DELETE FROM inventory_resources" in sql
+        and params.get("acct") == "222222222222"
+        for sql, params in calls
+    )
+
+    output = capsys.readouterr().out
+    terminal = [
+        json.loads(line) for line in output.splitlines()
+        if json.loads(line)["event"] == "inventory_sync_complete"
+    ]
+    assert terminal == [{
+        "event": "inventory_sync_complete",
+        "resource_type": "partial_account_test",
+        "row_count": 1,
+        "unreachable_account_count": 1,
+        "degraded": True,
+        "throttled": False,
+        "freshness": "degraded",
+        "age_minutes": None,
+        "elapsed_ms": terminal[0]["elapsed_ms"],
+    }]
+    assert "111111111111" not in output
+    assert "222222222222" not in output
+
+
+def test_zero_row_success_is_durable_across_later_failure(capsys, monkeypatch):
+    """A genuine empty successful inventory must retain its success timestamp/count after a later
+    running/failed overwrite, after every expected aggregator account proves reachable."""
+    mod = load_sync_lambda()
+
+    class FakeAurora:
+        def __init__(self):
+            self.last_success_at = None
+            self.last_success_row_count = None
+
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "last_success_at=NULL" in sql:
+                self.last_success_at = None
+            if "last_success_row_count=NULL" in sql:
+                self.last_success_row_count = None
+            if "SET status='succeeded'" in sql and "last_success_at=now()" in sql:
+                self.last_success_at = "durable-success"
+                self.last_success_row_count = kwargs["n"]
+            if "SELECT account_id, region, resource_id" in sql:
+                return []
+            return []
+
+        def close(self):
+            pass
+
+    adb = FakeAurora()
+    monkeypatch.setattr(mod, "_aurora", lambda: adb)
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_enabled_target_accounts", lambda adb: ["222222222222"])
+    reachable = []
+
+    def account_reachable(account_id):
+        reachable.append(account_id)
+        return True
+
+    monkeypatch.setattr(mod, "_account_reachable", account_reachable)
+    aggregate_attempts = iter([[], RuntimeError("later collection failure")])
+
+    class FakeSteampipe:
+        columns = [
+            {"name": "id"},
+            {"name": "region"},
+            {"name": "account_id"},
+        ]
+
+        def run(self, sql):
+            value = next(aggregate_attempts)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_steampipe", FakeSteampipe)
+    mod._ACCOUNT_CACHE["id"] = "111111111111"
+    mod.QUERIES["zero_row_history_test"] = (
+        "SELECT id, region, account_id",
+        "id",
+        "region",
+    )
+    mod._ALLOWED.add("zero_row_history_test")
+
+    first = mod.sync("zero_row_history_test")
+    second = mod.sync("zero_row_history_test")
+    capsys.readouterr()
+
+    assert first == {
+        "status": "succeeded",
+        "type": "zero_row_history_test",
+        "row_count": 0,
+    }
+    assert second["status"] == "failed"
+    assert reachable == ["111111111111", "222222222222"]
+    assert adb.last_success_at == "durable-success"
+    assert adb.last_success_row_count == 0
 
 
 def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkeypatch):
@@ -509,6 +685,55 @@ def test_sync_cleanup_failure_replaces_success_with_one_safe_terminal_failure(
     assert terminal[0]["error_type"] == error_type
     assert len(terminal) == 1
     assert secret not in json.dumps(terminal)
+
+
+def test_unlock_failure_restores_last_success_before_closing_connection(capsys, monkeypatch):
+    """An unlock failure changes the run to failed, so restore durable success while Aurora is
+    still usable; waiting until after close can make that preservation impossible."""
+    mod = load_sync_lambda()
+    restored = []
+
+    class FakeAurora:
+        def __init__(self):
+            self.closed = False
+
+        def run(self, sql, **kwargs):
+            if self.closed:
+                raise RuntimeError("connection already closed")
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "INSERT INTO inventory_sync_runs" in sql:
+                return [("prior-success", 9)]
+            if "pg_advisory_unlock" in sql:
+                raise RuntimeError("unlock failed")
+            if "error='inventory sync cleanup failed'" in sql:
+                restored.append((
+                    kwargs["last_success_at"],
+                    kwargs["last_success_row_count"],
+                    self.closed,
+                ))
+            if "SELECT account_id, region, resource_id" in sql:
+                return []
+            return []
+
+        def close(self):
+            self.closed = True
+
+    adb = FakeAurora()
+    monkeypatch.setattr(mod, "_aurora", lambda: adb)
+    monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    mod.SDK_SYNCS["unlock_restore_test"] = (
+        lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
+    )
+    mod._ALLOWED.add("unlock_restore_test")
+
+    result = mod.sync("unlock_restore_test")
+    capsys.readouterr()
+
+    assert result["status"] == "failed"
+    assert restored == [("prior-success", 9, False)]
+    assert adb.closed is True
 
 
 @pytest.mark.parametrize(

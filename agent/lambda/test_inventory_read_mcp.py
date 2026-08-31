@@ -157,6 +157,9 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
                     "status": "succeeded",
                     "finished_at": "2026-08-31T00:00:00+00:00",
                     "row_count": 1,
+                    "last_success_at": "2026-08-31T00:00:00+00:00",
+                    "last_success_row_count": 1,
+                    "oldest_captured_at": "2026-08-31T00:00:00+00:00",
                     "latest_success_at": "2026-08-31T00:00:00+00:00",
                     "freshness": "stale",
                     "age_minutes": 31,
@@ -176,6 +179,7 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         self.assertEqual(body["freshness"]["resource_type"], "alb")
         self.assertEqual(body["freshness"]["freshness"], "stale")
         self.assertEqual(body["freshness"]["age_minutes"], 31)
+        self.assertEqual(body["freshness"]["last_success_row_count"], 1)
         freshness_call = next(call for call in calls if "inventory_sync_runs" in call[0])
         self.assertEqual(
             freshness_call[1],
@@ -185,6 +189,46 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
             ],
         )
         self.assertNotIn("'alb'", freshness_call[0])
+
+    def test_query_inventory_discloses_partial_as_degraded_without_hiding_oldest_data(self):
+        calls = []
+
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            if "inventory_sync_runs" in sql:
+                return [{
+                    "resource_type": "ec2",
+                    "status": "partial",
+                    "finished_at": "2026-08-31T00:15:00+00:00",
+                    "row_count": 3,
+                    "last_success_at": "2026-08-31T00:00:00+00:00",
+                    "last_success_row_count": 4,
+                    "oldest_captured_at": "2026-08-31T00:00:00+00:00",
+                    "latest_success_at": "2026-08-31T00:00:00+00:00",
+                    "freshness": "degraded",
+                    "age_minutes": 15,
+                    "stale_after_minutes": 30,
+                }]
+            return [{"data": {"instance_id": "i-1"}}]
+
+        inv._execute_override = fake
+        out = inv.lambda_handler(
+            {"tool_name": "query_inventory", "arguments": {"resource_type": "ec2"}},
+            None,
+        )
+
+        import json as _j
+        body = _j.loads(out["body"])
+        self.assertEqual(body["freshness"]["status"], "partial")
+        self.assertEqual(body["freshness"]["freshness"], "degraded")
+        self.assertEqual(body["freshness"]["oldest_captured_at"], "2026-08-31T00:00:00+00:00")
+        freshness_sql = next(sql for sql, _ in calls if "inventory_sync_runs" in sql)
+        self.assertIn("MIN(resources.captured_at)", freshness_sql)
+        self.assertIn("runs.last_success_at", freshness_sql)
+        self.assertIn("runs.last_success_row_count", freshness_sql)
+        self.assertIn("COALESCE(oldest_captured_at, last_success_at)", freshness_sql)
+        self.assertIn("IN ('partial', 'failed', 'running')", freshness_sql)
+        self.assertNotIn("MAX(resources.captured_at)", freshness_sql)
 
     def test_inventory_summary_binds_threshold_and_returns_per_type_freshness(self):
         calls = []
@@ -196,6 +240,9 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
                 "status": "succeeded",
                 "finished_at": "2026-08-31T00:00:00+00:00",
                 "row_count": 2,
+                "last_success_at": "2026-08-31T00:00:00+00:00",
+                "last_success_row_count": 2,
+                "oldest_captured_at": "2026-08-31T00:04:00+00:00",
                 "latest_success_at": "2026-08-31T00:00:00+00:00",
                 "freshness": "healthy",
                 "age_minutes": 4,
@@ -214,6 +261,44 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
             calls[0][1],
             [{"name": "stale_after_minutes", "value": {"longValue": 30}}],
         )
+
+    def test_inventory_summary_discloses_stale_and_zero_row_failed_histories(self):
+        def fake(sql, params=None):
+            return [
+                {
+                    "resource_type": "alb",
+                    "status": "partial",
+                    "last_success_at": "2026-08-31T00:00:00+00:00",
+                    "last_success_row_count": 2,
+                    "oldest_captured_at": "2026-08-30T23:00:00+00:00",
+                    "latest_success_at": "2026-08-30T23:00:00+00:00",
+                    "freshness": "stale",
+                    "age_minutes": 60,
+                    "stale_after_minutes": 30,
+                },
+                {
+                    "resource_type": "route53",
+                    "status": "failed",
+                    "last_success_at": "2026-08-31T00:10:00+00:00",
+                    "last_success_row_count": 0,
+                    "oldest_captured_at": None,
+                    "latest_success_at": "2026-08-31T00:10:00+00:00",
+                    "freshness": "degraded",
+                    "age_minutes": 5,
+                    "stale_after_minutes": 30,
+                },
+            ]
+
+        inv._execute_override = fake
+        out = inv.lambda_handler({"tool_name": "inventory_summary"}, None)
+
+        import json as _j
+        body = _j.loads(out["body"])
+        by_type = {row["resource_type"]: row for row in body["sync"]}
+        self.assertEqual(by_type["alb"]["freshness"], "stale")
+        self.assertEqual(by_type["route53"]["freshness"], "degraded")
+        self.assertEqual(by_type["route53"]["last_success_row_count"], 0)
+        self.assertIsNone(by_type["route53"]["oldest_captured_at"])
 
     def test_stale_threshold_env_defaults_and_rejects_invalid_values(self):
         self.assertEqual(inv._inventory_stale_after_minutes({}), 30)

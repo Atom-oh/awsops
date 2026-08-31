@@ -93,14 +93,15 @@ CloudWatch Logs에서 다음 JSON event 이름을 조회한다:
 
 - `steampipe_limiter_config` — effective `max_concurrency`, `bucket_size`, `fill_rate`.
 - `inventory_sync_dispatch` — `type=all` fan-out이 시작됨.
-- `inventory_sync_complete` — `resource_type`, `row_count`, `elapsed_ms`, `degraded=false`, `throttled=false`, `freshness=healthy`, `age_minutes=0`.
+- `inventory_sync_complete` — full success이면 `degraded=false`, `freshness=healthy`, `age_minutes=0`; expected account 일부가 도달 불가한 partial이면 `degraded=true`, `freshness=degraded`, `age_minutes=null`, `unreachable_account_count`가 있고 account ID는 없다.
 - `inventory_sync_busy` — `degraded=true`, `throttled=false`; 해당 type의 advisory lock이 이미 사용 중이며 retry storm을 만들지 않는다.
 - `inventory_sync_failed` — `resource_type`, `elapsed_ms`, `error_category`, `error_type`, `degraded=true`, structured `throttled`; raw exception text는 로그에 쓰지 않는다.
 
 예시 Logs Insights query / Example Logs Insights query:
 
 ```text
-fields @timestamp, event, resource_type, row_count, elapsed_ms, degraded, throttled,
+fields @timestamp, event, resource_type, row_count, unreachable_account_count,
+  elapsed_ms, degraded, throttled,
   freshness, age_minutes, error_category, error_type,
   max_concurrency, bucket_size, fill_rate
 | filter event like /^inventory_sync_/ or event = "steampipe_limiter_config"
@@ -108,21 +109,30 @@ fields @timestamp, event, resource_type, row_count, elapsed_ms, degraded, thrott
 | limit 100
 ```
 
-Aurora에서 `inventory_sync_runs`는 resource type별 마지막 실행 ledger이고, `inventory_resources.captured_at`은 account/region/resource row의 실제 수집 시각이다. `inventory-read`의 `query_inventory`와 `inventory_summary`는 둘을 사용해 `inventory_stale_after_minutes`(기본 30분) 기준 `healthy|stale|unavailable`, `latest_success_at`, `age_minutes`를 공개한다.
+Aurora에서 `inventory_sync_runs`는 resource type별 current-run ledger이며 `last_success_at`/`last_success_row_count`는 running/failed/partial 뒤에도 마지막 full success를 보존한다. 성공한 0-row 실행도 이 필드로 남는다. 현재 row가 있으면 reader는 가장 오래된 `inventory_resources.captured_at`을 사용해 preserved stale row를 새 row가 가리지 못하게 하고, row가 없으면 durable `last_success_at`을 사용한다. `query_inventory`와 `inventory_summary`는 `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, `age_minutes`를 공개한다.
 
-In Aurora, `inventory_sync_runs` is the per-resource-type run ledger and `inventory_resources.captured_at` is the actual collection time for an account/Region/resource row. `query_inventory` and `inventory_summary` use both to disclose `healthy|stale|unavailable`, `latest_success_at`, and `age_minutes` against `inventory_stale_after_minutes` (default 30).
+In Aurora, `inventory_sync_runs` is the per-type current-run ledger; `last_success_at` and `last_success_row_count` preserve the latest full success across running/failed/partial attempts, including a successful zero-row inventory. Where current rows exist, the reader uses the oldest `inventory_resources.captured_at` so newer rows cannot hide preserved stale rows; with no rows it uses durable `last_success_at`. `query_inventory` and `inventory_summary` disclose `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, and `age_minutes`.
+
+- `unavailable`: no durable last success and no current data.
+- `stale`: effective data age is greater than `inventory_stale_after_minutes` (default 30).
+- `degraded`: current status is `partial`, `failed`, or `running`, while effective data is still within the threshold.
+- `healthy`: current status is `succeeded` and effective data is within the threshold.
 
 ```sql
-SELECT resource_type, status, finished_at, row_count, error
+SELECT resource_type, status, finished_at, row_count,
+       last_success_at, last_success_row_count
 FROM inventory_sync_runs
 WHERE account_id = 'self'
 ORDER BY resource_type;
 
-SELECT resource_type, account_id, region, max(captured_at) AS latest_captured_at
+SELECT resource_type, account_id, region, min(captured_at) AS oldest_captured_at
 FROM inventory_resources
 GROUP BY resource_type, account_id, region
-ORDER BY latest_captured_at ASC;
+ORDER BY oldest_captured_at ASC;
 ```
+
+`sql_reader.inventory_sync_runs`는 위 safe operational columns만 명시적으로 노출하며 `error` text를 노출하지 않는다.
+`sql_reader.inventory_sync_runs` explicitly exposes only the safe operational columns above and never exposes `error` text.
 
 The limited ops `inventory-read-target` already returns explicit freshness for `query_inventory` and `inventory_summary`; it never silently falls back to a live API. Direct domain targets still coexist until Phase 2 expands Aurora coverage and retires them. Aurora-only is not live.
 

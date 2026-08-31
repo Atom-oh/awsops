@@ -14,12 +14,16 @@ on either side of the contract moving.
 import os
 import re
 import unittest
+from glob import glob
 
 import inventory_read_mcp as inv
 
 MIGRATION = os.path.join(
     os.path.dirname(__file__), "..", "..", "terraform", "v2", "foundation", "migrations",
     "01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql")
+FRESHNESS_MIGRATION_GLOB = os.path.join(
+    os.path.dirname(__file__), "..", "..", "terraform", "v2", "foundation", "migrations",
+    "*_inventory_sync_freshness.sql")
 
 
 def _entries():
@@ -116,6 +120,25 @@ class TestInventoryViewContract(unittest.TestCase):
             cols = _view_columns(table)
             for c in needed:
                 self.assertIn(c, cols, f"{table} view lost {c!r}, which inventory_read_mcp selects")
+
+    def test_inventory_sync_runs_view_exposes_durable_freshness_without_error_text(self):
+        matches = glob(FRESHNESS_MIGRATION_GLOB)
+        self.assertEqual(len(matches), 1, "expected one inventory_sync_freshness migration")
+        src = open(matches[0], encoding="utf-8").read()
+        match = re.search(
+            r"CREATE\s+VIEW\s+sql_reader\.inventory_sync_runs.*?AS\s+SELECT\s+(.*?)"
+            r"\s+FROM\s+public\.inventory_sync_runs",
+            src,
+            re.I | re.S,
+        )
+        self.assertIsNotNone(match, "freshness migration must recreate inventory_sync_runs view")
+        columns = match.group(1).lower()
+        for column in (
+            "resource_type", "account_id", "started_at", "finished_at", "status", "row_count",
+            "last_success_at", "last_success_row_count",
+        ):
+            self.assertRegex(columns, rf"\b{column}\b")
+        self.assertNotRegex(columns, r"\berror\b")
 
 
     def test_a_projection_is_dollar_quoted_so_its_inner_quotes_survive(self):

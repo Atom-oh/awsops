@@ -80,9 +80,9 @@
 
 ---
 
-> **인벤토리 쿼터 격리 (ADR-021, 2026-08-31):** Phase 1의 전역 Steampipe limiter, sync backpressure, structured terminal state, `inventory_stale_after_minutes=30` freshness 공개는 저장소에 구현됐다. 이 변경을 수행한 에이전트는 apply를 실행하지 않았으며 controller의 실제 배포 상태는 별도 확인한다. **현재는 ops gateway의 제한된 Aurora `inventory-read-target`과 직접 domain inventory/configuration API target이 공존한다.** Phase 2가 domain-aware Aurora coverage를 확장하고 direct target을 retirement한다. Aurora-only는 아직 live가 아니며 ADR-005 FROZEN은 그대로다.
+> **인벤토리 쿼터 격리 (ADR-021, 2026-08-31):** Phase 1의 전역 Steampipe limiter, sync backpressure, durable last-success, `partial` terminal state, `inventory_stale_after_minutes=30`의 `healthy|degraded|stale|unavailable` 공개는 저장소에 구현됐다. 성공한 0-row는 이후 실패에도 보존되고 expected account 도달 불가 시 last-good row를 유지한다. 이 변경을 수행한 에이전트는 apply를 실행하지 않았으며 controller의 실제 배포 상태는 별도 확인한다. **현재는 ops gateway의 제한된 Aurora `inventory-read-target`과 직접 domain inventory/configuration API target이 공존한다.** Phase 2가 domain-aware Aurora coverage를 확장하고 direct target을 retirement한다. Aurora-only는 아직 live가 아니며 ADR-005 FROZEN은 그대로다.
 >
-> **Inventory quota isolation (ADR-021, 2026-08-31):** Phase 1's global Steampipe limiter, sync backpressure, structured terminal state, and `inventory_stale_after_minutes=30` freshness disclosure are implemented in the repository. The agent making this change did not run apply; controller deployment status must be verified separately. **Current truth is coexistence: the ops gateway's limited Aurora `inventory-read-target` remains live alongside direct domain inventory/configuration API targets.** Phase 2 expands domain-aware Aurora coverage and retires direct targets. Aurora-only is not live, and ADR-005 FROZEN is unchanged.
+> **Inventory quota isolation (ADR-021, 2026-08-31):** Phase 1's global Steampipe limiter, sync backpressure, durable last-success, `partial` terminal state, and `healthy|degraded|stale|unavailable` disclosure at `inventory_stale_after_minutes=30` are implemented in the repository. Successful zero-row history survives later failures, and unreachable expected accounts preserve last-good rows. The agent making this change did not run apply; controller deployment status must be verified separately. **Current truth is coexistence: the ops gateway's limited Aurora `inventory-read-target` remains live alongside direct domain inventory/configuration API targets.** Phase 2 expands domain-aware Aurora coverage and retires direct targets. Aurora-only is not live, and ADR-005 FROZEN is unchanged.
 
 ## §3 결정 인덱스 (Decision Index)
 
@@ -99,7 +99,7 @@
 | [007](007-external-data-integration-governance.md) | 외부 데이터 통합 거버넌스 (keystone) | read-only=리소스 한정; 외부 read LIVE·write 2-티어 거버넌스 | 보안·운영우수성 |
 | [008](008-ai-diagnosis-pipeline.md) | AI 진단 파이프라인 | raw boto3 Bedrock·15+1섹션(의도 대비 실제 포함, 총 16) 병렬렌더·포맷·비용캐싱 (스트리밍 후속); 챗 루프 `AsyncAnthropicBedrock` 실험=flag-gated dark(`ANTHROPIC_AGENT_LOOP_ENABLED`) | 운영우수성·비용 |
 | [009](009-async-worker-backbone.md) | 비동기 워커 백본 | SQS+SFN+Lambda/Fargate; read-only job — `noop`/`noop-heavy`(범용 `/api/jobs`), `report`·`compliance`는 사용자 경로 기준 소유권-스코프 전용 라우트(`/api/diagnosis`, `/api/compliance/run`)로 enqueue(`schedule_dispatcher.py` 내부 직접 enqueue 예외), `datasource_index`·`insight`는 내부 전용 enqueue(사용자 제출 불가) | 안정성·운영우수성 |
-| [010](010-inventory-resource-model.md) | 인벤토리·리소스 모델 | 타입 레지스트리 + flag-gated Steampipe sync→Aurora (ECS service 갭) | 안정성·비용 |
+| [010](010-inventory-resource-model.md) | 인벤토리·리소스 모델 | 타입 레지스트리 + flag-gated Steampipe sync→Aurora (`ecs_service` 포함) | 안정성·비용 |
 | [011](011-multi-account.md) | 멀티 어카운트 | STS AssumeRole(AWSopsReadOnlyRole; ExternalId = 3rd-party 필수 / 1st-party는 task-role ARN 핀 시 선택, amended 2026-06-26), read-only fan-out | 보안 |
 | [012](012-cost-finops.md) | Cost / FinOps | Cost Explorer probe + FinOps MCP + Bedrock 비용 귀속 | 비용최적화 |
 | [013](013-alerting-notification.md) | 알림·통지 | 웹훅 HMAC + SNS 통지(diagnosis_notify LIVE) + 리포트 다운로드 | 운영우수성 |

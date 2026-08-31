@@ -47,12 +47,19 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 - **2026-08-31 rollout note (ADR-021)**: Phase 1's limiter, backpressure, structured
   terminal state, and freshness threshold are implemented in the repository. The agent making
   this change did not run apply; controller deployment status must be verified separately.
-  Current truth is coexistence: the limited ops `inventory-read-target` serves Aurora data and
-  freshness while direct domain inventory/config targets remain live. Phase 2 expands
+  `inventory_sync_runs.last_success_at`/`last_success_row_count` durably preserve full success,
+  including genuine zero-row inventories; unreachable expected accounts record `partial` without
+  deleting last-good rows or advancing those fields. The reader classifies the oldest current
+  `captured_at` (or durable last success when no rows exist) as
+  `healthy|degraded|stale|unavailable`. Current truth is coexistence: the limited ops
+  `inventory-read-target` serves Aurora data and freshness while direct domain
+  inventory/config targets remain live. Phase 2 expands
   domain-aware Aurora coverage and retires those direct targets after parity; Aurora-only is not live.
   (2026-08-31 롤아웃 노트(ADR-021): Phase 1 limiter, backpressure, structured terminal state,
-  freshness threshold는 저장소에 구현됐다. 이 변경을 수행한 에이전트는 apply를 실행하지
-  않았고 controller 배포 상태는 별도 확인한다. 현재 limited ops `inventory-read-target`이
+  freshness threshold와 durable last-success/partial semantics는 저장소에 구현됐다.
+  성공한 0-row도 보존되고 expected account가 도달 불가하면 last-good row를 유지한다.
+  이 변경을 수행한 에이전트는 apply를 실행하지 않았고 controller 배포 상태는 별도
+  확인한다. 현재 limited ops `inventory-read-target`이
   Aurora 데이터/freshness를 제공하면서 direct domain target과 공존한다. Phase 2가
   domain-aware coverage를 확장하고 parity 뒤 direct target을 retirement하므로
   Aurora-only는 아직 live가 아니다.)
@@ -88,6 +95,9 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
   Aurora cluster + writer instance, RDS-managed master secret.
 - `terraform/v2/foundation/data/schema.sql` — ADR-001 7-table schema + `schema_migrations`
   + P2 `worker_jobs` (idempotent).
+- `terraform/v2/foundation/migrations/01M1B3NB288P56BDR1GMEN9GH9_inventory_sync_freshness.sql`
+  — additive durable inventory success fields, `partial` status, and the safe explicit-column
+  `sql_reader.inventory_sync_runs` view.
 - The root `.gitignore` `data/` rule has a `!terraform/v2/foundation/data/` carve-out,
   so `schema.sql` is source-controlled (same pattern as `infra-cdk/data/`).
 - `web/lib/db.ts` — node-pg connection (consumed in P1d, not P1c).

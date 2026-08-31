@@ -309,9 +309,9 @@ def _fetch_one_type(rtype, limit):
 def _sync_freshness(resource_type=None):
     """Return threshold-classified freshness per type using bound Data API parameters.
 
-    A failed current run may leave last-good inventory rows in place. In that case their latest
-    captured_at remains the best available successful-data timestamp; a successful zero-row run
-    uses the run's finished_at so an intentionally empty inventory is still healthy.
+    Current rows use their oldest captured_at so a partial refresh cannot hide preserved stale
+    rows behind newer rows. When no rows exist, the durable last_success_at keeps a genuine
+    zero-row success visible across later running/failed/partial attempts.
     """
     stale_after = _inventory_stale_after_minutes()
     params = [{
@@ -320,7 +320,7 @@ def _sync_freshness(resource_type=None):
     }]
     type_filter = ""
     if resource_type is not None:
-        type_filter = " WHERE per_type.resource_type = :rt"
+        type_filter = " WHERE classified.resource_type = :rt"
         params.append({"name": "rt", "value": {"stringValue": resource_type}})
 
     rows = _execute(
@@ -330,28 +330,35 @@ def _sync_freshness(resource_type=None):
         "SELECT resource_type FROM inventory_resources WHERE account_id = 'self'"
         "), per_type AS ("
         "SELECT types.resource_type, runs.status, runs.finished_at, runs.row_count, "
-        "COALESCE("
-        "CASE WHEN runs.status = 'succeeded' THEN runs.finished_at END, "
-        "MAX(resources.captured_at)"
-        ") AS latest_success_at "
+        "runs.last_success_at, runs.last_success_row_count, "
+        "MIN(resources.captured_at) AS oldest_captured_at "
         "FROM types "
         "LEFT JOIN inventory_sync_runs runs "
         "ON runs.account_id = 'self' AND runs.resource_type = types.resource_type "
         "LEFT JOIN inventory_resources resources "
         "ON resources.account_id = 'self' AND resources.resource_type = types.resource_type "
-        "GROUP BY types.resource_type, runs.status, runs.finished_at, runs.row_count"
+        "GROUP BY types.resource_type, runs.status, runs.finished_at, runs.row_count, "
+        "runs.last_success_at, runs.last_success_row_count"
+        "), classified AS ("
+        "SELECT resource_type, status, finished_at, row_count, last_success_at, "
+        "last_success_row_count, oldest_captured_at, "
+        "COALESCE(oldest_captured_at, last_success_at) AS latest_success_at "
+        "FROM per_type"
         ") "
-        "SELECT resource_type, status, finished_at, row_count, latest_success_at, "
+        "SELECT resource_type, status, finished_at, row_count, last_success_at, "
+        "last_success_row_count, oldest_captured_at, latest_success_at, "
         "CASE "
         "WHEN latest_success_at IS NULL THEN 'unavailable' "
         "WHEN latest_success_at < CURRENT_TIMESTAMP - "
         "(:stale_after_minutes * INTERVAL '1 minute') THEN 'stale' "
-        "ELSE 'healthy' END AS freshness, "
+        "WHEN status IN ('partial', 'failed', 'running') THEN 'degraded' "
+        "WHEN status = 'succeeded' THEN 'healthy' "
+        "ELSE 'unavailable' END AS freshness, "
         "CASE WHEN latest_success_at IS NULL THEN NULL ELSE "
         "GREATEST(0, FLOOR(EXTRACT(EPOCH FROM "
         "(CURRENT_TIMESTAMP - latest_success_at)) / 60))::integer END AS age_minutes, "
         ":stale_after_minutes AS stale_after_minutes "
-        "FROM per_type" + type_filter + " ORDER BY resource_type",
+        "FROM classified" + type_filter + " ORDER BY resource_type",
         params=params,
     )
     return rows
@@ -366,6 +373,9 @@ def _freshness_for_type(resource_type):
         "status": None,
         "finished_at": None,
         "row_count": None,
+        "last_success_at": None,
+        "last_success_row_count": None,
+        "oldest_captured_at": None,
         "latest_success_at": None,
         "freshness": "unavailable",
         "age_minutes": None,
