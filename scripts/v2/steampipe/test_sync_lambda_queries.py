@@ -3,6 +3,7 @@ import json
 import sys
 import types
 from pathlib import Path
+import pytest
 
 
 def load_sync_lambda():
@@ -242,7 +243,7 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
 
 
 def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkeypatch):
-    """A failed sync without a bounded terminal error would be opaque or leak sensitive details."""
+    """A raw work exception in logs would expose sensitive query or credential text."""
     mod = load_sync_lambda()
 
     class FakeAurora:
@@ -254,22 +255,26 @@ def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkey
         def close(self):
             pass
 
-    failure = "x" * 400
+    failure = "password=supersecret SELECT * FROM inventory_resources " + "x" * 400
     monkeypatch.setattr(mod, "_aurora", FakeAurora)
     mod.SDK_SYNCS["log_test_failure"] = lambda: (_ for _ in ()).throw(RuntimeError(failure))
     mod._ALLOWED.add("log_test_failure")
 
     result = mod.sync("log_test_failure")
 
-    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    output = capsys.readouterr().out
+    records = [json.loads(line) for line in output.splitlines()]
     terminal = [record for record in records if record["event"].startswith("inventory_sync_") and
                 record["event"] != "inventory_sync_dispatch"]
     assert result == {"status": "failed", "type": "log_test_failure", "error": failure[:300]}
     assert len(terminal) == 1
     assert terminal[0]["event"] == "inventory_sync_failed"
     assert terminal[0]["resource_type"] == "log_test_failure"
-    assert terminal[0]["error"] == failure[:300]
+    assert terminal[0]["error_category"] == "sync"
+    assert terminal[0]["error"] == "inventory sync failed"
+    assert terminal[0]["error_type"] == "RuntimeError"
     assert isinstance(terminal[0]["elapsed_ms"], int)
+    assert "supersecret" not in output
 
 
 def test_sync_busy_logs_one_terminal_record(capsys, monkeypatch):
@@ -297,3 +302,157 @@ def test_sync_busy_logs_one_terminal_record(capsys, monkeypatch):
         "elapsed_ms": records[0]["elapsed_ms"],
     }]
     assert isinstance(records[0]["elapsed_ms"], int)
+
+
+def _terminal_records(capsys):
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    return [
+        record for record in records
+        if record["event"] in {
+            "inventory_sync_busy",
+            "inventory_sync_complete",
+            "inventory_sync_failed",
+        }
+    ]
+
+
+def test_sync_logs_one_safe_failure_when_aurora_connection_fails(capsys, monkeypatch):
+    """Moving _aurora outside the lifecycle catch would leave connection failures unlogged."""
+    mod = load_sync_lambda()
+    secret = "postgres://operator:supersecret@example.com:5432/awsops"
+
+    def fail_connect():
+        raise RuntimeError(f"connection refused {secret}")
+
+    monkeypatch.setattr(mod, "_aurora", fail_connect)
+
+    result = mod.sync("ec2")
+
+    terminal = _terminal_records(capsys)
+    assert result == {"status": "failed", "type": "ec2", "error": "inventory sync failed"}
+    assert terminal == [{
+        "event": "inventory_sync_failed",
+        "resource_type": "ec2",
+        "error_category": "lifecycle",
+        "error": "inventory sync failed",
+        "error_type": "RuntimeError",
+        "elapsed_ms": terminal[0]["elapsed_ms"],
+    }]
+    assert isinstance(terminal[0]["elapsed_ms"], int)
+    assert secret not in json.dumps(terminal)
+
+
+def test_sync_logs_one_safe_failure_when_lock_acquisition_fails(capsys, monkeypatch):
+    """An advisory-lock exception must not bypass the single terminal lifecycle record."""
+    mod = load_sync_lambda()
+    secret = "SELECT pg_try_advisory_lock(password='supersecret')"
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                raise ValueError(secret)
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+
+    result = mod.sync("ec2")
+
+    terminal = _terminal_records(capsys)
+    assert result == {"status": "failed", "type": "ec2", "error": "inventory sync failed"}
+    assert terminal[0]["event"] == "inventory_sync_failed"
+    assert terminal[0]["error_category"] == "lifecycle"
+    assert terminal[0]["error"] == "inventory sync failed"
+    assert terminal[0]["error_type"] == "ValueError"
+    assert len(terminal) == 1
+    assert secret not in json.dumps(terminal)
+
+
+def test_sync_logs_work_failure_when_failure_ledger_write_fails(capsys, monkeypatch):
+    """A failed ledger update must not replace or suppress the original terminal failure."""
+    mod = load_sync_lambda()
+    work_secret = "work failure SELECT * FROM credentials WHERE token='supersecret'"
+    ledger_secret = "ledger failure password=supersecret"
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "SET status='failed'" in sql:
+                raise RuntimeError(ledger_secret)
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+    mod.SDK_SYNCS["log_test_ledger_failure"] = (
+        lambda: (_ for _ in ()).throw(ValueError(work_secret))
+    )
+    mod._ALLOWED.add("log_test_ledger_failure")
+
+    result = mod.sync("log_test_ledger_failure")
+
+    terminal = _terminal_records(capsys)
+    assert result == {
+        "status": "failed",
+        "type": "log_test_ledger_failure",
+        "error": work_secret[:300],
+    }
+    assert terminal[0]["event"] == "inventory_sync_failed"
+    assert terminal[0]["error_category"] == "sync"
+    assert terminal[0]["error"] == "inventory sync failed"
+    assert terminal[0]["error_type"] == "ValueError"
+    assert len(terminal) == 1
+    output = json.dumps(terminal)
+    assert work_secret not in output
+    assert ledger_secret not in output
+
+
+@pytest.mark.parametrize(
+    ("cleanup", "error_type"),
+    [("unlock", "RuntimeError"), ("close", "OSError")],
+)
+def test_sync_cleanup_failure_replaces_success_with_one_safe_terminal_failure(
+    capsys, monkeypatch, cleanup, error_type
+):
+    """Logging complete before unlock/close would report success for an incomplete lifecycle."""
+    mod = load_sync_lambda()
+    secret = f"{cleanup} failure password=supersecret SELECT * FROM inventory_sync_runs"
+
+    class FakeAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if cleanup == "unlock" and "pg_advisory_unlock" in sql:
+                raise RuntimeError(secret)
+            return []
+
+        def close(self):
+            if cleanup == "close":
+                raise OSError(secret)
+
+    monkeypatch.setattr(mod, "_aurora", FakeAurora)
+    monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    mod.SDK_SYNCS["log_test_cleanup_failure"] = (
+        lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
+    )
+    mod._ALLOWED.add("log_test_cleanup_failure")
+
+    result = mod.sync("log_test_cleanup_failure")
+
+    terminal = _terminal_records(capsys)
+    assert result == {
+        "status": "failed",
+        "type": "log_test_cleanup_failure",
+        "error": "inventory sync cleanup failed",
+    }
+    assert terminal[0]["event"] == "inventory_sync_failed"
+    assert terminal[0]["error_category"] == "cleanup"
+    assert terminal[0]["error"] == "inventory sync cleanup failed"
+    assert terminal[0]["error_type"] == error_type
+    assert len(terminal) == 1
+    assert secret not in json.dumps(terminal)

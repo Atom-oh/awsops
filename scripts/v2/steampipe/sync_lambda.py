@@ -740,15 +740,21 @@ def sync(resource_type):
     started = time.monotonic()
     if resource_type not in _ALLOWED:
         return {"error": f"unknown type {resource_type}"}
-    adb = _aurora()
+    adb = None
+    locked = False
+    result = None
+    terminal_event = None
+    terminal_fields = None
     try:
+        adb = _aurora()
         # advisory lock per type (no Steampipe stampede); skip if busy
         got = adb.run("SELECT pg_try_advisory_lock(hashtext(:t))", t=f"inv:{resource_type}")
         if not got[0][0]:
-            _log("inventory_sync_busy", resource_type=resource_type,
-                 elapsed_ms=int((time.monotonic() - started) * 1000))
-            return {"status": "busy", "type": resource_type}
-        try:
+            result = {"status": "busy", "type": resource_type}
+            terminal_event = "inventory_sync_busy"
+            terminal_fields = {"resource_type": resource_type}
+        else:
+            locked = True
             # NOTE (M4): inventory_sync_runs is a JOB-LEVEL ledger — one row per resource_type keyed
             # under the host 'self' sentinel, tracking the aggregator run's status/row_count. It is
             # intentionally NOT per-account: a single aggregator run covers every connected account at
@@ -854,20 +860,61 @@ def sync(resource_type):
                     "AND captured_at::date = CURRENT_DATE", t=resource_type)
             adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
                     "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
-            _log("inventory_sync_complete", resource_type=resource_type, row_count=len(recs),
-                 elapsed_ms=int((time.monotonic() - started) * 1000))
-            return {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
-        except Exception as e:
-            adb.run("UPDATE inventory_sync_runs SET status='failed', finished_at=now(), error=:e "
-                    "WHERE resource_type=:t AND account_id='self'", t=resource_type, e=str(e)[:2000])
+            result = {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
+            terminal_event = "inventory_sync_complete"
+            terminal_fields = {"resource_type": resource_type, "row_count": len(recs)}
+    except Exception as e:
+        if locked:
+            # Keep the pre-existing result and Aurora-ledger contracts, but never put raw
+            # exception text (which can contain SQL, secrets, or resource payloads) in logs.
             error = str(e)[:300]
-            _log("inventory_sync_failed", resource_type=resource_type, error=error,
-                 elapsed_ms=int((time.monotonic() - started) * 1000))
-            return {"status": "failed", "type": resource_type, "error": error}
-        finally:
-            adb.run("SELECT pg_advisory_unlock(hashtext(:t))", t=f"inv:{resource_type}")
+            result = {"status": "failed", "type": resource_type, "error": error}
+            error_category = "sync"
+            try:
+                adb.run("UPDATE inventory_sync_runs SET status='failed', finished_at=now(), error=:e "
+                        "WHERE resource_type=:t AND account_id='self'",
+                        t=resource_type, e=str(e)[:2000])
+            except Exception:
+                pass
+        else:
+            result = {"status": "failed", "type": resource_type, "error": "inventory sync failed"}
+            error_category = "lifecycle"
+        terminal_event = "inventory_sync_failed"
+        terminal_fields = {
+            "resource_type": resource_type,
+            "error_category": error_category,
+            "error": "inventory sync failed",
+            "error_type": type(e).__name__,
+        }
     finally:
-        adb.close()
+        cleanup_error = None
+        if adb is not None:
+            if locked:
+                try:
+                    adb.run("SELECT pg_advisory_unlock(hashtext(:t))", t=f"inv:{resource_type}")
+                except Exception as e:
+                    cleanup_error = e
+            try:
+                adb.close()
+            except Exception as e:
+                if cleanup_error is None:
+                    cleanup_error = e
+        if cleanup_error is not None:
+            result = {
+                "status": "failed",
+                "type": resource_type,
+                "error": "inventory sync cleanup failed",
+            }
+            terminal_event = "inventory_sync_failed"
+            terminal_fields = {
+                "resource_type": resource_type,
+                "error_category": "cleanup",
+                "error": "inventory sync cleanup failed",
+                "error_type": type(cleanup_error).__name__,
+            }
+        terminal_fields["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        _log(terminal_event, **terminal_fields)
+    return result
 
 
 def lambda_handler(event, ctx):
