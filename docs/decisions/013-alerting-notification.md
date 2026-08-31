@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-**Accepted (2026-06-22) — consolidated.** consolidates: ADR-012 (SNS 알림 전략), ADR-014 (리포트 프록시 다운로드 URL), ADR-022 (알림 웹훅 HMAC-SHA256 인증).
+**Accepted (2026-06-22) — consolidated.** consolidates: ADR-012 (SNS 알림 전략), ADR-014 (리포트 프록시 다운로드 URL), ADR-022 (알림 웹훅 HMAC-SHA256 인증). amended 2026-08-31 (web task additionally holds a single-topic-scoped `sns:Publish` for the admin-only test notification — `POST /api/diagnosis/subscribers/test`) / 개정 2026-08-31 (web 태스크가 관리자 전용 테스트 발송용으로 동일 토픽 한정 `sns:Publish`를 추가 보유 — `POST /api/diagnosis/subscribers/test`).
 
 이 ADR은 v2 현행(net) 결정만을 기술한다. 세 레거시 ADR의 v1 메커니즘(EC2 `data/config.json` 시크릿, `src/lib/alert-sqs-poller.ts` 폴러, `/awsops/api/*` 프록시 등)은 v1 이력으로만 남으며 여기서 재서술하지 않는다.
 
@@ -36,11 +36,11 @@ Inbound webhooks are authenticated by HMAC-SHA256 with constant-time `timingSafe
 
 ### 2. SNS / 이메일 통지 / SNS / email notification
 
-스케줄 진단 리포트 요약은 **단일 전용 SNS 토픽** 으로 발행되며, 인앱 구독 관리(`web/lib/diagnosis-notify.ts`)는 그 토픽의 이메일 구독만 다룬다(Subscribe/Unsubscribe/List). 토픽 ARN은 Terraform이 주입(`diagnosis_notify_enabled` 게이트)하며, 부재 시 기능 비활성.
+스케줄 진단 리포트 요약은 **단일 전용 SNS 토픽** 으로 발행되며, 인앱 구독 관리(`web/lib/diagnosis-notify.ts`)는 그 토픽의 이메일 구독만 다룬다(Subscribe/Unsubscribe/List). 2026-08-31부터 web 태스크는 동일 토픽 한정 `sns:Publish` 1건을 추가로 보유한다 — 관리자 전용 테스트 발송(`POST /api/diagnosis/subscribers/test`) 용도이며, 리포트/다이제스트 발행은 여전히 worker 전용이다. 토픽 ARN은 Terraform이 주입(`diagnosis_notify_enabled` 게이트)하며, 부재 시 기능 비활성.
 
 `diagnosis_notify_enabled=true` 는 **현재 LIVE**다. 이는 외부-comms write이지만 IAM이 단일 토픽 ARN으로 스코프되어 **AWS-리소스 변경이 아니며**, ADR-040/041의 거버넌스된 외부 데이터/통지 write에 해당한다. (광역 `integrations_write_enabled` [Slack/Notion/Jira]는 OFF로 유지.) 구독 ARN은 `${topicArn}:${uuid}` 소유 검증으로 임의 토픽 unsubscribe를 차단한다.
 
-Scheduled diagnosis summaries publish to one dedicated SNS topic; in-app subscription management touches only that topic's email subscriptions, scoped by IAM to the single topic ARN. `diagnosis_notify_enabled=true` is **LIVE** — an external-comms write that is NOT AWS-resource mutation and is governed per ADR-040/041. Subscription-ARN ownership is verified (`${topicArn}:${uuid}`) before unsubscribe.
+Scheduled diagnosis summaries publish to one dedicated SNS topic; in-app subscription management touches only that topic's email subscriptions, scoped by IAM to the single topic ARN. Since 2026-08-31 the web task additionally holds `sns:Publish` scoped to the same single topic — solely for the admin-only test notification (`POST /api/diagnosis/subscribers/test`); report/digest publishing remains worker-only. `diagnosis_notify_enabled=true` is **LIVE** — an external-comms write that is NOT AWS-resource mutation and is governed per ADR-040/041. Subscription-ARN ownership is verified (`${topicArn}:${uuid}`) before unsubscribe.
 
 ### 3. 리포트 다운로드 — BFF 프록시 / Report download — BFF proxy
 

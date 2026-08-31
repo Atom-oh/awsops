@@ -19,6 +19,7 @@ A page for generating and reading comprehensive diagnostic reports that analyze 
   - **Light**: a fast check of core items only (currently identical catalog/token budget to Mid)
   - **Mid**: a balanced standard diagnosis (default)
   - **Deep**: a broad analysis covering 15+1 sections (16 rendered). Only **Deep** lets you additionally pick a model (**Sonnet** / **Opus**), and choosing **Opus** shows an accompanying cost note.
+- **Report language**: choose the report body language (**한국어 / English / 中文 / 日本語**). It defaults to the current UI language, and switching only the language within the same hour starts a new report.
 - Press the **진단 실행 (Run diagnosis)** button and the report is produced asynchronously by a background worker.
 
 ### Progress indicator
@@ -30,7 +31,7 @@ The left sidebar lists your recent reports:
 - An auto-generated **title**, the **id**, **depth (Tier)**, **model**, **status**, and **creation date** (KST)
 
 ### Report body
-- The body renders as **markdown** with a **table of contents (TOC)**.
+- The body renders as collapsible **section cards** with severity icons and a sticky **table of contents (TOC)** sidebar on the right.
 - Use the top buttons to export as **MD / DOCX / PDF**.
 
 ### Insight badges
@@ -40,20 +41,25 @@ The left sidebar lists your recent reports:
 ### Title, tags, and delete
 - The report owner or an admin can edit the **title** inline, add and remove **tags**, and **soft-delete** the report.
 
+### Scheduled diagnosis & notifications
+- **Scheduled diagnosis**: besides the cadence (weekly/biweekly/monthly) you can pick a **weekday** (weekly/biweekly), a **day of month 1–28** (monthly), a **run hour** (KST), and the **report language**; the **next run** and **last run** times are both shown. Unset fields keep the interval-only behavior.
+- **Diagnosis mailing list**: admins can, in addition to adding/removing subscribers, press **Send test** to deliver one test email to every confirmed subscriber and verify delivery.
+
 ## How to use
 
 1. In the sidebar, click **AI Operations > AI Diagnosis**.
 2. Select a **diagnosis depth** (**Light** / **Mid** / **Deep**).
 3. If you chose **Deep**, optionally specify the model (**Sonnet** / **Opus**).
-4. Press the **진단 실행 (Run diagnosis)** button to start generation.
-5. Watch the stages on the progress bar; when it finishes, review the report that opens automatically.
-6. Navigate sections with the **table of contents** on the left, and export as **MD / DOCX / PDF** from the top.
-7. Edit the **title** and **tags** or delete the report if needed (when you have permission).
+4. Choose the **report language** (default: the current UI language).
+5. Press the **진단 실행 (Run diagnosis)** button to start generation.
+6. Watch the stages on the progress bar; when it finishes, review the report that opens automatically.
+7. Navigate sections with the **table of contents** sidebar on the right (section cards collapse/expand), and export as **MD / DOCX / PDF** from the top.
+8. Edit the **title** and **tags** or delete the report if needed (when you have permission).
 
 ## Tips
 
 :::tip Duplicate-run protection
-If you run the same conditions (depth and model) again within the hour, the existing report is returned instead of generating a new one, along with a duplicate-run notice.
+If you run the same conditions (depth, model, and language) again within the hour, the existing report is returned instead of generating a new one, along with a duplicate-run notice.
 :::
 
 :::info Permissions
