@@ -65,6 +65,10 @@ export default function DiagnosisView() {
   const locale = localeOf(lang);
   const [tier, setTier] = useState<'light' | 'mid' | 'deep'>('mid');
   const [model, setModel] = useState<'sonnet' | 'opus'>('sonnet'); // deep-tier model choice
+  // Report output language (gap L50) — defaults to the current UI language (all 4 are supported).
+  const [reportLang, setReportLang] = useState<'ko' | 'en' | 'zh' | 'ja'>(
+    (['ko', 'en', 'zh', 'ja'] as const).includes(lang as 'ko') ? (lang as 'ko') : 'ko',
+  );
 
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress; title?: string | null; tags?: string[]; can_edit?: boolean } | null>(null);
@@ -166,7 +170,8 @@ export default function DiagnosisView() {
       const r = await fetch('/api/diagnosis', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(tier === 'deep' ? { tier, model } : { tier }),
+        body: JSON.stringify(tier === 'deep'
+          ? { tier, model, lang: reportLang } : { tier, lang: reportLang }),
       });
       if (!r.ok) return;
       const posted = await r.json();
@@ -199,7 +204,7 @@ export default function DiagnosisView() {
   return (
     <div className="flex gap-6">
       <aside className="w-64 shrink-0 space-y-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
             value={tier}
             onChange={(e) => setTier(e.target.value as 'light' | 'mid' | 'deep')}
@@ -208,6 +213,17 @@ export default function DiagnosisView() {
             <option value="light">Light</option>
             <option value="mid">Mid</option>
             <option value="deep">{tt('Deep (15+1섹션)')}</option>
+          </select>
+          <select
+            aria-label={tt('리포트 언어')}
+            value={reportLang}
+            onChange={(e) => setReportLang(e.target.value as typeof reportLang)}
+            className="rounded-md border border-ink-200 bg-card px-2 py-1 text-sm text-ink-700"
+          >
+            <option value="ko">한국어</option>
+            <option value="en">EN</option>
+            <option value="zh">中文</option>
+            <option value="ja">日本語</option>
           </select>
           <button
             onClick={run}

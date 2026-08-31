@@ -61,6 +61,23 @@ export default function SubscribersPanel() {
     }
   }
 
+  // Test-notification send (gap L53): one SNS test message to every CONFIRMED subscriber so a
+  // fresh subscription's delivery can be verified. Admin-only (the route enforces it too).
+  async function sendTest() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch('/api/diagnosis/subscribers/test', { method: 'POST' });
+      if (r.ok) setMsg(tt('테스트 메시지를 발송했습니다. 확인된 구독자 메일함을 확인하세요.'));
+      else {
+        const j = await r.json().catch(() => ({}));
+        setMsg(tt('테스트 발송에 실패했습니다.') + (j?.message ? ` (${j.message})` : ''));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove(subscriptionArn: string) {
     if (!window.confirm(tt('이 구독자를 메일링 리스트에서 제거할까요?'))) return;
     setBusy(true);
@@ -131,6 +148,15 @@ export default function SubscribersPanel() {
             {tt('추가')}
           </button>
         </div>
+      )}
+      {canManage && subs.some((s) => s.status === 'Confirmed') && (
+        <button
+          onClick={sendTest}
+          disabled={busy}
+          className="mt-1.5 rounded-md border border-ink-200 px-2.5 py-1 text-[12px] text-ink-600 hover:bg-ink-50 disabled:opacity-50"
+        >
+          {tt('테스트 발송')}
+        </button>
       )}
       {subs.some((s) => s.status === 'PendingConfirmation') && (
         // A pending subscription has no real ARN yet, so it cannot be unsubscribed via the SNS API (and
