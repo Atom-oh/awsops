@@ -78,15 +78,35 @@ def list_pending_notifications(conn):
     return [{"id": r[0], "title": r[1], "artifact_uri": r[2]} for r in rows]
 
 
-def mark_notified(conn, report_ids):
-    """Stamp notified_at=now() on the given report ids (after a successful digest publish). No-op
-    on an empty list (avoids an `= ANY('{}')` no-match query for nothing)."""
+_NOTIFY_OUTCOMES = ("emailed", "emailed_failopen", "publish_failed", "dropped_paused", "skipped_no_topic")
+
+
+def mark_notified(conn, report_ids, outcome="emailed"):
+    """Stamp notified_at=now() + the durable delivery outcome on the given report ids.
+    outcome vocabulary (also CHECK-constrained in the migration): 'emailed' (MessageId
+    confirmed), 'emailed_failopen' (published while the pause-flag read failed),
+    'publish_failed' (SNS publish returned no MessageId — still drained, never retried),
+    'dropped_paused' (admin pause — gap L178), 'skipped_no_topic'.
+    No-op on an empty list (avoids an `= ANY('{}')` no-match query for nothing)."""
+    if outcome not in _NOTIFY_OUTCOMES:
+        raise ValueError(f"invalid notify outcome: {outcome!r}")
     if not report_ids:
         return 0
-    rows = conn.run(
-        "UPDATE diagnosis_reports SET notified_at=now() WHERE id = ANY(:ids) RETURNING id",
-        ids=list(report_ids),
-    )
+    try:
+        rows = conn.run(
+            "UPDATE diagnosis_reports SET notified_at=now(), notify_outcome=:oc "
+            "WHERE id = ANY(:ids) RETURNING id",
+            ids=list(report_ids), oc=outcome,
+        )
+    except Exception as e:  # noqa: BLE001 — deploy-ordering guard, see below
+        # A worker image deployed BEFORE the notify_outcome migration must still stamp
+        # notified_at — failing here AFTER the SNS publish would leave the rows pending and
+        # the 15-minute schedule re-emailing the same reports until `make migrate` runs.
+        print(f"[db] notify_outcome write failed (pre-migration? stamping notified_at only): {e}")
+        rows = conn.run(
+            "UPDATE diagnosis_reports SET notified_at=now() WHERE id = ANY(:ids) RETURNING id",
+            ids=list(report_ids),
+        )
     return len(rows)
 
 
