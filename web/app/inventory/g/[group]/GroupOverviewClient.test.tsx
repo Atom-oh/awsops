@@ -11,12 +11,19 @@ vi.mock('next/link', () => ({
 const SUMMARY = {
   byType: [
     { type: 'vpc', label: 'VPCs', count: 3 },
+    { type: 'subnet', label: 'Subnets', count: 9 },
+    { type: 'nat_gateway', label: 'NAT Gateways', count: 2 },
     { type: 'alb', label: 'App Load Balancers', count: 2 },
     { type: 'security_group', label: 'Security Groups', count: 7 },
+    { type: 'ec2', label: 'EC2 Instances', count: 5 },
+    { type: 'lambda', label: 'Lambda Functions', count: 12 },
   ],
   byCategory: [],
-  total: 12,
-  splits: { ec2Running: 1, ec2Stopped: 0, ebsUnencrypted: 0, iamUserNoMfa: 0, sgOpenIngress: 4 },
+  total: 40,
+  splits: {
+    ec2Running: 4, ec2Stopped: 1, ebsUnencrypted: 0, iamUserNoMfa: 0, sgOpenIngress: 4,
+    lambdaRuntimes: 3, lambdaLongTimeout: 2,
+  },
 };
 
 beforeEach(() => {
@@ -38,6 +45,20 @@ describe('GroupOverviewClient', () => {
   it('surfaces the group-pinned split value (Network → sgOpenIngress = 4)', async () => {
     renderG('network');
     await waitFor(() => expect(screen.getByText('4')).toBeTruthy());
+  });
+
+  it('renders gap-L82 micro-stat sublines: ec2 splits, lambda runtimes, vpc cross-type composition', async () => {
+    renderG('compute');
+    await waitFor(() => expect(screen.getByText('4 running · 1 stopped')).toBeTruthy());
+    expect(screen.getByText('3 runtimes · 2 >300s')).toBeTruthy();
+    renderG('network');
+    await waitFor(() => expect(screen.getByText('9 subnets · 2 NAT')).toBeTruthy());
+    expect(screen.getByText('4 open ingress')).toBeTruthy();
+  });
+
+  it('no subline for a type whose split keys are absent (rolling-deploy skew) — no fabricated zeros', async () => {
+    renderG('storage'); // ebs_volume needs ebsTotalGb, absent from this fixture
+    await waitFor(() => expect(screen.queryByText(/GB ·/)).toBeNull());
   });
 
   it('Compute surfaces the EKS family tiles (feature links from the eks subgroup)', async () => {

@@ -27,6 +27,10 @@ describe('GET /api/inventory/summary', () => {
         { k: 'iam_user_no_mfa', n: 3 },
         { k: 'sg_open_ingress', n: 1 },
         { k: 's3_public', n: 1 },
+        { k: 'lambda_runtimes', n: 3 },
+        { k: 'lambda_long_timeout', n: 2 },
+        { k: 'ebs_total_gb', n: 500 },
+        { k: 'ecr_scan_on_push', n: 4 },
       ] })
       .mockResolvedValueOnce({ rows: [
         { t: 't3.medium', n: 3 },
@@ -53,6 +57,16 @@ describe('GET /api/inventory/summary', () => {
       sgOpenIngress: 1,
       s3Public: 1,
       cwAlarm: 0,
+      // gap L82 micro-stat splits — mapped when the UNION-ALL row is present, zero otherwise
+      lambdaRuntimes: 3,
+      lambdaLongTimeout: 2,
+      ebsTotalGb: 500,
+      rdsMultiAz: 0,
+      rdsUnencrypted: 0,
+      ecrScanOnPush: 4,
+      ecrImmutable: 0,
+      s3VersioningOff: 0,
+      cloudfrontEnabled: 0,
     });
     expect(body.ec2Types).toEqual([
       { name: 't3.medium', count: 3 },
@@ -63,6 +77,10 @@ describe('GET /api/inventory/summary', () => {
     const splitsSql = query.mock.calls[1][0] as string;
     expect(splitsSql).toContain('block_public_acls');
     expect(splitsSql).toContain('block_public_policy');
+    // gap L82: micro-stat aggregates ride the same single UNION-ALL round trip
+    for (const k of ['lambda_runtimes', 'lambda_long_timeout', 'ebs_total_gb', 'rds_multi_az', 'ecr_scan_on_push', 's3_versioning_off', 'cloudfront_enabled']) {
+      expect(splitsSql).toContain(k);
+    }
   });
 
   it('degrades ec2Types to [] when its aggregation query fails (byType still returns)', async () => {
@@ -97,6 +115,15 @@ describe('GET /api/inventory/summary', () => {
       sgOpenIngress: 0,
       s3Public: 0,
       cwAlarm: 0,
+      lambdaRuntimes: 0,
+      lambdaLongTimeout: 0,
+      ebsTotalGb: 0,
+      rdsMultiAz: 0,
+      rdsUnencrypted: 0,
+      ecrScanOnPush: 0,
+      ecrImmutable: 0,
+      s3VersioningOff: 0,
+      cloudfrontEnabled: 0,
     });
   });
   it('500 on byType db error', async () => {
