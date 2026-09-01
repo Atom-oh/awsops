@@ -1386,7 +1386,7 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   // Day-of-month options in the diagnosis SchedulePanel ("5일" → "Day 5").
   // Diagnosis stats bar (L176): "섹션 9개" / "소요 03:12".
   { re: /^섹션 (\d+)개$/, en: (m) => `${m[1]} sections`, zh: (m) => `${m[1]} 个章节`, ja: (m) => `${m[1]} セクション` },
-  { re: /^소요 (\d{2}:\d{2})$/, en: (m) => `Took ${m[1]}`, zh: (m) => `耗时 ${m[1]}`, ja: (m) => `所要 ${m[1]}` },
+  { re: /^소요 (\d{2,}:\d{2})$/, en: (m) => `Took ${m[1]}`, zh: (m) => `耗时 ${m[1]}`, ja: (m) => `所要 ${m[1]}` },
   { re: /^(\d{1,2})일$/, en: (m) => `Day ${m[1]}`, zh: (m) => `${m[1]} 日`, ja: (m) => `${m[1]} 日` },
   { re: /^(.+)로 다시$/, en: (m) => `${m[1]} again`, zh: (m) => `再次通过 ${m[1]}`, ja: (m) => `${m[1]} でもう一度` },
   { re: /^이 세션 (\d+)개 질의$/, en: (m) => `${m[1]} queries this session`, zh: (m) => `本会话 ${m[1]} 次查询`, ja: (m) => `このセッション ${m[1]} 件の質問` },

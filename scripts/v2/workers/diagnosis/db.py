@@ -95,7 +95,10 @@ def finish_report(conn, report_id, status, sources_used=None, summary=None,
     assert status in _TERMINAL
     # title/tags are set ONLY when provided — the failure path (status='failed', no title/tags) must
     # not clobber an auto-title, and pg won't accept None into the NOT NULL tags column.
-    sets = ["status=:s", "sources_used=:su::jsonb", "summary=:sm::jsonb", "artifact_uri=:a", "error=:e"]
+    # finished_at (L176): the terminal-write timestamp — stamped for every terminal status so
+    # the UI's elapsed stat never needs updated_at (which later meta edits keep advancing).
+    sets = ["status=:s", "sources_used=:su::jsonb", "summary=:sm::jsonb", "artifact_uri=:a", "error=:e",
+            "finished_at=now()"]
     kw = {"s": status, "su": json.dumps(sources_used or []), "sm": json.dumps(summary or {}),
           "a": artifact_uri, "e": error, "id": report_id}
     if title is not None:

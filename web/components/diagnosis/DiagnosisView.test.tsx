@@ -67,11 +67,13 @@ describe('DiagnosisView — live progress & never-stuck UI (A6)', () => {
 });
 
 describe('DiagnosisView — generation quick wins (L176/L177/L180/L181)', () => {
-  it('running: shows an mm:ss elapsed timer and the section checklist grid from progress.completed', async () => {
+  it('running: shows an mm:ss elapsed timer and the completed/pending checklist grid', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-08-31T00:01:30Z'));
+    // Mirrors the worker's payload shape: `section` is the most recently COMPLETED section and
+    // is always a member of `completed` (render is concurrent — no in-flight telemetry exists).
     mockList([{ id: 5, tier: 'mid', status: 'running', created_at: '2026-08-31T00:00:00Z',
-                progress: { current: 2, total: 9, section: 'Security Posture', phase: 'render',
+                progress: { current: 2, total: 9, section: 'Cost Overview', phase: 'render',
                             completed: ['Executive Summary', 'Cost Overview'] } }]);
     render(<DiagnosisView />);
     const bar = await screen.findByRole('progressbar');
@@ -79,7 +81,16 @@ describe('DiagnosisView — generation quick wins (L176/L177/L180/L181)', () => 
     expect(within(panel).getByText('01:30')).toBeTruthy();          // L176 timer
     expect(within(panel).getByText('Executive Summary')).toBeTruthy(); // L177 grid: completed
     expect(within(panel).getByText('Recommendations')).toBeTruthy();   // pending entry listed
+    expect(within(panel).getByText(/최근 완료 섹션/)).toBeTruthy();      // honest label (no spinner claim)
     vi.useRealTimers();
+  });
+  it('grid falls back to bar-only when the static mirror disagrees with progress.total (drift guard)', async () => {
+    mockList([{ id: 5, tier: 'mid', status: 'running', created_at: 't',
+                progress: { current: 2, total: 99, section: 'Cost Overview', phase: 'render',
+                            completed: ['Cost Overview'] } }]);
+    render(<DiagnosisView />);
+    await screen.findByRole('progressbar');
+    expect(screen.queryByText('Recommendations')).toBeNull();
   });
   it('running without progress.completed (legacy rows) keeps the bar-only view', async () => {
     mockList([{ id: 5, tier: 'mid', status: 'running', created_at: 't',

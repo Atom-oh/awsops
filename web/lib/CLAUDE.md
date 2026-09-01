@@ -14,6 +14,7 @@
 - `i18n-terms.ts` — `tt(label)`: the Korean literal is the source string; an unregistered string passes through unchanged (zero-risk fallback). Parameterized patterns go through RULES.
 - `eks-incluster.ts` — direct K8s API calls (reproduces `aws eks get-token`, P1e Access Entry + AdminViewPolicy). **Read-only invariant: GET only, never issue a write verb.** 4s timeout per request, 50-minute AssumeRole cache.
 - `inventory-types.ts` — inventory type registry (`InvType` spec — backs DetailPanel's `sections`).
+- `diagnosis-sections.ts` — static mirror of the worker's diagnosis section catalog (checklist grid + idle preview); manual lockstep with `scripts/v2/workers/diagnosis/sections.py`, enforced by `diagnosis/test_sections_mirror.py`.
 - `jobs.ts` — worker job creation/lookup (`worker_jobs` + SQS enqueue).
 - `changelog.ts` — data layer for the sidebar version chip + changelog modal (server-only, fs). **Single source of truth = repo-root `CHANGELOG.md`** — `deploy.mjs` copies it into the image just before build (`/app/CHANGELOG.md`); local dev falls back to `../CHANGELOG.md`. Bilingual (# English / # 한국어).
 - `ssrf-guard.ts` — SSRF guard for external datasource calls.

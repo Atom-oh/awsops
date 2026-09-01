@@ -32,6 +32,7 @@ def test_finish_report_sets_terminal_and_summary():
     assert n == 1
     sql, kw = c.calls[0]
     assert "UPDATE diagnosis_reports" in sql and "status=:s" in sql
+    assert "finished_at=now()" in sql  # L176: terminal-write stamp (drives the elapsed stat)
     assert json.loads(kw["su"]) == ["inventory", "cost"]
     assert kw["s"] == "succeeded"
 

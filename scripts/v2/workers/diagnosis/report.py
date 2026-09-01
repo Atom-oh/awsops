@@ -330,7 +330,7 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
             completed_titles.append(result["title"])
             _emit(done, result["title"], "render", list(completed_titles))
     rendered = [rendered_by_idx[i] for i in range(len(catalog))]
-    _emit(total, "리포트 조립", "assemble")
+    _emit(total, "리포트 조립", "assemble", list(completed_titles))  # keep the grid populated at 100%
     md = build_markdown(rendered, account, tier, collected, lang)
     summary = {"sections": len(rendered), "sources_used": sources_used,
                "degraded": degraded, "drift": drift}

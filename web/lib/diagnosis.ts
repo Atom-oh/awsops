@@ -18,7 +18,8 @@ export interface DiagnosisReport {
   artifact_uri: string | null;
   error: string | null;
   created_at: string;
-  // Set by finish_report; NULL while running. Drives the completed-report elapsed stat (L176).
+  // Stamped by finish_report (migration 01M1DA8D8W…); NULL while running and on legacy rows —
+  // the UI omits the duration segment when absent.
   finished_at: string | null;
   // Bedrock model used (NULL on legacy rows → render as 'sonnet'). Display metadata only.
   model: string | null;

@@ -47,6 +47,14 @@ export function sectionsForTier(tier: string): DiagSection[] {
   return tier === 'deep' ? DIAG_SECTIONS : DIAG_SECTIONS.filter((s) => !s.deep);
 }
 
+/** UI-language display title: variants are ordered [en, zh, ja]; ko (and base sections with
+ *  no variants) use the catalog title. */
+export function localizedTitle(section: DiagSection, lang: string): string {
+  if (!section.variants) return section.title;
+  const idx = lang === 'en' ? 0 : lang === 'zh' ? 1 : lang === 'ja' ? 2 : -1;
+  return idx >= 0 ? (section.variants[idx] ?? section.title) : section.title;
+}
+
 /** True when a completed-progress title refers to this catalog entry (any language variant). */
 export function titleMatches(section: DiagSection, completedTitle: string): boolean {
   return section.title === completedTitle || (section.variants ?? []).includes(completedTitle);
