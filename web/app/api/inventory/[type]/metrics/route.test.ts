@@ -6,6 +6,9 @@ const ec2AvgCpu = vi.fn();
 const ec2HourlyCost = vi.fn();
 const rdsMetrics = vi.fn();
 const rdsInstanceTrends = vi.fn();
+const liveResourceTrends = vi.fn();
+const hasLiveMetrics = vi.fn();
+const liveResourceMetrics = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/metrics', () => ({
@@ -13,6 +16,9 @@ vi.mock('@/lib/metrics', () => ({
   ec2HourlyCost: (...a: unknown[]) => ec2HourlyCost(...a),
   rdsMetrics: (...a: unknown[]) => rdsMetrics(...a),
   rdsInstanceTrends: (...a: unknown[]) => rdsInstanceTrends(...a),
+  liveResourceTrends: (...a: unknown[]) => liveResourceTrends(...a),
+  hasLiveMetrics: (...a: unknown[]) => hasLiveMetrics(...a),
+  liveResourceMetrics: (...a: unknown[]) => liveResourceMetrics(...a),
 }));
 
 const req = (url = 'http://x/api/inventory/ec2/metrics', cookie = 'awsops_token=t') =>
@@ -25,6 +31,10 @@ beforeEach(() => {
   ec2AvgCpu.mockReset();
   ec2HourlyCost.mockReset();
   rdsMetrics.mockReset();
+  rdsInstanceTrends.mockReset();
+  liveResourceTrends.mockReset();
+  hasLiveMetrics.mockReset();
+  liveResourceMetrics.mockReset();
 });
 
 describe('GET /api/inventory/[type]/metrics', () => {
@@ -191,5 +201,48 @@ describe('rds ?id= trends=1 (gap L141/L142/L155)', () => {
     const { GET } = await import('./route');
     expect((await GET(req("http://x/api/inventory/rds/metrics?id=db-1'--"), ctx('rds'))).status).toBe(400);
     expect(rdsMetrics).not.toHaveBeenCalled();
+  });
+});
+
+describe('live-metrics ?id= trends=1 (gap L118)', () => {
+  it('trends=1 returns ONLY the 1h series from liveResourceTrends', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    liveResourceTrends.mockResolvedValue([{ label: 'CPU', fmt: 'pct', samples: null }]);
+    const { GET } = await import('./route');
+    const body = await (await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1'), ctx('elasticache'))).json();
+    expect(body.trends).toEqual([{ label: 'CPU', fmt: 'pct', samples: null }]);
+    expect(liveResourceMetrics).not.toHaveBeenCalled();
+    expect(liveResourceTrends).toHaveBeenCalledWith('elasticache', 'cc-1', undefined, undefined);
+  });
+  it('400 on a malformed live-metrics id', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    const { GET } = await import('./route');
+    expect((await GET(req("http://x/api/inventory/elasticache/metrics?id=x'--"), ctx('elasticache'))).status).toBe(400);
+  });
+  it('forwards validated account AND region (member-account, non-default-region resources)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    liveResourceTrends.mockResolvedValue([]);
+    const { GET } = await import('./route');
+    await GET(req('http://x/api/inventory/opensearch/metrics?id=dom-1&trends=1&account=123456789012&region=us-west-2'), ctx('opensearch'));
+    expect(liveResourceTrends).toHaveBeenCalledWith('opensearch', 'dom-1', '123456789012', 'us-west-2');
+  });
+  it('400 on a malformed region (AWS-region shape, not just charset)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    const { GET } = await import('./route');
+    expect((await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1&region=US_EAST!'), ctx('elasticache'))).status).toBe(400);
+    expect((await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1&region=garbage'), ctx('elasticache'))).status).toBe(400);
+    expect(liveResourceTrends).not.toHaveBeenCalled();
+  });
+  it('latest-value grid forwards account and region too (member-account grid was host-pinned)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    liveResourceMetrics.mockResolvedValue([]);
+    const { GET } = await import('./route');
+    await GET(req('http://x/api/inventory/opensearch/metrics?id=dom-1&account=123456789012&region=us-west-2'), ctx('opensearch'));
+    expect(liveResourceMetrics).toHaveBeenCalledWith('opensearch', 'dom-1', '123456789012', 'us-west-2');
   });
 });

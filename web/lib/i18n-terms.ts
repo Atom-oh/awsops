@@ -1378,6 +1378,7 @@ export const TERMS: Record<string, Pair> = {
   '여유 메모리 24시간 (GB, KST)': { en: 'Freeable memory, 24h (GB, KST)', zh: '可用内存 24小时（GB，KST）', ja: '空きメモリ 24時間（GB, KST）' },
   'CPU 14일 일별 추이 (%)': { en: 'CPU, 14-day daily trend (%)', zh: 'CPU 14天每日趋势（%）', ja: 'CPU 14日間 日次推移（%）' },
   '데이터 불가': { en: 'no data', zh: '无数据', ja: 'データなし' },
+  '표본 기준': { en: 'sampled', zh: '基于样本', ja: 'サンプル基準' },
   // EBS detail drill-down batch (L97/L98).
   '연관 리소스 조회 실패': { en: 'Related-resource lookup failed', zh: '关联资源查询失败', ja: '関連リソースの取得に失敗しました' },
   '연관 리소스 조회 중…': { en: 'Loading related resources…', zh: '正在查询关联资源…', ja: '関連リソースを取得中…' },

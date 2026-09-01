@@ -7,6 +7,11 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
   GetMetricDataCommand: class { constructor(public input: unknown) {} },
   ListMetricsCommand: class { constructor(public input: unknown) {} },
 }));
+// assumedClient's member-account path hits a real STSClient — passthrough keeps the host path
+// identical while letting member-account dims tests run against the mocked CloudWatch client.
+vi.mock('./aws-assume', () => ({
+  assumedClient: async (_a: unknown, Ctor: new (c: Record<string, unknown>) => unknown, cfg: Record<string, unknown> = {}) => new Ctor(cfg),
+}));
 vi.mock('@aws-sdk/client-pricing', () => ({
   PricingClient: class { send = priceSend; },
   GetProductsCommand: class { constructor(public input: unknown) {} },
@@ -213,4 +218,59 @@ describe('rdsInstanceTrends (gap L141/L142/L155)', () => {
     expect(Object.values(t.spark).every((v) => v === null)).toBe(true);
   });
 
+});
+
+describe('liveResourceTrends (gap L118)', () => {
+  it('one bounded ~65-min call, Period 300, ascending; per-spec labels; empty series → null', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [
+      { Id: 'lt0', Timestamps: [new Date(Date.now() - 10 * 60_000)], Values: [42.123] },
+    ] });
+    const { liveResourceTrends } = await import('./metrics');
+    const t = await liveResourceTrends('elasticache', 'cc-1');
+    const input = (cwSend.mock.calls[0][0] as { input: { StartTime: Date; MetricDataQueries: { MetricStat: { Period: number; Metric: { MetricName: string } } }[]; ScanBy?: string } }).input;
+    expect(Date.now() - input.StartTime.getTime()).toBeLessThan(70 * 60_000);
+    expect(input.MetricDataQueries.every((q) => q.MetricStat.Period === 300)).toBe(true);
+    expect(input.ScanBy).toBe('TimestampAscending');
+    // the audit-required CacheHitRate is part of the elasticache spec
+    expect(input.MetricDataQueries.map((q) => q.MetricStat.Metric.MetricName)).toContain('CacheHitRate');
+    expect(t[0]).toMatchObject({ label: 'CPU', fmt: 'pct' });
+    expect(t[0].samples?.[0].v).toBe(42.12);
+    expect(t[1].samples).toBeNull(); // no datapoints → null, never []
+  });
+  it('unknown type → []; CloudWatch deny → [] (never throws)', async () => {
+    const { liveResourceTrends } = await import('./metrics');
+    expect(await liveResourceTrends('nope', 'x')).toEqual([]);
+    cwSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    expect(await liveResourceTrends('elasticache', 'cc-1')).toEqual([]);
+  });
+  it('opensearch dims carry the OWNING account ClientId (member domains must not query with the host id)', async () => {
+    process.env.AWS_ACCOUNT_ID = '180294183052';
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [] });
+    const { liveResourceTrends } = await import('./metrics');
+    await liveResourceTrends('opensearch', 'dom-1', '123456789012');
+    const q = (cwSend.mock.calls[0][0] as { input: { MetricDataQueries: { MetricStat: { Metric: { Dimensions: { Name: string; Value: string }[] } } }[] } }).input.MetricDataQueries[0];
+    const client = q.MetricStat.Metric.Dimensions.find((d) => d.Name === 'ClientId');
+    expect(client?.Value).toBe('123456789012');
+  });
+});
+
+describe('live fmt (ratio/native units)', () => {
+  it('CacheHitRate uses ratioPct — 0.92 renders 92%, never 0.9% (0–1 ratio source)', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [
+      { Id: 'lm6', Values: [0.92] }, // elasticache spec index 6 = CacheHitRate
+    ] });
+    const { liveResourceMetrics } = await import('./metrics');
+    const rows = await liveResourceMetrics('elasticache', 'cc-1');
+    const hit = rows.find((r) => r.label === 'Cache Hit Rate');
+    expect(hit?.value).toBe('92%');
+  });
+  it('opensearch FreeStorageSpace (already megabytes) renders without the bytes÷1e6 division', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [
+      { Id: 'lm2', Values: [512.4] }, // opensearch spec index 2 = FreeStorageSpace (mbRaw)
+    ] });
+    const { liveResourceMetrics } = await import('./metrics');
+    const rows = await liveResourceMetrics('opensearch', 'dom-1');
+    const fs = rows.find((r) => r.label === 'Free Storage');
+    expect(fs?.value).toBe('512.4 MB');
+  });
 });

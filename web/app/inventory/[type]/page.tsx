@@ -218,6 +218,18 @@ export default function InventoryTypePage() {
     return out;
   }, [allRows, spec?.stateKey, stateFilter, facets, query]);
 
+  // Value-distribution histogram (gap L135): counts per distinct numeric value of histKey.col,
+  // top 10 by count, then numerically sorted (v1's memory-allocation bar). preserveOrder keeps
+  // the numeric axis — BarDistribution's default re-sort is count-descending (rankings).
+  // Hook — must sit ABOVE the !spec early return (rules of hooks; no ESLint here to catch it).
+  const histData = useMemo(() => (spec?.histKey
+    ? countBy(allRows, spec.histKey.col)
+        .filter((d) => d.name !== '(none)')
+        .slice(0, 10)
+        .sort((a, b) => Number(a.name) - Number(b.name))
+        .map((d) => ({ label: `${d.name}${spec.histKey!.suffix ?? ''}`, value: d.value }))
+    : []), [allRows, spec?.histKey]);
+
   if (!spec) {
     return (
       <>
@@ -267,6 +279,18 @@ export default function InventoryTypePage() {
     ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
     : null;
   // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
+  const hist = spec.histKey && histData.length > 0
+    ? (
+      <BarDistribution
+        title={isTruncated ? `${spec.histKey.label} (${tt('표본 기준')})` : spec.histKey.label}
+        data={histData}
+        xKey="label"
+        yKey="value"
+        preserveOrder
+      />
+    )
+    : null;
+
   const barData = spec.barKey
     ? [...allRows]
         .map((r) => ({
@@ -341,7 +365,9 @@ export default function InventoryTypePage() {
               kpiRow
             )}
             {graphBand}
-            {barChart}
+            {barChart && hist
+              ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{barChart}{hist}</div>
+              : barChart ?? hist}
             {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
             {type === 'cloudtrail' && <CloudTrailEvents />}
             {tableBlock}
