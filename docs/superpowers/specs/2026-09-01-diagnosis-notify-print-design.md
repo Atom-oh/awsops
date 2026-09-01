@@ -100,3 +100,19 @@ No Terraform/IAM changes; one additive migration.
   guide (4 locales) and the CHANGELOG carry the sub-cadence caveat ("a pause shorter than the
   ~15-minute digest cadence may drop nothing"); the print view labels dates as KST with an
   Invalid-Date guard.
+
+## Round-4 corrections (review-driven)
+
+- **`emailed` requires a real MessageId (the gate MAJOR)** — publish_report/digest swallow
+  errors and return None; the outcome was computed from topic-presence alone, durably
+  recording a throttled/denied publish as delivered. The handler now captures the MessageId;
+  vocabulary widened to `publish_failed` (still drained, never retried) and
+  `emailed_failopen` (published while the pause-flag read failed — the divergence stays
+  visible durably); precedence: no-topic > paused > MessageId. CHECK constraint added; the
+  Python assert became a real ValueError.
+- **Deploy-ordering guard (MAJOR)** — a worker image deployed before the migration must not
+  throw AFTER the SNS publish (the 15-min schedule would re-email the same reports until
+  `make migrate`): `mark_notified` falls back to the legacy notified_at-only UPDATE with a
+  warning when the notify_outcome write fails.
+- Print view empty-body tri-state: a not-finished report reads its status; an unreadable
+  artifact on a finished one reads a body-read failure — never one flat '데이터 불가'.

@@ -45,13 +45,19 @@ describe('printable report view (gap L179)', () => {
   it("a null markdown (artifact unreadable) reads '데이터 불가' under the cover — never a blank page", async () => {
     setFetch({ report: REPORT, markdown: null });
     mount();
-    await waitFor(() => expect(screen.getByText('데이터 불가')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('리포트 본문을 읽지 못했습니다.')).toBeTruthy());
   });
 
   it("an EMPTY-string markdown (zero-byte artifact) also takes the honest fallback", async () => {
     setFetch({ report: REPORT, markdown: '   ' });
     mount();
-    await waitFor(() => expect(screen.getByText('데이터 불가')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('리포트 본문을 읽지 못했습니다.')).toBeTruthy());
+  });
+
+  it('a not-yet-finished report reads its status, not a body-read failure', async () => {
+    setFetch({ report: { ...REPORT, status: 'running' }, markdown: null });
+    mount();
+    await waitFor(() => expect(screen.getByText(/리포트가 아직 완료되지 않았습니다\. \(running\)/)).toBeTruthy());
   });
 
   it('a ## line inside a code fence never becomes a section/TOC entry (fence-aware split)', async () => {

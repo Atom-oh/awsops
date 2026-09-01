@@ -23,6 +23,8 @@ export const TERMS: Record<string, Pair> = {
   '인쇄': { en: 'Print', zh: '打印', ja: '印刷' },
   '닫기': { en: 'Close', zh: '关闭', ja: '閉じる' },
   '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },
+  '리포트 본문을 읽지 못했습니다.': { en: 'Could not read the report body.', zh: '无法读取报告正文。', ja: 'レポート本文を読み取れませんでした。' },
+  '리포트가 아직 완료되지 않았습니다.': { en: 'The report is not finished yet.', zh: '报告尚未完成。', ja: 'レポートはまだ完了していません。' },
   // EKS overview filter + node capacity (gap L130/L132)
   '클러스터 / VPC 필터': { en: 'Cluster / VPC Filter', zh: '集群 / VPC 筛选', ja: 'クラスター / VPC フィルター' },
   '노드 용량 (Requested / Available / Reserved)': { en: 'Node Capacity (Requested / Available / Reserved)', zh: '节点容量（Requested / Available / Reserved）', ja: 'ノード容量（Requested / Available / Reserved）' },

@@ -46,6 +46,7 @@ def test_digest_single_report_uses_publish_report_with_fetched_markdown(monkeypa
     out = diagnosis_digest.lambda_handler(None, None)
 
     assert out == {"digested": 1, "paused": False}
+    assert marked["outcome"] == "emailed"  # MessageId confirmed → durable 'emailed'
     assert digest_called["called"] is False  # single report → NOT the batch path
     assert captured["topic"] == "arn:aws:sns:x:1:t"
     assert captured["title"] == "리포트 A"
@@ -90,6 +91,7 @@ def test_digest_multiple_reports_uses_publish_digest_with_teasers(monkeypatch):
     out = diagnosis_digest.lambda_handler(None, None)
 
     assert out == {"digested": 2, "paused": False}
+    assert marked["outcome"] == "emailed"
     assert report_called["called"] is False  # multiple reports → NOT the single-report path
     assert captured["topic"] == "arn:aws:sns:x:1:t"
     assert [r["title"] for r in captured["reports"]] == ["리포트 A", "리포트 B"]
@@ -248,3 +250,61 @@ def test_digest_pause_flag_read_failure_fails_open(monkeypatch):
 
     diagnosis_digest.lambda_handler({}, None)
     assert len(published) == 1
+
+
+def test_digest_publish_failure_records_publish_failed_not_emailed(monkeypatch):
+    """publish_report swallows errors and returns None — a throttled/denied publish must be
+    durably recorded as publish_failed (still drained), never as 'emailed'."""
+    import diagnosis_digest
+
+    conn = FakeConn()
+    monkeypatch.setattr(diagnosis_digest.db, "connect", lambda: conn)
+    monkeypatch.setattr(
+        diagnosis_digest.ddb, "list_pending_notifications",
+        lambda c: [{"id": 5, "title": "t", "artifact_uri": ""}],
+    )
+    monkeypatch.setattr(diagnosis_digest.notify, "publish_report", lambda *a, **k: None)
+    marked = {}
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": marked.update(ids=ids, outcome=outcome))
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+
+    diagnosis_digest.lambda_handler({}, None)
+    assert marked["outcome"] == "publish_failed"
+    assert marked["ids"] == [5]
+
+
+def test_digest_no_topic_records_skipped_no_topic(monkeypatch):
+    import diagnosis_digest
+
+    conn = FakeConn()
+    monkeypatch.setattr(diagnosis_digest.db, "connect", lambda: conn)
+    monkeypatch.setattr(
+        diagnosis_digest.ddb, "list_pending_notifications",
+        lambda c: [{"id": 6, "title": "t", "artifact_uri": ""}],
+    )
+    marked = {}
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": marked.update(ids=ids, outcome=outcome))
+    monkeypatch.delenv("DIAGNOSIS_SNS_TOPIC_ARN", raising=False)
+
+    diagnosis_digest.lambda_handler({}, None)
+    assert marked["outcome"] == "skipped_no_topic"
+
+
+def test_digest_failopen_publish_records_emailed_failopen(monkeypatch):
+    """A publish that happened only because the pause-flag read failed must carry its own
+    durable marker — the pause/publish divergence stays answerable."""
+    import diagnosis_digest
+
+    conn = FakeConnWithSettings(raise_on_run=True)
+    monkeypatch.setattr(diagnosis_digest.db, "connect", lambda: conn)
+    monkeypatch.setattr(
+        diagnosis_digest.ddb, "list_pending_notifications",
+        lambda c: [{"id": 7, "title": "t", "artifact_uri": ""}],
+    )
+    monkeypatch.setattr(diagnosis_digest.notify, "publish_report", lambda *a, **k: "mid-7")
+    marked = {}
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": marked.update(ids=ids, outcome=outcome))
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+
+    diagnosis_digest.lambda_handler({}, None)
+    assert marked["outcome"] == "emailed_failopen"
