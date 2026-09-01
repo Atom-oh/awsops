@@ -205,11 +205,25 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
   // "True" can never read KPI-enabled but column-'No'.
   ecr: (r) => {
     const v = walk(r.image_scanning_configuration, 'scan_on_push');
+    const encType = walk(r.encryption_configuration, 'encryption_type');
     return {
       scan_on_push: v != null
         && !['', 'false', 'null', 'undefined', '0', 'none', 'no', 'disabled'].includes(String(v).trim().toLowerCase())
         ? 'Yes' : 'No',
+      // L213: pass-through of the encryption type (AES256 | KMS | KMS_DSSE | future values —
+      // rendered as-is; undefined when the blob is absent)
+      encryption_type_h: typeof encType === 'string' && encType ? encType : undefined,
     };
+  },
+  cloudtrail: (r) => {
+    // L188: 'is this trail actually delivering' at a glance. The sync persists pg8000
+    // datetimes via str() → '2026-09-01 03:04:00+00:00' (space-separated) — normalize to
+    // ISO before parsing (space-form Date() parsing is implementation-defined). dateH
+    // renders UTC; the column header carries the (UTC) marker.
+    const raw = typeof r.latest_delivery_time === 'string'
+      ? r.latest_delivery_time.replace(' ', 'T')
+      : r.latest_delivery_time;
+    return { last_delivery_h: dateH(raw) };
   },
   ecs_task: (r) => {
     // Fargate on-demand (ap-northeast-2): $/vCPU-h + $/GB-h — v1 constants (config-overridable in v1).

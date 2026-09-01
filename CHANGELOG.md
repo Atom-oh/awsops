@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Inventory quick wins: the CloudFront table gains a Name column (tag-derived), the CloudTrail table gains a Last Delivery (UTC) column (the most recent SUCCESSFUL delivery — the failure signal is the detail panel's delivery error) and its detail panel gains the CloudWatch Logs role plus the CloudWatch Logs / digest delivery timestamps-and-errors and stop-logging time (visible after the next sync run), and the ECR table gains an Encryption column (the type rendered as-is: AES256/KMS/KMS_DSSE etc.).
 - AI diagnosis: an admin pause switch for the report/digest emails (one Aurora settings row — pausing needs no deploy; reports completed while a pause spans a digest run are dropped from email exactly like when no topic is configured, and a settings-read failure fails open to publishing), and a printable report view (new-tab white A4 page with a cover block, numbered anchor TOC, per-section page breaks, and Print/Close buttons) alongside the existing PDF export.
 - Group overview tiles (the /inventory/g category pages — the dashboard-home tiles are a separate follow-up): per-type micro-stat sublines — EC2 running/stopped, Lambda runtimes (container-image functions count as 'custom') and >300s timeouts, EBS total GiB and unencrypted, RDS Multi-AZ/unencrypted, ECR scan-on-push/immutable, S3 public/versioning-off, IAM no-MFA, SG open-ingress, CloudFront enabled, and VPC subnet·NAT·TGW composition — computed in the existing single summary aggregation (no new AWS calls); sublines and the health verdict are hidden, never zeroed, while loading OR when the aggregation fails.
 - Compliance control detail: the slide-over now shows the control's description (the recommendation rationale) alongside Status/Reason/Resource — collected per control on new runs; rows from older runs read '—' rather than a fabricated rationale.
@@ -601,6 +602,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
+- 인벤토리 퀵윈: CloudFront 테이블에 Name 컬럼(태그 파생), CloudTrail 테이블에 Last Delivery (UTC) 컬럼(가장 최근의 성공한 배달 시각 — 실패 신호는 상세의 배달 오류) + 상세 패널에 CW Logs 역할과 CloudWatch Logs/다이제스트 배달 시각·오류, 로깅 중지 시각(다음 sync 실행 후 표시), ECR 테이블에 Encryption 컬럼(타입 값 그대로 — AES256/KMS/KMS_DSSE 등) 추가.
 - AI 진단: 리포트/다이제스트 이메일의 관리자 일시중지 스위치(Aurora 설정 1행 — 배포 없이 중지; 다이제스트 실행을 걸친 일시중지 동안 완료된 리포트는 토픽 미구성 때와 동일하게 이메일에서 제외되며, 설정 조회 실패 시 발송 쪽으로 fail-open) + 인쇄용 리포트 뷰(새 탭 흰 배경 A4 — 커버 블록, 번호 앵커 목차, 섹션별 page-break, 인쇄/닫기 버튼)를 기존 PDF 내보내기와 함께 제공.
 - 그룹 개요 타일(/inventory/g 카테고리 페이지 — 대시보드 홈 타일은 별도 후속): 타입별 마이크로스탯 서브라인 — EC2 running/stopped, Lambda 런타임 수(컨테이너 이미지 함수는 'custom'으로 집계)·>300s 타임아웃, EBS 총 GiB·미암호화, RDS Multi-AZ/미암호화, ECR scan-on-push/immutable, S3 public/versioning off, IAM no-MFA, SG open-ingress, CloudFront enabled, VPC 서브넷·NAT·TGW 구성 — 기존 단일 summary 집계 쿼리에서 계산(신규 AWS 호출 없음); 로딩 중이거나 집계가 실패하면 서브라인과 상태 판정 모두 0을 지어내지 않고 숨김.
 - 컴플라이언스 컨트롤 상세: 슬라이드오버에 Status/Reason/Resource와 함께 컨트롤 description(권고 배경 설명) 표시 — 새 실행부터 컨트롤별로 수집하며, 이전 실행의 행은 설명을 지어내지 않고 '—'로 표시.

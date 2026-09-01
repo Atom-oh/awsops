@@ -217,6 +217,10 @@ const VIRTUAL_LABELS: Record<string, string> = {
   software_update_h: 'Service Software', enforce_https_h: 'Enforce HTTPS',
   tls_policy_h: 'TLS Policy', custom_endpoint_h: 'Custom Endpoint',
   custom_endpoint_cert_h: 'Custom Endpoint Cert',
+  cloudwatch_logs_role_arn: 'CW Logs Role', latest_cloudwatch_logs_delivery_time: 'CW Last Delivery',
+  latest_cloudwatch_logs_delivery_error: 'CW Delivery Error',
+  latest_digest_delivery_time: 'Digest Last Delivery', latest_digest_delivery_error: 'Digest Delivery Error',
+  stop_logging_time: 'Logging Stopped',
   auto_tune_h: 'Auto-Tune', snapshot_hour_h: 'Automated Snapshot',
 };
 
