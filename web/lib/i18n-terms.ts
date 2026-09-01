@@ -25,6 +25,7 @@ export const TERMS: Record<string, Pair> = {
   '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },
   '리포트 본문을 읽지 못했습니다.': { en: 'Could not read the report body.', zh: '无法读取报告正文。', ja: 'レポート本文を読み取れませんでした。' },
   // Cost quick wins (gap L196/L197)
+  '최근 30일 · 필터 적용': { en: 'Trailing 30 days · filters applied', zh: '最近 30 天 · 已应用筛选', ja: '直近30日 · フィルター適用' },
   '비용 데이터가 없습니다 — Cost Explorer가 활성화되지 않았을 수 있습니다. AWS Billing 콘솔에서 Cost Explorer를 활성화하세요. 활성화 후 데이터 표시까지 최대 24시간 걸릴 수 있습니다.': { en: 'No cost data — Cost Explorer may not be enabled. Enable it in the AWS Billing console; data can take up to 24 hours to appear.', zh: '没有成本数据 — Cost Explorer 可能未启用。请在 AWS Billing 控制台启用；启用后数据最长可能需要 24 小时才会显示。', ja: 'コストデータがありません — Cost Explorer が有効になっていない可能性があります。AWS Billing コンソールで有効化してください。有効化後、データ表示まで最大 24 時間かかる場合があります。' },
   // EBS detail verdicts (gap L210)
   '암호화됨': { en: 'Encrypted', zh: '已加密', ja: '暗号化済み' },
@@ -1505,6 +1506,9 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^run 조회 실패 \((\d+)\)$/, en: (m) => `Failed to fetch the run (${m[1]})`, zh: (m) => `获取 run 失败 (${m[1]})`, ja: (m) => `run の取得に失敗 (${m[1]})` },
   { re: /^(.+) — 시계열 \((.+)\)$/, en: (m) => `${m[1]} — Time series (${m[2]})`, zh: (m) => `${m[1]} — 时序图 (${m[2]})`, ja: (m) => `${m[1]} — 時系列 (${m[2]})` },
   { re: /^이번 달 누적 \((.+)\)$/, en: (m) => `MTD (${m[1]})`, zh: (m) => `本月累计 (${m[1]})`, ja: (m) => `今月累計 (${m[1]})` },
+  { re: /^일평균 \((.+)\)$/, en: (m) => `Daily Average (${m[1]})`, zh: (m) => `日均 (${m[1]})`, ja: (m) => `日平均 (${m[1]})` },
+  { re: /^전월 총액 \((.+)\)$/, en: (m) => `Last Month (${m[1]})`, zh: (m) => `上月总额 (${m[1]})`, ja: (m) => `前月合計 (${m[1]})` },
+  { re: /^(\d+)개 >20% 증가$/, en: (m) => `${m[1]} increasing >20%`, zh: (m) => `${m[1]} 个增长 >20%`, ja: (m) => `${m[1]} 件が >20% 増加` },
   { re: /^이번 달 \((.+)\)$/, en: (m) => `This month (${m[1]})`, zh: (m) => `本月 (${m[1]})`, ja: (m) => `今月 (${m[1]})` },
   { re: /^일평균 기준 · 전월 (.+)$/, en: (m) => `Daily-avg basis · prev. month ${m[1]}`, zh: (m) => `按日均计算 · 上月 ${m[1]}`, ja: (m) => `日平均基準 · 前月 ${m[1]}` },
   { re: /^서비스로 필터링 \((\d+)\)$/, en: (m) => `Filter by service (${m[1]})`, zh: (m) => `按服务筛选 (${m[1]})`, ja: (m) => `サービスで絞り込み (${m[1]})` },

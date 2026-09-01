@@ -4,6 +4,7 @@ import {
   allServiceNames, filterServiceTotal, filterMonthlyTotals, filterDailyTotals,
   serviceChangeRows, mergeMonthlyByService, mergeDailyByService,
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
+  looksLikeCeUnconfigured,
 } from './cost';
 
 describe('momChangePct', () => {
@@ -171,5 +172,28 @@ describe('mergeMonthlyByService / mergeDailyByService (전체 계정 fan-out)', 
   it('empty parts → empty result', () => {
     expect(mergeMonthlyByService([])).toEqual([]);
     expect(mergeDailyByService([[], []])).toEqual([]);
+  });
+});
+
+
+describe('looksLikeCeUnconfigured (gap L197)', () => {
+  const base = { busy: false, err: '', loaded: true, filtered: false, failedLegs: 0, total: 0, changeRowCount: 0, trend: [] as { amount: number }[] };
+  it('fires only on a successful, unfiltered, failure-free load with all-zero derived values', () => {
+    expect(looksLikeCeUnconfigured(base)).toBe(true);
+    expect(looksLikeCeUnconfigured({ ...base, trend: [{ amount: 0 }, { amount: 0 }] })).toBe(true);
+  });
+  it('a zero-cost bucketed response with any nonzero value stays quiet', () => {
+    expect(looksLikeCeUnconfigured({ ...base, total: 0.01 })).toBe(false);
+    expect(looksLikeCeUnconfigured({ ...base, changeRowCount: 1 })).toBe(false);
+    expect(looksLikeCeUnconfigured({ ...base, trend: [{ amount: 3 }] })).toBe(false);
+  });
+  it('suppressed while busy / on error / before load / with a service filter active', () => {
+    expect(looksLikeCeUnconfigured({ ...base, busy: true })).toBe(false);
+    expect(looksLikeCeUnconfigured({ ...base, err: '500' })).toBe(false);
+    expect(looksLikeCeUnconfigured({ ...base, loaded: false })).toBe(false);
+    expect(looksLikeCeUnconfigured({ ...base, filtered: true })).toBe(false);
+  });
+  it('a failed fan-out leg is an access/error condition, NEVER an onboarding diagnosis', () => {
+    expect(looksLikeCeUnconfigured({ ...base, failedLegs: 1 })).toBe(false);
   });
 });

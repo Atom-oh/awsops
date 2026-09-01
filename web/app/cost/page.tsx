@@ -15,7 +15,7 @@ import { localeOf } from '@/lib/i18n';
 import {
   momChangePctDaily, projectMonthEnd, trendPill,
   PERIOD_MONTHS, PERIOD_OPTIONS, allServiceNames, filterMonthlyTotals, filterDailyTotals,
-  serviceChangeRows, mergeMonthlyByService, mergeDailyByService,
+  serviceChangeRows, mergeMonthlyByService, mergeDailyByService, looksLikeCeUnconfigured,
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
 } from '@/lib/cost';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
@@ -60,24 +60,32 @@ function mergeCost(parts: Cost[]): Cost {
     monthlyByService, dailyByService,
   };
 }
-async function loadAllAccountsCost(months: number): Promise<Cost> {
+async function loadAllAccountsCost(months: number): Promise<{ cost: Cost; failedLegs: number }> {
   const ar = await fetch('/api/accounts');
   const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> =
     ar.ok ? ((await ar.json().catch(() => ({ accounts: [] }))).accounts ?? []) : [];
   const ids = accts.filter((a) => a.enabled).map((a) => (a.isHost ? 'self' : a.accountId));
-  if (!ids.length) return await fetchCost('self', months);
+  if (!ids.length) return { cost: await fetchCost('self', months), failedLegs: 0 };
   const parts: Cost[] = [];
+  // Failed legs are swallowed into empty stubs (one broken account must not blank the page) —
+  // but the count is TRACKED: an all-empty merge caused by failures must never be diagnosed
+  // as "Cost Explorer not enabled" (gap L197 review round 1).
+  let failedLegs = 0;
   for (let i = 0; i < ids.length; i += FANOUT) {
     const chunk = await Promise.all(ids.slice(i, i + FANOUT).map((id) =>
-      fetchCost(id, months).catch(() => ({ currency: 'USD', forecast: null, monthlyByService: [], dailyByService: [] } as Cost))));
+      fetchCost(id, months).catch(() => {
+        failedLegs += 1;
+        return { currency: 'USD', forecast: null, monthlyByService: [], dailyByService: [] } as Cost;
+      })));
     parts.push(...chunk);
   }
-  return mergeCost(parts);
+  return { cost: mergeCost(parts), failedLegs };
 }
 
 export default function CostPage() {
   const { tt, lang } = useI18n();
   const [d, setD] = useState<Cost | null>(null);
+  const [failedLegs, setFailedLegs] = useState(0);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
@@ -138,8 +146,14 @@ export default function CostPage() {
     setBusy(true);
     const months = PERIOD_MONTHS[period] ?? 6;
     try {
-      const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost(months) : await fetchCost(active, months);
-      setD(data);
+      if (active === ALL_ACCOUNTS) {
+        const { cost, failedLegs: legs } = await loadAllAccountsCost(months);
+        setD(cost);
+        setFailedLegs(legs);
+      } else {
+        setD(await fetchCost(active, months));
+        setFailedLegs(0);
+      }
       setErr('');
       setCapturedAt(new Date().toISOString());
     } catch (e) {
@@ -215,7 +229,9 @@ export default function CostPage() {
     { key: 'current', label: `이번 달 (${currency})`, type: 'num', value: (r) => r.current, render: (r) => usd(r.current) },
     { key: 'previous', label: '전월', type: 'num', value: (r) => r.previous, render: (r) => usd(r.previous) },
     {
-      key: 'change', label: '변화율', type: 'num', value: (r) => r.change,
+      // null = no baseline (previous 0) — MetricTable's missing contract sorts these LAST
+      // instead of interleaving them with genuinely-flat services.
+      key: 'change', label: '변화율', type: 'num', value: (r) => (r.previous > 0 ? r.change : null),
       render: (r) => (
         <span className={changeTone(r.change, r.previous)}>
           {r.previous > 0 ? `${r.change > 0 ? '+' : ''}${r.change.toFixed(1)}%` : '—'}
@@ -247,10 +263,16 @@ export default function CostPage() {
   // change to 0, so >20 alone is already safe, but the guard states the intent).
   const dailyAvg = trend.length > 0 ? trend.reduce((a, t) => a + t.amount, 0) / trend.length : null;
   const surging = changeRows.filter((r) => r.change > 20 && r.previous > 0).length;
-  // Gap L197: load SUCCEEDED but every series is empty → Cost Explorer onboarding banner
-  // (distinct from the error banner; partial emptiness keeps the per-card empty texts).
-  const ceLikelyDisabled = !busy && !err && d != null
-    && monthlyByService.length === 0 && dailyByService.length === 0 && changeRows.length === 0;
+  // Gap L197: load SUCCEEDED but every DERIVED value is empty → Cost Explorer onboarding
+  // banner (distinct from the error banner). Derived emptiness, not raw-array emptiness — a
+  // successful CE response for a zero-spend account still returns one bucket per period
+  // (empty byService inside), so raw-length checks never fire. Suppressed when a service
+  // filter is active (a filter pinned to a zero-cost service must not claim CE is off) or
+  // when any fan-out leg FAILED (that is an access/error condition, not an onboarding one).
+  const ceLikelyDisabled = looksLikeCeUnconfigured({
+    busy, err, loaded: d != null, filtered: selectedServices.size > 0, failedLegs,
+    total, changeRowCount: changeRows.length, trend,
+  });
   const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
   const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
 
@@ -385,20 +407,20 @@ export default function CostPage() {
                 icon={<CalendarDays size={16} />}
               />
               <StatTile
-                label={`일평균 (${currency})`}
+                label={tt(`일평균 (${currency})`)}
                 value={dailyAvg == null ? DASH : usd(dailyAvg)}
-                hint={dailyAvg == null ? undefined : '최근 30일 · 필터 적용'}
+                hint={dailyAvg == null ? undefined : tt('최근 30일 · 필터 적용')}
                 icon={<CalendarDays size={16} />}
               />
               <StatTile
-                label={`전월 총액 (${currency})`}
-                value={lastMonth > 0 ? usd(lastMonth) : DASH}
+                label={tt(`전월 총액 (${currency})`)}
+                value={monthly.length > 1 ? usd(lastMonth) : DASH}
                 icon={<DollarSign size={16} />}
               />
               <StatTile
                 label="서비스 수"
                 value={changeRows.length}
-                trend={surging > 0 ? `${surging}개 >20% 증가` : undefined}
+                trend={surging > 0 ? tt(`${surging}개 >20% 증가`) : undefined}
                 variant={surging > 0 ? 'warn' : 'default'}
                 icon={<Layers size={16} />}
               />

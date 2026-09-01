@@ -30,7 +30,24 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
 
 ## Testing
 - Page-level helpers stay in lib/cost.ts (no change); the new tile math is presentational.
-- Component test for the cost table cells is impractical (page-level) — MetricTable's own
-  suite covers sort/render plumbing; tile/banner logic asserted via a lightweight page test if
-  feasible, else covered by tsc + the existing suite.
+- No page-level test is added (decision, not deferral): MetricTable's own suite covers the
+  sort/render plumbing, and the banner predicate lives in lib/cost.ts with unit tests.
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-24 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **The banner trigger works (the gate MAJOR)** — raw-array emptiness never fires (a zero-
+  spend CE response still returns one bucket per period) and the only reachable path (all
+  fan-out legs failing in 전체 계정) fired with the WRONG diagnosis. New
+  `looksLikeCeUnconfigured` in lib/cost.ts (unit-tested): derived emptiness (total 0, no
+  change rows, all-zero trend), unfiltered, load succeeded, and ZERO failed fan-out legs
+  (`loadAllAccountsCost` now tracks swallowed leg failures).
+- **Header i18n restored (the gate MAJOR)** — MetricTable renders `tt(c.label)` everywhere the
+  label reaches the user (passthrough-safe for its existing English call sites), and the new
+  tile labels/hint/surge text are registered (RULES patterns `일평균 (X)`, `전월 총액 (X)`,
+  `N개 >20% 증가`; TERM `최근 30일 · 필터 적용`).
+- No-baseline change rows pass `null` (MetricTable's missing contract — they sort LAST);
+  the Last Month dash gates on `monthly.length < 2` (a present $0 prior month renders $0);
+  the CHANGELOG bullet is amended in place for the table chrome + mobile layout change.
+- Known follow-up (out of scope, v1-parity bias): the change % compares partial MTD to the
+  previous full month — per-day normalization would remove the mid-month green bias.

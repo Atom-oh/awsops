@@ -146,3 +146,16 @@ export function mergeDailyByService(parts: DailyServiceCostPoint[][]): DailyServ
       byService: [...svc.entries()].map(([service, amount]) => ({ service, amount })).sort((a, b) => b.amount - a.amount),
     }));
 }
+
+
+/** Gap L197: "Cost Explorer probably isn't enabled" ONLY when the load succeeded, nothing is
+ *  filtered, no fan-out leg failed, and every DERIVED value is zero/empty. Raw-array emptiness
+ *  is the wrong signal — a successful CE call for a zero-spend account still returns one
+ *  bucket per period; a genuinely-disabled CE throws and takes the error path instead. */
+export function looksLikeCeUnconfigured(p: {
+  busy: boolean; err: string; loaded: boolean; filtered: boolean; failedLegs: number;
+  total: number; changeRowCount: number; trend: { amount: number }[];
+}): boolean {
+  if (p.busy || p.err !== '' || !p.loaded || p.filtered || p.failedLegs > 0) return false;
+  return p.total === 0 && p.changeRowCount === 0 && p.trend.every((t) => t.amount === 0);
+}
