@@ -78,6 +78,9 @@ export default function InventoryTypePage() {
   const [mapVpc, setMapVpc] = useState<Row | null>(null);
   // Supplementary metric KPI cards (e.g. EC2 avg CPU + hourly cost). Degrade silently to [].
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
+  // Optional server-computed ranking chart (gap L138, e.g. EC2 CPU Top 15) — generic: any type
+  // whose metrics route returns `bar` renders it with no page changes.
+  const [metricBar, setMetricBar] = useState<{ title: string; data: { label: string; value: number }[] } | null>(null);
   const [scope] = useActiveScope();
 
   // Accurate fleet total past the 500-row cap (gap L110): the summary endpoint's byType
@@ -120,12 +123,13 @@ export default function InventoryTypePage() {
   // while the table/donut narrow to the selected region, showing mismatched numbers.
   useEffect(() => {
     setMetricCards([]);
+    setMetricBar(null);
     if (!spec) return;
     let alive = true;
     fetch(`/api/inventory/${type}/metrics?${scopeParams(scope)}`)
       .then((r) => (r.ok ? r.json() : { cards: [] }))
-      .then((d) => { if (alive) setMetricCards(d.cards || []); })
-      .catch(() => { if (alive) setMetricCards([]); });
+      .then((d) => { if (alive) { setMetricCards(d.cards || []); setMetricBar(d.bar && Array.isArray(d.bar.data) && d.bar.data.length ? d.bar : null); } })
+      .catch(() => { if (alive) { setMetricCards([]); setMetricBar(null); } });
     return () => { alive = false; };
   }, [spec, type, scope]);
 
@@ -304,6 +308,10 @@ export default function InventoryTypePage() {
   const barChart = spec.barKey && barData.length > 0
     ? <BarDistribution title={`Top ${barData.length} — ${spec.barKey.label}`} data={barData} xKey="label" yKey="value" />
     : null;
+  // Server-computed ranking chart (gap L138): the metrics route's optional `bar` payload.
+  const serverBar = metricBar
+    ? <BarDistribution title={metricBar.title} data={metricBar.data} xKey="label" yKey="value" decimals={1} />
+    : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
   const graphBand = donut && donut2
     ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{donut}{donut2}</div>
@@ -365,9 +373,12 @@ export default function InventoryTypePage() {
               kpiRow
             )}
             {graphBand}
-            {barChart && hist
-              ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{barChart}{hist}</div>
-              : barChart ?? hist}
+            {(() => {
+              const charts = [barChart, hist, serverBar].filter(Boolean);
+              if (charts.length === 0) return null;
+              if (charts.length === 1) return charts[0];
+              return <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{charts.map((c, i) => <div key={i} className="min-w-0">{c}</div>)}</div>;
+            })()}
             {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
             {type === 'cloudtrail' && <CloudTrailEvents />}
             {tableBlock}

@@ -24,6 +24,9 @@ export interface InvType {
    *  memory_size). Rendered beside the Top-N bar as a second BarDistribution. */
   histKey?: { col: string; label: string; suffix?: string };
   sections?: { label: string; keys: string[] }[];
+  /** Raw row keys replaced by derived/structured fields (gap L150) — buildDetailGroups marks
+   *  them used-but-hidden so they neither render in a section nor leak into "Other". */
+  hideKeys?: string[];
   // filterKeys (optional, v1-parity facet filters): row keys rendered as dropdown facets above
   // the table (each option shows a live count). The stateKey already has its own SegmentedControl,
   // so list OTHER discriminating keys here (e.g. ec2 type/vpc, lambda runtime). Keys need not be
@@ -399,12 +402,19 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'created', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'domain_name', 'account_id', 'region', 'arn', 'domain_id', 'created', 'deleted', 'processing'] },
-      { label: 'Engine', keys: ['engine_type', 'engine_version', 'cluster_config'] },
-      { label: 'Endpoint', keys: ['endpoint', 'endpoints', 'vpc_options'] },
-      { label: 'Security', keys: ['encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'advanced_security_options', 'cognito_options'] },
-      { label: 'Storage', keys: ['ebs_options'] },
+      { label: 'Engine', keys: ['engine_type', 'engine_version'] },
+      // L150 structured rendering — derived *_h fields (inventory-derived.ts) replace the raw
+      // cluster_config/ebs_options/vpc_options/encryption/advanced-security JSONB blobs.
+      { label: 'Cluster Config', keys: ['instance_type_h', 'instance_count_h', 'dedicated_master_h', 'zone_awareness_h', 'warm_storage_h', 'cold_storage_h', 'multi_az_standby_h'] },
+      { label: 'Endpoint & Network', keys: ['endpoint', 'endpoints', 'vpc_id_h', 'subnets_h', 'security_groups_h', 'azs_h'] },
+      // Raw advanced_security_options/cognito_options stay visible after the derived flags —
+      // they carry fields (SAML, user-pool ids) the flags don't derive; hiding them would
+      // regress information availability.
+      { label: 'Security', keys: ['rest_enc_h', 'kms_key_h', 'n2n_enc_h', 'adv_security_h', 'internal_user_db_h', 'anonymous_auth_h', 'cognito_h', 'advanced_security_options', 'cognito_options'] },
+      { label: 'Storage', keys: ['ebs_volume_h'] },
       { label: 'Tags', keys: ['tags'] },
     ],
+    hideKeys: ['cluster_config', 'ebs_options', 'vpc_options', 'encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'storage_gb_h'],
     filterKeys: ['region', 'engine_version', 'engine_type'] },
   msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', distKey2: 'state', columns: [
     { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' },

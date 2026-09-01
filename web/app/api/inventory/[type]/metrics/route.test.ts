@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const verifyUser = vi.fn();
 const query = vi.fn();
-const ec2AvgCpu = vi.fn();
+const ec2CpuStats = vi.fn();
 const ec2HourlyCost = vi.fn();
 const rdsMetrics = vi.fn();
 const rdsInstanceTrends = vi.fn();
@@ -12,7 +12,7 @@ const liveResourceMetrics = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/metrics', () => ({
-  ec2AvgCpu: (...a: unknown[]) => ec2AvgCpu(...a),
+  ec2CpuStats: (...a: unknown[]) => ec2CpuStats(...a),
   ec2HourlyCost: (...a: unknown[]) => ec2HourlyCost(...a),
   rdsMetrics: (...a: unknown[]) => rdsMetrics(...a),
   rdsInstanceTrends: (...a: unknown[]) => rdsInstanceTrends(...a),
@@ -28,7 +28,7 @@ const ctx = (type = 'ec2') => ({ params: { type } });
 beforeEach(() => {
   verifyUser.mockReset();
   query.mockReset();
-  ec2AvgCpu.mockReset();
+  ec2CpuStats.mockReset();
   ec2HourlyCost.mockReset();
   rdsMetrics.mockReset();
   rdsInstanceTrends.mockReset();
@@ -48,22 +48,29 @@ describe('GET /api/inventory/[type]/metrics', () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({
       rows: [
-        { id: 'i-1', state: 'running', type: 't3.micro' },
-        { id: 'i-2', state: 'stopped', type: 't3.micro' },
-        { id: 'i-3', state: 'running', type: 't4g.nano' },
+        { id: 'i-1', state: 'running', type: 't3.micro', name: null, region: 'ap-northeast-2' },
+        { id: 'i-2', state: 'stopped', type: 't3.micro', name: 'web-b', region: 'ap-northeast-2' },
+        { id: 'i-3', state: 'running', type: 't4g.nano', name: null, region: 'us-east-1' },
       ],
     });
-    ec2AvgCpu.mockResolvedValue(15.4);
+    ec2CpuStats.mockResolvedValue({ avg: 15.4, byInstance: { 'i-1': 12.1, 'i-3': 18.7 } });
     ec2HourlyCost.mockResolvedValue(0.03);
     const { GET } = await import('./route');
     const res = await GET(req(), ctx());
     expect(res.status).toBe(200);
-    const cards = (await res.json()).cards;
+    const body = await res.json();
+    const cards = body.cards;
     expect(cards).toHaveLength(2);
     expect(cards[0].value).toBe('15.4%');
     expect(cards[1].value).toBe('$0.03');
-    // running ids only
-    expect(ec2AvgCpu).toHaveBeenCalledWith(['i-1', 'i-3']);
+    // running ids only, grouped by their inventory region (fleet-wide per-region ranking)
+    expect(ec2CpuStats).toHaveBeenCalledWith({ 'ap-northeast-2': ['i-1'], 'us-east-1': ['i-3'] });
+    // Top-15 bar (gap L138): CPU-descending, Name tag label falling back to the instance id
+    expect(body.bar.title).toBe('EC2 CPU Top 15 (%)');
+    expect(body.bar.data).toEqual([
+      { label: 'i-3', value: 18.7 },
+      { label: 'i-1', value: 12.1 },
+    ]);
     // counts across all rows
     expect(ec2HourlyCost).toHaveBeenCalledWith({ 't3.micro': 2, 't4g.nano': 1 });
   });
@@ -71,13 +78,14 @@ describe('GET /api/inventory/[type]/metrics', () => {
   it('ec2 → em-dash cards when metrics null (degrade)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({ rows: [] });
-    ec2AvgCpu.mockResolvedValue(null);
+    ec2CpuStats.mockResolvedValue({ avg: null, byInstance: {} });
     ec2HourlyCost.mockResolvedValue(null);
     const { GET } = await import('./route');
-    const cards = (await (await GET(req(), ctx())).json()).cards;
-    expect(cards).toHaveLength(2);
-    expect(cards[0].value).toBe('—');
-    expect(cards[1].value).toBe('—');
+    const body = await (await GET(req(), ctx())).json();
+    expect(body.cards).toHaveLength(2);
+    expect(body.cards[0].value).toBe('—');
+    expect(body.cards[1].value).toBe('—');
+    expect(body).not.toHaveProperty('bar'); // no datapoints → no ranking chart
   });
 
   it('non-ec2/non-rds (s3) → {cards:[]}', async () => {
@@ -146,7 +154,7 @@ describe('GET /api/inventory/[type]/metrics', () => {
     it('ec2: regions=ap-northeast-2 → region = ANY($n) in the fleet query', async () => {
       verifyUser.mockResolvedValue({ sub: 'u' });
       query.mockResolvedValue({ rows: [] });
-      ec2AvgCpu.mockResolvedValue(null);
+      ec2CpuStats.mockResolvedValue({ avg: null, byInstance: {} });
       ec2HourlyCost.mockResolvedValue(null);
       const { GET } = await import('./route');
       await GET(req('http://x/api/inventory/ec2/metrics?regions=ap-northeast-2'), ctx());
