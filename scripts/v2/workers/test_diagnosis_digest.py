@@ -8,6 +8,11 @@ class FakeConn:
     def __init__(self):
         self.closed = False
 
+    def run(self, sql, **_kw):
+        # absent flag (zero rows) — the legacy tests must exercise the REAL absent-flag path,
+        # not the fail-open except branch via AttributeError.
+        return []
+
     def close(self):
         self.closed = True
 
@@ -40,7 +45,7 @@ def test_digest_single_report_uses_publish_report_with_fetched_markdown(monkeypa
 
     out = diagnosis_digest.lambda_handler(None, None)
 
-    assert out == {"digested": 1}
+    assert out == {"digested": 1, "paused": False}
     assert digest_called["called"] is False  # single report → NOT the batch path
     assert captured["topic"] == "arn:aws:sns:x:1:t"
     assert captured["title"] == "리포트 A"
@@ -84,7 +89,7 @@ def test_digest_multiple_reports_uses_publish_digest_with_teasers(monkeypatch):
 
     out = diagnosis_digest.lambda_handler(None, None)
 
-    assert out == {"digested": 2}
+    assert out == {"digested": 2, "paused": False}
     assert report_called["called"] is False  # multiple reports → NOT the single-report path
     assert captured["topic"] == "arn:aws:sns:x:1:t"
     assert [r["title"] for r in captured["reports"]] == ["리포트 A", "리포트 B"]
@@ -138,7 +143,7 @@ def test_digest_marks_notified_even_without_topic_configured(monkeypatch):
 
     out = diagnosis_digest.lambda_handler(None, None)
 
-    assert out == {"digested": 1}
+    assert out == {"digested": 1, "paused": False}
     assert calls == {"report": False, "digest": False}
     assert marked["ids"] == [5]      # backlog still drained
 

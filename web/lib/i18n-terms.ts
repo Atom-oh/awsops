@@ -18,6 +18,8 @@ export const TERMS: Record<string, Pair> = {
   '일시 중지됨': { en: 'Paused', zh: '已暂停', ja: '一時停止中' },
   '알림 설정 변경에 실패했습니다.': { en: 'Failed to change the notification setting.', zh: '通知设置更改失败。', ja: '通知設定の変更に失敗しました。' },
   '인쇄용 보기': { en: 'Print view', zh: '打印视图', ja: '印刷ビュー' },
+  '티어': { en: 'Tier', zh: '层级', ja: 'ティア' },
+  '생성': { en: 'Created', zh: '创建', ja: '作成' },
   '인쇄': { en: 'Print', zh: '打印', ja: '印刷' },
   '닫기': { en: 'Close', zh: '关闭', ja: '閉じる' },
   '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },

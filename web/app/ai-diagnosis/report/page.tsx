@@ -1,9 +1,10 @@
 'use client';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import ReportMarkdown from '@/components/diagnosis/ReportMarkdown';
+import ReportMarkdown, { normalizeHeadings } from '@/components/diagnosis/ReportMarkdown';
 import { splitSections } from '@/components/diagnosis/ReportSections';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { localeOf } from '@/lib/i18n';
 
 // Printable report view (gap L179, v1 parity): /ai-diagnosis/report?id=N opens in a new tab
 // with a white A4 layout — cover block, numbered anchor TOC, per-section page breaks, and
@@ -21,14 +22,9 @@ interface ReportMeta {
   created_at: string | null; finished_at: string | null;
 }
 
-// Same collapse ReportMarkdown applies at render (`## ### X` → `### X`) — but the SPLIT runs
-// first, so it must see normalized headings or a legacy artifact becomes a spurious section.
-function normalizeHeadings(md: string): string {
-  return md.replace(/^(#{1,6})[ \t]+(#{1,6}[ \t])/gm, '$2');
-}
 
 function PrintReportInner() {
-  const { tt } = useI18n();
+  const { tt, lang } = useI18n();
   const params = useSearchParams();
   const router = useRouter();
   const id = Number(params.get('id'));
@@ -75,7 +71,7 @@ function PrintReportInner() {
   }
 
   const r = state.report;
-  const fmt = (v: string | null) => (v ? new Date(v).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) : '—');
+  const fmt = (v: string | null) => (v ? new Date(v).toLocaleString(localeOf(lang), { timeZone: 'Asia/Seoul' }) : '—');
 
   return (
     <div className="print-report-root min-h-screen bg-white">
@@ -84,9 +80,17 @@ function PrintReportInner() {
           which would render (and print) pale-on-white. */}
       <style>{`
         .print-report-root {
+          /* EVERY token ReportMarkdown paints with must be re-pinned to the light palette —
+             .dark inverts ink AND paper/brand (code blocks, <pre>, table heads use
+             --paper-muted, which is #141A1F in dark → dark-on-dark on this white page). */
           --ink-900: #05080B; --ink-800: #1B2530; --ink-700: #2C3A47;
           --ink-600: #455664; --ink-500: #64748B; --ink-400: #94A3B8; --ink-300: #CBD5E1;
           --ink-200: #E2E8F0; --ink-100: #EEF2F6; --ink-50: #F6F8FA;
+          --paper: #F4F6F8; --paper-muted: #EBEFF2; --white: #FFFFFF;
+          --surface-page: #FFFFFF; --surface-sunken: #EBEFF2; --surface-card: #FFFFFF;
+          --brand-50: #E6F6F2; --brand-100: #C4EBE3; --brand-200: #8FD9CC; --brand-300: #54C3B0;
+          --brand-400: #1FB199; --brand-500: #01A88D; --brand-600: #00876F; --brand-700: #0A6B5A;
+          color-scheme: light;
           color: #1B2530;
         }
         @media print {
@@ -105,10 +109,10 @@ function PrintReportInner() {
         <header className="mb-8 border-b-2 border-neutral-800 pb-6">
           <h1 className="text-[24px] font-bold text-neutral-900">{r.title || `AI Diagnosis Report #${r.id}`}</h1>
           <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-[12.5px] text-neutral-600">
-            <div><dt className="inline text-neutral-400">Tier </dt><dd className="inline font-medium">{r.tier ?? '—'}</dd></div>
-            <div><dt className="inline text-neutral-400">Status </dt><dd className="inline font-medium">{r.status ?? '—'}</dd></div>
-            <div><dt className="inline text-neutral-400">Created </dt><dd className="inline">{fmt(r.created_at)}</dd></div>
-            <div><dt className="inline text-neutral-400">Finished </dt><dd className="inline">{fmt(r.finished_at)}</dd></div>
+            <div><dt className="inline text-neutral-400">{tt('티어')} </dt><dd className="inline font-medium">{r.tier ?? '—'}</dd></div>
+            <div><dt className="inline text-neutral-400">{tt('상태')} </dt><dd className="inline font-medium">{r.status ?? '—'}</dd></div>
+            <div><dt className="inline text-neutral-400">{tt('생성')} </dt><dd className="inline">{fmt(r.created_at)}</dd></div>
+            <div><dt className="inline text-neutral-400">{tt('완료')} </dt><dd className="inline">{fmt(r.finished_at)}</dd></div>
           </dl>
         </header>
 

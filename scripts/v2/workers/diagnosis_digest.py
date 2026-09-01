@@ -88,6 +88,8 @@ def lambda_handler(_event, _ctx):
         # Stamp notified_at regardless of whether a topic is configured (flag-off / no topic still
         # drains the backlog so a later flag-on doesn't suddenly email a huge historical batch).
         ddb.mark_notified(conn, [r["id"] for r in pending])
-        return {"digested": len(pending)}
+        # "paused": dropped-not-delivered runs stay distinguishable in durable records
+        # (metric filters), not only in per-report log lines.
+        return {"digested": len(pending), "paused": paused}
     finally:
         conn.close()

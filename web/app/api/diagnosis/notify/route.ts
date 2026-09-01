@@ -17,7 +17,9 @@ async function readPaused(): Promise<boolean> {
   const r = await getPool().query<{ value: string }>(
     `SELECT value FROM app_settings WHERE key = $1`, [KEY],
   );
-  return r.rows[0]?.value === 'true';
+  // Same normalization as the digest worker (strip/lower) — an out-of-band 'TRUE ' row must
+  // never show 'active' in the UI while the worker suppresses email.
+  return (r.rows[0]?.value ?? '').trim().toLowerCase() === 'true';
 }
 
 export async function GET(request: Request) {

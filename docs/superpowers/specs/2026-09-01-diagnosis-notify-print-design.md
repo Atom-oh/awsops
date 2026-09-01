@@ -69,3 +69,18 @@ No Terraform/IAM changes; one additive migration.
   stay server-side) and audits the actor (`app_settings.updated_by` + a structured log line);
   the worker normalizes the flag value (`strip().lower()`), logs each report DROPPED while
   paused, and its test pins the `diagnosis_notify_paused` key literal on both sides.
+
+## Round-2 corrections (review-driven)
+
+- **Complete light-token re-pin (the gate MAJOR)** — round 1 re-pinned only `--ink-*`;
+  ReportMarkdown also paints code blocks/`<pre>`/table heads with `--paper-muted` (#141A1F in
+  dark → dark-on-dark on the white page). The print root now re-pins paper/surface/brand
+  scales too, plus `color-scheme: light`.
+- `normalizeHeadings` is exported from ReportMarkdown (one regex, no hand-copy); the BFF's
+  `readPaused` normalizes identically to the worker (`trim().lower() === 'true'`); the digest
+  handler returns `{"digested": N, "paused": bool}` so dropped-not-delivered runs are
+  distinguishable in durable records; legacy digest tests' FakeConn gained `run() → []` so the
+  ABSENT-flag path (not the fail-open except) is what they cover; ADR-013's status tag is
+  bilingual and §2 notes the sub-cadence pause window ("may drop nothing") and the hard stop
+  (unsubscribe / `diagnosis_notify_enabled=false`); the print cover labels go through `tt()`
+  with locale-aware dates.
