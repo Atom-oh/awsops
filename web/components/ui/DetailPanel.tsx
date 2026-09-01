@@ -13,6 +13,7 @@ import type { RdsInstanceMetrics } from '@/lib/metrics';
 import { EbsRelatedSection } from '@/components/inventory/metrics/EbsRelatedSection';
 import { RdsTrendsSection } from '@/components/inventory/metrics/RdsTrendsSection';
 import { LiveTrendsSection } from '@/components/inventory/metrics/LiveTrendsSection';
+import { RdsSgRulesSection } from '@/components/inventory/metrics/RdsSgRulesSection';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // v1-parity: each detail section is a titled card with a leading icon. Section labels are a small
@@ -289,6 +290,21 @@ export default function DetailPanel({
 
   const groups = buildDetailGroups(data, spec);
   const rdsInstanceId = resourceType === 'rds' && typeof data.resource_id === 'string' ? data.resource_id : null;
+  // SG inbound chaining (gap L154): parse attached SG ids from the row's vpc_security_groups
+  // (Steampipe JSONB — PascalCase or snake_case depending on plugin version; string ids too).
+  const rdsSgIds = rdsInstanceId
+    ? (Array.isArray(data.vpc_security_groups) ? data.vpc_security_groups : [])
+        .map((g) => {
+          if (typeof g === 'string') return g;
+          if (g && typeof g === 'object') {
+            const o = g as Record<string, unknown>;
+            const v = o.VpcSecurityGroupId ?? o.vpc_security_group_id ?? o.GroupId ?? o.group_id;
+            return typeof v === 'string' ? v : null;
+          }
+          return null;
+        })
+        .filter((v): v is string => !!v && v.startsWith('sg-'))
+    : [];
   // EBS drill-down (gap L97/L98): per-volume snapshots + attached-instance enrichment.
   const ebsVolumeId = resourceType === 'ebs_volume' && typeof data.resource_id === 'string' ? data.resource_id : null;
   const liveMetricId =
@@ -399,6 +415,15 @@ export default function DetailPanel({
           {rdsInstanceId && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
               <RdsTrendsSection instanceId={rdsInstanceId} />
+            </section>
+          )}
+          {rdsSgIds.length > 0 && (
+            <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+              <RdsSgRulesSection
+                sgIds={rdsSgIds}
+                accountId={typeof data.account_id === 'string' ? data.account_id : undefined}
+                region={typeof data.region === 'string' ? data.region : undefined}
+              />
             </section>
           )}
           {ebsVolumeId && (

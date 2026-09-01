@@ -102,6 +102,58 @@ describe('deriveRow opensearch structured detail (gap L150)', () => {
     expect(d.adv_security_h).toBeUndefined();
   });
 
+  it('L153 sync additions: service software / endpoint policy / auto-tune / snapshot hour', () => {
+    const d = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: true, CurrentVersion: 'OpenSearch_2.11', NewVersion: 'OpenSearch_2.13' },
+      domain_endpoint_options: { EnforceHTTPS: true, TLSSecurityPolicy: 'Policy-Min-TLS-1-2-2019-07', CustomEndpointEnabled: false },
+      auto_tune_options: { State: 'ENABLED' },
+      snapshot_options: { AutomatedSnapshotStartHour: 3 },
+    });
+    expect(d.software_update_h).toBe('update available: OpenSearch_2.11 → OpenSearch_2.13');
+    expect(d.enforce_https_h).toBe(true);
+    expect(d.tls_policy_h).toBe('Policy-Min-TLS-1-2-2019-07');
+    expect(d.custom_endpoint_h).toBe('disabled');
+    expect(d.auto_tune_h).toBe('ENABLED');
+    expect(d.snapshot_hour_h).toBe('3:00 UTC');
+  });
+
+  it('L153: UpdateStatus drives the label — NOT_ELIGIBLE/IN_PROGRESS never read as healthy', () => {
+    const notEligible = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: false, UpdateStatus: 'NOT_ELIGIBLE', CurrentVersion: 'ES_7.10' },
+    });
+    expect(notEligible.software_update_h).toBe('not eligible for update (ES_7.10) — domain upgrade required');
+    const inProgress = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: false, UpdateStatus: 'IN_PROGRESS', CurrentVersion: 'OpenSearch_2.11', NewVersion: 'OpenSearch_2.13' },
+    });
+    expect(inProgress.software_update_h).toBe('update in progress: OpenSearch_2.11 → OpenSearch_2.13');
+    const pending = deriveRow('opensearch', {
+      service_software_options: { UpdateStatus: 'PENDING_UPDATE', CurrentVersion: 'OpenSearch_2.11', NewVersion: 'OpenSearch_2.13' },
+    });
+    expect(pending.software_update_h).toBe('update pending: OpenSearch_2.11 → OpenSearch_2.13');
+    const completed = deriveRow('opensearch', {
+      service_software_options: { UpdateStatus: 'COMPLETED', CurrentVersion: 'OpenSearch_2.13' },
+    });
+    expect(completed.software_update_h).toBe('up to date (OpenSearch_2.13)');
+  });
+
+  it('L153: up-to-date software, enabled custom endpoint (domain shown), absent blobs → undefined', () => {
+    const upToDate = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: false, CurrentVersion: 'OpenSearch_2.13' },
+      domain_endpoint_options: { CustomEndpointEnabled: true, CustomEndpoint: 'search.example.com' },
+    });
+    expect(upToDate.software_update_h).toBe('no update available (OpenSearch_2.13)');
+    expect(upToDate.custom_endpoint_h).toBe('search.example.com');
+    const withCert = deriveRow('opensearch', {
+      domain_endpoint_options: { CustomEndpointEnabled: true, CustomEndpoint: 's.example.com', CustomEndpointCertificateArn: 'arn:aws:acm:ap-northeast-2:1:certificate/x' },
+    });
+    expect(withCert.custom_endpoint_cert_h).toBe('arn:aws:acm:ap-northeast-2:1:certificate/x');
+    const empty = deriveRow('opensearch', { resource_id: 'dom-2' });
+    expect(empty.software_update_h).toBeUndefined();
+    expect(empty.enforce_https_h).toBeUndefined();
+    expect(empty.auto_tune_h).toBeUndefined();
+    expect(empty.snapshot_hour_h).toBeUndefined();
+  });
+
   it("string-typed booleans ('true'/'false') are tolerated like boolH", () => {
     const d = deriveRow('opensearch', {
       cluster_config: { DedicatedMasterEnabled: 'false', ColdStorageOptions: { Enabled: 'true' } },

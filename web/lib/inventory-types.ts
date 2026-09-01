@@ -402,19 +402,22 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'created', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'domain_name', 'account_id', 'region', 'arn', 'domain_id', 'created', 'deleted', 'processing'] },
-      { label: 'Engine', keys: ['engine_type', 'engine_version'] },
+      { label: 'Engine', keys: ['engine_type', 'engine_version', 'software_update_h', 'upgrade_processing'] },
       // L150 structured rendering — derived *_h fields (inventory-derived.ts) replace the raw
       // cluster_config/ebs_options/vpc_options/encryption/advanced-security JSONB blobs.
       { label: 'Cluster Config', keys: ['instance_type_h', 'instance_count_h', 'dedicated_master_h', 'zone_awareness_h', 'warm_storage_h', 'cold_storage_h', 'multi_az_standby_h'] },
-      { label: 'Endpoint & Network', keys: ['endpoint', 'endpoints', 'vpc_id_h', 'subnets_h', 'security_groups_h', 'azs_h'] },
+      { label: 'Endpoint & Network', keys: ['endpoint', 'endpoints', 'enforce_https_h', 'tls_policy_h', 'custom_endpoint_h', 'custom_endpoint_cert_h', 'vpc_id_h', 'subnets_h', 'security_groups_h', 'azs_h'] },
       // Raw advanced_security_options/cognito_options stay visible after the derived flags —
       // they carry fields (SAML, user-pool ids) the flags don't derive; hiding them would
       // regress information availability.
-      { label: 'Security', keys: ['rest_enc_h', 'kms_key_h', 'n2n_enc_h', 'adv_security_h', 'internal_user_db_h', 'anonymous_auth_h', 'cognito_h', 'advanced_security_options', 'cognito_options'] },
+      { label: 'Security', keys: ['rest_enc_h', 'kms_key_h', 'n2n_enc_h', 'adv_security_h', 'internal_user_db_h', 'anonymous_auth_h', 'cognito_h', 'advanced_security_options', 'cognito_options', 'access_policies'] },
       { label: 'Storage', keys: ['ebs_volume_h'] },
+      // L153: partially-derived/reference blobs stay visible (log_publishing_options,
+      // advanced_options, auto_tune_options carry fields the *_h derivations don't cover).
+      { label: 'Operations', keys: ['auto_tune_h', 'snapshot_hour_h', 'service_software_options', 'log_publishing_options', 'advanced_options', 'auto_tune_options'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    hideKeys: ['cluster_config', 'ebs_options', 'vpc_options', 'encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'storage_gb_h'],
+    hideKeys: ['cluster_config', 'ebs_options', 'vpc_options', 'encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'storage_gb_h', 'domain_endpoint_options', 'snapshot_options'],
     filterKeys: ['region', 'engine_version', 'engine_type'] },
   msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', distKey2: 'state', columns: [
     { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' },
