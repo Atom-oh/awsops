@@ -1380,7 +1380,7 @@ export const TERMS: Record<string, Pair> = {
   'inventory에 없음': { en: 'not in inventory', zh: '不在库存中', ja: 'インベントリに未登録' },
   '스냅샷': { en: 'Snapshots', zh: '快照', ja: 'スナップショット' },
   '스냅샷 조회 실패': { en: 'Snapshot lookup failed', zh: '快照查询失败', ja: 'スナップショットの取得に失敗しました' },
-  // Inventory-home KPI bar (L127).
+  // Inventory-home KPI bar + trend legend (L126/L127).
   '리소스 타입': { en: 'Resource types', zh: '资源类型', ja: 'リソースタイプ' },
   'Core Resources': { en: 'Core Resources', zh: '核心资源', ja: 'コアリソース' },
   'Other Resources': { en: 'Other Resources', zh: '其他资源', ja: 'その他のリソース' },

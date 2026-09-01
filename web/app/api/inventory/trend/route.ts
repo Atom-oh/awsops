@@ -42,8 +42,12 @@ export async function GET(request: Request) {
       latestByType.set(row.resource_type, Number(row.n)); // rows are date-ordered → last write wins
     }
     const trend = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-    // Types ranked by their latest count (chart picks top-N client-side; table shows all).
-    const types = [...latestByType.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    // Types ranked by the LATEST DAY's counts (fallback: last-seen value) — the previous
+    // all-rows last-write-wins let a type that stopped syncing days ago hold a top (Core)
+    // slot on its stale count while a live series landed default-hidden.
+    const lastPt = trend[trend.length - 1] as Record<string, unknown> | undefined;
+    const rankOf = (t: string) => (typeof lastPt?.[t] === 'number' ? (lastPt[t] as number) : latestByType.get(t) ?? 0);
+    const types = [...latestByType.keys()].sort((a, b) => rankOf(b) - rankOf(a));
     return Response.json({ trend, types });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });

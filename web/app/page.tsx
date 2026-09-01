@@ -19,6 +19,7 @@ import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
+import { nearestSnapshot, netChange } from '@/lib/trend-utils';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
 
@@ -61,20 +62,6 @@ const SECTION_GATEWAYS = 8;
 
 // v1-parity: every KPI/resource tile carries a lucide glyph in its translucent top-right box.
 // Resource tiles reuse the shared per-type map so icons match the inventory pages.
-// Nearest snapshot to `daysAgo` within ±2 CALENDAR days (v1 tolerance): the target is
-// date-normalized so gaps are integral — comparing against a time-of-day-bearing now() made
-// the window asymmetric and wall-clock-dependent. Shared by the delta table and the KPI bar.
-function nearestSnapshot<T extends { date: string }>(pts: T[], daysAgo: number): T | null {
-  const target = new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
-  let best: T | null = null;
-  let bestGap = 3;
-  for (const p of pts) {
-    const gap = Math.abs((new Date(p.date).getTime() - new Date(target).getTime()) / 86_400_000);
-    if (gap < bestGap) { best = p; bestGap = gap; }
-  }
-  return best;
-}
-
 function typeIcon(type: string): ReactNode {
   const I = TYPE_ICON[type];
   return I ? <I size={13} /> : null;
@@ -223,23 +210,14 @@ export default function Home() {
   const trendSeries = trendTypes.map((t) => ({ key: t, label: INV_LABEL(t) }));
   const coreTypes = trendTypes.slice(0, 5);
   const otherTypes = trendTypes.slice(5);
-  // L127: 7d net change of the all-type total. Baseline = the SAME nearestSnapshot the delta
-  // table uses (date-normalized target → integral ±2 calendar days); a baseline that resolves
-  // to the latest point itself (stale sync) is null → '—', never a fabricated 0. The trend
-  // endpoint is account_id='self'-fixed with no region dimension (open audit item L124), so a
-  // narrowed scope also renders '—' — the adjacent 전체 리소스 IS scoped, and one KPI row must
-  // not silently mix the two scopes.
+  // L127: 7d net change (lib/trend-utils netChange — coverage-parity diff with honest-degrade
+  // branches; see its doc). The trend endpoint is account_id='self'-fixed with no region
+  // dimension (scoping it is a separately tracked open item), so a narrowed scope also renders
+  // '—' — the adjacent 전체 리소스 IS scoped, and one KPI row must not silently mix the two.
   const scopeIsDefault =
     Array.isArray(scope.accounts) && scope.accounts.length === 1 && scope.accounts[0] === 'self'
     && scope.regions === '__all__' && scope.includeGlobal === true;
-  const net7 = (() => {
-    if (!scopeIsDefault) return null;
-    const pts = resTrend?.trend ?? [];
-    if (pts.length < 2) return null;
-    const base = nearestSnapshot(pts, 7);
-    if (!base || base === pts[pts.length - 1]) return null;
-    return Number(pts[pts.length - 1].total ?? 0) - Number(base.total ?? 0);
-  })();
+  const net7 = scopeIsDefault ? netChange(resTrend?.trend ?? [], 7) : null;
 
   const deltaRows = (() => {
     const pts = resTrend?.trend ?? [];
