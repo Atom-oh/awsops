@@ -144,6 +144,10 @@ export default function InventoryTypePage() {
   // (never smaller than what is visibly loaded).
   const totalCount = allRows.length >= ROW_LIMIT && trueTotal != null
     ? Math.max(trueTotal, allRows.length) : allRows.length;
+  // ONE truncation signal for every sample-based consumer: at the cap AND a confirmed-or-unknown
+  // remainder exists. An exactly-at-cap fleet whose true total equals the rows scanned was fully
+  // scanned — not a sample.
+  const isTruncated = allRows.length >= ROW_LIMIT && (trueTotal == null || trueTotal > allRows.length);
 
   // KPI state breakdown — from the FULL row set (not filtered).
   const stateCounts = useMemo(
@@ -155,9 +159,9 @@ export default function InventoryTypePage() {
   // back to the generic state tiles, so unconfigured types render as before.
   const highlightCards = useMemo(
     () => (HIGHLIGHTS[type]
-      ? computeHighlights(allRows, HIGHLIGHTS[type], { capped: allRows.length >= ROW_LIMIT })
+      ? computeHighlights(allRows, HIGHLIGHTS[type], { capped: isTruncated })
       : []),
-    [allRows, type],
+    [allRows, type, isTruncated],
   );
 
   // Distribution donut — top 6 + 기타, from the FULL row set.
@@ -325,9 +329,7 @@ export default function InventoryTypePage() {
                   sampled={allRows.length}
                   totalIsExact={allRows.length < ROW_LIMIT || trueTotal != null}
                   cards={highlightCards}
-                  // an exactly-at-cap fleet whose true total equals the rows scanned WAS fully
-                  // scanned — only a confirmed-or-unknown remainder makes the verdict a sample
-                  capped={allRows.length >= ROW_LIMIT && (trueTotal == null || trueTotal > allRows.length)}
+                  capped={isTruncated}
                 />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">

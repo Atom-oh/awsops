@@ -26,7 +26,7 @@ rows 라우트의 worst-first ORDER BY(캡 이전 정렬)이다.
   additionally map `eventId`, `awsRegion`, `sourceIPAddress`, `userAgent`, `errorCode`,
   `accessKeyId` (a first-class Event field, v1 parity), the full `resources` list (today only
   `Resources[0]` survives), and `raw` — PROJECTED through a field allowlist (forensic call
-  detail stays; `userIdentity` is reduced to identity names) with credential-FAMILY keys
+  detail stays; `userIdentity` is reduced to selected identity attributes (type/arn/accountId/userName/invokedBy)) with credential-FAMILY keys
   inside `requestParameters`/`responseElements` recursively masked by a normalized deny-list
   (separator-insensitive: x-api-key / access_key / accessKeyId all hit; sts credentials,
   iam accessKey, lambda environment, userData, keyMaterial, authParameters). This is
@@ -49,11 +49,6 @@ rows 라우트의 worst-first ORDER BY(캡 이전 정렬)이다.
   client-only re-sort would reorder whichever 500 rows survived the near-uniform captured_at
   cut, silently excluding firing alarms in >500-alarm fleets (v1 sorted in SQL). Identifiers
   are charset-validated before inlining even though the spec is trusted code.
-- Accepted deviations: invalid region tokens in the summary route are silently DROPPED
-  (matching regionWhereClause's narrow-on-invalid direction) rather than 400ing as the
-  2026-06-26 scope-selector spec once suggested; L137 ships one UTC `dateH` format instead of
-  v1's locale-dependent `toLocaleDateString()`/`toLocaleString()` split (consistent with every
-  other deriver in the file).
 
 ### L110 — accurate total tile past the 500-row cap
 - The summary route now honors the SAME `regions`/`includeGlobal` contract the rows route
@@ -84,6 +79,15 @@ rows 라우트의 worst-first ORDER BY(캡 이전 정렬)이다.
   further inherited base-pipeline truncations (unpaginated ListMetrics; the 500-query
   GetMetricData slice ≈62 models) can undercount very large fleets — pre-existing behavior the
   tile now makes visible; pagination is a separate follow-up. Grid bumped to 8 tiles.
+
+## Accepted deviations
+- The summary route implements the region contract as a strictly-validated LITERAL-inlining
+  condition (`regionCond`, mirroring its existing `accountCond`) — a third implementation next
+  to the shared parameterized `regionWhereClause` the 2026-06-26 scope-selector spec prescribes;
+  invalid tokens are silently dropped (narrow-on-invalid, same failure direction). Recorded as
+  a deviation because the UNION-ALL template makes positional params impractical there.
+- L137 ships one UTC `dateH` format instead of v1's locale-dependent
+  `toLocaleDateString()`/`toLocaleString()` split (consistent with every other deriver).
 
 ## Testing (as shipped)
 - CloudTrail route: drill-down mapping, all-resources list, userIdentity projection (first-
