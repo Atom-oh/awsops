@@ -1369,6 +1369,10 @@ export const TERMS: Record<string, Pair> = {
   '모두 접기': { en: 'Collapse all', zh: '全部折叠', ja: 'すべて折りたたむ' },
   '목차': { en: 'Contents', zh: '目录', ja: '目次' },
   '리포트 목차': { en: 'Report contents', zh: '报告目录', ja: 'レポート目次' },
+  // Diagnosis quick-wins batch (L176/L177/L180/L181).
+  '경과 시간': { en: 'Elapsed', zh: '已用时间', ja: '経過時間' },
+  '리포트': { en: 'Report', zh: '报告', ja: 'レポート' },
+  '진단은 계정 전반을 아래 섹션으로 분석합니다 (Deep 표시는 Deep 티어 전용):': { en: 'A diagnosis analyzes the whole account across these sections (Deep-tagged ones run on the Deep tier only):', zh: '诊断会按以下章节分析整个账户（标有 Deep 的仅在 Deep 层级运行）：', ja: '診断はアカウント全体を以下のセクションで分析します（Deep 表示は Deep ティア専用）:' },
   '본문 키워드 기반 표시 (점수 아님)': { en: 'Derived from body keywords (not a score)', zh: '基于正文关键词的标记（并非评分）', ja: '本文キーワードに基づく表示（スコアではありません）' },
 
 };
@@ -1380,6 +1384,9 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^요청 실패 \((\d+)\)$/, en: (m) => `Request failed (${m[1]})`, zh: (m) => `请求失败 (${m[1]})`, ja: (m) => `リクエスト失敗 (${m[1]})` },
   { re: /^진단 결과 메일링 \((\d+)\)$/, en: (m) => `Diagnosis Result Mailing List (${m[1]})`, zh: (m) => `诊断结果邮件列表 (${m[1]})`, ja: (m) => `診断結果メール配信リスト (${m[1]})` },
   // Day-of-month options in the diagnosis SchedulePanel ("5일" → "Day 5").
+  // Diagnosis stats bar (L176): "섹션 9개" / "소요 03:12".
+  { re: /^섹션 (\d+)개$/, en: (m) => `${m[1]} sections`, zh: (m) => `${m[1]} 个章节`, ja: (m) => `${m[1]} セクション` },
+  { re: /^소요 (\d{2,}:\d{2})$/, en: (m) => `Took ${m[1]}`, zh: (m) => `耗时 ${m[1]}`, ja: (m) => `所要 ${m[1]}` },
   { re: /^(\d{1,2})일$/, en: (m) => `Day ${m[1]}`, zh: (m) => `${m[1]} 日`, ja: (m) => `${m[1]} 日` },
   { re: /^(.+)로 다시$/, en: (m) => `${m[1]} again`, zh: (m) => `再次通过 ${m[1]}`, ja: (m) => `${m[1]} でもう一度` },
   { re: /^이 세션 (\d+)개 질의$/, en: (m) => `${m[1]} queries this session`, zh: (m) => `本会话 ${m[1]} 次查询`, ja: (m) => `このセッション ${m[1]} 件の質問` },

@@ -32,6 +32,7 @@ def test_finish_report_sets_terminal_and_summary():
     assert n == 1
     sql, kw = c.calls[0]
     assert "UPDATE diagnosis_reports" in sql and "status=:s" in sql
+    assert "finished_at=now()" in sql  # L176: terminal-write stamp (drives the elapsed stat)
     assert json.loads(kw["su"]) == ["inventory", "cost"]
     assert kw["s"] == "succeeded"
 
@@ -45,6 +46,13 @@ def test_update_progress_writes_jsonb():
     assert "status='running'" in sql  # never resurrect a terminal/reaped row
     assert kw["id"] == 123
     assert json.loads(kw["p"]) == {"current": 3, "total": 9, "section": "네트워크", "phase": "render"}
+
+
+def test_update_progress_persists_completed_list_when_given():
+    # L177: `completed` is an additive JSONB key — present only when passed (old readers tolerate absence).
+    c = FakeConn(); c.ret = [[123]]
+    db.update_progress(c, 123, current=2, total=9, section="B", phase="render", completed=["A", "B"])
+    assert json.loads(c.calls[0][1]["p"])["completed"] == ["A", "B"]
 
 
 def test_update_progress_noop_when_no_report_id():
@@ -485,7 +493,7 @@ def test_report_title_failure_is_isolated(monkeypatch):
 def test_report_handler_streams_progress_via_callback(monkeypatch):
     # A4: _report must hand generate() an on_progress that persists via ddb.update_progress(report_id).
     def gen(conn, account, tier, **kw):
-        kw["on_progress"](2, 9, "네트워크", "render")  # generate would call this per section
+        kw["on_progress"](2, 9, "네트워크", "render", ["Executive Summary", "네트워크"])  # per-section call (with the L177 completed list)
         return ("# md", {"degraded": []}, ["inventory"])
     _patch_report(monkeypatch, generate=gen)
     calls = []
@@ -495,7 +503,8 @@ def test_report_handler_streams_progress_via_callback(monkeypatch):
         {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
     assert result["status"] == "succeeded"
     assert calls and calls[0][0] == 7
-    assert calls[0][1] == {"current": 2, "total": 9, "section": "네트워크", "phase": "render"}
+    assert calls[0][1] == {"current": 2, "total": 9, "section": "네트워크", "phase": "render",
+                           "completed": ["Executive Summary", "네트워크"]}
 
 
 def test_report_handler_partial_when_a_source_degraded(monkeypatch):

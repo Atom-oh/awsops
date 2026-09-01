@@ -6,12 +6,16 @@ import ReportSections from './ReportSections';
 import IntentPanel from './IntentPanel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
+import { sectionsForTier, titleMatches, localizedTitle } from '@/lib/diagnosis-sections';
+import { CheckCircle } from 'lucide-react';
 
 interface DiagnosisProgress {
   current?: number;
   total?: number;
   section?: string;
   phase?: 'collect' | 'render' | 'assemble';
+  // L177: finished-section titles in COMPLETION order (concurrent render ≠ catalog order).
+  completed?: string[];
 }
 
 interface ReportRow {
@@ -19,6 +23,7 @@ interface ReportRow {
   tier: string;
   status: string;
   created_at: string;
+  finished_at?: string | null;  // L176: drives the completed-report elapsed stat
   model?: string | null;        // deep-tier model (sonnet|opus); shown in the list for deep reports
   account?: string | null;      // diagnosed account id (from the job payload; null on legacy rows)
   title?: string | null;        // LLM auto key-insight title (editable)
@@ -76,7 +81,7 @@ export default function DiagnosisView() {
   }, [lang, reportLangTouched]);
 
   const [reports, setReports] = useState<ReportRow[]>([]);
-  const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress; title?: string | null; tags?: string[]; can_edit?: boolean } | null>(null);
+  const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress; title?: string | null; tags?: string[]; can_edit?: boolean; tier?: string; created_at?: string; finished_at?: string | null } | null>(null);
   const [titleDraft, setTitleDraft] = useState<string | null>(null); // non-null while editing the title
   const [tagDraft, setTagDraft] = useState('');
   const [submitting, setSubmitting] = useState(false); // brief: the POST round-trip only
@@ -100,6 +105,9 @@ export default function DiagnosisView() {
         id, markdown: j.markdown, summary: (j.report?.summary as ReportSummary) ?? null,
         status: j.report?.status, error: j.report?.error ?? null, progress: j.report?.progress,
         title: j.report?.title ?? null, tags: j.report?.tags ?? [], can_edit: j.report?.can_edit ?? false,
+        // carried from the report row so the stats bar/grid work for reports outside the
+        // 50-row list (deep links) — the list row is only a fallback.
+        tier: j.report?.tier, created_at: j.report?.created_at, finished_at: j.report?.finished_at ?? null,
       });
     }
   }, []);
@@ -284,6 +292,23 @@ export default function DiagnosisView() {
                   {r.created_at ? ` · ${fmtDay(r.created_at, locale)}` : ''}
                 </div>
               </button>
+              {/* L181 (v1 parity): inline MD/DOCX without opening the report — completed rows only. */}
+              {(r.status === 'succeeded' || r.status === 'partial') && (
+                <span className="flex shrink-0 gap-1">
+                  {(['md', 'docx'] as const).map((f) => (
+                    <a
+                      key={f}
+                      href={`/api/diagnosis/${r.id}/download?format=${f}`}
+                      download={`awsops-diagnosis-${r.id}.${f}`}
+                      onClick={(e) => e.stopPropagation()}
+                      title={f.toUpperCase()}
+                      className="rounded border border-ink-200 px-1 text-[10px] uppercase text-ink-400 hover:bg-ink-100"
+                    >
+                      {f}
+                    </a>
+                  ))}
+                </span>
+              )}
               {r.can_edit ? (
                 <button
                   onClick={() => del(r.id)}
@@ -379,25 +404,83 @@ export default function DiagnosisView() {
                 ))}
               </div>
             </div>
+            {/* L176 (v1 parity): 섹션 수 · 소요 · 리포트 ID stats bar. 소요 is omitted when
+                finished_at is unavailable (legacy rows) — never a fabricated duration. */}
+            {(() => {
+              const row = reports.find((r) => r.id === view!.id);
+              const startAt = active?.created_at ?? row?.created_at;
+              const endAt = active?.finished_at ?? row?.finished_at;
+              const secs = typeof view.summary?.sections === 'number' ? (view.summary.sections as number) : null;
+              const endMs = endAt ? new Date(endAt).getTime() : NaN;
+              const dur = startAt && !isNaN(endMs) ? elapsedLabel(startAt, endMs) : null;
+              const parts = [
+                secs !== null ? tt(`섹션 ${secs}개`) : null,
+                dur ? tt(`소요 ${dur}`) : null,
+                `${tt('리포트')} #${view!.id}`,
+              ].filter(Boolean);
+              return (
+                <div className="mb-3 rounded-md border border-ink-100 bg-paper px-3 py-1.5 text-[12px] text-ink-500">
+                  {parts.join(' · ')}
+                </div>
+              );
+            })()}
             {view.summary && <ReportInsights summary={view.summary} />}
             <ReportSections markdown={view.markdown} />
           </>
         ) : view?.status === 'running' ? (
-          <ProgressPanel progress={view.progress} stalled={pollTicks >= LONG_AFTER} />
+          <ProgressPanel progress={view.progress} stalled={pollTicks >= LONG_AFTER} createdAt={createdAt} tier={active?.tier ?? reports.find((r) => r.id === view?.id)?.tier} />
         ) : view?.status === 'failed' ? (
           <FailedPanel error={view.error} onRetry={run} disabled={running} />
         ) : (
-          <p className="text-sm text-ink-400">{tt('리포트를 선택하거나 “진단 실행”을 누르세요.')}</p>
+          <div>
+            <p className="text-sm text-ink-400">{tt('리포트를 선택하거나 “진단 실행”을 누르세요.')}</p>
+            {/* L180 (v1 parity): what a diagnosis covers, before running one. */}
+            <p className="mt-4 text-[13px] text-ink-600">{tt('진단은 계정 전반을 아래 섹션으로 분석합니다 (Deep 표시는 Deep 티어 전용):')}</p>
+            <ul className="mt-2 flex flex-wrap gap-1.5">
+              {sectionsForTier('deep').map((sec) => (
+                <li key={sec.key} className="flex items-center gap-1 rounded-full border border-ink-200 bg-paper px-2.5 py-1 text-[12px] text-ink-600">
+                  <span>{localizedTitle(sec, lang)}</span>
+                  {sec.deep && <span className="rounded-sm bg-brand-50 px-1 text-[10px] text-brand-700">Deep</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </main>
     </div>
   );
 }
 
+// mm:ss from an ISO start time (L176); negative skew clamps to 0. NaN start → null (no timer).
+function elapsedLabel(fromISO: string | undefined, nowMs: number): string | null {
+  if (!fromISO || isNaN(nowMs)) return null;
+  const start = new Date(fromISO).getTime();
+  if (isNaN(start)) return null;
+  const sec = Math.max(0, Math.floor((nowMs - start) / 1000));
+  return `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+}
+
 // A6 (V1 parity): live per-section progress while a report is running — never a bare spinner, so a
 // stalled run is visible. The reaper (B2) turns a dead worker into a 'failed' row within minutes.
-function ProgressPanel({ progress, stalled }: { progress?: DiagnosisProgress; stalled?: boolean }) {
-  const { tt } = useI18n();
+// L176: a 1s mm:ss elapsed timer from the row's created_at. L177: a section checklist grid
+// (completed check / current spinner / pending dim) when the worker streams `progress.completed`;
+// old in-flight rows without it keep the bar-only view.
+function ProgressPanel({ progress, stalled, createdAt, tier }: {
+  progress?: DiagnosisProgress; stalled?: boolean; createdAt?: string; tier?: string;
+}) {
+  const { tt, lang: uiLang } = useI18n();
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const elapsed = elapsedLabel(createdAt, now);
+  const completed = progress?.completed;
+  // Grid only when the mirror still matches the worker's catalog size — a sections.py change
+  // without a mirror update falls back to the bar-only view instead of drifting silently.
+  const catalog = tier ? sectionsForTier(tier) : null;
+  const grid = completed && catalog && catalog.length === (progress?.total ?? catalog.length)
+    ? catalog : null;
   const cur = progress?.current ?? 0;
   const total = progress?.total ?? 0;
   const pct = total > 0 ? Math.round((cur / total) * 100) : 0;
@@ -409,7 +492,10 @@ function ProgressPanel({ progress, stalled }: { progress?: DiagnosisProgress; st
     <div className="rounded-md border border-ink-200 bg-paper p-4">
       <div className="mb-2 flex items-center justify-between text-[13px] text-ink-700">
         <span className="font-medium">{tt('AI 진단 진행 중…')} {phaseLabel}</span>
-        {total > 0 && <span className="tabular-nums text-ink-500">{cur} / {total}</span>}
+        <span className="flex items-center gap-2 tabular-nums text-ink-500">
+          {elapsed && <span aria-label={tt('경과 시간')}>{elapsed}</span>}
+          {total > 0 && <span>{cur} / {total}</span>}
+        </span>
       </div>
       <div
         className="h-2 w-full overflow-hidden rounded-full bg-ink-100"
@@ -419,8 +505,27 @@ function ProgressPanel({ progress, stalled }: { progress?: DiagnosisProgress; st
       </div>
       {progress?.section && (
         <div className="mt-2 text-[12px] text-ink-600">
-          {tt('현재 섹션:')} <span className="font-medium text-ink-800">{progress.section}</span>
+          {progress.phase === 'render' ? tt('최근 완료 섹션:') : tt('현재 섹션:')}{' '}
+          <span className="font-medium text-ink-800">{progress.section}</span>
         </div>
+      )}
+      {grid && (
+        // 완료/대기 two-state grid — deliberately NO per-section spinner: render is concurrent
+        // (RENDER_CONCURRENCY=4) and the persisted payload can't tell in-flight from untouched,
+        // so a spinner would be invented telemetry. progress.section (above) names the most
+        // recently COMPLETED section during the render phase.
+        <ul className="mt-3 grid grid-cols-1 gap-1 sm:grid-cols-2">
+          {grid.map((sec) => {
+            const isDone = completed!.some((tName) => titleMatches(sec, tName));
+            return (
+              <li key={sec.key} className={`flex items-center gap-1.5 text-[12px] ${isDone ? 'text-ink-700' : 'text-ink-300'}`}>
+                {isDone ? <CheckCircle size={13} className="shrink-0 text-emerald-500" />
+                  : <span className="inline-block h-[13px] w-[13px] shrink-0 rounded-full border border-ink-200" />}
+                <span className="truncate">{localizedTitle(sec, uiLang)}</span>
+              </li>
+            );
+          })}
+        </ul>
       )}
       {stalled && (
         <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">

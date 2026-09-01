@@ -275,11 +275,11 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
     base_catalog, model_id, max_tokens = _resolve_tier(tier, model)
     total = len(base_catalog) + 1  # + INTENDED_VS_ACTUAL_SECTION; fixed so the UI can show N/total
 
-    def _emit(current, section, phase):
+    def _emit(current, section, phase, completed=None):
         if on_progress is None:
             return
         try:
-            on_progress(current, total, section, phase)
+            on_progress(current, total, section, phase, completed)
         except Exception as e:  # noqa: BLE001 — progress is a heartbeat, never fatal to the report
             print(f"progress emit failed (non-fatal): {e}", file=sys.stderr)  # [P4 gemini MINOR] don't fail silently
 
@@ -318,16 +318,19 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
             return i, {"key": sec.get("key"), "title": localized_title(sec, lang),
                        "body": f"_{fail.get(lang, fail['ko'])}: {e}_"}
 
-    rendered_by_idx, done = {}, 0
+    rendered_by_idx, done, completed_titles = {}, 0, []
     with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(catalog))) as ex:
         futures = [ex.submit(_render_one, i, sec) for i, sec in enumerate(catalog)]
         for fut in as_completed(futures):
             i, result = fut.result()
             rendered_by_idx[i] = result
             done += 1
-            _emit(done, result["title"], "render")  # progress as each section completes
+            # gap L177: accumulate finished-section titles (completion order — render is
+            # concurrent, so this is NOT catalog order) for the UI checklist grid.
+            completed_titles.append(result["title"])
+            _emit(done, result["title"], "render", list(completed_titles))
     rendered = [rendered_by_idx[i] for i in range(len(catalog))]
-    _emit(total, "리포트 조립", "assemble")
+    _emit(total, "리포트 조립", "assemble", list(completed_titles))  # keep the grid populated at 100%
     md = build_markdown(rendered, account, tier, collected, lang)
     summary = {"sections": len(rendered), "sources_used": sources_used,
                "degraded": degraded, "drift": drift}

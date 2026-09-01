@@ -23,11 +23,12 @@ A page for generating and reading comprehensive diagnostic reports that analyze 
 - Press the **진단 실행 (Run diagnosis)** button and the report is produced asynchronously by a background worker.
 
 ### Progress indicator
+- While generating, an **mm:ss elapsed timer** and a per-section **completed/pending checklist grid** accompany the progress bar; a completed report shows a **section count · duration · report id** stats bar (duration omitted on older reports without a recorded finish time).
 - While the report is being produced, a live progress bar shows the **data collection → section analysis → assembly** stages.
 - The report opens automatically once it is done.
 
 ### Report list
-The left sidebar lists your recent reports:
+The left sidebar lists your recent reports — completed rows carry inline **MD/DOCX download links** so you can download without opening the report:
 - An auto-generated **title**, the **id**, **depth (Tier)**, **model**, **status**, and **creation date** (KST)
 
 ### Report body
