@@ -13,22 +13,25 @@ interface Props {
 
 const gib = (mib: number) => (mib >= 1024 ? `${(mib / 1024).toFixed(1)} GiB` : `${Math.round(mib)} MiB`);
 
-function StackBar({ requested, allocatable, capacity }: { requested: number; allocatable: number; capacity: number }) {
+// Exported for reuse by the fleet nodes page's NodeCapacityList (gap L132) — one source of
+// truth for the 3-segment math. `requested: null` = unknown (pods fetch failed): the bar
+// renders only the Allocatable/Reserved split, never a fabricated zero-requested segment.
+export function StackBar({ requested, allocatable, capacity }: { requested: number | null; allocatable: number; capacity: number }) {
   if (!(capacity > 0)) return null;
-  const req = Math.min(requested, allocatable);
-  const avail = Math.max(0, allocatable - req);
+  const req = requested == null ? null : Math.min(requested, allocatable);
+  const avail = req == null ? allocatable : Math.max(0, allocatable - req);
   const reserved = Math.max(0, capacity - allocatable);
   const pct = (v: number) => `${(v / capacity) * 100}%`;
   return (
     <div>
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-ink-100">
-        <span className="h-full bg-brand-500" style={{ width: pct(req) }} title={`Requested ${((req / capacity) * 100).toFixed(0)}%`} />
-        <span className="h-full bg-emerald-400/70" style={{ width: pct(avail) }} title={`Available ${((avail / capacity) * 100).toFixed(0)}%`} />
+        {req != null && <span className="h-full bg-brand-500" style={{ width: pct(req) }} title={`Requested ${((req / capacity) * 100).toFixed(0)}%`} />}
+        <span className="h-full bg-emerald-400/70" style={{ width: pct(avail) }} title={`${req == null ? 'Allocatable' : 'Available'} ${((avail / capacity) * 100).toFixed(0)}%`} />
         <span className="h-full bg-ink-300" style={{ width: pct(reserved) }} title={`System-Reserved ${((reserved / capacity) * 100).toFixed(0)}%`} />
       </div>
       <div className="mt-1 flex items-center gap-3 text-[10.5px] text-ink-400">
-        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-brand-500" />Requested</span>
-        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-emerald-400/70" />Available</span>
+        {req != null && <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-brand-500" />Requested</span>}
+        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-emerald-400/70" />{req == null ? 'Allocatable' : 'Available'}</span>
         <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-ink-300" />Reserved</span>
       </div>
     </div>

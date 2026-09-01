@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- EKS overview: a collapsible cluster/VPC facet filter — multi-select cluster and VPC chips (VPC chips carry their cluster counts), an active-filter badge, Clear all, and a filtered/total counter — narrowing the cluster cards and the fleet panels below.
+- EKS nodes fleet page: per-node 3-segment capacity bars (Requested / Available / System-Reserved) for CPU and memory with 'avail X | rsv Y' captions; scheduler-requested totals come from a per-cluster pods read, and a cluster whose pods read fails shows 'requests unknown' rather than a fabricated zero.
 - EC2 diagnostics table: a Private IP column, and clicking a row slides in a 24-hour network panel — hourly NetworkIn/NetworkOut charts (KST axis) with Total In/Out (24h) tiles, scoped to the instance's own account and region; a missing series reads 'no data' and never fabricates a zero.
 - RDS detail panel: each attached security group now chains to its inbound rules — protocol, port range, and source chips (CIDR with description, referenced SG, prefix list; open-internet sources highlighted) — resolved from the synced security-group inventory with no live AWS call; a group missing from inventory reads 'not synced' rather than claiming it has no rules.
 - OpenSearch inventory sync gains eight detail columns (service software update availability, log publishing, endpoint HTTPS/TLS/custom-endpoint policy, Auto-Tune, snapshot hour, advanced options, access policies, upgrade state), surfaced as readable detail-panel fields — visible after the next sync run.
@@ -596,6 +598,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
+- EKS 개요: 접이식 클러스터/VPC facet 필터 — 멀티 선택 클러스터·VPC 칩(VPC 칩에 클러스터 수 표시), 활성 필터 배지, 전체 해제, filtered/total 카운터 — 클러스터 카드와 하단 fleet 패널을 함께 좁힘.
+- EKS 노드 fleet 페이지: 노드별 3분할 용량 바(Requested / Available / System-Reserved, CPU·메모리) + 'avail X | rsv Y' 캡션; 스케줄러 요청 합계는 클러스터별 pods 조회로 계산하며, pods 조회가 실패한 클러스터는 0으로 조작하지 않고 '요청량 미상'으로 표시.
 - EC2 진단 테이블: Private IP 컬럼 추가, 행 클릭 시 24시간 네트워크 패널 슬라이드인 — 시간별 NetworkIn/NetworkOut 차트(KST 축) + Total In/Out(24h) 타일, 인스턴스의 계정·리전 스코프 적용; 누락 시리즈는 0을 만들지 않고 '데이터 불가'로 표시.
 - RDS 상세 패널: 연결된 각 보안 그룹의 인바운드 규칙 체이닝 — 프로토콜, 포트 범위, 소스 칩(설명 포함 CIDR, 참조 SG, prefix list; 전체 인터넷 소스 강조) — 동기화된 보안 그룹 인벤토리에서 해석하며 라이브 AWS 호출 없음; 인벤토리에 없는 그룹은 '규칙 없음'이 아닌 '미동기화'로 표시.
 - OpenSearch 인벤토리 sync에 상세 컬럼 8종 추가(서비스 소프트웨어 업데이트 가용성, 로그 퍼블리싱, 엔드포인트 HTTPS/TLS/커스텀 엔드포인트 정책, Auto-Tune, 스냅샷 시각, 고급 옵션, 액세스 정책, 업그레이드 상태) — 상세 패널에 읽기 쉬운 필드로 표시, 다음 sync 실행 후 반영.

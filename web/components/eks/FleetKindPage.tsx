@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import NodeDrilldownPanel from '@/components/eks/NodeDrilldownPanel';
+import NodeCapacityList, { type NodeCapacityRow } from '@/components/eks/NodeCapacityList';
 import DetailPanel from '@/components/ui/DetailPanel';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -94,6 +95,9 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
   const [clusterSel, setClusterSel] = useState('전체');
   // nodes 전용 드릴다운 (v1 parity — 개요와 동일 패널): 행 클릭 → CPU/Memory/Pods/ENI
   const [nodeSel, setNodeSel] = useState<{ cluster: string; name: string } | null>(null);
+  // Gap L132 (nodes only): per-cluster pod request aggregation keyed by node name; a cluster
+  // whose pods fetch failed maps to null so its bars degrade honestly ('요청량 미상').
+  const [podReq, setPodReq] = useState<Record<string, Record<string, { cpu: number; mem: number }> | null>>({});
   const [selected, setSelected] = useState<Row | null>(null);
 
   // Monotonic load sequence — a late response from a superseded load must not
@@ -138,6 +142,31 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
       setRows(merged);
       setFailed(failedNames);
       setCapturedAt(new Date().toISOString());
+      // Gap L132: the capacity bars need scheduler-requested totals — one pods fetch per
+      // cluster, aggregated by node. Failures degrade per cluster (null), never the page.
+      if (kind === 'nodes') {
+        const podResults = await Promise.all(
+          names.map(async (name) => {
+            try {
+              const rr = await fetch(`/api/eks/${encodeURIComponent(name)}/incluster?kind=pods`);
+              if (!rr.ok) return { name, agg: null as Record<string, { cpu: number; mem: number }> | null };
+              const dd = await rr.json();
+              const agg: Record<string, { cpu: number; mem: number }> = {};
+              for (const pod of (dd.rows ?? []) as { node?: string; cpuRequest?: number; memRequest?: number }[]) {
+                if (!pod.node) continue;
+                const cur = (agg[pod.node] ??= { cpu: 0, mem: 0 });
+                cur.cpu += Number(pod.cpuRequest) || 0;
+                cur.mem += Number(pod.memRequest) || 0;
+              }
+              return { name, agg };
+            } catch {
+              return { name, agg: null as Record<string, { cpu: number; mem: number }> | null };
+            }
+          }),
+        );
+        if (!fresh()) return;
+        setPodReq(Object.fromEntries(podResults.map((p) => [p.name, p.agg])));
+      }
     } catch (e) {
       if (fresh()) setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -151,6 +180,7 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
     setClusterSel('전체');
     setSelected(null);
     setRows(null);
+    setPodReq({});
     void load();
   }, [load]);
 
@@ -259,6 +289,28 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
                 </>
               );
             })()}
+
+            {/* Gap L132: per-node 3-segment capacity bars (v1 nodes subpage) — follows the
+                table's filters so the list narrows with the operator's scope. */}
+            {kind === 'nodes' && filteredRows.length > 0 && (
+              <NodeCapacityList
+                rows={filteredRows.map((r): NodeCapacityRow => {
+                  const cluster = String(r.cluster ?? '');
+                  const clusterAgg = podReq[cluster];
+                  const nodeAgg = clusterAgg == null ? null : clusterAgg[String(r.name ?? '')] ?? { cpu: 0, mem: 0 };
+                  return {
+                    cluster,
+                    name: String(r.name ?? ''),
+                    cpuCapacity: Number(r.cpuCapacity) || 0,
+                    cpuAllocatable: Number(r.cpuAllocatable) || 0,
+                    cpuRequest: nodeAgg == null ? null : nodeAgg.cpu,
+                    memCapacityMiB: Number(r.memCapacity) || 0,
+                    memAllocatableMiB: Number(r.memAllocatable) || 0,
+                    memRequestMiB: nodeAgg == null ? null : nodeAgg.mem,
+                  };
+                })}
+              />
+            )}
 
             {kind === 'pods' && allRows.length > 0 && (() => {
               const s = podStatusCounts(allRows);
