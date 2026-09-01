@@ -370,6 +370,7 @@ export default function DetailPanel({
         </header>
         {actions && <div className="border-b border-ink-100 px-4 py-3">{actions}</div>}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          {ebsVolumeId != null && <EbsVerdictBanners data={data} />}
           {groups.map((group, gi) => {
             // v1-parity: each section is a rounded card with a leading icon + title. An unlabelled
             // group (no spec/sections) renders as a plain card without the header row.
@@ -427,7 +428,6 @@ export default function DetailPanel({
               />
             </section>
           )}
-          {ebsVolumeId && <EbsVerdictBanners data={data} />}
           {ebsVolumeId && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
               <EbsRelatedSection

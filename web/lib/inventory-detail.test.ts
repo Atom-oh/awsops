@@ -131,8 +131,14 @@ describe('structuredList additions (gap L209/L215)', () => {
     expect(v.items![1]).toMatchObject({ id: 'fargateEphemeralStorageKmsKeyId', name: 'key-1' });
   });
 
-  it('malformed settings (non-string Name) fall back to the JSON rendering — never half-parsed', () => {
-    const v = formatDetailValue('settings', [{ Value: 'x' }]);
-    expect(v.kind).toBe('code');
+  it('malformed settings (non-string Name OR structured Value) fall back WHOLE to JSON', () => {
+    expect(formatDetailValue('settings', [{ Value: 'x' }]).kind).toBe('code');
+    // a structured Value must not render as '[object Object]' in a half-parsed list
+    expect(formatDetailValue('settings', [{ Name: 'a', Value: { nested: 1 } }]).kind).toBe('code');
+  });
+
+  it("attachments tolerate a text-shaped 'true' for the DeleteOnTermination flag", () => {
+    const v = formatDetailValue('attachments', [{ InstanceId: 'i-1', DeleteOnTermination: 'true' }]);
+    expect(v.items![0].flag).toBe('DeleteOnTermination');
   });
 });

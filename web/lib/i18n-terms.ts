@@ -27,7 +27,8 @@ export const TERMS: Record<string, Pair> = {
   // EBS detail verdicts (gap L210)
   '암호화됨': { en: 'Encrypted', zh: '已加密', ja: '暗号化済み' },
   '스냅샷으로 암호화 사본 생성을 검토하세요.': { en: 'Consider creating an encrypted copy via snapshot.', zh: '建议通过快照创建加密副本。', ja: 'スナップショット経由で暗号化コピーの作成を検討してください。' },
-  '미연결 상태로 과금 중 — 삭제로 비용 절감을 검토하세요.': { en: 'Detached but still billed — consider deleting to save costs.', zh: '未挂载但仍在计费 — 建议删除以节省成本。', ja: '未接続のまま課金中 — 削除によるコスト削減を検討してください。' },
+  '유휴 볼륨 (스냅샷 기준)': { en: 'Idle volume (as of last sync)', zh: '闲置卷（截至上次同步）', ja: 'アイドルボリューム（最終同期時点）' },
+  '마지막 sync 시점에 미연결 — 여전히 과금되므로 삭제로 비용 절감을 검토하세요.': { en: 'Detached at the last sync — still billed; consider deleting to save costs.', zh: '上次同步时未挂载 — 仍在计费；建议删除以节省成本。', ja: '最終同期時点で未接続 — 引き続き課金されるため、削除によるコスト削減を検討してください。' },
   '리포트 생성이 실패했습니다.': { en: 'Report generation failed.', zh: '报告生成失败。', ja: 'レポート生成に失敗しました。' },
   '리포트가 아직 완료되지 않았습니다.': { en: 'The report is not finished yet.', zh: '报告尚未完成。', ja: 'レポートはまだ完了していません。' },
   // EKS overview filter + node capacity (gap L130/L132)

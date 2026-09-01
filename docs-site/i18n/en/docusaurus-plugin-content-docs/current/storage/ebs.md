@@ -35,8 +35,10 @@ Click on a volume to view in the right panel:
 - Volume ID, name, type, size
 - IOPS, Throughput, AZ
 - Multi-Attach setting
-- Encryption status and KMS key
-- Attached EC2 instance information
+- **Encryption verdict banner**: encrypted (green, with the KMS key) / unencrypted (red, with the encrypted-copy recommendation) — no banner when encryption is unknown
+- **Idle-volume hint**: a banner recommending cleanup when the volume was detached (available) at the last sync
+- Encryption status and KMS key (fields)
+- Attached EC2 instance information — each attachment flags **DeleteOnTermination** when set (the volume is deleted with the instance)
 - List of snapshots for the volume
 
 ## How to Use

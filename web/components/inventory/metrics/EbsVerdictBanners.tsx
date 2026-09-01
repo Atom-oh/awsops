@@ -14,7 +14,9 @@ export function EbsVerdictBanners({ data }: { data: Record<string, unknown> }) {
   const { tt } = useI18n();
   const enc = data.encrypted;
   const kms = typeof data.kms_key_id === 'string' && data.kms_key_id ? data.kms_key_id : null;
-  const idle = data.state === 'available'; // detached — billed but doing nothing
+  // 'available' in the SYNCED SNAPSHOT — a stale snapshot can't prove it is still detached,
+  // so the banner says so (the FinOps rule wraps the same signal in staleness guards).
+  const idle = data.state === 'available';
   const banners = [] as JSX.Element[];
   if (isTrue(enc)) {
     banners.push(
@@ -34,8 +36,8 @@ export function EbsVerdictBanners({ data }: { data: Record<string, unknown> }) {
   if (idle) {
     banners.push(
       <div key="idle" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
-        <span className="font-semibold">{tt('유휴 볼륨')}</span>
-        <span className="ml-2">{tt('미연결 상태로 과금 중 — 삭제로 비용 절감을 검토하세요.')}</span>
+        <span className="font-semibold">{tt('유휴 볼륨 (스냅샷 기준)')}</span>
+        <span className="ml-2">{tt('마지막 sync 시점에 미연결 — 여전히 과금되므로 삭제로 비용 절감을 검토하세요.')}</span>
       </div>,
     );
   }

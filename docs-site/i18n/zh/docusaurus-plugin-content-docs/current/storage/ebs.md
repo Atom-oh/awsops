@@ -35,8 +35,10 @@ import Screenshot from '@site/src/components/Screenshot';
 - 卷 ID、名称、类型、大小
 - IOPS、Throughput、AZ
 - Multi-Attach 设置
-- 加密状态及 KMS 密钥
-- 关联的 EC2 实例信息
+- **加密判定横幅**：已加密（绿色，显示 KMS 密钥）/ 未加密（红色，附加密副本建议）— 加密状态未知时不显示横幅
+- **闲置卷提示**：上次同步时未挂载（available）则显示成本清理建议横幅
+- 加密状态及 KMS 密钥（字段）
+- 关联的 EC2 实例信息 — 各 attachment 在设置了 **DeleteOnTermination** 时显示该标志（随实例终止一并删除卷）
 - 该卷的快照列表
 
 ## 使用方法
