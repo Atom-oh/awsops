@@ -20,6 +20,8 @@ export default function SubscribersPanel() {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // Gap L178: admin pause toggle — null until loaded (no fabricated 'active' state).
+  const [paused, setPaused] = useState<boolean | null>(null);
 
   async function load() {
     const r = await fetch('/api/diagnosis/subscribers');
@@ -31,6 +33,30 @@ export default function SubscribersPanel() {
     setEnabled(!!d.enabled);
     setCanManage(!!d.canManage);
     setSubs(Array.isArray(d.subscribers) ? d.subscribers : []);
+    try {
+      const nr = await fetch('/api/diagnosis/notify');
+      if (nr.ok) setPaused(!!(await nr.json()).paused);
+    } catch { /* toggle state stays unknown — switch hidden, list unaffected */ }
+  }
+
+  // Gap L178: pause/resume the report/digest emails without a deploy (admin-only; the route
+  // enforces it too). Optimistic-free: state updates only from the server response.
+  async function setPause(next: boolean) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch('/api/diagnosis/notify', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ paused: next }),
+      });
+      if (r.ok) setPaused(!!(await r.json()).paused);
+      else setMsg(tt('알림 설정 변경에 실패했습니다.'));
+    } catch {
+      setMsg(tt('알림 설정 변경에 실패했습니다.'));
+    } finally {
+      setBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -104,6 +130,30 @@ export default function SubscribersPanel() {
   return (
     <fieldset className="rounded-md border border-ink-200 px-2 py-1.5 text-[13px]">
       <legend className="px-1 text-ink-400">{tt(`진단 결과 메일링 (${subs.length})`)}</legend>
+      {/* Gap L178: pause switch — admins toggle; others see the state. Hidden while unknown. */}
+      {paused !== null && (
+        <div className="mb-1.5 flex items-center gap-2">
+          {canManage ? (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!paused}
+              disabled={busy}
+              onClick={() => setPause(!paused)}
+              className={`relative h-4 w-8 rounded-full transition ${paused ? 'bg-ink-200' : 'bg-brand-500'} disabled:opacity-50`}
+              aria-label={tt('이메일 알림')}
+            >
+              <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${paused ? 'left-0.5' : 'left-[18px]'}`} />
+            </button>
+          ) : null}
+          <span className="text-[12px] text-ink-600">{tt('이메일 알림')}</span>
+          {paused ? (
+            <span className="rounded-sm bg-amber-50 px-1 text-[10px] text-amber-700">{tt('일시 중지됨')}</span>
+          ) : (
+            <span className="rounded-sm bg-green-50 px-1 text-[10px] text-green-700">{tt('활성')}</span>
+          )}
+        </div>
+      )}
       {subs.length === 0 ? (
         <p className="text-[12px] text-ink-400">{tt('구독자가 없습니다. 진단 완료 시 등록된 메일로 요약이 발송됩니다.')}</p>
       ) : (

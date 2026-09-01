@@ -74,4 +74,30 @@ describe('SubscribersPanel', () => {
     fireEvent.click(screen.getByText('테스트 발송'));
     await waitFor(() => expect(screen.getByText(/테스트 발송에 실패했습니다/)).toBeTruthy());
   });
+
+  it('gap L178: the pause switch reflects state and PUTs the toggle (admin)', async () => {
+    setFetch((url, init) => {
+      if (url === '/api/diagnosis/notify' && init?.method === 'PUT') return { body: { paused: true } };
+      if (url === '/api/diagnosis/notify') return { body: { paused: false, canManage: true } };
+      return { body: listBody() };
+    });
+    render(<SubscribersPanel />);
+    await waitFor(() => expect(screen.getByText('활성')).toBeTruthy());
+    const sw = screen.getByRole('switch');
+    expect(sw.getAttribute('aria-checked')).toBe('true'); // active = checked
+    fireEvent.click(sw);
+    await waitFor(() => expect(screen.getByText('일시 중지됨')).toBeTruthy());
+    const putCall = fetchMock.mock.calls.find((c) => c[1]?.method === 'PUT');
+    expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ paused: true });
+  });
+
+  it('gap L178: non-admins see the state badge but no interactive switch', async () => {
+    setFetch((url) => {
+      if (url === '/api/diagnosis/notify') return { body: { paused: true, canManage: false } };
+      return { body: listBody({ canManage: false }) };
+    });
+    render(<SubscribersPanel />);
+    await waitFor(() => expect(screen.getByText('일시 중지됨')).toBeTruthy());
+    expect(screen.queryByRole('switch')).toBeNull();
+  });
 });

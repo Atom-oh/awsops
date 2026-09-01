@@ -13,6 +13,14 @@ export const TERMS: Record<string, Pair> = {
   '전체 해제': { en: 'Clear all', zh: '清除全部', ja: 'すべて解除' },
   '검색…': { en: 'Search…', zh: '搜索…', ja: '検索…' },
   '로딩 중…': { en: 'Loading…', zh: '加载中…', ja: '読み込み中…' },
+  // Diagnosis notify pause + print view (gap L178/L179)
+  '이메일 알림': { en: 'Email notifications', zh: '邮件通知', ja: 'メール通知' },
+  '일시 중지됨': { en: 'Paused', zh: '已暂停', ja: '一時停止中' },
+  '알림 설정 변경에 실패했습니다.': { en: 'Failed to change the notification setting.', zh: '通知设置更改失败。', ja: '通知設定の変更に失敗しました。' },
+  '인쇄용 보기': { en: 'Print view', zh: '打印视图', ja: '印刷ビュー' },
+  '인쇄': { en: 'Print', zh: '打印', ja: '印刷' },
+  '닫기': { en: 'Close', zh: '关闭', ja: '閉じる' },
+  '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },
   // EKS overview filter + node capacity (gap L130/L132)
   '클러스터 / VPC 필터': { en: 'Cluster / VPC Filter', zh: '集群 / VPC 筛选', ja: 'クラスター / VPC フィルター' },
   '노드 용량 (Requested / Available / Reserved)': { en: 'Node Capacity (Requested / Available / Reserved)', zh: '节点容量（Requested / Available / Reserved）', ja: 'ノード容量（Requested / Available / Reserved）' },
@@ -34,7 +42,6 @@ export const TERMS: Record<string, Pair> = {
   '확인 중…': { en: 'Checking…', zh: '检查中…', ja: '確認中…' },
   '실행 중…': { en: 'Running…', zh: '运行中…', ja: '実行中…' },
   '기타': { en: 'Other', zh: '其他', ja: 'その他' },
-  '닫기': { en: 'Close', zh: '关闭', ja: '閉じる' },
   '검색 지우기': { en: 'Clear search', zh: '清除搜索', ja: '検索をクリア' },
   '선택 해제': { en: 'Deselect', zh: '取消选择', ja: '選択解除' },
   '(오래됨)': { en: '(stale)', zh: '（过期）', ja: '（古い）' },

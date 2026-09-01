@@ -54,10 +54,23 @@ def lambda_handler(_event, _ctx):
         topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
         region = os.environ.get("AWS_REGION")
 
+        # Gap L178: admin pause toggle (app_settings) — paused behaves exactly like a missing
+        # topic: skip the publish but still stamp notified_at (reports completed while paused
+        # are dropped from email, never queued for a stale blast on re-enable). A flag-read
+        # failure fails OPEN — a broken settings read must not silently kill notifications.
+        paused = False
+        try:
+            rows = conn.run("SELECT value FROM app_settings WHERE key = 'diagnosis_notify_paused'")
+            paused = bool(rows) and rows[0][0] == "true"
+        except Exception as e:  # noqa: BLE001 — fail-open by design
+            print(f"[diagnosis_digest] pause-flag read failed (fail-open, publishing): {e}")
+        if paused:
+            print(f"[diagnosis_digest] notifications paused by admin - skipping publish for {len(pending)} report(s)")
+
         def url_for(report_id):
             return f"https://{domain}/ai-diagnosis?report={report_id}" if domain else ""
 
-        if topic:
+        if topic and not paused:
             if len(pending) == 1:
                 r = pending[0]
                 md = _fetch_markdown(r["artifact_uri"])

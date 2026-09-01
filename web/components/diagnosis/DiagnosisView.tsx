@@ -392,6 +392,15 @@ export default function DiagnosisView() {
                 <span className="text-[12px] text-ink-400">{tt('생성 일시:')} {fmtDate(createdAt, locale)}</span>
               ) : <span />}
               <div className="flex gap-2">
+                {/* Gap L179: browser print-preview view (new tab) — the PDF stays the primary export. */}
+                <a
+                  href={`/ai-diagnosis/report?id=${view!.id}`}
+                  target="_blank"
+                  rel="noopener"
+                  className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-100"
+                >
+                  {tt('인쇄용 보기')}
+                </a>
                 {(['md', 'docx', 'pdf'] as const).map((f) => (
                   <a
                     key={f}

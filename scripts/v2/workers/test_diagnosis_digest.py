@@ -182,3 +182,60 @@ def test_fetch_markdown_swallows_s3_errors(monkeypatch):
     monkeypatch.setattr(diagnosis_digest, "_s3_client", lambda: _S3())
 
     assert diagnosis_digest._fetch_markdown("s3://b/missing.md") == ""
+
+
+class FakeConnWithSettings(FakeConn):
+    """FakeConn that answers the gap-L178 pause-flag read."""
+    def __init__(self, paused_value=None, raise_on_run=False):
+        super().__init__()
+        self.paused_value = paused_value
+        self.raise_on_run = raise_on_run
+
+    def run(self, sql, **_kw):
+        if self.raise_on_run:
+            raise RuntimeError("settings table missing")
+        assert "app_settings" in sql
+        return [[self.paused_value]] if self.paused_value is not None else []
+
+
+def test_digest_paused_skips_publish_but_still_stamps(monkeypatch):
+    """Gap L178: paused behaves exactly like a missing topic — no SNS publish, notified_at
+    still stamped (reports completed while paused are dropped, never queued for a stale blast)."""
+    import diagnosis_digest
+
+    conn = FakeConnWithSettings(paused_value="true")
+    monkeypatch.setattr(diagnosis_digest.db, "connect", lambda: conn)
+    monkeypatch.setattr(
+        diagnosis_digest.ddb, "list_pending_notifications",
+        lambda c: [{"id": 1, "title": "t", "artifact_uri": "s3://b/k"}],
+    )
+    published = []
+    monkeypatch.setattr(diagnosis_digest.notify, "publish_report", lambda *a, **k: published.append(a))
+    monkeypatch.setattr(diagnosis_digest.notify, "publish_digest", lambda *a, **k: published.append(a))
+    marked = {}
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids: marked.update(ids=ids))
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+
+    out = diagnosis_digest.lambda_handler({}, None)
+    assert published == []
+    assert marked["ids"] == [1]
+    assert out["digested"] == 1
+
+
+def test_digest_pause_flag_read_failure_fails_open(monkeypatch):
+    """A broken settings read must not silently kill notifications — publish proceeds."""
+    import diagnosis_digest
+
+    conn = FakeConnWithSettings(raise_on_run=True)
+    monkeypatch.setattr(diagnosis_digest.db, "connect", lambda: conn)
+    monkeypatch.setattr(
+        diagnosis_digest.ddb, "list_pending_notifications",
+        lambda c: [{"id": 2, "title": "t", "artifact_uri": ""}],
+    )
+    published = []
+    monkeypatch.setattr(diagnosis_digest.notify, "publish_report", lambda *a, **k: published.append(a))
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids: None)
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+
+    diagnosis_digest.lambda_handler({}, None)
+    assert len(published) == 1
