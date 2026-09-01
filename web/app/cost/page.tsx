@@ -234,12 +234,17 @@ export default function CostPage() {
   // Declared BEFORE costRows — .map() executes during render (const is not hoisted).
   const now = new Date();
   const normChange = (current: number, previous: number) => momChangePctDailyUtc(current, previous, now);
+  // Early-UTC-month suppression: with ≤2 UTC days elapsed the MTD numerator is dominated by
+  // today's partial/lagging CE bucket (~24h ingest lag), so any thresholded verdict inverts
+  // (a flat rate reads ≈−50% on day 2 — green — and a real surge hides under the threshold).
+  // Render '—' / exclude from the surge count instead of a wrong-colored verdict.
+  const tooEarlyForVerdict = now.getUTCDate() <= 2;
   // Gap L198: raw numbers feed MetricTable (real numeric sort + threshold-colored cells),
   // not pre-formatted strings.
   type CostRow = { service: string; current: number; previous: number; change: number; share: number };
   const costRows: CostRow[] = changeRows.map((s) => ({
     service: s.service, current: s.current, previous: s.previous,
-    change: s.previous > 0 ? normChange(s.current, s.previous) : s.change,
+    change: s.previous > 0 && !tooEarlyForVerdict ? normChange(s.current, s.previous) : s.change,
     share: s.share,
   }));
   const changeTone = (c: number, previous: number) =>
@@ -251,13 +256,15 @@ export default function CostPage() {
     {
       // null = no baseline (previous 0) — MetricTable's missing contract sorts these LAST
       // instead of interleaving them with genuinely-flat services.
-      key: 'change', label: '변화율 (일평균)', type: 'num', value: (r) => (r.previous > 0 ? r.change : null),
+      key: 'change', label: '변화율 (일평균)', type: 'num',
+      title: tt('전월 일평균 대비 이번 달(UTC) 일평균 — 매월 1~2일(UTC)에는 부분 집계 왜곡을 피하기 위해 판정을 표시하지 않습니다'),
+      value: (r) => (r.previous > 0 && !tooEarlyForVerdict ? r.change : null),
       render: (r) => (
-        <span className={changeTone(r.change, r.previous)}>
-          {r.previous > 0 ? `${r.change > 0 ? '+' : ''}${r.change.toFixed(1)}%` : '—'}
+        <span className={tooEarlyForVerdict ? 'text-ink-500' : changeTone(r.change, r.previous)}>
+          {r.previous > 0 && !tooEarlyForVerdict ? `${r.change > 0 ? '+' : ''}${r.change.toFixed(1)}%` : '—'}
         </span>
       ),
-      danger: (r) => r.previous > 0 && r.change > 20,
+      danger: (r) => !tooEarlyForVerdict && r.previous > 0 && r.change > 20,
     },
     {
       key: 'share', label: '점유율', type: 'num', value: (r) => r.share,
@@ -288,7 +295,7 @@ export default function CostPage() {
   // No completed day yet (only today's partial bucket) → '—', never an average of exactly
   // the bucket the exclusion was written for.
   const dailyAvg = completedDays.length > 0 ? completedDays.reduce((a, t) => a + t.amount, 0) / completedDays.length : null;
-  const surging = changeRows.filter((r) => r.previous > 0 && normChange(r.current, r.previous) > 20).length;
+  const surging = tooEarlyForVerdict ? 0 : changeRows.filter((r) => r.previous > 0 && normChange(r.current, r.previous) > 20).length;
   // Gap L197: load SUCCEEDED but every DERIVED value is empty → a NEUTRAL empty-data banner
   // that never asserts a cause on its own (a narrow window can be all-empty for an enabled
   // CE, and a genuinely disabled CE takes the error path with its classified notice). The
@@ -430,6 +437,11 @@ export default function CostPage() {
               </div>
             )}
 
+            {failedLegs > 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                {tt(`일부 계정 조회 실패 (${failedLegs}건) — 아래 합계는 불완전합니다.`)}
+              </div>
+            )}
             {ceLooksEmpty && (
               <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2.5 text-[12.5px] text-sky-800">
                 <span>{tt('선택한 기간에 비용 데이터가 없습니다.')}</span>
@@ -474,7 +486,7 @@ export default function CostPage() {
               <StatTile
                 label={tt(`일평균 (${currency})`)}
                 value={dailyAvg == null ? DASH : usd(dailyAvg)}
-                hint={dailyAvg == null ? undefined : tt('최근 30일 · 필터 적용')}
+                hint={dailyAvg == null ? undefined : tt('최근 30일 중 완결일 평균 · 필터 적용')}
                 icon={<CalendarDays size={16} />}
               />
               <StatTile

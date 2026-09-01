@@ -31,7 +31,8 @@ export const TERMS: Record<string, Pair> = {
   '가용성을 확정하지 못했습니다 — 상세 원인은 새로고침 시 오류 배너를 참고하세요.': { en: 'Could not determine availability — refresh and see the error banner for details.', zh: '无法确定可用性 — 请刷新并查看错误横幅了解详情。', ja: '可用性を確認できませんでした — 更新してエラーバナーをご確認ください。' },
   '가용성 확인': { en: 'Check availability', zh: '检查可用性', ja: '可用性を確認' },
   '변화율 (일평균)': { en: 'Change % (daily avg)', zh: '变化率（日均）', ja: '変化率（日平均）' },
-  '최근 30일 · 필터 적용': { en: 'Trailing 30 days · filters applied', zh: '最近 30 天 · 已应用筛选', ja: '直近30日 · フィルター適用' },
+  '최근 30일 중 완결일 평균 · 필터 적용': { en: 'Mean of completed days in the trailing 30 · filters applied', zh: '最近 30 天中已完结日的平均 · 已应用筛选', ja: '直近30日のうち完了日の平均 · フィルター適用' },
+  '전월 일평균 대비 이번 달(UTC) 일평균 — 매월 1~2일(UTC)에는 부분 집계 왜곡을 피하기 위해 판정을 표시하지 않습니다': { en: "This month's daily average (UTC) vs last month's — no verdict is shown on UTC days 1–2 to avoid partial-aggregation distortion", zh: '本月（UTC）日均对比上月日均 — 每月 UTC 第 1~2 天不显示判定，以避免部分汇总失真', ja: '今月（UTC）の日平均と前月の比較 — 部分集計の歪みを避けるため毎月 UTC 1〜2 日は判定を表示しません' },
   // EBS detail verdicts (gap L210)
   '암호화됨': { en: 'Encrypted', zh: '已加密', ja: '暗号化済み' },
   '스냅샷으로 암호화 사본 생성을 검토하세요.': { en: 'Consider creating an encrypted copy via snapshot.', zh: '建议通过快照创建加密副本。', ja: 'スナップショット経由で暗号化コピーの作成を検討してください。' },
@@ -1513,6 +1514,7 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^이번 달 누적 \((.+)\)$/, en: (m) => `MTD (${m[1]})`, zh: (m) => `本月累计 (${m[1]})`, ja: (m) => `今月累計 (${m[1]})` },
   { re: /^일평균 \((.+)\)$/, en: (m) => `Daily Average (${m[1]})`, zh: (m) => `日均 (${m[1]})`, ja: (m) => `日平均 (${m[1]})` },
   { re: /^전월 총액 \((.+)\)$/, en: (m) => `Last Month (${m[1]})`, zh: (m) => `上月总额 (${m[1]})`, ja: (m) => `前月合計 (${m[1]})` },
+  { re: /^일부 계정 조회 실패 \((\d+)건\) — 아래 합계는 불완전합니다\.$/, en: (m) => `${m[1]} account(s) failed to load — the totals below are incomplete.`, zh: (m) => `${m[1]} 个账户查询失败 — 以下合计不完整。`, ja: (m) => `${m[1]} 件のアカウント取得に失敗 — 以下の合計は不完全です。` },
   { re: /^(\d+)개 >20% 증가$/, en: (m) => `${m[1]} increasing >20%`, zh: (m) => `${m[1]} 个增长 >20%`, ja: (m) => `${m[1]} 件が >20% 増加` },
   { re: /^이번 달 \((.+)\)$/, en: (m) => `This month (${m[1]})`, zh: (m) => `本月 (${m[1]})`, ja: (m) => `今月 (${m[1]})` },
   { re: /^일평균 기준 · 전월 (.+)$/, en: (m) => `Daily-avg basis · prev. month ${m[1]}`, zh: (m) => `按日均计算 · 上月 ${m[1]}`, ja: (m) => `日平均基準 · 前月 ${m[1]}` },

@@ -147,3 +147,13 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   missing fraction as residual bias; the tests now model a partial-day numerator.
 - `probeFromBanner` catches transport-level rejections (explicit 'error' feedback, never a
   dead button) and the button renders only in host scope (its verdict only renders there).
+
+## Round-9 corrections (review-driven)
+
+- **Early-UTC-month verdict suppression (the gate MAJOR)** — with ≤2 UTC days elapsed the MTD
+  numerator is dominated by today's partial/lagging bucket, inverting any thresholded verdict
+  (a flat rate reads ≈−50% green on day 2). Days 1–2 render '—' (excluded from the surge
+  count and the danger filter), and the column's tooltip discloses the basis.
+- A `failedLegs > 0` warn banner marks incomplete totals in 전체 계정 mode; the Daily Average
+  hint says "mean of completed days in the trailing 30" (29 completed buckets after excluding
+  today).
