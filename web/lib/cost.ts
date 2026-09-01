@@ -148,14 +148,21 @@ export function mergeDailyByService(parts: DailyServiceCostPoint[][]): DailyServ
 }
 
 
-/** Gap L197: "Cost Explorer probably isn't enabled" ONLY when the load succeeded, nothing is
- *  filtered, no fan-out leg failed, and every DERIVED value is zero/empty. Raw-array emptiness
- *  is the wrong signal — a successful CE call for a zero-spend account still returns one
- *  bucket per period; a genuinely-disabled CE throws and takes the error path instead. */
+/** Gap L197: "Cost Explorer probably isn't enabled" ONLY when the load succeeded LIVE (not a
+ *  cached fallback), nothing is filtered, no fan-out leg failed, the daily leg actually
+ *  returned buckets (a swallowed daily-leg failure yields [], and [].every() is vacuously
+ *  true), and there is no spend ANYWHERE — including the earlier monthly buckets, so an
+ *  account whose spend stopped >30 days ago never reads an onboarding banner above a chart
+ *  showing real historical bars. A successful zero-spend CE response still returns ~30 zero
+ *  daily buckets and one (empty-byService) bucket per month, so the intended case still
+ *  fires; a genuinely-disabled CE throws and takes the error path instead. */
 export function looksLikeCeUnconfigured(p: {
-  busy: boolean; err: string; loaded: boolean; filtered: boolean; failedLegs: number;
+  busy: boolean; err: string; loaded: boolean; cached: boolean; filtered: boolean; failedLegs: number;
   total: number; changeRowCount: number; trend: { amount: number }[];
+  monthlyByService: MonthlyServiceCostPoint[];
 }): boolean {
-  if (p.busy || p.err !== '' || !p.loaded || p.filtered || p.failedLegs > 0) return false;
-  return p.total === 0 && p.changeRowCount === 0 && p.trend.every((t) => t.amount === 0);
+  if (p.busy || p.err !== '' || !p.loaded || p.cached || p.filtered || p.failedLegs > 0) return false;
+  if (p.trend.length === 0) return false; // daily leg failed/empty — not evidence of anything
+  const noHistoricalSpend = p.monthlyByService.every((m) => m.byService.length === 0);
+  return p.total === 0 && p.changeRowCount === 0 && noHistoricalSpend && p.trend.every((t) => t.amount === 0);
 }

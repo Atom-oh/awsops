@@ -177,15 +177,32 @@ describe('mergeMonthlyByService / mergeDailyByService (전체 계정 fan-out)', 
 
 
 describe('looksLikeCeUnconfigured (gap L197)', () => {
-  const base = { busy: false, err: '', loaded: true, filtered: false, failedLegs: 0, total: 0, changeRowCount: 0, trend: [] as { amount: number }[] };
-  it('fires only on a successful, unfiltered, failure-free load with all-zero derived values', () => {
+  const zeroTrend = [{ date: '2026-08-30', amount: 0 }, { date: '2026-08-31', amount: 0 }] as { amount: number }[];
+  const emptyMonths = [
+    { month: '2026-08', byService: [] },
+    { month: '2026-09', byService: [] },
+  ] as never;
+  const base = {
+    busy: false, err: '', loaded: true, cached: false, filtered: false, failedLegs: 0,
+    total: 0, changeRowCount: 0, trend: zeroTrend, monthlyByService: emptyMonths,
+  };
+  it('fires on a successful LIVE, unfiltered, failure-free load with zero spend anywhere', () => {
     expect(looksLikeCeUnconfigured(base)).toBe(true);
-    expect(looksLikeCeUnconfigured({ ...base, trend: [{ amount: 0 }, { amount: 0 }] })).toBe(true);
   });
   it('a zero-cost bucketed response with any nonzero value stays quiet', () => {
     expect(looksLikeCeUnconfigured({ ...base, total: 0.01 })).toBe(false);
     expect(looksLikeCeUnconfigured({ ...base, changeRowCount: 1 })).toBe(false);
     expect(looksLikeCeUnconfigured({ ...base, trend: [{ amount: 3 }] })).toBe(false);
+  });
+  it('HISTORICAL spend in an earlier month suppresses the banner (decommissioned workload)', () => {
+    const months = [{ month: '2026-07', byService: [{ service: 'EC2', amount: 42 }] }, { month: '2026-09', byService: [] }] as never;
+    expect(looksLikeCeUnconfigured({ ...base, monthlyByService: months })).toBe(false);
+  });
+  it('an EMPTY trend is a failed/degraded daily leg, not onboarding evidence (vacuous every())', () => {
+    expect(looksLikeCeUnconfigured({ ...base, trend: [] })).toBe(false);
+  });
+  it('a cached-snapshot fallback (server-side degradation) fails closed', () => {
+    expect(looksLikeCeUnconfigured({ ...base, cached: true })).toBe(false);
   });
   it('suppressed while busy / on error / before load / with a service filter active', () => {
     expect(looksLikeCeUnconfigured({ ...base, busy: true })).toBe(false);

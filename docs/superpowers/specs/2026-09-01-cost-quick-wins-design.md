@@ -51,3 +51,17 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   the CHANGELOG bullet is amended in place for the table chrome + mobile layout change.
 - Known follow-up (out of scope, v1-parity bias): the change % compares partial MTD to the
   previous full month — per-day normalization would remove the mid-month green bias.
+
+## Round-2 corrections (review-driven)
+
+- **The banner fails closed on every degradation (the gate MAJORs)** — the predicate now also
+  requires: NOT a cached-snapshot fallback (`/api/cost` serves last-good bodies as 200 +
+  `cached: true`, and the 전체 계정 merge taints on ANY cached leg), a NON-empty daily trend
+  (a swallowed daily-leg failure yields [] and `[].every()` is vacuously true), and zero spend
+  ACROSS THE FETCHED MONTHLY MATRIX (an account whose spend stopped >30 days ago must never
+  read an onboarding banner above real historical bars). All covered by unit tests.
+- Daily Average excludes today's still-accumulating CE bucket (the momChangePctDaily caveat);
+  the docs-site cost guide (4 locales) documents the 7-tile row, the new tiles/subtext, and
+  the onboarding banner.
+- Known follow-up (unchanged): per-row day-normalized change % to remove the mid-month
+  under-alerting bias in the surge count/coloring.

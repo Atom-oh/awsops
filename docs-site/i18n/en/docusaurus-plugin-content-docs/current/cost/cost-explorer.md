@@ -15,12 +15,16 @@ A page for analyzing month-to-date cost and the per-service cost breakdown.
 ## Key Features
 
 ### KPI Tiles
-Five tiles at the top of the page summarize your cost posture:
+Seven tiles at the top of the page summarize your cost posture:
 - **Month-to-date**: Cumulative cost from the first of the month through now
 - **MoM (daily average)**: Month-over-month change. Since the current month is partial, the comparison is made on a **daily-average** basis to avoid distortion from incomplete data
 - **Projected month-end cost**: AWS forecast or a linear estimate (the tile shows **AWS forecast** / **linear estimate**)
-- **Service count**: Number of services that incurred cost
+- **Daily Average**: Mean of the trailing-30d daily totals (today's still-accumulating bucket excluded; service filters apply)
+- **Last Month**: The previous month's total
+- **Service count**: Number of services that incurred cost — with an 'N increasing >20%' subtext when services grew more than 20% over last month
 - **Top service**: The highest-cost service and its amount
+
+When there is no data at all (every series empty), a Cost Explorer onboarding banner appears — enable it in the AWS Billing console; data can take up to 24 hours to appear.
 
 ### Trend Charts
 - **Monthly cost trend**: An area chart of monthly cost over roughly the last 6 months

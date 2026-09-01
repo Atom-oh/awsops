@@ -58,6 +58,8 @@ function mergeCost(parts: Cost[]): Cost {
     forecast: parts.some((p) => typeof p.forecast === 'number')
       ? parts.reduce((s, p) => s + (p.forecast ?? 0), 0) : null,
     monthlyByService, dailyByService,
+    // ANY cached leg taints the merge — the onboarding banner must fail closed on stale data.
+    cached: parts.some((p) => p.cached === true),
   };
 }
 async function loadAllAccountsCost(months: number): Promise<{ cost: Cost; failedLegs: number }> {
@@ -261,7 +263,12 @@ export default function CostPage() {
   // Gap L196: Daily Average over the FILTERED trailing-30d series; surge count for the
   // Services subtext (previous>0 keeps new services out — serviceChangeRows pins their
   // change to 0, so >20 alone is already safe, but the guard states the intent).
-  const dailyAvg = trend.length > 0 ? trend.reduce((a, t) => a + t.amount, 0) / trend.length : null;
+  // Exclude today's still-accumulating CE bucket from the mean (the same partial-day caveat
+  // momChangePctDaily documents); fall back to the full series when it is all we have.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const completedDays = trend.filter((t) => t.date !== todayIso);
+  const avgBase = completedDays.length > 0 ? completedDays : trend;
+  const dailyAvg = avgBase.length > 0 ? avgBase.reduce((a, t) => a + t.amount, 0) / avgBase.length : null;
   const surging = changeRows.filter((r) => r.change > 20 && r.previous > 0).length;
   // Gap L197: load SUCCEEDED but every DERIVED value is empty → Cost Explorer onboarding
   // banner (distinct from the error banner). Derived emptiness, not raw-array emptiness — a
@@ -270,8 +277,8 @@ export default function CostPage() {
   // filter is active (a filter pinned to a zero-cost service must not claim CE is off) or
   // when any fan-out leg FAILED (that is an access/error condition, not an onboarding one).
   const ceLikelyDisabled = looksLikeCeUnconfigured({
-    busy, err, loaded: d != null, filtered: selectedServices.size > 0, failedLegs,
-    total, changeRowCount: changeRows.length, trend,
+    busy, err, loaded: d != null, cached: d?.cached === true, filtered: selectedServices.size > 0, failedLegs,
+    total, changeRowCount: changeRows.length, trend, monthlyByService,
   });
   const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
   const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
