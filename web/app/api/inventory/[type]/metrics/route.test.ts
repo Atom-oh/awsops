@@ -229,11 +229,20 @@ describe('live-metrics ?id= trends=1 (gap L118)', () => {
     await GET(req('http://x/api/inventory/opensearch/metrics?id=dom-1&trends=1&account=123456789012&region=us-west-2'), ctx('opensearch'));
     expect(liveResourceTrends).toHaveBeenCalledWith('opensearch', 'dom-1', '123456789012', 'us-west-2');
   });
-  it('400 on a malformed region', async () => {
+  it('400 on a malformed region (AWS-region shape, not just charset)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     hasLiveMetrics.mockReturnValue(true);
     const { GET } = await import('./route');
     expect((await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1&region=US_EAST!'), ctx('elasticache'))).status).toBe(400);
+    expect((await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1&region=garbage'), ctx('elasticache'))).status).toBe(400);
     expect(liveResourceTrends).not.toHaveBeenCalled();
+  });
+  it('latest-value grid forwards account and region too (member-account grid was host-pinned)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    liveResourceMetrics.mockResolvedValue([]);
+    const { GET } = await import('./route');
+    await GET(req('http://x/api/inventory/opensearch/metrics?id=dom-1&account=123456789012&region=us-west-2'), ctx('opensearch'));
+    expect(liveResourceMetrics).toHaveBeenCalledWith('opensearch', 'dom-1', '123456789012', 'us-west-2');
   });
 });

@@ -300,22 +300,24 @@ export async function GET(request: Request, { params }: { params: { type: string
         if (!/^[a-zA-Z0-9._-]{1,128}$/.test(id)) {
           return Response.json({ status: 'error', message: 'invalid id' }, { status: 400 });
         }
+        // `account`/`region` (validated) reach assumedClient so member-account and
+        // non-default-region resources read their OWN metrics — both the latest-value grid
+        // and the opt-in trends path (half-opening the scope charts the wrong resource).
+        const account = url.searchParams.get('account') ?? undefined;
+        if (account !== undefined && account !== 'self' && !/^[0-9]{12}$/.test(account)) {
+          return Response.json({ status: 'error', message: 'invalid account' }, { status: 400 });
+        }
+        const reg = url.searchParams.get('region') ?? undefined;
+        // AWS-region shape (the sg-rules.ts form) — this string reaches SDK client construction.
+        if (reg !== undefined && !/^[a-z]{2,4}(-[a-z]+)+-\d$/.test(reg)) {
+          return Response.json({ status: 'error', message: 'invalid region' }, { status: 400 });
+        }
         // Opt-in 1h sparkline series (gap L118): trends=1 returns ONLY the trends — the
         // latest-value grid is the sibling section's fetch (the RDS trends=1 contract).
-        // `account` (validated) reaches assumedClient so member-account resources chart too —
-        // the sibling latest-value path keeps its pre-existing host-only behavior for now.
         if (url.searchParams.get('trends') === '1') {
-          const account = url.searchParams.get('account') ?? undefined;
-          if (account !== undefined && account !== 'self' && !/^[0-9]{12}$/.test(account)) {
-            return Response.json({ status: 'error', message: 'invalid account' }, { status: 400 });
-          }
-          const reg = url.searchParams.get('region') ?? undefined;
-          if (reg !== undefined && !/^[a-z0-9-]{1,32}$/.test(reg)) {
-            return Response.json({ status: 'error', message: 'invalid region' }, { status: 400 });
-          }
           return Response.json({ trends: await liveResourceTrends(params.type, id, account, reg) });
         }
-        const metrics = await liveResourceMetrics(params.type, id);
+        const metrics = await liveResourceMetrics(params.type, id, account, reg);
         // MSK: append bootstrap broker connection strings (v1 parity) — ARN from the synced row.
         if (params.type === 'msk') {
           try {

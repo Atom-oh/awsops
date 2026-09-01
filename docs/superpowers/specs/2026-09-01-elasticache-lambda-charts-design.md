@@ -49,7 +49,22 @@ Terraform/IAM/스키마 변경 없음.
 - **Region threaded alongside account** — account without region half-opens the scope (a
   member cluster outside the deployment region reads '데이터 불가', or a same-named
   default-region cluster charts the WRONG resource). `liveResourceTrends(type, id, account?,
-  region?)`; route validates `region` (`/^[a-z0-9-]{1,32}$/` → 400); LiveTrendsSection sends
+  region?)`; route validates `region` (AWS-region shape `/^[a-z]{2,4}(-[a-z]+)+-\d$/` → 400,
+  the sg-rules.ts form — the string reaches SDK client construction); LiveTrendsSection sends
   `&region=`; DetailPanel passes `data.region` (mirrors EbsRelatedSection).
+
+## Round-3 corrections (review-driven)
+
+- **The latest-value grid is account/region-scoped too** — round 2 scoped only the new trends
+  path, leaving the pre-existing `LiveMetricsSection` grid host-pinned while the CHANGELOG
+  claimed member-account domains "return data". Now the route's whole `?id=` branch validates
+  `account`/`region` once and passes both to `liveResourceMetrics(type, id, account?, region?)`
+  as well; `LiveMetricsSection` sends `&account=&region=` from `data.account_id`/`data.region`
+  — making the CHANGELOG bullet true end-to-end instead of narrowing it.
+- **Rules-of-hooks fix** — the `histData` `useMemo` moved above the page's `if (!spec)` early
+  return (the diff had introduced the component's first conditional hook; no ESLint here to
+  catch regressions).
+- Audit note: v2 places the Lambda memory histogram beside the Top-N memory bar (v1 sat it
+  alongside the runtime pie) — presentational deviation, recorded on the L135 tick.
 - **CHANGELOG Fixed bullets (EN/KO)** for the user-visible FreeStorageSpace ~1e6× display fix
   + CacheHitRate ratio fix + member-account ClientId fix.
