@@ -25,6 +25,9 @@ export const TERMS: Record<string, Pair> = {
   '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },
   '리포트 본문을 읽지 못했습니다.': { en: 'Could not read the report body.', zh: '无法读取报告正文。', ja: 'レポート本文を読み取れませんでした。' },
   // Cost quick wins (gap L196/L197)
+  '선택한 기간에 비용 데이터가 없습니다.': { en: 'No cost data in the selected period.', zh: '所选期间没有成本数据。', ja: '選択した期間にコストデータがありません。' },
+  'Cost Explorer가 아직 활성화되지 않았습니다 — AWS Billing 콘솔에서 활성화하세요 (표시까지 최대 24시간).': { en: 'Cost Explorer is not enabled yet — enable it in the AWS Billing console (up to 24h until data appears).', zh: 'Cost Explorer 尚未启用 — 请在 AWS Billing 控制台启用（数据显示最长需 24 小时）。', ja: 'Cost Explorer はまだ有効化されていません — AWS Billing コンソールで有効化してください（表示まで最大24時間）。' },
+  '가용성 확인': { en: 'Check availability', zh: '检查可用性', ja: '可用性を確認' },
   '변화율 (일평균)': { en: 'Change % (daily avg)', zh: '变化率（日均）', ja: '変化率（日平均）' },
   '최근 30일 · 필터 적용': { en: 'Trailing 30 days · filters applied', zh: '最近 30 天 · 已应用筛选', ja: '直近30日 · フィルター適用' },
   '비용 데이터가 없습니다 — Cost Explorer가 활성화되지 않았을 수 있습니다. AWS Billing 콘솔에서 Cost Explorer를 활성화하세요. 활성화 후 데이터 표시까지 최대 24시간 걸릴 수 있습니다.': { en: 'No cost data — Cost Explorer may not be enabled. Enable it in the AWS Billing console; data can take up to 24 hours to appear.', zh: '没有成本数据 — Cost Explorer 可能未启用。请在 AWS Billing 控制台启用；启用后数据最长可能需要 24 小时才会显示。', ja: 'コストデータがありません — Cost Explorer が有効になっていない可能性があります。AWS Billing コンソールで有効化してください。有効化後、データ表示まで最大 24 時間かかる場合があります。' },

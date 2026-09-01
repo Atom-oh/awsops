@@ -163,6 +163,7 @@ export function looksLikeCeUnconfigured(p: {
 }): boolean {
   if (p.busy || p.err !== '' || !p.loaded || p.cached || p.filtered || p.failedLegs > 0) return false;
   if (p.trend.length === 0) return false; // daily leg failed/empty — not evidence of anything
+  if (p.monthlyByService.length === 0) return false; // same vacuous-every() hole on the monthly axis
   const noHistoricalSpend = p.monthlyByService.every((m) => m.byService.length === 0);
   return p.total === 0 && p.changeRowCount === 0 && noHistoricalSpend && p.trend.every((t) => t.amount === 0);
 }

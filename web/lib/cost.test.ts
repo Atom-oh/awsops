@@ -201,6 +201,10 @@ describe('looksLikeCeUnconfigured (gap L197)', () => {
   it('an EMPTY trend is a failed/degraded daily leg, not onboarding evidence (vacuous every())', () => {
     expect(looksLikeCeUnconfigured({ ...base, trend: [] })).toBe(false);
   });
+
+  it('an EMPTY monthly matrix is a failed/degraded monthly leg — same vacuous-every() hole', () => {
+    expect(looksLikeCeUnconfigured({ ...base, monthlyByService: [] as never })).toBe(false);
+  });
   it('a cached-snapshot fallback (server-side degradation) fails closed', () => {
     expect(looksLikeCeUnconfigured({ ...base, cached: true })).toBe(false);
   });

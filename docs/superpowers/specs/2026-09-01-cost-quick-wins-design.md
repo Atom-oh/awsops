@@ -91,3 +91,19 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
 - Discovery validation covers a 200 with `{}`/`accounts: null` (malformed, counted as a
   failed leg); `mergeCost` propagates the latest `cachedAt` so the stale banner never renders
   empty parentheses in 전체 계정 mode.
+
+## Round-5 corrections (review-driven)
+
+- **TDZ crash fixed (the gate CRITICAL)** — `normChange` was declared ~50 lines below the
+  `costRows` map that called it during render; `now`/`normChange` are hoisted above the map.
+- **The banner is cause-NEUTRAL and probe-honest (the gate MAJORs)** — the auto-probe is
+  gone (billable, host-scoped, and its verdict stuck across account switches). The empty
+  state now renders a neutral '선택한 기간에 비용 데이터가 없습니다.' banner with the
+  existing force-probe button; the not_enabled onboarding sentence renders only after a
+  probe result AND only in host scope (`active === 'self'`) — the availability classifier
+  probes with the host task role and must never speak for a member account. Reachability is
+  honest by construction: a genuinely-disabled CE takes the error path (classified notice,
+  pre-existing), and the empty banner covers the narrow-window/zero-spend states without
+  asserting a cause.
+- `looksLikeCeUnconfigured` guards the monthly vacuous-every() hole; `mergeCost` keeps the
+  OLDEST `cachedAt` (the honest staleness bound for a mixed merge).

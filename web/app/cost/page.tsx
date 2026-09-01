@@ -60,7 +60,8 @@ function mergeCost(parts: Cost[]): Cost {
     monthlyByService, dailyByService,
     // ANY cached leg taints the merge — the onboarding banner must fail closed on stale data.
     cached: parts.some((p) => p.cached === true),
-    cachedAt: parts.map((p) => p.cachedAt).filter(Boolean).sort().pop(),
+    // OLDEST cached timestamp — the honest staleness bound for a mixed merge.
+    cachedAt: parts.map((p) => p.cachedAt).filter(Boolean).sort()[0],
   };
 }
 async function loadAllAccountsCost(months: number): Promise<{ cost: Cost; failedLegs: number }> {
@@ -95,8 +96,6 @@ export default function CostPage() {
   const { tt, lang } = useI18n();
   const [d, setD] = useState<Cost | null>(null);
   const [failedLegs, setFailedLegs] = useState(0);
-  // null = not probed; true only when /api/cost/availability confirmed reason 'not_enabled'.
-  const [ceNotEnabled, setCeNotEnabled] = useState<boolean | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
@@ -227,6 +226,12 @@ export default function CostPage() {
   })();
   const hbarData = changeRows.map((s) => ({ service: s.service, amount: s.current }));
 
+  // Day-normalized change (the same momChangePctDaily primitive the MoM tile uses): the raw
+  // partial-MTD-vs-full-month ratio reads ≈-50% mid-month for an unchanged run-rate — turning
+  // that skew into a red/green verdict and an alert count would invert for most of the month.
+  // Declared BEFORE costRows — .map() executes during render (const is not hoisted).
+  const now = new Date();
+  const normChange = (current: number, previous: number) => momChangePctDaily(current, previous, now);
   // Gap L198: raw numbers feed MetricTable (real numeric sort + threshold-colored cells),
   // not pre-formatted strings.
   type CostRow = { service: string; current: number; previous: number; change: number; share: number };
@@ -281,36 +286,18 @@ export default function CostPage() {
   // No completed day yet (only today's partial bucket) → '—', never an average of exactly
   // the bucket the exclusion was written for.
   const dailyAvg = completedDays.length > 0 ? completedDays.reduce((a, t) => a + t.amount, 0) / completedDays.length : null;
-  // Day-normalized change (the same momChangePctDaily primitive the MoM tile uses): the raw
-  // partial-MTD-vs-full-month ratio reads ≈-50% mid-month for an unchanged run-rate — turning
-  // that skew into a red/green verdict and an alert count would invert for most of the month.
-  const now = new Date();
-  const normChange = (current: number, previous: number) => momChangePctDaily(current, previous, now);
   const surging = changeRows.filter((r) => r.previous > 0 && normChange(r.current, r.previous) > 20).length;
-  // Gap L197: load SUCCEEDED but every DERIVED value is empty → Cost Explorer onboarding
-  // banner (distinct from the error banner). Derived emptiness, not raw-array emptiness — a
-  // successful CE response for a zero-spend account still returns one bucket per period
-  // (empty byService inside), so raw-length checks never fire. Suppressed when a service
-  // filter is active (a filter pinned to a zero-cost service must not claim CE is off) or
-  // when any fan-out leg FAILED (that is an access/error condition, not an onboarding one).
+  // Gap L197: load SUCCEEDED but every DERIVED value is empty → a NEUTRAL empty-data banner
+  // that never asserts a cause on its own (a narrow window can be all-empty for an enabled
+  // CE, and a genuinely disabled CE takes the error path with its classified notice). The
+  // banner offers the existing force-probe; the not_enabled onboarding sentence renders only
+  // after a probe result AND only in host scope — /api/cost/availability probes with the
+  // host task role, so its verdict must never be presented as a member account's.
   const ceLooksEmpty = looksLikeCeUnconfigured({
     busy, err, loaded: d != null, cached: d?.cached === true, filtered: selectedServices.size > 0, failedLegs,
     total, changeRowCount: changeRows.length, trend, monthlyByService,
   });
-  // A narrow period window (1m/3m) can be all-empty for an ENABLED CE whose spend simply
-  // predates the window — before asserting an onboarding cause, confirm with the
-  // purpose-built classifier (/api/cost/availability → reason 'not_enabled').
-  useEffect(() => {
-    if (!ceLooksEmpty) { setCeNotEnabled(null); return; }
-    let alive = true;
-    fetch('/api/cost/availability')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((a) => { if (alive) setCeNotEnabled(a != null && a.available === false && a.reason === 'not_enabled'); })
-      .catch(() => { if (alive) setCeNotEnabled(false); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ceLooksEmpty]);
-  const ceLikelyDisabled = ceLooksEmpty && ceNotEnabled === true;
+  const showNotEnabledHint = active === 'self' && avail?.reason === 'not_enabled';
   const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
   const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
 
@@ -417,9 +404,15 @@ export default function CostPage() {
               </div>
             )}
 
-            {ceLikelyDisabled && (
+            {ceLooksEmpty && (
               <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2.5 text-[12.5px] text-sky-800">
-                {tt('비용 데이터가 없습니다 — Cost Explorer가 활성화되지 않았을 수 있습니다. AWS Billing 콘솔에서 Cost Explorer를 활성화하세요. 활성화 후 데이터 표시까지 최대 24시간 걸릴 수 있습니다.')}
+                <span>{tt('선택한 기간에 비용 데이터가 없습니다.')}</span>
+                {showNotEnabledHint && (
+                  <span className="ml-1">{tt('Cost Explorer가 아직 활성화되지 않았습니다 — AWS Billing 콘솔에서 활성화하세요 (표시까지 최대 24시간).')}</span>
+                )}
+                <button onClick={recheck} disabled={rechecking} className="ml-2 rounded-md border border-sky-300 bg-card px-2 py-0.5 text-[11.5px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50">
+                  {tt(rechecking ? '확인 중…' : '가용성 확인')}
+                </button>
               </div>
             )}
             {/* ---- KPI tiles (gap L196: Daily Average + Last Month + surge subtext) ---- */}
