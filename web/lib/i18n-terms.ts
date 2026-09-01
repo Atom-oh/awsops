@@ -13,6 +13,11 @@ export const TERMS: Record<string, Pair> = {
   '전체 해제': { en: 'Clear all', zh: '清除全部', ja: 'すべて解除' },
   '검색…': { en: 'Search…', zh: '搜索…', ja: '検索…' },
   '로딩 중…': { en: 'Loading…', zh: '加载中…', ja: '読み込み中…' },
+  // EC2 network drill-down (gap L139)
+  '네트워크 트래픽 (24시간)': { en: 'Network Traffic (24h)', zh: '网络流量（24小时）', ja: 'ネットワークトラフィック（24時間）' },
+  '행 클릭 → 24시간 네트워크 In/Out 차트': { en: 'Click a row → 24h network In/Out charts', zh: '点击行 → 24小时网络进/出图表', ja: '行クリック → 24時間ネットワークIn/Outチャート' },
+  'Total In (24h)': { en: 'Total In (24h)', zh: '总流入（24小时）', ja: '合計In（24時間）' },
+  'Total Out (24h)': { en: 'Total Out (24h)', zh: '总流出（24小时）', ja: '合計Out（24時間）' },
   // RDS SG inbound chaining (gap L154)
   '보안 그룹 인바운드 규칙': { en: 'Security Group Inbound Rules', zh: '安全组入站规则', ja: 'セキュリティグループ インバウンドルール' },
   '보안 그룹 규칙 조회 실패': { en: 'Failed to load security group rules', zh: '安全组规则查询失败', ja: 'セキュリティグループルールの取得に失敗' },

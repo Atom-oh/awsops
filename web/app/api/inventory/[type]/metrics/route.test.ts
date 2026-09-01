@@ -6,6 +6,7 @@ const ec2CpuStats = vi.fn();
 const ec2HourlyCost = vi.fn();
 const rdsMetrics = vi.fn();
 const rdsInstanceTrends = vi.fn();
+const ec2NetworkTrends = vi.fn();
 const liveResourceTrends = vi.fn();
 const hasLiveMetrics = vi.fn();
 const liveResourceMetrics = vi.fn();
@@ -16,6 +17,7 @@ vi.mock('@/lib/metrics', () => ({
   ec2HourlyCost: (...a: unknown[]) => ec2HourlyCost(...a),
   rdsMetrics: (...a: unknown[]) => rdsMetrics(...a),
   rdsInstanceTrends: (...a: unknown[]) => rdsInstanceTrends(...a),
+  ec2NetworkTrends: (...a: unknown[]) => ec2NetworkTrends(...a),
   liveResourceTrends: (...a: unknown[]) => liveResourceTrends(...a),
   hasLiveMetrics: (...a: unknown[]) => hasLiveMetrics(...a),
   liveResourceMetrics: (...a: unknown[]) => liveResourceMetrics(...a),
@@ -32,6 +34,7 @@ beforeEach(() => {
   ec2HourlyCost.mockReset();
   rdsMetrics.mockReset();
   rdsInstanceTrends.mockReset();
+  ec2NetworkTrends.mockReset();
   liveResourceTrends.mockReset();
   hasLiveMetrics.mockReset();
   liveResourceMetrics.mockReset();
@@ -252,5 +255,27 @@ describe('live-metrics ?id= trends=1 (gap L118)', () => {
     const { GET } = await import('./route');
     await GET(req('http://x/api/inventory/opensearch/metrics?id=dom-1&account=123456789012&region=us-west-2'), ctx('opensearch'));
     expect(liveResourceMetrics).toHaveBeenCalledWith('opensearch', 'dom-1', '123456789012', 'us-west-2');
+  });
+});
+
+describe('ec2 ?id= trends=1 (gap L139)', () => {
+  it('returns ONLY the network trends — no fleet query, no KPI-card calls', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    ec2NetworkTrends.mockResolvedValue({ netIn: null, netOut: null });
+    const { GET } = await import('./route');
+    const body = await (await GET(req('http://x/api/inventory/ec2/metrics?id=i-0abc12345&trends=1&account=123456789012&region=us-west-2'), ctx())).json();
+    expect(body.trends).toEqual({ netIn: null, netOut: null });
+    expect(body).not.toHaveProperty('cards');
+    expect(ec2NetworkTrends).toHaveBeenCalledWith('i-0abc12345', '123456789012', 'us-west-2');
+    expect(query).not.toHaveBeenCalled();
+    expect(ec2CpuStats).not.toHaveBeenCalled();
+  });
+  it('400 on malformed id / account / region', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const { GET } = await import('./route');
+    expect((await GET(req("http://x/api/inventory/ec2/metrics?id=i-XYZ'--&trends=1"), ctx())).status).toBe(400);
+    expect((await GET(req('http://x/api/inventory/ec2/metrics?id=i-0abc12345&trends=1&account=nope'), ctx())).status).toBe(400);
+    expect((await GET(req('http://x/api/inventory/ec2/metrics?id=i-0abc12345&trends=1&region=garbage'), ctx())).status).toBe(400);
+    expect(ec2NetworkTrends).not.toHaveBeenCalled();
   });
 });

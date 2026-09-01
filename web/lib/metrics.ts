@@ -483,6 +483,43 @@ export async function liveResourceTrends(type: string, id: string, accountId?: s
   }
 }
 
+// ── EC2 per-instance 24h network trends (gap L139, v1 parity) ───────────────
+export interface Ec2NetworkTrends {
+  netIn: TrendSample[] | null;  // hourly NetworkIn Sum (bytes/hour); null = no data / error
+  netOut: TrendSample[] | null; // hourly NetworkOut Sum (bytes/hour)
+}
+
+/** One bounded read-only GetMetricData — 24h hourly NetworkIn/Out for one instance.
+ *  Account/region thread through assumedClient so member-account and off-region instances
+ *  chart their OWN metrics; any CloudWatch error degrades both series to null (never throws). */
+export async function ec2NetworkTrends(instanceId: string, accountId?: string, region?: string): Promise<Ec2NetworkTrends> {
+  try {
+    const client = await assumedClient(accountId, CloudWatchClient, { region: region ?? REGION });
+    const metrics = ['NetworkIn', 'NetworkOut'] as const;
+    const r = await client.send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 24 * 3600_000), EndTime: new Date(),
+      MetricDataQueries: metrics.map((name, i) => ({
+        Id: `nt${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: 'AWS/EC2', MetricName: name, Dimensions: [{ Name: 'InstanceId', Value: instanceId }] }, Period: 3600, Stat: 'Sum' },
+      })),
+      ScanBy: 'TimestampAscending',
+    }));
+    const series = (i: number): TrendSample[] | null => {
+      const res = (r.MetricDataResults ?? []).find((x) => x.Id === `nt${i}`);
+      const samples: TrendSample[] = [];
+      for (let k = 0; k < (res?.Timestamps?.length ?? 0); k++) {
+        const ts = res!.Timestamps![k] instanceof Date ? (res!.Timestamps![k] as Date) : new Date(String(res!.Timestamps![k]));
+        const v = res!.Values?.[k];
+        if (typeof v === 'number') samples.push({ t: ts.toISOString(), v });
+      }
+      return samples.length ? samples : null;
+    };
+    return { netIn: series(0), netOut: series(1) };
+  } catch {
+    return { netIn: null, netOut: null };
+  }
+}
+
 /** MSK bootstrap broker connection strings (v1 parity) — [] on error/denied. */
 export async function mskBootstrapBrokers(clusterArn: string): Promise<LiveMetric[]> {
   try {
