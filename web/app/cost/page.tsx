@@ -233,18 +233,22 @@ export default function CostPage() {
   // that skew into a red/green verdict and an alert count would invert for most of the month.
   // Declared BEFORE costRows — .map() executes during render (const is not hoisted).
   const now = new Date();
-  const normChange = (current: number, previous: number) => momChangePctDailyUtc(current, previous, now);
-  // Early-UTC-month suppression: with ≤2 UTC days elapsed the MTD numerator is dominated by
-  // today's partial/lagging CE bucket (~24h ingest lag), so any thresholded verdict inverts
-  // (a flat rate reads ≈−50% on day 2 — green — and a real surge hides under the threshold).
-  // Render '—' / exclude from the surge count instead of a wrong-colored verdict.
-  const tooEarlyForVerdict = now.getUTCDate() <= 2;
+  // Completed-days basis on BOTH sides (rounds 8–10): today's partial/lagging per-service
+  // amount is subtracted from the numerator (dailyByService is already on the client), and
+  // the divisor counts completed UTC days. Suppression remains only for UTC day 1 (zero
+  // completed days — nothing honest to compare).
+  const todayIso = now.toISOString().slice(0, 10);
+  const todayBucket = dailyByService.find((p) => p.date === todayIso);
+  const todayByService = new Map((todayBucket?.byService ?? []).map((b) => [b.service, b.amount]));
+  const normChange = (current: number, previous: number, service: string) =>
+    momChangePctDailyUtc(Math.max(0, current - (todayByService.get(service) ?? 0)), previous, now);
+  const tooEarlyForVerdict = now.getUTCDate() <= 1;
   // Gap L198: raw numbers feed MetricTable (real numeric sort + threshold-colored cells),
   // not pre-formatted strings.
   type CostRow = { service: string; current: number; previous: number; change: number; share: number };
   const costRows: CostRow[] = changeRows.map((s) => ({
     service: s.service, current: s.current, previous: s.previous,
-    change: s.previous > 0 && !tooEarlyForVerdict ? normChange(s.current, s.previous) : s.change,
+    change: s.previous > 0 && !tooEarlyForVerdict ? normChange(s.current, s.previous, s.service) : s.change,
     share: s.share,
   }));
   const changeTone = (c: number, previous: number) =>
@@ -257,7 +261,7 @@ export default function CostPage() {
       // null = no baseline (previous 0) — MetricTable's missing contract sorts these LAST
       // instead of interleaving them with genuinely-flat services.
       key: 'change', label: '변화율 (일평균)', type: 'num',
-      title: tt('전월 일평균 대비 이번 달(UTC) 일평균 — 매월 1~2일(UTC)에는 부분 집계 왜곡을 피하기 위해 판정을 표시하지 않습니다'),
+      title: tt('전월 일평균 대비 이번 달 완결일(UTC) 일평균 — 오늘의 부분 집계는 제외되며, 매월 1일(UTC)에는 판정을 표시하지 않습니다'),
       value: (r) => (r.previous > 0 && !tooEarlyForVerdict ? r.change : null),
       render: (r) => (
         <span className={tooEarlyForVerdict ? 'text-ink-500' : changeTone(r.change, r.previous)}>
@@ -290,12 +294,11 @@ export default function CostPage() {
   // change to 0, so >20 alone is already safe, but the guard states the intent).
   // Exclude today's still-accumulating CE bucket from the mean (the same partial-day caveat
   // momChangePctDaily documents); fall back to the full series when it is all we have.
-  const todayIso = new Date().toISOString().slice(0, 10);
   const completedDays = trend.filter((t) => t.date !== todayIso);
   // No completed day yet (only today's partial bucket) → '—', never an average of exactly
   // the bucket the exclusion was written for.
   const dailyAvg = completedDays.length > 0 ? completedDays.reduce((a, t) => a + t.amount, 0) / completedDays.length : null;
-  const surging = tooEarlyForVerdict ? 0 : changeRows.filter((r) => r.previous > 0 && normChange(r.current, r.previous) > 20).length;
+  const surging = tooEarlyForVerdict ? 0 : changeRows.filter((r) => r.previous > 0 && normChange(r.current, r.previous, r.service) > 20).length;
   // Gap L197: load SUCCEEDED but every DERIVED value is empty → a NEUTRAL empty-data banner
   // that never asserts a cause on its own (a narrow window can be all-empty for an enabled
   // CE, and a genuinely disabled CE takes the error path with its classified notice). The
@@ -325,7 +328,7 @@ export default function CostPage() {
     } catch {
       // transport-level rejection (offline/abort) — same explicit feedback, never a dead button
       if (seq === probeSeqRef.current) setEmptyProbe({ reason: 'error' });
-    } finally { if (seq === probeSeqRef.current) setRechecking(false); }
+    } finally { setRechecking(false); } // unconditional — a bumped seq guards the RESULT, not the busy flag (a skipped clear strands both recheck buttons)
   }, []);
   // Both hints are HOST-scope only — the availability classifier probes with the host task
   // role and must never speak for a member account (either direction).

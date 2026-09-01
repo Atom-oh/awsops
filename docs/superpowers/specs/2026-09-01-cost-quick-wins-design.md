@@ -157,3 +157,14 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
 - A `failedLegs > 0` warn banner marks incomplete totals in 전체 계정 mode; the Daily Average
   hint says "mean of completed days in the trailing 30" (29 completed buckets after excluding
   today).
+
+## Round-10 corrections (review-driven)
+
+- **Completed-days basis on BOTH sides (the gate MAJOR)** — the includes-today divisor left a
+  decaying −100/elapsed bias (−33% on day 3 → flat services green, surges under-fire).
+  Today's per-service amount is now subtracted from the numerator (from the already-fetched
+  `dailyByService` — no extra CE call) and the divisor counts completed UTC days; suppression
+  narrows to UTC day 1 only (zero completed days). Contract documented on the function.
+- **The stranded busy flag is fixed (the gate MAJOR)** — `probeFromBanner`'s `finally` clears
+  `rechecking` unconditionally (the sequence guard protects only the RESULT); an invalidated
+  in-flight probe no longer disables both recheck buttons until remount.

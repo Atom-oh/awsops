@@ -33,16 +33,18 @@ export function momChangePctDaily(thisMtd: number, lastMonthTotal: number, now: 
  *  buckets are UTC calendar months, so a local-time day count inverts the verdict in the
  *  ~9h window after a UTC month rollover (KST) and skews elapsed by one day daily. The MoM
  *  tile keeps the original local-time behavior (pre-existing, non-alerting). */
-export function momChangePctDailyUtc(thisMtd: number, lastMonthTotal: number, now: Date): number {
-  // The divisor must match the NUMERATOR's window: the CE monthly bucket ends tomorrow, so
-  // MTD includes today's partial spend — dividing by completed-days-only overstates the rate
-  // by up to +100% on day 2 (round-8 review), while excluding today from BOTH sides would
-  // need per-service daily re-aggregation. Same includes-today basis as the MoM tile, in UTC
-  // (CE buckets are UTC calendar months); residual bias is only today's missing fraction.
-  const elapsed = now.getUTCDate();
+/** CONTRACT: `thisMtdCompleted` must be the MTD with TODAY'S (UTC) partial bucket already
+ *  subtracted by the caller (the cost page derives it from dailyByService — no extra CE
+ *  call). Both sides then cover completed UTC days only: numerator = completed-day spend,
+ *  divisor = completed days. Any mixed window systematically biases the thresholded verdict
+ *  (rounds 8–10: +100% on day 2 with a completed divisor and an including numerator; −33%
+ *  on day 3 the other way). Callers suppress the verdict entirely on UTC day 1 (zero
+ *  completed days). */
+export function momChangePctDailyUtc(thisMtdCompleted: number, lastMonthTotal: number, now: Date): number {
+  const elapsed = Math.max(1, now.getUTCDate() - 1);
   const lastDays = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).getUTCDate();
   if (lastDays <= 0) return 0;
-  return momChangePct(thisMtd / elapsed, lastMonthTotal / lastDays);
+  return momChangePct(thisMtdCompleted / elapsed, lastMonthTotal / lastDays);
 }
 
 /** Linear projection of month-end spend from month-to-date. `now` injected for determinism. */

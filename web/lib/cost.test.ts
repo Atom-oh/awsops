@@ -177,23 +177,21 @@ describe('mergeMonthlyByService / mergeDailyByService (전체 계정 fan-out)', 
 
 
 describe('momChangePctDailyUtc (alert-surface UTC math)', () => {
-  it('divisor matches the includes-today numerator: day 2 at an unchanged run-rate reads ~0', () => {
-    // CE's monthly bucket ends tomorrow — MTD on day 2 at 12:00 UTC ≈ 1.5 days of spend.
-    const now = new Date('2026-09-02T12:00:00Z'); // elapsed (UTC, incl. today) = 2
-    // prev month (Aug, 31d) total 310 → 10/day; MTD with today half-recorded = 15.
-    expect(Math.abs(momChangePctDailyUtc(15, 310, now))).toBeLessThan(30); // bounded by today's fraction, never +100%
-    // fully-recorded today (end of day): exactly 0
+  it('completed-days contract: day 3 at an unchanged run-rate reads exactly ~0 (no -33% green bias)', () => {
+    const now = new Date('2026-09-03T12:00:00Z'); // completed UTC days = 2
+    // prev month (Aug, 31d) total 310 → 10/day; completed-days MTD (today already subtracted
+    // by the caller) = 20 → 10/day → change 0.
     expect(Math.abs(momChangePctDailyUtc(20, 310, now))).toBeLessThan(0.5);
   });
-  it('uses UTC days: on the 1st (UTC) a KST browser never divides by a rolled-over local day', () => {
-    const now = new Date('2026-09-01T03:00:00Z'); // KST already Sep 1 local; UTC day = 1
-    // MTD so far ≈ 1/8 of a day at 10/day → tiny; must read a bounded partial-day dip, not ±3000%.
-    expect(momChangePctDailyUtc(1.25, 310, now)).toBeGreaterThan(-95);
-    expect(momChangePctDailyUtc(1.25, 310, now)).toBeLessThan(0);
+  it('day 2: one completed day at the same rate reads ~0; a real 2x surge reads ~+100%', () => {
+    const now = new Date('2026-09-02T12:00:00Z'); // completed = 1
+    expect(Math.abs(momChangePctDailyUtc(10, 310, now))).toBeLessThan(0.5);
+    expect(momChangePctDailyUtc(20, 310, now)).toBeGreaterThan(80);
   });
-  it('matches the local MoM variant away from boundaries (same includes-today basis)', () => {
-    const now = new Date('2026-09-15T12:00:00Z');
-    expect(momChangePctDailyUtc(150, 310, now)).toBeCloseTo(momChangePctDaily(150, 310, now), 5);
+  it('uses UTC calendar days regardless of browser timezone (callers suppress UTC day 1)', () => {
+    const now = new Date('2026-09-01T03:00:00Z'); // KST already Sep 1 local; UTC day 1 → clamp divisor 1
+    // day-1 verdicts are suppressed by callers — the function itself just stays finite.
+    expect(Number.isFinite(momChangePctDailyUtc(0, 310, now))).toBe(true);
   });
 });
 
