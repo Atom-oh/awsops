@@ -86,8 +86,8 @@ def _report(payload, dry_run):
             report_id = ddb.create_report(conn, worker_job_id=None, tier=tier, requested_by=requested_by)
         try:
             # A4 (V1 parity): stream per-section progress to diagnosis_reports as generate() advances.
-            on_progress = (lambda c, t, s, p: ddb.update_progress(
-                conn, report_id, current=c, total=t, section=s, phase=p))
+            on_progress = (lambda c, t, s, p, done=None: ddb.update_progress(
+                conn, report_id, current=c, total=t, section=s, phase=p, completed=done))
             scope = payload.get("scope") or "self"
             md, summary, sources_used = rpt.generate(
                 conn, account, tier, report_id=report_id, on_progress=on_progress, model=model,

@@ -18,6 +18,8 @@ export interface DiagnosisReport {
   artifact_uri: string | null;
   error: string | null;
   created_at: string;
+  // Set by finish_report; NULL while running. Drives the completed-report elapsed stat (L176).
+  finished_at: string | null;
   // Bedrock model used (NULL on legacy rows → render as 'sonnet'). Display metadata only.
   model: string | null;
   // LLM auto key-insight title (editable) + tags (auto-suggested + manual); soft-delete timestamp.
@@ -35,10 +37,13 @@ export interface DiagnosisProgress {
   total?: number;
   section?: string;
   phase?: 'collect' | 'render' | 'assemble';
+  // L177: finished-section titles in COMPLETION order (render is concurrent — not catalog
+  // order). Absent on old rows and outside the render phase.
+  completed?: string[];
 }
 
 const COLS =
-  'id, worker_job_id, tier, status, requested_by, sources_used, summary, artifact_uri, error, created_at, model, title, tags, deleted_at, progress';
+  'id, worker_job_id, tier, status, requested_by, sources_used, summary, artifact_uri, error, created_at, finished_at, model, title, tags, deleted_at, progress';
 
 // pentest-remediation P2-1 (Finding 5): the list had no per-user filter — every authenticated user
 // saw every report (48/48 in the pentest run) regardless of who requested it. `owner` = the
