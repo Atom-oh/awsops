@@ -406,7 +406,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       // L150 structured rendering — derived *_h fields (inventory-derived.ts) replace the raw
       // cluster_config/ebs_options/vpc_options/encryption/advanced-security JSONB blobs.
       { label: 'Cluster Config', keys: ['instance_type_h', 'instance_count_h', 'dedicated_master_h', 'zone_awareness_h', 'warm_storage_h', 'cold_storage_h', 'multi_az_standby_h'] },
-      { label: 'Endpoint & Network', keys: ['endpoint', 'endpoints', 'enforce_https_h', 'tls_policy_h', 'custom_endpoint_h', 'vpc_id_h', 'subnets_h', 'security_groups_h', 'azs_h'] },
+      { label: 'Endpoint & Network', keys: ['endpoint', 'endpoints', 'enforce_https_h', 'tls_policy_h', 'custom_endpoint_h', 'custom_endpoint_cert_h', 'vpc_id_h', 'subnets_h', 'security_groups_h', 'azs_h'] },
       // Raw advanced_security_options/cognito_options stay visible after the derived flags —
       // they carry fields (SAML, user-pool ids) the flags don't derive; hiding them would
       // regress information availability.

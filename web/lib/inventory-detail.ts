@@ -216,6 +216,7 @@ const VIRTUAL_LABELS: Record<string, string> = {
   internal_user_db_h: 'Internal User DB', anonymous_auth_h: 'Anonymous Auth', cognito_h: 'Cognito Auth',
   software_update_h: 'Service Software', enforce_https_h: 'Enforce HTTPS',
   tls_policy_h: 'TLS Policy', custom_endpoint_h: 'Custom Endpoint',
+  custom_endpoint_cert_h: 'Custom Endpoint Cert',
   auto_tune_h: 'Auto-Tune', snapshot_hour_h: 'Automated Snapshot',
 };
 

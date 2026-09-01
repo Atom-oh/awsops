@@ -20,7 +20,7 @@
 | `/api/chat/threads` | GET, DELETE | 대화 스레드 목록/검색(`?q=` 본인 메시지 substring) + 전체 삭제 | verifyUser |
 | `/api/chat/threads/[id]` | GET, DELETE | 스레드 단건 조회/삭제 (사용자별 분리) | verifyUser |
 
-## inventory (6)
+## inventory (8)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
 | `/api/inventory/[type]` | GET | 인벤토리 리소스 목록 — `iam_user`/`iam_role`은 admin 전용 | verifyUser |

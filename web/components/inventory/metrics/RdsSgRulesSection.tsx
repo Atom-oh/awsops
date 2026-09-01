@@ -9,8 +9,11 @@ import type { SgInboundEntry, SgRuleSource } from '@/app/api/inventory/security_
 // "not synced" state, never an empty-rules claim. Named export per the metrics-module convention.
 
 function SourceChip({ s }: { s: SgRuleSource }) {
+  // /0 and /1 both cover (half) the internet — a /1 pair is the classic "not technically
+  // 0.0.0.0/0" evasion, so highlight it the same way.
+  const wideOpen = /\/[01]$/.test(s.value);
   const tone = s.kind === 'sg' ? 'text-brand-700 bg-brand-50'
-    : s.value === '0.0.0.0/0' || s.value === '::/0' ? 'text-rose-700 bg-rose-50'
+    : s.kind === 'cidr' && wideOpen ? 'text-rose-700 bg-rose-50'
     : 'text-ink-600 bg-ink-50';
   return (
     <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10.5px] ${tone}`} title={s.description}>

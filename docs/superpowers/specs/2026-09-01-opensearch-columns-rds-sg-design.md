@@ -22,10 +22,11 @@ missing from sync), L154 (RDS detail-panel security-group inbound-rule chaining)
 - **Derived fields** (`inventory-derived.ts`): `software_update_h` ("update available:
   cur → new" / "up to date (cur)"), `enforce_https_h` (boolean), `tls_policy_h`,
   `custom_endpoint_h`, `auto_tune_h` (state), `snapshot_hour_h` (automated snapshot start
-  hour). Fully-derived raw blobs (`service_software_options`, `domain_endpoint_options`,
+  hour), `custom_endpoint_cert_h`. Fully-derived raw blobs (`domain_endpoint_options`,
   `snapshot_options`) are hidden via `hideKeys`; partially-derived or reference blobs
-  (`log_publishing_options`, `advanced_options`, `access_policies`, `auto_tune_options`)
-  stay visible (info availability — the L150 round-1 lesson).
+  (`service_software_options`, `log_publishing_options`, `advanced_options`,
+  `access_policies`, `auto_tune_options`) stay visible (info availability — the L150
+  round-1 lesson).
 - **Sections**: Engine += software update/upgrade state; Endpoint & Network += HTTPS/TLS/custom
   endpoint; Security += access_policies; new Operations section (auto-tune, snapshot hour,
   log publishing, advanced options).
@@ -74,5 +75,17 @@ are existing paths; new sync columns live inside the existing `data` JSONB).
 - **ICMP port formatting** — From/ToPort carry ICMP type/code (-1 = any); rules now render
   `type 8`, `all types`, `type 3/code 4` instead of a garbled "8--1" range.
 - **`docs/api-reference.md` + route counts** — the new route is indexed and the exhaustive
-  97→98 count is bumped in all seven declaration sites (api-reference ×2, README ×4-ish,
-  root CLAUDE.md, web/app/CLAUDE.md).
+  97→98 count is bumped in every declaration site (api-reference ×2 + the `## inventory`
+  heading, README ×6, root CLAUDE.md, web/app/CLAUDE.md, docs/CLAUDE.md, and the AGENTS.md
+  mirror regenerated).
+
+## Round-2 corrections (review-driven)
+
+- **Numeric protocol normalization** — AWS returns `IpProtocol` numerically when rules were
+  created numerically; `'1'` (ICMPv4) fell through the round-1 ICMP fix and still rendered
+  "8--1". The route now applies sg-analysis.ts's `PROTO_NAME` mapping (`'6'`→tcp, `'17'`→udp,
+  `'1'`→icmp, `'58'`→icmpv6) before formatting.
+- `custom_endpoint_cert_h` derived (the certificate ARN was silently dropped when
+  `domain_endpoint_options` was hidden); `PENDING_UPDATE` labeled "update pending" (distinct
+  from actively-deploying "update in progress"); `groupName` no longer falls back to the
+  tag-derived `name`; the open-internet source chip highlight widened to any `/0`–`/1` CIDR.

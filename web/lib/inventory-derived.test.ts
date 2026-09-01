@@ -126,6 +126,10 @@ describe('deriveRow opensearch structured detail (gap L150)', () => {
       service_software_options: { UpdateAvailable: false, UpdateStatus: 'IN_PROGRESS', CurrentVersion: 'OpenSearch_2.11', NewVersion: 'OpenSearch_2.13' },
     });
     expect(inProgress.software_update_h).toBe('update in progress: OpenSearch_2.11 → OpenSearch_2.13');
+    const pending = deriveRow('opensearch', {
+      service_software_options: { UpdateStatus: 'PENDING_UPDATE', CurrentVersion: 'OpenSearch_2.11', NewVersion: 'OpenSearch_2.13' },
+    });
+    expect(pending.software_update_h).toBe('update pending: OpenSearch_2.11 → OpenSearch_2.13');
     const completed = deriveRow('opensearch', {
       service_software_options: { UpdateStatus: 'COMPLETED', CurrentVersion: 'OpenSearch_2.13' },
     });
@@ -139,6 +143,10 @@ describe('deriveRow opensearch structured detail (gap L150)', () => {
     });
     expect(upToDate.software_update_h).toBe('no update available (OpenSearch_2.13)');
     expect(upToDate.custom_endpoint_h).toBe('search.example.com');
+    const withCert = deriveRow('opensearch', {
+      domain_endpoint_options: { CustomEndpointEnabled: true, CustomEndpoint: 's.example.com', CustomEndpointCertificateArn: 'arn:aws:acm:ap-northeast-2:1:certificate/x' },
+    });
+    expect(withCert.custom_endpoint_cert_h).toBe('arn:aws:acm:ap-northeast-2:1:certificate/x');
     const empty = deriveRow('opensearch', { resource_id: 'dom-2' });
     expect(empty.software_update_h).toBeUndefined();
     expect(empty.enforce_https_h).toBeUndefined();

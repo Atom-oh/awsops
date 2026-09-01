@@ -53,12 +53,17 @@ function parseRules(ipPermissions: unknown): SgInboundRule[] {
   if (typeof perms === 'string') {
     try { perms = JSON.parse(perms); } catch { return []; }
   }
+  // AWS returns numeric protocols verbatim when rules were created numerically — the same
+  // normalization sg-analysis.ts's PROTO_NAME applies (without it, IpProtocol '1' would render
+  // the garbled "8--1" ICMP range this route exists to avoid).
+  const PROTO_NAME: Record<string, string> = { '6': 'tcp', '17': 'udp', '1': 'icmp', '58': 'icmpv6' };
   return asArray(perms).map((p) => {
-    const proto = asStr(pick(p, 'ip_protocol')) ?? '-1';
+    const rawProto = asStr(pick(p, 'ip_protocol')) ?? '-1';
+    const proto = PROTO_NAME[rawProto] ?? rawProto;
     const from = pick(p, 'from_port');
     const to = pick(p, 'to_port');
     // ICMP puts type/code in From/ToPort (-1 = any) — a "8--1" port range would be garbled.
-    const icmp = proto === 'icmp' || proto === 'icmpv6' || proto === '58';
+    const icmp = proto === 'icmp' || proto === 'icmpv6';
     const portRange = proto === '-1' || from == null
       ? 'all'
       : icmp
@@ -117,7 +122,7 @@ export async function GET(request: Request) {
     const groups: SgInboundEntry[] = ids.map((sgId) => {
       const data = byId.get(sgId);
       if (!data) return { sgId, found: false, rules: [] };
-      const nameRaw = data.group_name ?? data.name;
+      const nameRaw = data.group_name;
       return {
         sgId,
         found: true,

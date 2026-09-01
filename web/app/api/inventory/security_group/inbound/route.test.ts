@@ -64,6 +64,21 @@ describe('GET /api/inventory/security_group/inbound (gap L154)', () => {
       .toEqual(['type 8', 'all types', 'type 3/code 4']);
   });
 
+  it("numeric protocols normalize ('1'→icmp with type/code, '6'→tcp) — AWS returns them verbatim", async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [{
+      resource_id: 'sg-11112222',
+      data: { ip_permissions: [
+        { IpProtocol: '1', FromPort: 8, ToPort: -1, IpRanges: [{ CidrIp: '10.0.0.0/8' }] },
+        { IpProtocol: '6', FromPort: 443, ToPort: 443, IpRanges: [{ CidrIp: '10.0.0.0/8' }] },
+      ] },
+    }] });
+    const { GET } = await import('./route');
+    const body = await (await GET(req('ids=sg-11112222'))).json();
+    expect(body.groups[0].rules[0]).toMatchObject({ protocol: 'icmp', portRange: 'type 8' });
+    expect(body.groups[0].rules[1]).toMatchObject({ protocol: 'tcp', portRange: '443' });
+  });
+
   it('snake_case JSONB (plugin casing drift) parses identically', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({ rows: [{

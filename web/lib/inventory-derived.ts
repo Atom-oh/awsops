@@ -128,7 +128,8 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
         if (typeof status === 'string' && status) {
           const st = status.toUpperCase();
           if (st === 'COMPLETED') return `up to date${cur != null ? ` (${cur})` : ''}`;
-          if (st === 'IN_PROGRESS' || st === 'PENDING_UPDATE') return `update in progress: ${cur ?? '?'} → ${next ?? '?'}`;
+          if (st === 'IN_PROGRESS') return `update in progress: ${cur ?? '?'} → ${next ?? '?'}`;
+          if (st === 'PENDING_UPDATE') return `update pending: ${cur ?? '?'} → ${next ?? '?'}`;
           if (st === 'NOT_ELIGIBLE') return `not eligible for update${cur != null ? ` (${cur})` : ''} — domain upgrade required`;
           if (st === 'ELIGIBLE') return `update available: ${cur ?? '?'} → ${next ?? '?'}`;
           return `${status}${cur != null ? ` (${cur})` : ''}`;
@@ -143,6 +144,7 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       custom_endpoint_h: flag(walk(r.domain_endpoint_options, 'custom_endpoint_enabled')) === true
         ? walk(r.domain_endpoint_options, 'custom_endpoint') ?? 'enabled'
         : flag(walk(r.domain_endpoint_options, 'custom_endpoint_enabled')) === false ? 'disabled' : undefined,
+      custom_endpoint_cert_h: walk(r.domain_endpoint_options, 'custom_endpoint_certificate_arn'),
       auto_tune_h: walk(r.auto_tune_options, 'state'),
       snapshot_hour_h: (() => {
         const h = walk(r.snapshot_options, 'automated_snapshot_start_hour');
