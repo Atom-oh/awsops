@@ -65,3 +65,13 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   the onboarding banner.
 - Known follow-up (unchanged): per-row day-normalized change % to remove the mid-month
   under-alerting bias in the surge count/coloring.
+
+## Round-3 corrections (review-driven)
+
+- **A failed accounts DISCOVERY counts as a failed leg (the gate MAJOR)** — `/api/accounts`
+  down/malformed fell into the pre-existing self-only fallback with `failedLegs: 0`, so a
+  live zero-spend host could still read the onboarding banner while member accounts were
+  never queried. Discovery failure now taints the merge the same way a fan-out leg failure
+  does (banner suppressed; the self-only fallback still renders).
+- Daily Average renders '—' when no COMPLETED day exists yet — the fallback had re-admitted
+  exactly the partial bucket the exclusion was written for.

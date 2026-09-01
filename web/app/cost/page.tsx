@@ -63,11 +63,15 @@ function mergeCost(parts: Cost[]): Cost {
   };
 }
 async function loadAllAccountsCost(months: number): Promise<{ cost: Cost; failedLegs: number }> {
-  const ar = await fetch('/api/accounts');
-  const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> =
-    ar.ok ? ((await ar.json().catch(() => ({ accounts: [] }))).accounts ?? []) : [];
+  const ar = await fetch('/api/accounts').catch(() => null);
+  const body = ar?.ok ? await ar.json().catch(() => null) : null;
+  const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> = body?.accounts ?? [];
+  // A FAILED discovery (accounts API down/malformed) is not the same as "no accounts
+  // registered": the self-only fallback still renders, but it counts as a failed leg so the
+  // onboarding banner can never diagnose an accounts-API outage as "CE not enabled".
+  const discoveryFailed = body == null;
   const ids = accts.filter((a) => a.enabled).map((a) => (a.isHost ? 'self' : a.accountId));
-  if (!ids.length) return { cost: await fetchCost('self', months), failedLegs: 0 };
+  if (!ids.length) return { cost: await fetchCost('self', months), failedLegs: discoveryFailed ? 1 : 0 };
   const parts: Cost[] = [];
   // Failed legs are swallowed into empty stubs (one broken account must not blank the page) —
   // but the count is TRACKED: an all-empty merge caused by failures must never be diagnosed
@@ -267,8 +271,9 @@ export default function CostPage() {
   // momChangePctDaily documents); fall back to the full series when it is all we have.
   const todayIso = new Date().toISOString().slice(0, 10);
   const completedDays = trend.filter((t) => t.date !== todayIso);
-  const avgBase = completedDays.length > 0 ? completedDays : trend;
-  const dailyAvg = avgBase.length > 0 ? avgBase.reduce((a, t) => a + t.amount, 0) / avgBase.length : null;
+  // No completed day yet (only today's partial bucket) → '—', never an average of exactly
+  // the bucket the exclusion was written for.
+  const dailyAvg = completedDays.length > 0 ? completedDays.reduce((a, t) => a + t.amount, 0) / completedDays.length : null;
   const surging = changeRows.filter((r) => r.change > 20 && r.previous > 0).length;
   // Gap L197: load SUCCEEDED but every DERIVED value is empty → Cost Explorer onboarding
   // banner (distinct from the error banner). Derived emptiness, not raw-array emptiness — a
