@@ -333,7 +333,7 @@ export async function bedrockModelMetrics(range = '24h', accountId?: string): Pr
 // One GetMetricData call per resource; every failure degrades to [] (never blanks the panel).
 export interface LiveMetric { label: string; value: string }
 
-export type LiveFmt = 'pct' | 'gb' | 'mb' | 'count' | 'ms' | 'bps';
+export type LiveFmt = 'pct' | 'gb' | 'mb' | 'mbRaw' | 'count' | 'ms' | 'bps';
 interface LiveMetricDef { name: string; label: string; stat: 'Average' | 'Sum' | 'Maximum'; fmt: LiveFmt }
 interface LiveMetricSpec { namespace: string; dims: (id: string) => { Name: string; Value: string }[]; metrics: LiveMetricDef[] }
 
@@ -349,6 +349,7 @@ const LIVE_SPECS: Record<string, LiveMetricSpec> = {
       { name: 'NetworkBytesIn', label: 'Network In', stat: 'Average', fmt: 'mb' },
       { name: 'NetworkBytesOut', label: 'Network Out', stat: 'Average', fmt: 'mb' },
       { name: 'CurrConnections', label: 'Connections', stat: 'Average', fmt: 'count' },
+      { name: 'CacheHitRate', label: 'Cache Hit Rate', stat: 'Average', fmt: 'pct' },
     ],
   },
   // resource_id = DomainName. AWS/ES requires the ClientId (account) dimension.
@@ -361,7 +362,8 @@ const LIVE_SPECS: Record<string, LiveMetricSpec> = {
     metrics: [
       { name: 'CPUUtilization', label: 'CPU', stat: 'Average', fmt: 'pct' },
       { name: 'JVMMemoryPressure', label: 'JVM Memory', stat: 'Average', fmt: 'pct' },
-      { name: 'FreeStorageSpace', label: 'Free Storage', stat: 'Average', fmt: 'mb' },
+      // AWS/ES reports FreeStorageSpace in MEGABYTES already — 'mb' (bytes÷1e6) understated it ~1e6×.
+      { name: 'FreeStorageSpace', label: 'Free Storage', stat: 'Average', fmt: 'mbRaw' },
       { name: 'SearchableDocuments', label: 'Documents', stat: 'Average', fmt: 'count' },
       { name: 'SearchLatency', label: 'Search Latency', stat: 'Average', fmt: 'ms' },
       { name: 'IndexingLatency', label: 'Indexing Latency', stat: 'Average', fmt: 'ms' },
@@ -387,6 +389,7 @@ function fmtLive(v: number, fmt: LiveFmt): string {
     case 'pct': return `${Math.round(v * 10) / 10}%`;
     case 'gb': return `${(v / 1e9).toFixed(1)} GB`;
     case 'mb': return `${(v / 1e6).toFixed(1)} MB`;
+    case 'mbRaw': return `${v.toFixed(1)} MB`; // source metric already in megabytes (AWS/ES)
     case 'ms': return `${Math.round(v * 1000) / 1000} ms`;
     case 'bps': return `${(v / 1e6).toFixed(1)} MB/s`;
     default: return Math.round(v).toLocaleString();

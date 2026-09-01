@@ -18,6 +18,7 @@ function fmtValue(v: number, fmt: LiveTrendMetric['fmt']): string {
     case 'pct': return `${Math.round(v * 10) / 10}%`;
     case 'gb': return `${(v / 1e9).toFixed(1)} GB`;
     case 'mb': return `${(v / 1e6).toFixed(1)} MB`;
+    case 'mbRaw': return `${v.toFixed(1)} MB`; // source metric already in megabytes (AWS/ES)
     case 'ms': return `${Math.round(v * 1000) / 1000} ms`;
     case 'bps': return `${(v / 1e6).toFixed(1)} MB/s`;
     default: return Math.round(v).toLocaleString();
@@ -45,7 +46,7 @@ function AvgMaxMin({ samples, fmt }: { samples: TrendSample[]; fmt: LiveTrendMet
   );
 }
 
-export function LiveTrendsSection({ type, id }: { type: string; id: string }) {
+export function LiveTrendsSection({ type, id, accountId }: { type: string; id: string; accountId?: string }) {
   const { tt } = useI18n();
   const c = useChartColors();
   const [trends, setTrends] = useState<LiveTrendMetric[] | null>(null);
@@ -54,7 +55,8 @@ export function LiveTrendsSection({ type, id }: { type: string; id: string }) {
   useEffect(() => {
     let alive = true;
     setTrends(null); setErr(false);
-    fetch(`/api/inventory/${encodeURIComponent(type)}/metrics?id=${encodeURIComponent(id)}&trends=1`)
+    const acct = accountId ? `&account=${encodeURIComponent(accountId)}` : '';
+    fetch(`/api/inventory/${encodeURIComponent(type)}/metrics?id=${encodeURIComponent(id)}&trends=1${acct}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
         if (!alive) return;
@@ -63,15 +65,20 @@ export function LiveTrendsSection({ type, id }: { type: string; id: string }) {
       })
       .catch(() => { if (alive) setErr(true); });
     return () => { alive = false; };
-  }, [type, id]);
+  }, [type, id, accountId]);
 
-  if (err) return <p className="text-[12px] text-rose-600">{tt('메트릭 추이 조회 실패')}</p>;
-  if (!trends) return <p className="text-[12px] text-ink-400">{tt('메트릭 추이 로딩 중…')}</p>;
-  if (!trends.length) return <p className="text-[12px] text-ink-300">{tt('데이터 불가')}</p>;
+  // The heading renders in EVERY branch — a bare unlabelled bordered card under the
+  // live-metrics card would be unreadable (the sibling sections do the same).
+  const heading = (
+    <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt('최근 1시간 (5분 단위)')}</div>
+  );
+  if (err) return <div>{heading}<p className="text-[12px] text-rose-600">{tt('메트릭 추이 조회 실패')}</p></div>;
+  if (!trends) return <div>{heading}<p className="text-[12px] text-ink-400">{tt('메트릭 추이 로딩 중…')}</p></div>;
+  if (!trends.length) return <div>{heading}<p className="text-[12px] text-ink-300">{tt('데이터 불가')}</p></div>;
 
   return (
     <div>
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt('최근 1시간 (5분 단위)')}</div>
+      {heading}
       <div className="grid grid-cols-2 gap-2">
         {trends.map((m) => (
           <div key={m.label} className="rounded-md border border-ink-100 bg-paper p-2">

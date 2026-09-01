@@ -268,16 +268,25 @@ export default function InventoryTypePage() {
     : null;
   // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
   // Value-distribution histogram (gap L135): counts per distinct numeric value of histKey.col,
-  // top 10 by count, then numerically sorted (v1's memory-allocation bar).
-  const histData = spec.histKey
+  // top 10 by count, then numerically sorted (v1's memory-allocation bar). preserveOrder keeps
+  // the numeric axis — BarDistribution's default re-sort is count-descending (rankings).
+  const histData = useMemo(() => (spec?.histKey
     ? countBy(allRows, spec.histKey.col)
         .filter((d) => d.name !== '(none)')
         .slice(0, 10)
         .sort((a, b) => Number(a.name) - Number(b.name))
         .map((d) => ({ label: `${d.name}${spec.histKey!.suffix ?? ''}`, value: d.value }))
-    : [];
+    : []), [allRows, spec?.histKey]);
   const hist = spec.histKey && histData.length > 0
-    ? <BarDistribution title={spec.histKey.label} data={histData} xKey="label" yKey="value" />
+    ? (
+      <BarDistribution
+        title={isTruncated ? `${spec.histKey.label} (${tt('표본 기준')})` : spec.histKey.label}
+        data={histData}
+        xKey="label"
+        yKey="value"
+        preserveOrder
+      />
+    )
     : null;
 
   const barData = spec.barKey

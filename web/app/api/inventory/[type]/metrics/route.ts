@@ -297,13 +297,19 @@ export async function GET(request: Request, { params }: { params: { type: string
     if (hasLiveMetrics(params.type)) {
       const id = url.searchParams.get('id');
       if (id) {
-        if (!/^[a-zA-Z0-9._-]+$/.test(id)) {
+        if (!/^[a-zA-Z0-9._-]{1,128}$/.test(id)) {
           return Response.json({ status: 'error', message: 'invalid id' }, { status: 400 });
         }
         // Opt-in 1h sparkline series (gap L118): trends=1 returns ONLY the trends — the
         // latest-value grid is the sibling section's fetch (the RDS trends=1 contract).
+        // `account` (validated) reaches assumedClient so member-account resources chart too —
+        // the sibling latest-value path keeps its pre-existing host-only behavior for now.
         if (url.searchParams.get('trends') === '1') {
-          return Response.json({ trends: await liveResourceTrends(params.type, id) });
+          const account = url.searchParams.get('account') ?? undefined;
+          if (account !== undefined && account !== 'self' && !/^[0-9]{12}$/.test(account)) {
+            return Response.json({ status: 'error', message: 'invalid account' }, { status: 400 });
+          }
+          return Response.json({ trends: await liveResourceTrends(params.type, id, account) });
         }
         const metrics = await liveResourceMetrics(params.type, id);
         // MSK: append bootstrap broker connection strings (v1 parity) — ARN from the synced row.

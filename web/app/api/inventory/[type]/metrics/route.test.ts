@@ -209,7 +209,7 @@ describe('live-metrics ?id= trends=1 (gap L118)', () => {
     const body = await (await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1'), ctx('elasticache'))).json();
     expect(body.trends).toEqual([{ label: 'CPU', fmt: 'pct', samples: null }]);
     expect(liveResourceMetrics).not.toHaveBeenCalled();
-    expect(liveResourceTrends).toHaveBeenCalledWith('elasticache', 'cc-1');
+    expect(liveResourceTrends).toHaveBeenCalledWith('elasticache', 'cc-1', undefined);
   });
   it('400 on a malformed live-metrics id', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });

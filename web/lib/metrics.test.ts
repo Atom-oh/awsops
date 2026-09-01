@@ -214,3 +214,28 @@ describe('rdsInstanceTrends (gap L141/L142/L155)', () => {
   });
 
 });
+
+describe('liveResourceTrends (gap L118)', () => {
+  it('one bounded ~65-min call, Period 300, ascending; per-spec labels; empty series → null', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [
+      { Id: 'lt0', Timestamps: [new Date(Date.now() - 10 * 60_000)], Values: [42.123] },
+    ] });
+    const { liveResourceTrends } = await import('./metrics');
+    const t = await liveResourceTrends('elasticache', 'cc-1');
+    const input = (cwSend.mock.calls[0][0] as { input: { StartTime: Date; MetricDataQueries: { MetricStat: { Period: number; Metric: { MetricName: string } } }[]; ScanBy?: string } }).input;
+    expect(Date.now() - input.StartTime.getTime()).toBeLessThan(70 * 60_000);
+    expect(input.MetricDataQueries.every((q) => q.MetricStat.Period === 300)).toBe(true);
+    expect(input.ScanBy).toBe('TimestampAscending');
+    // the audit-required CacheHitRate is part of the elasticache spec
+    expect(input.MetricDataQueries.map((q) => q.MetricStat.Metric.MetricName)).toContain('CacheHitRate');
+    expect(t[0]).toMatchObject({ label: 'CPU', fmt: 'pct' });
+    expect(t[0].samples?.[0].v).toBe(42.12);
+    expect(t[1].samples).toBeNull(); // no datapoints → null, never []
+  });
+  it('unknown type → []; CloudWatch deny → [] (never throws)', async () => {
+    const { liveResourceTrends } = await import('./metrics');
+    expect(await liveResourceTrends('nope', 'x')).toEqual([]);
+    cwSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    expect(await liveResourceTrends('elasticache', 'cc-1')).toEqual([]);
+  });
+});
