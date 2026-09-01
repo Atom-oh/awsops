@@ -61,6 +61,20 @@ const SECTION_GATEWAYS = 8;
 
 // v1-parity: every KPI/resource tile carries a lucide glyph in its translucent top-right box.
 // Resource tiles reuse the shared per-type map so icons match the inventory pages.
+// Nearest snapshot to `daysAgo` within ±2 CALENDAR days (v1 tolerance): the target is
+// date-normalized so gaps are integral — comparing against a time-of-day-bearing now() made
+// the window asymmetric and wall-clock-dependent. Shared by the delta table and the KPI bar.
+function nearestSnapshot<T extends { date: string }>(pts: T[], daysAgo: number): T | null {
+  const target = new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+  let best: T | null = null;
+  let bestGap = 3;
+  for (const p of pts) {
+    const gap = Math.abs((new Date(p.date).getTime() - new Date(target).getTime()) / 86_400_000);
+    if (gap < bestGap) { best = p; bestGap = gap; }
+  }
+  return best;
+}
+
 function typeIcon(type: string): ReactNode {
   const I = TYPE_ICON[type];
   return I ? <I size={13} /> : null;
@@ -201,46 +215,38 @@ export default function Home() {
     hasFleet && recentEvents.length > 0 && { key: 'k8s', dot: 'var(--warning)', text: `K8s Warning 이벤트 ${recentEvents.length}건`, href: '/eks' },
   ].filter((w): w is { key: string; dot: string; text: string; href: string } => Boolean(w));
 
-  // Multi-line trend series + Current/7d/30d delta rows (v1 parity). L126: top 12 types as
-  // toggle chips — Core (top 5) visible by default, Other default-hidden; colors stay pinned
-  // to each series' original index inside MultiLineTrend.
-  const trendTypes = (resTrend?.types ?? []).slice(0, 12);
+  // Multi-line trend series + Current/7d/30d delta rows (v1 parity). L126: top 8 types as
+  // toggle chips (the chart palette has exactly 8 hues — more would duplicate colors) — Core
+  // (top 5) visible by default, Other default-hidden; colors stay pinned to each series'
+  // original index inside MultiLineTrend.
+  const trendTypes = (resTrend?.types ?? []).slice(0, 8);
   const trendSeries = trendTypes.map((t) => ({ key: t, label: INV_LABEL(t) }));
   const coreTypes = trendTypes.slice(0, 5);
   const otherTypes = trendTypes.slice(5);
-  // L127: 7d net change of the all-type total (nearest snapshot within ±2 days, the delta
-  // table's tolerance). null → rendered as '—', never a fabricated 0.
+  // L127: 7d net change of the all-type total. Baseline = the SAME nearestSnapshot the delta
+  // table uses (date-normalized target → integral ±2 calendar days); a baseline that resolves
+  // to the latest point itself (stale sync) is null → '—', never a fabricated 0. The trend
+  // endpoint is account_id='self'-fixed with no region dimension (open audit item L124), so a
+  // narrowed scope also renders '—' — the adjacent 전체 리소스 IS scoped, and one KPI row must
+  // not silently mix the two scopes.
+  const scopeIsDefault =
+    Array.isArray(scope.accounts) && scope.accounts.length === 1 && scope.accounts[0] === 'self'
+    && scope.regions === '__all__' && scope.includeGlobal === true;
   const net7 = (() => {
+    if (!scopeIsDefault) return null;
     const pts = resTrend?.trend ?? [];
     if (pts.length < 2) return null;
-    const target = Date.now() - 7 * 86_400_000;
-    let best: ResourceTrendPoint | null = null;
-    let bestGap = 3;
-    for (const p of pts) {
-      const gap = Math.abs((new Date(p.date).getTime() - target) / 86_400_000);
-      if (gap < bestGap) { best = p; bestGap = gap; }
-    }
-    if (!best) return null;
-    return Number(pts[pts.length - 1].total ?? 0) - Number(best.total ?? 0);
+    const base = nearestSnapshot(pts, 7);
+    if (!base || base === pts[pts.length - 1]) return null;
+    return Number(pts[pts.length - 1].total ?? 0) - Number(base.total ?? 0);
   })();
 
   const deltaRows = (() => {
     const pts = resTrend?.trend ?? [];
     if (pts.length < 2) return [];
     const last = pts[pts.length - 1];
-    const at = (daysAgo: number): Record<string, unknown> | null => {
-      const target = new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
-      // nearest snapshot within ±2 days (v1 tolerance)
-      let best: Record<string, unknown> | null = null;
-      let bestGap = 3;
-      for (const p of pts) {
-        const gap = Math.abs((new Date(p.date).getTime() - new Date(target).getTime()) / 86_400_000);
-        if (gap < bestGap) { best = p; bestGap = gap; }
-      }
-      return best;
-    };
-    const w = at(7);
-    const m = at(30);
+    const w = nearestSnapshot(pts, 7);
+    const m = nearestSnapshot(pts, 30);
     return (resTrend?.types ?? []).map((t) => {
       const cur = Number(last[t] ?? 0);
       const wv = w ? Number(w[t] ?? 0) : null;
@@ -472,10 +478,11 @@ export default function Home() {
                 data={resTrend.trend}
                 xKey="date"
                 series={trendSeries}
+                key={trendTypes.join(',')} // period toggle re-ranks types → remount resets hidden state
                 interactiveLegend
                 legendGroups={[
-                  { label: 'Core Resources', keys: coreTypes },
-                  ...(otherTypes.length ? [{ label: 'Other Resources', keys: otherTypes }] : []),
+                  { label: tt('Core Resources'), keys: coreTypes },
+                  ...(otherTypes.length ? [{ label: tt('Other Resources'), keys: otherTypes }] : []),
                 ]}
                 defaultHidden={otherTypes}
               />

@@ -102,8 +102,15 @@ export default function MultiLineTrend({ title, right, data, xKey, series, heigh
       )}
       {interactiveLegend && (
         <div className="mt-2 space-y-1">
-          {(legendGroups ?? [{ label: '', keys: series.map((s) => s.key) }]).map((g) => (
-            <div key={g.label} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {(() => {
+            const groups = legendGroups ?? [{ label: '', keys: series.map((s) => s.key) }];
+            // A series key covered by no group would be un-toggleable (and unrecoverable if
+            // also defaultHidden) — surface leftovers in an extra unlabeled row.
+            const covered = new Set(groups.flatMap((g) => g.keys));
+            const leftover = series.map((s) => s.key).filter((k) => !covered.has(k));
+            return leftover.length ? [...groups, { label: '', keys: leftover }] : groups;
+          })().map((g, gi) => (
+            <div key={`${gi}-${g.label}`} className="flex flex-wrap items-center gap-x-2 gap-y-1">
               {g.label && <span className="text-[10px] font-semibold uppercase tracking-[0.04em] text-ink-400">{g.label}</span>}
               {g.keys.map((key) => {
                 const s = series.find((x) => x.key === key);
@@ -112,6 +119,7 @@ export default function MultiLineTrend({ title, right, data, xKey, series, heigh
                 return (
                   <button
                     key={key}
+                    type="button"
                     onClick={() => toggle(key)}
                     aria-pressed={!off}
                     className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${off ? 'border-ink-100 text-ink-300' : 'border-ink-200 text-ink-600'}`}

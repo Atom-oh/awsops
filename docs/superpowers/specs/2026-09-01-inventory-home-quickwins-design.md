@@ -17,11 +17,23 @@ Closes gap-audit items: L126 (series show/hide toggle chips), L127 (summary KPI 
 
 ## Decisions
 - `MultiLineTrend` gains opt-in `interactiveLegend` + `legendGroups` + `defaultHidden` —
-  existing (non-interactive) charts keep the static legend unchanged.
-- Home trend series widens from top-8 to top-12 types; Core = top 5 (visible), Other = the
-  rest (default-hidden) — bounded, so re-enabling everything stays legible.
-- 7d net change reuses the delta table's nearest-snapshot ±2-day tolerance on the `total`
-  column; no snapshot in tolerance → '—' (honest-degrade, never a fabricated 0).
+  existing (non-interactive) charts keep the static legend unchanged. Chips are
+  `type="button"`, ungrouped series keys surface in an extra unlabeled row (never
+  un-toggleable), and the home chart is `key`-ed on the series signature so a period-driven
+  type re-rank resets the hidden state instead of silently misapplying it.
+- Home trend series stays at top 8 (the chart palette has exactly 8 hues — more would
+  duplicate line/chip colors); Core = top 5 (visible), Other = the remaining 3
+  (default-hidden). The default view therefore draws 5 lines where it previously drew 8 —
+  disclosed in the CHANGELOG.
+- 7d net change reuses the delta table's `nearestSnapshot` (extracted to module scope —
+  date-normalized target, integral ±2 CALENDAR days); it is null → '—' when: <2 snapshots,
+  no snapshot within tolerance, the qualifying baseline IS the latest snapshot (stale sync —
+  a self-diff would fabricate 0), or the account/region scope is narrowed (the trend endpoint
+  is `account_id='self'`-fixed with no region dimension — open audit L124 — and the adjacent
+  전체 리소스 IS scoped; one KPI row must not mix the two).
+- Known label caveat: 리소스 타입 counts currently-nonempty `inventory_resources` types
+  (including derived catalog types), which is a superset of the snapshot series the adjacent
+  chart tracks — the two numbers may not reconcile exactly; accepted as-is.
 
 ## Testing
 - MultiLineTrend: grouped chips render; defaultHidden starts off; toggle both directions;
