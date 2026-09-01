@@ -223,12 +223,119 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         self.assertEqual(body["freshness"]["freshness"], "degraded")
         self.assertEqual(body["freshness"]["oldest_captured_at"], "2026-08-31T00:00:00+00:00")
         freshness_sql = next(sql for sql, _ in calls if "inventory_sync_runs" in sql)
-        self.assertIn("MIN(resources.captured_at)", freshness_sql)
+        self.assertIn("MIN(captured_at) AS oldest_captured_at", freshness_sql)
+        self.assertIn("LEFT JOIN resource_counts resources", freshness_sql)
         self.assertIn("runs.last_success_at", freshness_sql)
         self.assertIn("runs.last_success_row_count", freshness_sql)
         self.assertIn("COALESCE(oldest_captured_at, last_success_at)", freshness_sql)
         self.assertIn("IN ('partial', 'failed', 'running')", freshness_sql)
         self.assertNotIn("MAX(resources.captured_at)", freshness_sql)
+
+    def test_first_run_partial_or_failed_without_durable_success_is_unavailable(self):
+        calls = []
+
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            return [
+                {
+                    "resource_type": "cloudfront_vpc_origin",
+                    "status": "partial",
+                    "last_success_at": None,
+                    "oldest_captured_at": "2026-08-31T00:14:00+00:00",
+                    "latest_success_at": None,
+                    "freshness": "unavailable",
+                    "age_minutes": None,
+                    "stale_after_minutes": 30,
+                },
+                {
+                    "resource_type": "alb_listener_rule",
+                    "status": "failed",
+                    "last_success_at": None,
+                    "oldest_captured_at": "2026-08-31T00:14:00+00:00",
+                    "latest_success_at": None,
+                    "freshness": "unavailable",
+                    "age_minutes": None,
+                    "stale_after_minutes": 30,
+                },
+            ]
+
+        inv._execute_override = fake
+        with mock.patch.dict(os.environ, {"INVENTORY_STALE_AFTER_MINUTES": "30"}):
+            rows = inv._sync_freshness()
+
+        self.assertEqual(
+            {row["resource_type"]: row["freshness"] for row in rows},
+            {
+                "cloudfront_vpc_origin": "unavailable",
+                "alb_listener_rule": "unavailable",
+            },
+        )
+        freshness_sql, freshness_params = calls[0]
+        self.assertIn(
+            "CASE WHEN last_success_at IS NULL THEN NULL ELSE "
+            "LEAST(last_success_at, COALESCE(oldest_captured_at, last_success_at)) END "
+            "AS latest_success_at",
+            freshness_sql,
+        )
+        self.assertEqual(
+            freshness_params,
+            [{"name": "stale_after_minutes", "value": {"longValue": 30}}],
+        )
+
+    def test_repeated_partial_uses_old_success_or_older_capture_for_stale_precedence(self):
+        calls = []
+
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            return [
+                {
+                    "resource_type": "s3",
+                    "status": "partial",
+                    "last_success_at": "2026-08-31T00:00:00+00:00",
+                    "oldest_captured_at": "2026-08-31T00:10:00+00:00",
+                    "latest_success_at": "2026-08-31T00:00:00+00:00",
+                    "freshness": "stale",
+                    "age_minutes": 45,
+                    "stale_after_minutes": 30,
+                },
+                {
+                    "resource_type": "s3_public_access",
+                    "status": "partial",
+                    "last_success_at": "2026-08-31T00:25:00+00:00",
+                    "oldest_captured_at": "2026-08-31T00:20:00+00:00",
+                    "latest_success_at": "2026-08-31T00:20:00+00:00",
+                    "freshness": "degraded",
+                    "age_minutes": 25,
+                    "stale_after_minutes": 30,
+                },
+            ]
+
+        inv._execute_override = fake
+        rows = inv._sync_freshness()
+
+        by_type = {row["resource_type"]: row for row in rows}
+        self.assertEqual(by_type["s3"]["freshness"], "stale")
+        self.assertEqual(by_type["s3"]["latest_success_at"], "2026-08-31T00:00:00+00:00")
+        self.assertEqual(by_type["s3_public_access"]["freshness"], "degraded")
+        self.assertEqual(
+            by_type["s3_public_access"]["latest_success_at"],
+            "2026-08-31T00:20:00+00:00",
+        )
+        freshness_sql = calls[0][0]
+        self.assertLess(
+            freshness_sql.index("WHEN latest_success_at IS NULL THEN 'unavailable'"),
+            freshness_sql.index(
+                "WHEN latest_success_at < CURRENT_TIMESTAMP - "
+                "(:stale_after_minutes * INTERVAL '1 minute') THEN 'stale'"
+            ),
+        )
+        self.assertLess(
+            freshness_sql.index(
+                "WHEN latest_success_at < CURRENT_TIMESTAMP - "
+                "(:stale_after_minutes * INTERVAL '1 minute') THEN 'stale'"
+            ),
+            freshness_sql.index("WHEN status IN ('partial', 'failed', 'running') THEN 'degraded'"),
+        )
 
     def test_inventory_summary_binds_threshold_and_returns_per_type_freshness(self):
         calls = []
@@ -240,6 +347,7 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
                 "status": "succeeded",
                 "finished_at": "2026-08-31T00:00:00+00:00",
                 "row_count": 2,
+                "current_count": 5,
                 "last_success_at": "2026-08-31T00:00:00+00:00",
                 "last_success_row_count": 2,
                 "oldest_captured_at": "2026-08-31T00:04:00+00:00",
@@ -257,9 +365,23 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         body = _j.loads(out["body"])
         self.assertEqual(body["sync"][0]["resource_type"], "ec2")
         self.assertEqual(body["sync"][0]["freshness"], "healthy")
+        self.assertEqual(body["sync"][0]["row_count"], 2)
+        self.assertEqual(body["sync"][0]["current_count"], 5)
         self.assertEqual(
             calls[0][1],
             [{"name": "stale_after_minutes", "value": {"longValue": 30}}],
+        )
+        summary_sql = calls[0][0]
+        self.assertIn("COUNT(*)::integer AS current_count", summary_sql)
+        self.assertIn(
+            "FROM inventory_resources WHERE account_id = 'self' GROUP BY resource_type",
+            summary_sql,
+        )
+        self.assertIn("resources.current_count", summary_sql)
+        self.assertNotIn(
+            "LEFT JOIN inventory_resources resources",
+            summary_sql,
+            "joining raw resources to the run ledger can multiply summary counts",
         )
 
     def test_inventory_summary_discloses_stale_and_zero_row_failed_histories(self):

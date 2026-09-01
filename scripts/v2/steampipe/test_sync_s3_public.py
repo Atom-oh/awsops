@@ -1,15 +1,15 @@
-"""s3_public_access SDK sync: denial-safe per-bucket public-access flags. One denied bucket must
-not fail the whole sync; the SDK_SYNCS contract is (rows: list[dict], id_col, region_col)."""
+"""s3_public_access SDK sync: denial-safe rows plus safe partial-failure metadata."""
 from botocore.exceptions import ClientError
 
 import sync_lambda  # PYTHONPATH must include scripts/v2/steampipe
 
 
 class FakeS3:
-    def __init__(self, buckets, denied=(), no_pab=()):
+    def __init__(self, buckets, denied=(), no_pab=(), no_policy=()):
         self._buckets = buckets
         self._denied = set(denied)
         self._no_pab = set(no_pab)
+        self._no_policy = set(no_policy)
 
     def list_buckets(self):
         return {"Buckets": [{"Name": b} for b in self._buckets]}
@@ -19,7 +19,10 @@ class FakeS3:
 
     def get_public_access_block(self, Bucket):
         if Bucket in self._denied:
-            raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetPublicAccessBlock")
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": f"secret={Bucket}"}},
+                "GetPublicAccessBlock",
+            )
         if Bucket in self._no_pab:
             raise ClientError({"Error": {"Code": "NoSuchPublicAccessBlock"}}, "GetPublicAccessBlock")
         return {"PublicAccessBlockConfiguration": {
@@ -28,19 +31,28 @@ class FakeS3:
 
     def get_bucket_policy_status(self, Bucket):
         if Bucket in self._denied:
-            raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetBucketPolicyStatus")
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": f"secret={Bucket}"}},
+                "GetBucketPolicyStatus",
+            )
+        if Bucket in self._no_policy:
+            raise ClientError(
+                {"Error": {"Code": "NoSuchBucketPolicy", "Message": f"bucket={Bucket}"}},
+                "GetBucketPolicyStatus",
+            )
         return {"PolicyStatus": {"IsPublic": Bucket == "pub"}}
 
 
-def test_contract_shape_is_rows_idcol_regioncol():
-    rows, id_col, region_col = sync_lambda._fetch_s3_public_access(FakeS3(["x"]))
+def test_contract_shape_includes_empty_failure_metadata():
+    rows, id_col, region_col, failures = sync_lambda._fetch_s3_public_access(FakeS3(["x"]))
     assert id_col == "name" and region_col == "region"
     assert isinstance(rows, list) and rows[0]["name"] == "x" and rows[0]["region"] == "ap-northeast-2"
+    assert failures == {"failure_count": 0, "failure_types": []}
 
 
-def test_one_denied_bucket_does_not_fail_sync():
+def test_one_denied_bucket_keeps_rows_and_returns_redacted_partial_metadata(capsys):
     fake = FakeS3(buckets=["pub", "priv", "locked"], denied=["locked"])
-    rows, _id, _rg = sync_lambda._fetch_s3_public_access(fake)
+    rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(fake)
     by = {r["name"]: r for r in rows}
     assert by["pub"]["bucket_policy_is_public"] is True
     assert by["priv"]["bucket_policy_is_public"] is False
@@ -49,13 +61,29 @@ def test_one_denied_bucket_does_not_fail_sync():
     assert "locked" in by
     assert by["locked"]["bucket_policy_is_public"] is None
     assert by["locked"]["block_public_acls"] is None
+    assert failures == {
+        "failure_count": 2,
+        "failure_types": ["ClientError:AccessDenied"],
+    }
+    assert "locked" not in capsys.readouterr().out
 
 
 def test_no_public_access_block_marks_blocks_false():
-    rows, _id, _rg = sync_lambda._fetch_s3_public_access(FakeS3(["open"], no_pab=["open"]))
+    rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(
+        FakeS3(["open"], no_pab=["open"])
+    )
     rec = rows[0]
     assert rec["block_public_acls"] is False
     assert rec["block_public_policy"] is False
+    assert failures == {"failure_count": 0, "failure_types": []}
+
+
+def test_no_bucket_policy_is_expected_absence_not_a_partial_failure():
+    rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(
+        FakeS3(["private"], no_policy=["private"])
+    )
+    assert rows[0]["bucket_policy_is_public"] is None
+    assert failures == {"failure_count": 0, "failure_types": []}
 
 
 def test_registered_in_sdk_syncs():

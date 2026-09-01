@@ -386,6 +386,10 @@ resource "aws_cloudwatch_event_target" "inv_sync" {
   target_id = "inv-sync-ec2"
   arn       = aws_lambda_function.inv_sync[0].arn
   input     = jsonencode({ type = "all" })
+  retry_policy {
+    maximum_event_age_in_seconds = 900
+    maximum_retry_attempts       = 0
+  }
 }
 resource "aws_lambda_permission" "inv_sync_events" {
   count         = local.sp

@@ -12,6 +12,7 @@ the view, and the row-copy key must never be. These assertions read the migratio
 on either side of the contract moving.
 """
 import os
+import importlib.util
 import re
 import unittest
 from glob import glob
@@ -140,6 +141,24 @@ class TestInventoryViewContract(unittest.TestCase):
             self.assertRegex(columns, rf"\b{column}\b")
         self.assertNotRegex(columns, r"\berror\b")
         self.assertNotRegex(columns, r"\brun_token\b")
+
+    def test_inventory_summary_catalog_contract_names_host_scoped_current_count(self):
+        catalog_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore", "catalog.py"
+        )
+        spec = importlib.util.spec_from_file_location("agentcore_catalog_contract", catalog_path)
+        catalog = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(catalog)
+        tools = catalog.TARGETS["inventory-read-target"]["tools"]
+        summary = next(tool for tool in tools if tool["name"] == "inventory_summary")
+        description = summary["description"].lower()
+        self.assertIn("current_count", description)
+        self.assertTrue(
+            "host" in description or "self" in description,
+            "inventory_summary catalog must disclose that current_count is host/self-scoped",
+        )
 
 
     def test_a_projection_is_dollar_quoted_so_its_inner_quotes_survive(self):

@@ -328,25 +328,30 @@ def _sync_freshness(resource_type=None):
         "SELECT resource_type FROM inventory_sync_runs WHERE account_id = 'self' "
         "UNION "
         "SELECT resource_type FROM inventory_resources WHERE account_id = 'self'"
+        "), resource_counts AS ("
+        "SELECT resource_type, COUNT(*)::integer AS current_count, "
+        "MIN(captured_at) AS oldest_captured_at FROM inventory_resources "
+        "WHERE account_id = 'self' GROUP BY resource_type"
         "), per_type AS ("
         "SELECT types.resource_type, runs.status, runs.finished_at, runs.row_count, "
         "runs.last_success_at, runs.last_success_row_count, "
-        "MIN(resources.captured_at) AS oldest_captured_at "
+        "COALESCE(resources.current_count, 0) AS current_count, "
+        "resources.oldest_captured_at "
         "FROM types "
         "LEFT JOIN inventory_sync_runs runs "
         "ON runs.account_id = 'self' AND runs.resource_type = types.resource_type "
-        "LEFT JOIN inventory_resources resources "
-        "ON resources.account_id = 'self' AND resources.resource_type = types.resource_type "
-        "GROUP BY types.resource_type, runs.status, runs.finished_at, runs.row_count, "
-        "runs.last_success_at, runs.last_success_row_count"
+        "LEFT JOIN resource_counts resources "
+        "ON resources.resource_type = types.resource_type"
         "), classified AS ("
         "SELECT resource_type, status, finished_at, row_count, last_success_at, "
-        "last_success_row_count, oldest_captured_at, "
-        "COALESCE(oldest_captured_at, last_success_at) AS latest_success_at "
+        "last_success_row_count, current_count, oldest_captured_at, "
+        "CASE WHEN last_success_at IS NULL THEN NULL ELSE "
+        "LEAST(last_success_at, COALESCE(oldest_captured_at, last_success_at)) END "
+        "AS latest_success_at "
         "FROM per_type"
         ") "
         "SELECT resource_type, status, finished_at, row_count, last_success_at, "
-        "last_success_row_count, oldest_captured_at, latest_success_at, "
+        "last_success_row_count, current_count, oldest_captured_at, latest_success_at, "
         "CASE "
         "WHEN latest_success_at IS NULL THEN 'unavailable' "
         "WHEN latest_success_at < CURRENT_TIMESTAMP - "
@@ -373,6 +378,7 @@ def _freshness_for_type(resource_type):
         "status": None,
         "finished_at": None,
         "row_count": None,
+        "current_count": 0,
         "last_success_at": None,
         "last_success_row_count": None,
         "oldest_captured_at": None,

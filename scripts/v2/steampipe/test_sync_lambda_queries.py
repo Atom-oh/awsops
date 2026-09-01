@@ -190,23 +190,110 @@ def test_log_is_structured_json(capsys):
     }
 
 
-def test_all_dispatch_logs_type_count(capsys):
-    """Dropping the all-type dispatch record would hide fan-out breadth from operators."""
+def test_all_dispatch_reports_every_type_queued(capsys):
+    """A fully queued fan-out must report dispatched with exact per-type outcomes."""
     mod = load_sync_lambda()
+    mod.QUERIES = {"ec2": ("SELECT 1", "id", "region")}
+    mod.SDK_SYNCS = {"s3": lambda: ([], "id", "region")}
 
     class FakeLambda:
         def invoke(self, **kwargs):
-            return {}
+            return {"StatusCode": 202}
 
     class FakeContext:
         invoked_function_arn = "arn:aws:lambda:ap-northeast-2:123456789012:function:sync"
 
     mod._lambda = FakeLambda()
-    mod.lambda_handler({"type": "all"}, FakeContext())
+    result = mod.lambda_handler({"type": "all"}, FakeContext())
 
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    hit = next(record for record in records if record["event"] == "inventory_sync_dispatch")
-    assert hit["type_count"] == len(mod.QUERIES) + len(mod.SDK_SYNCS)
+    assert result == {
+        "status": "dispatched",
+        "queued_count": 2,
+        "failed_count": 0,
+        "queued_types": ["ec2", "s3"],
+        "failed_types": [],
+    }
+    assert records == [{
+        "event": "inventory_sync_dispatch",
+        "status": "dispatched",
+        "type_count": 2,
+        "queued_count": 2,
+        "failed_count": 0,
+        "queued_types": ["ec2", "s3"],
+        "failed_types": [],
+    }]
+
+
+def test_all_dispatch_continues_after_one_failure_and_reports_partial_without_error_text(capsys):
+    """One failed self-invoke must not block later types or expose the raw exception."""
+    mod = load_sync_lambda()
+    mod.QUERIES = {
+        "ec2": ("SELECT 1", "id", "region"),
+        "alb": ("SELECT 1", "id", "region"),
+    }
+    mod.SDK_SYNCS = {"s3": lambda: ([], "id", "region")}
+    invoked = []
+
+    class FakeLambda:
+        def invoke(self, **kwargs):
+            resource_type = json.loads(kwargs["Payload"].decode())["type"]
+            invoked.append(resource_type)
+            if resource_type == "alb":
+                raise RuntimeError("credential=supersecret account=123456789012")
+            return {"StatusCode": 202}
+
+    class FakeContext:
+        invoked_function_arn = "arn:aws:lambda:ap-northeast-2:123456789012:function:sync"
+
+    mod._lambda = FakeLambda()
+    result = mod.lambda_handler({"type": "all"}, FakeContext())
+
+    output = capsys.readouterr().out
+    records = [json.loads(line) for line in output.splitlines()]
+    assert invoked == ["ec2", "alb", "s3"]
+    assert result == {
+        "status": "partial",
+        "queued_count": 2,
+        "failed_count": 1,
+        "queued_types": ["ec2", "s3"],
+        "failed_types": ["alb"],
+    }
+    assert records[0]["status"] == "partial"
+    assert records[0]["queued_types"] == ["ec2", "s3"]
+    assert records[0]["failed_types"] == ["alb"]
+    assert "supersecret" not in output
+    assert "123456789012" not in output
+    assert "supersecret" not in json.dumps(result)
+
+
+def test_all_dispatch_reports_failed_when_no_type_was_queued(capsys):
+    """A fan-out with zero accepted async invokes must not claim dispatch success."""
+    mod = load_sync_lambda()
+    mod.QUERIES = {"ec2": ("SELECT 1", "id", "region")}
+    mod.SDK_SYNCS = {"s3": lambda: ([], "id", "region")}
+
+    class FakeLambda:
+        def invoke(self, **kwargs):
+            return {"StatusCode": 500}
+
+    class FakeContext:
+        invoked_function_arn = "arn:aws:lambda:ap-northeast-2:123456789012:function:sync"
+
+    mod._lambda = FakeLambda()
+    result = mod.lambda_handler({"type": "all"}, FakeContext())
+
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert result == {
+        "status": "failed",
+        "queued_count": 0,
+        "failed_count": 2,
+        "queued_types": [],
+        "failed_types": ["ec2", "s3"],
+    }
+    assert records[0]["status"] == "failed"
+    assert records[0]["queued_count"] == 0
+    assert records[0]["failed_count"] == 2
 
 
 def test_new_run_token_is_opaque_uuid_hex():
@@ -279,7 +366,7 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
             if "pg_try_advisory_lock" in sql:
                 return [(True,)]
             if "SELECT account_id, region, resource_id" in sql:
-                return []
+                return [("self", "ap-northeast-2", "stale-r-0")]
             if "RETURNING 1" in sql:
                 return [(1,)]
             return []
@@ -290,7 +377,12 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
     monkeypatch.setattr(mod, "_aurora", FakeAurora)
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
     monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
-    mod.SDK_SYNCS["log_test_success"] = lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
+    mod.SDK_SYNCS["log_test_success"] = lambda: (
+        [{"id": "r-1", "region": "ap-northeast-2"}],
+        "id",
+        "region",
+        {"failure_count": 0, "failure_types": []},
+    )
     mod._ALLOWED.add("log_test_success")
 
     result = mod.sync("log_test_success")
@@ -311,6 +403,12 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
     assert len(connections) == 2
     main_sql = [sql for sql, _ in connections[0].sql_log]
     finalizer_sql = [sql for sql, _ in connections[1].sql_log]
+    assert mod.PHASE1_PRUNE_SQL in main_sql
+    assert any(
+        "DELETE FROM inventory_resources" in sql
+        and params.get("id") == "stale-r-0"
+        for sql, params in connections[0].sql_log
+    )
     assert not any("SET status='succeeded'" in sql for sql in main_sql)
     assert any(
         "SET status='succeeded'" in sql
@@ -326,6 +424,88 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
     )
     assert "run_token" in running[0]
     assert running[1]["run_token"] == connections[1].sql_log[-1][1]["run_token"]
+
+
+def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success(
+    capsys, monkeypatch
+):
+    """A swallowed SDK sub-call failure makes the run partial and preserves all prior rows."""
+    mod = load_sync_lambda()
+    main_calls = []
+    finalizer_calls = []
+
+    class MainAurora:
+        def run(self, sql, **kwargs):
+            main_calls.append((sql, kwargs))
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "SELECT account_id, region, resource_id" in sql:
+                return [
+                    ("self", "ap-northeast-2", "old-good"),
+                    ("self", "ap-northeast-2", "old-missing-from-partial"),
+                ]
+            return []
+
+        def close(self):
+            pass
+
+    class FinalizerAurora:
+        def run(self, sql, **kwargs):
+            finalizer_calls.append((sql, kwargs))
+            return [(1,)]
+
+        def close(self):
+            pass
+
+    connections = iter([MainAurora(), FinalizerAurora()])
+    monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
+    monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    mod.SDK_SYNCS["sdk_partial_test"] = lambda: (
+        [{"id": "new-good", "region": "ap-northeast-2"}],
+        "id",
+        "region",
+        {
+            "failure_count": 1,
+            "failure_types": ["ClientError:AccessDenied"],
+        },
+    )
+    mod._ALLOWED.add("sdk_partial_test")
+
+    result = mod.sync("sdk_partial_test")
+
+    assert result == {
+        "status": "partial",
+        "type": "sdk_partial_test",
+        "row_count": 1,
+        "failure_count": 1,
+        "failure_types": ["ClientError:AccessDenied"],
+    }
+    assert any("INSERT INTO inventory_resources" in sql for sql, _ in main_calls)
+    assert mod.PHASE1_PRUNE_SQL not in [sql for sql, _ in main_calls]
+    assert not any("DELETE FROM inventory_resources" in sql for sql, _ in main_calls)
+    assert not any("inventory_snapshots" in sql for sql, _ in main_calls)
+    assert len(finalizer_calls) == 1
+    assert "SET status='partial'" in finalizer_calls[0][0]
+    assert "last_success_at" not in finalizer_calls[0][0]
+    assert "last_success_row_count" not in finalizer_calls[0][0]
+
+    output = capsys.readouterr().out
+    terminal = [json.loads(line) for line in output.splitlines()]
+    assert terminal == [{
+        "event": "inventory_sync_complete",
+        "resource_type": "sdk_partial_test",
+        "row_count": 1,
+        "failure_count": 1,
+        "failure_types": ["ClientError:AccessDenied"],
+        "degraded": True,
+        "throttled": False,
+        "freshness": "degraded",
+        "age_minutes": None,
+        "elapsed_ms": terminal[0]["elapsed_ms"],
+    }]
+    assert "supersecret" not in output
+    assert "old-missing-from-partial" not in output
 
 
 def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(

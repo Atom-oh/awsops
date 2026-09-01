@@ -395,13 +395,69 @@ QUERIES = {
 # Some data Steampipe cannot supply. CloudFront VPC origins: aws_cloudfront_vpc_origin has no
 # Steampipe table AND aws_cloudfront_distribution.origins omits VpcOriginConfig (absent from the
 # pinned cloudfront SDK Origin struct), so neither vo→LB nor distribution→vo is obtainable via SQL.
-# These fetchers return (list[dict] rows, id_col, region_col) — fed through the SAME upsert path.
+# These fetchers return (list[dict] rows, id_col, region_col, failure_metadata) — successful rows
+# still flow through the same upsert path, while safe per-subcall failure codes make the run partial.
+_SAFE_FAILURE_LABEL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def _safe_sdk_failure_type(error):
+    error_type = type(error).__name__
+    code = ""
+    if isinstance(error, ClientError):
+        code = str(error.response.get("Error", {}).get("Code") or "")
+    label = f"{error_type}:{code}" if code else error_type
+    return label if _SAFE_FAILURE_LABEL_RE.fullmatch(label) else error_type
+
+
+def _safe_sdk_response_failure_type(error):
+    code = str(error.get("errorCode") or "") if isinstance(error, dict) else ""
+    label = f"CollectionError:{code}" if code else "CollectionError"
+    return label if _SAFE_FAILURE_LABEL_RE.fullmatch(label) else "CollectionError"
+
+
+def _sdk_failure_metadata(failure_types=()):
+    labels = tuple(failure_types)
+    safe_types = sorted({
+        label for label in labels
+        if isinstance(label, str) and _SAFE_FAILURE_LABEL_RE.fullmatch(label)
+    })
+    return {
+        "failure_count": len(labels),
+        "failure_types": safe_types,
+    }
+
+
+def _sdk_collection(rows, id_col, region_col, failures=()):
+    return rows, id_col, region_col, _sdk_failure_metadata(tuple(failures))
+
+
+def _normalize_sdk_collection(result):
+    """Accept the current 4-field contract and legacy internal test doubles with 3 fields."""
+    if len(result) == 3:
+        rows, id_col, region_col = result
+        return rows, id_col, region_col, _sdk_failure_metadata()
+    if len(result) != 4:
+        raise ValueError("invalid SDK inventory collector result")
+    rows, id_col, region_col, metadata = result
+    failure_count = int(metadata.get("failure_count", 0))
+    failure_types = sorted({
+        label for label in metadata.get("failure_types", [])
+        if isinstance(label, str) and _SAFE_FAILURE_LABEL_RE.fullmatch(label)
+    })
+    return rows, id_col, region_col, {
+        "failure_count": max(0, failure_count),
+        "failure_types": failure_types,
+    }
+
+
 def _fetch_cloudfront_vpc_origins():
     cf = boto3.client("cloudfront", region_name="us-east-1")  # CloudFront is global → us-east-1
     if not hasattr(cf, "list_vpc_origins"):
         # botocore too old for the (late-2024) VPC-origins API → degrade gracefully, never crash
-        print("cloudfront_vpc_origin: botocore lacks list_vpc_origins; returning 0 rows")
-        return [], "resource_id", "region"
+        return _sdk_collection(
+            [], "resource_id", "region", ["UnsupportedApi"]
+        )
+    failures = []
     # (b2) vo_id → backing LB ARN + status
     vos, marker = {}, None
     while True:
@@ -414,7 +470,7 @@ def _fetch_cloudfront_vpc_origins():
                 cfg = d.get("VpcOriginEndpointConfig") or {}
                 vos[vid] = {"name": cfg.get("Name"), "arn": cfg.get("Arn"), "status": d.get("Status")}
             except ClientError as e:
-                print(f"get_vpc_origin {vid} failed: {e}")
+                failures.append(_safe_sdk_failure_type(e))
         marker = lst.get("NextMarker")
         if not marker:
             break
@@ -435,7 +491,7 @@ def _fetch_cloudfront_vpc_origins():
                         dists.setdefault(vid, set()).add(did)
                         refs.setdefault(vid, []).append({"distribution_id": did, "domain": o.get("DomainName")})
             except ClientError as e:
-                print(f"get_distribution_config {did} skipped: {e}")  # one bad dist must not blank the type
+                failures.append(_safe_sdk_failure_type(e))
         marker = dl.get("NextMarker")
         if not marker:
             break
@@ -443,7 +499,7 @@ def _fetch_cloudfront_vpc_origins():
              "arn": v["arn"], "status": v["status"], "distribution_ids": sorted(dists.get(vid, [])),
              "origin_refs": refs.get(vid, [])}
             for vid, v in vos.items()]
-    return rows, "resource_id", "region"
+    return _sdk_collection(rows, "resource_id", "region", failures)
 
 
 def _fetch_alb_listener_rules():
@@ -454,6 +510,7 @@ def _fetch_alb_listener_rules():
     region = os.environ.get("AWS_REGION", "ap-northeast-2")
     elb = boto3.client("elbv2", region_name=region)
     rows = []
+    failures = []
     lb_marker = None
     while True:
         kw = {"Marker": lb_marker} if lb_marker else {}
@@ -473,11 +530,11 @@ def _fetch_alb_listener_rules():
                             "conditions": rule.get("Conditions", []), "actions": rule.get("Actions", []),
                         })
             except ClientError as e:
-                print(f"alb_listener_rule {lb_arn} skipped: {e}")  # one bad LB must not blank the type
+                failures.append(_safe_sdk_failure_type(e))
         lb_marker = lbs.get("NextMarker")
         if not lb_marker:
             break
-    return rows, "resource_id", "region"
+    return _sdk_collection(rows, "resource_id", "region", failures)
 
 
 def _fetch_s3_public_access(s3=None):
@@ -489,13 +546,15 @@ def _fetch_s3_public_access(s3=None):
     AccessDenied => genuinely unknown => leave None (FINDING_SQL treats None as non-public)."""
     s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
     rows = []
+    failures = []
     for b in s3.list_buckets().get("Buckets", []) or []:
         name = b["Name"]
         try:
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"  # null LocationConstraint => us-east-1
-        except ClientError:
+        except ClientError as e:
             region = ""
+            failures.append(_safe_sdk_failure_type(e))
         rec = {"name": name, "region": region, "bucket_policy_is_public": None,
                "block_public_acls": None, "block_public_policy": None,
                "restrict_public_buckets": None, "ignore_public_acls": None}
@@ -511,14 +570,18 @@ def _fetch_s3_public_access(s3=None):
                 rec["block_public_policy"] = False
                 rec["restrict_public_buckets"] = False
                 rec["ignore_public_acls"] = False
-            # else AccessDenied / other → leave None (unknown)
+            else:
+                failures.append(_safe_sdk_failure_type(e))
+            # AccessDenied / other → leave None (unknown)
         try:
             rec["bucket_policy_is_public"] = (
                 s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
-        except ClientError:
-            pass  # AccessDenied / NoSuchBucketPolicy → leave None
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "NoSuchBucketPolicy":
+                failures.append(_safe_sdk_failure_type(e))
+            # AccessDenied / NoSuchBucketPolicy → leave None
         rows.append(rec)
-    return rows, "name", "region"
+    return _sdk_collection(rows, "name", "region", failures)
 
 
 def _fetch_s3_security(s3=None):
@@ -528,13 +591,15 @@ def _fetch_s3_security(s3=None):
     STRICTLY READ-ONLY (List/Get only)."""
     s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
     rows = []
+    failures = []
     for b in s3.list_buckets().get("Buckets", []) or []:
         name = b["Name"]
         try:
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"
-        except ClientError:
+        except ClientError as e:
             region = ""
+            failures.append(_safe_sdk_failure_type(e))
         rec = {
             "name": name, "region": region,
             "arn": f"arn:aws:s3:::{name}",
@@ -544,8 +609,9 @@ def _fetch_s3_security(s3=None):
         try:
             v = s3.get_bucket_versioning(Bucket=name)
             rec["versioning_enabled"] = v.get("Status") == "Enabled"
-        except ClientError:
-            pass  # denied → unknown (None)
+        except ClientError as e:
+            failures.append(_safe_sdk_failure_type(e))
+            # denied → unknown (None)
         try:
             enc = s3.get_bucket_encryption(Bucket=name)
             rules = enc.get("ServerSideEncryptionConfiguration", {}).get("Rules", [])
@@ -555,14 +621,16 @@ def _fetch_s3_security(s3=None):
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") == "ServerSideEncryptionConfigurationNotFoundError":
                 rec["encryption"] = "none"
-            # else denied → unknown (None)
+            else:
+                failures.append(_safe_sdk_failure_type(e))
+            # denied → unknown (None)
         try:
             log = s3.get_bucket_logging(Bucket=name)
             rec["logging_enabled"] = bool(log.get("LoggingEnabled"))
-        except ClientError:
-            pass
+        except ClientError as e:
+            failures.append(_safe_sdk_failure_type(e))
         rows.append(rec)
-    return rows, "name", "region"
+    return _sdk_collection(rows, "name", "region", failures)
 
 
 def _fetch_opensearch_serverless(aoss=None):
@@ -582,8 +650,14 @@ def _fetch_opensearch_serverless(aoss=None):
         if not token:
             break
     rows = []
+    failures = []
     for i in range(0, len(ids), 100):
-        detail = aoss.batch_get_collection(ids=ids[i : i + 100]).get("collectionDetails", []) or []
+        response = aoss.batch_get_collection(ids=ids[i : i + 100])
+        detail = response.get("collectionDetails", []) or []
+        failures.extend(
+            _safe_sdk_response_failure_type(error)
+            for error in response.get("collectionErrorDetails", []) or []
+        )
         for c in detail:
             arn = c.get("arn", "")
             acct = arn.split(":")[4] if arn.count(":") >= 5 else ""
@@ -600,7 +674,7 @@ def _fetch_opensearch_serverless(aoss=None):
                 "created_date": _ts(c.get("createdDate")),
                 "last_modified_date": _ts(c.get("lastModifiedDate")),
             })
-    return rows, "name", "region"
+    return _sdk_collection(rows, "name", "region", failures)
 
 
 SDK_SYNCS = {
@@ -836,6 +910,9 @@ def sync(resource_type):
     pending_ledger_row_count = None
     pending_ledger_error = None
     run_token = None
+    sdk_failure_count = 0
+    sdk_failure_types = []
+    sdk_partial = False
     try:
         run_token = _new_run_token()
         adb = _aurora()
@@ -872,7 +949,12 @@ def sync(resource_type):
             )
             # SDK-sourced types bypass Steampipe; both paths yield list[dict] rows (recs).
             if resource_type in SDK_SYNCS:
-                recs, id_col, region_col = SDK_SYNCS[resource_type]()
+                recs, id_col, region_col, sdk_metadata = _normalize_sdk_collection(
+                    SDK_SYNCS[resource_type]()
+                )
+                sdk_failure_count = sdk_metadata["failure_count"]
+                sdk_failure_types = sdk_metadata["failure_types"]
+                sdk_partial = sdk_failure_count > 0
             else:
                 sql, id_col, region_col = QUERIES[resource_type]
                 if "{owner_ids}" in sql:  # multi-account OwnerIds pushdown (all enabled accounts)
@@ -917,52 +999,69 @@ def sync(resource_type):
             # same phantom-inventory class rounds 3-5 fixed, reached through a different door).
             # 'self' is excluded here — the host always scans all regions regardless of the flag
             # (C1 host-parity guard) and is handled by phase 2 below.
-            adb.run(PHASE1_PRUNE_SQL, t=resource_type)
-            # Phase 2 — row-level stale within enabled/in-scope accounts: delete individual rows
-            # that were NOT returned in this run, but ONLY for accounts that DID contribute rows
-            # (`present`). An account with 0 rows from the aggregator may have suffered a transient
-            # connection failure — pruning it would silently discard its last-good inventory (M5).
             present = {a for (a, _, _) in seen}
             unreachable_accounts = set()
-            # M-2 (round 8): host ('self') protection must be SYMMETRIC with target accounts, not
-            # an unconditional `| {'self'}`. An earlier version force-included 'self' on the
-            # reasoning "host uses IAM task-role creds (not AssumeRole), always succeeds" — but
-            # that only rules out an AUTH failure, not a transient failure of the Steampipe
-            # connection's QUERY itself (e.g. an AWS API throttle/blip on this specific run). The
-            # aggregator returns PARTIAL results on a single-connection failure without raising, so
-            # a host-connection hiccup this run would otherwise force-prune the host's last-good
-            # inventory to zero — the exact M5 data-loss class, applied asymmetrically to 'self'.
-            # SDK_SYNCS types don't go through Steampipe at all: reaching this point already means
-            # the direct SDK call succeeded (a failure would have raised above, short-circuiting
-            # before this section), so 0 rows there is the SDK's own definitive "genuinely empty"
-            # signal — no probe needed. Aggregator-backed (QUERIES) types: probe the host's OWN
-            # connection (aws_<host_real_id>, via _caller_account()) exactly like a target account.
-            if 'self' not in present:
-                if resource_type in SDK_SYNCS or _account_reachable(_caller_account()):
-                    present.add('self')
-                else:
-                    unreachable_accounts.add('self')
-            # M2 (round 6): an enabled TARGET account that contributed 0 rows this run is
-            # ambiguous under the M5 guard above — it might be genuinely empty (e.g. all its EC2
-            # instances were terminated) or its aggregator connection might be transiently
-            # failing. Aggregator-backed (QUERIES) types only — SDK_SYNCS are host-only and never
-            # populate target rows. Positively probe each such account via its OWN Steampipe
-            # connection (data path, not an independent IAM trust check — see _account_reachable):
-            # reachable + 0 rows = genuinely empty (include in present so its stale rows get
-            # pruned); unreachable = protect its last-good inventory (leave excluded).
-            if resource_type not in SDK_SYNCS:
-                for acct_id in expected_target_accounts:
-                    if acct_id not in present:
-                        if _account_reachable(acct_id):
-                            present.add(acct_id)
-                        else:
-                            unreachable_accounts.add(acct_id)
-            existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
-            for acct, rg, rid in existing:
-                if str(acct) in present and (str(acct), str(rg), str(rid)) not in seen:
-                    adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id=:acct AND region=:rg AND resource_id=:id",
-                            t=resource_type, acct=acct, rg=rg, id=rid)
-            if unreachable_accounts:
+            if not sdk_partial:
+                adb.run(PHASE1_PRUNE_SQL, t=resource_type)
+                # Phase 2 — row-level stale within enabled/in-scope accounts: delete individual
+                # rows not returned in this run, but only for accounts proven present/reachable.
+                # An SDK sub-call failure makes the entire type incomplete, so both prune phases
+                # are skipped above and below; successful rows are upserted while last-good rows
+                # remain intact.
+                # M-2 (round 8): host ('self') protection must be symmetric with target accounts.
+                if 'self' not in present:
+                    if resource_type in SDK_SYNCS or _account_reachable(_caller_account()):
+                        present.add('self')
+                    else:
+                        unreachable_accounts.add('self')
+                if resource_type not in SDK_SYNCS:
+                    for acct_id in expected_target_accounts:
+                        if acct_id not in present:
+                            if _account_reachable(acct_id):
+                                present.add(acct_id)
+                            else:
+                                unreachable_accounts.add(acct_id)
+                existing = adb.run(
+                    "SELECT account_id, region, resource_id FROM inventory_resources "
+                    "WHERE resource_type=:t",
+                    t=resource_type,
+                )
+                for acct, rg, rid in existing:
+                    if str(acct) in present and (str(acct), str(rg), str(rid)) not in seen:
+                        adb.run(
+                            "DELETE FROM inventory_resources WHERE resource_type=:t "
+                            "AND account_id=:acct AND region=:rg AND resource_id=:id",
+                            t=resource_type,
+                            acct=acct,
+                            rg=rg,
+                            id=rid,
+                        )
+            if sdk_partial:
+                pending_ledger_status = "partial"
+                pending_ledger_row_count = len(recs)
+                result = {
+                    "status": "partial",
+                    "type": resource_type,
+                    "row_count": len(recs),
+                    "failure_count": sdk_failure_count,
+                    "failure_types": sdk_failure_types,
+                }
+                terminal_event = "inventory_sync_complete"
+                terminal_fields = {
+                    "resource_type": resource_type,
+                    "row_count": len(recs),
+                    "failure_count": sdk_failure_count,
+                    "failure_types": sdk_failure_types,
+                    "degraded": True,
+                    "throttled": any(
+                        "throttl" in failure_type.lower()
+                        or "slowdown" in failure_type.lower()
+                        for failure_type in sdk_failure_types
+                    ),
+                    "freshness": "degraded",
+                    "age_minutes": None,
+                }
+            elif unreachable_accounts:
                 pending_ledger_status = "partial"
                 pending_ledger_row_count = len(recs)
                 result = {
@@ -997,7 +1096,7 @@ def sync(resource_type):
             # Daily inventory_snapshots row (dashboard "리소스 추세" chart, self-scoped only —
             # see _self_count). One row per (account, day, type): delete same-day then insert,
             # matching backfill-v1.mjs's convention — a resource type can sync more than once a day.
-            if 'self' in present:
+            if not sdk_partial and 'self' in present:
                 adb.run("DELETE FROM inventory_snapshots WHERE account_id='self' AND resource_type=:t "
                         "AND captured_at::date = CURRENT_DATE", t=resource_type)
                 adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
@@ -1107,9 +1206,34 @@ def sync(resource_type):
 def lambda_handler(event, ctx):
     rtype = (event or {}).get("type", "all")
     if rtype == "all":
-        _log("inventory_sync_dispatch", type_count=len(QUERIES) + len(SDK_SYNCS))
-        for rt in list(QUERIES) + list(SDK_SYNCS):
-            _lambda.invoke(FunctionName=ctx.invoked_function_arn, InvocationType="Event",
-                           Payload=json.dumps({"type": rt}).encode())
-        return {"status": "dispatched", "types": list(QUERIES) + list(SDK_SYNCS)}
+        types = list(QUERIES) + list(SDK_SYNCS)
+        queued_types = []
+        failed_types = []
+        for rt in types:
+            try:
+                response = _lambda.invoke(
+                    FunctionName=ctx.invoked_function_arn,
+                    InvocationType="Event",
+                    Payload=json.dumps({"type": rt}).encode(),
+                )
+                if response.get("StatusCode") == 202:
+                    queued_types.append(rt)
+                else:
+                    failed_types.append(rt)
+            except Exception:
+                failed_types.append(rt)
+        status = (
+            "failed" if not queued_types
+            else "partial" if failed_types
+            else "dispatched"
+        )
+        result = {
+            "status": status,
+            "queued_count": len(queued_types),
+            "failed_count": len(failed_types),
+            "queued_types": queued_types,
+            "failed_types": failed_types,
+        }
+        _log("inventory_sync_dispatch", type_count=len(types), **result)
+        return result
     return sync(rtype)

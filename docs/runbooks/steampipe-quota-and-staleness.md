@@ -18,9 +18,11 @@ This runbook operates the Phase 1 Steampipe inventory sync. Phase 1 is implement
 관련 고정 동작 / Related fixed behavior:
 
 - EventBridge scheduled sync: `rate(15 minutes)`.
-- Asynchronous invocation: maximum event age 900 seconds, zero retries.
+- EventBridge target delivery: maximum event age 900 seconds, zero retries.
+- Lambda asynchronous self/manual invocation: maximum event age 900 seconds, zero retries.
 - Generated config: exactly one unscoped `limiter "awsops_global"` shared across all rendered AWS connections.
-- Manual inventory and security refreshes enqueue the same async Lambda path; they do not bypass its reserved concurrency.
+- Manual inventory and security refreshes are admin-only and enqueue the same async Lambda path;
+  they do not bypass its reserved concurrency.
 
 ## 2. 적용 전 검토 / Review before deployment
 
@@ -152,6 +154,7 @@ terraform -chdir=terraform/v2/foundation plan \
   -target=aws_ecr_repository.steampipe \
   -var='steampipe_enabled=true' \
   -out tfplan-steampipe-ecr
+# Controller-approved operation only:
 terraform -chdir=terraform/v2/foundation apply tfplan-steampipe-ecr
 
 docker buildx build --platform linux/arm64 -f scripts/v2/steampipe/Dockerfile \
@@ -159,6 +162,7 @@ docker buildx build --platform linux/arm64 -f scripts/v2/steampipe/Dockerfile \
 
 # Now set steampipe_enabled=true in the reviewed configuration.
 terraform -chdir=terraform/v2/foundation plan -out tfplan
+# Controller-approved operation only:
 terraform -chdir=terraform/v2/foundation apply tfplan
 ```
 
@@ -170,8 +174,10 @@ Manual UI refresh uses the same `InvocationType=Event` path and Lambda reserved 
 CloudWatch Logs에서 다음 JSON event 이름을 조회한다:
 
 - `steampipe_limiter_config` — effective `max_concurrency`, `bucket_size`, `fill_rate`.
-- `inventory_sync_dispatch` — `type=all` fan-out이 시작됨.
-- `inventory_sync_complete` — full success이면 `degraded=false`, `freshness=healthy`, `age_minutes=0`; expected account 일부가 도달 불가한 partial이면 `degraded=true`, `freshness=degraded`, `age_minutes=null`, `unreachable_account_count`가 있고 account ID는 없다.
+- `inventory_sync_dispatch` — `type=all` fan-out 결과. `status=dispatched|partial|failed`,
+  `queued_count`/`failed_count`, `queued_types`/`failed_types`만 포함하며 invoke exception
+  text는 포함하지 않는다.
+- `inventory_sync_complete` — full success이면 `degraded=false`, `freshness=healthy`, `age_minutes=0`; expected account 일부가 도달 불가한 partial이면 `degraded=true`, `freshness=degraded`, `age_minutes=null`, `unreachable_account_count`가 있고 account ID는 없다. SDK per-resource sub-call partial이면 `failure_count`와 safe `failure_types`만 있으며 stale row pruning과 snapshot replacement를 건너뛴다.
 - `inventory_sync_busy` — `degraded=true`, `throttled=false`; 해당 type의 advisory lock이 이미 사용 중이며 retry storm을 만들지 않는다.
 - `inventory_sync_failed` — `resource_type`, `elapsed_ms`, `error_category`, `error_type`, `degraded=true`, structured `throttled`; raw exception text는 로그에 쓰지 않는다.
   - `error_category=superseded`는 이 실행이 lock을 해제한 뒤 더 새 실행이 같은 ledger row를 교체했다는 뜻이다. stale finalizer는 새 row를 수정하지 않고 안전한 degraded failure 하나만 기록하며 run token/account ID를 로그에 쓰지 않는다.
@@ -189,11 +195,11 @@ fields @timestamp, event, resource_type, row_count, unreachable_account_count,
 | limit 100
 ```
 
-Aurora에서 `inventory_sync_runs`는 resource type별 current-run ledger이며 `last_success_at`/`last_success_row_count`는 running/failed/partial 뒤에도 마지막 full success를 보존한다. 성공한 0-row 실행도 이 필드로 남는다. 각 allowed sync는 내부 non-secret opaque `run_token`을 running UPSERT에 저장하고, advisory unlock/main close 뒤의 fresh finalizer는 같은 token을 조건으로 둔 compare-and-set `UPDATE ... RETURNING`만 수행한다. 따라서 더 새 실행이 row를 교체하면 stale finalizer는 0 rows를 받고 새 상태를 덮어쓰지 않는다. 현재 row가 있으면 reader는 가장 오래된 `inventory_resources.captured_at`을 사용해 preserved stale row를 새 row가 가리지 못하게 하고, row가 없으면 durable `last_success_at`을 사용한다. `query_inventory`와 `inventory_summary`는 `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, `age_minutes`를 공개한다.
+Aurora에서 `inventory_sync_runs`는 resource type별 current-run ledger이며 `last_success_at`/`last_success_row_count`는 running/failed/partial 뒤에도 마지막 full success를 보존한다. 성공한 0-row 실행도 이 필드로 남는다. 각 allowed sync는 내부 non-secret opaque `run_token`을 running UPSERT에 저장하고, advisory unlock/main close 뒤의 fresh finalizer는 같은 token을 조건으로 둔 compare-and-set `UPDATE ... RETURNING`만 수행한다. 따라서 더 새 실행이 row를 교체하면 stale finalizer는 0 rows를 받고 새 상태를 덮어쓰지 않는다. reader는 durable `last_success_at`이 없으면 현재 partial row가 있어도 authoritative data로 보지 않는다. durable success가 있으면 effective timestamp는 `LEAST(last_success_at, COALESCE(oldest_captured_at,last_success_at))`이므로 preserved stale row나 오래된 success를 새 partial row가 가리지 못한다. `query_inventory`와 `inventory_summary`는 `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, backward-compatible `latest_success_at`, `age_minutes`를 공개한다. `inventory_summary.current_count`는 Aurora `inventory_resources`의 host/`self` 현재 row 수이고, 기존 `row_count`는 latest run ledger count로 유지된다.
 
-In Aurora, `inventory_sync_runs` is the per-type current-run ledger; `last_success_at` and `last_success_row_count` preserve the latest full success across running/failed/partial attempts, including a successful zero-row inventory. Each allowed sync stores an internal, non-secret opaque `run_token` in the running UPSERT. After advisory unlock and main-connection close, the fresh finalizer performs only a compare-and-set `UPDATE ... RETURNING` for that token, so a stale finalizer gets zero rows and cannot overwrite a newer run. Where current rows exist, the reader uses the oldest `inventory_resources.captured_at` so newer rows cannot hide preserved stale rows; with no rows it uses durable `last_success_at`. `query_inventory` and `inventory_summary` disclose `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, `latest_success_at`, and `age_minutes`.
+In Aurora, `inventory_sync_runs` is the per-type current-run ledger; `last_success_at` and `last_success_row_count` preserve the latest full success across running/failed/partial attempts, including a successful zero-row inventory. Each allowed sync stores an internal, non-secret opaque `run_token` in the running UPSERT. After advisory unlock and main-connection close, the fresh finalizer performs only a compare-and-set `UPDATE ... RETURNING` for that token, so a stale finalizer gets zero rows and cannot overwrite a newer run. Without durable `last_success_at`, even current rows from a first partial run are not authoritative. With a durable success, the effective timestamp is `LEAST(last_success_at, COALESCE(oldest_captured_at,last_success_at))`, so neither newer partial rows nor a newer success can hide older retained data. `query_inventory` and `inventory_summary` disclose `healthy|degraded|stale|unavailable`, `last_success_at`, `last_success_row_count`, `oldest_captured_at`, backward-compatible `latest_success_at`, and `age_minutes`. `inventory_summary.current_count` is the current host/`self` row count from Aurora `inventory_resources`; the existing `row_count` remains the latest run-ledger count.
 
-- `unavailable`: no durable last success and no current data.
+- `unavailable`: no durable last success, including a first failed/partial run with current rows.
 - `stale`: effective data age is greater than `inventory_stale_after_minutes` (default 30).
 - `degraded`: current status is `partial`, `failed`, or `running`, while effective data is still within the threshold.
 - `healthy`: current status is `succeeded` and effective data is within the threshold.
@@ -209,6 +215,12 @@ SELECT resource_type, account_id, region, min(captured_at) AS oldest_captured_at
 FROM inventory_resources
 GROUP BY resource_type, account_id, region
 ORDER BY oldest_captured_at ASC;
+
+SELECT resource_type, count(*)::integer AS current_count
+FROM inventory_resources
+WHERE account_id = 'self'
+GROUP BY resource_type
+ORDER BY resource_type;
 ```
 
 `sql_reader.inventory_sync_runs`는 위 safe operational columns만 명시적으로 노출하며 `error` text와 내부 `run_token`을 노출하지 않는다.

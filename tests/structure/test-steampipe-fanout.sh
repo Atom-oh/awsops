@@ -62,6 +62,13 @@ grep -Eq 'maximum_retry_attempts[[:space:]]*=[[:space:]]*0' "$SP" \
   && pass "inventory sync Lambda disables asynchronous retries" \
   || fail "inventory sync Lambda disables asynchronous retries"
 
+EVENT_TARGET_BLOCK=$(sed -n '/^resource "aws_cloudwatch_event_target" "inv_sync" {/,/^}/p' "$SP")
+printf '%s\n' "$EVENT_TARGET_BLOCK" | grep -Eq 'retry_policy[[:space:]]*\{' \
+  && printf '%s\n' "$EVENT_TARGET_BLOCK" | grep -Eq 'maximum_event_age_in_seconds[[:space:]]*=[[:space:]]*900' \
+  && printf '%s\n' "$EVENT_TARGET_BLOCK" | grep -Eq 'maximum_retry_attempts[[:space:]]*=[[:space:]]*0' \
+  && pass "EventBridge target expires scheduled deliveries after 900 seconds with zero retries" \
+  || fail "EventBridge target must set retry_policy age 900 and retries 0"
+
 grep -q 'AURORA_ENDPOINT' "$SP" && grep -q 'AURORA_DATABASE' "$SP" \
   && pass "steampipe task gets AURORA_ENDPOINT + AURORA_DATABASE env" \
   || fail "steampipe task gets AURORA_ENDPOINT + AURORA_DATABASE env"
@@ -130,6 +137,23 @@ if [ -n "$MIGRATE_LINE" ] && [ -n "$APPLY_LINE" ] && [ "$MIGRATE_LINE" -lt "$APP
   pass "runbook migrates Aurora before Terraform rolls the inv-sync Lambda"
 else
   fail "runbook must place make migrate before apply tfplan in the deployment-order section"
+fi
+
+FIRST_ENABLE=$(printf '%s\n' "$DEPLOY_ORDER" | sed -n '/^### 최초 활성화/,$p')
+FIRST_ENABLE_APPLIES=$(printf '%s\n' "$FIRST_ENABLE" \
+  | grep -c '^terraform -chdir=terraform/v2/foundation apply ')
+FIRST_ENABLE_QUALIFIED=$(printf '%s\n' "$FIRST_ENABLE" | awk '
+  /^terraform -chdir=terraform\/v2\/foundation apply / {
+    if (previous == "# Controller-approved operation only:") qualified++
+  }
+  { previous = $0 }
+  END { print qualified + 0 }
+')
+if [ "$FIRST_ENABLE_APPLIES" -eq 2 ] \
+  && [ "$FIRST_ENABLE_QUALIFIED" -eq "$FIRST_ENABLE_APPLIES" ]; then
+  pass "every first-time shared-infra apply has the exact controller-only qualifier"
+else
+  fail "both first-time applies must be immediately preceded by # Controller-approved operation only:"
 fi
 
 [ "$FAILS" -eq 0 ] || exit 1
