@@ -1,6 +1,7 @@
 // OpenCost allocation read (v1 eks-container-cost parity) — queries the in-cluster OpenCost
 // service via the K8s service proxy (no ingress/port-forward needed). READ-ONLY.
 import { k8sGetPath, listInCluster } from './eks-incluster';
+import { ESTIMATE_UNIT_PRICES } from '@/lib/cost-basis';
 import type { PodRow } from './eks-resources';
 
 export interface PodCost {
@@ -96,9 +97,10 @@ export async function getAllocation(cluster: string): Promise<AllocationResult> 
   }
 }
 
-// Fargate-style unit prices (ap-northeast-2 on-demand) — the request-estimate fallback's basis.
-const VCPU_H = 0.04656;
-const GB_H = 0.00511;
+// Fargate-style unit prices (ap-northeast-2 on-demand) — single source shared with the
+// /eks/cost Cost Calculation Basis panel (gap L217): lib/cost-basis.ts.
+const VCPU_H = ESTIMATE_UNIT_PRICES.vcpuHour;
+const GB_H = ESTIMATE_UNIT_PRICES.gbHour;
 
 /** OpenCost-unavailable fallback: per-pod daily cost from resource REQUESTS × unit prices. */
 async function requestEstimate(cluster: string): Promise<AllocationResult | null> {

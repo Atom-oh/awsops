@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import CostBasisPanel from '@/components/eks/CostBasisPanel';
 import { DollarSign, CalendarDays, Boxes, Crown, Search } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -361,6 +362,9 @@ export default function EksFleetCostPage() {
         )}
 
         {clusterNames.length > 0 && <PodTransferSection clusters={clusterNames} />}
+
+        {/* Gap L217: collapsible calculation-transparency panel — always available. */}
+        <CostBasisPanel />
       </div>
 
       <DetailPanel
