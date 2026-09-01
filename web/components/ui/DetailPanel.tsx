@@ -10,6 +10,7 @@ import StatePill from './StatePill';
 import { buildDetailGroups, type DetailValue } from '@/lib/inventory-detail';
 import type { InvType } from '@/lib/inventory-types';
 import type { RdsInstanceMetrics } from '@/lib/metrics';
+import { EbsRelatedSection } from '@/components/inventory/metrics/EbsRelatedSection';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // v1-parity: each detail section is a titled card with a leading icon. Section labels are a small
@@ -284,6 +285,8 @@ export default function DetailPanel({
 
   const groups = buildDetailGroups(data, spec);
   const rdsInstanceId = resourceType === 'rds' && typeof data.resource_id === 'string' ? data.resource_id : null;
+  // EBS drill-down (gap L97/L98): per-volume snapshots + attached-instance enrichment.
+  const ebsVolumeId = resourceType === 'ebs_volume' && typeof data.resource_id === 'string' ? data.resource_id : null;
   const liveMetricId =
     resourceType && LIVE_METRIC_TYPES.has(resourceType) && typeof data.resource_id === 'string' ? data.resource_id : null;
 
@@ -387,6 +390,15 @@ export default function DetailPanel({
           {rdsInstanceId && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
               <RdsMetricsSection instanceId={rdsInstanceId} />
+            </section>
+          )}
+          {ebsVolumeId && (
+            <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+              <EbsRelatedSection
+                volumeId={ebsVolumeId}
+                accountId={typeof data.account_id === 'string' ? data.account_id : undefined}
+                attachments={data.attachments}
+              />
             </section>
           )}
           {liveMetricId && resourceType && (

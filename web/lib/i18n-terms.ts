@@ -1371,6 +1371,16 @@ export const TERMS: Record<string, Pair> = {
   '리포트 목차': { en: 'Report contents', zh: '报告目录', ja: 'レポート目次' },
   // Diagnosis quick-wins batch (L176/L177/L180/L181).
   '경과 시간': { en: 'Elapsed', zh: '已用时间', ja: '経過時間' },
+  // EBS detail drill-down batch (L97/L98).
+  '연관 리소스 조회 실패': { en: 'Related-resource lookup failed', zh: '关联资源查询失败', ja: '関連リソースの取得に失敗しました' },
+  '연관 리소스 조회 중…': { en: 'Loading related resources…', zh: '正在查询关联资源…', ja: '関連リソースを取得中…' },
+  '연결 인스턴스': { en: 'Attached instances', zh: '挂载的实例', ja: '接続インスタンス' },
+  '연결된 인스턴스 없음': { en: 'No attached instances', zh: '无挂载实例', ja: '接続インスタンスなし' },
+  '인스턴스 조회 실패': { en: 'Instance lookup failed', zh: '实例查询失败', ja: 'インスタンスの取得に失敗しました' },
+  'inventory에 없음': { en: 'not in inventory', zh: '不在库存中', ja: 'インベントリに未登録' },
+  '스냅샷': { en: 'Snapshots', zh: '快照', ja: 'スナップショット' },
+  '스냅샷 조회 실패': { en: 'Snapshot lookup failed', zh: '快照查询失败', ja: 'スナップショットの取得に失敗しました' },
+  '이 볼륨의 스냅샷 없음': { en: 'No snapshots for this volume', zh: '此卷没有快照', ja: 'このボリュームのスナップショットはありません' },
   // Small-parity sweep batch (L62/L182).
   '사용 모델': { en: 'Models used', zh: '使用的模型', ja: '使用モデル' },
   '이벤트 상세': { en: 'Event detail', zh: '事件详情', ja: 'イベント詳細' },
@@ -1386,6 +1396,8 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^의도 대비 실제 \(intended vs actual\) — 위반 (\d+)건$/, en: (m) => `Intended vs actual — ${m[1]} violations`, zh: (m) => `意图与实际 (intended vs actual) — ${m[1]} 项违规`, ja: (m) => `意図と実際 (intended vs actual) — 違反 ${m[1]} 件` },
   { re: /^요청 실패 \((\d+)\)$/, en: (m) => `Request failed (${m[1]})`, zh: (m) => `请求失败 (${m[1]})`, ja: (m) => `リクエスト失敗 (${m[1]})` },
   { re: /^진단 결과 메일링 \((\d+)\)$/, en: (m) => `Diagnosis Result Mailing List (${m[1]})`, zh: (m) => `诊断结果邮件列表 (${m[1]})`, ja: (m) => `診断結果メール配信リスト (${m[1]})` },
+  // EBS snapshot sub-list cap note ("최근 20개만 표시").
+  { re: /^최근 (\d+)개만 표시$/, en: (m) => `Showing only the latest ${m[1]}`, zh: (m) => `仅显示最近 ${m[1]} 个`, ja: (m) => `直近 ${m[1]} 件のみ表示` },
   // Day-of-month options in the diagnosis SchedulePanel ("5일" → "Day 5").
   // Diagnosis stats bar (L176): "섹션 9개" / "소요 03:12".
   { re: /^섹션 (\d+)개$/, en: (m) => `${m[1]} sections`, zh: (m) => `${m[1]} 个章节`, ja: (m) => `${m[1]} セクション` },
