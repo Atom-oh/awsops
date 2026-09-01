@@ -10,9 +10,15 @@ let cw: CloudWatchClient | null = null;
 const cwClient = () => (cw ??= new CloudWatchClient({ region: REGION }));
 
 /** Fleet average of the latest 1h CPUUtilization across up to 100 instances. null when no datapoints. */
-export async function ec2AvgCpu(instanceIds: string[]): Promise<number | null> {
+export interface Ec2CpuStats {
+  avg: number | null;                 // fleet average across instances reporting a datapoint
+  byInstance: Record<string, number>; // latest CPU % per instance id (gap L138 Top-N ranking)
+}
+
+/** One GetMetricData call — per-instance latest CPU plus the fleet average it already implied. */
+export async function ec2CpuStats(instanceIds: string[]): Promise<Ec2CpuStats> {
   const ids = instanceIds.slice(0, 100);
-  if (!ids.length) return null;
+  if (!ids.length) return { avg: null, byInstance: {} };
   const r = await cwClient().send(new GetMetricDataCommand({
     StartTime: new Date(Date.now() - 3 * 3600_000), EndTime: new Date(),
     MetricDataQueries: ids.map((id, i) => ({
@@ -20,9 +26,20 @@ export async function ec2AvgCpu(instanceIds: string[]): Promise<number | null> {
       MetricStat: { Metric: { Namespace: 'AWS/EC2', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'InstanceId', Value: id }] }, Period: 3600, Stat: 'Average' },
     })),
   }));
-  const latest = (r.MetricDataResults ?? []).map((m) => m.Values?.[0]).filter((v): v is number => typeof v === 'number');
-  if (!latest.length) return null;
-  return Math.round((latest.reduce((a, b) => a + b, 0) / latest.length) * 10) / 10;
+  const byInstance: Record<string, number> = {};
+  (r.MetricDataResults ?? []).forEach((m, idx) => {
+    // Results can arrive out of order — map back through the query Id, not the array index.
+    const qi = Number(String(m.Id ?? `m${idx}`).slice(1));
+    const v = m.Values?.[0];
+    if (typeof v === 'number' && ids[qi] !== undefined) byInstance[ids[qi]] = Math.round(v * 10) / 10;
+  });
+  const latest = Object.values(byInstance);
+  const avg = latest.length ? Math.round((latest.reduce((a, b) => a + b, 0) / latest.length) * 10) / 10 : null;
+  return { avg, byInstance };
+}
+
+export async function ec2AvgCpu(instanceIds: string[]): Promise<number | null> {
+  return (await ec2CpuStats(instanceIds)).avg;
 }
 
 // ── RDS per-instance CloudWatch metrics (v1 parity) ─────────────────────────

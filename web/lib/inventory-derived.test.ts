@@ -39,3 +39,58 @@ describe('deriveRow ecr scan_on_push', () => {
     expect(out.repository_uri).toBe('x');
   });
 });
+
+describe('deriveRow opensearch structured detail (gap L150)', () => {
+  const full = {
+    cluster_config: {
+      InstanceType: 'r6g.large.search', InstanceCount: 3,
+      DedicatedMasterEnabled: true, DedicatedMasterType: 'm6g.large.search', DedicatedMasterCount: 3,
+      ZoneAwarenessEnabled: true, ZoneAwarenessConfig: { AvailabilityZoneCount: 3 },
+      WarmEnabled: false, ColdStorageOptions: { Enabled: false }, MultiAZWithStandbyEnabled: true,
+    },
+    ebs_options: { EBSEnabled: true, VolumeType: 'gp3', VolumeSize: 100, Iops: 3000, Throughput: 125 },
+    vpc_options: { VPCId: 'vpc-1', SubnetIds: ['subnet-a', 'subnet-b'], SecurityGroupIds: ['sg-1'], AvailabilityZones: ['apne2-az1'] },
+    encryption_at_rest_options: { Enabled: true, KmsKeyId: 'key-1' },
+    advanced_security_options: { Enabled: true, InternalUserDatabaseEnabled: false, AnonymousAuthEnabled: false },
+    cognito_options: { Enabled: false },
+    node_to_node_encryption_options_enabled: true,
+  };
+
+  it('flattens cluster_config into readable fields', () => {
+    const d = deriveRow('opensearch', { ...full });
+    expect(d.dedicated_master_h).toBe('m6g.large.search × 3');
+    expect(d.zone_awareness_h).toBe('enabled (3 AZ)');
+    expect(d.warm_storage_h).toBe('disabled');
+    expect(d.cold_storage_h).toBe('disabled');
+    expect(d.multi_az_standby_h).toBe('enabled');
+  });
+
+  it('EBS one-liner carries type/size/IOPS/throughput; VPC arrays join to chips-ready strings', () => {
+    const d = deriveRow('opensearch', { ...full });
+    expect(d.ebs_volume_h).toBe('gp3 · 100 GB · 3000 IOPS · 125 MB/s');
+    expect(d.vpc_id_h).toBe('vpc-1');
+    expect(d.subnets_h).toBe('subnet-a, subnet-b');
+    expect(d.security_groups_h).toBe('sg-1');
+  });
+
+  it('security fields: KMS key surfaced, advanced-security as real booleans (Badge rendering)', () => {
+    const d = deriveRow('opensearch', { ...full });
+    expect(d.kms_key_h).toBe('key-1');
+    expect(d.adv_security_h).toBe(true);
+    expect(d.internal_user_db_h).toBe(false);
+    expect(d.cognito_h).toBe(false);
+  });
+
+  it('missing JSONB blobs → undefined fields (absent from the panel), never fabricated values', () => {
+    const d = deriveRow('opensearch', { resource_id: 'dom-2' });
+    expect(d.dedicated_master_h).toBeUndefined();
+    expect(d.ebs_volume_h).toBeUndefined();
+    expect(d.adv_security_h).toBeUndefined();
+    expect(d.cognito_h).toBeUndefined();
+  });
+
+  it('EBS disabled renders disabled (blob present, feature off)', () => {
+    const d = deriveRow('opensearch', { ebs_options: { EBSEnabled: false } });
+    expect(d.ebs_volume_h).toBe('disabled');
+  });
+});

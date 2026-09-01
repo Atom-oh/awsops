@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, rdsInstanceTrends, hasLiveMetrics, liveResourceMetrics, liveResourceTrends, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
+import { ec2CpuStats, ec2HourlyCost, rdsMetrics, rdsInstanceTrends, hasLiveMetrics, liveResourceMetrics, liveResourceTrends, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -51,8 +51,9 @@ export async function GET(request: Request, { params }: { params: { type: string
       }
       const qparams: unknown[] = [];
       const where = `resource_type = 'ec2' AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, qparams);
-      const r = await getPool().query<{ id: string | null; state: string | null; type: string | null }>(
-        `SELECT data->>'instance_id' AS id, data->>'instance_state' AS state, data->>'instance_type' AS type
+      const r = await getPool().query<{ id: string | null; state: string | null; type: string | null; name: string | null }>(
+        `SELECT data->>'instance_id' AS id, data->>'instance_state' AS state, data->>'instance_type' AS type,
+                COALESCE(data->>'name', data->'tags'->>'Name') AS name
          FROM inventory_resources WHERE ${where}`,
         qparams,
       );
@@ -65,12 +66,19 @@ export async function GET(request: Request, { params }: { params: { type: string
         if (x.type) typeCounts[x.type] = (typeCounts[x.type] ?? 0) + 1;
       }
 
-      const [cpu, cost] = await Promise.all([ec2AvgCpu(runningIds), ec2HourlyCost(typeCounts)]);
+      const [cpuStats, cost] = await Promise.all([ec2CpuStats(runningIds), ec2HourlyCost(typeCounts)]);
       const cards: Card[] = [
-        { label: '평균 CPU', value: cpu == null ? '—' : `${cpu}%`, accent: true },
+        { label: '평균 CPU', value: cpuStats.avg == null ? '—' : `${cpuStats.avg}%`, accent: true },
         { label: '시간당 비용(USD)', value: cost == null ? '—' : `$${cost.toFixed(2)}`, accent: true },
       ];
-      return Response.json({ cards });
+      // Top-15 per-instance CPU ranking (gap L138) — the same GetMetricData call already
+      // carried per-instance latest values; label = Name tag, falling back to the instance id.
+      const nameById = new Map(r.rows.filter((x) => x.id).map((x) => [x.id as string, x.name]));
+      const top = Object.entries(cpuStats.byInstance)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 15)
+        .map(([id, v]) => ({ label: nameById.get(id) || id, value: v }));
+      return Response.json(top.length ? { cards, bar: { title: 'EC2 CPU Top 15 (%)', data: top } } : { cards });
     }
 
     if (params.type === 'rds') {

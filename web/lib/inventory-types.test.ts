@@ -278,11 +278,14 @@ describe('computeHighlights (per-type highlight cards)', () => {
     for (const [type, hls] of Object.entries(HIGHLIGHTS)) {
       const spec = INVENTORY_TYPES[type];
       expect(spec, `HIGHLIGHTS[${type}] has a registered type`).toBeTruthy();
-      // Known synced fields = table columns ∪ detail-section keys (both validated against
-      // sync_lambda.py) ∪ state/dist keys. Dotted JSONB paths validate their ROOT field.
+      // Known synced fields = table columns ∪ detail-section keys ∪ hideKeys (raw synced
+      // blobs replaced by derived fields — still real synced data, just not panel-rendered;
+      // both validated against sync_lambda.py) ∪ state/dist keys. Dotted JSONB paths
+      // validate their ROOT field.
       const cols = new Set<string>([
         ...spec.columns.map((c) => c.key),
         ...(spec.sections ?? []).flatMap((sec) => sec.keys),
+        ...(spec.hideKeys ?? []),
         ...[spec.stateKey, spec.distKey, spec.distKey2, spec.barKey?.col].filter((k): k is string => Boolean(k)),
       ]);
       for (const h of hls) {

@@ -60,6 +60,25 @@ describe('ec2AvgCpu', () => {
     const { ec2AvgCpu } = await import('./metrics');
     expect(await ec2AvgCpu(['i-aaa'])).toBeNull();
   });
+
+  it('ec2CpuStats exposes the per-instance map (gap L138) and maps results by query Id, not array order', async () => {
+    cwSend.mockResolvedValueOnce({
+      MetricDataResults: [
+        { Id: 'm1', Values: [20.61] }, // out of order on purpose
+        { Id: 'm0', Values: [10.24] },
+      ],
+    });
+    const { ec2CpuStats } = await import('./metrics');
+    const st = await ec2CpuStats(['i-aaa', 'i-bbb']);
+    expect(st.byInstance).toEqual({ 'i-aaa': 10.2, 'i-bbb': 20.6 });
+    expect(st.avg).toBe(15.4);
+  });
+
+  it('ec2CpuStats: empty ids → {avg: null, byInstance: {}} without a CloudWatch call', async () => {
+    const { ec2CpuStats } = await import('./metrics');
+    expect(await ec2CpuStats([])).toEqual({ avg: null, byInstance: {} });
+    expect(cwSend).not.toHaveBeenCalled();
+  });
 });
 
 describe('ec2HourlyCost', () => {

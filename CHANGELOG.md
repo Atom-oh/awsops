@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- EC2 inventory: a CPU Top 15 bar chart ranks instances by their latest CloudWatch CPU (name-tag labels, instance-id fallback) beside the existing KPI cards — computed from the same GetMetricData call that already fed the fleet-average card, so no extra API cost.
+- OpenSearch detail panel: the raw cluster_config/EBS/VPC/encryption/advanced-security JSON blobs are replaced by structured, labelled sections — Dedicated Master, Zone Awareness, Warm/Cold storage, Multi-AZ Standby, an EBS volume one-liner (type·size·IOPS·throughput), VPC/subnet/SG lists, the KMS key, and advanced-security flags as badges.
 
 - ElastiCache/OpenSearch/MSK detail sparklines + Lambda memory histogram (v1 parity): live-metric detail panels gain a 1-hour 5-minute sparkline block per spec metric (≤2 datapoints → the Avg/Max/Min fallback, a missing series reads 'no data'; one bounded read-only GetMetricData call behind the trends=1 contract, with the resource's own account AND region threaded through), and the Lambda page gains a memory-allocation histogram (function counts per memory size, top 10 numerically sorted) beside the existing Top-N bar via a new generic spec option.
 - RDS instance detail time-series (v1 parity): the RDS slide-over gains three trend blocks — 1-hour 5-minute sparklines for the six v1 metrics (CPU, freeable memory, connections, read/write IOPS, free storage; a series with ≤2 datapoints renders the v1 Avg/Max/Min fallback instead of a misleading two-point line, and a missing series reads 'no data'), a 24-hour freeable-memory trend, and a 14-day daily CPU trend, each with Avg/Max/Min tiles. Two bounded, parallel read-only GetMetricData calls (a ~65-minute spark window + a 14-day trend window — Period sets resolution, not a window) behind an opt-in `trends=1` param that returns only the trends; the existing `?id=` response shape and its consumers are untouched; no IAM/Terraform changes.
@@ -590,6 +592,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 ## [Unreleased]
 
 ### Added
+- EC2 인벤토리: 최신 CloudWatch CPU 기준 인스턴스 Top 15 바 차트(Name 태그 라벨, 없으면 인스턴스 ID)를 기존 KPI 카드 옆에 표시 — fleet 평균 카드가 쓰던 동일한 GetMetricData 호출에서 계산하므로 추가 API 비용 없음.
+- OpenSearch 상세 패널: cluster_config/EBS/VPC/암호화/고급 보안 원시 JSON 블롭을 구조화된 섹션으로 대체 — Dedicated Master, Zone Awareness, Warm/Cold 스토리지, Multi-AZ Standby, EBS 볼륨 한 줄 요약(타입·크기·IOPS·처리량), VPC/서브넷/SG 목록, KMS 키, 고급 보안 플래그 배지.
 
 - ElastiCache/OpenSearch/MSK 상세 스파크라인 + Lambda 메모리 히스토그램(v1 패리티): 라이브 메트릭 상세 패널에 스펙 메트릭별 최근 1시간 5분 단위 스파크라인 블록 추가(포인트 ≤2개는 Avg/Max/Min 폴백, 시리즈 부재는 '데이터 불가'; trends=1 계약의 bounded read-only GetMetricData 1회 — 리소스의 계정·리전을 그대로 전달), Lambda 페이지에 기존 Top-N 바 옆 메모리 할당 히스토그램(메모리 크기별 함수 수, 상위 10개 숫자 정렬 — 신규 generic 스펙 옵션) 추가.
 - RDS 인스턴스 상세 시계열(v1 패리티): RDS 슬라이드오버에 추이 블록 3종 추가 — v1 6개 메트릭(CPU·여유 메모리·커넥션·Read/Write IOPS·여유 스토리지)의 최근 1시간 5분 단위 스파크라인(포인트 ≤2개는 오해를 부르는 2점 선 대신 v1 Avg/Max/Min 폴백, 시리즈 부재는 '데이터 불가'), 여유 메모리 24시간 추이, CPU 14일 일별 추이(각각 Avg/Max/Min 타일 포함). read-only GetMetricData 2회 병렬 호출(스파크용 ~65분 윈도우 + 장기 추이용 14일 윈도우 — Period는 윈도우가 아니라 해상도), opt-in `trends=1`은 추이만 반환 — 기존 `?id=` 응답 형태와 소비자는 그대로; IAM/Terraform 변경 없음.
