@@ -26,9 +26,12 @@ rows 라우트의 worst-first ORDER BY(캡 이전 정렬)이다.
   additionally map `eventId`, `awsRegion`, `sourceIPAddress`, `userAgent`, `errorCode`,
   `accessKeyId` (a first-class Event field, v1 parity), the full `resources` list (today only
   `Resources[0]` survives), and `raw` — PROJECTED through a field allowlist (forensic call
-  detail stays; `userIdentity` is reduced to identity names — no sessionContext/credential
-  detail leaves the server as a bulk-copyable blob; repo redaction precedent). Same
-  `LookupEvents` call — no new AWS surface.
+  detail stays; `userIdentity` is reduced to identity names) with credential-FAMILY keys
+  inside `requestParameters`/`responseElements` recursively masked by a normalized deny-list
+  (separator-insensitive: x-api-key / access_key / accessKeyId all hit; sts credentials,
+  iam accessKey, lambda environment, userData, keyMaterial, authParameters). This is
+  defense-in-depth ATOP CloudTrail's own sensitive-field masking — a deny-list cannot prove
+  completeness, and the docs say so. Same `LookupEvents` call — no new AWS surface.
 - UI (`CloudTrailEvents.tsx`): rows become clickable → the existing `DetailPanel` (no spec →
   flat key list, the same renderer inventory JSONB nests use) with the event fields + the raw
   event object. Close on ×/overlay/Escape comes free.
@@ -75,7 +78,10 @@ rows 라우트의 worst-first ORDER BY(캡 이전 정렬)이다.
 - `app/bedrock/page.tsx` KPI band gains a `사용 모델` StatTile counting only models with
   `invocations > 0` in the range (ListMetrics enumerates ~2 weeks of metric existence, so idle
   models return 0-invocation rows and must not count; models last used >2 weeks ago fall out of
-  ListMetrics entirely — a known window caveat for the 30d range). Grid bumped to 8 tiles.
+  ListMetrics entirely — a known window caveat for the 30d range, hinted on the tile). Two
+  further inherited base-pipeline truncations (unpaginated ListMetrics; the 500-query
+  GetMetricData slice ≈62 models) can undercount very large fleets — pre-existing behavior the
+  tile now makes visible; pagination is a separate follow-up. Grid bumped to 8 tiles.
 
 ## Testing (as shipped)
 - CloudTrail route: drill-down mapping, all-resources list, userIdentity projection (first-

@@ -70,8 +70,15 @@ describe('GET /api/inventory/cloudtrail/events', () => {
       EventId: 'ev-3', EventName: 'AssumeRole', EventSource: 'sts.amazonaws.com',
       CloudTrailEvent: JSON.stringify({
         readOnly: true,
-        requestParameters: { roleArn: 'arn:aws:iam::1:role/x', environment: { variables: { DB_PW: 'hunter2' } }, userData: 'IyEvYmlu' },
-        responseElements: { credentials: { accessKeyId: 'ASIAEXAMPLE', sessionToken: 'FwoGZXIv' }, assumedRoleUser: { arn: 'arn:aws:sts::1:assumed-role/x/s' } },
+        requestParameters: {
+          roleArn: 'arn:aws:iam::1:role/x', environment: { variables: { DB_PW: 'hunter2' } }, userData: 'IyEvYmlu',
+          'x-api-key': 'XKEY', access_key: 'UKEY', authParameters: { u: 'p' }, keyMaterial: 'PEM',
+        },
+        responseElements: {
+          credentials: { accessKeyId: 'ASIAEXAMPLE', sessionToken: 'FwoGZXIv' },
+          accessKey: { accessKeyId: 'AKIANEW', status: 'Active' },
+          assumedRoleUser: { arn: 'arn:aws:sts::1:assumed-role/x/s' },
+        },
       }),
     }] });
     const e = (await (await GET(req())).json()).events[0];
@@ -80,9 +87,12 @@ describe('GET /api/inventory/cloudtrail/events', () => {
     expect(e.raw.responseElements.credentials).toBe('[REDACTED]');
     expect(e.raw.requestParameters.environment).toBe('[REDACTED]');
     expect(e.raw.requestParameters.userData).toBe('[REDACTED]');
-    for (const secret of ['ASIAEXAMPLE', 'FwoGZXIv', 'hunter2', 'IyEvYmlu']) {
+    // separator/family variants must hit the normalized deny-list too (round-3 review)
+    for (const secret of ['ASIAEXAMPLE', 'FwoGZXIv', 'hunter2', 'IyEvYmlu', 'XKEY', 'UKEY', 'PEM', 'AKIANEW', '"u":"p"']) {
       expect(blob).not.toContain(secret);
     }
+    expect(e.raw.requestParameters['x-api-key']).toBe('[REDACTED]');
+    expect(e.raw.responseElements.accessKey).toBe('[REDACTED]');
     // non-sensitive forensic detail stays
     expect(e.raw.requestParameters.roleArn).toBe('arn:aws:iam::1:role/x');
     expect(e.raw.responseElements.assumedRoleUser.arn).toContain('assumed-role');

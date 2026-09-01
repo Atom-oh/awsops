@@ -40,18 +40,24 @@ const RAW_KEYS = [
 const UID_KEYS = ['type', 'arn', 'accountId', 'userName', 'invokedBy'] as const;
 
 // requestParameters/responseElements routinely carry credential-adjacent material
-// (sts:AssumeRole → responseElements.credentials.sessionToken; lambda Create/UpdateFunction →
-// environment variables; ec2:RunInstances → userData) — key-level projection alone is not a
-// redaction. Recursive key deny-list over the admitted subtrees; matched keys keep their
-// PRESENCE (forensics: the call set credentials) but never their value.
-const SENSITIVE_KEY = /credential|token|secret|password|userdata|privatekey|authoriz|apikey|environment/i;
+// (sts:AssumeRole → responseElements.credentials.sessionToken; iam:CreateAccessKey →
+// responseElements.accessKey; lambda Create/UpdateFunction → environment variables;
+// ec2:RunInstances → userData; CFN → keyMaterial/authParameters) — key-level projection alone
+// is not a redaction. Recursive deny-list over the admitted subtrees, matched against the key
+// NORMALIZED to lowercase with separators stripped (x-api-key / access_key / accessKeyId all
+// hit); matched keys keep their PRESENCE (forensics: the call set credentials) but never their
+// value. Defense-in-depth ATOP CloudTrail's own masking of known-sensitive fields — a
+// deny-list can't prove completeness, so the docs describe it as credential-family masking,
+// not a guarantee of secretlessness.
+const SENSITIVE_KEY = /credential|token|secret|password|userdata|privatekey|authoriz|apikey|accesskey|keymaterial|authparameters|environment/;
 
 function scrubSensitive(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(scrubSensitive);
   if (v && typeof v === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      out[k] = SENSITIVE_KEY.test(k) ? '[REDACTED]' : scrubSensitive(val);
+      const norm = k.toLowerCase().replace(/[-_ ]/g, '');
+      out[k] = SENSITIVE_KEY.test(norm) ? '[REDACTED]' : scrubSensitive(val);
     }
     return out;
   }

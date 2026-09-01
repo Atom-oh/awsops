@@ -83,6 +83,7 @@ function worstFirstOrderBy(type: string): string {
   if (!ID.test(wf.col) || (wf.tieBreak !== undefined && !ID.test(wf.tieBreak))) return '';
   const whens = Object.entries(wf.rank)
     .filter(([k]) => /^[A-Za-z0-9_-]{1,64}$/.test(k))
+    .filter(([, v]) => Number.isFinite(Number(v)))
     .map(([k, v]) => `WHEN '${k.toLowerCase()}' THEN ${Number(v)}`)
     .join(' ');
   if (!whens) return '';
