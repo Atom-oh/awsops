@@ -15,6 +15,16 @@ interface Splits {
   sgOpenIngress: number;
   s3Public: number;
   cwAlarm: number;
+  // Gap L82 — per-type tile micro-stat sublines (all from synced JSONB, same query).
+  lambdaRuntimes: number;
+  lambdaLongTimeout: number;
+  ebsTotalGb: number;
+  rdsMultiAz: number;
+  rdsUnencrypted: number;
+  ecrScanOnPush: number;
+  ecrImmutable: number;
+  s3VersioningOff: number;
+  cloudfrontEnabled: number;
 }
 
 // Account-scope SQL fragment. Values are STRICTLY validated ('self' | 12-digit id) before
@@ -53,6 +63,17 @@ const splitsSql = (ACC: string): string => `
     AND (data->'ip_permissions')::text ~ '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
   UNION ALL SELECT 's3_public', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='s3_public_access' AND ${PUBLIC_S3_WHERE}
   UNION ALL SELECT 'cw_alarm', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='cloudwatch_alarm' AND lower(data->>'state_value')='alarm'
+  UNION ALL SELECT 'lambda_runtimes', count(DISTINCT COALESCE(NULLIF(data->>'runtime',''),'custom'))::int FROM inventory_resources WHERE ${ACC} AND resource_type='lambda'
+  UNION ALL SELECT 'lambda_long_timeout', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='lambda' AND (data->>'timeout') ~ '^[0-9]+$' AND (data->>'timeout')::int > 300
+  UNION ALL SELECT 'ebs_total_gb', COALESCE(sum(CASE WHEN (data->>'size') ~ '^[0-9]+$' THEN (data->>'size')::int ELSE 0 END),0)::int FROM inventory_resources WHERE ${ACC} AND resource_type='ebs_volume'
+  UNION ALL SELECT 'rds_multi_az', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='rds' AND (data->>'multi_az')='true'
+  UNION ALL SELECT 'rds_unencrypted', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='rds' AND (data->>'storage_encrypted')='false'
+  UNION ALL SELECT 'ecr_scan_on_push', count(*)::int FROM inventory_resources
+    WHERE ${ACC} AND resource_type='ecr'
+    AND (data->'image_scanning_configuration')::text ~* '"(scan_on_push|ScanOnPush)"\\s*:\\s*(true|"true"|1)'
+  UNION ALL SELECT 'ecr_immutable', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='ecr' AND upper(data->>'image_tag_mutability')='IMMUTABLE'
+  UNION ALL SELECT 's3_versioning_off', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='s3' AND (data->>'versioning_enabled')='false'
+  UNION ALL SELECT 'cloudfront_enabled', count(*)::int FROM inventory_resources WHERE ${ACC} AND resource_type='cloudfront' AND (data->>'enabled')='true'
 `;
 
 /** Aggregate inventory counts: per resource_type (desc) and rolled up per category group. */
@@ -103,6 +124,15 @@ export async function GET(request: Request) {
       sgOpenIngress: 0,
       s3Public: 0,
       cwAlarm: 0,
+      lambdaRuntimes: 0,
+      lambdaLongTimeout: 0,
+      ebsTotalGb: 0,
+      rdsMultiAz: 0,
+      rdsUnencrypted: 0,
+      ecrScanOnPush: 0,
+      ecrImmutable: 0,
+      s3VersioningOff: 0,
+      cloudfrontEnabled: 0,
     };
     const SPLIT_KEY: Record<string, keyof Splits> = {
       ec2_running: 'ec2Running',
@@ -112,7 +142,17 @@ export async function GET(request: Request) {
       sg_open_ingress: 'sgOpenIngress',
       s3_public: 's3Public',
       cw_alarm: 'cwAlarm',
+      lambda_runtimes: 'lambdaRuntimes',
+      lambda_long_timeout: 'lambdaLongTimeout',
+      ebs_total_gb: 'ebsTotalGb',
+      rds_multi_az: 'rdsMultiAz',
+      rds_unencrypted: 'rdsUnencrypted',
+      ecr_scan_on_push: 'ecrScanOnPush',
+      ecr_immutable: 'ecrImmutable',
+      s3_versioning_off: 's3VersioningOff',
+      cloudfront_enabled: 'cloudfrontEnabled',
     };
+    let splitsOk = true;
     try {
       const sr = await pool.query<{ k: string; n: number }>(splitsSql(ACC));
       for (const row of sr.rows) {
@@ -120,7 +160,10 @@ export async function GET(request: Request) {
         if (key) splits[key] = Number(row.n);
       }
     } catch {
-      // splits omitted/zeros — byType already computed, don't fail the response.
+      // splits FAILED — return null, never fabricated zeros: "0 no MFA"/"0 open ingress"
+      // sublines and a 'healthy' verdict from a broken aggregation would be false-clean
+      // security claims. Consumers all handle a missing splits (DASH / hidden sublines).
+      splitsOk = false;
     }
 
     // EC2 instance-type distribution for the landing donut (degrade to [] on failure).
@@ -147,7 +190,7 @@ export async function GET(request: Request) {
       // freshness omitted — non-fatal.
     }
 
-    return Response.json({ byType, byCategory, total, splits, ec2Types, lastSyncAt });
+    return Response.json({ byType, byCategory, total, splits: splitsOk ? splits : null, ec2Types, lastSyncAt });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

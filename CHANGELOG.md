@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Group overview tiles (the /inventory/g category pages — the dashboard-home tiles are a separate follow-up): per-type micro-stat sublines — EC2 running/stopped, Lambda runtimes (container-image functions count as 'custom') and >300s timeouts, EBS total GiB and unencrypted, RDS Multi-AZ/unencrypted, ECR scan-on-push/immutable, S3 public/versioning-off, IAM no-MFA, SG open-ingress, CloudFront enabled, and VPC subnet·NAT·TGW composition — computed in the existing single summary aggregation (no new AWS calls); sublines and the health verdict are hidden, never zeroed, while loading OR when the aggregation fails.
 - Compliance control detail: the slide-over now shows the control's description (the recommendation rationale) alongside Status/Reason/Resource — collected per control on new runs; rows from older runs read '—' rather than a fabricated rationale.
 - EKS overview: a collapsible cluster/VPC facet filter — multi-select cluster and VPC chips (VPC chips carry their cluster counts), an active-filter badge, Clear all, and a filtered/total counter — narrowing the cluster cards and the fleet panels below.
 - EKS nodes fleet page: per-node 3-segment capacity bars (Requested / Available / System-Reserved) for CPU and memory with 'avail X | rsv Y' captions; scheduler-requested totals come from a per-cluster pods read, and a cluster whose pods read fails shows 'requests unknown' rather than a fabricated zero; terminal (Succeeded/Failed) pods are excluded from requested totals on every surface (fleet list, overview node bars, node drill-down) to match scheduler reservations (native-sidecar init requests remain uncounted — a known follow-up), and above 40 nodes the list keeps degraded-data rows first, then the most pressured, with an explicit truncation note.
@@ -599,6 +600,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
+- 그룹 개요 타일(/inventory/g 카테고리 페이지 — 대시보드 홈 타일은 별도 후속): 타입별 마이크로스탯 서브라인 — EC2 running/stopped, Lambda 런타임 수(컨테이너 이미지 함수는 'custom'으로 집계)·>300s 타임아웃, EBS 총 GiB·미암호화, RDS Multi-AZ/미암호화, ECR scan-on-push/immutable, S3 public/versioning off, IAM no-MFA, SG open-ingress, CloudFront enabled, VPC 서브넷·NAT·TGW 구성 — 기존 단일 summary 집계 쿼리에서 계산(신규 AWS 호출 없음); 로딩 중이거나 집계가 실패하면 서브라인과 상태 판정 모두 0을 지어내지 않고 숨김.
 - 컴플라이언스 컨트롤 상세: 슬라이드오버에 Status/Reason/Resource와 함께 컨트롤 description(권고 배경 설명) 표시 — 새 실행부터 컨트롤별로 수집하며, 이전 실행의 행은 설명을 지어내지 않고 '—'로 표시.
 - EKS 개요: 접이식 클러스터/VPC facet 필터 — 멀티 선택 클러스터·VPC 칩(VPC 칩에 클러스터 수 표시), 활성 필터 배지, 전체 해제, filtered/total 카운터 — 클러스터 카드와 하단 fleet 패널을 함께 좁힘.
 - EKS 노드 fleet 페이지: 노드별 3분할 용량 바(Requested / Available / System-Reserved, CPU·메모리) + 'avail X | rsv Y' 캡션; 스케줄러 요청 합계는 클러스터별 pods 조회로 계산하며, pods 조회가 실패한 클러스터는 0으로 조작하지 않고 '요청량 미상'으로 표시; 종료(Succeeded/Failed) 파드는 모든 표면(fleet 목록·개요 노드 바·노드 드릴다운)의 요청 합계에서 스케줄러 예약과 일치하도록 제외(native-sidecar init 요청은 미집계 — 알려진 후속 과제), 40개 초과 시 저하 데이터 행 우선 → 압박 큰 노드 순으로 표시하고 잘림을 명시.
