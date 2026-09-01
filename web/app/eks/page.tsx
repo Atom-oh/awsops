@@ -200,6 +200,10 @@ export default function EksPage() {
     return true;
   }), [rows, facet]);
   const facetNames = useMemo(() => new Set(facetRows.map((c) => c.name)), [facetRows]);
+  // The card-click scope must not silently zero every panel when the facet excludes it.
+  useEffect(() => {
+    if (facetActive && clusterFilter && !facetNames.has(clusterFilter)) setClusterFilter('');
+  }, [facetActive, clusterFilter, facetNames]);
   const visibleFleet = useMemo(
     () => fleet.filter((f) =>
       (clusterFilter ? f.name === clusterFilter : true)
@@ -417,6 +421,9 @@ export default function EksPage() {
           onChange={setFacet}
           filteredCount={facetRows.length}
         />
+      )}
+      {rows && facetActive && facetRows.length === 0 && (
+        <div className="rounded-md border border-ink-100 bg-ink-50 px-3 py-3 text-[13px] text-ink-400">{tt('필터와 일치하는 클러스터가 없습니다')}</div>
       )}
       {rows && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

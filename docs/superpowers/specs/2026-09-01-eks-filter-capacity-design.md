@@ -16,7 +16,7 @@ the node-DETAIL stacked bars already exist in `NodeCapacityCards`).
   its cluster count), an **active-filter count badge** on the toggle button, **Clear all**, and
   a **"filtered/total clusters"** counter — v1 parity.
 - Semantics: chip selections narrow the cluster CARD GRID and the fleet panels below
-  (`visibleRows` by (cluster ∈ selClusters) AND (vpc ∈ selVpcs); empty selection = no
+  (`facetRows`/`visibleFleet` by (cluster ∈ selClusters) AND (vpc ∈ selVpcs); empty selection = no
   constraint on that facet). The existing card-click single-cluster scope (`clusterFilter`,
   ring highlight) is preserved and composes on top.
 - Clusters without a `vpcId` group under a `(no VPC)` chip rather than disappearing from the
@@ -43,6 +43,29 @@ Read-only; no Terraform/IAM/schema changes (both fetches are existing in-cluster
   filtered/total counter, `(no VPC)` bucket.
 - NodeCapacityList: bars + captions from capacity/allocatable/requested; pods-failed cluster →
   '요청량 미상' caption (no requested segment); cap note at >40.
-- FleetKindPage: nodes view mounts the capacity list; pods fetch failure for one cluster
+- FleetKindPage (`FleetKindPage.test.tsx`): nodes view mounts the capacity list; terminal
+  (Succeeded/Failed) pods are excluded from Requested; a pods fetch failure for one cluster
   degrades only that cluster's rows.
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-18 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **Terminal pods excluded from Requested (the gate MAJOR)** — Succeeded/Failed pods keep
+  `spec.nodeName` + requests but hold no scheduler reservation; summing them overstated
+  Requested on Job/CronJob-churning clusters while the subtitle claimed scheduler parity.
+  New shared `isTerminalPodPhase` in `eks-resources.ts`, applied in `aggregateNodeResources`
+  (fleet route + overview), the FleetKindPage aggregation, and NodeDrilldownPanel — all
+  surfaces agree.
+- **The promised FleetKindPage test now exists** (`FleetKindPage.test.tsx`) — mounts the
+  capacity list, proves the terminal-pod exclusion, and proves per-cluster degrade.
+- Pending vs failed are no longer conflated: `podReq` clears at load start and a
+  `requestsPending` flag renders '요청량 로딩 중…' during the fan-out ('요청량 미상' only on a
+  real failure); the >40 cap slices by PRESSURE (max request/allocatable, desc) so saturated
+  nodes are never hidden; `NodeDrilldownPanel` passes `null` (not a fabricated 0) when its
+  pods fetch fails and `NodeCapacityCards` renders '—' rows for it; facet ∩ card-click
+  composes safely (auto-clears an excluded card scope + an explicit no-match empty state);
+  null-prototype/`Object.hasOwn` guards on the aggregation maps; the VPC-count test asserts
+  on the chip button itself. Note: the caption arithmetic in NodeCapacityList intentionally
+  mirrors (not imports) StackBar's clamps — the "one source of truth" claim covers the bar
+  segments. Known base follow-up (not this PR): `normalizePod` ignores restartable
+  native-sidecar init containers in the request formula.

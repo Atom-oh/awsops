@@ -23,9 +23,11 @@ describe('EksFilterPanel (gap L130)', () => {
   it('VPC chips carry per-VPC cluster counts and a (no VPC) bucket', () => {
     mount();
     open();
-    expect(screen.getByText('vpc-1').parentElement?.textContent).toContain('(2)');
-    expect(screen.getByText('vpc-2').parentElement?.textContent).toContain('(1)');
-    expect(screen.getByText(NO_VPC).parentElement?.textContent).toContain('(1)');
+    // Assert on the chip BUTTON itself — a row-level assertion would pass with counts on
+    // the wrong chips.
+    expect(screen.getByText('vpc-1').closest('button')?.textContent).toBe('vpc-1(2)');
+    expect(screen.getByText('vpc-2').closest('button')?.textContent).toBe('vpc-2(1)');
+    expect(screen.getByText(NO_VPC).closest('button')?.textContent).toBe(`${NO_VPC}(1)`);
   });
 
   it('chip clicks toggle multi-select (add and remove)', () => {

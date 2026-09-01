@@ -5,8 +5,9 @@ import { localeOf } from '@/lib/i18n';
 // v1 노드 상세 3분할 카드 (CPU / Memory / Pod Info) — 스택 바는 Capacity 기준
 // [Requested | Available(=Allocatable-Requested) | Reserved(=Capacity-Allocatable)] 3분할.
 interface Props {
-  cpuCapacity: number; cpuAllocatable: number; cpuRequest: number;
-  memCapacityMiB: number; memAllocatableMiB: number; memRequestMiB: number;
+  // requested null = pods fetch failed — bars/rows read unknown, never a fabricated 0.
+  cpuCapacity: number; cpuAllocatable: number; cpuRequest: number | null;
+  memCapacityMiB: number; memAllocatableMiB: number; memRequestMiB: number | null;
   podCIDR?: string; podCount: number; podRunning: number; podPending: number; podFailed: number;
   createdAt?: string;
 }
@@ -51,11 +52,13 @@ export default function NodeCapacityCards(raw: Props) {
   const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const p = {
     ...raw,
-    cpuCapacity: n(raw.cpuCapacity), cpuAllocatable: n(raw.cpuAllocatable), cpuRequest: n(raw.cpuRequest),
-    memCapacityMiB: n(raw.memCapacityMiB), memAllocatableMiB: n(raw.memAllocatableMiB), memRequestMiB: n(raw.memRequestMiB),
+    cpuCapacity: n(raw.cpuCapacity), cpuAllocatable: n(raw.cpuAllocatable),
+    cpuRequest: raw.cpuRequest == null ? null : n(raw.cpuRequest),
+    memCapacityMiB: n(raw.memCapacityMiB), memAllocatableMiB: n(raw.memAllocatableMiB),
+    memRequestMiB: raw.memRequestMiB == null ? null : n(raw.memRequestMiB),
   };
-  const cpuAvail = Math.max(0, p.cpuAllocatable - p.cpuRequest);
-  const memAvail = Math.max(0, p.memAllocatableMiB - p.memRequestMiB);
+  const cpuAvail = p.cpuRequest == null ? null : Math.max(0, p.cpuAllocatable - p.cpuRequest);
+  const memAvail = p.memRequestMiB == null ? null : Math.max(0, p.memAllocatableMiB - p.memRequestMiB);
   const card = 'rounded-lg border border-ink-100 bg-paper-muted/40 p-3 flex flex-col gap-1.5';
   const h = 'text-[11px] font-semibold text-ink-700';
   return (
@@ -64,16 +67,16 @@ export default function NodeCapacityCards(raw: Props) {
         <div className={h}>CPU</div>
         <Row label="Capacity" value={`${p.cpuCapacity.toFixed(1)} vCPU`} />
         <Row label="Allocatable" value={`${p.cpuAllocatable.toFixed(1)} (${p.cpuCapacity > 0 ? ((p.cpuAllocatable / p.cpuCapacity) * 100).toFixed(0) : 0}%)`} />
-        <Row label="Pod Requested" value={`${p.cpuRequest.toFixed(2)} (${p.cpuAllocatable > 0 ? ((p.cpuRequest / p.cpuAllocatable) * 100).toFixed(0) : 0}%)`} />
-        <Row label="Available" value={`${cpuAvail.toFixed(2)} vCPU`} />
+        <Row label="Pod Requested" value={p.cpuRequest == null ? '—' : `${p.cpuRequest.toFixed(2)} (${p.cpuAllocatable > 0 ? ((p.cpuRequest / p.cpuAllocatable) * 100).toFixed(0) : 0}%)`} />
+        <Row label="Available" value={cpuAvail == null ? '—' : `${cpuAvail.toFixed(2)} vCPU`} />
         <StackBar requested={p.cpuRequest} allocatable={p.cpuAllocatable} capacity={p.cpuCapacity} />
       </div>
       <div className={card}>
         <div className={h}>Memory</div>
         <Row label="Capacity" value={gib(p.memCapacityMiB)} />
         <Row label="Allocatable" value={`${gib(p.memAllocatableMiB)} (${p.memCapacityMiB > 0 ? ((p.memAllocatableMiB / p.memCapacityMiB) * 100).toFixed(0) : 0}%)`} />
-        <Row label="Pod Requested" value={`${gib(p.memRequestMiB)} (${p.memAllocatableMiB > 0 ? ((p.memRequestMiB / p.memAllocatableMiB) * 100).toFixed(0) : 0}%)`} />
-        <Row label="Available" value={gib(memAvail)} />
+        <Row label="Pod Requested" value={p.memRequestMiB == null ? '—' : `${gib(p.memRequestMiB)} (${p.memAllocatableMiB > 0 ? ((p.memRequestMiB / p.memAllocatableMiB) * 100).toFixed(0) : 0}%)`} />
+        <Row label="Available" value={memAvail == null ? '—' : gib(memAvail)} />
         <StackBar requested={p.memRequestMiB} allocatable={p.memAllocatableMiB} capacity={p.memCapacityMiB} />
       </div>
       <div className={card}>

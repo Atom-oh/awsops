@@ -19,6 +19,8 @@ export const TERMS: Record<string, Pair> = {
   'Reserved = Capacity − Allocatable (system-reserved) · Requested = 스케줄러 예약 합계': { en: 'Reserved = Capacity − Allocatable (system-reserved) · Requested = scheduler reservation total', zh: 'Reserved = Capacity − Allocatable（系统保留）· Requested = 调度器预留合计', ja: 'Reserved = Capacity − Allocatable（システム予約）· Requested = スケジューラ予約合計' },
   '노드 표시 — 필터로 좁혀보세요': { en: 'nodes shown — narrow with the filters', zh: '个节点已显示 — 请用筛选缩小范围', ja: 'ノード表示 — フィルターで絞り込んでください' },
   '요청량 미상': { en: 'requests unknown', zh: '请求量未知', ja: 'リクエスト量不明' },
+  '요청량 로딩 중…': { en: 'loading requests…', zh: '请求量加载中…', ja: 'リクエスト量読み込み中…' },
+  '필터와 일치하는 클러스터가 없습니다': { en: 'No clusters match the filter', zh: '没有匹配筛选条件的集群', ja: 'フィルターに一致するクラスターがありません' },
   // EC2 network drill-down (gap L139)
   '네트워크 트래픽 (24시간)': { en: 'Network Traffic (24h)', zh: '网络流量（24小时）', ja: 'ネットワークトラフィック（24時間）' },
   '행 클릭 → 24시간 네트워크 In/Out 차트': { en: 'Click a row → 24h network In/Out charts', zh: '点击行 → 24小时网络进/出图表', ja: '行クリック → 24時間ネットワークIn/Outチャート' },

@@ -4,6 +4,7 @@ import { Search } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import NodeDrilldownPanel from '@/components/eks/NodeDrilldownPanel';
 import NodeCapacityList, { type NodeCapacityRow } from '@/components/eks/NodeCapacityList';
+import { isTerminalPodPhase } from '@/lib/eks-resources';
 import DetailPanel from '@/components/ui/DetailPanel';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -98,6 +99,8 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
   // Gap L132 (nodes only): per-cluster pod request aggregation keyed by node name; a cluster
   // whose pods fetch failed maps to null so its bars degrade honestly ('요청량 미상').
   const [podReq, setPodReq] = useState<Record<string, Record<string, { cpu: number; mem: number }> | null>>({});
+  // Tri-state: false = pods fan-out still pending (bars caption '로딩 중', not '미상').
+  const [podReqReady, setPodReqReady] = useState(false);
   const [selected, setSelected] = useState<Row | null>(null);
 
   // Monotonic load sequence — a late response from a superseded load must not
@@ -109,6 +112,9 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
     const fresh = () => seq === loadSeqRef.current;
     setBusy(true);
     setErr('');
+    // A refresh must not pair NEW node rows with the PREVIOUS run's request numbers.
+    setPodReq({});
+    setPodReqReady(false);
     try {
       const r = await fetch('/api/eks?account=self');
       if (!r.ok) throw new Error(String(r.status));
@@ -151,9 +157,13 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
               const rr = await fetch(`/api/eks/${encodeURIComponent(name)}/incluster?kind=pods`);
               if (!rr.ok) return { name, agg: null as Record<string, { cpu: number; mem: number }> | null };
               const dd = await rr.json();
-              const agg: Record<string, { cpu: number; mem: number }> = {};
-              for (const pod of (dd.rows ?? []) as { node?: string; cpuRequest?: number; memRequest?: number }[]) {
+              // Null prototype: a node legally named 'constructor' must not collide with
+              // inherited Object members during accumulation.
+              const agg: Record<string, { cpu: number; mem: number }> = Object.create(null);
+              for (const pod of (dd.rows ?? []) as { node?: string; status?: string; cpuRequest?: number; memRequest?: number }[]) {
                 if (!pod.node) continue;
+                // Same exclusion as aggregateNodeResources: terminal pods hold no reservation.
+                if (isTerminalPodPhase(pod.status)) continue;
                 const cur = (agg[pod.node] ??= { cpu: 0, mem: 0 });
                 cur.cpu += Number(pod.cpuRequest) || 0;
                 cur.mem += Number(pod.memRequest) || 0;
@@ -166,6 +176,7 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
         );
         if (!fresh()) return;
         setPodReq(Object.fromEntries(podResults.map((p) => [p.name, p.agg])));
+        setPodReqReady(true);
       }
     } catch (e) {
       if (fresh()) setErr(e instanceof Error ? e.message : String(e));
@@ -181,6 +192,7 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
     setSelected(null);
     setRows(null);
     setPodReq({});
+    setPodReqReady(false);
     void load();
   }, [load]);
 
@@ -294,10 +306,12 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
                 table's filters so the list narrows with the operator's scope. */}
             {kind === 'nodes' && filteredRows.length > 0 && (
               <NodeCapacityList
+                requestsPending={!podReqReady}
                 rows={filteredRows.map((r): NodeCapacityRow => {
                   const cluster = String(r.cluster ?? '');
-                  const clusterAgg = podReq[cluster];
-                  const nodeAgg = clusterAgg == null ? null : clusterAgg[String(r.name ?? '')] ?? { cpu: 0, mem: 0 };
+                  // hasOwn guard: cluster names may legally shadow Object.prototype members.
+                  const clusterAgg = Object.hasOwn(podReq, cluster) ? podReq[cluster] : null;
+                  const nodeAgg = clusterAgg == null ? null : (Object.hasOwn(clusterAgg, String(r.name ?? '')) ? clusterAgg[String(r.name ?? '')] : { cpu: 0, mem: 0 });
                   return {
                     cluster,
                     name: String(r.name ?? ''),

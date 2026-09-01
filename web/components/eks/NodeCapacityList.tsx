@@ -27,10 +27,20 @@ function caption(requested: number | null, allocatable: number, capacity: number
   return `avail ${fmt(avail)} | rsv ${fmt(rsv)}`;
 }
 
-export default function NodeCapacityList({ rows }: { rows: NodeCapacityRow[] }) {
+export default function NodeCapacityList({ rows, requestsPending = false }: { rows: NodeCapacityRow[]; requestsPending?: boolean }) {
   const { tt } = useI18n();
   if (!rows.length) return null;
-  const shown = rows.slice(0, MAX_RENDER);
+  // Cap by PRESSURE (max of cpu/mem request ratio, desc) — an arbitrary slice could hide
+  // exactly the saturated nodes an operator opens this list to find.
+  const pressure = (n: NodeCapacityRow) => Math.max(
+    n.cpuAllocatable > 0 && n.cpuRequest != null ? n.cpuRequest / n.cpuAllocatable : -1,
+    n.memAllocatableMiB > 0 && n.memRequestMiB != null ? n.memRequestMiB / n.memAllocatableMiB : -1,
+  );
+  const shown = rows.length > MAX_RENDER
+    ? [...rows].sort((a, b) => pressure(b) - pressure(a)).slice(0, MAX_RENDER)
+    : rows;
+  // Pending (pods fan-out in flight) reads '로딩 중', failed reads '미상' — never conflated.
+  const unknownText = requestsPending ? tt('요청량 로딩 중…') : tt('요청량 미상');
   const cpuFmt = (v: number) => `${v.toFixed(1)} vCPU`;
   return (
     <Card
@@ -53,14 +63,14 @@ export default function NodeCapacityList({ rows }: { rows: NodeCapacityRow[] }) 
             <div>
               <div className="mb-0.5 flex items-baseline justify-between text-[10.5px] text-ink-400">
                 <span>CPU {n.cpuCapacity.toFixed(1)} vCPU</span>
-                <span>{caption(n.cpuRequest, n.cpuAllocatable, n.cpuCapacity, cpuFmt, tt('요청량 미상'))}</span>
+                <span>{caption(n.cpuRequest, n.cpuAllocatable, n.cpuCapacity, cpuFmt, unknownText)}</span>
               </div>
               <StackBar requested={n.cpuRequest} allocatable={n.cpuAllocatable} capacity={n.cpuCapacity} />
             </div>
             <div>
               <div className="mb-0.5 flex items-baseline justify-between text-[10.5px] text-ink-400">
                 <span>Mem {gib(n.memCapacityMiB)}</span>
-                <span>{caption(n.memRequestMiB, n.memAllocatableMiB, n.memCapacityMiB, gib, tt('요청량 미상'))}</span>
+                <span>{caption(n.memRequestMiB, n.memAllocatableMiB, n.memCapacityMiB, gib, unknownText)}</span>
               </div>
               <StackBar requested={n.memRequestMiB} allocatable={n.memAllocatableMiB} capacity={n.memCapacityMiB} />
             </div>
