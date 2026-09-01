@@ -25,6 +25,7 @@ export const TERMS: Record<string, Pair> = {
   '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },
   '리포트 본문을 읽지 못했습니다.': { en: 'Could not read the report body.', zh: '无法读取报告正文。', ja: 'レポート本文を読み取れませんでした。' },
   // Cost quick wins (gap L196/L197)
+  '변화율 (일평균)': { en: 'Change % (daily avg)', zh: '变化率（日均）', ja: '変化率（日平均）' },
   '최근 30일 · 필터 적용': { en: 'Trailing 30 days · filters applied', zh: '最近 30 天 · 已应用筛选', ja: '直近30日 · フィルター適用' },
   '비용 데이터가 없습니다 — Cost Explorer가 활성화되지 않았을 수 있습니다. AWS Billing 콘솔에서 Cost Explorer를 활성화하세요. 활성화 후 데이터 표시까지 최대 24시간 걸릴 수 있습니다.': { en: 'No cost data — Cost Explorer may not be enabled. Enable it in the AWS Billing console; data can take up to 24 hours to appear.', zh: '没有成本数据 — Cost Explorer 可能未启用。请在 AWS Billing 控制台启用；启用后数据最长可能需要 24 小时才会显示。', ja: 'コストデータがありません — Cost Explorer が有効になっていない可能性があります。AWS Billing コンソールで有効化してください。有効化後、データ表示まで最大 24 時間かかる場合があります。' },
   // EBS detail verdicts (gap L210)

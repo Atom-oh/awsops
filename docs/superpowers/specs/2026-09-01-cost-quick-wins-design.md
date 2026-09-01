@@ -75,3 +75,19 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   does (banner suppressed; the self-only fallback still renders).
 - Daily Average renders '—' when no COMPLETED day exists yet — the fallback had re-admitted
   exactly the partial bucket the exclusion was written for.
+
+## Round-4 corrections (review-driven)
+
+- **The banner is availability-confirmed (the gate MAJOR)** — a narrow period window (1m/3m)
+  can be all-empty for an ENABLED CE whose spend predates the window, so derived emptiness
+  alone can't assert an onboarding cause. When the emptiness predicate fires, the page now
+  probes the purpose-built classifier (`/api/cost/availability`) and renders the banner ONLY
+  on a confirmed `reason: 'not_enabled'`.
+- **The surge count and threshold coloring are day-normalized (the gate MAJOR)** — the raw
+  partial-MTD-vs-full-month ratio reads ≈−50% mid-month at an unchanged run-rate; the table's
+  Change column (relabeled '변화율 (일평균)'), its red/green thresholds, and the 'N개 >20%
+  증가' subtext all use the same `momChangePctDaily` primitive as the MoM tile. No-baseline
+  rows still read '—'.
+- Discovery validation covers a 200 with `{}`/`accounts: null` (malformed, counted as a
+  failed leg); `mergeCost` propagates the latest `cachedAt` so the stale banner never renders
+  empty parentheses in 전체 계정 mode.

@@ -60,16 +60,19 @@ function mergeCost(parts: Cost[]): Cost {
     monthlyByService, dailyByService,
     // ANY cached leg taints the merge — the onboarding banner must fail closed on stale data.
     cached: parts.some((p) => p.cached === true),
+    cachedAt: parts.map((p) => p.cachedAt).filter(Boolean).sort().pop(),
   };
 }
 async function loadAllAccountsCost(months: number): Promise<{ cost: Cost; failedLegs: number }> {
   const ar = await fetch('/api/accounts').catch(() => null);
   const body = ar?.ok ? await ar.json().catch(() => null) : null;
-  const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> = body?.accounts ?? [];
+  // A 200 with {} / accounts:null is malformed discovery too — not "no accounts registered".
+  const accountsValid = Array.isArray(body?.accounts);
+  const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> = accountsValid ? body.accounts : [];
   // A FAILED discovery (accounts API down/malformed) is not the same as "no accounts
   // registered": the self-only fallback still renders, but it counts as a failed leg so the
   // onboarding banner can never diagnose an accounts-API outage as "CE not enabled".
-  const discoveryFailed = body == null;
+  const discoveryFailed = !accountsValid;
   const ids = accts.filter((a) => a.enabled).map((a) => (a.isHost ? 'self' : a.accountId));
   if (!ids.length) return { cost: await fetchCost('self', months), failedLegs: discoveryFailed ? 1 : 0 };
   const parts: Cost[] = [];
@@ -92,6 +95,8 @@ export default function CostPage() {
   const { tt, lang } = useI18n();
   const [d, setD] = useState<Cost | null>(null);
   const [failedLegs, setFailedLegs] = useState(0);
+  // null = not probed; true only when /api/cost/availability confirmed reason 'not_enabled'.
+  const [ceNotEnabled, setCeNotEnabled] = useState<boolean | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
@@ -226,7 +231,9 @@ export default function CostPage() {
   // not pre-formatted strings.
   type CostRow = { service: string; current: number; previous: number; change: number; share: number };
   const costRows: CostRow[] = changeRows.map((s) => ({
-    service: s.service, current: s.current, previous: s.previous, change: s.change, share: s.share,
+    service: s.service, current: s.current, previous: s.previous,
+    change: s.previous > 0 ? normChange(s.current, s.previous) : s.change,
+    share: s.share,
   }));
   const changeTone = (c: number, previous: number) =>
     previous <= 0 ? 'text-ink-500' : c > 20 ? 'text-rose-600 font-semibold' : c > 0 ? 'text-amber-600' : c < 0 ? 'text-emerald-600' : 'text-ink-500';
@@ -237,7 +244,7 @@ export default function CostPage() {
     {
       // null = no baseline (previous 0) — MetricTable's missing contract sorts these LAST
       // instead of interleaving them with genuinely-flat services.
-      key: 'change', label: '변화율', type: 'num', value: (r) => (r.previous > 0 ? r.change : null),
+      key: 'change', label: '변화율 (일평균)', type: 'num', value: (r) => (r.previous > 0 ? r.change : null),
       render: (r) => (
         <span className={changeTone(r.change, r.previous)}>
           {r.previous > 0 ? `${r.change > 0 ? '+' : ''}${r.change.toFixed(1)}%` : '—'}
@@ -274,17 +281,36 @@ export default function CostPage() {
   // No completed day yet (only today's partial bucket) → '—', never an average of exactly
   // the bucket the exclusion was written for.
   const dailyAvg = completedDays.length > 0 ? completedDays.reduce((a, t) => a + t.amount, 0) / completedDays.length : null;
-  const surging = changeRows.filter((r) => r.change > 20 && r.previous > 0).length;
+  // Day-normalized change (the same momChangePctDaily primitive the MoM tile uses): the raw
+  // partial-MTD-vs-full-month ratio reads ≈-50% mid-month for an unchanged run-rate — turning
+  // that skew into a red/green verdict and an alert count would invert for most of the month.
+  const now = new Date();
+  const normChange = (current: number, previous: number) => momChangePctDaily(current, previous, now);
+  const surging = changeRows.filter((r) => r.previous > 0 && normChange(r.current, r.previous) > 20).length;
   // Gap L197: load SUCCEEDED but every DERIVED value is empty → Cost Explorer onboarding
   // banner (distinct from the error banner). Derived emptiness, not raw-array emptiness — a
   // successful CE response for a zero-spend account still returns one bucket per period
   // (empty byService inside), so raw-length checks never fire. Suppressed when a service
   // filter is active (a filter pinned to a zero-cost service must not claim CE is off) or
   // when any fan-out leg FAILED (that is an access/error condition, not an onboarding one).
-  const ceLikelyDisabled = looksLikeCeUnconfigured({
+  const ceLooksEmpty = looksLikeCeUnconfigured({
     busy, err, loaded: d != null, cached: d?.cached === true, filtered: selectedServices.size > 0, failedLegs,
     total, changeRowCount: changeRows.length, trend, monthlyByService,
   });
+  // A narrow period window (1m/3m) can be all-empty for an ENABLED CE whose spend simply
+  // predates the window — before asserting an onboarding cause, confirm with the
+  // purpose-built classifier (/api/cost/availability → reason 'not_enabled').
+  useEffect(() => {
+    if (!ceLooksEmpty) { setCeNotEnabled(null); return; }
+    let alive = true;
+    fetch('/api/cost/availability')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((a) => { if (alive) setCeNotEnabled(a != null && a.available === false && a.reason === 'not_enabled'); })
+      .catch(() => { if (alive) setCeNotEnabled(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ceLooksEmpty]);
+  const ceLikelyDisabled = ceLooksEmpty && ceNotEnabled === true;
   const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
   const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
 
