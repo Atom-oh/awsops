@@ -180,3 +180,31 @@ describe('deriveRow ecr encryption + cloudtrail last delivery (gap L213/L188)', 
     expect(deriveRow('cloudtrail', { resource_id: 't' }).last_delivery_h).toBeUndefined();
   });
 });
+
+describe('deriveRow lambda size/layers/vpc + waf action (gap L231/L232/L252)', () => {
+  it('code_size_h renders human-readable bytes', () => {
+    expect(deriveRow('lambda', { code_size: 1536 }).code_size_h).toBe('1.5 KB');
+    expect(deriveRow('lambda', { code_size: 5_242_880 }).code_size_h).toBe('5.0 MB');
+    expect(deriveRow('lambda', { resource_id: 'f' }).code_size_h).toBeUndefined();
+  });
+  it("layers_h parses ARNs into name:version rows (string and {Arn} shapes); absent → undefined", () => {
+    const d = deriveRow('lambda', { layers: [
+      'arn:aws:lambda:ap-northeast-2:1:layer:shared-utils:3',
+      { Arn: 'arn:aws:lambda:ap-northeast-2:1:layer:telemetry:12' },
+    ] });
+    expect(d.layers_h).toEqual(['shared-utils:3', 'telemetry:12']);
+    expect(deriveRow('lambda', { resource_id: 'f' }).layers_h).toBeUndefined();
+  });
+  it("vpc_h tri-state: id / explicit 'Not in VPC' when null / undefined when the field is absent", () => {
+    expect(deriveRow('lambda', { vpc_id: 'vpc-1' }).vpc_h).toBe('vpc-1');
+    expect(deriveRow('lambda', { vpc_id: null }).vpc_h).toBe('Not in VPC');
+    expect(deriveRow('lambda', { vpc_id: '' }).vpc_h).toBe('Not in VPC');
+    expect(deriveRow('lambda', { resource_id: 'f' }).vpc_h).toBeUndefined();
+  });
+  it("waf default_action_h is the object's own single top-level key; malformed → undefined", () => {
+    expect(deriveRow('waf', { default_action: { Allow: {} } }).default_action_h).toBe('Allow');
+    expect(deriveRow('waf', { default_action: { Block: {} } }).default_action_h).toBe('Block');
+    expect(deriveRow('waf', { default_action: { Allow: {}, Block: {} } }).default_action_h).toBeUndefined();
+    expect(deriveRow('waf', { resource_id: 'w' }).default_action_h).toBeUndefined();
+  });
+});

@@ -232,6 +232,7 @@ const VIRTUAL_LABELS: Record<string, string> = {
   software_update_h: 'Service Software', enforce_https_h: 'Enforce HTTPS',
   tls_policy_h: 'TLS Policy', custom_endpoint_h: 'Custom Endpoint',
   custom_endpoint_cert_h: 'Custom Endpoint Cert',
+  code_size_h: 'Code Size', layers_h: 'Layers', vpc_h: 'VPC', default_action_h: 'Default Action',
   cloudwatch_logs_role_arn: 'CW Logs Role', latest_cloudwatch_logs_delivery_time: 'CW Last Delivery',
   latest_cloudwatch_logs_delivery_error: 'CW Delivery Error',
   latest_digest_delivery_time: 'Digest Last Delivery', latest_digest_delivery_error: 'Digest Delivery Error',
