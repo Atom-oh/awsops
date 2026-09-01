@@ -29,6 +29,17 @@ export function momChangePctDaily(thisMtd: number, lastMonthTotal: number, now: 
   return momChangePct(thisMtd / elapsed, lastMonthTotal / lastDays);
 }
 
+/** UTC variant of momChangePctDaily for the ALERT surface (red cells / surge count): CE
+ *  buckets are UTC calendar months, so a local-time day count inverts the verdict in the
+ *  ~9h window after a UTC month rollover (KST) and skews elapsed by one day daily. The MoM
+ *  tile keeps the original local-time behavior (pre-existing, non-alerting). */
+export function momChangePctDailyUtc(thisMtd: number, lastMonthTotal: number, now: Date): number {
+  const elapsed = now.getUTCDate();
+  const lastDays = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).getUTCDate();
+  if (elapsed <= 0 || lastDays <= 0) return 0;
+  return momChangePct(thisMtd / elapsed, lastMonthTotal / lastDays);
+}
+
 /** Linear projection of month-end spend from month-to-date. `now` injected for determinism. */
 export function projectMonthEnd(mtd: number, now: Date): number {
   const dayOfMonth = now.getDate();

@@ -27,6 +27,7 @@ export const TERMS: Record<string, Pair> = {
   // Cost quick wins (gap L196/L197)
   '선택한 기간에 비용 데이터가 없습니다.': { en: 'No cost data in the selected period.', zh: '所选期间没有成本数据。', ja: '選択した期間にコストデータがありません。' },
   'Cost Explorer가 아직 활성화되지 않았습니다 — AWS Billing 콘솔에서 활성화하세요 (표시까지 최대 24시간).': { en: 'Cost Explorer is not enabled yet — enable it in the AWS Billing console (up to 24h until data appears).', zh: 'Cost Explorer 尚未启用 — 请在 AWS Billing 控制台启用（数据显示最长需 24 小时）。', ja: 'Cost Explorer はまだ有効化されていません — AWS Billing コンソールで有効化してください（表示まで最大24時間）。' },
+  '가용성 확인 결과: Cost Explorer는 사용 가능합니다 — 선택한 기간에 비용이 없었을 가능성이 큽니다.': { en: 'Availability check: Cost Explorer is available — the selected period most likely had no spend.', zh: '可用性检查结果：Cost Explorer 可用 — 所选期间很可能没有产生费用。', ja: '可用性チェック結果: Cost Explorer は利用可能です — 選択した期間に費用が発生しなかった可能性が高いです。' },
   '가용성 확인': { en: 'Check availability', zh: '检查可用性', ja: '可用性を確認' },
   '변화율 (일평균)': { en: 'Change % (daily avg)', zh: '变化率（日均）', ja: '変化率（日平均）' },
   '최근 30일 · 필터 적용': { en: 'Trailing 30 days · filters applied', zh: '最近 30 天 · 已应用筛选', ja: '直近30日 · フィルター適用' },

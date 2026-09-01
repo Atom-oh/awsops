@@ -13,7 +13,7 @@ import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
 import {
-  momChangePctDaily, projectMonthEnd, trendPill,
+  momChangePctDaily, momChangePctDailyUtc, projectMonthEnd, trendPill,
   PERIOD_MONTHS, PERIOD_OPTIONS, allServiceNames, filterMonthlyTotals, filterDailyTotals,
   serviceChangeRows, mergeMonthlyByService, mergeDailyByService, looksLikeCeUnconfigured,
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
@@ -154,6 +154,7 @@ export default function CostPage() {
 
   const load = useCallback(async () => {
     setBusy(true);
+    setEmptyProbe(null);
     const months = PERIOD_MONTHS[period] ?? 6;
     try {
       if (active === ALL_ACCOUNTS) {
@@ -231,7 +232,7 @@ export default function CostPage() {
   // that skew into a red/green verdict and an alert count would invert for most of the month.
   // Declared BEFORE costRows — .map() executes during render (const is not hoisted).
   const now = new Date();
-  const normChange = (current: number, previous: number) => momChangePctDaily(current, previous, now);
+  const normChange = (current: number, previous: number) => momChangePctDailyUtc(current, previous, now);
   // Gap L198: raw numbers feed MetricTable (real numeric sort + threshold-colored cells),
   // not pre-formatted strings.
   type CostRow = { service: string; current: number; previous: number; change: number; share: number };
@@ -297,7 +298,19 @@ export default function CostPage() {
     busy, err, loaded: d != null, cached: d?.cached === true, filtered: selectedServices.size > 0, failedLegs,
     total, changeRowCount: changeRows.length, trend, monthlyByService,
   });
-  const showNotEnabledHint = active === 'self' && avail?.reason === 'not_enabled';
+  // The onboarding hint must come from a FRESH, user-initiated probe (the global `avail` is
+  // set on old error paths / rechecks and never invalidated on account/period switches). This
+  // local result is set only by the banner's own button and cleared on every load.
+  const [emptyProbe, setEmptyProbe] = useState<{ reason: string } | null>(null);
+  const probeFromBanner = useCallback(async () => {
+    setRechecking(true);
+    try {
+      const r = await fetch('/api/cost/availability?force=1');
+      const a = r.ok ? await r.json() : null;
+      if (a) setEmptyProbe({ reason: String(a.reason ?? 'error') });
+    } finally { setRechecking(false); }
+  }, []);
+  const showNotEnabledHint = active === 'self' && emptyProbe?.reason === 'not_enabled';
   const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
   const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
 
@@ -410,7 +423,10 @@ export default function CostPage() {
                 {showNotEnabledHint && (
                   <span className="ml-1">{tt('Cost Explorer가 아직 활성화되지 않았습니다 — AWS Billing 콘솔에서 활성화하세요 (표시까지 최대 24시간).')}</span>
                 )}
-                <button onClick={recheck} disabled={rechecking} className="ml-2 rounded-md border border-sky-300 bg-card px-2 py-0.5 text-[11.5px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50">
+                {emptyProbe != null && !showNotEnabledHint && (
+                  <span className="ml-1">{tt('가용성 확인 결과: Cost Explorer는 사용 가능합니다 — 선택한 기간에 비용이 없었을 가능성이 큽니다.')}</span>
+                )}
+                <button onClick={probeFromBanner} disabled={rechecking} className="ml-2 rounded-md border border-sky-300 bg-card px-2 py-0.5 text-[11.5px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50">
                   {tt(rechecking ? '확인 중…' : '가용성 확인')}
                 </button>
               </div>

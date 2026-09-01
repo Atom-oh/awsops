@@ -24,7 +24,7 @@ Seven tiles at the top of the page summarize your cost posture:
 - **Service count**: Number of services that incurred cost — with an 'N increasing >20%' subtext when services grew more than 20% over last month
 - **Top service**: The highest-cost service and its amount
 
-When there is no data at all (every series empty), a Cost Explorer onboarding banner appears — enable it in the AWS Billing console; data can take up to 24 hours to appear.
+When there is no data at all (every series empty), a 'no cost data in the selected period' banner appears with a **Check availability** button — if Cost Explorer is confirmed not enabled (host account), an onboarding hint appears (enable it in the Billing console; up to 24h until data shows); if it is available, the banner says the period most likely had no spend.
 
 ### Trend Charts
 - **Monthly cost trend**: An area chart of monthly cost over roughly the last 6 months

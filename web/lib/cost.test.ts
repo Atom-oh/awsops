@@ -4,7 +4,7 @@ import {
   allServiceNames, filterServiceTotal, filterMonthlyTotals, filterDailyTotals,
   serviceChangeRows, mergeMonthlyByService, mergeDailyByService,
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
-  looksLikeCeUnconfigured,
+  looksLikeCeUnconfigured, momChangePctDailyUtc,
 } from './cost';
 
 describe('momChangePct', () => {
@@ -175,6 +175,19 @@ describe('mergeMonthlyByService / mergeDailyByService (전체 계정 fan-out)', 
   });
 });
 
+
+describe('momChangePctDailyUtc (alert-surface UTC math)', () => {
+  it('uses UTC days: on the 1st (UTC) at an unchanged run-rate the change is ~0, not +3000%', () => {
+    // 2026-09-01T03:00Z — KST browsers are already Sep 1 local; UTC day = 1.
+    const now = new Date('2026-09-01T03:00:00Z');
+    // previous month (Aug, 31d) total 310 → 10/day; MTD after 1 UTC day at the same rate = 10.
+    expect(Math.abs(momChangePctDailyUtc(10, 310, now))).toBeLessThan(0.5);
+  });
+  it('matches the local variant away from boundaries', () => {
+    const now = new Date('2026-09-15T12:00:00Z');
+    expect(momChangePctDailyUtc(150, 310, now)).toBeCloseTo(momChangePctDaily(150, 310, now), 5);
+  });
+});
 
 describe('looksLikeCeUnconfigured (gap L197)', () => {
   const zeroTrend = [{ date: '2026-08-30', amount: 0 }, { date: '2026-08-31', amount: 0 }] as { amount: number }[];

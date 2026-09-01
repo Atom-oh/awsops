@@ -107,3 +107,15 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   asserting a cause.
 - `looksLikeCeUnconfigured` guards the monthly vacuous-every() hole; `mergeCost` keeps the
   OLDEST `cachedAt` (the honest staleness bound for a mixed merge).
+
+## Round-6 corrections (review-driven)
+
+- **UTC alert math (the gate MAJOR)** — the red/surge verdicts now use
+  `momChangePctDailyUtc` (CE buckets are UTC calendar months; local `getDate()` inverted the
+  verdict for ~9h after every UTC month rollover in KST and skewed elapsed by one day daily).
+  The non-alerting MoM tile keeps its pre-existing local behavior. Boundary unit test added.
+- **The onboarding hint comes only from a FRESH, user-initiated probe (the gate MAJOR)** —
+  the stale global `avail` no longer drives it; the banner's own button force-probes and
+  stores a local result cleared on every load; a confirmed-available result renders the
+  honest "the period most likely had no spend" line instead. The docs-site (4 locales) now
+  describes the conditional flow instead of an unconditional onboarding banner.
