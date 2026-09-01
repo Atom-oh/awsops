@@ -125,11 +125,11 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   ecr: { label: 'ECR Repositories', group: 'Compute', distKey: 'image_tag_mutability', columns: [
     { key: 'repository_uri', label: 'URI' }, { key: 'image_tag_mutability', label: 'Tag mutability' },
     // Repository-level basic scanning setting — registry-level Inspector enhanced scanning is not represented here.
-    { key: 'scan_on_push', label: 'Scan on Push (Basic)' }, { key: 'created_at', label: 'Created' } ],
+    { key: 'scan_on_push', label: 'Scan on Push (Basic)' }, { key: 'encryption_type_h', label: 'Encryption' }, { key: 'created_at', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'repository_name', 'account_id', 'region', 'arn', 'registry_id', 'repository_uri', 'created_at'] },
       { label: 'Config', keys: ['image_tag_mutability', 'scan_on_push', 'image_scanning_configuration', 'lifecycle_policy'] },
-      { label: 'Security', keys: ['encryption_configuration'] },
+      { label: 'Security', keys: ['encryption_type_h', 'encryption_configuration'] },
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['region', 'image_tag_mutability'] },
@@ -276,7 +276,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     filterKeys: ['region', 'path', 'mfa_enabled'] },
   // ---- D3 wave ----
   cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', distKey2: 'status', columns: [
-    { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
+    { key: 'domain_name', label: 'Domain' }, { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' },
     { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } , { key: 'protocol_h', label: 'Protocol' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'domain_name', 'e_tag'] },
@@ -369,11 +369,12 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     filterKeys: ['region', 'scope'] },
   cloudtrail: { label: 'CloudTrail Trails', group: 'Security', distKey: 'home_region', columns: [
     { key: 'is_logging', label: 'Logging' }, { key: 'is_multi_region_trail', label: 'Multi-region' },
-    { key: 'home_region', label: 'Home region' }, { key: 's3_bucket_name', label: 'S3 bucket' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ],
+    { key: 'home_region', label: 'Home region' }, { key: 's3_bucket_name', label: 'S3 bucket' },
+    { key: 'last_delivery_h', label: 'Last Delivery' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'home_region'] },
-      { label: 'Logging', keys: ['is_logging', 'is_multi_region_trail', 'is_organization_trail', 'include_global_service_events', 'log_file_validation_enabled', 'start_logging_time', 'latest_delivery_time', 'latest_delivery_error'] },
-      { label: 'Storage', keys: ['s3_bucket_name', 's3_key_prefix', 'log_group_arn'] },
+      { label: 'Logging', keys: ['is_logging', 'is_multi_region_trail', 'is_organization_trail', 'include_global_service_events', 'log_file_validation_enabled', 'start_logging_time', 'stop_logging_time', 'latest_delivery_time', 'latest_delivery_error', 'latest_digest_delivery_time', 'latest_digest_delivery_error'] },
+      { label: 'Storage', keys: ['s3_bucket_name', 's3_key_prefix', 'log_group_arn', 'cloudwatch_logs_role_arn', 'latest_cloudwatch_logs_delivery_time', 'latest_cloudwatch_logs_delivery_error'] },
       { label: 'Security', keys: ['kms_key_id', 'sns_topic_arn', 'has_custom_event_selectors', 'has_insight_selectors'] },
       { label: 'Tags', keys: ['tags'] },
     ],

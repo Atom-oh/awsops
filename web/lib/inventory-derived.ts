@@ -205,12 +205,19 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
   // "True" can never read KPI-enabled but column-'No'.
   ecr: (r) => {
     const v = walk(r.image_scanning_configuration, 'scan_on_push');
+    const encType = walk(r.encryption_configuration, 'encryption_type');
     return {
       scan_on_push: v != null
         && !['', 'false', 'null', 'undefined', '0', 'none', 'no', 'disabled'].includes(String(v).trim().toLowerCase())
         ? 'Yes' : 'No',
+      // L213: AES256 | KMS (from encryption_configuration; undefined when the blob is absent)
+      encryption_type_h: typeof encType === 'string' && encType ? encType : undefined,
     };
   },
+  cloudtrail: (r) => ({
+    // L188: 'is this trail actually delivering' at a glance — localized datetime.
+    last_delivery_h: dateH(r.latest_delivery_time),
+  }),
   ecs_task: (r) => {
     // Fargate on-demand (ap-northeast-2): $/vCPU-h + $/GB-h — v1 constants (config-overridable in v1).
     const VCPU_H = 0.04656;

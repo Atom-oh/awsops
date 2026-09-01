@@ -170,3 +170,16 @@ def test_opensearch_query_carries_the_l153_detail_columns():
     ):
         assert col in sql, col
     assert "off_peak_window_options" not in sql
+
+
+def test_cloudtrail_query_carries_the_l189_delivery_columns():
+    """Gap L189: CW-Logs/digest delivery + stop_logging_time detail fields (all present in the
+    pinned plugin aws@0.142.0)."""
+    mod = load_sync_lambda()
+    sql = mod.QUERIES["cloudtrail"][0]
+    for col in (
+        "cloudwatch_logs_role_arn", "latest_cloudwatch_logs_delivery_time",
+        "latest_cloudwatch_logs_delivery_error", "latest_digest_delivery_time",
+        "latest_digest_delivery_error", "stop_logging_time",
+    ):
+        assert col in sql, col

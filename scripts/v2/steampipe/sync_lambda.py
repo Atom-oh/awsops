@@ -308,7 +308,10 @@ QUERIES = {
         "SELECT name, region, account_id, arn, home_region, is_multi_region_trail, is_logging, "
         "log_file_validation_enabled, s3_bucket_name, s3_key_prefix, sns_topic_arn, kms_key_id, "
         "log_group_arn, is_organization_trail, include_global_service_events, has_custom_event_selectors, "
-        "has_insight_selectors, latest_delivery_time, latest_delivery_error, start_logging_time, tags "
+        "has_insight_selectors, latest_delivery_time, latest_delivery_error, start_logging_time, "
+        # L189 detail fields (all verified present in the pinned plugin aws@0.142.0)
+        "cloudwatch_logs_role_arn, latest_cloudwatch_logs_delivery_time, latest_cloudwatch_logs_delivery_error, "
+        "latest_digest_delivery_time, latest_digest_delivery_error, stop_logging_time, tags "
         "FROM aws_cloudtrail_trail ORDER BY name",
         "name",
         "region",
