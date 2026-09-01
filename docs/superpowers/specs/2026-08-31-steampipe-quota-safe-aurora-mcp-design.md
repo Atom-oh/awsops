@@ -1,7 +1,7 @@
 # Quota-Safe Steampipe Inventory and Aurora-Backed AgentCore MCP Design
 
-Date: 2026-08-31  
-Status: Proposed  
+Date: 2026-08-31
+Status: Proposed
 Scope: AWSops v2 inventory collection and AWS-native AgentCore MCP read paths
 
 ## 1. Problem
