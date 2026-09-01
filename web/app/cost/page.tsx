@@ -13,9 +13,9 @@ import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
 import {
-  momChangePctDaily, momChangePctDailyUtc, projectMonthEnd, trendPill,
+  momChangePctDaily, projectMonthEnd, trendPill,
   PERIOD_MONTHS, PERIOD_OPTIONS, allServiceNames, filterMonthlyTotals, filterDailyTotals,
-  serviceChangeRows, mergeMonthlyByService, mergeDailyByService, looksLikeCeUnconfigured,
+  serviceChangeRows, mergeMonthlyByService, mergeDailyByService, looksLikeCeUnconfigured, serviceAlertChange,
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
 } from '@/lib/cost';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
@@ -30,7 +30,7 @@ interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost {
   currency: string; forecast?: number | null;
   monthlyByService: MonthlyServiceCostPoint[]; dailyByService: DailyServiceCostPoint[];
-  cached?: boolean; cachedAt?: string;
+  cached?: boolean; cachedAt?: string; dailyDegraded?: boolean;
 }
 interface UsageType { usageType: string; amount: number; [k: string]: unknown }
 interface ServiceDetail { service: string; currency: string; trend: TrendPoint[] | null; byUsageType: UsageType[] | null; monthly: { month: string; amount: number }[] | null }
@@ -62,6 +62,9 @@ function mergeCost(parts: Cost[]): Cost {
     cached: parts.some((p) => p.cached === true),
     // OLDEST cached timestamp — the honest staleness bound for a mixed merge.
     cachedAt: parts.map((p) => p.cachedAt).filter(Boolean).sort()[0],
+    // ANY leg's degraded daily leg taints the merge — the alert verdict needs every account's
+    // today-bucket to subtract honestly.
+    dailyDegraded: parts.some((p) => p.dailyDegraded === true),
   };
 }
 async function loadAllAccountsCost(months: number): Promise<{ cost: Cost; failedLegs: number }> {
@@ -233,26 +236,31 @@ export default function CostPage() {
   // that skew into a red/green verdict and an alert count would invert for most of the month.
   // Declared BEFORE costRows — .map() executes during render (const is not hoisted).
   const now = new Date();
-  // Completed-days basis on BOTH sides (rounds 8–10): today's partial/lagging per-service
+  // Completed-days basis on BOTH sides (rounds 8–11): today's partial/lagging per-service
   // amount is subtracted from the numerator (dailyByService is already on the client), and
-  // the divisor counts completed UTC days. Suppression remains only for UTC day 1 (zero
-  // completed days — nothing honest to compare).
+  // the divisor counts completed UTC days. serviceAlertChange returns null — no verdict —
+  // on UTC day 1, on a DEGRADED daily leg (today's bucket unsubtractable → the math would
+  // silently revert to the biased basis), and on cross-call clamp skew.
   const todayIso = now.toISOString().slice(0, 10);
+  const dailyLegDegraded = d?.dailyDegraded === true || dailyByService.length === 0;
   const todayBucket = dailyByService.find((p) => p.date === todayIso);
   const todayByService = new Map((todayBucket?.byService ?? []).map((b) => [b.service, b.amount]));
-  const normChange = (current: number, previous: number, service: string) =>
-    momChangePctDailyUtc(Math.max(0, current - (todayByService.get(service) ?? 0)), previous, now);
-  const tooEarlyForVerdict = now.getUTCDate() <= 1;
+  const alertChange = (r: { current: number; previous: number; service: string }) =>
+    serviceAlertChange({
+      current: r.current, previous: r.previous,
+      todayAmount: dailyLegDegraded ? null : (todayByService.get(r.service) ?? 0),
+      now,
+    });
   // Gap L198: raw numbers feed MetricTable (real numeric sort + threshold-colored cells),
   // not pre-formatted strings.
-  type CostRow = { service: string; current: number; previous: number; change: number; share: number };
+  type CostRow = { service: string; current: number; previous: number; change: number | null; share: number };
   const costRows: CostRow[] = changeRows.map((s) => ({
     service: s.service, current: s.current, previous: s.previous,
-    change: s.previous > 0 && !tooEarlyForVerdict ? normChange(s.current, s.previous, s.service) : s.change,
+    change: alertChange(s), // null = no honest verdict (baseline/day-1/degraded/clamped)
     share: s.share,
   }));
-  const changeTone = (c: number, previous: number) =>
-    previous <= 0 ? 'text-ink-500' : c > 20 ? 'text-rose-600 font-semibold' : c > 0 ? 'text-amber-600' : c < 0 ? 'text-emerald-600' : 'text-ink-500';
+  const changeTone = (c: number) =>
+    c > 20 ? 'text-rose-600 font-semibold' : c > 0 ? 'text-amber-600' : c < 0 ? 'text-emerald-600' : 'text-ink-500';
   const costCols: MetricCol<CostRow>[] = [
     { key: 'service', label: '서비스', value: (r) => r.service },
     { key: 'current', label: `이번 달 (${currency})`, type: 'num', value: (r) => r.current, render: (r) => usd(r.current) },
@@ -261,14 +269,14 @@ export default function CostPage() {
       // null = no baseline (previous 0) — MetricTable's missing contract sorts these LAST
       // instead of interleaving them with genuinely-flat services.
       key: 'change', label: '변화율 (일평균)', type: 'num',
-      title: tt('전월 일평균 대비 이번 달 완결일(UTC) 일평균 — 오늘의 부분 집계는 제외되며, 매월 1일(UTC)에는 판정을 표시하지 않습니다'),
-      value: (r) => (r.previous > 0 && !tooEarlyForVerdict ? r.change : null),
+      title: tt('전월 일평균 대비 이번 달 완결일(UTC) 일평균 — 오늘의 부분 집계 제외. 기준월 없음/매월 1일(UTC)/일별 데이터 저하 시 판정을 표시하지 않습니다'),
+      value: (r) => r.change,
       render: (r) => (
-        <span className={tooEarlyForVerdict ? 'text-ink-500' : changeTone(r.change, r.previous)}>
-          {r.previous > 0 && !tooEarlyForVerdict ? `${r.change > 0 ? '+' : ''}${r.change.toFixed(1)}%` : '—'}
+        <span className={r.change == null ? 'text-ink-500' : changeTone(r.change)}>
+          {r.change == null ? '—' : `${r.change > 0 ? '+' : ''}${r.change.toFixed(1)}%`}
         </span>
       ),
-      danger: (r) => !tooEarlyForVerdict && r.previous > 0 && r.change > 20,
+      danger: (r) => r.change != null && r.change > 20,
     },
     {
       key: 'share', label: '점유율', type: 'num', value: (r) => r.share,
@@ -298,7 +306,7 @@ export default function CostPage() {
   // No completed day yet (only today's partial bucket) → '—', never an average of exactly
   // the bucket the exclusion was written for.
   const dailyAvg = completedDays.length > 0 ? completedDays.reduce((a, t) => a + t.amount, 0) / completedDays.length : null;
-  const surging = tooEarlyForVerdict ? 0 : changeRows.filter((r) => r.previous > 0 && normChange(r.current, r.previous, r.service) > 20).length;
+  const surging = changeRows.filter((r) => (alertChange(r) ?? 0) > 20).length;
   // Gap L197: load SUCCEEDED but every DERIVED value is empty → a NEUTRAL empty-data banner
   // that never asserts a cause on its own (a narrow window can be all-empty for an enabled
   // CE, and a genuinely disabled CE takes the error path with its classified notice). The

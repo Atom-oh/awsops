@@ -4,7 +4,7 @@ import {
   allServiceNames, filterServiceTotal, filterMonthlyTotals, filterDailyTotals,
   serviceChangeRows, mergeMonthlyByService, mergeDailyByService,
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
-  looksLikeCeUnconfigured, momChangePctDailyUtc,
+  looksLikeCeUnconfigured, momChangePctDailyUtc, serviceAlertChange,
 } from './cost';
 
 describe('momChangePct', () => {
@@ -235,5 +235,24 @@ describe('looksLikeCeUnconfigured (gap L197)', () => {
   });
   it('a failed fan-out leg is an access/error condition, NEVER an onboarding diagnosis', () => {
     expect(looksLikeCeUnconfigured({ ...base, failedLegs: 1 })).toBe(false);
+  });
+});
+
+
+describe('serviceAlertChange (composed alert verdict)', () => {
+  const now = new Date('2026-09-10T12:00:00Z'); // 9 completed days; Aug = 31d
+  it('subtracts today and compares completed-day run rates (flat rate → ~0)', () => {
+    // prev 310 → 10/day; completed MTD 90 + today partial 4 → current 94.
+    expect(Math.abs(serviceAlertChange({ current: 94, previous: 310, todayAmount: 4, now })!)).toBeLessThan(0.5);
+  });
+  it('null verdicts: no baseline / UTC day 1 / degraded daily leg / cross-call clamp', () => {
+    expect(serviceAlertChange({ current: 94, previous: 0, todayAmount: 4, now })).toBeNull();
+    expect(serviceAlertChange({ current: 5, previous: 310, todayAmount: 5, now: new Date('2026-09-01T12:00:00Z') })).toBeNull();
+    expect(serviceAlertChange({ current: 94, previous: 310, todayAmount: null, now })).toBeNull(); // degraded → never the biased basis
+    expect(serviceAlertChange({ current: 3, previous: 310, todayAmount: 5, now })).toBeNull();     // clamp skew → never a confident -100%
+  });
+  it('a real surge still trips the threshold', () => {
+    // completed MTD 270 over 9 days = 30/day vs prev 10/day → +200%.
+    expect(serviceAlertChange({ current: 280, previous: 310, todayAmount: 10, now })!).toBeGreaterThan(100);
   });
 });

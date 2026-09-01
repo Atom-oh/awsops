@@ -185,3 +185,21 @@ export function looksLikeCeUnconfigured(p: {
   const noHistoricalSpend = p.monthlyByService.every((m) => m.byService.length === 0);
   return p.total === 0 && p.changeRowCount === 0 && noHistoricalSpend && p.trend.every((t) => t.amount === 0);
 }
+
+
+/** The composed per-service ALERT change (table color / danger / surge count). Returns null
+ *  ("no verdict") whenever an honest verdict is impossible: no baseline, UTC day 1 (zero
+ *  completed days), a degraded/absent daily leg (today's bucket can't be subtracted — the
+ *  math would silently revert to the biased includes-today basis), or a clamped numerator
+ *  (today's bucket exceeding the monthly MTD — cross-call skew, not a real -100%). */
+export function serviceAlertChange(p: {
+  current: number; previous: number; todayAmount: number | null; // null = daily leg degraded
+  now: Date;
+}): number | null {
+  if (p.previous <= 0) return null;
+  if (p.now.getUTCDate() <= 1) return null;
+  if (p.todayAmount == null) return null;
+  const completed = p.current - p.todayAmount;
+  if (completed < 0) return null; // cross-call skew — never a confident -100%
+  return momChangePctDailyUtc(completed, p.previous, p.now);
+}

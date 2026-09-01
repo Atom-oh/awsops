@@ -168,3 +168,12 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
 - **The stranded busy flag is fixed (the gate MAJOR)** — `probeFromBanner`'s `finally` clears
   `rechecking` unconditionally (the sequence guard protects only the RESULT); an invalidated
   in-flight probe no longer disables both recheck buttons until remount.
+
+## Round-11 corrections (review-driven)
+
+- **A degraded daily leg never reverts the verdict to the biased basis (the gate MAJOR)** —
+  `/api/cost` surfaces `dailyDegraded` when the secondary daily leg fails inside a 200, the
+  전체 계정 merge taints on any leg, and the composed verdict is now a PURE, unit-tested
+  helper `serviceAlertChange` returning null (no verdict, '—', excluded from surge/danger)
+  for: no baseline, UTC day 1, a degraded/absent daily leg, and cross-call clamp skew (today's
+  bucket exceeding the monthly MTD reads '—', never a confident −100%).
