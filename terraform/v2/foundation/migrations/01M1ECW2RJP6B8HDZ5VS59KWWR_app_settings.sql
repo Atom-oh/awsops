@@ -5,5 +5,8 @@
 CREATE TABLE IF NOT EXISTS app_settings (
   key text PRIMARY KEY,
   value text NOT NULL,
+  -- who last flipped the flag (Cognito sub; '' for system writes) — pausing silences the
+  -- sole LIVE external write channel, so the actor must be answerable.
+  updated_by text NOT NULL DEFAULT '',
   updated_at timestamptz NOT NULL DEFAULT now()
 );

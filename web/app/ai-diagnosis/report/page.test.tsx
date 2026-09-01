@@ -5,7 +5,7 @@ import { LanguageProvider } from '@/components/shell/LanguageProvider';
 import PrintReportPage from './page';
 
 const search = new URLSearchParams('id=7');
-vi.mock('next/navigation', () => ({ useSearchParams: () => search }));
+vi.mock('next/navigation', () => ({ useSearchParams: () => search, useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -46,6 +46,19 @@ describe('printable report view (gap L179)', () => {
     setFetch({ report: REPORT, markdown: null });
     mount();
     await waitFor(() => expect(screen.getByText('데이터 불가')).toBeTruthy());
+  });
+
+  it("an EMPTY-string markdown (zero-byte artifact) also takes the honest fallback", async () => {
+    setFetch({ report: REPORT, markdown: '   ' });
+    mount();
+    await waitFor(() => expect(screen.getByText('데이터 불가')).toBeTruthy());
+  });
+
+  it('a ## line inside a code fence never becomes a section/TOC entry (fence-aware split)', async () => {
+    setFetch({ report: REPORT, markdown: '## Real\nbody\n```\n## not-a-heading\n```\ntail' });
+    mount();
+    await waitFor(() => expect(screen.getAllByRole('link').length).toBe(1));
+    expect(screen.getAllByRole('link')[0].textContent).toBe('Real');
   });
 
   it('fetch failure renders the inline error state', async () => {

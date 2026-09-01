@@ -61,11 +61,14 @@ def lambda_handler(_event, _ctx):
         paused = False
         try:
             rows = conn.run("SELECT value FROM app_settings WHERE key = 'diagnosis_notify_paused'")
-            paused = bool(rows) and rows[0][0] == "true"
+            paused = bool(rows) and str(rows[0][0]).strip().lower() == "true"
         except Exception as e:  # noqa: BLE001 — fail-open by design
             print(f"[diagnosis_digest] pause-flag read failed (fail-open, publishing): {e}")
         if paused:
             print(f"[diagnosis_digest] notifications paused by admin - skipping publish for {len(pending)} report(s)")
+            for r in pending:
+                # per-report delivery record: 'dropped while paused' must stay answerable later.
+                print(f"[diagnosis_digest] report id={r.get('id')} title={r.get('title')!r} DROPPED (paused)")
 
         def url_for(report_id):
             return f"https://{domain}/ai-diagnosis?report={report_id}" if domain else ""

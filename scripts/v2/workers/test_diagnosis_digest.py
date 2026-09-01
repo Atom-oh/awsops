@@ -194,7 +194,9 @@ class FakeConnWithSettings(FakeConn):
     def run(self, sql, **_kw):
         if self.raise_on_run:
             raise RuntimeError("settings table missing")
-        assert "app_settings" in sql
+        # Pin BOTH sides of the cross-component contract: a key typo on either side would
+        # read zero rows and silently fail open with green tests.
+        assert "app_settings" in sql and "diagnosis_notify_paused" in sql
         return [[self.paused_value]] if self.paused_value is not None else []
 
 

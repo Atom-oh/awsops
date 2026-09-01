@@ -47,3 +47,25 @@ No Terraform/IAM changes; one additive migration.
   Print/Close buttons present (screen) — print CSS asserted by class.
 - Panel: switch renders for admins, read-only for non-admins, reflects paused state.
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-21 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **Print page renders BARE (the gate CRITICAL)** — ShellGate mounted the app chrome around
+  the view, printing the sidebar and clipping the body inside AppShell's h-screen overflow
+  container (killing the per-section page breaks). `/ai-diagnosis/report` joins `/login` in
+  ShellGate's bare-route set.
+- **Section splitting reuses ReportSections' fence-aware `splitSections`** — the page's own
+  copy split on `## ` inside code fences (garbling both halves + a phantom TOC entry) and left
+  the stored markdown's dead-anchor `**목차**` list rendering as a second TOC. Headings are
+  normalized (`## ### X` legacy artifacts) BEFORE splitting.
+- **Dark-theme legibility** — the app's ink tokens invert under `.dark` (pale-on-white in this
+  forced-white view); the page re-pins the ink scale to light values and uses fixed neutral
+  classes for its own chrome.
+- ADR-013 §2 (KO+EN) + References + Status and the BASELINE §2 LIVE row are amended for the
+  runtime pause (semantics: paused = dropped-and-stamped, fail-open on read failure, test-send
+  carve-out); the docs-site ai-diagnosis guide (4 locales) documents both features.
+- Minor hardening: empty-string markdown takes the honest fallback; Close falls back to
+  /ai-diagnosis in a history-less tab; the notify route returns generic 500s (raw DB errors
+  stay server-side) and audits the actor (`app_settings.updated_by` + a structured log line);
+  the worker normalizes the flag value (`strip().lower()`), logs each report DROPPED while
+  paused, and its test pins the `diagnosis_notify_paused` key literal on both sides.

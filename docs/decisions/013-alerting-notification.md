@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-**Accepted (2026-06-22) — consolidated.** consolidates: ADR-012 (SNS 알림 전략), ADR-014 (리포트 프록시 다운로드 URL), ADR-022 (알림 웹훅 HMAC-SHA256 인증). amended 2026-08-31 (web task additionally holds a single-topic-scoped `sns:Publish` for the admin-only test notification — `POST /api/diagnosis/subscribers/test`) / 개정 2026-08-31 (web 태스크가 관리자 전용 테스트 발송용으로 동일 토픽 한정 `sns:Publish`를 추가 보유 — `POST /api/diagnosis/subscribers/test`).
+**Accepted (2026-06-22) — consolidated.** consolidates: ADR-012 (SNS 알림 전략), ADR-014 (리포트 프록시 다운로드 URL), ADR-022 (알림 웹훅 HMAC-SHA256 인증). amended 2026-08-31 (web task additionally holds a single-topic-scoped `sns:Publish` for the admin-only test notification — `POST /api/diagnosis/subscribers/test`) / 개정 2026-08-31 (web 태스크가 관리자 전용 테스트 발송용으로 동일 토픽 한정 `sns:Publish`를 추가 보유 — `POST /api/diagnosis/subscribers/test`). · Amended 2026-09-01 (runtime pause toggle)
 
 이 ADR은 v2 현행(net) 결정만을 기술한다. 세 레거시 ADR의 v1 메커니즘(EC2 `data/config.json` 시크릿, `src/lib/alert-sqs-poller.ts` 폴러, `/awsops/api/*` 프록시 등)은 v1 이력으로만 남으며 여기서 재서술하지 않는다.
 
@@ -40,7 +40,11 @@ Inbound webhooks are authenticated by HMAC-SHA256 with constant-time `timingSafe
 
 `diagnosis_notify_enabled=true` 는 **현재 LIVE**다. 이는 외부-comms write이지만 IAM이 단일 토픽 ARN으로 스코프되어 **AWS-리소스 변경이 아니며**, ADR-040/041의 거버넌스된 외부 데이터/통지 write에 해당한다. (광역 `integrations_write_enabled` [Slack/Notion/Jira]는 OFF로 유지.) 구독 ARN은 `${topicArn}:${uuid}` 소유 검증으로 임의 토픽 unsubscribe를 차단한다.
 
+2026-09-01부터 Terraform 게이트 위에 **런타임 일시중지 토글**이 추가되었다: Aurora `app_settings`의 `diagnosis_notify_paused` 키(관리자 전용 `PUT /api/diagnosis/notify`, 배포 불필요). 시맨틱은 토픽 미구성과 동일 — digest worker는 발행을 생략하되 `notified_at`을 그대로 스탬프한다(중지 중 완료된 리포트는 이메일에서 **탈락**하며, 재개 시 소급 발송되지 않는다). 플래그 **조회 실패는 발송 쪽으로 fail-open** — 설정 조회 장애가 알림을 조용히 죽여서는 안 된다(로그 남김). 관리자 테스트 발송(`subscribers/test`)은 일시중지의 영향을 받지 않는다(의도된 carve-out — 중지 상태에서도 배달 경로 검증이 가능해야 한다).
+
 Scheduled diagnosis summaries publish to one dedicated SNS topic; in-app subscription management touches only that topic's email subscriptions, scoped by IAM to the single topic ARN. Since 2026-08-31 the web task additionally holds `sns:Publish` scoped to the same single topic — solely for the admin-only test notification (`POST /api/diagnosis/subscribers/test`); report/digest publishing remains worker-only. `diagnosis_notify_enabled=true` is **LIVE** — an external-comms write that is NOT AWS-resource mutation and is governed per ADR-040/041. Subscription-ARN ownership is verified (`${topicArn}:${uuid}`) before unsubscribe.
+
+Since 2026-09-01 a **runtime pause toggle** sits above the Terraform gate: the `diagnosis_notify_paused` key in Aurora `app_settings` (admin-only `PUT /api/diagnosis/notify`, no deploy needed). Semantics match a missing topic — the digest worker skips publishing but still stamps `notified_at` (reports completed while paused are **dropped** from email, never re-blasted on resume). A flag-READ failure **fails open to publishing** (a broken settings read must not silently kill notifications; it is logged). The admin test send (`subscribers/test`) is deliberately NOT covered by the pause — delivery-path verification must stay possible while paused.
 
 ### 3. 리포트 다운로드 — BFF 프록시 / Report download — BFF proxy
 
@@ -76,6 +80,7 @@ Report downloads are proxied by the BFF (no presigned URL exposed): the route fe
 ### Internal
 - `web/app/api/incidents/webhook/route.ts` — HMAC active/standby + rate-limit + SNS confirm + SSM secrets (ADR-022 이식; `INCIDENT_LIFECYCLE_ENABLED` 게이트)
 - `web/lib/diagnosis-notify.ts` — 단일 SNS 토픽 이메일 구독 관리 (`diagnosis_notify_enabled` 게이트, LIVE)
+- `web/app/api/diagnosis/notify/route.ts` + `scripts/v2/workers/diagnosis_digest.py` — 런타임 일시중지 토글 (`app_settings.diagnosis_notify_paused`, 2026-09-01)
 - `web/app/api/diagnosis/[id]/download/route.ts` — S3 프록시 다운로드 (`Content-Disposition: attachment`)
 - `terraform/v2/foundation/notify.tf` — SNS 토픽 (`diagnosis_notify_enabled`)
 - ADR-032 (인시던트 라이프사이클 — analysis-only 게이트), ADR-040/041 (거버넌스된 외부 데이터/통지 write), ADR-020/042 (엣지 인증)

@@ -26,7 +26,8 @@ export async function GET(request: Request) {
   try {
     return NextResponse.json({ paused: await readPaused(), canManage: await isAdmin(user) });
   } catch (e) {
-    return NextResponse.json({ message: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    console.error('diagnosis notify GET failed:', e); // raw DB errors stay server-side
+    return NextResponse.json({ message: 'internal error' }, { status: 500 });
   }
 }
 
@@ -44,12 +45,16 @@ export async function PUT(request: Request) {
   }
   try {
     await getPool().query(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, now())
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [KEY, paused ? 'true' : 'false'],
+      `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ($1, $2, $3, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [KEY, paused ? 'true' : 'false', String(user.sub ?? '')],
     );
+    // Pausing silences the sole LIVE external write channel — leave an actor trail in the
+    // structured logs too (the row keeps only the latest actor).
+    console.log(`[diagnosis-notify] ${paused ? 'PAUSED' : 'RESUMED'} by sub=${String(user.sub ?? '')}`);
     return NextResponse.json({ paused });
   } catch (e) {
-    return NextResponse.json({ message: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    console.error('diagnosis notify PUT failed:', e);
+    return NextResponse.json({ message: 'internal error' }, { status: 500 });
   }
 }

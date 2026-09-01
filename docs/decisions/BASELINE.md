@@ -58,7 +58,7 @@
 | **GATED** | 자율 인시던트 라이프사이클 | `incident_lifecycle_enabled` | OFF | analysis-only(read-only triage/RCA, 권고전용, mutation 라우팅 금지). 활성화해도 자율 조치 없음 | ADR-006 |
 | **GATED** | RCA write-back (OpsCenter/Incident Manager 관측메타 write) | `rca_writeback_enabled` | OFF | `incident_lifecycle_enabled` + **자족 role 분리 선행**(현재 frozen remediation role 상속 → 분리 전 do-not-enable) | ADR-006 |
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | OFF | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |
-| **LIVE** (외부 write 중 유일) | 진단 완료 SNS 이메일 통지 | `diagnosis_notify_enabled` | ON | **이미 켜져 있음** — IAM 단일 토픽 스코프, AWS-리소스 변경 아님(거버넌스 충족 — 아래 "주의" blockquote 참조) + 관리자 전용 테스트 발송(web 태스크, 동일 토픽 한정 sns:Publish — 2026-08-31) | ADR-013 |
+| **LIVE** (외부 write 중 유일) | 진단 완료 SNS 이메일 통지 | `diagnosis_notify_enabled` | ON | **이미 켜져 있음** — IAM 단일 토픽 스코프, AWS-리소스 변경 아님(거버넌스 충족 — 아래 "주의" blockquote 참조) + 관리자 전용 테스트 발송(web 태스크, 동일 토픽 한정 sns:Publish — 2026-08-31) + 런타임 일시중지 토글(app_settings `diagnosis_notify_paused`, 관리자 전용, 중지=탈락/재발송 없음, 조회 실패 fail-open — 2026-09-01) | ADR-013 |
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | OFF | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | OFF | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
 | **GATED** | 그래프 쿼리 LLM 폴백 (ClickHouse trace_spans 1건) | `graph_querygen_enabled` | OFF | `datasource_diagnosis_enabled` 선행. ClickHouse 스키마가 표준 OTel shape 과 다를 때 Bedrock(Haiku)이 **그래프 쿼리 1건**을 생성하고, static read-only 검사 + (선택) Code Interpreter + LIMIT 1 dry-run 을 모두 통과한 것만 캐시. 실행 경로는 read-only 커넥터 | ADR-018 |

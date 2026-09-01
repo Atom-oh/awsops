@@ -56,7 +56,7 @@ describe('GET/PUT /api/diagnosis/notify (gap L178)', () => {
     expect(await res.json()).toEqual({ paused: true });
     const [sql, params] = query.mock.calls[0];
     expect(String(sql)).toContain('ON CONFLICT (key) DO UPDATE');
-    expect(params).toEqual(['diagnosis_notify_paused', 'true']);
+    expect(params).toEqual(['diagnosis_notify_paused', 'true', 'u']); // actor sub audited
     expect((await PUT(put({ paused: 'yes' }))).status).toBe(400);
   });
 });
