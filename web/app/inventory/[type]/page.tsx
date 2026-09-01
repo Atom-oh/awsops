@@ -312,6 +312,12 @@ export default function InventoryTypePage() {
   const serverBar = metricBar
     ? <BarDistribution title={metricBar.title} data={metricBar.data} xKey="label" yKey="value" decimals={1} />
     : null;
+  // Count-distribution bar (gap L221): row counts per distinct value, count-desc (the
+  // BarDistribution default) — distinct from barKey (numeric ranking) and hist (numeric axis).
+  const countBarData = spec.countBarKey ? countBy(allRows, spec.countBarKey.col).filter((d) => d.name !== '(none)') : [];
+  const countBar = spec.countBarKey && countBarData.length > 0
+    ? <BarDistribution title={spec.countBarKey.label} data={countBarData} xKey="name" yKey="value" />
+    : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
   const graphBand = donut && donut2
     ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{donut}{donut2}</div>
@@ -374,7 +380,7 @@ export default function InventoryTypePage() {
             )}
             {graphBand}
             {(() => {
-              const charts = [barChart, hist, serverBar].filter(Boolean);
+              const charts = [barChart, hist, countBar, serverBar].filter(Boolean);
               if (charts.length === 0) return null;
               if (charts.length === 1) return charts[0];
               return <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{charts.map((c, i) => <div key={i} className="min-w-0">{c}</div>)}</div>;

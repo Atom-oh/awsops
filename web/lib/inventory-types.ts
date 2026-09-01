@@ -19,6 +19,9 @@ export interface InvType {
   distKey2Colors?: Record<string, string>;
   /** Optional Top-N metric bar chart: numeric column ranked desc over the row set. */
   barKey?: { col: string; label: string };
+  /** Optional count-distribution bar (gap L221): row COUNTS per distinct value of `col`,
+   *  count-descending (distinct from barKey's numeric ranking and histKey's numeric axis). */
+  countBarKey?: { col: string; label: string };
   /** Optional value-distribution histogram (gap L135): row COUNTS per distinct numeric value
    *  of `col` (top 10 by count, then numerically sorted; e.g. lambda functions per
    *  memory_size). Rendered beside the Top-N bar as a second BarDistribution. */
@@ -393,7 +396,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'bucket_policy_is_public', label: 'Policy public' }, { key: 'block_public_acls', label: 'Block ACLs' },
     { key: 'block_public_policy', label: 'Block policy' }, { key: 'restrict_public_buckets', label: 'Restrict public' }, { key: 'ignore_public_acls', label: 'Ignore ACLs' } ],
     filterKeys: ['region', 'name'] },
-  elasticache: { label: 'ElastiCache', group: 'Storage & DB', stateKey: 'cache_cluster_status', distKey: 'engine', distKey2: 'cache_node_type', columns: [
+  // v1 parity (gap L221): engine donut + node-type count BAR — the same dimension must not
+  // render as both a donut and a bar, so distKey2 is dropped for countBarKey.
+  elasticache: { label: 'ElastiCache', group: 'Storage & DB', stateKey: 'cache_cluster_status', distKey: 'engine', countBarKey: { col: 'cache_node_type', label: 'Node Type Distribution' }, columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' },
     { key: 'replication_group_id', label: 'Repl Group' }, { key: 'at_rest_encryption_enabled', label: 'At-Rest Enc' } ],
@@ -406,7 +411,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['region', 'engine_version', 'cache_node_type', 'replication_group_id', 'at_rest_encryption_enabled', 'transit_encryption_enabled'] },
-  opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', distKey2: 'engine_type', columns: [
+  // v1 parity (gap L236): the second donut is the DERIVED encryption status (Full/Partial/No),
+  // not engine_type (never a v1 chart); unknown-either-side rows carry no value → excluded.
+  opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', distKey2: 'encryption_status_h', distKey2Colors: { 'Full Encryption': '#059669', 'Partial': '#D97706', 'No Encryption': '#E11D48' }, columns: [
     { key: 'engine_version', label: 'Version' }, { key: 'instance_type_h', label: 'Instance' },
     { key: 'instance_count_h', label: 'Count' }, { key: 'storage_gb_h', label: 'Storage(GB)' },
     { key: 'n2n_enc_h', label: 'N2N Enc' }, { key: 'rest_enc_h', label: 'Rest Enc' },

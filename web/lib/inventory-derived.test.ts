@@ -212,3 +212,21 @@ describe('deriveRow lambda size/layers/vpc + waf action (gap L231/L232/L252)', (
     expect(deriveRow('waf', { resource_id: 'w' }).default_action_h).toBeUndefined();
   });
 });
+
+describe('opensearch encryption_status_h (gap L236)', () => {
+  const row = (rest: unknown, n2n: unknown) => deriveRow('opensearch', {
+    encryption_at_rest_options: rest === undefined ? undefined : { Enabled: rest },
+    node_to_node_encryption_options_enabled: n2n,
+  });
+  it('Full / Partial / No from the at-rest + n2n pair', () => {
+    expect(row(true, true).encryption_status_h).toBe('Full Encryption');
+    expect(row(true, false).encryption_status_h).toBe('Partial');
+    expect(row(false, true).encryption_status_h).toBe('Partial');
+    expect(row(false, false).encryption_status_h).toBe('No Encryption');
+  });
+  it("unknown EITHER side → undefined — never counted as 'No Encryption'", () => {
+    expect(row(undefined, true).encryption_status_h).toBeUndefined();
+    expect(row(true, undefined).encryption_status_h).toBeUndefined();
+    expect(deriveRow('opensearch', { resource_id: 'd' }).encryption_status_h).toBeUndefined();
+  });
+});
