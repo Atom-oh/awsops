@@ -186,6 +186,8 @@ describe('deriveRow lambda size/layers/vpc + waf action (gap L231/L232/L252)', (
     expect(deriveRow('lambda', { code_size: 1536 }).code_size_h).toBe('1.5 KB');
     expect(deriveRow('lambda', { code_size: 5_242_880 }).code_size_h).toBe('5.0 MB');
     expect(deriveRow('lambda', { resource_id: 'f' }).code_size_h).toBeUndefined();
+    // synced-but-null must read unknown, not a confident '0 B'
+    expect(deriveRow('lambda', { code_size: null }).code_size_h).toBeUndefined();
   });
   it("layers_h parses ARNs into name:version rows (string and {Arn} shapes); absent → undefined", () => {
     const d = deriveRow('lambda', { layers: [
@@ -194,6 +196,8 @@ describe('deriveRow lambda size/layers/vpc + waf action (gap L231/L232/L252)', (
     ] });
     expect(d.layers_h).toEqual(['shared-utils:3', 'telemetry:12']);
     expect(deriveRow('lambda', { resource_id: 'f' }).layers_h).toBeUndefined();
+    // all-unresolvable entries fall back to undefined (raw layers stays reachable), never []
+    expect(deriveRow('lambda', { layers: [{ bogus: 1 }] }).layers_h).toBeUndefined();
   });
   it("vpc_h tri-state: id / explicit 'Not in VPC' when null / undefined when the field is absent", () => {
     expect(deriveRow('lambda', { vpc_id: 'vpc-1' }).vpc_h).toBe('vpc-1');

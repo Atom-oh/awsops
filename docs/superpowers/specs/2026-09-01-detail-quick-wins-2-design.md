@@ -31,3 +31,16 @@ Read-only; no sync/Terraform/schema changes. Table labels are English (existing 
   (id / Not in VPC / undefined); default_action_h Allow/Block/malformed-undefined.
 - Registry invariants keep passing.
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-26 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **The duplicate Network section is gone (the gate MAJOR)** — the old raw-`vpc_id` Network
+  line remained beside the new `vpc_h` one (hideKeys never suppresses section-listed keys),
+  rendering two consecutive Network cards with a contradictory raw vpc_id row.
+- Code Size sorts numerically: the table column is the RAW `code_size` and DataTable gains a
+  byte-key formatter (BYTE_KEYS → human-readable cell over a numeric sort value) — no more
+  '900.0 KB' sorting after '5.0 MB'; `bytesH` guards null/'' → undefined (a synced-but-null
+  size must never read a confident '0 B'); `layers_h` falls back to undefined when ANY entry
+  is unresolvable and the raw `layers` JSON stays reachable in the Capacity section (the
+  adv-security precedent); the lambda facet swaps raw `vpc_id` for `vpc_h` so 'Not in VPC'
+  is a real facet option instead of a blank.

@@ -32,6 +32,8 @@ function walk(root: unknown, path: string): unknown {
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
 function bytesH(v: unknown): string | undefined {
+  // null/'' coerce to 0 via Number() — a synced-but-null size must read unknown, not '0 B'.
+  if (v == null || v === '') return undefined;
   const n = Number(v);
   if (!Number.isFinite(n)) return undefined;
   if (n <= 0) return '0 B';
@@ -199,13 +201,14 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
     // the id when present, v1's explicit 'Not in VPC' when the synced field is null/empty,
     // undefined when the field is absent entirely (never a fabricated verdict).
     const layersArr = asArr(r.layers);
-    const layers_h = layersArr && layersArr.length
-      ? layersArr.map((l) => {
-          const arn = typeof l === 'string' ? l : String(asObj(l)?.Arn ?? asObj(l)?.arn ?? '');
-          const segs = arn.split(':');
-          return segs.length >= 2 ? `${segs[segs.length - 2]}:${segs[segs.length - 1]}` : arn;
-        }).filter(Boolean)
-      : undefined;
+    const layerNames = (layersArr ?? []).map((l) => {
+      const arn = typeof l === 'string' ? l : String(asObj(l)?.Arn ?? asObj(l)?.arn ?? '');
+      const segs = arn.split(':');
+      return segs.length >= 2 ? `${segs[segs.length - 2]}:${segs[segs.length - 1]}` : arn;
+    }).filter(Boolean);
+    // Post-filter length check: with the raw layers JSON hidden, an all-unresolvable list must
+    // fall back to undefined (absent), never an empty-but-confident [].
+    const layers_h = layerNames.length === (layersArr?.length ?? 0) && layerNames.length > 0 ? layerNames : undefined;
     return {
       runtime: r.runtime ?? 'custom',
       last_modified: dateH(r.last_modified) ?? (r.last_modified as string | undefined),
