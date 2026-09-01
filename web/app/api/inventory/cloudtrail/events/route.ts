@@ -1,5 +1,6 @@
 import { CloudTrailClient, LookupEventsCommand } from '@aws-sdk/client-cloudtrail';
 import { verifyUser } from '@/lib/auth';
+import { isAdmin } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,11 +81,16 @@ function projectRaw(raw: Record<string, unknown> | null): Record<string, unknown
   return out;
 }
 
-/** Recent CloudTrail events (v1 parity: last 20, live LookupEvents). ?write=1 → write-only audit view. */
+/** Recent CloudTrail events (v1 parity: last 20, live LookupEvents). ?write=1 → write-only audit
+ *  view. The forensic drill-down block (`raw` + `accessKeyId`) is ADMIN-ONLY — the repo already
+ *  gates identity-grade data that way (ADMIN_ONLY_TYPES, a pentest remediation), and the value
+ *  scrub is a deny-list that cannot prove completeness; non-admins keep the flat Event fields. */
 export async function GET(request: Request) {
-  if (!(await verifyUser(request.headers.get('cookie')))) {
+  const user = await verifyUser(request.headers.get('cookie'));
+  if (!user) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
+  const admin = await isAdmin(user);
   const writeOnly = new URL(request.url).searchParams.get('write') === '1';
   try {
     const r = await ctClient().send(new LookupEventsCommand({
@@ -114,9 +120,9 @@ export async function GET(request: Request) {
         resources: (e.Resources ?? []).map((x) => ({
           type: x.ResourceType?.replace(/^AWS::/, '') ?? '', name: x.ResourceName ?? '',
         })),
-        accessKeyId: typeof (raw?.userIdentity as Record<string, unknown> | undefined)?.accessKeyId === 'string'
+        accessKeyId: admin && typeof (raw?.userIdentity as Record<string, unknown> | undefined)?.accessKeyId === 'string'
           ? String((raw!.userIdentity as Record<string, unknown>).accessKeyId) : '',
-        raw: projectRaw(raw),
+        raw: admin ? projectRaw(raw) : null,
       };
     });
     return Response.json({ events });

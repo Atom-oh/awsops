@@ -31,7 +31,9 @@ rows 라우트의 worst-first ORDER BY(캡 이전 정렬)이다.
   (separator-insensitive: x-api-key / access_key / accessKeyId all hit; sts credentials,
   iam accessKey, lambda environment, userData, keyMaterial, authParameters). This is
   defense-in-depth ATOP CloudTrail's own sensitive-field masking — a deny-list cannot prove
-  completeness, and the docs say so. Same `LookupEvents` call — no new AWS surface.
+  completeness, and the docs say so. Because it cannot, the forensic block (`raw` +
+  `accessKeyId`) is ADMIN-ONLY (matching the ADMIN_ONLY_TYPES identity-data precedent);
+  non-admins keep the flat Event fields. Same `LookupEvents` call — no new AWS surface.
 - UI (`CloudTrailEvents.tsx`): rows become clickable → the existing `DetailPanel` (no spec →
   flat key list, the same renderer inventory JSONB nests use) with the event fields + the raw
   event object. Close on ×/overlay/Escape comes free.

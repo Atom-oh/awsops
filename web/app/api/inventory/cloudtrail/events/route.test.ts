@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { verifyUser, send } = vi.hoisted(() => ({ verifyUser: vi.fn(), send: vi.fn() }));
+const { verifyUser, isAdmin, send } = vi.hoisted(() => ({ verifyUser: vi.fn(), isAdmin: vi.fn(), send: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@aws-sdk/client-cloudtrail', () => ({
   CloudTrailClient: class { send = (...a: unknown[]) => send(...a); },
   LookupEventsCommand: class { constructor(public input: unknown) {} },
@@ -14,8 +15,9 @@ const req = (q = '') => new Request(`http://x/api/inventory/cloudtrail/events${q
 });
 
 beforeEach(() => {
-  verifyUser.mockReset(); send.mockReset();
+  verifyUser.mockReset(); isAdmin.mockReset(); send.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u1' });
+  isAdmin.mockResolvedValue(true); // async, matching the real signature
 });
 
 describe('GET /api/inventory/cloudtrail/events', () => {
@@ -96,6 +98,20 @@ describe('GET /api/inventory/cloudtrail/events', () => {
     // non-sensitive forensic detail stays
     expect(e.raw.requestParameters.roleArn).toBe('arn:aws:iam::1:role/x');
     expect(e.raw.responseElements.assumedRoleUser.arn).toContain('assumed-role');
+  });
+
+  it('non-admins get the flat Event fields but never the forensic raw block or access key', async () => {
+    isAdmin.mockResolvedValue(false);
+    send.mockResolvedValue({ Events: [{
+      EventId: 'ev-4', EventName: 'RunInstances', EventSource: 'ec2.amazonaws.com',
+      CloudTrailEvent: JSON.stringify({ readOnly: false, awsRegion: 'ap-northeast-2',
+        userIdentity: { userName: 'alice', accessKeyId: 'AKIAEXAMPLE' }, requestParameters: { x: 1 } }),
+    }] });
+    const e = (await (await GET(req())).json()).events[0];
+    expect(e.name).toBe('RunInstances');
+    expect(e.awsRegion).toBe('ap-northeast-2'); // flat fields stay
+    expect(e.raw).toBeNull();
+    expect(e.accessKeyId).toBe('');
   });
 
   it('malformed CloudTrailEvent JSON → row still renders (raw null, readOnly defaults true)', async () => {

@@ -47,7 +47,7 @@ Events および Write Events タブは、クリック時にのみデータを�
 イベント行をクリックすると確認できます:
 - **Event**: ID、名前、ソース、時刻、ユーザー、Access Key
 - **Resource**: リソースタイプおよび名前
-- **Raw Event**: JSON 形式のプロジェクション済みイベントデータ — userIdentity は身元名のみに縮約され、資格情報に隣接する値はマスキングされます
+- **Raw Event**（管理者専用）: JSON 形式のプロジェクション済みイベントデータ — userIdentity は身元名のみに縮約され、資格情報系のキーは deny-list でマスキングされます（完全性の保証ではなく defense-in-depth — コピー前に内容の確認を推奨）
 
 ## 使い方
 

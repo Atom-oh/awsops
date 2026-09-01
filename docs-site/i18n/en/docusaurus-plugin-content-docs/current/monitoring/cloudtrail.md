@@ -43,7 +43,7 @@ Click on a trail row to view in the slide panel:
 Click on an event row to view:
 - **Event**: ID, name, source, time, user, Access Key
 - **Resource**: Resource type and name
-- **Raw Event**: Projected event data in JSON format — userIdentity is reduced to identity names and credential-adjacent values are masked
+- **Raw Event** (admin only): Projected event data in JSON format — userIdentity is reduced to identity names and credential-family keys are masked by a deny-list (defense-in-depth, not a completeness guarantee — review before copying out)
 
 ## How to Use
 
