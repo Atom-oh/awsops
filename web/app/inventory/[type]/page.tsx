@@ -15,7 +15,7 @@ import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import VpcResourceMap from '@/components/inventory/VpcResourceMap';
 import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes, RdsInstanceMetrics, DynamoTableMetrics, AlbMetrics, NlbMetrics, S3Metrics, EbsMetrics, Ec2Metrics, LambdaMetrics, TgwSection } from '@/components/inventory/NodeMetricsTables';
-import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
+import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf, worstFirst } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
 import { useI18n } from '@/components/shell/LanguageProvider';
@@ -80,6 +80,25 @@ export default function InventoryTypePage() {
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
   const [scope] = useActiveScope();
 
+  // Accurate fleet total past the 500-row cap (gap L110): the summary endpoint's byType
+  // count is the true DB count. Failure degrades silently to the row count (today's value).
+  const [trueTotal, setTrueTotal] = useState<number | null>(null);
+  useEffect(() => {
+    setTrueTotal(null);
+    if (!spec) return;
+    let alive = true;
+    fetch(`/api/inventory/summary?${scopeParams(scope)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!alive) return;
+        const n = (d?.byType as { type: string; count: number }[] | undefined)
+          ?.find((t) => t.type === type)?.count;
+        if (typeof n === 'number') setTrueTotal(n);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [spec, type, scope]);
+
   const load = useCallback(async () => {
     try {
       const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}&${scopeParams(scope)}`);
@@ -116,6 +135,10 @@ export default function InventoryTypePage() {
   };
 
   const allRows = useMemo(() => rows ?? [], [rows]);
+  // Below the cap the row count is already exact; at the cap prefer the summary's true count
+  // (never smaller than what is visibly loaded).
+  const totalCount = allRows.length >= ROW_LIMIT && trueTotal != null
+    ? Math.max(trueTotal, allRows.length) : allRows.length;
 
   // KPI state breakdown — from the FULL row set (not filtered).
   const stateCounts = useMemo(
@@ -221,7 +244,7 @@ export default function InventoryTypePage() {
   };
   const kpiRow = (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" icon={<TypeIcon size={16} />} />
+      <StatTile label={`총 ${spec.label}`} value={totalCount} variant="accent" icon={<TypeIcon size={16} />} />
       {highlightCards.length > 0
         ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={cardIcon(h.label, h.variant)} />)
         : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={cardIcon(s.name, stateVariant(s.name))} />)}
@@ -267,10 +290,10 @@ export default function InventoryTypePage() {
         facets={facets}
         onFacet={(key, val) => setFacets((prev) => ({ ...prev, [key]: val }))}
         shownCount={filteredRows.length}
-        totalCount={allRows.length}
+        totalCount={totalCount}
         onClear={anyFilterActive ? clearAll : undefined}
       />
-      <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
+      <DataTable columns={columns} rows={spec.worstFirst ? worstFirst(filteredRows, spec.worstFirst) : filteredRows} onRowClick={setSelected} />
     </div>
   );
 
@@ -278,7 +301,7 @@ export default function InventoryTypePage() {
     <>
       <PageHeader
         title={spec.label}
-        subtitle={`${spec.group} · ${allRows.length.toLocaleString()}개 리소스`}
+        subtitle={`${spec.group} · ${totalCount.toLocaleString()}개 리소스`}
         right={<RefreshButton busy={busy} onClick={refresh} capturedAt={captured} />}
       />
       <div className="px-8 py-8 flex flex-col gap-6">
@@ -291,7 +314,7 @@ export default function InventoryTypePage() {
                 Risk types keep their verdict hero as the KPI band; everything else uses kpiRow. */}
             {arch === 'risk' ? (
               <>
-                <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
+                <RiskHero label={spec.label} total={totalCount} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                     {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}

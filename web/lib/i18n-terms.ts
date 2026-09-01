@@ -1371,6 +1371,8 @@ export const TERMS: Record<string, Pair> = {
   '리포트 목차': { en: 'Report contents', zh: '报告目录', ja: 'レポート目次' },
   // Diagnosis quick-wins batch (L176/L177/L180/L181).
   '경과 시간': { en: 'Elapsed', zh: '已用时间', ja: '経過時間' },
+  '사용 모델': { en: 'Models used', zh: '使用的模型', ja: '使用モデル' },
+  '이벤트 상세': { en: 'Event detail', zh: '事件详情', ja: 'イベント詳細' },
   '리포트': { en: 'Report', zh: '报告', ja: 'レポート' },
   '진단은 계정 전반을 아래 섹션으로 분석합니다 (Deep 표시는 Deep 티어 전용):': { en: 'A diagnosis analyzes the whole account across these sections (Deep-tagged ones run on the Deep tier only):', zh: '诊断会按以下章节分析整个账户（标有 Deep 的仅在 Deep 层级运行）：', ja: '診断はアカウント全体を以下のセクションで分析します（Deep 表示は Deep ティア専用）:' },
   '본문 키워드 기반 표시 (점수 아님)': { en: 'Derived from body keywords (not a score)', zh: '基于正文关键词的标记（并非评分）', ja: '本文キーワードに基づく表示（スコアではありません）' },

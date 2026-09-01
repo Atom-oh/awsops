@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { DollarSign, Activity, ArrowDownToLine, ArrowUpFromLine, PiggyBank, Timer, AlertTriangle } from 'lucide-react';
+import { DollarSign, Activity, ArrowDownToLine, ArrowUpFromLine, PiggyBank, Timer, AlertTriangle, Boxes } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import DetailPanel from '@/components/ui/DetailPanel';
 import { getModelPricing } from '@/lib/bedrock';
@@ -211,9 +211,11 @@ export default function BedrockPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
                 <StatTile label={`총 비용 (${range})`} value={usd(totalCost)} variant="accent" icon={<DollarSign size={16} />} />
                 <StatTile label="호출 수" value={totalInvocations.toLocaleString()} icon={<Activity size={16} />} />
+                {/* gap L182 (v1 parity): distinct models invoked within the selected range. */}
+                <StatTile label="사용 모델" value={models.length} icon={<Boxes size={16} />} />
                 <StatTile label="입력 토큰" value={compact(totalInput)} icon={<ArrowDownToLine size={16} />} />
                 <StatTile label="출력 토큰" value={compact(totalOutput)} icon={<ArrowUpFromLine size={16} />} />
                 <StatTile label="캐시 절감" value={usd(totalSavings)} hint="cache read 할인" variant="warn" icon={<PiggyBank size={16} />} />
