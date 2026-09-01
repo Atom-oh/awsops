@@ -79,15 +79,20 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', barKey: { col: 'memory_size', label: 'Memory (MB)' },
     histKey: { col: 'memory_size', label: 'Memory Allocation', suffix: ' MB' }, columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
-    { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
+    { key: 'timeout', label: 'Timeout(s)' }, { key: 'code_size', label: 'Code Size' }, { key: 'state', label: 'State' },
     { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'description', 'version', 'last_modified'] },
       { label: 'Runtime', keys: ['runtime', 'handler', 'package_type', 'architectures', 'state', 'last_update_status'] },
-      { label: 'Capacity', keys: ['memory_size', 'timeout', 'code_size', 'code_sha_256', 'layers'] },
-      { label: 'Network', keys: ['vpc_id', 'vpc_subnet_ids', 'vpc_security_group_ids'] },
+      // Raw layers stays visible after the derived list (the adv-security precedent) — layers_h
+      // reads undefined on unparseable shapes, and the raw JSON must remain reachable then.
+      { label: 'Capacity', keys: ['memory_size', 'timeout', 'code_size_h', 'code_sha_256', 'layers_h', 'layers'] },
+      { label: 'Network', keys: ['vpc_h', 'vpc_subnet_ids', 'vpc_security_group_ids'] },
     ],
-    filterKeys: ['region', 'runtime', 'memory_size', 'timeout', 'vpc_id'] },
+    // raw byte int / raw vpc_id are replaced by code_size_h / vpc_h; the raw layers JSON stays
+    // reachable (Other group) because layers_h falls back to undefined on unparseable shapes.
+    hideKeys: ['code_size', 'vpc_id'],
+    filterKeys: ['region', 'runtime', 'memory_size', 'timeout', 'vpc_h'] },
   ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', distKey2: 'region', barKey: { col: 'running_tasks_count', label: 'Running Tasks' }, columns: [
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
@@ -256,7 +261,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     filterKeys: ['region', 'amazon_side_asn'] },
 
   iam_role: { label: 'IAM Roles', group: 'Security', distKey: 'path', columns: [
-    { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
+    { key: 'description', label: 'Description' }, { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
     { key: 'role_id', label: 'Role ID' }, { key: 'max_session_duration', label: 'Max session(s)' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'role_id', 'path', 'create_date', 'description'] },
@@ -362,7 +367,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'id', 'arn', 'description'] },
-      { label: 'Security', keys: ['scope', 'capacity', 'default_action', 'managed_by_firewall_manager', 'visibility_config'] },
+      { label: 'Security', keys: ['scope', 'capacity', 'default_action_h', 'default_action', 'managed_by_firewall_manager', 'visibility_config'] },
       { label: 'Rules', keys: ['rules'] },
       { label: 'Tags', keys: ['tags'] },
     ],

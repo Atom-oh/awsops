@@ -32,6 +32,8 @@ function walk(root: unknown, path: string): unknown {
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
 function bytesH(v: unknown): string | undefined {
+  // null/'' coerce to 0 via Number() — a synced-but-null size must read unknown, not '0 B'.
+  if (v == null || v === '') return undefined;
   const n = Number(v);
   if (!Number.isFinite(n)) return undefined;
   if (n <= 0) return '0 B';
@@ -194,10 +196,29 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
   // Lambda value formatting (gap L137, v1 parity): null/absent runtime → 'custom' (container-
   // image functions; overriding the raw column keeps the table, runtime donut, facet, and
   // detail panel in agreement — v1 did the COALESCE in SQL), and last_modified formatted.
-  lambda: (r) => ({
-    runtime: r.runtime ?? 'custom',
-    last_modified: dateH(r.last_modified) ?? (r.last_modified as string | undefined),
-  }),
+  lambda: (r) => {
+    // L232: layers → one 'name:version' per row (trailing two ARN segments); vpc_h tri-state —
+    // the id when present, v1's explicit 'Not in VPC' when the synced field is null/empty,
+    // undefined when the field is absent entirely (never a fabricated verdict).
+    const layersArr = asArr(r.layers);
+    const layerNames = (layersArr ?? []).map((l) => {
+      const arn = typeof l === 'string' ? l : String(asObj(l)?.Arn ?? asObj(l)?.arn ?? '');
+      const segs = arn.split(':');
+      return segs.length >= 2 ? `${segs[segs.length - 2]}:${segs[segs.length - 1]}` : arn;
+    }).filter(Boolean);
+    // Post-filter length check: with the raw layers JSON hidden, an all-unresolvable list must
+    // fall back to undefined (absent), never an empty-but-confident [].
+    const layers_h = layerNames.length === (layersArr?.length ?? 0) && layerNames.length > 0 ? layerNames : undefined;
+    return {
+      runtime: r.runtime ?? 'custom',
+      last_modified: dateH(r.last_modified) ?? (r.last_modified as string | undefined),
+      // L231: human-readable code size (B/KB/MB) — replaces the raw byte integer in the panel.
+      code_size_h: bytesH(r.code_size),
+      layers_h,
+      vpc_h: typeof r.vpc_id === 'string' && r.vpc_id ? r.vpc_id
+        : 'vpc_id' in r ? 'Not in VPC' : undefined,
+    };
+  },
   // scan_on_push (gap-audit L107): Yes/No from the JSONB scanning config. A missing/malformed
   // config means scanning is off (the API default), so 'No' — never undefined (keeps the column
   // filterable and the No count honest). The truthiness test deliberately mirrors
@@ -214,6 +235,13 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       // rendered as-is; undefined when the blob is absent)
       encryption_type_h: typeof encType === 'string' && encType ? encType : undefined,
     };
+  },
+  waf: (r) => {
+    // L252: the default action is the JSONB object's own top-level key ('Allow' | 'Block') —
+    // parse-only, case-preserved; malformed/absent → undefined (the raw blob stays visible).
+    const da = asObj(r.default_action);
+    const keys = da ? Object.keys(da) : [];
+    return { default_action_h: keys.length === 1 ? keys[0] : undefined };
   },
   cloudtrail: (r) => {
     // L188: 'is this trail actually delivering' at a glance. The sync persists pg8000
