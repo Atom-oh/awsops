@@ -26,3 +26,16 @@ Read-only; no sync/Terraform/schema changes.
   countBy check); spec invariant tests keep passing (countBarKey.col validated like barKey).
 - encryption_status_h: all four states (Full/Partial/No/unknown-either-side).
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-27 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **Unknown domains really are excluded from the donut (the gate MAJOR)** — countBy buckets
+  undefined as '(none)' and distData2 applied no filter, so unknowns rendered as a
+  positional-palette slice inside the denominator. New `distKey2DropNone` spec flag (set for
+  opensearch) filters the bucket at the page level.
+- **The donut is titled 'Encryption Status 분포' (the gate MAJOR)** — colLabel falls back to
+  the raw key for derived-only fields; new `distKey2Label` spec option supplies the title.
+- `encryption_status_h` joins the detail Security section (no more humanized leak into
+  Other); `countBarKey` data is top-10-capped, '(none)'-filtered, and useMemo'd ABOVE the
+  !spec early return (the histData hooks lesson); the CHANGELOG wording says 'in the chart
+  band' instead of 'beside'.

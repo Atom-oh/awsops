@@ -13,6 +13,12 @@ export interface InvType {
    *  DESC (e.g. newest state change first). Applied by the page BEFORE DataTable, so a user's
    *  own column-header sort still overrides it. */
   worstFirst?: { col: string; rank: Record<string, number>; tieBreak?: string };
+  /** Optional label for the distKey2 donut title when distKey2 is a derived-only field (not a
+   *  table column — colLabel would fall back to the raw key). */
+  distKey2Label?: string;
+  /** Drop the '(none)' bucket from the distKey2 donut (gap L236): a semantic-verdict donut
+   *  (e.g. encryption status) must not render unknown rows as a colored slice/denominator. */
+  distKey2DropNone?: boolean;
   /** Semantic slice colors for the distKey2 donut, keyed by the RAW cell value (case-sensitive —
    *  the donut buckets raw values, unlike countWhere's case-insensitive compare). Unmapped
    *  values fall back to the positional palette. */
@@ -413,7 +419,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     filterKeys: ['region', 'engine_version', 'cache_node_type', 'replication_group_id', 'at_rest_encryption_enabled', 'transit_encryption_enabled'] },
   // v1 parity (gap L236): the second donut is the DERIVED encryption status (Full/Partial/No),
   // not engine_type (never a v1 chart); unknown-either-side rows carry no value → excluded.
-  opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', distKey2: 'encryption_status_h', distKey2Colors: { 'Full Encryption': '#059669', 'Partial': '#D97706', 'No Encryption': '#E11D48' }, columns: [
+  opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', distKey2: 'encryption_status_h', distKey2Label: 'Encryption Status', distKey2DropNone: true, distKey2Colors: { 'Full Encryption': '#059669', 'Partial': '#D97706', 'No Encryption': '#E11D48' }, columns: [
     { key: 'engine_version', label: 'Version' }, { key: 'instance_type_h', label: 'Instance' },
     { key: 'instance_count_h', label: 'Count' }, { key: 'storage_gb_h', label: 'Storage(GB)' },
     { key: 'n2n_enc_h', label: 'N2N Enc' }, { key: 'rest_enc_h', label: 'Rest Enc' },
@@ -428,7 +434,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       // Raw advanced_security_options/cognito_options stay visible after the derived flags —
       // they carry fields (SAML, user-pool ids) the flags don't derive; hiding them would
       // regress information availability.
-      { label: 'Security', keys: ['rest_enc_h', 'kms_key_h', 'n2n_enc_h', 'adv_security_h', 'internal_user_db_h', 'anonymous_auth_h', 'cognito_h', 'advanced_security_options', 'cognito_options', 'access_policies'] },
+      { label: 'Security', keys: ['encryption_status_h', 'rest_enc_h', 'kms_key_h', 'n2n_enc_h', 'adv_security_h', 'internal_user_db_h', 'anonymous_auth_h', 'cognito_h', 'advanced_security_options', 'cognito_options', 'access_policies'] },
       { label: 'Storage', keys: ['ebs_volume_h'] },
       // L153: partially-derived/reference blobs stay visible (log_publishing_options,
       // advanced_options, auto_tune_options carry fields the *_h derivations don't cover).

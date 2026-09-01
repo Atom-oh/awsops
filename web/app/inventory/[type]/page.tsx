@@ -180,7 +180,9 @@ export default function InventoryTypePage() {
     [allRows, spec?.distKey],
   );
   const distData2 = useMemo(
-    () => (spec?.distKey2 ? top6(countBy(allRows, spec.distKey2)) : []),
+    () => (spec?.distKey2
+      ? top6(countBy(allRows, spec.distKey2).filter((d) => !(spec.distKey2DropNone && d.name === '(none)')))
+      : []),
     [allRows, spec?.distKey2],
   );
 
@@ -234,6 +236,15 @@ export default function InventoryTypePage() {
         .map((d) => ({ label: `${d.name}${spec.histKey!.suffix ?? ''}`, value: d.value }))
     : []), [allRows, spec?.histKey]);
 
+  // Count-distribution bar data (gap L221) — hook ABOVE the !spec early return (rules of
+  // hooks; the histData precedent), top-10 by count with '(none)' filtered.
+  const countBarData = useMemo(
+    () => (spec?.countBarKey
+      ? countBy(allRows, spec.countBarKey.col).filter((d) => d.name !== '(none)').sort((a, b) => b.value - a.value).slice(0, 10)
+      : []),
+    [allRows, spec?.countBarKey],
+  );
+
   if (!spec) {
     return (
       <>
@@ -280,7 +291,7 @@ export default function InventoryTypePage() {
     ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
     : null;
   const donut2 = spec.distKey2 && spec.distKey2 !== spec.distKey && distData2.length > 0
-    ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
+    ? <DonutBreakdown title={`${spec.distKey2Label ?? colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
     : null;
   // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
   const hist = spec.histKey && histData.length > 0
@@ -314,7 +325,7 @@ export default function InventoryTypePage() {
     : null;
   // Count-distribution bar (gap L221): row counts per distinct value, count-desc (the
   // BarDistribution default) — distinct from barKey (numeric ranking) and hist (numeric axis).
-  const countBarData = spec.countBarKey ? countBy(allRows, spec.countBarKey.col).filter((d) => d.name !== '(none)') : [];
+
   const countBar = spec.countBarKey && countBarData.length > 0
     ? <BarDistribution title={spec.countBarKey.label} data={countBarData} xKey="name" yKey="value" />
     : null;
