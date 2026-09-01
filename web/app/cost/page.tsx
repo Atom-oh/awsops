@@ -6,7 +6,7 @@ import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import Card from '@/components/ui/Card';
-import DataTable from '@/components/ui/DataTable';
+import MetricTable, { type MetricCol } from '@/components/inventory/metrics/MetricTable';
 import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
@@ -202,13 +202,39 @@ export default function CostPage() {
   })();
   const hbarData = changeRows.map((s) => ({ service: s.service, amount: s.current }));
 
-  const tableRows = changeRows.map((s) => ({
-    service: s.service,
-    current: usd(s.current),
-    previous: usd(s.previous),
-    change: `${s.change > 0 ? '+' : ''}${s.change.toFixed(1)}%`,
-    share: `${s.share.toFixed(1)}%`,
+  // Gap L198: raw numbers feed MetricTable (real numeric sort + threshold-colored cells),
+  // not pre-formatted strings.
+  type CostRow = { service: string; current: number; previous: number; change: number; share: number };
+  const costRows: CostRow[] = changeRows.map((s) => ({
+    service: s.service, current: s.current, previous: s.previous, change: s.change, share: s.share,
   }));
+  const changeTone = (c: number, previous: number) =>
+    previous <= 0 ? 'text-ink-500' : c > 20 ? 'text-rose-600 font-semibold' : c > 0 ? 'text-amber-600' : c < 0 ? 'text-emerald-600' : 'text-ink-500';
+  const costCols: MetricCol<CostRow>[] = [
+    { key: 'service', label: '서비스', value: (r) => r.service },
+    { key: 'current', label: `이번 달 (${currency})`, type: 'num', value: (r) => r.current, render: (r) => usd(r.current) },
+    { key: 'previous', label: '전월', type: 'num', value: (r) => r.previous, render: (r) => usd(r.previous) },
+    {
+      key: 'change', label: '변화율', type: 'num', value: (r) => r.change,
+      render: (r) => (
+        <span className={changeTone(r.change, r.previous)}>
+          {r.previous > 0 ? `${r.change > 0 ? '+' : ''}${r.change.toFixed(1)}%` : '—'}
+        </span>
+      ),
+      danger: (r) => r.previous > 0 && r.change > 20,
+    },
+    {
+      key: 'share', label: '점유율', type: 'num', value: (r) => r.share,
+      render: (r) => (
+        <span className="flex items-center gap-2">
+          <span className="h-1.5 w-16 overflow-hidden rounded-full bg-ink-100">
+            <span className="block h-full bg-brand-400" style={{ width: `${Math.min(100, r.share)}%` }} />
+          </span>
+          <span className="tabular text-[12px]">{r.share.toFixed(1)}%</span>
+        </span>
+      ),
+    },
+  ];
 
   // MoM (from the FILTERED monthly series) + month-end forecast. AWS's CE forecast is inherently
   // account/service-unscoped (whole-account), so it only applies when NO service filter is active —
@@ -216,6 +242,15 @@ export default function CostPage() {
   const thisMonth = monthly.length > 0 ? monthly[monthly.length - 1].total : total;
   const lastMonth = monthly.length > 1 ? monthly[monthly.length - 2].total : 0;
   const mom = momChangePctDaily(thisMonth, lastMonth, new Date());
+  // Gap L196: Daily Average over the FILTERED trailing-30d series; surge count for the
+  // Services subtext (previous>0 keeps new services out — serviceChangeRows pins their
+  // change to 0, so >20 alone is already safe, but the guard states the intent).
+  const dailyAvg = trend.length > 0 ? trend.reduce((a, t) => a + t.amount, 0) / trend.length : null;
+  const surging = changeRows.filter((r) => r.change > 20 && r.previous > 0).length;
+  // Gap L197: load SUCCEEDED but every series is empty → Cost Explorer onboarding banner
+  // (distinct from the error banner; partial emptiness keeps the per-card empty texts).
+  const ceLikelyDisabled = !busy && !err && d != null
+    && monthlyByService.length === 0 && dailyByService.length === 0 && changeRows.length === 0;
   const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
   const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
 
@@ -322,8 +357,13 @@ export default function CostPage() {
               </div>
             )}
 
-            {/* ---- KPI tiles ---- */}
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            {ceLikelyDisabled && (
+              <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2.5 text-[12.5px] text-sky-800">
+                {tt('비용 데이터가 없습니다 — Cost Explorer가 활성화되지 않았을 수 있습니다. AWS Billing 콘솔에서 Cost Explorer를 활성화하세요. 활성화 후 데이터 표시까지 최대 24시간 걸릴 수 있습니다.')}
+              </div>
+            )}
+            {/* ---- KPI tiles (gap L196: Daily Average + Last Month + surge subtext) ---- */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatTile
                 label={`이번 달 누적 (${currency})`}
                 value={usd(total)}
@@ -344,7 +384,24 @@ export default function CostPage() {
                 variant="warn"
                 icon={<CalendarDays size={16} />}
               />
-              <StatTile label="서비스 수" value={changeRows.length} icon={<Layers size={16} />} />
+              <StatTile
+                label={`일평균 (${currency})`}
+                value={dailyAvg == null ? DASH : usd(dailyAvg)}
+                hint={dailyAvg == null ? undefined : '최근 30일 · 필터 적용'}
+                icon={<CalendarDays size={16} />}
+              />
+              <StatTile
+                label={`전월 총액 (${currency})`}
+                value={lastMonth > 0 ? usd(lastMonth) : DASH}
+                icon={<DollarSign size={16} />}
+              />
+              <StatTile
+                label="서비스 수"
+                value={changeRows.length}
+                trend={surging > 0 ? `${surging}개 >20% 증가` : undefined}
+                variant={surging > 0 ? 'warn' : 'default'}
+                icon={<Layers size={16} />}
+              />
               <StatTile
                 label="최대 서비스"
                 value={top ? usd(top.current) : DASH}
@@ -391,16 +448,13 @@ export default function CostPage() {
             {/* ---- Detail table: service / 이번 달 / 전월 / 변화율 / 점유율 ---- */}
             <section className="flex flex-col gap-3">
               <h2 className="text-[13px] font-semibold text-ink-800">{tt('서비스 상세')}</h2>
-              <DataTable
-                columns={[
-                  { key: 'service', label: '서비스' },
-                  { key: 'current', label: `이번 달 (${currency})` },
-                  { key: 'previous', label: '전월' },
-                  { key: 'change', label: '변화율' },
-                  { key: 'share', label: '점유율' },
-                ]}
-                rows={tableRows}
-                onRowClick={(row) => openDetail(String(row.service))}
+              {/* Gap L198: MetricTable — numeric sort + threshold-colored Change + Share mini bar */}
+              <MetricTable
+                columns={costCols}
+                items={costRows}
+                rowKey={(r) => r.service}
+                defaultSortKey="current"
+                onRowClick={(r) => openDetail(r.service)}
               />
               <p className="text-[12px] text-ink-400">{tt('행을 클릭하면 서비스별 일별 추이·사용 유형 분해를 볼 수 있습니다.')}</p>
             </section>
