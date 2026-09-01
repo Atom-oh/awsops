@@ -78,14 +78,17 @@ def list_pending_notifications(conn):
     return [{"id": r[0], "title": r[1], "artifact_uri": r[2]} for r in rows]
 
 
-def mark_notified(conn, report_ids):
-    """Stamp notified_at=now() on the given report ids (after a successful digest publish). No-op
-    on an empty list (avoids an `= ANY('{}')` no-match query for nothing)."""
+def mark_notified(conn, report_ids, outcome="emailed"):
+    """Stamp notified_at=now() + the durable delivery outcome on the given report ids. outcome:
+    'emailed' (published), 'dropped_paused' (admin pause — gap L178), 'skipped_no_topic'.
+    No-op on an empty list (avoids an `= ANY('{}')` no-match query for nothing)."""
+    assert outcome in ("emailed", "dropped_paused", "skipped_no_topic")
     if not report_ids:
         return 0
     rows = conn.run(
-        "UPDATE diagnosis_reports SET notified_at=now() WHERE id = ANY(:ids) RETURNING id",
-        ids=list(report_ids),
+        "UPDATE diagnosis_reports SET notified_at=now(), notify_outcome=:oc "
+        "WHERE id = ANY(:ids) RETURNING id",
+        ids=list(report_ids), oc=outcome,
     )
     return len(rows)
 

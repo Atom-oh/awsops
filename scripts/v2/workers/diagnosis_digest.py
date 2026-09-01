@@ -49,7 +49,8 @@ def lambda_handler(_event, _ctx):
     try:
         pending = ddb.list_pending_notifications(conn)
         if not pending:
-            return {"digested": 0}
+            # keep the response shape consistent across runs (paused unknown/irrelevant here)
+            return {"digested": 0, "paused": False}
         domain = os.environ.get("APP_DOMAIN", "")
         topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
         region = os.environ.get("AWS_REGION")
@@ -66,9 +67,6 @@ def lambda_handler(_event, _ctx):
             print(f"[diagnosis_digest] pause-flag read failed (fail-open, publishing): {e}")
         if paused:
             print(f"[diagnosis_digest] notifications paused by admin - skipping publish for {len(pending)} report(s)")
-            for r in pending:
-                # per-report delivery record: 'dropped while paused' must stay answerable later.
-                print(f"[diagnosis_digest] report id={r.get('id')} title={r.get('title')!r} DROPPED (paused)")
 
         def url_for(report_id):
             return f"https://{domain}/ai-diagnosis?report={report_id}" if domain else ""
@@ -87,9 +85,15 @@ def lambda_handler(_event, _ctx):
                 notify.publish_digest(topic, reports, region=region)
         # Stamp notified_at regardless of whether a topic is configured (flag-off / no topic still
         # drains the backlog so a later flag-on doesn't suddenly email a huge historical batch).
-        ddb.mark_notified(conn, [r["id"] for r in pending])
-        # "paused": dropped-not-delivered runs stay distinguishable in durable records
-        # (metric filters), not only in per-report log lines.
+        # The DURABLE per-report delivery record is notify_outcome in Aurora (gap L178 round-3:
+        # 'was report N ever emailed?' must outlive the 14-day log retention — the Lambda return
+        # value is async-invoked and written nowhere).
+        outcome = "dropped_paused" if paused else ("emailed" if topic else "skipped_no_topic")
+        ddb.mark_notified(conn, [r["id"] for r in pending], outcome=outcome)
+        if paused:
+            # logged AFTER the stamp succeeded — an audit line must not precede its record.
+            for r in pending:
+                print(f"[diagnosis_digest] report id={r.get('id')} title={r.get('title')!r} DROPPED (paused)")
         return {"digested": len(pending), "paused": paused}
     finally:
         conn.close()

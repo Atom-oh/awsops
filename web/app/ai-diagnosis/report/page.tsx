@@ -71,7 +71,12 @@ function PrintReportInner() {
   }
 
   const r = state.report;
-  const fmt = (v: string | null) => (v ? new Date(v).toLocaleString(localeOf(lang), { timeZone: 'Asia/Seoul' }) : '—');
+  const fmt = (v: string | null) => {
+    if (!v) return '—';
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return '—'; // never print 'Invalid Date'
+    return `${d.toLocaleString(localeOf(lang), { timeZone: 'Asia/Seoul' })} (KST)`;
+  };
 
   return (
     <div className="print-report-root min-h-screen bg-white">

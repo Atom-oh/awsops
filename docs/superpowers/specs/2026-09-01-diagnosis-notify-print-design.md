@@ -84,3 +84,19 @@ No Terraform/IAM changes; one additive migration.
   bilingual and §2 notes the sub-cadence pause window ("may drop nothing") and the hard stop
   (unsubscribe / `diagnosis_notify_enabled=false`); the print cover labels go through `tt()`
   with locale-aware dates.
+
+## Round-3 corrections (review-driven)
+
+- **Durable delivery record (the gate MAJOR)** — the round-2 `{"paused"}` return was written
+  nowhere (async-invoked Lambda) and log lines expire in 14 days, so 'was report N emailed?'
+  became unanswerable on the sole LIVE external write channel. New
+  `diagnosis_reports.notify_outcome` column ('' legacy; 'emailed' | 'dropped_paused' |
+  'skipped_no_topic'), written by `mark_notified(..., outcome=)` in the same UPDATE as the
+  stamp; the sql_reader view is re-projected in the same migration (the compliance-description
+  precedent). A fail-open publish records 'emailed', making a pause/publish divergence visible
+  in the durable record. The DROPPED audit log now prints AFTER the stamp succeeds; the
+  nothing-pending early return carries the consistent `{digested, paused}` shape.
+- ADR-002's ShellGate sentence (KO+EN) is amended for the two-route bare set; the docs-site
+  guide (4 locales) and the CHANGELOG carry the sub-cadence caveat ("a pause shorter than the
+  ~15-minute digest cadence may drop nothing"); the print view labels dates as KST with an
+  Invalid-Date guard.

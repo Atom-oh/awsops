@@ -39,7 +39,7 @@ def test_digest_single_report_uses_publish_report_with_fetched_markdown(monkeypa
         lambda *a, **kw: digest_called.update(called=True),
     )
     marked = {}
-    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids: marked.update(ids=ids))
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": marked.update(ids=ids, outcome=outcome))
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
     monkeypatch.setenv("APP_DOMAIN", "x.example")
 
@@ -83,7 +83,7 @@ def test_digest_multiple_reports_uses_publish_digest_with_teasers(monkeypatch):
         lambda topic, reports, region=None: captured.update(topic=topic, reports=reports) or "mid-2",
     )
     marked = {}
-    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids: marked.update(ids=ids))
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": marked.update(ids=ids, outcome=outcome))
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
     monkeypatch.setenv("APP_DOMAIN", "x.example")
 
@@ -113,7 +113,7 @@ def test_digest_noop_when_nothing_pending(monkeypatch):
 
     out = diagnosis_digest.lambda_handler(None, None)
 
-    assert out == {"digested": 0}
+    assert out == {"digested": 0, "paused": False}
     assert calls == {"report": False, "digest": False}
     assert marked["called"] is False
     assert conn.closed
@@ -138,7 +138,7 @@ def test_digest_marks_notified_even_without_topic_configured(monkeypatch):
     monkeypatch.setattr(diagnosis_digest.notify, "publish_report", lambda *a, **kw: calls.update(report=True))
     monkeypatch.setattr(diagnosis_digest.notify, "publish_digest", lambda *a, **kw: calls.update(digest=True))
     marked = {}
-    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids: marked.update(ids=ids))
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": marked.update(ids=ids, outcome=outcome))
     monkeypatch.delenv("DIAGNOSIS_SNS_TOPIC_ARN", raising=False)
 
     out = diagnosis_digest.lambda_handler(None, None)
@@ -220,12 +220,14 @@ def test_digest_paused_skips_publish_but_still_stamps(monkeypatch):
     monkeypatch.setattr(diagnosis_digest.notify, "publish_report", lambda *a, **k: published.append(a))
     monkeypatch.setattr(diagnosis_digest.notify, "publish_digest", lambda *a, **k: published.append(a))
     marked = {}
-    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids: marked.update(ids=ids))
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": marked.update(ids=ids, outcome=outcome))
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
 
     out = diagnosis_digest.lambda_handler({}, None)
     assert published == []
     assert marked["ids"] == [1]
+    # the DURABLE record: dropped-while-paused is written to Aurora, not only logs
+    assert marked["outcome"] == "dropped_paused"
     assert out["digested"] == 1
 
 
@@ -241,7 +243,7 @@ def test_digest_pause_flag_read_failure_fails_open(monkeypatch):
     )
     published = []
     monkeypatch.setattr(diagnosis_digest.notify, "publish_report", lambda *a, **k: published.append(a))
-    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids: None)
+    monkeypatch.setattr(diagnosis_digest.ddb, "mark_notified", lambda c, ids, outcome="emailed": None)
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
 
     diagnosis_digest.lambda_handler({}, None)
