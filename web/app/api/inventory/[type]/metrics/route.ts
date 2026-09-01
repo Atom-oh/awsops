@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2CpuStats, ec2HourlyCost, rdsMetrics, rdsInstanceTrends, hasLiveMetrics, liveResourceMetrics, liveResourceTrends, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
+import { ec2CpuStats, ec2NetworkTrends, ec2HourlyCost, rdsMetrics, rdsInstanceTrends, hasLiveMetrics, liveResourceMetrics, liveResourceTrends, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -46,6 +46,23 @@ export async function GET(request: Request, { params }: { params: { type: string
           [...byRegion.entries()].map(async ([reg, insts]) => Object.assign(fleet, await ec2DiagFleetLive(insts, reg, range))),
         );
         return Response.json({ fleet, range });
+      }
+      // Per-instance 24h network trends (gap L139): ?id=&trends=1 returns ONLY {trends} —
+      // the established trends=1 contract (rds / live-metrics branches).
+      const ec2Id = url.searchParams.get('id');
+      if (ec2Id && url.searchParams.get('trends') === '1') {
+        if (!/^i-[0-9a-f]{8,17}$/.test(ec2Id)) {
+          return Response.json({ status: 'error', message: 'invalid id' }, { status: 400 });
+        }
+        const account = url.searchParams.get('account') ?? undefined;
+        if (account !== undefined && account !== 'self' && !/^[0-9]{12}$/.test(account)) {
+          return Response.json({ status: 'error', message: 'invalid account' }, { status: 400 });
+        }
+        const reg = url.searchParams.get('region') ?? undefined;
+        if (reg !== undefined && !/^[a-z]{2,4}(-[a-z]+)+-\d$/.test(reg)) {
+          return Response.json({ status: 'error', message: 'invalid region' }, { status: 400 });
+        }
+        return Response.json({ trends: await ec2NetworkTrends(ec2Id, account, reg) });
       }
       const qparams: unknown[] = [];
       const where = `resource_type = 'ec2' AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, qparams);

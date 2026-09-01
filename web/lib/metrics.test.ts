@@ -291,3 +291,32 @@ describe('live fmt (ratio/native units)', () => {
     expect(fs?.value).toBe('512.4 MB');
   });
 });
+
+describe('ec2NetworkTrends (gap L139)', () => {
+  it('one bounded 24h hourly call — both metrics, ascending, account+region forwarded', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [
+      { Id: 'nt0', Timestamps: [new Date('2026-09-01T00:00:00Z'), new Date('2026-09-01T01:00:00Z')], Values: [1e6, 2e6] },
+      { Id: 'nt1', Timestamps: [new Date('2026-09-01T00:00:00Z')], Values: [5e5] },
+    ] });
+    const { ec2NetworkTrends } = await import('./metrics');
+    const t = await ec2NetworkTrends('i-abc12345', '123456789012', 'us-west-2');
+    const input = (cwSend.mock.calls[0][0] as { input: { StartTime: Date; EndTime: Date; ScanBy?: string; MetricDataQueries: { MetricStat: { Metric: { MetricName?: string }; Period?: number } }[] } }).input;
+    const windowMs = input.EndTime.getTime() - input.StartTime.getTime();
+    expect(windowMs).toBeLessThanOrEqual(25 * 3600_000);
+    expect(windowMs).toBeGreaterThanOrEqual(23 * 3600_000);
+    expect(input.ScanBy).toBe('TimestampAscending');
+    expect(input.MetricDataQueries.map((q) => q.MetricStat.Metric.MetricName)).toEqual(['NetworkIn', 'NetworkOut']);
+    expect(input.MetricDataQueries.every((q) => q.MetricStat.Period === 3600)).toBe(true);
+    expect(t.netIn).toHaveLength(2);
+    expect(t.netIn![1]).toEqual({ t: '2026-09-01T01:00:00.000Z', v: 2e6 });
+    expect(t.netOut).toHaveLength(1);
+  });
+
+  it('empty series → null; CloudWatch error → both null (never throws)', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [{ Id: 'nt0', Timestamps: [], Values: [] }] });
+    const { ec2NetworkTrends } = await import('./metrics');
+    expect(await ec2NetworkTrends('i-abc12345')).toEqual({ netIn: null, netOut: null });
+    cwSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    expect(await ec2NetworkTrends('i-abc12345')).toEqual({ netIn: null, netOut: null });
+  });
+});
