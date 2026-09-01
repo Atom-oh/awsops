@@ -397,6 +397,7 @@ export default function DetailPanel({
               <EbsRelatedSection
                 volumeId={ebsVolumeId}
                 accountId={typeof data.account_id === 'string' ? data.account_id : undefined}
+                region={typeof data.region === 'string' ? data.region : undefined}
                 attachments={data.attachments}
               />
             </section>

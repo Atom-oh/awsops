@@ -1380,6 +1380,7 @@ export const TERMS: Record<string, Pair> = {
   'inventory에 없음': { en: 'not in inventory', zh: '不在库存中', ja: 'インベントリに未登録' },
   '스냅샷': { en: 'Snapshots', zh: '快照', ja: 'スナップショット' },
   '스냅샷 조회 실패': { en: 'Snapshot lookup failed', zh: '快照查询失败', ja: 'スナップショットの取得に失敗しました' },
+  '암호화 알 수 없음': { en: 'Encryption unknown', zh: '加密状态未知', ja: '暗号化不明' },
   '이 볼륨의 스냅샷 없음': { en: 'No snapshots for this volume', zh: '此卷没有快照', ja: 'このボリュームのスナップショットはありません' },
   // Small-parity sweep batch (L62/L182).
   '사용 모델': { en: 'Models used', zh: '使用的模型', ja: '使用モデル' },

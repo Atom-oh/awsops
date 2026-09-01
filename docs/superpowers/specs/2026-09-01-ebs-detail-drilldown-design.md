@@ -21,12 +21,21 @@ EBS 볼륨 상세 패널에 v1 패리티 드릴다운 2종을 추가한다: 해�
   - `volumeId` (required, `^vol-[0-9a-f]{8,32}$`) → up to 20 `ebs_snapshot` rows where
     `data->>'volume_id' = $volumeId`, newest first (`data->>'start_time' DESC`), fields
     `{snapshotId, sizeGb, encrypted, startTime, state}`.
-  - `instanceIds` (optional, comma list, each `^i-[0-9a-f]{8,32}$`, max 10) → `ec2` rows by
+  - `instanceIds` (optional, comma list, each `^i-[0-9a-f]{8,32}$`, max 16 — io2 multi-attach) → `ec2` rows by
     `resource_id = ANY(...)`, fields `{instanceId, name, instanceType, state}`.
   - `account` (optional, `self` | 12-digit) scopes BOTH queries (`account_id`) — same-id
     collisions across synced accounts must not leak another account's rows. Default `self`.
+    The HOST's real 12-digit id is normalized to the `'self'` sentinel server-side
+    (`AWS_ACCOUNT_ID` env) — host rows are STORED under `'self'` while the row payload carries
+    the real id, the same self-vs-real-id trap root CLAUDE.md documents for the agent tier;
+    without the normalization the drill-down returns zero rows for every host volume.
+  - `region` (optional, validated) narrows both queries to the volume's own region — the table
+    identity is (type, account, region, id).
   - Invalid `volumeId`/tokens → 400 (never silently unfiltered); the two queries degrade
-    independently (one failing block renders an inline error, not a dead panel).
+    independently (one failing block renders an inline error + a server-side console.error,
+    not a dead panel). Snapshot `encrypted` is tri-state (unknown never renders a definitive
+    미암호화 badge) and a non-`completed` snapshot state renders as a badge (a pending/error
+    snapshot must not read as a usable backup).
 - **Component** `web/components/inventory/metrics/EbsRelatedSection.tsx` (named export like its
   metric siblings), mounted by `DetailPanel` when `resourceType === 'ebs_volume'` (the exact
   `RdsMetricsSection` pattern). Receives the row's `resource_id`, `account_id`, and raw

@@ -8,7 +8,7 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 // GET /api/inventory/ebs_volume/related. Mounted by DetailPanel for resourceType 'ebs_volume'
 // (the RdsMetricsSection pattern). Named export — metrics siblings' established convention.
 
-interface RelatedSnapshot { snapshotId: string; sizeGb: number | null; encrypted: boolean; startTime: string; state: string }
+interface RelatedSnapshot { snapshotId: string; sizeGb: number | null; encrypted: boolean | null; startTime: string; state: string }
 interface RelatedInstance { instanceId: string; name: string; instanceType: string; state: string }
 
 /** Instance ids from the volume row's raw attachments (JSON-string tolerant; malformed → []). */
@@ -26,11 +26,11 @@ export function attachmentInstanceIds(attachments: unknown): string[] {
       if (typeof id === 'string' && /^i-[0-9a-f]{8,32}$/.test(id)) ids.add(id);
     }
   }
-  return [...ids].slice(0, 10);
+  return [...ids].slice(0, 16); // io2 multi-attach max (route MAX_INSTANCES)
 }
 
-export function EbsRelatedSection({ volumeId, accountId, attachments }: {
-  volumeId: string; accountId?: string; attachments?: unknown;
+export function EbsRelatedSection({ volumeId, accountId, region, attachments }: {
+  volumeId: string; accountId?: string; region?: string; attachments?: unknown;
 }) {
   const { tt } = useI18n();
   const [data, setData] = useState<{ snapshots: RelatedSnapshot[] | null; instances: RelatedInstance[] | null; snapshotLimit: number } | null>(null);
@@ -43,6 +43,7 @@ export function EbsRelatedSection({ volumeId, accountId, attachments }: {
     const qs = new URLSearchParams({ volumeId });
     if (instanceIds.length) qs.set('instanceIds', instanceIds.join(','));
     if (accountId) qs.set('account', accountId);
+    if (region) qs.set('region', region);
     fetch(`/api/inventory/ebs_volume/related?${qs}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setData(d); })
@@ -50,7 +51,7 @@ export function EbsRelatedSection({ volumeId, accountId, attachments }: {
     return () => { alive = false; };
     // instanceIds is derived from `attachments` — the raw prop is the stable dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volumeId, accountId, attachments]);
+  }, [volumeId, accountId, region, attachments]);
 
   if (err) return <p className="text-[12px] text-rose-600">{tt('연관 리소스 조회 실패')}</p>;
   if (!data) return <p className="text-[12px] text-ink-400">{tt('연관 리소스 조회 중…')}</p>;
@@ -102,8 +103,12 @@ export function EbsRelatedSection({ volumeId, accountId, attachments }: {
                 <li key={s.snapshotId} className="flex items-center gap-2 text-[12px]">
                   <span className="min-w-0 flex-1 truncate font-mono text-ink-700">{s.snapshotId}</span>
                   {s.sizeGb != null && <span className="shrink-0 text-ink-500">{s.sizeGb} GB</span>}
-                  <span className={`shrink-0 rounded px-1 text-[10px] ${s.encrypted ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}`}>
-                    {s.encrypted ? tt('암호화') : tt('미암호화')}
+                  {s.state && s.state !== 'completed' && (
+                    // a pending/error snapshot must not silently read as a usable backup
+                    <span className="shrink-0 rounded bg-amber-50 px-1 text-[10px] text-amber-800">{s.state}</span>
+                  )}
+                  <span className={`shrink-0 rounded px-1 text-[10px] ${s.encrypted === true ? 'bg-emerald-50 text-emerald-700' : s.encrypted === false ? 'bg-amber-50 text-amber-800' : 'bg-ink-100 text-ink-500'}`}>
+                    {s.encrypted === true ? tt('암호화') : s.encrypted === false ? tt('미암호화') : tt('암호화 알 수 없음')}
                   </span>
                   {s.startTime && <span className="shrink-0 tabular text-[11px] text-ink-400">{s.startTime.slice(0, 10)}</span>}
                 </li>

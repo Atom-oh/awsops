@@ -13,6 +13,7 @@ const req = (q: string) => new Request(`http://x/api/inventory/ebs_volume/relate
 beforeEach(() => {
   verifyUser.mockReset(); query.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u1' });
+  process.env.AWS_ACCOUNT_ID = '180294183052';
 });
 
 describe('GET /api/inventory/ebs_volume/related (gap L97/L98)', () => {
@@ -57,6 +58,24 @@ describe('GET /api/inventory/ebs_volume/related (gap L97/L98)', () => {
     const d = await (await GET(req('?volumeId=vol-0123456789abcdef0&instanceIds=i-0123456789abcdef0'))).json();
     expect(d.snapshots).toBeNull();
     expect(d.instances).toEqual([]);
+  });
+
+  it("HOST account id normalizes to the 'self' sentinel (host rows are stored under 'self', not the raw id)", async () => {
+    query.mockResolvedValue({ rows: [] });
+    await GET(req('?volumeId=vol-0123456789abcdef0&account=180294183052&instanceIds=i-0123456789abcdef0'));
+    expect((query.mock.calls[0][1] as unknown[])[0]).toBe('self');
+    expect((query.mock.calls[1][1] as unknown[])[0]).toBe('self');
+  });
+
+  it('region narrows both queries; invalid region 400s; unknown encryption is tri-state null', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [{ resource_id: 'snap-1', data: { volume_size: 1, start_time: '', state: 'pending' } }] })
+      .mockResolvedValueOnce({ rows: [] });
+    const d = await (await GET(req('?volumeId=vol-0123456789abcdef0&instanceIds=i-0123456789abcdef0&region=ap-northeast-2'))).json();
+    expect(String(query.mock.calls[0][0])).toContain('AND region =');
+    expect(String(query.mock.calls[1][0])).toContain('AND region =');
+    expect(d.snapshots[0].encrypted).toBeNull(); // absent value ≠ definitive 미암호화
+    expect((await GET(req("?volumeId=vol-0123456789abcdef0&region=bad'--"))).status).toBe(400);
   });
 
   it('no instanceIds → instances [] with a single (snapshot) query', async () => {
