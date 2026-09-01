@@ -54,7 +54,7 @@ function structuredList(key: string, value: unknown): DetailListItem[] | null {
         id,
         name: typeof (o.Device ?? o.device) === 'string' ? String(o.Device ?? o.device) : undefined,
         extra: typeof (o.State ?? o.state) === 'string' ? String(o.State ?? o.state) : undefined,
-        flag: [true, 'true'].includes((o.DeleteOnTermination ?? o.delete_on_termination) as boolean | string) ? 'DeleteOnTermination' : undefined,
+        flag: [true, 'true'].includes((o.DeleteOnTermination ?? o.delete_on_termination ?? o.deleteOnTermination) as boolean | string) ? 'DeleteOnTermination' : undefined,
       });
     } else if (key === 'settings') {
       // ECS-cluster-shaped settings ONLY: [{ Name: string, Value: string }] → one label–value
@@ -63,8 +63,10 @@ function structuredList(key: string, value: unknown): DetailListItem[] | null {
       // a half-parsed list or an '[object Object]' cell.
       const name = o.Name ?? o.name;
       const val = o.Value ?? o.value;
-      if (typeof name !== 'string' || (val != null && typeof val !== 'string')) return null;
-      rows.push({ id: name, name: typeof val === 'string' ? val : undefined });
+      // A null/absent Value falls back too — a bare label row is indistinguishable from an
+      // empty value, so anything but {string, string} takes the JSON rendering whole.
+      if (typeof name !== 'string' || typeof val !== 'string') return null;
+      rows.push({ id: name, name: val });
     } else if (key === 'routes') {
       // Route table (v1 parity): destination → target, blackhole flagged.
       const dest = o.DestinationCidrBlock ?? o.destination_cidr_block ?? o.DestinationIpv6CidrBlock

@@ -58,11 +58,12 @@ In the "Attached Resources" section of the volume detail panel:
 - Attached EC2 instance ID
 - Device path (e.g., /dev/xvda)
 - Instance name, type, status
+- DeleteOnTermination flag (shown only on attachments that have it set)
 
 ## Tips
 
 :::tip Idle Volume Management
-Volumes in "available" state are not attached to EC2 and only incur costs. Check idle volumes in the Idle Volumes card and delete unnecessary volumes.
+Volumes in "available" state are not attached to EC2 and only incur costs. Check them in the Idle Volumes card and the idle banner in the volume detail, and delete unnecessary volumes.
 :::
 
 :::info Encryption Recommended

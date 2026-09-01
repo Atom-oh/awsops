@@ -135,10 +135,12 @@ describe('structuredList additions (gap L209/L215)', () => {
     expect(formatDetailValue('settings', [{ Value: 'x' }]).kind).toBe('code');
     // a structured Value must not render as '[object Object]' in a half-parsed list
     expect(formatDetailValue('settings', [{ Name: 'a', Value: { nested: 1 } }]).kind).toBe('code');
+    // a null/absent Value falls back too — a bare label row would read as an empty value
+    expect(formatDetailValue('settings', [{ Name: 'a' }]).kind).toBe('code');
   });
 
-  it("attachments tolerate a text-shaped 'true' for the DeleteOnTermination flag", () => {
-    const v = formatDetailValue('attachments', [{ InstanceId: 'i-1', DeleteOnTermination: 'true' }]);
-    expect(v.items![0].flag).toBe('DeleteOnTermination');
+  it("attachments tolerate a text-shaped 'true' AND the camelCase variant for the flag", () => {
+    expect(formatDetailValue('attachments', [{ InstanceId: 'i-1', DeleteOnTermination: 'true' }]).items![0].flag).toBe('DeleteOnTermination');
+    expect(formatDetailValue('attachments', [{ InstanceId: 'i-1', deleteOnTermination: true }]).items![0].flag).toBe('DeleteOnTermination');
   });
 });

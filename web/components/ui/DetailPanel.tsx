@@ -115,7 +115,8 @@ function copyText(fmt: DetailValue): string | null {
     case 'tags':
       return fmt.entries!.map(([k, v]) => `${k}=${v}`).join('\n') || null;
     case 'idlist':
-      return fmt.items!.map((it) => [it.id, it.name, it.extra].filter(Boolean).join(' ')).join('\n') || null;
+      // include the flag — a copied Attachments list must not drop DeleteOnTermination/BLACKHOLE.
+      return fmt.items!.map((it) => [it.id, it.name, it.extra, it.flag].filter(Boolean).join(' ')).join('\n') || null;
     default:
       return fmt.text?.trim() ? fmt.text : null;
   }

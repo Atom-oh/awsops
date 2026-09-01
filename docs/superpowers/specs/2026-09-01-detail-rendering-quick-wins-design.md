@@ -22,7 +22,7 @@ rendering).
   - Idle hint: `state === 'available'` (detached) → amber "idle volume — consider deleting to
     save costs" banner; attached/unknown → nothing.
 - **L215** — `structuredList` gains a `settings` branch: ECS cluster `[{Name, Value}]` renders
-  as one label–value row per setting ('containerInsights · disabled') instead of a raw JSON
+  as one label–value row per setting (containerInsights disabled — adjacent spans, no glyph) instead of a raw JSON
   code block. Rows with a non-string Name fall back to the JSON rendering (never a half-parsed
   list).
 
@@ -44,3 +44,14 @@ Read-only; no sync/Terraform/schema changes. 4-language i18n for the new banner 
   banners mount ABOVE the field groups; the idle banner is snapshot-qualified ('마지막 sync
   시점에 미연결' with its own singular term) since the panel carries no freshness stamp;
   component counts bumped 102 → 103 in all five declaration sites.
+
+## Round-2 corrections (review-driven)
+
+- **The EN/JA/ZH guides now carry ALL the round-1 hunks (the gate MAJOR)** — round 1 shipped
+  the Attached-Resources DeleteOnTermination bullet and the idle-tip rewrite only in Korean
+  while this spec claimed 4 locales; the two hunks are ported and the claim is now true.
+- Settings require {string, string} — a null/absent Value also falls back whole to JSON (a
+  bare label row is indistinguishable from an empty value); the attachments flag tolerates the
+  camelCase `deleteOnTermination` variant (the EbsRelatedSection precedent); idlist copy
+  includes the flag (a copied attachments list must not drop DeleteOnTermination/BLACKHOLE);
+  the '·' glyph is dropped from the docs (the renderer emits adjacent spans).

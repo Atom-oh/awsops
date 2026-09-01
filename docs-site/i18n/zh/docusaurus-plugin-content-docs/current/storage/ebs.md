@@ -58,11 +58,12 @@ import Screenshot from '@site/src/components/Screenshot';
 - 关联的 EC2 实例 ID
 - 设备路径（例如：/dev/xvda）
 - 实例名称、类型、状态
+- DeleteOnTermination 标志（仅在已设置的 attachment 上显示）
 
 ## 使用技巧
 
 :::tip 闲置卷管理
-处于 "available" 状态的卷未关联到 EC2，只会产生费用。请在 Idle Volumes 卡片中确认闲置卷，并删除不需要的卷。
+处于 "available" 状态的卷未关联到 EC2，只会产生费用。请在 Idle Volumes 卡片和卷详情的闲置横幅中确认，并删除不需要的卷。
 :::
 
 :::info 建议加密
