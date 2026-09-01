@@ -1,13 +1,14 @@
 # Components Module
 
 ## Role
-102 client components across 11 subdirectories: `ui` (shared primitives), `shell` (AppShell, Sidebar, LanguageProvider, AccountSelector, etc.), `charts`, `chat`, `inventory` (+`metrics/`), `eks`, `diagnosis`, `datasources`, `insights`, `nfm`, `overview`.
+102 client components across 14 subdirectories: `ui` (shared primitives), `shell` (AppShell, Sidebar, LanguageProvider, AccountSelector, etc.), `charts`, `chat`, `inventory` (+`metrics/`), `eks`, `diagnosis`, `datasources`, `finops`, `graph`, `insights`, `nfm`, `overview`, `topology`.
 
 ## Key Files
 - `ui/DataTable.tsx` + `ui/DetailPanel.tsx` — the default list+detail combo. DetailPanel renders the full data the row already holds, with no extra fetch — if the spec (`InvType`) has `sections`, it renders grouped sections; otherwise a flat key list (backward-compat). New inventory types must define `sections`.
 - `inventory/metrics/MetricTable.tsx` — a declarative `MetricCol` model (`{value, render?, danger?, facet?, facetValues?, type}`) gets you sort, global search, facet filters, and a "problems only" toggle for free. Per-service tables (Ec2/Rds/Alb/...) are written purely as column definitions. Opt-in props: `facetValues` (multi-value facet — an exact-match on the joined display string drops multi-value rows), `maxRender`+`capKeep` (render-stage row cap — a data-stage cut silently zeroes an exact search), `rowClass` (per-row class hook).
 - `inventory/metrics/guides.tsx` + `guides.{en,zh,ja}.tsx` — per-language diagnosis-guide bodies. i18n lockstep — update all four files together.
 - `nfm/FlowHopPath.tsx` — end-to-end hop stepper (local endpoint → traversedConstructs → remote endpoint). Each kind has its own glyph and color — never rely on color alone to identify a kind.
+- `eks/NodeCapacityCards.tsx` — node capacity 3-split cards; also exports the shared `StackBar` (named export) reused by `NodeCapacityList` on the nodes fleet page — a deliberate exception to the default-export-per-page convention.
 - `eks/NodeDrilldownPanel.tsx` — node drilldown (capacity cards + Pod/ENI sections, with its own live nodes+pods query). Shared by the EKS overview and the `/eks/nodes` fleet page (`FleetKindPage`).
 - `chat/MessageList.tsx` + `chat/useChat.ts` — streaming smoothing: throttles markdown-parse input at ~180ms via `useThrottled` (avoids O(n²) full reparse per token) and balances incomplete code fences (MessageList); a typewriter buffer batches deltas and emits proportionally to backlog every 24ms (min 3 chars), flushing immediately on completion (useChat).
 - `shell/LanguageProvider.tsx` — the `useI18n()` hook (`t`/`tt`/lang context).

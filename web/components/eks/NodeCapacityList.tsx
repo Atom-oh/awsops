@@ -30,14 +30,16 @@ function caption(requested: number | null, allocatable: number, capacity: number
 export default function NodeCapacityList({ rows, requestsPending = false }: { rows: NodeCapacityRow[]; requestsPending?: boolean }) {
   const { tt } = useI18n();
   if (!rows.length) return null;
-  // Cap by PRESSURE (max of cpu/mem request ratio, desc) — an arbitrary slice could hide
-  // exactly the saturated nodes an operator opens this list to find.
+  // Cap order: UNKNOWN-request rows first (a failed pods read must stay visible — truncating
+  // the degraded rows away would mask the degradation), then by PRESSURE desc (max of cpu/mem
+  // request ratio) so saturated nodes are never hidden either.
+  const unknown = (n: NodeCapacityRow) => n.cpuRequest == null || n.memRequestMiB == null;
   const pressure = (n: NodeCapacityRow) => Math.max(
-    n.cpuAllocatable > 0 && n.cpuRequest != null ? n.cpuRequest / n.cpuAllocatable : -1,
-    n.memAllocatableMiB > 0 && n.memRequestMiB != null ? n.memRequestMiB / n.memAllocatableMiB : -1,
+    n.cpuAllocatable > 0 && n.cpuRequest != null ? n.cpuRequest / n.cpuAllocatable : 0,
+    n.memAllocatableMiB > 0 && n.memRequestMiB != null ? n.memRequestMiB / n.memAllocatableMiB : 0,
   );
   const shown = rows.length > MAX_RENDER
-    ? [...rows].sort((a, b) => pressure(b) - pressure(a)).slice(0, MAX_RENDER)
+    ? [...rows].sort((a, b) => (Number(unknown(b)) - Number(unknown(a))) || (pressure(b) - pressure(a))).slice(0, MAX_RENDER)
     : rows;
   // Pending (pods fan-out in flight) reads '로딩 중', failed reads '미상' — never conflated.
   const unknownText = requestsPending ? tt('요청량 로딩 중…') : tt('요청량 미상');
@@ -45,7 +47,7 @@ export default function NodeCapacityList({ rows, requestsPending = false }: { ro
   return (
     <Card
       title={tt('노드 용량 (Requested / Available / Reserved)')}
-      subtitle={tt('Reserved = Capacity − Allocatable (system-reserved) · Requested = 스케줄러 예약 합계')}
+      subtitle={tt('Reserved = Capacity − Allocatable (system-reserved) · Requested = 스케줄러 요청 합계 (native-sidecar init 요청 제외)')}
       padded={false}
     >
       {rows.length > MAX_RENDER && (

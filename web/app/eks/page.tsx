@@ -204,6 +204,18 @@ export default function EksPage() {
   useEffect(() => {
     if (facetActive && clusterFilter && !facetNames.has(clusterFilter)) setClusterFilter('');
   }, [facetActive, clusterFilter, facetNames]);
+  // Prune facet selections that no longer exist after a reload/account switch — a vanished
+  // cluster/VPC must not pin the page on the no-match empty state.
+  useEffect(() => {
+    if (!rows) return;
+    const names = new Set(rows.map((c) => c.name));
+    const vpcs = new Set(rows.map((c) => c.vpcId || NO_VPC));
+    setFacet((cur) => {
+      const clusters = cur.clusters.filter((c) => names.has(c));
+      const vs = cur.vpcs.filter((v) => vpcs.has(v));
+      return clusters.length === cur.clusters.length && vs.length === cur.vpcs.length ? cur : { clusters, vpcs: vs };
+    });
+  }, [rows]);
   const visibleFleet = useMemo(
     () => fleet.filter((f) =>
       (clusterFilter ? f.name === clusterFilter : true)

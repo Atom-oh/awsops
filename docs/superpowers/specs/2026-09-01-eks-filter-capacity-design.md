@@ -69,3 +69,17 @@ Read-only; no Terraform/IAM/schema changes (both fetches are existing in-cluster
   mirrors (not imports) StackBar's clamps — the "one source of truth" claim covers the bar
   segments. Known base follow-up (not this PR): `normalizePod` ignores restartable
   native-sidecar init containers in the request formula.
+
+## Round-2 corrections (review-driven)
+
+- **Degraded rows survive the cap (the gate MAJOR)** — the pressure sort ranked
+  unknown-request rows (pressure −1) LAST, so a failed cluster's '요청량 미상' rows were
+  exactly the ones truncated away at >40 nodes, masking the degradation. Unknown rows now
+  sort FIRST, then known rows by pressure desc.
+- Facet selections are pruned when the cluster universe reloads (a vanished cluster/VPC no
+  longer pins the no-match empty state); the subtitle softens "스케줄러 예약 합계" to
+  "스케줄러 요청 합계 (native-sidecar init 요청 제외)" until the disclosed `normalizePod`
+  follow-up lands; the CHANGELOG bullet widens the terminal-exclusion scope to all three
+  surfaces and carries the sidecar caveat; `web/components/CLAUDE.md` gets the real
+  subdirectory list (14) and a `StackBar` named-export note; the truncated gap-audit L130/L132
+  sentence tails are restored.

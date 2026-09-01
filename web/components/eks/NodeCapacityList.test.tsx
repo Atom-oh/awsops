@@ -31,7 +31,25 @@ describe('NodeCapacityList (gap L132)', () => {
     const rows = Array.from({ length: 45 }, (_, i) => node({ name: `n-${i}` }));
     render(<NodeCapacityList rows={rows} />);
     expect(screen.getByText(/40 \/ 45/)).toBeTruthy();
-    expect(screen.queryByText('n-44')).toBeNull();
+  });
+
+  it('unknown-request (degraded) rows are NEVER truncated away by the pressure cap', () => {
+    const rows = [
+      ...Array.from({ length: 44 }, (_, i) => node({ name: `known-${i}`, cpuRequest: 3, memRequestMiB: 6144 })),
+      node({ name: 'degraded-node', cpuRequest: null, memRequestMiB: null }), // would sort last by raw pressure
+    ];
+    render(<NodeCapacityList rows={rows} />);
+    expect(screen.getByText('degraded-node')).toBeTruthy();
+    expect(screen.getAllByText(/요청량 미상/).length).toBe(2);
+  });
+
+  it('among known rows the cap keeps the most PRESSURED ones', () => {
+    const rows = [
+      ...Array.from({ length: 44 }, (_, i) => node({ name: `idle-${i}`, cpuRequest: 0.1 })),
+      node({ name: 'hot-node', cpuRequest: 3.4 }),
+    ];
+    render(<NodeCapacityList rows={rows} />);
+    expect(screen.getByText('hot-node')).toBeTruthy();
   });
 
   it('renders nothing for an empty row set', () => {
