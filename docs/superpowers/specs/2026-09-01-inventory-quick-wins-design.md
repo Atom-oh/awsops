@@ -11,10 +11,12 @@ L213 (ECR encryption-type column).
 ## Decisions
 - **L187** — `cloudfront` spec gains `{ key: 'name', label: 'Name' }` as the second column
   (the value is already synced via `(tags->>'Name') AS name`; the DetailPanel header already
-  uses it). Absent names render the table's standard em-dash.
-- **L188** — `cloudtrail` spec gains a `last_delivery_h` column (localized datetime via the
-  existing `dateH` deriver pattern from `latest_delivery_time`, already synced) — an
-  at-a-glance "is this trail actually delivering" signal.
+  uses it). Absent names render as blank cells (DataTable's null rendering).
+- **L188** — `cloudtrail` spec gains a `last_delivery_h` column (UTC datetime — the header
+  carries the (UTC) marker; the deriver normalizes the persisted space-separated pg8000
+  timestamp before parsing) — an at-a-glance "is this trail actually delivering" signal.
+  Note: it is a last-SUCCESS timestamp; `latest_delivery_error` (detail panel) is the failure
+  signal.
 - **L189** — the cloudtrail sync SELECT gains 6 columns, all verified present in the pinned
   plugin `aws@0.142.0` (`table_aws_cloudtrail_trail.go`): `cloudwatch_logs_role_arn`,
   `latest_cloudwatch_logs_delivery_time`, `latest_cloudwatch_logs_delivery_error`,
@@ -33,3 +35,17 @@ No Terraform/IAM/schema changes (the new sync columns live in the existing `data
   formatting + absent → undefined).
 - Registry: columns present in the specs (existing registry invariant tests keep passing).
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-22 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **The docs-site ECR guide contradicted the shipped UI (the gate MAJOR)** — all four locales
+  said "the encryption type is not a table column"; the sentence and the column tables now
+  document the Encryption column. The CloudTrail guides (4 locales) mention the Last Delivery
+  (UTC) column.
+- Last Delivery is labeled (UTC) and moved into the mobile card window; the deriver
+  normalizes the real persisted timestamp shape (space-separated pg8000 str()) with a test in
+  that shape; CW-Logs delivery time/error joined the Logging section beside the S3/digest
+  evidence (plumbing stays in Storage); `last_delivery_h` is hideKeys'd from the panel
+  (table-only derivation of `latest_delivery_time`); the two dead VIRTUAL_LABELS entries are
+  removed (table columns resolve from spec.columns); CloudFront's Name column moved before
+  Domain, matching the published guide order.

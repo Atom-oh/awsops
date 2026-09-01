@@ -23,7 +23,7 @@ import Screenshot from '@site/src/components/Screenshot';
 ### 选项卡结构
 | 选项卡 | 内容 |
 |---|------|
-| Trails | 跟踪列表、配置、S3 存储桶 |
+| Trails | 跟踪列表、配置、S3 存储桶 — Last Delivery (UTC) 列可一眼确认日志是否实际投递 |
 | Recent Events | 最近的 API 事件（所有事件） |
 | Write Events | 仅筛选写入事件（资源变更审计） |
 

@@ -214,10 +214,16 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       encryption_type_h: typeof encType === 'string' && encType ? encType : undefined,
     };
   },
-  cloudtrail: (r) => ({
-    // L188: 'is this trail actually delivering' at a glance — localized datetime.
-    last_delivery_h: dateH(r.latest_delivery_time),
-  }),
+  cloudtrail: (r) => {
+    // L188: 'is this trail actually delivering' at a glance. The sync persists pg8000
+    // datetimes via str() → '2026-09-01 03:04:00+00:00' (space-separated) — normalize to
+    // ISO before parsing (space-form Date() parsing is implementation-defined). dateH
+    // renders UTC; the column header carries the (UTC) marker.
+    const raw = typeof r.latest_delivery_time === 'string'
+      ? r.latest_delivery_time.replace(' ', 'T')
+      : r.latest_delivery_time;
+    return { last_delivery_h: dateH(raw) };
+  },
   ecs_task: (r) => {
     // Fargate on-demand (ap-northeast-2): $/vCPU-h + $/GB-h — v1 constants (config-overridable in v1).
     const VCPU_H = 0.04656;

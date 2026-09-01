@@ -23,7 +23,7 @@ AWS 계정의 API 활동을 기록하는 CloudTrail 트레일과 이벤트를 �
 ### 탭 구조
 | 탭 | 내용 |
 |---|------|
-| Trails | 트레일 목록, 설정, S3 버킷 |
+| Trails | 트레일 목록, 설정, S3 버킷 — Last Delivery (UTC) 컬럼으로 실제 로그 전달 여부를 한눈에 확인 |
 | Recent Events | 최근 API 이벤트 (모든 이벤트) |
 | Write Events | 쓰기 이벤트만 필터링 (리소스 변경 감사) |
 

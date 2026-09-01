@@ -31,9 +31,10 @@ There is no card showing total repository count (check the table row count inste
 | URI | Repository URI (image push/pull address) |
 | Tag mutability | Tag mutability (MUTABLE/IMMUTABLE) |
 | Scan on Push (Basic) | Repository-level basic scan-on-push setting (Yes/No) |
+| Encryption | Encryption type (AES256/KMS) |
 | Created | Creation date |
 
-The encryption type is **not a table column** — check the detail panel below. The Scan on Push (Basic) column reflects the repository-level basic scanning setting only; registry-level Inspector enhanced scanning is not represented.
+The Encryption column is the encryption type (AES256/KMS) derived from encryption_configuration. The Scan on Push (Basic) column reflects the repository-level basic scanning setting only; registry-level Inspector enhanced scanning is not represented.
 
 ### Detail Panel
 Click a repository to view detailed information:

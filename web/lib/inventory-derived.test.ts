@@ -173,6 +173,8 @@ describe('deriveRow ecr encryption + cloudtrail last delivery (gap L213/L188)', 
   });
   it('cloudtrail last_delivery_h formats the synced timestamp; absent → undefined', () => {
     expect(deriveRow('cloudtrail', { latest_delivery_time: '2026-09-01T03:04:00Z' }).last_delivery_h).toBe('2026-09-01 03:04');
+    // The REAL persisted shape: pg8000 datetime through json.dumps(default=str) — space-separated.
+    expect(deriveRow('cloudtrail', { latest_delivery_time: '2026-09-01 03:04:00+00:00' }).last_delivery_h).toBe('2026-09-01 03:04');
     expect(deriveRow('cloudtrail', { resource_id: 't' }).last_delivery_h).toBeUndefined();
   });
 });

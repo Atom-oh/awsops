@@ -276,7 +276,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     filterKeys: ['region', 'path', 'mfa_enabled'] },
   // ---- D3 wave ----
   cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', distKey2: 'status', columns: [
-    { key: 'domain_name', label: 'Domain' }, { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' },
+    { key: 'name', label: 'Name' }, { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
     { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } , { key: 'protocol_h', label: 'Protocol' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'domain_name', 'e_tag'] },
@@ -368,16 +368,21 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ],
     filterKeys: ['region', 'scope'] },
   cloudtrail: { label: 'CloudTrail Trails', group: 'Security', distKey: 'home_region', columns: [
-    { key: 'is_logging', label: 'Logging' }, { key: 'is_multi_region_trail', label: 'Multi-region' },
-    { key: 'home_region', label: 'Home region' }, { key: 's3_bucket_name', label: 'S3 bucket' },
-    { key: 'last_delivery_h', label: 'Last Delivery' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ],
+    { key: 'is_logging', label: 'Logging' }, { key: 'last_delivery_h', label: 'Last Delivery (UTC)' },
+    { key: 'is_multi_region_trail', label: 'Multi-region' }, { key: 'home_region', label: 'Home region' },
+    { key: 's3_bucket_name', label: 'S3 bucket' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'home_region'] },
-      { label: 'Logging', keys: ['is_logging', 'is_multi_region_trail', 'is_organization_trail', 'include_global_service_events', 'log_file_validation_enabled', 'start_logging_time', 'stop_logging_time', 'latest_delivery_time', 'latest_delivery_error', 'latest_digest_delivery_time', 'latest_digest_delivery_error'] },
-      { label: 'Storage', keys: ['s3_bucket_name', 's3_key_prefix', 'log_group_arn', 'cloudwatch_logs_role_arn', 'latest_cloudwatch_logs_delivery_time', 'latest_cloudwatch_logs_delivery_error'] },
+      // Delivery-health evidence stays TOGETHER in Logging (S3, CW Logs, digest) — an operator
+      // compares these side by side; only the plumbing (bucket/role/group) lives in Storage.
+      { label: 'Logging', keys: ['is_logging', 'is_multi_region_trail', 'is_organization_trail', 'include_global_service_events', 'log_file_validation_enabled', 'start_logging_time', 'stop_logging_time', 'latest_delivery_time', 'latest_delivery_error', 'latest_cloudwatch_logs_delivery_time', 'latest_cloudwatch_logs_delivery_error', 'latest_digest_delivery_time', 'latest_digest_delivery_error'] },
+      { label: 'Storage', keys: ['s3_bucket_name', 's3_key_prefix', 'log_group_arn', 'cloudwatch_logs_role_arn'] },
       { label: 'Security', keys: ['kms_key_id', 'sns_topic_arn', 'has_custom_event_selectors', 'has_insight_selectors'] },
       { label: 'Tags', keys: ['tags'] },
     ],
+    // last_delivery_h is a table-only derivation of latest_delivery_time — rendering both in
+    // the panel (section + Other) would duplicate the value in two formats.
+    hideKeys: ['last_delivery_h'],
     filterKeys: ['region', 'is_multi_region_trail', 'home_region', 's3_bucket_name', 'include_global_service_events'] },
   s3_public_access: { label: 'S3 Public Access', group: 'Security', distKey: 'bucket_policy_is_public', columns: [
     { key: 'bucket_policy_is_public', label: 'Policy public' }, { key: 'block_public_acls', label: 'Block ACLs' },

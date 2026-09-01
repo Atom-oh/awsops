@@ -31,9 +31,10 @@ ECR 리포지토리와 이미지 정보를 확인할 수 있는 페이지입니�
 | URI | 리포지토리 URI (이미지 푸시/풀 주소) |
 | Tag mutability | 태그 변경 가능 여부 (MUTABLE/IMMUTABLE) |
 | Scan on Push (Basic) | 리포지토리 수준 기본 스캔 설정 (Yes/No) |
+| Encryption | 암호화 타입 (AES256/KMS) |
 | Created | 생성일 |
 
-Encryption 타입은 **테이블 컬럼이 아닙니다** — 아래 상세 패널로 확인합니다. Scan on Push (Basic) 컬럼은 리포지토리 수준 기본 스캔 설정이며, 레지스트리 수준 Inspector 확장 스캔은 반영하지 않습니다.
+Encryption 컬럼은 encryption_configuration에서 파생된 암호화 타입(AES256/KMS)입니다. Scan on Push (Basic) 컬럼은 리포지토리 수준 기본 스캔 설정이며, 레지스트리 수준 Inspector 확장 스캔은 반영하지 않습니다.
 
 ### 상세 패널
 리포지토리를 클릭하면 상세 정보를 확인할 수 있습니다:

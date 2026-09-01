@@ -23,7 +23,7 @@ A page for viewing CloudTrail trails and events that record API activity in your
 ### Tab Structure
 | Tab | Content |
 |-----|---------|
-| Trails | Trail list, configuration, S3 bucket |
+| Trails | Trail list, configuration, S3 bucket — the Last Delivery (UTC) column shows at a glance whether logs are actually delivering |
 | Recent Events | Recent API events (all events) |
 | Write Events | Write events only (resource change audit) |
 

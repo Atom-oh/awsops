@@ -31,9 +31,10 @@ import Screenshot from '@site/src/components/Screenshot';
 | URI | 存储库 URI（镜像推送/拉取地址） |
 | Tag mutability | 标签是否可更改（MUTABLE/IMMUTABLE） |
 | Scan on Push (Basic) | 仓库级基础推送扫描设置（Yes/No） |
+| Encryption | 加密类型（AES256/KMS） |
 | Created | 创建日期 |
 
-加密类型**并非表格列** —— 请在下方详情面板中查看。Scan on Push (Basic) 列仅反映仓库级基础扫描设置，不反映注册表级 Inspector 增强扫描。
+Encryption 列为从 encryption_configuration 派生的加密类型（AES256/KMS）。Scan on Push (Basic) 列仅反映仓库级基础扫描设置，不反映注册表级 Inspector 增强扫描。
 
 ### 详情面板
 点击存储库可以查看详细信息：
