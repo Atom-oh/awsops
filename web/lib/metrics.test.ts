@@ -168,3 +168,49 @@ describe('rdsMetrics', () => {
     expect(Object.keys(r.byInstance)).toHaveLength(63); // every instance represented
   });
 });
+
+describe('rdsInstanceTrends (gap L141/L142/L155)', () => {
+  const iso = (minAgo: number) => new Date(Date.now() - minAgo * 60_000);
+  type CwInput = { input: { StartTime: Date; MetricDataQueries: { Id: string; MetricStat: { Period: number } }[]; ScanBy?: string } };
+  it('makes TWO bounded parallel calls — a ~65-min spark window and a 14-day long-trend window', async () => {
+    cwSend.mockResolvedValue({ MetricDataResults: [] });
+    const { rdsInstanceTrends } = await import('./metrics');
+    await rdsInstanceTrends('db-1');
+    expect(cwSend).toHaveBeenCalledTimes(2);
+    const [a, b] = cwSend.mock.calls.map((c) => (c[0] as CwInput).input);
+    const spark = a.MetricDataQueries[0].Id.startsWith('spark') ? a : b;
+    const long = spark === a ? b : a;
+    // Period sets RESOLUTION, not a window — the spark call must carry its own short StartTime
+    // (one 14d window returned ~4,000 points per 5-min query only to be trimmed client-side).
+    expect(Date.now() - spark.StartTime.getTime()).toBeLessThan(70 * 60_000);
+    expect(spark.MetricDataQueries).toHaveLength(6);
+    expect(spark.MetricDataQueries.every((q) => q.MetricStat.Period === 300)).toBe(true);
+    expect(Date.now() - long.StartTime.getTime()).toBeGreaterThan(13 * 86_400_000);
+    const periods = Object.fromEntries(long.MetricDataQueries.map((q) => [q.Id, q.MetricStat.Period]));
+    expect(periods).toEqual({ mem24h: 3600, cpu14d: 86_400 });
+    expect(spark.ScanBy).toBe('TimestampAscending');
+    expect(long.ScanBy).toBe('TimestampAscending');
+  });
+  it('maps series into {t,v}[] and windows sparks to the last hour', async () => {
+    cwSend.mockImplementation(async (cmd: { input: { MetricDataQueries: { Id: string }[] } }) => (
+      cmd.input.MetricDataQueries[0].Id.startsWith('spark')
+        ? { MetricDataResults: [{ Id: 'spark_0', Timestamps: [iso(120), iso(30), iso(5)], Values: [9, 41.234, 43.5] }] }
+        : { MetricDataResults: [{ Id: 'mem24h', Timestamps: [iso(60)], Values: [2 * 1024 ** 3] }] }
+    ));
+    const { rdsInstanceTrends } = await import('./metrics');
+    const t = await rdsInstanceTrends('db-1');
+    // the 120-min-old point falls outside the 1h spark window
+    expect(t.spark.cpu?.map((s) => s.v)).toEqual([41.23, 43.5]);
+    expect(t.mem24h?.[0].v).toBe(2 * 1024 ** 3);
+    expect(t.cpu14d).toBeNull(); // no datapoints → null, never []
+  });
+  it('degrades every series to null (never throws) when CloudWatch denies', async () => {
+    cwSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    const { rdsInstanceTrends } = await import('./metrics');
+    const t = await rdsInstanceTrends('db-1');
+    expect(t.mem24h).toBeNull();
+    expect(t.cpu14d).toBeNull();
+    expect(Object.values(t.spark).every((v) => v === null)).toBe(true);
+  });
+
+});

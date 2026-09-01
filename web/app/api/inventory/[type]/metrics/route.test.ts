@@ -5,12 +5,14 @@ const query = vi.fn();
 const ec2AvgCpu = vi.fn();
 const ec2HourlyCost = vi.fn();
 const rdsMetrics = vi.fn();
+const rdsInstanceTrends = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/metrics', () => ({
   ec2AvgCpu: (...a: unknown[]) => ec2AvgCpu(...a),
   ec2HourlyCost: (...a: unknown[]) => ec2HourlyCost(...a),
   rdsMetrics: (...a: unknown[]) => rdsMetrics(...a),
+  rdsInstanceTrends: (...a: unknown[]) => rdsInstanceTrends(...a),
 }));
 
 const req = (url = 'http://x/api/inventory/ec2/metrics', cookie = 'awsops_token=t') =>
@@ -160,5 +162,34 @@ describe('GET /api/inventory/[type]/metrics', () => {
       await GET(req('http://x/api/inventory/rds/metrics?id=db-1&regions=us-east-1'), ctx('rds'));
       expect(query).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('rds ?id= trends=1 (gap L141/L142/L155)', () => {
+  it('default ?id= shape stays untouched (no trends field, no trends call)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    rdsMetrics.mockResolvedValue({ byInstance: { 'db-1': { cpu: 42 } }, avgCpu: 42 });
+    const { GET } = await import('./route');
+    const res = await GET(req('http://x/api/inventory/rds/metrics?id=db-1'), ctx('rds'));
+    const body = await res.json();
+    expect(body.instance).toMatchObject({ cpu: 42 });
+    expect(body).not.toHaveProperty('trends');
+    expect(rdsInstanceTrends).not.toHaveBeenCalled();
+  });
+  it('trends=1 returns ONLY the trends — no redundant rdsMetrics snapshot call', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    rdsInstanceTrends.mockResolvedValue({ spark: {}, mem24h: null, cpu14d: null });
+    const { GET } = await import('./route');
+    const body = await (await GET(req('http://x/api/inventory/rds/metrics?id=db-1&trends=1'), ctx('rds'))).json();
+    expect(body.trends).toEqual({ spark: {}, mem24h: null, cpu14d: null });
+    expect(body).not.toHaveProperty('instance');
+    expect(rdsInstanceTrends).toHaveBeenCalledWith('db-1');
+    expect(rdsMetrics).not.toHaveBeenCalled(); // the section discards the snapshot; its sibling already fetches it
+  });
+  it('400 on a malformed id (matching the sibling ?ids= charset)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const { GET } = await import('./route');
+    expect((await GET(req("http://x/api/inventory/rds/metrics?id=db-1'--"), ctx('rds'))).status).toBe(400);
+    expect(rdsMetrics).not.toHaveBeenCalled();
   });
 });

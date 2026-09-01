@@ -11,6 +11,7 @@ import { buildDetailGroups, type DetailValue } from '@/lib/inventory-detail';
 import type { InvType } from '@/lib/inventory-types';
 import type { RdsInstanceMetrics } from '@/lib/metrics';
 import { EbsRelatedSection } from '@/components/inventory/metrics/EbsRelatedSection';
+import { RdsTrendsSection } from '@/components/inventory/metrics/RdsTrendsSection';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // v1-parity: each detail section is a titled card with a leading icon. Section labels are a small
@@ -390,6 +391,11 @@ export default function DetailPanel({
           {rdsInstanceId && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
               <RdsMetricsSection instanceId={rdsInstanceId} />
+            </section>
+          )}
+          {rdsInstanceId && (
+            <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+              <RdsTrendsSection instanceId={rdsInstanceId} />
             </section>
           )}
           {ebsVolumeId && (
