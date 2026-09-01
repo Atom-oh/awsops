@@ -1375,7 +1375,7 @@ export const TERMS: Record<string, Pair> = {
   '메트릭 추이 조회 실패': { en: 'Metric trend lookup failed', zh: '指标趋势查询失败', ja: 'メトリクス推移の取得に失敗しました' },
   '메트릭 추이 로딩 중…': { en: 'Loading metric trends…', zh: '正在加载指标趋势…', ja: 'メトリクス推移を読み込み中…' },
   '최근 1시간 (5분 단위)': { en: 'Last 1 hour (5-min)', zh: '最近1小时（5分钟粒度）', ja: '直近1時間（5分単位）' },
-  '여유 메모리 24시간 (GB)': { en: 'Freeable memory, 24h (GB)', zh: '可用内存 24小时（GB）', ja: '空きメモリ 24時間（GB）' },
+  '여유 메모리 24시간 (GB, KST)': { en: 'Freeable memory, 24h (GB, KST)', zh: '可用内存 24小时（GB，KST）', ja: '空きメモリ 24時間（GB, KST）' },
   'CPU 14일 일별 추이 (%)': { en: 'CPU, 14-day daily trend (%)', zh: 'CPU 14天每日趋势（%）', ja: 'CPU 14日間 日次推移（%）' },
   '데이터 불가': { en: 'no data', zh: '无数据', ja: 'データなし' },
   // EBS detail drill-down batch (L97/L98).

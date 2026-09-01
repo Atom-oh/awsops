@@ -83,13 +83,19 @@ export async function GET(request: Request, { params }: { params: { type: string
       }
       const instanceId = new URL(request.url).searchParams.get('id');
       if (instanceId) {
-        const one = await rdsMetrics([instanceId]);
-        // Opt-in time-series (gap L141/L142/L155): the default ?id= shape stays untouched so
-        // existing consumers keep today's latency/contract.
-        if (new URL(request.url).searchParams.get('trends') === '1') {
-          const trends = await rdsInstanceTrends(instanceId);
-          return Response.json({ instance: one.byInstance[instanceId] ?? null, trends });
+        // Same identifier charset the sibling ?ids= branch enforces.
+        if (!/^[a-zA-Z0-9.-]+$/.test(instanceId)) {
+          return Response.json({ status: 'error', message: 'invalid id' }, { status: 400 });
         }
+        // Opt-in time-series (gap L141/L142/L155): trends=1 returns ONLY the trends — its
+        // consumer (RdsTrendsSection) never reads the snapshot, and the sibling section
+        // already fetches it; running rdsMetrics here doubled the CloudWatch calls and
+        // serialized the trends behind a result nobody read. The default ?id= shape stays
+        // untouched for existing consumers.
+        if (new URL(request.url).searchParams.get('trends') === '1') {
+          return Response.json({ trends: await rdsInstanceTrends(instanceId) });
+        }
+        const one = await rdsMetrics([instanceId]);
         return Response.json({ instance: one.byInstance[instanceId] ?? null });
       }
       const qparams: unknown[] = [];

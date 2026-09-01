@@ -31,7 +31,7 @@ describe('RdsTrendsSection (gap L141/L142/L155)', () => {
     // connections series missing → honest 데이터 불가
     expect(screen.getAllByText('데이터 불가').length).toBe(1);
     // 24h + 14d blocks render with their stat tiles
-    expect(screen.getByText('여유 메모리 24시간 (GB)')).toBeTruthy();
+    expect(screen.getByText('여유 메모리 24시간 (GB, KST)')).toBeTruthy();
     expect(screen.getByText('CPU 14일 일별 추이 (%)')).toBeTruthy();
   });
   it('null 24h/14d series render 데이터 불가, not empty charts', async () => {

@@ -158,28 +158,45 @@ describe('rdsMetrics', () => {
     const { rdsMetrics } = await import('./metrics');
     expect(await rdsMetrics(['db-1'])).toEqual({ byInstance: {}, avgCpu: null });
   });
+
+  it('batches >62 instances into multiple GetMetricData calls (no silent truncation)', async () => {
+    cwSend.mockResolvedValue({ MetricDataResults: [{ Id: 'cpu_i0', Values: [10] }] });
+    const { rdsMetrics } = await import('./metrics');
+    const ids = Array.from({ length: 63 }, (_, i) => `db-${i}`);
+    const r = await rdsMetrics(ids);
+    expect(cwSend).toHaveBeenCalledTimes(2);       // 63 → chunk(62) + chunk(1)
+    expect(Object.keys(r.byInstance)).toHaveLength(63); // every instance represented
+  });
 });
 
 describe('rdsInstanceTrends (gap L141/L142/L155)', () => {
   const iso = (minAgo: number) => new Date(Date.now() - minAgo * 60_000);
-  it('builds ONE call with 8 queries (6 sparks @300s, mem @3600s, cpu @86400s) ascending', async () => {
-    cwSend.mockResolvedValueOnce({ MetricDataResults: [] });
+  type CwInput = { input: { StartTime: Date; MetricDataQueries: { Id: string; MetricStat: { Period: number } }[]; ScanBy?: string } };
+  it('makes TWO bounded parallel calls — a ~65-min spark window and a 14-day long-trend window', async () => {
+    cwSend.mockResolvedValue({ MetricDataResults: [] });
     const { rdsInstanceTrends } = await import('./metrics');
     await rdsInstanceTrends('db-1');
-    expect(cwSend).toHaveBeenCalledTimes(1);
-    const input = (cwSend.mock.calls[0][0] as { input: { MetricDataQueries: { Id: string; MetricStat: { Period: number; Metric: { MetricName: string } } }[]; ScanBy?: string } }).input;
-    expect(input.MetricDataQueries).toHaveLength(8);
-    expect(input.ScanBy).toBe('TimestampAscending');
-    const periods = Object.fromEntries(input.MetricDataQueries.map((q) => [q.Id, q.MetricStat.Period]));
-    expect(periods.spark_0).toBe(300);
-    expect(periods.mem24h).toBe(3600);
-    expect(periods.cpu14d).toBe(86_400);
+    expect(cwSend).toHaveBeenCalledTimes(2);
+    const [a, b] = cwSend.mock.calls.map((c) => (c[0] as CwInput).input);
+    const spark = a.MetricDataQueries[0].Id.startsWith('spark') ? a : b;
+    const long = spark === a ? b : a;
+    // Period sets RESOLUTION, not a window — the spark call must carry its own short StartTime
+    // (one 14d window returned ~4,000 points per 5-min query only to be trimmed client-side).
+    expect(Date.now() - spark.StartTime.getTime()).toBeLessThan(70 * 60_000);
+    expect(spark.MetricDataQueries).toHaveLength(6);
+    expect(spark.MetricDataQueries.every((q) => q.MetricStat.Period === 300)).toBe(true);
+    expect(Date.now() - long.StartTime.getTime()).toBeGreaterThan(13 * 86_400_000);
+    const periods = Object.fromEntries(long.MetricDataQueries.map((q) => [q.Id, q.MetricStat.Period]));
+    expect(periods).toEqual({ mem24h: 3600, cpu14d: 86_400 });
+    expect(spark.ScanBy).toBe('TimestampAscending');
+    expect(long.ScanBy).toBe('TimestampAscending');
   });
-  it('maps series into {t,v}[] and windows sparks to the last ~70 minutes', async () => {
-    cwSend.mockResolvedValueOnce({ MetricDataResults: [
-      { Id: 'spark_0', Timestamps: [iso(120), iso(30), iso(5)], Values: [9, 41.234, 43.5] },
-      { Id: 'mem24h', Timestamps: [iso(60)], Values: [2 * 1024 ** 3] },
-    ] });
+  it('maps series into {t,v}[] and windows sparks to the last hour', async () => {
+    cwSend.mockImplementation(async (cmd: { input: { MetricDataQueries: { Id: string }[] } }) => (
+      cmd.input.MetricDataQueries[0].Id.startsWith('spark')
+        ? { MetricDataResults: [{ Id: 'spark_0', Timestamps: [iso(120), iso(30), iso(5)], Values: [9, 41.234, 43.5] }] }
+        : { MetricDataResults: [{ Id: 'mem24h', Timestamps: [iso(60)], Values: [2 * 1024 ** 3] }] }
+    ));
     const { rdsInstanceTrends } = await import('./metrics');
     const t = await rdsInstanceTrends('db-1');
     // the 120-min-old point falls outside the 1h spark window
@@ -196,12 +213,4 @@ describe('rdsInstanceTrends (gap L141/L142/L155)', () => {
     expect(Object.values(t.spark).every((v) => v === null)).toBe(true);
   });
 
-  it('batches >62 instances into multiple GetMetricData calls (no silent truncation)', async () => {
-    cwSend.mockResolvedValue({ MetricDataResults: [{ Id: 'cpu_i0', Values: [10] }] });
-    const { rdsMetrics } = await import('./metrics');
-    const ids = Array.from({ length: 63 }, (_, i) => `db-${i}`);
-    const r = await rdsMetrics(ids);
-    expect(cwSend).toHaveBeenCalledTimes(2);       // 63 → chunk(62) + chunk(1)
-    expect(Object.keys(r.byInstance)).toHaveLength(63); // every instance represented
-  });
 });

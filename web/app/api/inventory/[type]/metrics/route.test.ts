@@ -176,13 +176,20 @@ describe('rds ?id= trends=1 (gap L141/L142/L155)', () => {
     expect(body).not.toHaveProperty('trends');
     expect(rdsInstanceTrends).not.toHaveBeenCalled();
   });
-  it('trends=1 adds the trends field from rdsInstanceTrends', async () => {
+  it('trends=1 returns ONLY the trends — no redundant rdsMetrics snapshot call', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
-    rdsMetrics.mockResolvedValue({ byInstance: { 'db-1': { cpu: 42 } }, avgCpu: 42 });
     rdsInstanceTrends.mockResolvedValue({ spark: {}, mem24h: null, cpu14d: null });
     const { GET } = await import('./route');
     const body = await (await GET(req('http://x/api/inventory/rds/metrics?id=db-1&trends=1'), ctx('rds'))).json();
     expect(body.trends).toEqual({ spark: {}, mem24h: null, cpu14d: null });
+    expect(body).not.toHaveProperty('instance');
     expect(rdsInstanceTrends).toHaveBeenCalledWith('db-1');
+    expect(rdsMetrics).not.toHaveBeenCalled(); // the section discards the snapshot; its sibling already fetches it
+  });
+  it('400 on a malformed id (matching the sibling ?ids= charset)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const { GET } = await import('./route');
+    expect((await GET(req("http://x/api/inventory/rds/metrics?id=db-1'--"), ctx('rds'))).status).toBe(400);
+    expect(rdsMetrics).not.toHaveBeenCalled();
   });
 });

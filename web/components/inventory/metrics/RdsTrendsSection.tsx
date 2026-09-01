@@ -4,14 +4,16 @@ import { LineChart, Line, ResponsiveContainer } from 'recharts';
 import AreaTrend from '@/components/charts/AreaTrend';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { useChartColors } from '@/lib/use-chart-colors';
-import type { RdsInstanceTrends, TrendSample } from '@/lib/metrics';
+import type { RdsInstanceTrends, RdsSparkField, TrendSample } from '@/lib/metrics';
 
 // RDS detail time-series (gap L141/L142/L155, v1 parity): 6-metric 1h sparklines (≤2 points →
 // the v1 Avg/Max/Min fallback grid, never a misleading 2-point line), FreeableMemory 24h trend,
 // CPU 14d daily trend — one opt-in `trends=1` fetch. Named export per the metrics-module
 // convention; mounted by DetailPanel below RdsMetricsSection.
 
-const SPARKS: { field: string; label: string; fmt: (v: number) => string }[] = [
+// field is the keyed union — a field-name drift vs the lib's SPARK_METRICS now fails to compile
+// instead of silently rendering '데이터 불가'.
+const SPARKS: { field: RdsSparkField; label: string; fmt: (v: number) => string }[] = [
   { field: 'cpu', label: 'CPU (%)', fmt: (v) => `${v.toFixed(1)}%` },
   { field: 'freeableMemory', label: 'Freeable Mem', fmt: gb },
   { field: 'connections', label: 'Connections', fmt: (v) => String(Math.round(v)) },
@@ -24,7 +26,8 @@ function gb(v: number): string {
   return `${(v / 1024 ** 3).toFixed(1)} GB`;
 }
 
-function stats(samples: TrendSample[]): { avg: number; max: number; min: number } {
+function stats(samples: TrendSample[]): { avg: number; max: number; min: number } | null {
+  if (!samples.length) return null; // defense-in-depth — series() already maps [] → null
   const vs = samples.map((s) => s.v);
   return {
     avg: vs.reduce((a, b) => a + b, 0) / vs.length,
@@ -36,6 +39,7 @@ function stats(samples: TrendSample[]): { avg: number; max: number; min: number 
 function AvgMaxMin({ samples, fmt }: { samples: TrendSample[]; fmt: (v: number) => string }) {
   const { tt } = useI18n();
   const s = stats(samples);
+  if (!s) return null;
   return (
     <div className="grid grid-cols-3 gap-1 text-center">
       {([['Avg', s.avg], ['Max', s.max], ['Min', s.min]] as const).map(([label, v]) => (
@@ -59,7 +63,13 @@ export function RdsTrendsSection({ instanceId }: { instanceId: string }) {
     setTrends(null); setErr(false);
     fetch(`/api/inventory/rds/metrics?id=${encodeURIComponent(instanceId)}&trends=1`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => { if (alive) setTrends((d.trends ?? null) as RdsInstanceTrends | null); })
+      .then((d) => {
+        if (!alive) return;
+        // A 200 without `trends` (an old task ignoring the param during a rolling deploy)
+        // must not pin the loading state forever — treat it as the error branch.
+        if (d && typeof d === 'object' && d.trends) setTrends(d.trends as RdsInstanceTrends);
+        else setErr(true);
+      })
       .catch(() => { if (alive) setErr(true); });
     return () => { alive = false; };
   }, [instanceId]);
@@ -67,8 +77,11 @@ export function RdsTrendsSection({ instanceId }: { instanceId: string }) {
   if (err) return <p className="text-[12px] text-rose-600">{tt('메트릭 추이 조회 실패')}</p>;
   if (!trends) return <p className="text-[12px] text-ink-400">{tt('메트릭 추이 로딩 중…')}</p>;
 
-  const memData = (trends.mem24h ?? []).map((s) => ({ t: s.t.slice(11, 16), v: Math.round((s.v / 1024 ** 3) * 10) / 10 }));
-  const cpuData = (trends.cpu14d ?? []).map((s) => ({ t: s.t.slice(5, 10), v: s.v }));
+  // Axis labels in KST (raw ISO slices read 9h shifted for the operator's timezone).
+  const kstTime = (iso: string) => new Date(iso).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false });
+  const kstDay = (iso: string) => new Date(iso).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit' });
+  const memData = (trends.mem24h ?? []).map((s) => ({ t: kstTime(s.t), v: Math.round((s.v / 1024 ** 3) * 10) / 10 }));
+  const cpuData = (trends.cpu14d ?? []).map((s) => ({ t: kstDay(s.t), v: s.v }));
 
   return (
     <div className="space-y-4">
@@ -102,23 +115,27 @@ export function RdsTrendsSection({ instanceId }: { instanceId: string }) {
         </div>
       </div>
       <div>
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt('여유 메모리 24시간 (GB)')}</div>
         {!trends.mem24h ? (
-          <p className="text-[12px] text-ink-300">{tt('데이터 불가')}</p>
+          <>
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt('여유 메모리 24시간 (GB, KST)')}</div>
+            <p className="text-[12px] text-ink-300">{tt('데이터 불가')}</p>
+          </>
         ) : (
           <>
-            <AreaTrend title="" data={memData} xKey="t" yKey="v" />
+            <AreaTrend title={tt('여유 메모리 24시간 (GB, KST)')} data={memData} xKey="t" yKey="v" />
             <div className="mt-1"><AvgMaxMin samples={trends.mem24h} fmt={gb} /></div>
           </>
         )}
       </div>
       <div>
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt('CPU 14일 일별 추이 (%)')}</div>
         {!trends.cpu14d ? (
-          <p className="text-[12px] text-ink-300">{tt('데이터 불가')}</p>
+          <>
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt('CPU 14일 일별 추이 (%)')}</div>
+            <p className="text-[12px] text-ink-300">{tt('데이터 불가')}</p>
+          </>
         ) : (
           <>
-            <AreaTrend title="" data={cpuData} xKey="t" yKey="v" />
+            <AreaTrend title={tt('CPU 14일 일별 추이 (%)')} data={cpuData} xKey="t" yKey="v" />
             <div className="mt-1"><AvgMaxMin samples={trends.cpu14d} fmt={(v) => `${v.toFixed(1)}%`} /></div>
           </>
         )}
