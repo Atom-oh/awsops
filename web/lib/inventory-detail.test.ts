@@ -107,3 +107,32 @@ describe('buildDetailGroups', () => {
     expect(g.find((x) => x.label === 'Other')?.items.map((i) => i.key)).toEqual(['some_unknown_field']);
   });
 });
+
+describe('structuredList additions (gap L209/L215)', () => {
+  it("EBS attachments flag DeleteOnTermination only when TRUE — false/absent shows nothing", () => {
+    const v = formatDetailValue('attachments', [
+      { InstanceId: 'i-1', Device: '/dev/xvda', State: 'attached', DeleteOnTermination: true },
+      { InstanceId: 'i-2', Device: '/dev/xvdb', State: 'attached', DeleteOnTermination: false },
+      { InstanceId: 'i-3', Device: '/dev/xvdc', State: 'attached' },
+    ]);
+    expect(v.kind).toBe('idlist');
+    expect(v.items![0].flag).toBe('DeleteOnTermination');
+    expect(v.items![1].flag).toBeUndefined();
+    expect(v.items![2].flag).toBeUndefined();
+  });
+
+  it('ECS cluster settings render as label–value rows, not a raw JSON block', () => {
+    const v = formatDetailValue('settings', [
+      { Name: 'containerInsights', Value: 'disabled' },
+      { name: 'fargateEphemeralStorageKmsKeyId', value: 'key-1' },
+    ]);
+    expect(v.kind).toBe('idlist');
+    expect(v.items![0]).toMatchObject({ id: 'containerInsights', name: 'disabled' });
+    expect(v.items![1]).toMatchObject({ id: 'fargateEphemeralStorageKmsKeyId', name: 'key-1' });
+  });
+
+  it('malformed settings (non-string Name) fall back to the JSON rendering — never half-parsed', () => {
+    const v = formatDetailValue('settings', [{ Value: 'x' }]);
+    expect(v.kind).toBe('code');
+  });
+});

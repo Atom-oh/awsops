@@ -24,6 +24,10 @@ export const TERMS: Record<string, Pair> = {
   '닫기': { en: 'Close', zh: '关闭', ja: '閉じる' },
   '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },
   '리포트 본문을 읽지 못했습니다.': { en: 'Could not read the report body.', zh: '无法读取报告正文。', ja: 'レポート本文を読み取れませんでした。' },
+  // EBS detail verdicts (gap L210)
+  '암호화됨': { en: 'Encrypted', zh: '已加密', ja: '暗号化済み' },
+  '스냅샷으로 암호화 사본 생성을 검토하세요.': { en: 'Consider creating an encrypted copy via snapshot.', zh: '建议通过快照创建加密副本。', ja: 'スナップショット経由で暗号化コピーの作成を検討してください。' },
+  '미연결 상태로 과금 중 — 삭제로 비용 절감을 검토하세요.': { en: 'Detached but still billed — consider deleting to save costs.', zh: '未挂载但仍在计费 — 建议删除以节省成本。', ja: '未接続のまま課金中 — 削除によるコスト削減を検討してください。' },
   '리포트 생성이 실패했습니다.': { en: 'Report generation failed.', zh: '报告生成失败。', ja: 'レポート生成に失敗しました。' },
   '리포트가 아직 완료되지 않았습니다.': { en: 'The report is not finished yet.', zh: '报告尚未完成。', ja: 'レポートはまだ完了していません。' },
   // EKS overview filter + node capacity (gap L130/L132)

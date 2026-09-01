@@ -14,6 +14,7 @@ import { EbsRelatedSection } from '@/components/inventory/metrics/EbsRelatedSect
 import { RdsTrendsSection } from '@/components/inventory/metrics/RdsTrendsSection';
 import { LiveTrendsSection } from '@/components/inventory/metrics/LiveTrendsSection';
 import { RdsSgRulesSection } from '@/components/inventory/metrics/RdsSgRulesSection';
+import { EbsVerdictBanners } from '@/components/inventory/metrics/EbsVerdictBanners';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // v1-parity: each detail section is a titled card with a leading icon. Section labels are a small
@@ -426,6 +427,7 @@ export default function DetailPanel({
               />
             </section>
           )}
+          {ebsVolumeId && <EbsVerdictBanners data={data} />}
           {ebsVolumeId && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
               <EbsRelatedSection
