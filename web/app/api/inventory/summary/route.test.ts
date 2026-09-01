@@ -3,7 +3,7 @@ const verifyUser = vi.fn();
 const query = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
-const req = (cookie = 'awsops_token=t') => new Request('http://x/api/inventory/summary', { headers: { cookie } });
+const req = (q = '', cookie = 'awsops_token=t') => new Request(`http://x/api/inventory/summary${q}`, { headers: { cookie } });
 beforeEach(() => { verifyUser.mockReset(); query.mockReset(); });
 
 describe('GET /api/inventory/summary', () => {
@@ -104,5 +104,44 @@ describe('GET /api/inventory/summary', () => {
     query.mockRejectedValue(new Error('no db'));
     const { GET } = await import('./route');
     expect((await GET(req())).status).toBe(500);
+  });
+});
+
+describe('GET /api/inventory/summary — region scope (gap L110)', () => {
+  it('applies the regions/includeGlobal contract to the counts (matches the rows route)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    const { GET } = await import('./route');
+    await GET(req('?regions=ap-northeast-2,us-east-1&includeGlobal=0'));
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain("region IN ('ap-northeast-2','us-east-1')");
+    expect(sql).not.toContain("'global'");
+  });
+  it('includeGlobal folds global into the allowed set; absent regions stays unfiltered', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    const { GET } = await import('./route');
+    await GET(req('?regions=ap-northeast-2'));
+    expect(String(query.mock.calls[0][0])).toContain("region IN ('ap-northeast-2','global')");
+    query.mockClear();
+    query.mockResolvedValue({ rows: [] });
+    await GET(req());
+    expect(String(query.mock.calls[0][0])).toContain('(TRUE)');
+  });
+  it('an explicitly empty region selection yields an empty result, never an unfiltered count', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    const { GET } = await import('./route');
+    await GET(req('?regions=&includeGlobal=0'));
+    expect(String(query.mock.calls[0][0])).toContain('(FALSE)');
+  });
+  it('rejects a malformed region token instead of inlining it (strict charset)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    const { GET } = await import('./route');
+    await GET(req("?regions=ap-northeast-2,bad'--&includeGlobal=0"));
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain("region IN ('ap-northeast-2')");
+    expect(sql).not.toContain('bad');
   });
 });

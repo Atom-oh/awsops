@@ -8,6 +8,11 @@ export interface InvType {
   label: string; group: string; columns: InvColumn[]; stateKey?: string; distKey?: string;
   /** Optional second distribution dimension — rendered as a second donut beside the first. */
   distKey2?: string;
+  /** Default worst-first row ordering (gap L68): rank rows by `rank[cell(col)]` ascending
+   *  (unknown values rank AFTER known ones — surfaced, never hidden), tie-broken by `tieBreak`
+   *  DESC (e.g. newest state change first). Applied by the page BEFORE DataTable, so a user's
+   *  own column-header sort still overrides it. */
+  worstFirst?: { col: string; rank: Record<string, number>; tieBreak?: string };
   /** Semantic slice colors for the distKey2 donut, keyed by the RAW cell value (case-sensitive —
    *  the donut buckets raw values, unlike countWhere's case-insensitive compare). Unmapped
    *  values fall back to the positional palette. */
@@ -20,6 +25,29 @@ export interface InvType {
   // so list OTHER discriminating keys here (e.g. ec2 type/vpc, lambda runtime). Keys need not be
   // table columns — non-column keys (e.g. region) get their label from the page's FACET_LABELS.
   filterKeys?: string[];
+}
+
+// Worst-first default ordering (gap L68): rank by spec.worstFirst.rank ascending (unknown
+// values rank AFTER known ones — surfaced, never hidden), tie-broken by tieBreak DESC
+// (newest state change first). The page applies it before DataTable, so a user's own
+// column-header sort still overrides it. Pure — unit-tested alongside computeHighlights.
+export function worstFirst<T extends Record<string, unknown>>(
+  rows: T[],
+  wf: { col: string; rank: Record<string, number>; tieBreak?: string },
+): T[] {
+  // Case-insensitive rank lookup — the rest of the pipeline compares state values
+  // case-insensitively (summary SQL lower(), countWhere), so a casing drift must not
+  // silently disable the default ordering.
+  const norm: Record<string, number> = {};
+  for (const [k, v] of Object.entries(wf.rank)) norm[k.toLowerCase()] = v;
+  const rank = (r: T) => norm[String(r[wf.col] ?? '').toLowerCase()] ?? Number.MAX_SAFE_INTEGER;
+  return [...rows].sort((a, b) => {
+    const d = rank(a) - rank(b);
+    if (d !== 0) return d;
+    if (!wf.tieBreak) return 0;
+    // numeric:true matches DataTable.compareValues' semantics for mixed numeric strings.
+    return String(b[wf.tieBreak] ?? '').localeCompare(String(a[wf.tieBreak] ?? ''), undefined, { numeric: true });
+  });
 }
 
 // resource_id + region are prepended by the page; columns here are the type-specific extras.
@@ -432,6 +460,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     filterKeys: ['region', 'type'] },
 
   cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', distKey2: 'state_value',
+    // Worst-first default (gap L68): firing alarms surface on top with zero interaction.
+    worstFirst: { col: 'state_value', rank: { ALARM: 0, INSUFFICIENT_DATA: 1, OK: 2 }, tieBreak: 'state_updated_timestamp' },
     // Semantic alarm-state colors (gap-audit L190): green OK / red ALARM / gray INSUFFICIENT_DATA
     // — the palette otherwise assigns colors by slice size, so ALARM could render green.
     distKey2Colors: { OK: '#01A88D', ALARM: '#D13212', INSUFFICIENT_DATA: '#9AA6B2' }, columns: [

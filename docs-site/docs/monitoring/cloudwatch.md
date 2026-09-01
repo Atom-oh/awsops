@@ -21,6 +21,7 @@ AWS CloudWatch 알람의 상태를 한눈에 파악하고 세부 설정을 확�
 
 ### 시각화
 - **Alarm State Distribution**: 상태별 알람 비율 파이 차트 (시맨틱 컬러: OK 초록 · ALARM 빨강 · INSUFFICIENT_DATA 회색)
+- 알람 테이블은 기본적으로 **worst-first**(ALARM → INSUFFICIENT_DATA → OK, 최신 상태 변경 우선)로 정렬되며, 컬럼 헤더 클릭 정렬이 이를 대체합니다
 - **Alarms by Namespace**: 네임스페이스별 알람 수 막대 차트
 
 ### 알람 목록

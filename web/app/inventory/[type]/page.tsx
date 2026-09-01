@@ -15,7 +15,7 @@ import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import VpcResourceMap from '@/components/inventory/VpcResourceMap';
 import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes, RdsInstanceMetrics, DynamoTableMetrics, AlbMetrics, NlbMetrics, S3Metrics, EbsMetrics, Ec2Metrics, LambdaMetrics, TgwSection } from '@/components/inventory/NodeMetricsTables';
-import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
+import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf, worstFirst } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
 import { useI18n } from '@/components/shell/LanguageProvider';
@@ -80,6 +80,29 @@ export default function InventoryTypePage() {
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
   const [scope] = useActiveScope();
 
+  // Accurate fleet total past the 500-row cap (gap L110): the summary endpoint's byType
+  // count is the true DB count (scoped by the SAME accounts+regions params as the rows).
+  // Fetched only once the cap is actually hit (it is the heaviest inventory aggregation);
+  // refreshTick refetches after an on-demand sync. Failure degrades silently to the row count.
+  const [trueTotal, setTrueTotal] = useState<number | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const atCap = (rows?.length ?? 0) >= ROW_LIMIT;
+  useEffect(() => {
+    setTrueTotal(null);
+    if (!spec || !atCap) return;
+    let alive = true;
+    fetch(`/api/inventory/summary?${scopeParams(scope)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!alive) return;
+        const n = (d?.byType as { type: string; count: number }[] | undefined)
+          ?.find((t) => t.type === type)?.count;
+        if (typeof n === 'number') setTrueTotal(n);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [spec, type, scope, atCap, refreshTick]);
+
   const load = useCallback(async () => {
     try {
       const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}&${scopeParams(scope)}`);
@@ -112,10 +135,19 @@ export default function InventoryTypePage() {
       const r = await fetch(`/api/inventory/${type}/refresh`, { method: 'POST' });
       if (!r.ok) throw new Error(r.status === 401 ? tt('세션 만료 — 새로고침') : tt(`수집 실패 (${r.status})`));
       await load();
+      setRefreshTick((c) => c + 1); // the true total must reflect the fresh sync too
     } catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
 
   const allRows = useMemo(() => rows ?? [], [rows]);
+  // Below the cap the row count is already exact; at the cap prefer the summary's true count
+  // (never smaller than what is visibly loaded).
+  const totalCount = allRows.length >= ROW_LIMIT && trueTotal != null
+    ? Math.max(trueTotal, allRows.length) : allRows.length;
+  // ONE truncation signal for every sample-based consumer: at the cap AND a confirmed-or-unknown
+  // remainder exists. An exactly-at-cap fleet whose true total equals the rows scanned was fully
+  // scanned — not a sample.
+  const isTruncated = allRows.length >= ROW_LIMIT && (trueTotal == null || trueTotal > allRows.length);
 
   // KPI state breakdown — from the FULL row set (not filtered).
   const stateCounts = useMemo(
@@ -127,9 +159,9 @@ export default function InventoryTypePage() {
   // back to the generic state tiles, so unconfigured types render as before.
   const highlightCards = useMemo(
     () => (HIGHLIGHTS[type]
-      ? computeHighlights(allRows, HIGHLIGHTS[type], { capped: allRows.length >= ROW_LIMIT })
+      ? computeHighlights(allRows, HIGHLIGHTS[type], { capped: isTruncated })
       : []),
-    [allRows, type],
+    [allRows, type, isTruncated],
   );
 
   // Distribution donut — top 6 + 기타, from the FULL row set.
@@ -221,7 +253,7 @@ export default function InventoryTypePage() {
   };
   const kpiRow = (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" icon={<TypeIcon size={16} />} />
+      <StatTile label={`총 ${spec.label}`} value={totalCount} variant="accent" icon={<TypeIcon size={16} />} />
       {highlightCards.length > 0
         ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={cardIcon(h.label, h.variant)} />)
         : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={cardIcon(s.name, stateVariant(s.name))} />)}
@@ -267,10 +299,10 @@ export default function InventoryTypePage() {
         facets={facets}
         onFacet={(key, val) => setFacets((prev) => ({ ...prev, [key]: val }))}
         shownCount={filteredRows.length}
-        totalCount={allRows.length}
+        totalCount={totalCount}
         onClear={anyFilterActive ? clearAll : undefined}
       />
-      <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
+      <DataTable columns={columns} rows={spec.worstFirst ? worstFirst(filteredRows, spec.worstFirst) : filteredRows} onRowClick={setSelected} />
     </div>
   );
 
@@ -278,7 +310,7 @@ export default function InventoryTypePage() {
     <>
       <PageHeader
         title={spec.label}
-        subtitle={`${spec.group} · ${allRows.length.toLocaleString()}개 리소스`}
+        subtitle={`${spec.group} · ${totalCount.toLocaleString()}개 리소스`}
         right={<RefreshButton busy={busy} onClick={refresh} capturedAt={captured} />}
       />
       <div className="px-8 py-8 flex flex-col gap-6">
@@ -291,7 +323,14 @@ export default function InventoryTypePage() {
                 Risk types keep their verdict hero as the KPI band; everything else uses kpiRow. */}
             {arch === 'risk' ? (
               <>
-                <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
+                <RiskHero
+                  label={spec.label}
+                  total={totalCount}
+                  sampled={allRows.length}
+                  totalIsExact={allRows.length < ROW_LIMIT || trueTotal != null}
+                  cards={highlightCards}
+                  capped={isTruncated}
+                />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                     {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}

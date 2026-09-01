@@ -21,6 +21,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ### 可视化
 - **Alarm State Distribution**: 按状态划分的告警比例饼图（语义颜色：OK 绿 · ALARM 红 · INSUFFICIENT_DATA 灰）
+- 告警表默认按 **worst-first** 排序（ALARM → INSUFFICIENT_DATA → OK，最新状态变更优先）；点击列头排序可覆盖
 - **Alarms by Namespace**: 按命名空间划分的告警数量柱状图
 
 ### 告警列表

@@ -103,6 +103,13 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
     const inst = first ? (walk(first, 'instance_id') as string | undefined) : undefined;
     return { attached_to: inst ?? 'Unattached' };
   },
+  // Lambda value formatting (gap L137, v1 parity): null/absent runtime → 'custom' (container-
+  // image functions; overriding the raw column keeps the table, runtime donut, facet, and
+  // detail panel in agreement — v1 did the COALESCE in SQL), and last_modified formatted.
+  lambda: (r) => ({
+    runtime: r.runtime ?? 'custom',
+    last_modified: dateH(r.last_modified) ?? (r.last_modified as string | undefined),
+  }),
   // scan_on_push (gap-audit L107): Yes/No from the JSONB scanning config. A missing/malformed
   // config means scanning is off (the API default), so 'No' — never undefined (keeps the column
   // filterable and the No count honest). The truthiness test deliberately mirrors

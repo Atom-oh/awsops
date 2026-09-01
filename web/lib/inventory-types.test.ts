@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   INVENTORY_TYPES, inventoryGroups, isDeprecatedRuntime, DEPRECATED_RUNTIMES,
   navTree, overviewGroups, groupBySlug, groupForPath, RESERVED_NAV_SLUGS,
-  computeHighlights, HIGHLIGHTS, layoutOf,
+  computeHighlights, HIGHLIGHTS, layoutOf, worstFirst,
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
@@ -323,5 +323,31 @@ describe('layout archetypes', () => {
       const hl = HIGHLIGHTS[t] ?? [];
       expect(hl.some((h) => h.tone === 'danger'), `${t} risk hero needs a danger highlight`).toBe(true);
     }
+  });
+});
+
+describe('worstFirst (gap L68)', () => {
+  const wf = { col: 'state_value', rank: { ALARM: 0, INSUFFICIENT_DATA: 1, OK: 2 }, tieBreak: 'ts' };
+  it('ranks ALARM first, unknown values last (surfaced, never hidden)', () => {
+    const rows = [
+      { state_value: 'OK', ts: '3' }, { state_value: 'WEIRD', ts: '9' },
+      { state_value: 'ALARM', ts: '1' }, { state_value: 'INSUFFICIENT_DATA', ts: '2' },
+    ];
+    expect(worstFirst(rows, wf).map((r) => r.state_value))
+      .toEqual(['ALARM', 'INSUFFICIENT_DATA', 'OK', 'WEIRD']);
+  });
+  it('ties break by tieBreak DESC (newest state change first)', () => {
+    const rows = [
+      { state_value: 'ALARM', ts: '2026-01-01' }, { state_value: 'ALARM', ts: '2026-03-01' },
+    ];
+    expect(worstFirst(rows, wf).map((r) => r.ts)).toEqual(['2026-03-01', '2026-01-01']);
+  });
+  it('does not mutate the input array', () => {
+    const rows = [{ state_value: 'OK', ts: '1' }, { state_value: 'ALARM', ts: '2' }];
+    worstFirst(rows, wf);
+    expect(rows[0].state_value).toBe('OK');
+  });
+  it('cloudwatch_alarm spec carries the worst-first config', () => {
+    expect(INVENTORY_TYPES.cloudwatch_alarm.worstFirst?.rank.ALARM).toBe(0);
   });
 });
