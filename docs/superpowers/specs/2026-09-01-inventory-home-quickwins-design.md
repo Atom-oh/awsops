@@ -36,9 +36,15 @@ chips), L127 (summary KPI bar).
   type on its own success path, so a mid-fan-out/partially-failed day drops types from
   `total`, and a raw total-diff would render that as a large confident negative (a sync
   artifact, worse than a fabricated 0).
-- The trend route now ranks `types` by the LATEST day's counts (fallback last-seen) — the
-  previous all-rows last-write-wins let a dead type hold a Core slot on a stale count while a
-  live series landed default-hidden.
+- The trend route no longer PRE-SEEDS `ec2: 0` on every point — key ABSENCE is the coverage
+  signal both the client's coverage-parity diff and the ranking rely on; the seed made a
+  failed-EC2 day indistinguishable from a genuine zero (a −fleet-size "7d change"). `types`
+  rank by the LATEST day's counts, and a type absent from the latest day ranks below every
+  present type (its last-seen value is only the tie-break among absentees) — never holding a
+  Core slot on a stale count.
+- `nearestSnapshot`/`netChange` sort their input defensively (order not assumed) and resolve
+  distance ties toward the NEWER candidate (−8d vs −6d at equal gap must not label a 9-day
+  span "7d").
 - Known label caveat: 리소스 타입 counts currently-nonempty `inventory_resources` types
   (including derived catalog types), which is a superset of the snapshot series the adjacent
   chart tracks — the two numbers may not reconcile exactly; accepted as-is.

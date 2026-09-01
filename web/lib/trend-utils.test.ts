@@ -28,8 +28,15 @@ describe('netChange honest-degrade branches (gap L127)', () => {
     expect(netChange(pts, 7)).toBe(2);
   });
   it('null when the baseline IS the latest point (stale sync self-diff would fabricate 0)', () => {
+    // date-ascending: latest = day(6), which is also the only point within the 7d±2 window
     const pts = [{ date: day(20), total: 5, ec2: 5 }, { date: day(6), total: 7, ec2: 7 }];
-    expect(netChange(pts, 7)).toBeNull(); // nearest to 7d ago IS the latest point
+    expect(netChange(pts, 7)).toBeNull();
+    // input order is NOT assumed — the same points descending give the same answer
+    expect(netChange([...pts].reverse(), 7)).toBeNull();
+  });
+  it('nearestSnapshot ties resolve toward the NEWER candidate (a 9-day span must not be labeled 7d)', () => {
+    const pts = [{ date: day(9), total: 1 }, { date: day(5), total: 2 }];
+    expect(nearestSnapshot(pts, 7)?.date).toBe(day(5));
   });
   it('null when the latest snapshot itself is stale (>2 days old)', () => {
     const pts = [{ date: day(10), total: 5, ec2: 5 }, { date: day(5), total: 7, ec2: 7 }];

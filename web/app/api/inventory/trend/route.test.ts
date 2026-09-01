@@ -36,6 +36,22 @@ describe('GET /api/inventory/trend', () => {
     expect(body.types).toEqual(['lambda', 'ec2', 's3']);
   });
 
+  it('a failed type slice leaves its key ABSENT from the day (never a fabricated 0) and ranks below present types', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValueOnce({ rows: [
+      { d: '2026-07-01', resource_type: 'ec2', n: 500 },
+      { d: '2026-07-01', resource_type: 'lambda', n: 12 },
+      // 07-02: the ec2 slice failed — no snapshot row was written
+      { d: '2026-07-02', resource_type: 'lambda', n: 12 },
+    ] });
+    const { GET } = await import('./route');
+    const body = await (await GET(req())).json();
+    // ec2 key absent (coverage signal for the client's coverage-parity diff), not 0
+    expect(Object.prototype.hasOwnProperty.call(body.trend[1], 'ec2')).toBe(false);
+    // ec2 absent from the latest day → ranks below lambda despite the larger stale count
+    expect(body.types).toEqual(['lambda', 'ec2']);
+  });
+
   it('clamps days into [1, 90] and defaults to 14', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({ rows: [] });

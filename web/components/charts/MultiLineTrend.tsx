@@ -20,7 +20,9 @@ import { axisTick, tooltipStyles } from './theme';
 export interface MultiLineTrendProps {
   /** Interactive legend (gap L126, v1 parity): chips toggle per-series visibility, optionally
    *  grouped into rows (Core/Other). Colors stay pinned to each series' ORIGINAL index so
-   *  toggling never recolors the remaining lines. */
+   *  toggling never recolors the remaining lines. `defaultHidden` is read at MOUNT only — a
+   *  caller whose series set can change (e.g. a period toggle re-ranking types) must `key=`
+   *  the chart on the series signature so the hidden state resets with it. */
   interactiveLegend?: boolean;
   legendGroups?: { label: string; keys: string[] }[];
   defaultHidden?: string[];
@@ -106,9 +108,14 @@ export default function MultiLineTrend({ title, right, data, xKey, series, heigh
             const groups = legendGroups ?? [{ label: '', keys: series.map((s) => s.key) }];
             // A series key covered by no group would be un-toggleable (and unrecoverable if
             // also defaultHidden) — surface leftovers in an extra unlabeled row.
-            const covered = new Set(groups.flatMap((g) => g.keys));
+            const covered = new Set<string>();
+            // Dedupe across groups — a key listed twice would render two chips for one series.
+            const deduped = groups.map((g) => ({
+              label: g.label,
+              keys: g.keys.filter((k) => !covered.has(k) && (covered.add(k), true)),
+            }));
             const leftover = series.map((s) => s.key).filter((k) => !covered.has(k));
-            return leftover.length ? [...groups, { label: '', keys: leftover }] : groups;
+            return leftover.length ? [...deduped, { label: '', keys: leftover }] : deduped;
           })().map((g, gi) => (
             <div key={`${gi}-${g.label}`} className="flex flex-wrap items-center gap-x-2 gap-y-1">
               {g.label && <span className="text-[10px] font-semibold uppercase tracking-[0.04em] text-ink-400">{g.label}</span>}

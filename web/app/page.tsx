@@ -44,7 +44,7 @@ interface Ec2Type { name: string; count: number; [k: string]: unknown }
 interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; splits?: Splits; ec2Types?: Ec2Type[]; lastSyncAt?: string | null }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[]; monthly?: { month: string; total: number }[] }
-interface ResourceTrendPoint { date: string; total: number; ec2: number; [k: string]: unknown }
+interface ResourceTrendPoint { date: string; total: number; ec2?: number; [k: string]: unknown }
 interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[] }
 interface FleetCluster {
   name: string;

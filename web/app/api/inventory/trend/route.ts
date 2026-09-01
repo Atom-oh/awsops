@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 const DEFAULT_DAYS = 14;
 const MAX_DAYS = 90;
 
-interface TrendPoint { date: string; total: number; ec2: number }
+interface TrendPoint { date: string; total: number; ec2?: number }
 
 /**
  * Daily resource-count trend (dashboard "리소스 추세" chart) from inventory_snapshots —
@@ -33,21 +33,30 @@ export async function GET(request: Request) {
     const byDate = new Map<string, TrendPoint & Record<string, number | string>>();
     const latestByType = new Map<string, number>();
     for (const row of r.rows) {
-      const p = byDate.get(row.d) ?? { date: row.d, total: 0, ec2: 0 };
+      // NO per-type pre-seeding (the old `ec2: 0` seed made a failed EC2 sync day
+      // indistinguishable from a genuine zero — key ABSENCE is the coverage signal the
+      // client's coverage-parity diff and the ranking below both rely on).
+      const p = byDate.get(row.d) ?? { date: row.d, total: 0 };
       p.total += Number(row.n);
-      if (row.resource_type === 'ec2') p.ec2 = Number(row.n);
       // v1 parity: every type is a column on the point (multi-line chart + delta table).
       p[row.resource_type] = Number(row.n);
       byDate.set(row.d, p);
       latestByType.set(row.resource_type, Number(row.n)); // rows are date-ordered → last write wins
     }
     const trend = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-    // Types ranked by the LATEST DAY's counts (fallback: last-seen value) — the previous
-    // all-rows last-write-wins let a type that stopped syncing days ago hold a top (Core)
-    // slot on its stale count while a live series landed default-hidden.
+    // Types ranked by the LATEST DAY's counts; a type ABSENT from the latest day (stopped
+    // syncing / failed slice) ranks below every present type — never holding a Core slot on
+    // a stale count — with its last-seen value only as the tie-break among absentees.
     const lastPt = trend[trend.length - 1] as Record<string, unknown> | undefined;
-    const rankOf = (t: string) => (typeof lastPt?.[t] === 'number' ? (lastPt[t] as number) : latestByType.get(t) ?? 0);
-    const types = [...latestByType.keys()].sort((a, b) => rankOf(b) - rankOf(a));
+    const present = (t: string) => typeof lastPt?.[t] === 'number';
+    const types = [...latestByType.keys()].sort((a, b) => {
+      const pa = present(a) ? 1 : 0;
+      const pb = present(b) ? 1 : 0;
+      if (pa !== pb) return pb - pa;
+      const va = pa ? (lastPt![a] as number) : latestByType.get(a) ?? 0;
+      const vb = pb ? (lastPt![b] as number) : latestByType.get(b) ?? 0;
+      return vb - va;
+    });
     return Response.json({ trend, types });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });

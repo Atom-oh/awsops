@@ -10,9 +10,12 @@ export function nearestSnapshot<T extends TrendPointLike>(pts: T[], daysAgo: num
   const target = new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
   let best: T | null = null;
   let bestGap = 3;
-  for (const p of pts) {
+  // Ties resolve toward the NEWER candidate (<= over date-ascending input): with −8d and −6d
+  // both at gap 2, preferring −8d would label a 9-day span "7d" — asymmetric with the
+  // stale-latest guard below.
+  for (const p of [...pts].sort((a, b) => a.date.localeCompare(b.date))) {
     const gap = Math.abs((new Date(p.date).getTime() - new Date(target).getTime()) / 86_400_000);
-    if (gap < bestGap) { best = p; bestGap = gap; }
+    if (gap <= bestGap && gap < 3) { best = p; bestGap = gap; }
   }
   return best;
 }
@@ -28,9 +31,10 @@ export function nearestSnapshot<T extends TrendPointLike>(pts: T[], daysAgo: num
  *    confident negative (a sync artifact — worse than a fabricated 0). */
 export function netChange(pts: TrendPointLike[], daysAgo: number): number | null {
   if (pts.length < 2) return null;
-  const last = pts[pts.length - 1];
-  if (nearestSnapshot(pts, 0) !== last) return null; // latest point itself is stale
-  const base = nearestSnapshot(pts, daysAgo);
+  const sorted = [...pts].sort((a, b) => a.date.localeCompare(b.date)); // input order not assumed
+  const last = sorted[sorted.length - 1];
+  if (nearestSnapshot(sorted, 0) !== last) return null; // latest point itself is stale
+  const base = nearestSnapshot(sorted, daysAgo);
   if (!base || base === last) return null;
   const keys = Object.keys(last).filter(
     (k) => k !== 'date' && k !== 'total' && typeof last[k] === 'number' && typeof base[k] === 'number',
