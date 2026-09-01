@@ -9,7 +9,7 @@ L188 (CloudTrail Last Delivery column), L189 (CloudTrail detail delivery/stop fi
 L213 (ECR encryption-type column).
 
 ## Decisions
-- **L187** — `cloudfront` spec gains `{ key: 'name', label: 'Name' }` as the second column
+- **L187** — `cloudfront` spec gains `{ key: 'name', label: 'Name' }` as the first spec column (the page prepends ID/Region — and Account under multi-account — before spec.columns)
   (the value is already synced via `(tags->>'Name') AS name`; the DetailPanel header already
   uses it). Absent names render as blank cells (DataTable's null rendering).
 - **L188** — `cloudtrail` spec gains a `last_delivery_h` column (UTC datetime — the header
@@ -49,3 +49,16 @@ No Terraform/IAM/schema changes (the new sync columns live in the existing `data
   (table-only derivation of `latest_delivery_time`); the two dead VIRTUAL_LABELS entries are
   removed (table columns resolve from spec.columns); CloudFront's Name column moved before
   Domain, matching the published guide order.
+
+## Round-2 corrections (review-driven)
+
+- **The CloudTrail guide's detail section matches the shipped grouping (the gate MAJOR)** —
+  all four locales now document Identity / Logging / Storage / Security / Tags with the
+  CW-Logs/digest delivery times-and-errors and Logging Stopped fields, and the tab-row
+  sentence is softened to "most recent SUCCESSFUL delivery (UTC)" pointing at
+  `latest_delivery_error` for the failure signal (this spec's own wording).
+- Encryption wording widened everywhere to pass-through semantics (AES256/KMS/KMS_DSSE etc.)
+  with a PascalCase `EncryptionType` test; the ECR guide's detail Security line documents the
+  derived field beside the raw blob; the CHANGELOG bullet is amended in place to include the
+  CW Logs role and the success-time semantics; the "second column" claim is corrected for the
+  page's prepended ID/Region columns.

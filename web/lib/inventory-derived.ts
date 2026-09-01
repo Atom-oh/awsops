@@ -210,7 +210,8 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       scan_on_push: v != null
         && !['', 'false', 'null', 'undefined', '0', 'none', 'no', 'disabled'].includes(String(v).trim().toLowerCase())
         ? 'Yes' : 'No',
-      // L213: AES256 | KMS (from encryption_configuration; undefined when the blob is absent)
+      // L213: pass-through of the encryption type (AES256 | KMS | KMS_DSSE | future values —
+      // rendered as-is; undefined when the blob is absent)
       encryption_type_h: typeof encType === 'string' && encType ? encType : undefined,
     };
   },

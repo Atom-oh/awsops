@@ -169,6 +169,8 @@ describe('deriveRow ecr encryption + cloudtrail last delivery (gap L213/L188)', 
   it('ecr encryption_type_h extracts AES256/KMS from encryption_configuration (both casings)', () => {
     expect(deriveRow('ecr', { encryption_configuration: { encryptionType: 'AES256' } }).encryption_type_h).toBe('AES256');
     expect(deriveRow('ecr', { encryption_configuration: { encryption_type: 'KMS' } }).encryption_type_h).toBe('KMS');
+    // the plugin actually persists PascalCase — and future values (KMS_DSSE) pass through as-is
+    expect(deriveRow('ecr', { encryption_configuration: { EncryptionType: 'KMS_DSSE' } }).encryption_type_h).toBe('KMS_DSSE');
     expect(deriveRow('ecr', { resource_id: 'r' }).encryption_type_h).toBeUndefined();
   });
   it('cloudtrail last_delivery_h formats the synced timestamp; absent → undefined', () => {
