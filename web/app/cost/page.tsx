@@ -315,6 +315,9 @@ export default function CostPage() {
       // A stale in-flight probe must not land after an account/period switch cleared it.
       if (seq !== probeSeqRef.current) return;
       setEmptyProbe({ reason: String(a?.reason ?? 'error') }); // non-OK → explicit 'error', never a dead button
+    } catch {
+      // transport-level rejection (offline/abort) — same explicit feedback, never a dead button
+      if (seq === probeSeqRef.current) setEmptyProbe({ reason: 'error' });
     } finally { if (seq === probeSeqRef.current) setRechecking(false); }
   }, []);
   // Both hints are HOST-scope only — the availability classifier probes with the host task
@@ -439,9 +442,11 @@ export default function CostPage() {
                 {emptyProbe != null && !showNotEnabledHint && !showAvailableHint && (
                   <span className="ml-1">{tt('가용성을 확정하지 못했습니다 — 상세 원인은 새로고침 시 오류 배너를 참고하세요.')}</span>
                 )}
-                <button onClick={probeFromBanner} disabled={rechecking} className="ml-2 rounded-md border border-sky-300 bg-card px-2 py-0.5 text-[11.5px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50">
-                  {tt(rechecking ? '확인 중…' : '가용성 확인')}
-                </button>
+                {active === 'self' && (
+                  <button onClick={probeFromBanner} disabled={rechecking} className="ml-2 rounded-md border border-sky-300 bg-card px-2 py-0.5 text-[11.5px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50">
+                    {tt(rechecking ? '확인 중…' : '가용성 확인')}
+                  </button>
+                )}
               </div>
             )}
             {/* ---- KPI tiles (gap L196: Daily Average + Last Month + surge subtext) ---- */}

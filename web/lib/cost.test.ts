@@ -177,21 +177,23 @@ describe('mergeMonthlyByService / mergeDailyByService (전체 계정 fan-out)', 
 
 
 describe('momChangePctDailyUtc (alert-surface UTC math)', () => {
-  it('uses UTC COMPLETED days: on the 1st (UTC) at an unchanged run-rate the change is ~0, not +3000%', () => {
-    // 2026-09-01T03:00Z — KST browsers are already Sep 1 local; completed UTC days = max(1, 1-1) = 1.
-    const now = new Date('2026-09-01T03:00:00Z');
-    // previous month (Aug, 31d) total 310 → 10/day; MTD ≈ one day at the same rate = 10.
-    expect(Math.abs(momChangePctDailyUtc(10, 310, now))).toBeLessThan(0.5);
+  it('divisor matches the includes-today numerator: day 2 at an unchanged run-rate reads ~0', () => {
+    // CE's monthly bucket ends tomorrow — MTD on day 2 at 12:00 UTC ≈ 1.5 days of spend.
+    const now = new Date('2026-09-02T12:00:00Z'); // elapsed (UTC, incl. today) = 2
+    // prev month (Aug, 31d) total 310 → 10/day; MTD with today half-recorded = 15.
+    expect(Math.abs(momChangePctDailyUtc(15, 310, now))).toBeLessThan(30); // bounded by today's fraction, never +100%
+    // fully-recorded today (end of day): exactly 0
+    expect(Math.abs(momChangePctDailyUtc(20, 310, now))).toBeLessThan(0.5);
   });
-  it("excludes today's PARTIAL bucket from the divisor (day 2 at an unchanged rate reads ~0)", () => {
-    const now = new Date('2026-09-02T12:00:00Z'); // 1 completed day
-    expect(Math.abs(momChangePctDailyUtc(10, 310, now))).toBeLessThan(0.5);
+  it('uses UTC days: on the 1st (UTC) a KST browser never divides by a rolled-over local day', () => {
+    const now = new Date('2026-09-01T03:00:00Z'); // KST already Sep 1 local; UTC day = 1
+    // MTD so far ≈ 1/8 of a day at 10/day → tiny; must read a bounded partial-day dip, not ±3000%.
+    expect(momChangePctDailyUtc(1.25, 310, now)).toBeGreaterThan(-95);
+    expect(momChangePctDailyUtc(1.25, 310, now)).toBeLessThan(0);
   });
-  it('stays close to the local MoM variant away from boundaries (one-elapsed-day offset)', () => {
-    const now = new Date('2026-09-15T12:00:00Z'); // completed=14 vs local elapsed=15
-    const utc = momChangePctDailyUtc(150, 310, now);
-    const local = momChangePctDaily(150, 310, now);
-    expect(Math.abs(utc - local)).toBeLessThan(10); // same order — the divisor differs by 1 day
+  it('matches the local MoM variant away from boundaries (same includes-today basis)', () => {
+    const now = new Date('2026-09-15T12:00:00Z');
+    expect(momChangePctDailyUtc(150, 310, now)).toBeCloseTo(momChangePctDaily(150, 310, now), 5);
   });
 });
 

@@ -137,3 +137,13 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   the Daily Average tile uses; day-2 boundary test added.
 - The EN CHANGELOG's inverted color text is fixed to match KO (>0 orange, <0 green); the dead
   round-1 banner TERM is removed.
+
+## Round-8 corrections (review-driven)
+
+- **The alert divisor matches the numerator's window (the gate MAJOR)** — CE's monthly bucket
+  ends tomorrow, so MTD includes today's partial spend; dividing by completed-days-only
+  overstated the rate up to +100% on day 2. `momChangePctDailyUtc` divides by
+  `getUTCDate()` (includes today, UTC) — the MoM tile's own basis — leaving only today's
+  missing fraction as residual bias; the tests now model a partial-day numerator.
+- `probeFromBanner` catches transport-level rejections (explicit 'error' feedback, never a
+  dead button) and the button renders only in host scope (its verdict only renders there).
