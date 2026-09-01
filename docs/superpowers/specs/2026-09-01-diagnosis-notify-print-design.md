@@ -116,3 +116,14 @@ No Terraform/IAM changes; one additive migration.
   warning when the notify_outcome write fails.
 - Print view empty-body tri-state: a not-finished report reads its status; an unreadable
   artifact on a finished one reads a body-read failure — never one flat '데이터 불가'.
+
+## Round-5 corrections (review-driven)
+
+- **The notify_outcome contract is now in the decisions of record (the gate MAJOR)** —
+  ADR-013 §2 (KO+EN) and the BASELINE §2 LIVE row describe the CHECK-constrained vocabulary
+  ('emailed' = publish ACCEPTANCE via MessageId, not end-to-end delivery; publish_failed =
+  drained, never retried; emailed_failopen), and the References list the two migrations +
+  `mark_notified`; the gap-audit batch-21 note records the column + view re-projection.
+- The pause flag is read BEFORE the nothing-pending early return so `{"paused"}` never lies;
+  a failed report reads its own terminal message ('리포트 생성이 실패했습니다.') instead of
+  "not finished yet".

@@ -47,18 +47,11 @@ def _fetch_markdown(artifact_uri):
 def lambda_handler(_event, _ctx):
     conn = db.connect()
     try:
-        pending = ddb.list_pending_notifications(conn)
-        if not pending:
-            # keep the response shape consistent across runs (paused unknown/irrelevant here)
-            return {"digested": 0, "paused": False}
-        domain = os.environ.get("APP_DOMAIN", "")
-        topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
-        region = os.environ.get("AWS_REGION")
-
         # Gap L178: admin pause toggle (app_settings) — paused behaves exactly like a missing
         # topic: skip the publish but still stamp notified_at (reports completed while paused
         # are dropped from email, never queued for a stale blast on re-enable). A flag-read
         # failure fails OPEN — a broken settings read must not silently kill notifications.
+        # Read BEFORE the nothing-pending early return so the response shape never lies.
         paused = False
         flag_read_failed = False
         try:
@@ -67,6 +60,13 @@ def lambda_handler(_event, _ctx):
         except Exception as e:  # noqa: BLE001 — fail-open by design
             flag_read_failed = True
             print(f"[diagnosis_digest] pause-flag read failed (fail-open, publishing): {e}")
+
+        pending = ddb.list_pending_notifications(conn)
+        if not pending:
+            return {"digested": 0, "paused": paused}
+        domain = os.environ.get("APP_DOMAIN", "")
+        topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
+        region = os.environ.get("AWS_REGION")
         if paused:
             print(f"[diagnosis_digest] notifications paused by admin - skipping publish for {len(pending)} report(s)")
 

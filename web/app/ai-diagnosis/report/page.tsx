@@ -139,7 +139,9 @@ function PrintReportInner() {
           <p className="text-[13px] text-neutral-400">
             {r.status === 'succeeded' || r.status === 'partial'
               ? tt('리포트 본문을 읽지 못했습니다.')
-              : `${tt('리포트가 아직 완료되지 않았습니다.')} (${r.status ?? '—'})`}
+              : r.status === 'failed'
+                ? tt('리포트 생성이 실패했습니다.')
+                : `${tt('리포트가 아직 완료되지 않았습니다.')} (${r.status ?? '—'})`}
           </p>
         ) : (
           <>

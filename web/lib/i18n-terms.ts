@@ -24,6 +24,7 @@ export const TERMS: Record<string, Pair> = {
   '닫기': { en: 'Close', zh: '关闭', ja: '閉じる' },
   '리포트를 불러오지 못했습니다.': { en: 'Failed to load the report.', zh: '无法加载报告。', ja: 'レポートを読み込めませんでした。' },
   '리포트 본문을 읽지 못했습니다.': { en: 'Could not read the report body.', zh: '无法读取报告正文。', ja: 'レポート本文を読み取れませんでした。' },
+  '리포트 생성이 실패했습니다.': { en: 'Report generation failed.', zh: '报告生成失败。', ja: 'レポート生成に失敗しました。' },
   '리포트가 아직 완료되지 않았습니다.': { en: 'The report is not finished yet.', zh: '报告尚未完成。', ja: 'レポートはまだ完了していません。' },
   // EKS overview filter + node capacity (gap L130/L132)
   '클러스터 / VPC 필터': { en: 'Cluster / VPC Filter', zh: '集群 / VPC 筛选', ja: 'クラスター / VPC フィルター' },
