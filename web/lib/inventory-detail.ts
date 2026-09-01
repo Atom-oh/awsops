@@ -214,6 +214,9 @@ const VIRTUAL_LABELS: Record<string, string> = {
   vpc_id_h: 'VPC', subnets_h: 'Subnets', security_groups_h: 'Security Groups', azs_h: 'AZs',
   kms_key_h: 'KMS Key', adv_security_h: 'Advanced Security',
   internal_user_db_h: 'Internal User DB', anonymous_auth_h: 'Anonymous Auth', cognito_h: 'Cognito Auth',
+  software_update_h: 'Service Software', enforce_https_h: 'Enforce HTTPS',
+  tls_policy_h: 'TLS Policy', custom_endpoint_h: 'Custom Endpoint',
+  auto_tune_h: 'Auto-Tune', snapshot_hour_h: 'Automated Snapshot',
 };
 
 // Acronyms kept uppercase when humanizing a snake_case key into a friendly label.

@@ -13,6 +13,11 @@ export const TERMS: Record<string, Pair> = {
   '전체 해제': { en: 'Clear all', zh: '清除全部', ja: 'すべて解除' },
   '검색…': { en: 'Search…', zh: '搜索…', ja: '検索…' },
   '로딩 중…': { en: 'Loading…', zh: '加载中…', ja: '読み込み中…' },
+  // RDS SG inbound chaining (gap L154)
+  '보안 그룹 인바운드 규칙': { en: 'Security Group Inbound Rules', zh: '安全组入站规则', ja: 'セキュリティグループ インバウンドルール' },
+  '보안 그룹 규칙 조회 실패': { en: 'Failed to load security group rules', zh: '安全组规则查询失败', ja: 'セキュリティグループルールの取得に失敗' },
+  '인벤토리에 미동기화': { en: 'Not synced to inventory', zh: '未同步到资产清单', ja: 'インベントリ未同期' },
+  '인바운드 규칙 없음': { en: 'No inbound rules', zh: '无入站规则', ja: 'インバウンドルールなし' },
   '확인 중…': { en: 'Checking…', zh: '检查中…', ja: '確認中…' },
   '실행 중…': { en: 'Running…', zh: '运行中…', ja: '実行中…' },
   '기타': { en: 'Other', zh: '其他', ja: 'その他' },

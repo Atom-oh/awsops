@@ -116,6 +116,25 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       internal_user_db_h: flag(walk(adv, 'internal_user_database_enabled')),
       anonymous_auth_h: flag(walk(adv, 'anonymous_auth_enabled')),
       cognito_h: flag(walk(r.cognito_options, 'enabled')),
+      // L153 sync additions — service software / endpoint policy / auto-tune / snapshots.
+      software_update_h: (() => {
+        const sso = r.service_software_options;
+        const avail = flag(walk(sso, 'update_available'));
+        const cur = walk(sso, 'current_version');
+        if (avail === true) return `update available: ${cur ?? '?'} → ${walk(sso, 'new_version') ?? '?'}`;
+        if (avail === false) return `up to date${cur != null ? ` (${cur})` : ''}`;
+        return undefined;
+      })(),
+      enforce_https_h: flag(walk(r.domain_endpoint_options, 'enforce_https')),
+      tls_policy_h: walk(r.domain_endpoint_options, 'tls_security_policy'),
+      custom_endpoint_h: flag(walk(r.domain_endpoint_options, 'custom_endpoint_enabled')) === true
+        ? walk(r.domain_endpoint_options, 'custom_endpoint') ?? 'enabled'
+        : flag(walk(r.domain_endpoint_options, 'custom_endpoint_enabled')) === false ? 'disabled' : undefined,
+      auto_tune_h: walk(r.auto_tune_options, 'state'),
+      snapshot_hour_h: (() => {
+        const h = walk(r.snapshot_options, 'automated_snapshot_start_hour');
+        return Number.isFinite(Number(h)) && h !== null && h !== '' ? `${h}:00 UTC` : undefined;
+      })(),
     };
   },
   cloudfront: (r) => ({

@@ -102,6 +102,35 @@ describe('deriveRow opensearch structured detail (gap L150)', () => {
     expect(d.adv_security_h).toBeUndefined();
   });
 
+  it('L153 sync additions: service software / endpoint policy / auto-tune / snapshot hour', () => {
+    const d = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: true, CurrentVersion: 'OpenSearch_2.11', NewVersion: 'OpenSearch_2.13' },
+      domain_endpoint_options: { EnforceHTTPS: true, TLSSecurityPolicy: 'Policy-Min-TLS-1-2-2019-07', CustomEndpointEnabled: false },
+      auto_tune_options: { State: 'ENABLED' },
+      snapshot_options: { AutomatedSnapshotStartHour: 3 },
+    });
+    expect(d.software_update_h).toBe('update available: OpenSearch_2.11 → OpenSearch_2.13');
+    expect(d.enforce_https_h).toBe(true);
+    expect(d.tls_policy_h).toBe('Policy-Min-TLS-1-2-2019-07');
+    expect(d.custom_endpoint_h).toBe('disabled');
+    expect(d.auto_tune_h).toBe('ENABLED');
+    expect(d.snapshot_hour_h).toBe('3:00 UTC');
+  });
+
+  it('L153: up-to-date software, enabled custom endpoint (domain shown), absent blobs → undefined', () => {
+    const upToDate = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: false, CurrentVersion: 'OpenSearch_2.13' },
+      domain_endpoint_options: { CustomEndpointEnabled: true, CustomEndpoint: 'search.example.com' },
+    });
+    expect(upToDate.software_update_h).toBe('up to date (OpenSearch_2.13)');
+    expect(upToDate.custom_endpoint_h).toBe('search.example.com');
+    const empty = deriveRow('opensearch', { resource_id: 'dom-2' });
+    expect(empty.software_update_h).toBeUndefined();
+    expect(empty.enforce_https_h).toBeUndefined();
+    expect(empty.auto_tune_h).toBeUndefined();
+    expect(empty.snapshot_hour_h).toBeUndefined();
+  });
+
   it("string-typed booleans ('true'/'false') are tolerated like boolH", () => {
     const d = deriveRow('opensearch', {
       cluster_config: { DedicatedMasterEnabled: 'false', ColdStorageOptions: { Enabled: 'true' } },
