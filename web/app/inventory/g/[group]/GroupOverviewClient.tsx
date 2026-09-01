@@ -30,16 +30,16 @@ const DASH = '—';
 const TYPE_MICRO: Record<string, (s: Splits, countOf: (t: string) => number) => string | null> = {
   ec2: (s) => `${s.ec2Running} running · ${s.ec2Stopped} stopped`,
   lambda: (s) => (s.lambdaRuntimes == null ? null : `${s.lambdaRuntimes} runtimes · ${s.lambdaLongTimeout ?? 0} >300s`),
-  ebs_volume: (s) => (s.ebsTotalGb == null ? null : `${s.ebsTotalGb.toLocaleString()} GB · ${s.ebsUnencrypted} unencrypted`),
+  ebs_volume: (s) => (s.ebsTotalGb == null ? null : `${s.ebsTotalGb.toLocaleString()} GiB · ${s.ebsUnencrypted} unencrypted`),
   rds: (s) => (s.rdsMultiAz == null ? null : `${s.rdsMultiAz} Multi-AZ · ${s.rdsUnencrypted ?? 0} unencrypted`),
   ecr: (s) => (s.ecrScanOnPush == null ? null : `${s.ecrScanOnPush} scan-on-push · ${s.ecrImmutable ?? 0} immutable`),
   s3: (s) => (s.s3VersioningOff == null ? null : `${s.s3Public ?? 0} public · ${s.s3VersioningOff} versioning off`),
   iam_user: (s) => `${s.iamUserNoMfa} no MFA`,
   security_group: (s) => `${s.sgOpenIngress} open ingress`,
-  cloudwatch_alarm: (s) => (s.cwAlarm == null ? null : `${s.cwAlarm} in alarm`),
+  // cloudwatch_alarm lives in the singleton Monitoring group (no /inventory/g page) — no entry.
   cloudfront: (s) => (s.cloudfrontEnabled == null ? null : `${s.cloudfrontEnabled} enabled`),
   // Cross-type composition — subnet/NAT totals already ride byType, zero extra SQL.
-  vpc: (_s, countOf) => `${countOf('subnet')} subnets · ${countOf('nat_gateway')} NAT`,
+  vpc: (_s, countOf) => `${countOf('subnet')} subnets · ${countOf('nat_gateway')} NAT · ${countOf('transit_gateway')} TGW`,
 };
 
 /**
@@ -102,9 +102,9 @@ export default function GroupOverviewClient({ slug }: { slug: string }) {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatTile
               label={t('overview.status')}
-              value={!sum ? DASH : attention === 0 ? t('overview.healthy') : t('overview.attention', { n: attention })}
-              variant={!sum ? 'default' : attention === 0 ? 'accent' : 'danger'}
-              icon={(() => { const I = variantIcon(!sum ? 'default' : attention === 0 ? 'accent' : 'danger'); return <I size={16} />; })()}
+              value={!sum || !splits ? DASH : attention === 0 ? t('overview.healthy') : t('overview.attention', { n: attention })}
+              variant={!sum || !splits ? 'default' : attention === 0 ? 'accent' : 'danger'}
+              icon={(() => { const I = variantIcon(!sum || !splits ? 'default' : attention === 0 ? 'accent' : 'danger'); return <I size={16} />; })()}
             />
             {node.splitKeys.map((k) => (
               <StatTile

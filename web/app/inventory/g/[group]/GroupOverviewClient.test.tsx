@@ -52,13 +52,21 @@ describe('GroupOverviewClient', () => {
     await waitFor(() => expect(screen.getByText('4 running · 1 stopped')).toBeTruthy());
     expect(screen.getByText('3 runtimes · 2 >300s')).toBeTruthy();
     renderG('network');
-    await waitFor(() => expect(screen.getByText('9 subnets · 2 NAT')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('9 subnets · 2 NAT · 0 TGW')).toBeTruthy());
     expect(screen.getByText('4 open ingress')).toBeTruthy();
   });
 
   it('no subline for a type whose split keys are absent (rolling-deploy skew) — no fabricated zeros', async () => {
     renderG('storage'); // ebs_volume needs ebsTotalGb, absent from this fixture
-    await waitFor(() => expect(screen.queryByText(/GB ·/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/GiB ·/)).toBeNull());
+  });
+
+  it('splits:null (aggregation failure) hides ALL sublines and the status verdict — never false-clean', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ...SUMMARY, splits: null }) })) as unknown as typeof fetch;
+    renderG('network');
+    await waitFor(() => expect(screen.getByText('VPCs')).toBeTruthy());
+    expect(screen.queryByText(/open ingress/)).toBeNull();
+    expect(screen.queryByText(/subnets ·/)).toBeNull(); // whole subline layer gated on splits
   });
 
   it('Compute surfaces the EKS family tiles (feature links from the eks subgroup)', async () => {

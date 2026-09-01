@@ -81,6 +81,11 @@ describe('GET /api/inventory/summary', () => {
     for (const k of ['lambda_runtimes', 'lambda_long_timeout', 'ebs_total_gb', 'rds_multi_az', 'ecr_scan_on_push', 's3_versioning_off', 'cloudfront_enabled']) {
       expect(splitsSql).toContain(k);
     }
+    // The ECR regex must reach Postgres with REAL \s escapes — a single backslash in the
+    // template literal collapses to a bare 's' and the aggregate silently reports 0 forever.
+    expect(splitsSql).toContain('\\s*:\\s*');
+    // container-image (null-runtime) functions count as the 'custom' runtime (v1 COALESCE parity)
+    expect(splitsSql).toContain("COALESCE(NULLIF(data->>'runtime',''),'custom')");
   });
 
   it('degrades ec2Types to [] when its aggregation query fails (byType still returns)', async () => {
@@ -107,24 +112,8 @@ describe('GET /api/inventory/summary', () => {
     const body = await res.json();
     expect(body.byType[0]).toEqual({ type: 'ec2', label: 'EC2 Instances', count: 5 });
     expect(body.total).toBe(5);
-    expect(body.splits).toEqual({
-      ec2Running: 0,
-      ec2Stopped: 0,
-      ebsUnencrypted: 0,
-      iamUserNoMfa: 0,
-      sgOpenIngress: 0,
-      s3Public: 0,
-      cwAlarm: 0,
-      lambdaRuntimes: 0,
-      lambdaLongTimeout: 0,
-      ebsTotalGb: 0,
-      rdsMultiAz: 0,
-      rdsUnencrypted: 0,
-      ecrScanOnPush: 0,
-      ecrImmutable: 0,
-      s3VersioningOff: 0,
-      cloudfrontEnabled: 0,
-    });
+    // splits FAILED → null, never fabricated zeros (false-clean security sublines)
+    expect(body.splits).toBeNull();
   });
   it('500 on byType db error', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
