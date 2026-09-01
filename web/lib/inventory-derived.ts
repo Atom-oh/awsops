@@ -66,44 +66,56 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
     const vpc = r.vpc_options;
     const enc = r.encryption_at_rest_options;
     const adv = r.advanced_security_options;
-    const joinArr = (v: unknown): string | undefined => {
+    // Tolerant boolean (boolH parity — Steampipe JSONB can carry 'true'/'false' strings);
+    // an ABSENT key yields undefined so a `{}` blob never fabricates a confident 'disabled'.
+    const flag = (v: unknown): boolean | undefined =>
+      v === true || v === 'true' ? true : v === false || v === 'false' ? false : undefined;
+    // Raw arrays pass through so formatDetailValue's one-per-row idlist rendering applies
+    // (a pre-joined comma string would flatten v1's subnet/SG chip list into one line).
+    const arr = (v: unknown): unknown[] | undefined => {
       const a = asArr(v);
-      return a && a.length ? a.map(String).join(', ') : undefined;
+      return a && a.length ? a : undefined;
     };
     const iops = walk(ebs, 'iops');
     const thr = walk(ebs, 'throughput');
+    const dm = flag(walk(cc, 'dedicated_master_enabled'));
+    const za = flag(walk(cc, 'zone_awareness_enabled'));
+    const warm = flag(walk(cc, 'warm_enabled'));
+    const cold = flag(walk(cc, 'cold_storage_options.enabled'));
+    const standby = flag(walk(cc, 'multi_az_with_standby_enabled'));
+    const ebsOn = flag(walk(ebs, 'ebs_enabled'));
     return {
       instance_type_h: walk(cc, 'instance_type'),
       instance_count_h: walk(cc, 'instance_count'),
       storage_gb_h: walk(ebs, 'volume_size'),
       n2n_enc_h: boolH(r.node_to_node_encryption_options_enabled),
       rest_enc_h: boolH(walk(enc, 'enabled')),
-      dedicated_master_h: walk(cc, 'dedicated_master_enabled') === true
+      dedicated_master_h: dm === true
         ? `${walk(cc, 'dedicated_master_type') ?? '?'} × ${walk(cc, 'dedicated_master_count') ?? '?'}`
-        : cc != null ? 'disabled' : undefined,
-      zone_awareness_h: walk(cc, 'zone_awareness_enabled') === true
+        : dm === false ? 'disabled' : undefined,
+      zone_awareness_h: za === true
         ? `enabled (${walk(cc, 'zone_awareness_config.availability_zone_count') ?? '?'} AZ)`
-        : cc != null ? 'disabled' : undefined,
-      warm_storage_h: walk(cc, 'warm_enabled') === true
+        : za === false ? 'disabled' : undefined,
+      warm_storage_h: warm === true
         ? `${walk(cc, 'warm_type') ?? '?'} × ${walk(cc, 'warm_count') ?? '?'}`
-        : cc != null ? 'disabled' : undefined,
-      cold_storage_h: cc != null ? (walk(cc, 'cold_storage_options.enabled') === true ? 'enabled' : 'disabled') : undefined,
-      multi_az_standby_h: cc != null ? (walk(cc, 'multi_az_with_standby_enabled') === true ? 'enabled' : 'disabled') : undefined,
-      ebs_volume_h: walk(ebs, 'ebs_enabled') === true
+        : warm === false ? 'disabled' : undefined,
+      cold_storage_h: cold === true ? 'enabled' : cold === false ? 'disabled' : undefined,
+      multi_az_standby_h: standby === true ? 'enabled' : standby === false ? 'disabled' : undefined,
+      ebs_volume_h: ebsOn === true
         ? `${walk(ebs, 'volume_type') ?? '?'} · ${walk(ebs, 'volume_size') ?? '?'} GB`
           + (iops != null ? ` · ${iops} IOPS` : '')
           + (thr != null ? ` · ${thr} MB/s` : '')
-        : ebs != null ? 'disabled' : undefined,
+        : ebsOn === false ? 'disabled' : undefined,
       vpc_id_h: walk(vpc, 'vpc_id'),
-      subnets_h: joinArr(walk(vpc, 'subnet_ids')),
-      security_groups_h: joinArr(walk(vpc, 'security_group_ids')),
-      azs_h: joinArr(walk(vpc, 'availability_zones')),
+      subnets_h: arr(walk(vpc, 'subnet_ids')),
+      security_groups_h: arr(walk(vpc, 'security_group_ids')),
+      azs_h: arr(walk(vpc, 'availability_zones')),
       kms_key_h: walk(enc, 'kms_key_id'),
       // real booleans → the DetailPanel's Badge rendering (green true / neutral false)
-      adv_security_h: adv != null ? walk(adv, 'enabled') === true : undefined,
-      internal_user_db_h: adv != null ? walk(adv, 'internal_user_database_enabled') === true : undefined,
-      anonymous_auth_h: adv != null ? walk(adv, 'anonymous_auth_enabled') === true : undefined,
-      cognito_h: r.cognito_options != null ? walk(r.cognito_options, 'enabled') === true : undefined,
+      adv_security_h: flag(walk(adv, 'enabled')),
+      internal_user_db_h: flag(walk(adv, 'internal_user_database_enabled')),
+      anonymous_auth_h: flag(walk(adv, 'anonymous_auth_enabled')),
+      cognito_h: flag(walk(r.cognito_options, 'enabled')),
     };
   },
   cloudfront: (r) => ({

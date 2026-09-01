@@ -310,7 +310,7 @@ export default function InventoryTypePage() {
     : null;
   // Server-computed ranking chart (gap L138): the metrics route's optional `bar` payload.
   const serverBar = metricBar
-    ? <BarDistribution title={metricBar.title} data={metricBar.data} xKey="label" yKey="value" />
+    ? <BarDistribution title={metricBar.title} data={metricBar.data} xKey="label" yKey="value" decimals={1} />
     : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
   const graphBand = donut && donut2

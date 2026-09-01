@@ -36,51 +36,49 @@ const priceList = (usd: string) => JSON.stringify({
   },
 });
 
-describe('ec2AvgCpu', () => {
-  it('averages the latest datapoint across results, rounded to 0.1', async () => {
+describe('ec2CpuStats (gap L138 fleet-wide per-region)', () => {
+  it('per-instance map + raw-value average, mapped by query Id (out-of-order safe)', async () => {
     cwSend.mockResolvedValueOnce({
       MetricDataResults: [
-        { Id: 'm0', Values: [10.2, 5] },
-        { Id: 'm1', Values: [20.6, 9] },
-      ],
-    });
-    const { ec2AvgCpu } = await import('./metrics');
-    // (10.2 + 20.6) / 2 = 15.4
-    expect(await ec2AvgCpu(['i-aaa', 'i-bbb'])).toBe(15.4);
-  });
-
-  it('returns null for empty ids (no CloudWatch call)', async () => {
-    const { ec2AvgCpu } = await import('./metrics');
-    expect(await ec2AvgCpu([])).toBeNull();
-    expect(cwSend).not.toHaveBeenCalled();
-  });
-
-  it('returns null when no datapoints', async () => {
-    cwSend.mockResolvedValueOnce({ MetricDataResults: [{ Id: 'm0', Values: [] }] });
-    const { ec2AvgCpu } = await import('./metrics');
-    expect(await ec2AvgCpu(['i-aaa'])).toBeNull();
-  });
-
-  it('ec2CpuStats exposes the per-instance map (gap L138) and maps results by query Id, not array order', async () => {
-    cwSend.mockResolvedValueOnce({
-      MetricDataResults: [
-        { Id: 'm1', Values: [20.61] }, // out of order on purpose
-        { Id: 'm0', Values: [10.24] },
+        { Id: 'cpu_i1', Values: [20.64] }, // out of order on purpose
+        { Id: 'cpu_i0', Values: [10.24] },
       ],
     });
     const { ec2CpuStats } = await import('./metrics');
-    const st = await ec2CpuStats(['i-aaa', 'i-bbb']);
+    const st = await ec2CpuStats({ 'ap-northeast-2': ['i-aaa', 'i-bbb'] });
     expect(st.byInstance).toEqual({ 'i-aaa': 10.2, 'i-bbb': 20.6 });
+    // avg from RAW datapoints (10.24+20.64)/2 = 15.44 → 15.4, not from the rounded display values
     expect(st.avg).toBe(15.4);
   });
 
-  it('ec2CpuStats: empty ids → {avg: null, byInstance: {}} without a CloudWatch call', async () => {
+  it('merges regions — one GetMetricData batch per region, ids never cross-region sampled', async () => {
+    cwSend
+      .mockResolvedValueOnce({ MetricDataResults: [{ Id: 'cpu_i0', Values: [50] }] })
+      .mockResolvedValueOnce({ MetricDataResults: [{ Id: 'cpu_i0', Values: [10] }] });
     const { ec2CpuStats } = await import('./metrics');
-    expect(await ec2CpuStats([])).toEqual({ avg: null, byInstance: {} });
+    const st = await ec2CpuStats({ 'ap-northeast-2': ['i-kr'], 'us-east-1': ['i-us'] });
+    expect(cwSend).toHaveBeenCalledTimes(2);
+    expect(Object.keys(st.byInstance).sort()).toEqual(['i-kr', 'i-us']);
+    expect(st.avg).toBe(30);
+  });
+
+  it('empty input → {avg: null, byInstance: {}} without a CloudWatch call', async () => {
+    const { ec2CpuStats } = await import('./metrics');
+    expect(await ec2CpuStats({})).toEqual({ avg: null, byInstance: {} });
+    expect(await ec2CpuStats({ 'ap-northeast-2': [] })).toEqual({ avg: null, byInstance: {} });
     expect(cwSend).not.toHaveBeenCalled();
   });
-});
 
+  it('no datapoints → avg null; a region-level CloudWatch deny degrades to the other regions', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [{ Id: 'cpu_i0', Values: [] }] });
+    const { ec2CpuStats } = await import('./metrics');
+    expect((await ec2CpuStats({ 'ap-northeast-2': ['i-aaa'] })).avg).toBeNull();
+    cwSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [{ Id: 'cpu_i0', Values: [7] }] });
+    const st = await ec2CpuStats({ 'us-east-1': ['i-denied'], 'ap-northeast-2': ['i-ok'] });
+    expect(st.byInstance).toEqual({ 'i-ok': 7 });
+  });
+});
 describe('ec2HourlyCost', () => {
   it('parses Pricing on-demand USD and sums price × count', async () => {
     priceSend

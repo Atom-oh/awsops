@@ -65,12 +65,12 @@ describe('deriveRow opensearch structured detail (gap L150)', () => {
     expect(d.multi_az_standby_h).toBe('enabled');
   });
 
-  it('EBS one-liner carries type/size/IOPS/throughput; VPC arrays join to chips-ready strings', () => {
+  it('EBS one-liner carries type/size/IOPS/throughput; VPC arrays pass through raw (idlist rows)', () => {
     const d = deriveRow('opensearch', { ...full });
     expect(d.ebs_volume_h).toBe('gp3 · 100 GB · 3000 IOPS · 125 MB/s');
     expect(d.vpc_id_h).toBe('vpc-1');
-    expect(d.subnets_h).toBe('subnet-a, subnet-b');
-    expect(d.security_groups_h).toBe('sg-1');
+    expect(d.subnets_h).toEqual(['subnet-a', 'subnet-b']); // arrays stay arrays → one-per-row rendering
+    expect(d.security_groups_h).toEqual(['sg-1']);
   });
 
   it('security fields: KMS key surfaced, advanced-security as real booleans (Badge rendering)', () => {
@@ -92,5 +92,23 @@ describe('deriveRow opensearch structured detail (gap L150)', () => {
   it('EBS disabled renders disabled (blob present, feature off)', () => {
     const d = deriveRow('opensearch', { ebs_options: { EBSEnabled: false } });
     expect(d.ebs_volume_h).toBe('disabled');
+  });
+
+  it('an EMPTY {} blob never fabricates disabled — absent keys stay undefined', () => {
+    const d = deriveRow('opensearch', { cluster_config: {}, ebs_options: {}, advanced_security_options: {} });
+    expect(d.dedicated_master_h).toBeUndefined();
+    expect(d.cold_storage_h).toBeUndefined();
+    expect(d.ebs_volume_h).toBeUndefined();
+    expect(d.adv_security_h).toBeUndefined();
+  });
+
+  it("string-typed booleans ('true'/'false') are tolerated like boolH", () => {
+    const d = deriveRow('opensearch', {
+      cluster_config: { DedicatedMasterEnabled: 'false', ColdStorageOptions: { Enabled: 'true' } },
+      advanced_security_options: { Enabled: 'true' },
+    });
+    expect(d.dedicated_master_h).toBe('disabled');
+    expect(d.cold_storage_h).toBe('enabled');
+    expect(d.adv_security_h).toBe(true);
   });
 });

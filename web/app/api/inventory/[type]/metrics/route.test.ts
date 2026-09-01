@@ -48,9 +48,9 @@ describe('GET /api/inventory/[type]/metrics', () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({
       rows: [
-        { id: 'i-1', state: 'running', type: 't3.micro', name: null },
-        { id: 'i-2', state: 'stopped', type: 't3.micro', name: 'web-b' },
-        { id: 'i-3', state: 'running', type: 't4g.nano', name: null },
+        { id: 'i-1', state: 'running', type: 't3.micro', name: null, region: 'ap-northeast-2' },
+        { id: 'i-2', state: 'stopped', type: 't3.micro', name: 'web-b', region: 'ap-northeast-2' },
+        { id: 'i-3', state: 'running', type: 't4g.nano', name: null, region: 'us-east-1' },
       ],
     });
     ec2CpuStats.mockResolvedValue({ avg: 15.4, byInstance: { 'i-1': 12.1, 'i-3': 18.7 } });
@@ -63,8 +63,8 @@ describe('GET /api/inventory/[type]/metrics', () => {
     expect(cards).toHaveLength(2);
     expect(cards[0].value).toBe('15.4%');
     expect(cards[1].value).toBe('$0.03');
-    // running ids only
-    expect(ec2CpuStats).toHaveBeenCalledWith(['i-1', 'i-3']);
+    // running ids only, grouped by their inventory region (fleet-wide per-region ranking)
+    expect(ec2CpuStats).toHaveBeenCalledWith({ 'ap-northeast-2': ['i-1'], 'us-east-1': ['i-3'] });
     // Top-15 bar (gap L138): CPU-descending, Name tag label falling back to the instance id
     expect(body.bar.title).toBe('EC2 CPU Top 15 (%)');
     expect(body.bar.data).toEqual([

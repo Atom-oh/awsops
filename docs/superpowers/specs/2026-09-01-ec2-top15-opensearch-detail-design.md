@@ -58,3 +58,25 @@ the OpenSearch JSONB columns are already synced.
 - Detail: `hideKeys` suppresses raw keys from sections AND the Other group; types without
   hideKeys byte-identical.
 - Full `npm test` + `tsc` + build; gap-audit ticks with a batch-15 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **Fleet-wide per-region ranking (the gate MAJOR)** — the first cut ranked an unordered
+  ≤100-instance, default-region-only sample under a "Top 15" title. `ec2CpuStats` now takes
+  `idsByRegion` and routes each region's ids through `fleetLatest`'s chunked GetMetricData
+  (per-region CloudWatch clients, ~480 queries/call batches, fail-soft per region); the route
+  groups running instances by their inventory region (the `?ids=` diagnostics `byRegion`
+  precedent). The average is computed from RAW datapoints (no rounded-value drift); the dead
+  `ec2AvgCpu` wrapper is removed. CHANGELOG/audit wording updated to the now-true claim.
+- **Chart value precision** — `HBarList`/`BarDistribution` gained a `decimals` prop; the CPU
+  chart renders 1 fraction digit instead of flooring 12.1% to "12".
+- **Deriver honesty/tolerance** — boolean lookups use a tolerant `flag()` (accepts
+  `'true'`/`'false'` strings, boolH parity), and an empty `{}` blob yields `undefined`
+  (absent from the panel) instead of a fabricated 'disabled'.
+- **Info availability** — the raw `advanced_security_options`/`cognito_options` blobs stay
+  visible in the Security section (SAML/user-pool fields aren't derived); final `hideKeys` =
+  `cluster_config`, `ebs_options`, `vpc_options`, `encryption_at_rest_options`,
+  `node_to_node_encryption_options_enabled`, and the derived table column `storage_gb_h`
+  (superseded in the panel by `ebs_volume_h`).
+- **Array rendering** — subnet/SG/AZ lists pass through as raw arrays so `formatDetailValue`'s
+  one-per-row idlist rendering applies (v1's chip list), not a comma-joined line.

@@ -407,11 +407,14 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       // cluster_config/ebs_options/vpc_options/encryption/advanced-security JSONB blobs.
       { label: 'Cluster Config', keys: ['instance_type_h', 'instance_count_h', 'dedicated_master_h', 'zone_awareness_h', 'warm_storage_h', 'cold_storage_h', 'multi_az_standby_h'] },
       { label: 'Endpoint & Network', keys: ['endpoint', 'endpoints', 'vpc_id_h', 'subnets_h', 'security_groups_h', 'azs_h'] },
-      { label: 'Security', keys: ['rest_enc_h', 'kms_key_h', 'n2n_enc_h', 'adv_security_h', 'internal_user_db_h', 'anonymous_auth_h', 'cognito_h'] },
+      // Raw advanced_security_options/cognito_options stay visible after the derived flags —
+      // they carry fields (SAML, user-pool ids) the flags don't derive; hiding them would
+      // regress information availability.
+      { label: 'Security', keys: ['rest_enc_h', 'kms_key_h', 'n2n_enc_h', 'adv_security_h', 'internal_user_db_h', 'anonymous_auth_h', 'cognito_h', 'advanced_security_options', 'cognito_options'] },
       { label: 'Storage', keys: ['ebs_volume_h'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    hideKeys: ['cluster_config', 'ebs_options', 'vpc_options', 'encryption_at_rest_options', 'advanced_security_options', 'cognito_options', 'node_to_node_encryption_options_enabled', 'storage_gb_h'],
+    hideKeys: ['cluster_config', 'ebs_options', 'vpc_options', 'encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'storage_gb_h'],
     filterKeys: ['region', 'engine_version', 'engine_type'] },
   msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', distKey2: 'state', columns: [
     { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' },
