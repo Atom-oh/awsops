@@ -44,14 +44,29 @@ function structuredList(key: string, value: unknown): DetailListItem[] | null {
       if (typeof id !== 'string') return null;
       rows.push({ id, name: typeof o.Status === 'string' ? o.Status : undefined });
     } else if (key === 'attachments') {
-      // EBS: [{ InstanceId, Device, State }]; IGW: [{ VpcId, State }] (ECS task attachments → JSON)
+      // EBS: [{ InstanceId, Device, State, DeleteOnTermination }]; IGW: [{ VpcId, State }]
+      // (ECS task attachments → JSON). DeleteOnTermination flags only when TRUE — the volume
+      // dies with the instance, the risky case v1 highlighted; false/absent shows nothing
+      // (never a fabricated 'No').
       const id = o.InstanceId ?? o.instance_id ?? o.VpcId ?? o.vpc_id;
       if (typeof id !== 'string') return null;
       rows.push({
         id,
         name: typeof (o.Device ?? o.device) === 'string' ? String(o.Device ?? o.device) : undefined,
         extra: typeof (o.State ?? o.state) === 'string' ? String(o.State ?? o.state) : undefined,
+        flag: [true, 'true'].includes((o.DeleteOnTermination ?? o.delete_on_termination ?? o.deleteOnTermination) as boolean | string) ? 'DeleteOnTermination' : undefined,
       });
+    } else if (key === 'settings') {
+      // ECS-cluster-shaped settings ONLY: [{ Name: string, Value: string }] → one label–value
+      // row ('containerInsights · disabled') instead of a raw JSON block (gap L215). Any other
+      // shape (structured Value, missing Name) falls back WHOLE to the JSON rendering — never
+      // a half-parsed list or an '[object Object]' cell.
+      const name = o.Name ?? o.name;
+      const val = o.Value ?? o.value;
+      // A null/absent Value falls back too — a bare label row is indistinguishable from an
+      // empty value, so anything but {string, string} takes the JSON rendering whole.
+      if (typeof name !== 'string' || typeof val !== 'string') return null;
+      rows.push({ id: name, name: val });
     } else if (key === 'routes') {
       // Route table (v1 parity): destination → target, blackhole flagged.
       const dest = o.DestinationCidrBlock ?? o.destination_cidr_block ?? o.DestinationIpv6CidrBlock
