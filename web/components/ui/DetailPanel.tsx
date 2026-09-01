@@ -416,7 +416,7 @@ export default function DetailPanel({
           )}
           {liveMetricId && resourceType && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
-              <LiveTrendsSection type={resourceType} id={liveMetricId} accountId={typeof data.account_id === 'string' ? data.account_id : undefined} />
+              <LiveTrendsSection type={resourceType} id={liveMetricId} accountId={typeof data.account_id === 'string' ? data.account_id : undefined} region={typeof data.region === 'string' ? data.region : undefined} />
             </section>
           )}
           {children}

@@ -37,4 +37,18 @@ describe('LiveTrendsSection (gap L118)', () => {
     render(<LiveTrendsSection type="msk" id="c" />);
     await waitFor(() => expect(screen.getByText('데이터 불가')).toBeTruthy());
   });
+  it('sends BOTH account and region — half-opening the scope charts the wrong resource', async () => {
+    const f = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ trends: [] }) }));
+    vi.stubGlobal('fetch', f);
+    render(<LiveTrendsSection type="opensearch" id="dom-1" accountId="123456789012" region="us-west-2" />);
+    await waitFor(() => expect(f).toHaveBeenCalled());
+    const url = String(f.mock.calls[0][0]);
+    expect(url).toContain('account=123456789012');
+    expect(url).toContain('region=us-west-2');
+  });
+  it('ratioPct renders 0–1 ratios as real percentages (0.92 → 92%, never 0.9%)', async () => {
+    setFetch({ trends: [{ label: 'Cache Hit Rate', fmt: 'ratioPct', samples: samples(2).map((s, i) => ({ ...s, v: i ? 0.92 : 0.9 })) }] });
+    render(<LiveTrendsSection type="elasticache" id="cc-1" />);
+    await waitFor(() => expect(screen.getByText('92%')).toBeTruthy()); // Max tile
+  });
 });

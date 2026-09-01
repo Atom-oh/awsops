@@ -16,6 +16,7 @@ import type { LiveTrendMetric, TrendSample } from '@/lib/metrics';
 function fmtValue(v: number, fmt: LiveTrendMetric['fmt']): string {
   switch (fmt) {
     case 'pct': return `${Math.round(v * 10) / 10}%`;
+    case 'ratioPct': return `${Math.round((v <= 1 ? v * 100 : v) * 10) / 10}%`; // 0–1 ratio source (CacheHitRate)
     case 'gb': return `${(v / 1e9).toFixed(1)} GB`;
     case 'mb': return `${(v / 1e6).toFixed(1)} MB`;
     case 'mbRaw': return `${v.toFixed(1)} MB`; // source metric already in megabytes (AWS/ES)
@@ -46,7 +47,7 @@ function AvgMaxMin({ samples, fmt }: { samples: TrendSample[]; fmt: LiveTrendMet
   );
 }
 
-export function LiveTrendsSection({ type, id, accountId }: { type: string; id: string; accountId?: string }) {
+export function LiveTrendsSection({ type, id, accountId, region }: { type: string; id: string; accountId?: string; region?: string }) {
   const { tt } = useI18n();
   const c = useChartColors();
   const [trends, setTrends] = useState<LiveTrendMetric[] | null>(null);
@@ -55,7 +56,8 @@ export function LiveTrendsSection({ type, id, accountId }: { type: string; id: s
   useEffect(() => {
     let alive = true;
     setTrends(null); setErr(false);
-    const acct = accountId ? `&account=${encodeURIComponent(accountId)}` : '';
+    const acct = (accountId ? `&account=${encodeURIComponent(accountId)}` : '')
+      + (region ? `&region=${encodeURIComponent(region)}` : '');
     fetch(`/api/inventory/${encodeURIComponent(type)}/metrics?id=${encodeURIComponent(id)}&trends=1${acct}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
@@ -65,7 +67,7 @@ export function LiveTrendsSection({ type, id, accountId }: { type: string; id: s
       })
       .catch(() => { if (alive) setErr(true); });
     return () => { alive = false; };
-  }, [type, id, accountId]);
+  }, [type, id, accountId, region]);
 
   // The heading renders in EVERY branch — a bare unlabelled bordered card under the
   // live-metrics card would be unreadable (the sibling sections do the same).

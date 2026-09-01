@@ -333,9 +333,9 @@ export async function bedrockModelMetrics(range = '24h', accountId?: string): Pr
 // One GetMetricData call per resource; every failure degrades to [] (never blanks the panel).
 export interface LiveMetric { label: string; value: string }
 
-export type LiveFmt = 'pct' | 'gb' | 'mb' | 'mbRaw' | 'count' | 'ms' | 'bps';
+export type LiveFmt = 'pct' | 'ratioPct' | 'gb' | 'mb' | 'mbRaw' | 'count' | 'ms' | 'bps';
 interface LiveMetricDef { name: string; label: string; stat: 'Average' | 'Sum' | 'Maximum'; fmt: LiveFmt }
-interface LiveMetricSpec { namespace: string; dims: (id: string) => { Name: string; Value: string }[]; metrics: LiveMetricDef[] }
+interface LiveMetricSpec { namespace: string; dims: (id: string, accountId?: string) => { Name: string; Value: string }[]; metrics: LiveMetricDef[] }
 
 const LIVE_SPECS: Record<string, LiveMetricSpec> = {
   // resource_id = CacheClusterId
@@ -349,15 +349,19 @@ const LIVE_SPECS: Record<string, LiveMetricSpec> = {
       { name: 'NetworkBytesIn', label: 'Network In', stat: 'Average', fmt: 'mb' },
       { name: 'NetworkBytesOut', label: 'Network Out', stat: 'Average', fmt: 'mb' },
       { name: 'CurrConnections', label: 'Connections', stat: 'Average', fmt: 'count' },
-      { name: 'CacheHitRate', label: 'Cache Hit Rate', stat: 'Average', fmt: 'pct' },
+      // CacheHitRate arrives as a 0–1 RATIO (see ElasticacheNodeMetrics.hitPctOf) — plain 'pct'
+      // would render 0.92 as '0.9%'.
+      { name: 'CacheHitRate', label: 'Cache Hit Rate', stat: 'Average', fmt: 'ratioPct' },
     ],
   },
   // resource_id = DomainName. AWS/ES requires the ClientId (account) dimension.
   opensearch: {
     namespace: 'AWS/ES',
-    dims: (id) => [
+    // ClientId must be the OWNING account — pinning the host id made every member-account
+    // domain query return empty series ('데이터 불가') while claiming cross-account support.
+    dims: (id, accountId) => [
       { Name: 'DomainName', Value: id },
-      { Name: 'ClientId', Value: process.env.AWS_ACCOUNT_ID ?? '' },
+      { Name: 'ClientId', Value: accountId && accountId !== 'self' ? accountId : process.env.AWS_ACCOUNT_ID ?? '' },
     ],
     metrics: [
       { name: 'CPUUtilization', label: 'CPU', stat: 'Average', fmt: 'pct' },
@@ -387,6 +391,8 @@ const LIVE_SPECS: Record<string, LiveMetricSpec> = {
 function fmtLive(v: number, fmt: LiveFmt): string {
   switch (fmt) {
     case 'pct': return `${Math.round(v * 10) / 10}%`;
+    // 0–1 ratio → percent (values >1 pass through — some engines report percent directly)
+    case 'ratioPct': return `${Math.round((v <= 1 ? v * 100 : v) * 10) / 10}%`;
     case 'gb': return `${(v / 1e9).toFixed(1)} GB`;
     case 'mb': return `${(v / 1e6).toFixed(1)} MB`;
     case 'mbRaw': return `${v.toFixed(1)} MB`; // source metric already in megabytes (AWS/ES)
@@ -399,16 +405,16 @@ function fmtLive(v: number, fmt: LiveFmt): string {
 export function hasLiveMetrics(type: string): boolean { return type in LIVE_SPECS; }
 
 /** Latest-hour metrics for ONE resource of a LIVE_SPECS type. [] on error/no data. */
-export async function liveResourceMetrics(type: string, id: string, accountId?: string): Promise<LiveMetric[]> {
+export async function liveResourceMetrics(type: string, id: string, accountId?: string, region?: string): Promise<LiveMetric[]> {
   const spec = LIVE_SPECS[type];
   if (!spec) return [];
   try {
-    const client = await assumedClient(accountId, CloudWatchClient, { region: REGION });
+    const client = await assumedClient(accountId, CloudWatchClient, { region: region ?? REGION });
     const r = await client.send(new GetMetricDataCommand({
       StartTime: new Date(Date.now() - 3 * 3600_000), EndTime: new Date(),
       MetricDataQueries: spec.metrics.map((m, i) => ({
         Id: `lm${i}`, ReturnData: true,
-        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id) }, Period: 3600, Stat: m.stat },
+        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id, accountId) }, Period: 3600, Stat: m.stat },
       })),
     }));
     const out: LiveMetric[] = [];
@@ -429,16 +435,19 @@ export interface LiveTrendMetric { label: string; fmt: LiveFmt; samples: TrendSa
 /** 1-hour 5-min sparkline series for ONE resource of a LIVE_SPECS type (gap L118 — v1's
  *  elasticache detail sparklines, generalized to opensearch/msk which share the spec table).
  *  Bounded window (~65min → ≤13 points/metric); [] on error (never throws). */
-export async function liveResourceTrends(type: string, id: string, accountId?: string): Promise<LiveTrendMetric[]> {
+export async function liveResourceTrends(type: string, id: string, accountId?: string, region?: string): Promise<LiveTrendMetric[]> {
   const spec = LIVE_SPECS[type];
   if (!spec) return [];
   try {
-    const client = await assumedClient(accountId, CloudWatchClient, { region: REGION });
+    // Opening the account dimension without the region would half-open the scope: a member
+    // account's cluster outside the deployment region would silently read '데이터 불가' (or a
+    // same-named default-region cluster would chart the WRONG resource).
+    const client = await assumedClient(accountId, CloudWatchClient, { region: region ?? REGION });
     const r = await client.send(new GetMetricDataCommand({
       StartTime: new Date(Date.now() - 65 * 60_000), EndTime: new Date(),
       MetricDataQueries: spec.metrics.map((m, i) => ({
         Id: `lt${i}`, ReturnData: true,
-        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id) }, Period: 300, Stat: m.stat },
+        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id, accountId) }, Period: 300, Stat: m.stat },
       })),
       ScanBy: 'TimestampAscending',
     }));

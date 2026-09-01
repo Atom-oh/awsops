@@ -31,6 +31,10 @@ beforeEach(() => {
   ec2AvgCpu.mockReset();
   ec2HourlyCost.mockReset();
   rdsMetrics.mockReset();
+  rdsInstanceTrends.mockReset();
+  liveResourceTrends.mockReset();
+  hasLiveMetrics.mockReset();
+  liveResourceMetrics.mockReset();
 });
 
 describe('GET /api/inventory/[type]/metrics', () => {
@@ -209,12 +213,27 @@ describe('live-metrics ?id= trends=1 (gap L118)', () => {
     const body = await (await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1'), ctx('elasticache'))).json();
     expect(body.trends).toEqual([{ label: 'CPU', fmt: 'pct', samples: null }]);
     expect(liveResourceMetrics).not.toHaveBeenCalled();
-    expect(liveResourceTrends).toHaveBeenCalledWith('elasticache', 'cc-1', undefined);
+    expect(liveResourceTrends).toHaveBeenCalledWith('elasticache', 'cc-1', undefined, undefined);
   });
   it('400 on a malformed live-metrics id', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     hasLiveMetrics.mockReturnValue(true);
     const { GET } = await import('./route');
     expect((await GET(req("http://x/api/inventory/elasticache/metrics?id=x'--"), ctx('elasticache'))).status).toBe(400);
+  });
+  it('forwards validated account AND region (member-account, non-default-region resources)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    liveResourceTrends.mockResolvedValue([]);
+    const { GET } = await import('./route');
+    await GET(req('http://x/api/inventory/opensearch/metrics?id=dom-1&trends=1&account=123456789012&region=us-west-2'), ctx('opensearch'));
+    expect(liveResourceTrends).toHaveBeenCalledWith('opensearch', 'dom-1', '123456789012', 'us-west-2');
+  });
+  it('400 on a malformed region', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    hasLiveMetrics.mockReturnValue(true);
+    const { GET } = await import('./route');
+    expect((await GET(req('http://x/api/inventory/elasticache/metrics?id=cc-1&trends=1&region=US_EAST!'), ctx('elasticache'))).status).toBe(400);
+    expect(liveResourceTrends).not.toHaveBeenCalled();
   });
 });

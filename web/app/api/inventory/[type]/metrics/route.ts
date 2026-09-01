@@ -309,7 +309,11 @@ export async function GET(request: Request, { params }: { params: { type: string
           if (account !== undefined && account !== 'self' && !/^[0-9]{12}$/.test(account)) {
             return Response.json({ status: 'error', message: 'invalid account' }, { status: 400 });
           }
-          return Response.json({ trends: await liveResourceTrends(params.type, id, account) });
+          const reg = url.searchParams.get('region') ?? undefined;
+          if (reg !== undefined && !/^[a-z0-9-]{1,32}$/.test(reg)) {
+            return Response.json({ status: 'error', message: 'invalid region' }, { status: 400 });
+          }
+          return Response.json({ trends: await liveResourceTrends(params.type, id, account, reg) });
         }
         const metrics = await liveResourceMetrics(params.type, id);
         // MSK: append bootstrap broker connection strings (v1 parity) — ARN from the synced row.

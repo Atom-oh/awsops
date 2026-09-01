@@ -36,3 +36,20 @@ Terraform/IAM/스키마 변경 없음.
 - Route: trends=1 returns only trends (no liveResourceMetrics call); malformed id → 400.
 - Component: sparkline/fallback/null-series; skew → error branch; empty trends → 데이터 불가.
 - Full `npm test` + `tsc` + build; gap-audit ticks with a batch-14 note.
+
+## Round-2 corrections (review-driven)
+
+- **CacheHitRate is a 0–1 RATIO** (per the existing `ElasticacheNodeMetrics.hitPctOf`
+  precedent: `hr <= 1 ? hr*100 : hr`) — a plain `pct` fmt rendered 0.92 as "0.9%". New
+  `ratioPct` fmt in both the server `fmtLive` and the client `fmtValue` twin.
+- **OpenSearch `ClientId` must be the OWNING account** — the hardcoded host id made every
+  member-account domain query return empty series while the diff claimed cross-account support.
+  `LiveMetricSpec.dims` widened to `(id, accountId?)`; both `liveResourceMetrics` and
+  `liveResourceTrends` pass the account through.
+- **Region threaded alongside account** — account without region half-opens the scope (a
+  member cluster outside the deployment region reads '데이터 불가', or a same-named
+  default-region cluster charts the WRONG resource). `liveResourceTrends(type, id, account?,
+  region?)`; route validates `region` (`/^[a-z0-9-]{1,32}$/` → 400); LiveTrendsSection sends
+  `&region=`; DetailPanel passes `data.region` (mirrors EbsRelatedSection).
+- **CHANGELOG Fixed bullets (EN/KO)** for the user-visible FreeStorageSpace ~1e6× display fix
+  + CacheHitRate ratio fix + member-account ClientId fix.
