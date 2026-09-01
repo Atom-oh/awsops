@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, rdsInstanceTrends, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -84,6 +84,12 @@ export async function GET(request: Request, { params }: { params: { type: string
       const instanceId = new URL(request.url).searchParams.get('id');
       if (instanceId) {
         const one = await rdsMetrics([instanceId]);
+        // Opt-in time-series (gap L141/L142/L155): the default ?id= shape stays untouched so
+        // existing consumers keep today's latency/contract.
+        if (new URL(request.url).searchParams.get('trends') === '1') {
+          const trends = await rdsInstanceTrends(instanceId);
+          return Response.json({ instance: one.byInstance[instanceId] ?? null, trends });
+        }
         return Response.json({ instance: one.byInstance[instanceId] ?? null });
       }
       const qparams: unknown[] = [];

@@ -158,6 +158,43 @@ describe('rdsMetrics', () => {
     const { rdsMetrics } = await import('./metrics');
     expect(await rdsMetrics(['db-1'])).toEqual({ byInstance: {}, avgCpu: null });
   });
+});
+
+describe('rdsInstanceTrends (gap L141/L142/L155)', () => {
+  const iso = (minAgo: number) => new Date(Date.now() - minAgo * 60_000);
+  it('builds ONE call with 8 queries (6 sparks @300s, mem @3600s, cpu @86400s) ascending', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [] });
+    const { rdsInstanceTrends } = await import('./metrics');
+    await rdsInstanceTrends('db-1');
+    expect(cwSend).toHaveBeenCalledTimes(1);
+    const input = (cwSend.mock.calls[0][0] as { input: { MetricDataQueries: { Id: string; MetricStat: { Period: number; Metric: { MetricName: string } } }[]; ScanBy?: string } }).input;
+    expect(input.MetricDataQueries).toHaveLength(8);
+    expect(input.ScanBy).toBe('TimestampAscending');
+    const periods = Object.fromEntries(input.MetricDataQueries.map((q) => [q.Id, q.MetricStat.Period]));
+    expect(periods.spark_0).toBe(300);
+    expect(periods.mem24h).toBe(3600);
+    expect(periods.cpu14d).toBe(86_400);
+  });
+  it('maps series into {t,v}[] and windows sparks to the last ~70 minutes', async () => {
+    cwSend.mockResolvedValueOnce({ MetricDataResults: [
+      { Id: 'spark_0', Timestamps: [iso(120), iso(30), iso(5)], Values: [9, 41.234, 43.5] },
+      { Id: 'mem24h', Timestamps: [iso(60)], Values: [2 * 1024 ** 3] },
+    ] });
+    const { rdsInstanceTrends } = await import('./metrics');
+    const t = await rdsInstanceTrends('db-1');
+    // the 120-min-old point falls outside the 1h spark window
+    expect(t.spark.cpu?.map((s) => s.v)).toEqual([41.23, 43.5]);
+    expect(t.mem24h?.[0].v).toBe(2 * 1024 ** 3);
+    expect(t.cpu14d).toBeNull(); // no datapoints → null, never []
+  });
+  it('degrades every series to null (never throws) when CloudWatch denies', async () => {
+    cwSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    const { rdsInstanceTrends } = await import('./metrics');
+    const t = await rdsInstanceTrends('db-1');
+    expect(t.mem24h).toBeNull();
+    expect(t.cpu14d).toBeNull();
+    expect(Object.values(t.spark).every((v) => v === null)).toBe(true);
+  });
 
   it('batches >62 instances into multiple GetMetricData calls (no silent truncation)', async () => {
     cwSend.mockResolvedValue({ MetricDataResults: [{ Id: 'cpu_i0', Values: [10] }] });

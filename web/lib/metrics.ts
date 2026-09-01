@@ -102,6 +102,79 @@ export async function rdsMetrics(instanceIds: string[], accountId?: string): Pro
   return { byInstance, avgCpu };
 }
 
+// ── RDS per-instance metric TRENDS (gap L141/L142/L155, v1 parity) ──────────
+export interface TrendSample { t: string; v: number }
+export interface RdsInstanceTrends {
+  /** 1h sparklines at 5-min resolution, keyed by RdsInstanceMetrics field name (6 metrics). */
+  spark: Record<string, TrendSample[] | null>;
+  /** FreeableMemory, 24h at 1h resolution (bytes). */
+  mem24h: TrendSample[] | null;
+  /** CPUUtilization, 14d at daily resolution (%). */
+  cpu14d: TrendSample[] | null;
+}
+
+const SPARK_METRICS = [
+  { field: 'cpu', name: 'CPUUtilization' },
+  { field: 'freeableMemory', name: 'FreeableMemory' },
+  { field: 'connections', name: 'DatabaseConnections' },
+  { field: 'readIops', name: 'ReadIOPS' },
+  { field: 'writeIops', name: 'WriteIOPS' },
+  { field: 'freeStorage', name: 'FreeStorageSpace' },
+] as const;
+
+/**
+ * Per-instance RDS metric time-series for the detail panel — ONE GetMetricData call with 8
+ * queries: the 6 v1 sparkline metrics (Period 300, last ~70min), FreeableMemory (Period 3600,
+ * 24h), CPUUtilization (Period 86400, 14d). Read-only live fetch; degrades to null series on
+ * any CloudWatch error (the rdsMetrics contract) — the UI renders '데이터 불가', never a dead
+ * panel.
+ */
+export async function rdsInstanceTrends(instanceId: string, accountId?: string): Promise<RdsInstanceTrends> {
+  const empty: RdsInstanceTrends = {
+    spark: Object.fromEntries(SPARK_METRICS.map((m) => [m.field, null])),
+    mem24h: null, cpu14d: null,
+  };
+  try {
+    const client = await assumedClient(accountId, CloudWatchClient, { region: REGION });
+    const dim = [{ Name: 'DBInstanceIdentifier', Value: instanceId }];
+    const stat = (name: string, period: number) => ({
+      Metric: { Namespace: 'AWS/RDS', MetricName: name, Dimensions: dim }, Period: period, Stat: 'Average',
+    });
+    const queries = [
+      ...SPARK_METRICS.map((m, i) => ({ Id: `spark_${i}`, ReturnData: true, MetricStat: stat(m.name, 300) })),
+      { Id: 'mem24h', ReturnData: true, MetricStat: stat('FreeableMemory', 3600) },
+      { Id: 'cpu14d', ReturnData: true, MetricStat: stat('CPUUtilization', 86_400) },
+    ];
+    // One window covers all three resolutions; per-query Period bounds each series' points
+    // (14d/86400 → 14, 24h/3600 → 24 within the last day, 70min/300 → ~14).
+    const r = await client.send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 14 * 86_400_000), EndTime: new Date(),
+      MetricDataQueries: queries,
+      ScanBy: 'TimestampAscending',
+    }));
+    const series = (id: string, sinceMs: number): TrendSample[] | null => {
+      const res = (r.MetricDataResults ?? []).find((x) => x.Id === id);
+      if (!res?.Timestamps?.length || !res.Values?.length) return null;
+      const out: TrendSample[] = [];
+      for (let i = 0; i < res.Timestamps.length; i++) {
+        const ts = res.Timestamps[i] instanceof Date ? (res.Timestamps[i] as Date) : new Date(String(res.Timestamps[i]));
+        const v = res.Values[i];
+        if (typeof v === 'number' && ts.getTime() >= sinceMs) {
+          out.push({ t: ts.toISOString(), v: Math.round(v * 100) / 100 });
+        }
+      }
+      return out.length ? out : null;
+    };
+    return {
+      spark: Object.fromEntries(SPARK_METRICS.map((m, i) => [m.field, series(`spark_${i}`, Date.now() - 70 * 60_000)])),
+      mem24h: series('mem24h', Date.now() - 24 * 3600_000),
+      cpu14d: series('cpu14d', Date.now() - 14 * 86_400_000),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 let pricing: PricingClient | null = null;
 // Pricing API is reached via us-east-1 only.
 const priceClient = () => (pricing ??= new PricingClient({ region: 'us-east-1' }));
