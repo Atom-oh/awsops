@@ -177,3 +177,15 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   helper `serviceAlertChange` returning null (no verdict, '—', excluded from surge/danger)
   for: no baseline, UTC day 1, a degraded/absent daily leg, and cross-call clamp skew (today's
   bucket exceeding the monthly MTD reads '—', never a confident −100%).
+
+## Round-12 corrections (review-driven)
+
+- **Cached snapshots never feed the alert verdict (the gate MAJOR)** — a previous-day
+  snapshot has no live-todayIso bucket to subtract, and at month rollover its full-month
+  total over 1–2 completed days would paint every row red; `d.cached === true` joins the
+  no-verdict gate (the banner's fail-closed rule, applied to the alert surface).
+- **The tooltip TERM matches the shipped literal (the gate MAJOR)** — the registered entry
+  was the superseded round-9 wording, so en/zh/ja users saw the Korean tooltip; the shipped
+  string is registered in all four languages and the stale entry is deleted.
+- ADR-012's Status carries an Extended 2026-09-01 note for the second probe entry point and
+  the new alert surface.

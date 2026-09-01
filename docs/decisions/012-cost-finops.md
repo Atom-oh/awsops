@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-**Accepted (2026-06-22) — consolidated.** / **채택됨 (2026-06-22) — 통합.** **Extended by ADR-020 (2026-08-19)** — a deterministic baseline-recommendations rule engine on `/cost`; this ADR's content below is unchanged. / **ADR-020(2026-08-19)로 확장됨** — `/cost`의 결정론적 기본 권장 룰 엔진. 아래 본문은 변경 없음.
+**Accepted (2026-06-22) — consolidated.** / **채택됨 (2026-06-22) — 통합.** **Extended 2026-09-01** — the /cost page's empty-data banner adds a second, user-initiated entry point to the availability probe (no force, lands on the 1h verdict cache; host-scope only) and a day-normalized service change alert surface (completed-UTC-day basis, no-verdict fail-closed states). / **2026-09-01 확장** — /cost 빈 데이터 배너가 가용성 probe의 두 번째(사용자 트리거, force 없음·1h 캐시·호스트 스코프) 진입점과 일평균 정규화 서비스 변화율 알림(완결 UTC일 기준, no-verdict fail-closed)을 추가. **Extended by ADR-020 (2026-08-19)** — a deterministic baseline-recommendations rule engine on `/cost`; this ADR's content below is unchanged. / **ADR-020(2026-08-19)로 확장됨** — `/cost`의 결정론적 기본 권장 룰 엔진. 아래 본문은 변경 없음.
 
 Consolidates: **006** (Cost Explorer availability probe), **015** (FinOps MCP Lambda).
 통합 대상: **006**(Cost Explorer 가용성 probe), **015**(FinOps MCP Lambda).

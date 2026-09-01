@@ -242,7 +242,10 @@ export default function CostPage() {
   // on UTC day 1, on a DEGRADED daily leg (today's bucket unsubtractable → the math would
   // silently revert to the biased basis), and on cross-call clamp skew.
   const todayIso = now.toISOString().slice(0, 10);
-  const dailyLegDegraded = d?.dailyDegraded === true || dailyByService.length === 0;
+  // cached snapshot → NO verdict either: a snapshot from a previous day has no live-todayIso
+  // bucket to subtract, and at month rollover its full-month total divided by 1-2 completed
+  // days would paint every row red (~10-30x run-rate). Same fail-closed rule as the banner.
+  const dailyLegDegraded = d?.dailyDegraded === true || d?.cached === true || dailyByService.length === 0;
   const todayBucket = dailyByService.find((p) => p.date === todayIso);
   const todayByService = new Map((todayBucket?.byService ?? []).map((b) => [b.service, b.amount]));
   const alertChange = (r: { current: number; previous: number; service: string }) =>

@@ -32,7 +32,7 @@ export const TERMS: Record<string, Pair> = {
   '가용성 확인': { en: 'Check availability', zh: '检查可用性', ja: '可用性を確認' },
   '변화율 (일평균)': { en: 'Change % (daily avg)', zh: '变化率（日均）', ja: '変化率（日平均）' },
   '최근 30일 중 완결일 평균 · 필터 적용': { en: 'Mean of completed days in the trailing 30 · filters applied', zh: '最近 30 天中已完结日的平均 · 已应用筛选', ja: '直近30日のうち完了日の平均 · フィルター適用' },
-  '전월 일평균 대비 이번 달(UTC) 일평균 — 매월 1~2일(UTC)에는 부분 집계 왜곡을 피하기 위해 판정을 표시하지 않습니다': { en: "This month's daily average (UTC) vs last month's — no verdict is shown on UTC days 1–2 to avoid partial-aggregation distortion", zh: '本月（UTC）日均对比上月日均 — 每月 UTC 第 1~2 天不显示判定，以避免部分汇总失真', ja: '今月（UTC）の日平均と前月の比較 — 部分集計の歪みを避けるため毎月 UTC 1〜2 日は判定を表示しません' },
+  '전월 일평균 대비 이번 달 완결일(UTC) 일평균 — 오늘의 부분 집계 제외. 기준월 없음/매월 1일(UTC)/일별 데이터 저하 시 판정을 표시하지 않습니다': { en: "This month's completed-day (UTC) daily average vs last month's — today's partial bucket excluded. No verdict when there is no baseline month, on UTC day 1, or when daily data is degraded", zh: '本月已完结日（UTC）日均对比上月日均 — 不含今天的部分汇总。无基准月/每月 UTC 第 1 天/日数据降级时不显示判定', ja: '今月の完了日（UTC）日平均と前月の比較 — 本日の部分集計は除外。基準月なし/毎月 UTC 1 日/日次データ低下時は判定を表示しません' },
   // EBS detail verdicts (gap L210)
   '암호화됨': { en: 'Encrypted', zh: '已加密', ja: '暗号化済み' },
   '스냅샷으로 암호화 사본 생성을 검토하세요.': { en: 'Consider creating an encrypted copy via snapshot.', zh: '建议通过快照创建加密副本。', ja: 'スナップショット経由で暗号化コピーの作成を検討してください。' },
