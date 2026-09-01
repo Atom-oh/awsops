@@ -5,6 +5,10 @@
 going" authorization). Branch `feat/small-parity-sweep`.
 **WA pillar:** Operational Excellence (event forensics, alarm triage, accurate fleet counts).
 
+Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L62 (CloudTrail event drill-down),
+L68 (CloudWatch worst-first ordering), L110 (accurate totals past the row cap), L137 (Lambda
+value formatting), L182 (Bedrock Models-Used KPI).
+
 ## 요약 (한국어)
 
 서로 독립적인 소형 패리티 5건: CloudTrail 이벤트 상세 드릴다운(raw JSON 포함), CloudWatch
@@ -17,9 +21,12 @@ Lambda 값 포맷(last_modified 날짜, null runtime → 'custom'), Bedrock '사
 ### L62 — CloudTrail event detail drill-down
 - Route (`app/api/inventory/cloudtrail/events/route.ts`): the SDK response's
   `CloudTrailEvent` JSON is already parsed for `readOnly` and thrown away — keep the parse and
-  additionally map `eventId`, `awsRegion`, `sourceIPAddress`, `userAgent`, `errorCode`, the
-  full `resources` list (today only `Resources[0]` survives), and `raw` (the parsed event
-  object). Same `LookupEvents` call — no new AWS surface.
+  additionally map `eventId`, `awsRegion`, `sourceIPAddress`, `userAgent`, `errorCode`,
+  `accessKeyId` (a first-class Event field, v1 parity), the full `resources` list (today only
+  `Resources[0]` survives), and `raw` — PROJECTED through a field allowlist (forensic call
+  detail stays; `userIdentity` is reduced to identity names — no sessionContext/credential
+  detail leaves the server as a bulk-copyable blob; repo redaction precedent). Same
+  `LookupEvents` call — no new AWS surface.
 - UI (`CloudTrailEvents.tsx`): rows become clickable → the existing `DetailPanel` (no spec →
   flat key list, the same renderer inventory JSONB nests use) with the event fields + the raw
   event object. Close on ×/overlay/Escape comes free.
@@ -33,13 +40,18 @@ Lambda 값 포맷(last_modified 날짜, null runtime → 'custom'), Bedrock '사
   first; unknown values rank after known ones, never hidden).
 
 ### L110 — accurate total tile past the 500-row cap
-- The page fetches `/api/inventory/summary?{scope}` once per type/scope and reads
-  `byType[type].count` (the true DB count). When `allRows.length >= ROW_LIMIT`, the '총 N'
-  tile, the PageHeader subtitle, `Filters.totalCount`, and `RiskHero.total` use
-  `max(summaryCount, allRows.length)`; below the cap the row count is already exact and the
-  summary fetch result is unused. Summary failure degrades silently to the row count (what
-  ships today). KPI/donut/facet numbers stay sample-based — that is L102's separate, still-open
-  scope; this closes only the total-count tile lie.
+- The summary route now honors the SAME `regions`/`includeGlobal` contract the rows route
+  applies (strictly validated inline `regionCond`, mirroring its `accountCond`) — otherwise a
+  region-narrowed page would compare region-filtered rows against an all-region count.
+- The page fetches `/api/inventory/summary?{scope}` only once the 500-row cap is actually hit
+  (it is the heaviest inventory aggregation; refetched after an on-demand sync) and reads
+  `byType[type].count`. At the cap the '총 N' tile, PageHeader subtitle, `Filters.totalCount`,
+  and `RiskHero.total` use `max(summaryCount, allRows.length)`; below the cap the row count is
+  already exact. Summary failure degrades silently to the row count (what ships today).
+- `RiskHero` splits the props: `total` (fleet count, `+` only when it is still a lower bound)
+  vs `sampled` (rows actually scanned — drives the 표본 caption), so an exact total is never
+  labeled as the sample size. KPI/donut/facet numbers stay sample-based — that is L102's
+  separate, still-open scope; this closes only the total-count lie.
 
 ### L137 — Lambda value formatting
 - New `lambda` deriver (`inventory-derived.ts`): `runtime: r.runtime ?? 'custom'` (v1's
@@ -49,15 +61,20 @@ Lambda 값 포맷(last_modified 날짜, null runtime → 'custom'), Bedrock '사
   an EOL runtime; distinct counts it as its own kind, as v1 did).
 
 ### L182 — Bedrock 'Models Used' KPI
-- `app/bedrock/page.tsx` KPI band gains a `사용 모델` StatTile (`models.length` — the
-  distinct-model count for the selected range), grid bumped to fit 8 tiles.
+- `app/bedrock/page.tsx` KPI band gains a `사용 모델` StatTile counting only models with
+  `invocations > 0` in the range (ListMetrics enumerates ~2 weeks of metric existence, so idle
+  models return 0-invocation rows and must not count; models last used >2 weeks ago fall out of
+  ListMetrics entirely — a known window caveat for the 30d range). Grid bumped to 8 tiles.
 
-## Testing
-- CloudTrail route: mapping test (eventId/raw/resources list; malformed CloudTrailEvent JSON →
-  row still renders with raw absent). Component: row click opens the panel with the raw block.
-- worstFirst: unit test on the page-level sorter (ALARM first, tieBreak desc, unknown last);
-  cloudwatch_alarm spec carries the field (synced-column validation extended if needed).
-- Totals: tile/subtitle use the summary count only at the cap; summary failure → row count.
-- Lambda deriver: null/absent runtime → 'custom'; date formatting; raw fallback.
-- Bedrock: models.length tile renders.
+## Testing (as shipped)
+- CloudTrail route: drill-down mapping, all-resources list, userIdentity projection (first-
+  class accessKeyId, no credential/session detail in raw), malformed-JSON degrade, write
+  filter. Component: row click opens the panel with the raw block; legacy payloads don't crash.
+- worstFirst: rank order / unknown-last / tieBreak desc / no input mutation / spec presence
+  (case-insensitive rank; numeric tieBreak compare matching DataTable).
+- Summary route: region/includeGlobal contract (narrowed set, global folding, explicit-empty →
+  FALSE, malformed-token rejection) — this is the totals-at-cap correctness test surface.
+- Lambda deriver: null/absent runtime → 'custom'; date formatting; raw passthrough.
+- The Bedrock tile itself has no page-level test (no page test infra exists for bedrock) —
+  the invoked-only filter is a one-line expression asserted by review + typecheck.
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-10 note.

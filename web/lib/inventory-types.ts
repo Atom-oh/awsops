@@ -35,12 +35,18 @@ export function worstFirst<T extends Record<string, unknown>>(
   rows: T[],
   wf: { col: string; rank: Record<string, number>; tieBreak?: string },
 ): T[] {
-  const rank = (r: T) => wf.rank[String(r[wf.col] ?? '')] ?? Number.MAX_SAFE_INTEGER;
+  // Case-insensitive rank lookup — the rest of the pipeline compares state values
+  // case-insensitively (summary SQL lower(), countWhere), so a casing drift must not
+  // silently disable the default ordering.
+  const norm: Record<string, number> = {};
+  for (const [k, v] of Object.entries(wf.rank)) norm[k.toLowerCase()] = v;
+  const rank = (r: T) => norm[String(r[wf.col] ?? '').toLowerCase()] ?? Number.MAX_SAFE_INTEGER;
   return [...rows].sort((a, b) => {
     const d = rank(a) - rank(b);
     if (d !== 0) return d;
     if (!wf.tieBreak) return 0;
-    return String(b[wf.tieBreak] ?? '').localeCompare(String(a[wf.tieBreak] ?? ''));
+    // numeric:true matches DataTable.compareValues' semantics for mixed numeric strings.
+    return String(b[wf.tieBreak] ?? '').localeCompare(String(a[wf.tieBreak] ?? ''), undefined, { numeric: true });
   });
 }
 

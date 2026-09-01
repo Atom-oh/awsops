@@ -214,8 +214,11 @@ export default function BedrockPage() {
               <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
                 <StatTile label={`총 비용 (${range})`} value={usd(totalCost)} variant="accent" icon={<DollarSign size={16} />} />
                 <StatTile label="호출 수" value={totalInvocations.toLocaleString()} icon={<Activity size={16} />} />
-                {/* gap L182 (v1 parity): distinct models invoked within the selected range. */}
-                <StatTile label="사용 모델" value={models.length} icon={<Boxes size={16} />} />
+                {/* gap L182 (v1 parity): distinct models actually INVOKED in the range —
+                    ListMetrics enumerates ~2 weeks of metric existence, so idle models come back
+                    with 0 invocations and must not count (and models last used >2 weeks ago fall
+                    out of ListMetrics entirely — a known window caveat for the 30d range). */}
+                <StatTile label="사용 모델" value={models.filter((m) => m.invocations > 0).length} icon={<Boxes size={16} />} />
                 <StatTile label="입력 토큰" value={compact(totalInput)} icon={<ArrowDownToLine size={16} />} />
                 <StatTile label="출력 토큰" value={compact(totalOutput)} icon={<ArrowUpFromLine size={16} />} />
                 <StatTile label="캐시 절감" value={usd(totalSavings)} hint="cache read 할인" variant="warn" icon={<PiggyBank size={16} />} />

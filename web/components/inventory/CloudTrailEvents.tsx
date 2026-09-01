@@ -10,7 +10,7 @@ interface TrailEvent {
   resourceType: string; resourceName: string; readOnly: boolean;
   // Drill-down fields (gap L62) — see the route's TrailEvent for provenance.
   eventId?: string; awsRegion?: string; sourceIPAddress?: string; userAgent?: string;
-  errorCode?: string; resources?: { type: string; name: string }[];
+  errorCode?: string; accessKeyId?: string; resources?: { type: string; name: string }[];
   raw?: Record<string, unknown> | null;
 }
 
@@ -21,7 +21,7 @@ function detailRow(e: TrailEvent): Record<string, unknown> {
   const row: Record<string, unknown> = {
     event_id: e.eventId, event_name: e.name, event_source: e.source, event_time: e.time,
     user: e.user, region: e.awsRegion, source_ip: e.sourceIPAddress, user_agent: e.userAgent,
-    error_code: e.errorCode, read_only: e.readOnly,
+    access_key_id: e.accessKeyId, error_code: e.errorCode, read_only: e.readOnly,
     resources: (e.resources ?? []).map((r) => `${r.type} ${r.name}`.trim()).filter(Boolean),
     raw_event: e.raw ?? undefined,
   };

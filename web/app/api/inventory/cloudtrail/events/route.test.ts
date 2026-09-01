@@ -36,6 +36,10 @@ describe('GET /api/inventory/cloudtrail/events', () => {
       CloudTrailEvent: JSON.stringify({
         readOnly: false, awsRegion: 'ap-northeast-2', sourceIPAddress: '10.0.0.1',
         userAgent: 'aws-cli/2', errorCode: 'AccessDenied', requestParameters: { x: 1 },
+        userIdentity: {
+          type: 'IAMUser', arn: 'arn:aws:iam::1:user/alice', accountId: '1', userName: 'alice',
+          accessKeyId: 'AKIAEXAMPLE', principalId: 'AIDAPRIV', sessionContext: { attributes: { mfaAuthenticated: 'true' } },
+        },
       }),
     }] });
     const res = await GET(req());
@@ -50,6 +54,15 @@ describe('GET /api/inventory/cloudtrail/events', () => {
       { type: 'EC2::Instance', name: 'i-1' }, { type: 'EC2::Volume', name: 'vol-1' },
     ]);
     expect(e.raw.requestParameters).toEqual({ x: 1 });
+    // v1 parity: access key id is a first-class Event field…
+    expect(e.accessKeyId).toBe('AKIAEXAMPLE');
+    // …but the raw blob's userIdentity is projected to identity NAMES only — no credential/
+    // session detail leaves the server as a bulk-copyable payload (repo redaction precedent).
+    expect(e.raw.userIdentity).toEqual({
+      type: 'IAMUser', arn: 'arn:aws:iam::1:user/alice', accountId: '1', userName: 'alice',
+    });
+    expect(JSON.stringify(e.raw)).not.toContain('AKIAEXAMPLE');
+    expect(JSON.stringify(e.raw)).not.toContain('sessionContext');
   });
 
   it('malformed CloudTrailEvent JSON → row still renders (raw null, readOnly defaults true)', async () => {

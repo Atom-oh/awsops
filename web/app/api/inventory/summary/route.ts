@@ -26,6 +26,19 @@ function accountCond(accounts: '__all__' | string[]): string {
   return `account_id IN (${safe.map((a) => `'${a}'`).join(',')})`;
 }
 
+// Region-scope SQL fragment (gap L110): the counts must honor the SAME regions/includeGlobal
+// contract the rows route applies via regionWhereClause — otherwise a region-narrowed page
+// compares region-filtered rows against an all-region "true total". Values are STRICTLY
+// validated (region-name charset) before inlining, mirroring accountCond; an explicitly empty
+// selection yields FALSE (empty result), never an unfiltered count.
+function regionCond(regions: '__all__' | string[], includeGlobal: boolean): string {
+  if (regions === '__all__') return includeGlobal ? 'TRUE' : `region <> 'global'`;
+  const base = regions.filter((r) => r !== 'global' && /^[a-z0-9-]{1,32}$/.test(r));
+  const allowed = includeGlobal ? [...base, 'global'] : base;
+  if (!allowed.length) return 'FALSE';
+  return `region IN (${allowed.map((r) => `'${r}'`).join(',')})`;
+}
+
 // Derived KPI sublines: one UNION-ALL round-trip over the synced JSONB (the EC2-type
 // donut adds a second small aggregation query below; both degrade independently).
 // SG ingress-open match is anchored to the cidr field key (description text can't
@@ -51,7 +64,12 @@ export async function GET(request: Request) {
   const accountsParam = url.searchParams.get('accounts');
   const accounts: '__all__' | string[] =
     accountsParam === null ? ['self'] : accountsParam === '__all__' ? '__all__' : accountsParam.split(',').filter(Boolean);
-  const ACC = accountCond(accounts);
+  // Same regions/includeGlobal parsing contract as the rows route ([type]/route.ts).
+  const regionsParam = url.searchParams.get('regions');
+  const regions: '__all__' | string[] =
+    regionsParam === null || regionsParam === '__all__' ? '__all__' : regionsParam.split(',').filter(Boolean);
+  const includeGlobal = url.searchParams.get('includeGlobal') !== '0';
+  const ACC = `(${accountCond(accounts)}) AND (${regionCond(regions, includeGlobal)})`;
   try {
     const pool = getPool();
     const r = await pool.query<{ resource_type: string; n: number }>(

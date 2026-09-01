@@ -1371,6 +1371,7 @@ export const TERMS: Record<string, Pair> = {
   '리포트 목차': { en: 'Report contents', zh: '报告目录', ja: 'レポート目次' },
   // Diagnosis quick-wins batch (L176/L177/L180/L181).
   '경과 시간': { en: 'Elapsed', zh: '已用时间', ja: '経過時間' },
+  // Small-parity sweep batch (L62/L182).
   '사용 모델': { en: 'Models used', zh: '使用的模型', ja: '使用モデル' },
   '이벤트 상세': { en: 'Event detail', zh: '事件详情', ja: 'イベント詳細' },
   '리포트': { en: 'Report', zh: '报告', ja: 'レポート' },

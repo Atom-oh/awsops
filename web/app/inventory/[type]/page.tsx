@@ -81,11 +81,15 @@ export default function InventoryTypePage() {
   const [scope] = useActiveScope();
 
   // Accurate fleet total past the 500-row cap (gap L110): the summary endpoint's byType
-  // count is the true DB count. Failure degrades silently to the row count (today's value).
+  // count is the true DB count (scoped by the SAME accounts+regions params as the rows).
+  // Fetched only once the cap is actually hit (it is the heaviest inventory aggregation);
+  // refreshTick refetches after an on-demand sync. Failure degrades silently to the row count.
   const [trueTotal, setTrueTotal] = useState<number | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const atCap = (rows?.length ?? 0) >= ROW_LIMIT;
   useEffect(() => {
     setTrueTotal(null);
-    if (!spec) return;
+    if (!spec || !atCap) return;
     let alive = true;
     fetch(`/api/inventory/summary?${scopeParams(scope)}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -97,7 +101,7 @@ export default function InventoryTypePage() {
       })
       .catch(() => {});
     return () => { alive = false; };
-  }, [spec, type, scope]);
+  }, [spec, type, scope, atCap, refreshTick]);
 
   const load = useCallback(async () => {
     try {
@@ -131,6 +135,7 @@ export default function InventoryTypePage() {
       const r = await fetch(`/api/inventory/${type}/refresh`, { method: 'POST' });
       if (!r.ok) throw new Error(r.status === 401 ? tt('세션 만료 — 새로고침') : tt(`수집 실패 (${r.status})`));
       await load();
+      setRefreshTick((c) => c + 1); // the true total must reflect the fresh sync too
     } catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
 
@@ -314,7 +319,7 @@ export default function InventoryTypePage() {
                 Risk types keep their verdict hero as the KPI band; everything else uses kpiRow. */}
             {arch === 'risk' ? (
               <>
-                <RiskHero label={spec.label} total={totalCount} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
+                <RiskHero label={spec.label} total={totalCount} sampled={allRows.length} totalIsExact={allRows.length < ROW_LIMIT || trueTotal != null} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                     {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
