@@ -29,7 +29,7 @@ export const TERMS: Record<string, Pair> = {
   '비용 항목': { en: 'Cost item', zh: '成本项目', ja: 'コスト項目' },
   '실측': { en: 'measured', zh: '实测', ja: '実測' },
   '요청 기반 추정': { en: 'Request-based estimate', zh: '基于请求的估算', ja: 'リクエストベース推定' },
-  '0으로 표시': { en: 'shown as 0', zh: '显示为 0', ja: '0 と表示' },
+  '추정 모드에선 미집계': { en: 'not counted in estimate mode', zh: '估算模式下不计入', ja: '推定モードでは未集計' },
   'PV (스토리지)': { en: 'PV (storage)', zh: 'PV（存储）', ja: 'PV（ストレージ）' },
   '추정 수식 (Fargate형 온디맨드 단가, ap-northeast-2)': { en: 'Estimate formula (Fargate-style on-demand rates, ap-northeast-2)', zh: '估算公式（Fargate 型按需单价，ap-northeast-2）', ja: '推定式（Fargate 型オンデマンド単価、ap-northeast-2）' },
   '계산 예시': { en: 'Worked example', zh: '计算示例', ja: '計算例' },
@@ -38,7 +38,7 @@ export const TERMS: Record<string, Pair> = {
   'Spot / RI / Savings Plans 할인은 반영되지 않습니다.': { en: 'Spot / RI / Savings Plans discounts are not reflected.', zh: '不反映 Spot / RI / Savings Plans 折扣。', ja: 'Spot / RI / Savings Plans の割引は反映されません。' },
   'Succeeded(종료) 파드는 추정에서 제외됩니다.': { en: 'Succeeded (terminated) pods are excluded from the estimate.', zh: 'Succeeded（已终止）Pod 不计入估算。', ja: 'Succeeded（終了）Pod は推定から除外されます。' },
   '요청(request)은 실제 사용량이 아닙니다 — 과다/과소 요청은 추정을 왜곡합니다.': { en: 'Requests are not actual usage — over/under-requesting skews the estimate.', zh: '请求量并非实际使用量 — 请求过多/过少会使估算失真。', ja: 'リクエストは実使用量ではありません — 過大/過小リクエストは推定を歪めます。' },
-  'Network / PV / GPU 비용은 OpenCost 설치 시에만 표시됩니다.': { en: 'Network / PV / GPU costs appear only with OpenCost installed.', zh: 'Network / PV / GPU 成本仅在安装 OpenCost 后显示。', ja: 'Network / PV / GPU コストは OpenCost 導入時のみ表示されます。' },
+  '할당 기준 Network/PV/GPU 비용은 OpenCost 설치 시에만 집계됩니다 — 표의 NFM Transfer/Day 컬럼은 별도의 네트워크 전송 실측입니다.': { en: 'Allocation-based Network/PV/GPU costs are counted only with OpenCost installed — the table\'s NFM Transfer/Day column is a separate network-transfer measurement.', zh: '基于分配的 Network/PV/GPU 成本仅在安装 OpenCost 后计入 — 表中的 NFM Transfer/Day 列是独立的网络传输实测。', ja: '割り当てベースの Network/PV/GPU コストは OpenCost 導入時のみ集計されます — 表の NFM Transfer/Day 列は別のネットワーク転送実測です。' },
   // Cost quick wins (gap L196/L197)
   '선택한 기간에 비용 데이터가 없습니다.': { en: 'No cost data in the selected period.', zh: '所选期间没有成本数据。', ja: '選択した期間にコストデータがありません。' },
   'Cost Explorer가 아직 활성화되지 않았습니다 — AWS Billing 콘솔에서 활성화하세요 (표시까지 최대 24시간).': { en: 'Cost Explorer is not enabled yet — enable it in the AWS Billing console (up to 24h until data appears).', zh: 'Cost Explorer 尚未启用 — 请在 AWS Billing 控制台启用（数据显示最长需 24 小时）。', ja: 'Cost Explorer はまだ有効化されていません — AWS Billing コンソールで有効化してください（表示まで最大24時間）。' },

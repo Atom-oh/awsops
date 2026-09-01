@@ -15,7 +15,7 @@ describe('CostBasisPanel (gap L217)', () => {
     expect(screen.getByText('Network')).toBeTruthy();
     expect(screen.getByText('GPU')).toBeTruthy();
     // the formula carries the LIVE constants (single source — can never drift from the estimator)
-    expect(screen.getByText(new RegExp(String(ESTIMATE_UNIT_PRICES.vcpuHour)))).toBeTruthy();
+    expect(screen.getByText(new RegExp(String(ESTIMATE_UNIT_PRICES.vcpuHour).replace('.', '\\.')))).toBeTruthy();
     expect(screen.getByText(/\$0\.68\/day/)).toBeTruthy(); // worked example
     expect(screen.getByText('주의사항')).toBeTruthy();
     expect(screen.getByText('Spot / RI / Savings Plans 할인은 반영되지 않습니다.')).toBeTruthy();

@@ -7,7 +7,15 @@ export const ESTIMATE_UNIT_PRICES = {
   gbHour: 0.00511,   // $/GB-hour (memory)
 } as const;
 
-/** Daily request-estimate for one pod (the estimator's exact formula, unit-testable). */
+/** Daily request-estimate parts for one pod — the estimator CALLS this (not a copy), so the
+ *  panel's formula and the computed numbers are lockstep by construction. memGb uses GiB
+ *  semantics (PodRow.memRequest is MiB → /1024), matching the ecs_task deriver. */
+export function estimateDailyParts(vcpuRequest: number, memGb: number): { cpu: number; ram: number; total: number } {
+  const cpu = vcpuRequest * ESTIMATE_UNIT_PRICES.vcpuHour * 24;
+  const ram = memGb * ESTIMATE_UNIT_PRICES.gbHour * 24;
+  return { cpu, ram, total: cpu + ram };
+}
+
 export function estimateDailyCost(vcpuRequest: number, memGb: number): number {
-  return vcpuRequest * ESTIMATE_UNIT_PRICES.vcpuHour * 24 + memGb * ESTIMATE_UNIT_PRICES.gbHour * 24;
+  return estimateDailyParts(vcpuRequest, memGb).total;
 }

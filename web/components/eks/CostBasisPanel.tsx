@@ -53,7 +53,7 @@ export default function CostBasisPanel() {
                   <tr key={item} className="border-b border-ink-50 last:border-0">
                     <td className="py-1.5 pr-3">{tt(item)}</td>
                     <td className="py-1.5 pr-3">{oc ? '✓' : '—'}</td>
-                    <td className="py-1.5">{est ? '✓' : <span className="text-ink-400">{tt('0으로 표시')}</span>}</td>
+                    <td className="py-1.5">{est ? '✓' : <span className="text-ink-400">{tt('추정 모드에선 미집계')}</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -65,7 +65,7 @@ export default function CostBasisPanel() {
             <pre className="overflow-x-auto rounded bg-ink-50 p-2 font-mono text-[11.5px] leading-relaxed text-ink-700">
 {`daily = vCPU request × $${ESTIMATE_UNIT_PRICES.vcpuHour}/vCPU-h × 24h
       + memory(GB) × $${ESTIMATE_UNIT_PRICES.gbHour}/GB-h × 24h
-monthly ≈ daily × 30`}
+monthly ≈ daily × 30  (실측/추정 공통)`}
             </pre>
           </div>
 
@@ -83,7 +83,7 @@ monthly ≈ daily × 30`}
               <li>{tt('Spot / RI / Savings Plans 할인은 반영되지 않습니다.')}</li>
               <li>{tt('Succeeded(종료) 파드는 추정에서 제외됩니다.')}</li>
               <li>{tt('요청(request)은 실제 사용량이 아닙니다 — 과다/과소 요청은 추정을 왜곡합니다.')}</li>
-              <li>{tt('Network / PV / GPU 비용은 OpenCost 설치 시에만 표시됩니다.')}</li>
+              <li>{tt('할당 기준 Network/PV/GPU 비용은 OpenCost 설치 시에만 집계됩니다 — 표의 NFM Transfer/Day 컬럼은 별도의 네트워크 전송 실측입니다.')}</li>
             </ul>
           </div>
         </div>

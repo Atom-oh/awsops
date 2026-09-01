@@ -40,3 +40,19 @@ VERIFIED ALREADY IMPLEMENTED).
   test pinning the values and the worked example).
 - Panel: renders collapsed, expands to the table/formula/example/caveats.
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-25 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **The panel exposed (and this PR fixes) a real estimator bug (the gate MAJOR)** —
+  `requestEstimate` divided `PodRow.memRequest` (MiB) by 1e9 as if bytes, zeroing the RAM
+  cost entirely (a 1 GiB request became ~1e-6 GB). Fixed to GiB semantics (/1024, the
+  ecs_task-deriver precedent) with a MiB-valued PodRow test through the real mapper.
+- **The estimator CALLS the shared formula (the gate MAJOR)** — `estimateDailyParts` in
+  cost-basis.ts is consumed by the (newly exported, pure) `estimatePodCost`; the panel and
+  the computed numbers are lockstep by construction, not by copied constants.
+- L219 reverts to UNCHECKED (partial — the /eks/cost page body's Korean-hardcoded strings
+  remain; only OpencostPanel is fully covered); the L220 tick notes the chart-placeholder
+  presentational difference; the L217 item line discloses the deliberate EC2-grid exclusion;
+  the '0으로 표시' cell reads '추정 모드에선 미집계' (columns are omitted, not zero-filled);
+  the Network/PV/GPU caveat distinguishes the page's separate NFM Transfer/Day measurement;
+  monthly ×30 is labeled 실측/추정 공통; component counts bumped 103 → 104.
