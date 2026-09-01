@@ -47,7 +47,7 @@ Events 和 Write Events 选项卡仅在点击时才加载数据（`eventsLoaded`
 点击事件行后可查看：
 - **Event**: ID、名称、来源、时间、用户、Access Key
 - **Resource**: 资源类型及名称
-- **Raw Event**: JSON 格式的完整事件数据
+- **Raw Event**: JSON 格式的投影事件数据 —— userIdentity 仅保留身份名称，凭证相邻的值会被掩码
 
 ## 使用方法
 

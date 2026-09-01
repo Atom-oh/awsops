@@ -39,10 +39,29 @@ const RAW_KEYS = [
 ] as const;
 const UID_KEYS = ['type', 'arn', 'accountId', 'userName', 'invokedBy'] as const;
 
+// requestParameters/responseElements routinely carry credential-adjacent material
+// (sts:AssumeRole → responseElements.credentials.sessionToken; lambda Create/UpdateFunction →
+// environment variables; ec2:RunInstances → userData) — key-level projection alone is not a
+// redaction. Recursive key deny-list over the admitted subtrees; matched keys keep their
+// PRESENCE (forensics: the call set credentials) but never their value.
+const SENSITIVE_KEY = /credential|token|secret|password|userdata|privatekey|authoriz|apikey|environment/i;
+
+function scrubSensitive(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(scrubSensitive);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      out[k] = SENSITIVE_KEY.test(k) ? '[REDACTED]' : scrubSensitive(val);
+    }
+    return out;
+  }
+  return v;
+}
+
 function projectRaw(raw: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!raw) return null;
   const out: Record<string, unknown> = {};
-  for (const k of RAW_KEYS) if (raw[k] !== undefined) out[k] = raw[k];
+  for (const k of RAW_KEYS) if (raw[k] !== undefined) out[k] = scrubSensitive(raw[k]);
   const uid = raw.userIdentity;
   if (uid && typeof uid === 'object') {
     const u: Record<string, unknown> = {};

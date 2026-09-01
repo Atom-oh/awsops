@@ -65,6 +65,29 @@ describe('GET /api/inventory/cloudtrail/events', () => {
     expect(JSON.stringify(e.raw)).not.toContain('sessionContext');
   });
 
+  it('recursively redacts credential-adjacent values inside request/response params', async () => {
+    send.mockResolvedValue({ Events: [{
+      EventId: 'ev-3', EventName: 'AssumeRole', EventSource: 'sts.amazonaws.com',
+      CloudTrailEvent: JSON.stringify({
+        readOnly: true,
+        requestParameters: { roleArn: 'arn:aws:iam::1:role/x', environment: { variables: { DB_PW: 'hunter2' } }, userData: 'IyEvYmlu' },
+        responseElements: { credentials: { accessKeyId: 'ASIAEXAMPLE', sessionToken: 'FwoGZXIv' }, assumedRoleUser: { arn: 'arn:aws:sts::1:assumed-role/x/s' } },
+      }),
+    }] });
+    const e = (await (await GET(req())).json()).events[0];
+    const blob = JSON.stringify(e.raw);
+    // presence survives (forensics: the call returned credentials), values never do
+    expect(e.raw.responseElements.credentials).toBe('[REDACTED]');
+    expect(e.raw.requestParameters.environment).toBe('[REDACTED]');
+    expect(e.raw.requestParameters.userData).toBe('[REDACTED]');
+    for (const secret of ['ASIAEXAMPLE', 'FwoGZXIv', 'hunter2', 'IyEvYmlu']) {
+      expect(blob).not.toContain(secret);
+    }
+    // non-sensitive forensic detail stays
+    expect(e.raw.requestParameters.roleArn).toBe('arn:aws:iam::1:role/x');
+    expect(e.raw.responseElements.assumedRoleUser.arn).toContain('assumed-role');
+  });
+
   it('malformed CloudTrailEvent JSON → row still renders (raw null, readOnly defaults true)', async () => {
     send.mockResolvedValue({ Events: [{
       EventId: 'ev-2', EventName: 'X', EventSource: 's', CloudTrailEvent: 'not json {',

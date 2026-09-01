@@ -218,7 +218,7 @@ export default function BedrockPage() {
                     ListMetrics enumerates ~2 weeks of metric existence, so idle models come back
                     with 0 invocations and must not count (and models last used >2 weeks ago fall
                     out of ListMetrics entirely — a known window caveat for the 30d range). */}
-                <StatTile label="사용 모델" value={models.filter((m) => m.invocations > 0).length} icon={<Boxes size={16} />} />
+                <StatTile label="사용 모델" value={models.filter((m) => m.invocations > 0).length} hint={range === '30d' ? '최근 2주 지표 기준' : undefined} icon={<Boxes size={16} />} />
                 <StatTile label="입력 토큰" value={compact(totalInput)} icon={<ArrowDownToLine size={16} />} />
                 <StatTile label="출력 토큰" value={compact(totalOutput)} icon={<ArrowUpFromLine size={16} />} />
                 <StatTile label="캐시 절감" value={usd(totalSavings)} hint="cache read 할인" variant="warn" icon={<PiggyBank size={16} />} />

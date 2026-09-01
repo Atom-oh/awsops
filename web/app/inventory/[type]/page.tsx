@@ -319,7 +319,16 @@ export default function InventoryTypePage() {
                 Risk types keep their verdict hero as the KPI band; everything else uses kpiRow. */}
             {arch === 'risk' ? (
               <>
-                <RiskHero label={spec.label} total={totalCount} sampled={allRows.length} totalIsExact={allRows.length < ROW_LIMIT || trueTotal != null} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
+                <RiskHero
+                  label={spec.label}
+                  total={totalCount}
+                  sampled={allRows.length}
+                  totalIsExact={allRows.length < ROW_LIMIT || trueTotal != null}
+                  cards={highlightCards}
+                  // an exactly-at-cap fleet whose true total equals the rows scanned WAS fully
+                  // scanned — only a confirmed-or-unknown remainder makes the verdict a sample
+                  capped={allRows.length >= ROW_LIMIT && (trueTotal == null || trueTotal > allRows.length)}
+                />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                     {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}

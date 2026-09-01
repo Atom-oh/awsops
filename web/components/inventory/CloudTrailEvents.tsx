@@ -42,7 +42,7 @@ export default function CloudTrailEvents() {
 
   useEffect(() => {
     let alive = true;
-    setEvents(null); setErr('');
+    setEvents(null); setErr(''); setSelected(null); // a stale slide-over must not outlive its tab
     fetch(`/api/inventory/cloudtrail/events${mode === 'write' ? '?write=1' : ''}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setEvents(d.events ?? []); })

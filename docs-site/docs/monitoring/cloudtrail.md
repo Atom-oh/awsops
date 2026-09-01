@@ -47,7 +47,7 @@ Events 및 Write Events 탭은 클릭 시에만 데이터를 로드합니다(`ev
 이벤트 행 클릭 시 확인:
 - **Event**: ID, 이름, 소스, 시간, 사용자, Access Key
 - **Resource**: 리소스 유형 및 이름
-- **Raw Event**: JSON 형식의 전체 이벤트 데이터
+- **Raw Event**: JSON 형식의 프로젝션된 이벤트 데이터 — userIdentity는 신원 이름으로 축소되고 자격증명 인접 값은 마스킹됩니다
 
 ## 사용 방법
 
