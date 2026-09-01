@@ -50,14 +50,22 @@ export async function GET(request: Request) {
     // failure must not demote e.g. ec2 into the default-hidden group and churn chip state).
     // Only a type absent from BOTH of the last two days (dead/stopped syncing) ranks below
     // every recent type, its stale last-seen value serving only as the tie-break there.
-    const lastPt = trend[trend.length - 1] as Record<string, unknown> | undefined;
-    const prevPt = trend[trend.length - 2] as Record<string, unknown> | undefined;
-    const recent = (t: string) => typeof lastPt?.[t] === 'number' || typeof prevPt?.[t] === 'number';
+    const lastPt = trend[trend.length - 1] as (Record<string, unknown> & { date: string }) | undefined;
+    // "Recent" is CALENDAR-based (within 2 days of the latest point's date), not point-index
+    // based — after a multi-day whole-sync gap, trend[len-2] can be weeks old and would let a
+    // long-dead type count as in-flight.
+    const lastMs = lastPt ? new Date(lastPt.date).getTime() : 0;
+    // strictly < 2 days = the latest calendar day and the one before it
+    const recentPts = trend.filter((pt) => lastMs - new Date(pt.date).getTime() < 2 * 86_400_000);
+    const recent = (t: string) => recentPts.some((pt) => typeof (pt as Record<string, unknown>)[t] === 'number');
     const types = [...latestByType.keys()].sort((a, b) => {
       const ra = recent(a) ? 1 : 0;
       const rb = recent(b) ? 1 : 0;
       if (ra !== rb) return rb - ra;
-      return (latestByType.get(b) ?? 0) - (latestByType.get(a) ?? 0);
+      const d = (latestByType.get(b) ?? 0) - (latestByType.get(a) ?? 0);
+      // deterministic name tie-break — unspecified SQL row order must not churn Core/Other
+      // membership between requests (the chart key= would reset chip state on every churn)
+      return d !== 0 ? d : a.localeCompare(b);
     });
     return Response.json({ trend, types });
   } catch (e) {

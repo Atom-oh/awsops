@@ -46,6 +46,14 @@ describe('netChange honest-degrade branches (gap L127)', () => {
     const pts = [{ date: day(9), total: 1 }, { date: day(5), total: 2 }];
     expect(nearestSnapshot(pts, 7)?.date).toBe(day(5));
   });
+  it('null when the actual endpoint span is not ~7d (3-day diff must not be labeled 7d)', () => {
+    // latest 2d old (passes the stale guard) + baseline 5d old (in the 7d±2 window) = 3-day span
+    const pts = [{ date: day(5), total: 5, ec2: 5 }, { date: day(2), total: 7, ec2: 7 }];
+    expect(netChange(pts, 7)).toBeNull();
+    // a genuine ~7d span at the tolerance edges still diffs (8-day span: 1d-old vs 9d-old)
+    const ok = [{ date: day(9), total: 5, ec2: 5 }, { date: day(1), total: 7, ec2: 7 }];
+    expect(netChange(ok, 7)).toBe(2);
+  });
   it('null when the latest snapshot itself is stale (>2 days old)', () => {
     const pts = [{ date: day(10), total: 5, ec2: 5 }, { date: day(5), total: 7, ec2: 7 }];
     expect(netChange(pts, 7)).toBeNull();

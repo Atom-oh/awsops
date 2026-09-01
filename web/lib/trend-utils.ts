@@ -24,7 +24,8 @@ export function nearestSnapshot<T extends TrendPointLike>(pts: T[], daysAgo: num
  *  cannot support the claim:
  *  - fewer than 2 snapshots, or no baseline within the ±2-calendar-day tolerance;
  *  - the qualifying baseline IS the latest snapshot (a stale-sync self-diff fabricates 0);
- *  - the LATEST snapshot itself is >2 days old (a 2-day-old-vs-9-day-old diff labeled "7d");
+ *  - the LATEST snapshot itself is >2 days old, or the ACTUAL endpoint span falls outside
+ *    daysAgo±2 (each endpoint tolerance alone still admitted a 3-day diff labeled "7d");
  *  - STRICT TYPE-SET PARITY: both days must snapshot the SAME type set — the writer emits one
  *    row per type on its own success path, so a mid-fan-out or partially failed day carries a
  *    different type set, and any diff over it (raw OR intersection) is a sync artifact
@@ -36,6 +37,13 @@ export function netChange(pts: TrendPointLike[], daysAgo: number): number | null
   if (nearestSnapshot(sorted, 0) !== last) return null; // latest point itself is stale
   const base = nearestSnapshot(sorted, daysAgo);
   if (!base || base === last) return null;
+  // The two guards above anchor each endpoint to TODAY independently, which still admits a
+  // short span (latest 2d old + baseline 5d old = a 3-day diff labeled "7d"). Validate the
+  // ACTUAL span between the endpoints — outside daysAgo±2 → null ('—').
+  const spanDays = Math.abs(
+    (new Date(last.date).getTime() - new Date(base.date).getTime()) / 86_400_000,
+  );
+  if (Math.abs(spanDays - daysAgo) > 2) return null;
   // STRICT type-set parity: the two days must snapshot the SAME type set, else null ('—').
   // An intersection diff was still a confident partial number for a mid-fan-out day (the
   // latest day builds progressively — one snapshot row per type on its own success path);
