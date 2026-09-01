@@ -12,6 +12,7 @@ import type { InvType } from '@/lib/inventory-types';
 import type { RdsInstanceMetrics } from '@/lib/metrics';
 import { EbsRelatedSection } from '@/components/inventory/metrics/EbsRelatedSection';
 import { RdsTrendsSection } from '@/components/inventory/metrics/RdsTrendsSection';
+import { LiveTrendsSection } from '@/components/inventory/metrics/LiveTrendsSection';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // v1-parity: each detail section is a titled card with a leading icon. Section labels are a small
@@ -411,6 +412,11 @@ export default function DetailPanel({
           {liveMetricId && resourceType && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
               <LiveMetricsSection type={resourceType} id={liveMetricId} />
+            </section>
+          )}
+          {liveMetricId && resourceType && (
+            <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+              <LiveTrendsSection type={resourceType} id={liveMetricId} />
             </section>
           )}
           {children}

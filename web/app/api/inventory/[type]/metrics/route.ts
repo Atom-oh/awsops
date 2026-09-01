@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, rdsInstanceTrends, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, rdsInstanceTrends, hasLiveMetrics, liveResourceMetrics, liveResourceTrends, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -297,6 +297,14 @@ export async function GET(request: Request, { params }: { params: { type: string
     if (hasLiveMetrics(params.type)) {
       const id = url.searchParams.get('id');
       if (id) {
+        if (!/^[a-zA-Z0-9._-]+$/.test(id)) {
+          return Response.json({ status: 'error', message: 'invalid id' }, { status: 400 });
+        }
+        // Opt-in 1h sparkline series (gap L118): trends=1 returns ONLY the trends — the
+        // latest-value grid is the sibling section's fetch (the RDS trends=1 contract).
+        if (url.searchParams.get('trends') === '1') {
+          return Response.json({ trends: await liveResourceTrends(params.type, id) });
+        }
         const metrics = await liveResourceMetrics(params.type, id);
         // MSK: append bootstrap broker connection strings (v1 parity) — ARN from the synced row.
         if (params.type === 'msk') {

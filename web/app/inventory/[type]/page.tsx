@@ -267,6 +267,19 @@ export default function InventoryTypePage() {
     ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
     : null;
   // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
+  // Value-distribution histogram (gap L135): counts per distinct numeric value of histKey.col,
+  // top 10 by count, then numerically sorted (v1's memory-allocation bar).
+  const histData = spec.histKey
+    ? countBy(allRows, spec.histKey.col)
+        .filter((d) => d.name !== '(none)')
+        .slice(0, 10)
+        .sort((a, b) => Number(a.name) - Number(b.name))
+        .map((d) => ({ label: `${d.name}${spec.histKey!.suffix ?? ''}`, value: d.value }))
+    : [];
+  const hist = spec.histKey && histData.length > 0
+    ? <BarDistribution title={spec.histKey.label} data={histData} xKey="label" yKey="value" />
+    : null;
+
   const barData = spec.barKey
     ? [...allRows]
         .map((r) => ({
@@ -341,7 +354,9 @@ export default function InventoryTypePage() {
               kpiRow
             )}
             {graphBand}
-            {barChart}
+            {barChart && hist
+              ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{barChart}{hist}</div>
+              : barChart ?? hist}
             {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
             {type === 'cloudtrail' && <CloudTrailEvents />}
             {tableBlock}

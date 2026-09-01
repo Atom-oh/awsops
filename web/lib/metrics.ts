@@ -333,7 +333,7 @@ export async function bedrockModelMetrics(range = '24h', accountId?: string): Pr
 // One GetMetricData call per resource; every failure degrades to [] (never blanks the panel).
 export interface LiveMetric { label: string; value: string }
 
-type LiveFmt = 'pct' | 'gb' | 'mb' | 'count' | 'ms' | 'bps';
+export type LiveFmt = 'pct' | 'gb' | 'mb' | 'count' | 'ms' | 'bps';
 interface LiveMetricDef { name: string; label: string; stat: 'Average' | 'Sum' | 'Maximum'; fmt: LiveFmt }
 interface LiveMetricSpec { namespace: string; dims: (id: string) => { Name: string; Value: string }[]; metrics: LiveMetricDef[] }
 
@@ -416,6 +416,41 @@ export async function liveResourceMetrics(type: string, id: string, accountId?: 
       if (def) out.push({ label: def.label, value: typeof v === 'number' ? fmtLive(v, def.fmt) : '—' });
     }
     return out;
+  } catch {
+    return [];
+  }
+}
+
+export interface LiveTrendMetric { label: string; fmt: LiveFmt; samples: TrendSample[] | null }
+
+/** 1-hour 5-min sparkline series for ONE resource of a LIVE_SPECS type (gap L118 — v1's
+ *  elasticache detail sparklines, generalized to opensearch/msk which share the spec table).
+ *  Bounded window (~65min → ≤13 points/metric); [] on error (never throws). */
+export async function liveResourceTrends(type: string, id: string, accountId?: string): Promise<LiveTrendMetric[]> {
+  const spec = LIVE_SPECS[type];
+  if (!spec) return [];
+  try {
+    const client = await assumedClient(accountId, CloudWatchClient, { region: REGION });
+    const r = await client.send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 65 * 60_000), EndTime: new Date(),
+      MetricDataQueries: spec.metrics.map((m, i) => ({
+        Id: `lt${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id) }, Period: 300, Stat: m.stat },
+      })),
+      ScanBy: 'TimestampAscending',
+    }));
+    return spec.metrics.map((def, i) => {
+      const res = (r.MetricDataResults ?? []).find((x) => x.Id === `lt${i}`);
+      const samples: TrendSample[] = [];
+      for (let k = 0; k < (res?.Timestamps?.length ?? 0); k++) {
+        const ts = res!.Timestamps![k] instanceof Date ? (res!.Timestamps![k] as Date) : new Date(String(res!.Timestamps![k]));
+        const v = res!.Values?.[k];
+        if (typeof v === 'number' && ts.getTime() >= Date.now() - 3600_000) {
+          samples.push({ t: ts.toISOString(), v: Math.round(v * 100) / 100 });
+        }
+      }
+      return { label: def.label, fmt: def.fmt, samples: samples.length ? samples : null };
+    });
   } catch {
     return [];
   }

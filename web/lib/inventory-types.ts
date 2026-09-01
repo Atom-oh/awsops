@@ -19,6 +19,10 @@ export interface InvType {
   distKey2Colors?: Record<string, string>;
   /** Optional Top-N metric bar chart: numeric column ranked desc over the row set. */
   barKey?: { col: string; label: string };
+  /** Optional value-distribution histogram (gap L135): row COUNTS per distinct numeric value
+   *  of `col` (top 10 by count, then numerically sorted; e.g. lambda functions per
+   *  memory_size). Rendered beside the Top-N bar as a second BarDistribution. */
+  histKey?: { col: string; label: string; suffix?: string };
   sections?: { label: string; keys: string[] }[];
   // filterKeys (optional, v1-parity facet filters): row keys rendered as dropdown facets above
   // the table (each option shows a live count). The stateKey already has its own SegmentedControl,
@@ -69,7 +73,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Image', keys: ['image_id', 'architecture', 'platform_details', 'virtualization_type', 'hypervisor'] },
     ],
     filterKeys: ['region', 'name', 'instance_type', 'pricing_model', 'subnet_id', 'vpc_id'] },
-  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', barKey: { col: 'memory_size', label: 'Memory (MB)' }, columns: [
+  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', barKey: { col: 'memory_size', label: 'Memory (MB)' },
+    histKey: { col: 'memory_size', label: 'Memory Allocation', suffix: ' MB' }, columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
     { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ],
