@@ -201,9 +201,29 @@ export default function Home() {
     hasFleet && recentEvents.length > 0 && { key: 'k8s', dot: 'var(--warning)', text: `K8s Warning 이벤트 ${recentEvents.length}건`, href: '/eks' },
   ].filter((w): w is { key: string; dot: string; text: string; href: string } => Boolean(w));
 
-  // Multi-line trend series (top 8 types by latest count) + Current/7d/30d delta rows (v1 parity).
-  const trendTypes = (resTrend?.types ?? []).slice(0, 8);
+  // Multi-line trend series + Current/7d/30d delta rows (v1 parity). L126: top 12 types as
+  // toggle chips — Core (top 5) visible by default, Other default-hidden; colors stay pinned
+  // to each series' original index inside MultiLineTrend.
+  const trendTypes = (resTrend?.types ?? []).slice(0, 12);
   const trendSeries = trendTypes.map((t) => ({ key: t, label: INV_LABEL(t) }));
+  const coreTypes = trendTypes.slice(0, 5);
+  const otherTypes = trendTypes.slice(5);
+  // L127: 7d net change of the all-type total (nearest snapshot within ±2 days, the delta
+  // table's tolerance). null → rendered as '—', never a fabricated 0.
+  const net7 = (() => {
+    const pts = resTrend?.trend ?? [];
+    if (pts.length < 2) return null;
+    const target = Date.now() - 7 * 86_400_000;
+    let best: ResourceTrendPoint | null = null;
+    let bestGap = 3;
+    for (const p of pts) {
+      const gap = Math.abs((new Date(p.date).getTime() - target) / 86_400_000);
+      if (gap < bestGap) { best = p; bestGap = gap; }
+    }
+    if (!best) return null;
+    return Number(pts[pts.length - 1].total ?? 0) - Number(best.total ?? 0);
+  })();
+
   const deltaRows = (() => {
     const pts = resTrend?.trend ?? [];
     if (pts.length < 2) return [];
@@ -417,6 +437,25 @@ export default function Home() {
           </div>
         </section>
 
+        {/* ---- Inventory summary KPI bar (gap L127, v1 parity): types · total · 7d net ---- */}
+        {sum && (
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-lg border border-ink-100 bg-card px-4 py-2 text-[12.5px] text-ink-600">
+            <span>{tt('리소스 타입')} <b className="tabular text-ink-800">{sum.byType.length}</b></span>
+            <span>{tt('전체 리소스')} <b className="tabular text-ink-800">{sum.total.toLocaleString()}</b></span>
+            <span>
+              {tt('7일 순증감')}{' '}
+              {net7 == null ? (
+                // honest-degrade: fewer than 2 snapshots, or no snapshot near 7d ago
+                <b className="text-ink-400">—</b>
+              ) : (
+                <b className={`tabular ${net7 > 0 ? 'text-emerald-600' : net7 < 0 ? 'text-rose-600' : 'text-ink-800'}`}>
+                  {net7 > 0 ? '+' : ''}{net7.toLocaleString()}
+                </b>
+              )}
+            </span>
+          </div>
+        )}
+
         {/* ---- Resource trend (14d, DESIGN.md §3) + category donut ---- */}
         {resTrend && (
           <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-6">
@@ -433,6 +472,12 @@ export default function Home() {
                 data={resTrend.trend}
                 xKey="date"
                 series={trendSeries}
+                interactiveLegend
+                legendGroups={[
+                  { label: 'Core Resources', keys: coreTypes },
+                  ...(otherTypes.length ? [{ label: 'Other Resources', keys: otherTypes }] : []),
+                ]}
+                defaultHidden={otherTypes}
               />
             ) : (
               <Card title={`리소스 추세 (${trendDays}d)`}>
