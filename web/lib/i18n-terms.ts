@@ -28,10 +28,10 @@ export const TERMS: Record<string, Pair> = {
   '선택한 기간에 비용 데이터가 없습니다.': { en: 'No cost data in the selected period.', zh: '所选期间没有成本数据。', ja: '選択した期間にコストデータがありません。' },
   'Cost Explorer가 아직 활성화되지 않았습니다 — AWS Billing 콘솔에서 활성화하세요 (표시까지 최대 24시간).': { en: 'Cost Explorer is not enabled yet — enable it in the AWS Billing console (up to 24h until data appears).', zh: 'Cost Explorer 尚未启用 — 请在 AWS Billing 控制台启用（数据显示最长需 24 小时）。', ja: 'Cost Explorer はまだ有効化されていません — AWS Billing コンソールで有効化してください（表示まで最大24時間）。' },
   '가용성 확인 결과: Cost Explorer는 사용 가능합니다 — 선택한 기간에 비용이 없었을 가능성이 큽니다.': { en: 'Availability check: Cost Explorer is available — the selected period most likely had no spend.', zh: '可用性检查结果：Cost Explorer 可用 — 所选期间很可能没有产生费用。', ja: '可用性チェック結果: Cost Explorer は利用可能です — 選択した期間に費用が発生しなかった可能性が高いです。' },
+  '가용성을 확정하지 못했습니다 — 상세 원인은 새로고침 시 오류 배너를 참고하세요.': { en: 'Could not determine availability — refresh and see the error banner for details.', zh: '无法确定可用性 — 请刷新并查看错误横幅了解详情。', ja: '可用性を確認できませんでした — 更新してエラーバナーをご確認ください。' },
   '가용성 확인': { en: 'Check availability', zh: '检查可用性', ja: '可用性を確認' },
   '변화율 (일평균)': { en: 'Change % (daily avg)', zh: '变化率（日均）', ja: '変化率（日平均）' },
   '최근 30일 · 필터 적용': { en: 'Trailing 30 days · filters applied', zh: '最近 30 天 · 已应用筛选', ja: '直近30日 · フィルター適用' },
-  '비용 데이터가 없습니다 — Cost Explorer가 활성화되지 않았을 수 있습니다. AWS Billing 콘솔에서 Cost Explorer를 활성화하세요. 활성화 후 데이터 표시까지 최대 24시간 걸릴 수 있습니다.': { en: 'No cost data — Cost Explorer may not be enabled. Enable it in the AWS Billing console; data can take up to 24 hours to appear.', zh: '没有成本数据 — Cost Explorer 可能未启用。请在 AWS Billing 控制台启用；启用后数据最长可能需要 24 小时才会显示。', ja: 'コストデータがありません — Cost Explorer が有効になっていない可能性があります。AWS Billing コンソールで有効化してください。有効化後、データ表示まで最大 24 時間かかる場合があります。' },
   // EBS detail verdicts (gap L210)
   '암호화됨': { en: 'Encrypted', zh: '已加密', ja: '暗号化済み' },
   '스냅샷으로 암호화 사본 생성을 검토하세요.': { en: 'Consider creating an encrypted copy via snapshot.', zh: '建议通过快照创建加密副本。', ja: 'スナップショット経由で暗号化コピーの作成を検討してください。' },

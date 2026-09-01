@@ -154,6 +154,7 @@ export default function CostPage() {
 
   const load = useCallback(async () => {
     setBusy(true);
+    probeSeqRef.current += 1;
     setEmptyProbe(null);
     const months = PERIOD_MONTHS[period] ?? 6;
     try {
@@ -302,15 +303,24 @@ export default function CostPage() {
   // set on old error paths / rechecks and never invalidated on account/period switches). This
   // local result is set only by the banner's own button and cleared on every load.
   const [emptyProbe, setEmptyProbe] = useState<{ reason: string } | null>(null);
+  const probeSeqRef = useRef(0);
   const probeFromBanner = useCallback(async () => {
+    const seq = ++probeSeqRef.current;
     setRechecking(true);
     try {
-      const r = await fetch('/api/cost/availability?force=1');
-      const a = r.ok ? await r.json() : null;
-      if (a) setEmptyProbe({ reason: String(a.reason ?? 'error') });
-    } finally { setRechecking(false); }
+      // No force=1: the 1h-cached verdict is adequate for an onboarding hint, and the banner
+      // button must not be an unthrottled billable CE entry point.
+      const r = await fetch('/api/cost/availability');
+      const a = r.ok ? await r.json().catch(() => null) : null;
+      // A stale in-flight probe must not land after an account/period switch cleared it.
+      if (seq !== probeSeqRef.current) return;
+      setEmptyProbe({ reason: String(a?.reason ?? 'error') }); // non-OK → explicit 'error', never a dead button
+    } finally { if (seq === probeSeqRef.current) setRechecking(false); }
   }, []);
+  // Both hints are HOST-scope only — the availability classifier probes with the host task
+  // role and must never speak for a member account (either direction).
   const showNotEnabledHint = active === 'self' && emptyProbe?.reason === 'not_enabled';
+  const showAvailableHint = active === 'self' && emptyProbe?.reason === 'ok';
   const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
   const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
 
@@ -423,8 +433,11 @@ export default function CostPage() {
                 {showNotEnabledHint && (
                   <span className="ml-1">{tt('Cost Explorer가 아직 활성화되지 않았습니다 — AWS Billing 콘솔에서 활성화하세요 (표시까지 최대 24시간).')}</span>
                 )}
-                {emptyProbe != null && !showNotEnabledHint && (
+                {showAvailableHint && (
                   <span className="ml-1">{tt('가용성 확인 결과: Cost Explorer는 사용 가능합니다 — 선택한 기간에 비용이 없었을 가능성이 큽니다.')}</span>
+                )}
+                {emptyProbe != null && !showNotEnabledHint && !showAvailableHint && (
+                  <span className="ml-1">{tt('가용성을 확정하지 못했습니다 — 상세 원인은 새로고침 시 오류 배너를 참고하세요.')}</span>
                 )}
                 <button onClick={probeFromBanner} disabled={rechecking} className="ml-2 rounded-md border border-sky-300 bg-card px-2 py-0.5 text-[11.5px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50">
                   {tt(rechecking ? '확인 중…' : '가용성 확인')}

@@ -9,6 +9,10 @@ tiles, ">20% increasing" sub-metric), L197 (Cost Explorer onboarding banner), L1
 table threshold colors + share mini bars).
 
 ## Decisions
+
+> NOTE: §Decisions/§Testing describe the ROUND-1 design; the shipped behavior is the
+> cumulative result of the correction rounds below (the banner is conditional/probe-driven
+> since round 5–7, and lib/cost.ts gained the predicate + UTC alert math).
 - **L196** — KPI row grows from 5 to 7 tiles (`lg:grid-cols-4`, wrapping): (a) **Daily
   Average** — mean of the FILTERED daily totals over the trailing-30d series ('—' when the
   series is empty); (b) **Last Month** standalone total ('—' when no prior month); (c) the
@@ -119,3 +123,17 @@ Read-only; no API/Terraform changes. 4-language i18n for the new strings.
   stores a local result cleared on every load; a confirmed-available result renders the
   honest "the period most likely had no spend" line instead. The docs-site (4 locales) now
   describes the conditional flow instead of an unconditional onboarding banner.
+
+## Round-7 corrections (review-driven)
+
+- **Probe-result rendering matches the verdict (the gate MAJOR)** — the "available" line
+  renders only on `reason === 'ok'` AND host scope; `access_denied`/`error` render a neutral
+  could-not-determine line (never an availability claim the probe failed to establish, never
+  a host verdict spoken for a member account). The probe drops `force=1` (the 1h-cached
+  verdict suffices; no unthrottled billable button), carries a sequence guard against
+  post-switch stale results, and a non-OK response gives explicit feedback.
+- **Alert divisor excludes today's partial CE bucket (the gate MAJOR)** —
+  `momChangePctDailyUtc` divides by `max(1, getUTCDate() − 1)`, the same completed-days basis
+  the Daily Average tile uses; day-2 boundary test added.
+- The EN CHANGELOG's inverted color text is fixed to match KO (>0 orange, <0 green); the dead
+  round-1 banner TERM is removed.

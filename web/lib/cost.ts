@@ -34,7 +34,10 @@ export function momChangePctDaily(thisMtd: number, lastMonthTotal: number, now: 
  *  ~9h window after a UTC month rollover (KST) and skews elapsed by one day daily. The MoM
  *  tile keeps the original local-time behavior (pre-existing, non-alerting). */
 export function momChangePctDailyUtc(thisMtd: number, lastMonthTotal: number, now: Date): number {
-  const elapsed = now.getUTCDate();
+  // Exclude today's PARTIAL CE bucket from the elapsed-day divisor (the Daily Average tile
+  // applies the same caveat) — dividing MTD by full-days-including-today reads ≈-45% on the
+  // 2nd at an unchanged run rate, suppressing exactly the alert this feeds.
+  const elapsed = Math.max(1, now.getUTCDate() - 1);
   const lastDays = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).getUTCDate();
   if (elapsed <= 0 || lastDays <= 0) return 0;
   return momChangePct(thisMtd / elapsed, lastMonthTotal / lastDays);

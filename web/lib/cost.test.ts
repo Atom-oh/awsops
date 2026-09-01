@@ -177,15 +177,21 @@ describe('mergeMonthlyByService / mergeDailyByService (전체 계정 fan-out)', 
 
 
 describe('momChangePctDailyUtc (alert-surface UTC math)', () => {
-  it('uses UTC days: on the 1st (UTC) at an unchanged run-rate the change is ~0, not +3000%', () => {
-    // 2026-09-01T03:00Z — KST browsers are already Sep 1 local; UTC day = 1.
+  it('uses UTC COMPLETED days: on the 1st (UTC) at an unchanged run-rate the change is ~0, not +3000%', () => {
+    // 2026-09-01T03:00Z — KST browsers are already Sep 1 local; completed UTC days = max(1, 1-1) = 1.
     const now = new Date('2026-09-01T03:00:00Z');
-    // previous month (Aug, 31d) total 310 → 10/day; MTD after 1 UTC day at the same rate = 10.
+    // previous month (Aug, 31d) total 310 → 10/day; MTD ≈ one day at the same rate = 10.
     expect(Math.abs(momChangePctDailyUtc(10, 310, now))).toBeLessThan(0.5);
   });
-  it('matches the local variant away from boundaries', () => {
-    const now = new Date('2026-09-15T12:00:00Z');
-    expect(momChangePctDailyUtc(150, 310, now)).toBeCloseTo(momChangePctDaily(150, 310, now), 5);
+  it("excludes today's PARTIAL bucket from the divisor (day 2 at an unchanged rate reads ~0)", () => {
+    const now = new Date('2026-09-02T12:00:00Z'); // 1 completed day
+    expect(Math.abs(momChangePctDailyUtc(10, 310, now))).toBeLessThan(0.5);
+  });
+  it('stays close to the local MoM variant away from boundaries (one-elapsed-day offset)', () => {
+    const now = new Date('2026-09-15T12:00:00Z'); // completed=14 vs local elapsed=15
+    const utc = momChangePctDailyUtc(150, 310, now);
+    const local = momChangePctDaily(150, 310, now);
+    expect(Math.abs(utc - local)).toBeLessThan(10); // same order — the divisor differs by 1 day
   });
 });
 
