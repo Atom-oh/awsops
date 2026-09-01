@@ -414,10 +414,10 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Storage', keys: ['ebs_volume_h'] },
       // L153: partially-derived/reference blobs stay visible (log_publishing_options,
       // advanced_options, auto_tune_options carry fields the *_h derivations don't cover).
-      { label: 'Operations', keys: ['auto_tune_h', 'snapshot_hour_h', 'log_publishing_options', 'advanced_options', 'auto_tune_options'] },
+      { label: 'Operations', keys: ['auto_tune_h', 'snapshot_hour_h', 'service_software_options', 'log_publishing_options', 'advanced_options', 'auto_tune_options'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    hideKeys: ['cluster_config', 'ebs_options', 'vpc_options', 'encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'storage_gb_h', 'service_software_options', 'domain_endpoint_options', 'snapshot_options'],
+    hideKeys: ['cluster_config', 'ebs_options', 'vpc_options', 'encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'storage_gb_h', 'domain_endpoint_options', 'snapshot_options'],
     filterKeys: ['region', 'engine_version', 'engine_type'] },
   msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', distKey2: 'state', columns: [
     { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' },

@@ -118,11 +118,24 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       cognito_h: flag(walk(r.cognito_options, 'enabled')),
       // L153 sync additions — service software / endpoint policy / auto-tune / snapshots.
       software_update_h: (() => {
+        // UpdateAvailable:false does NOT mean healthy — it also covers IN_PROGRESS and the
+        // persistently unhealthy NOT_ELIGIBLE (domain must upgrade first). Derive from
+        // UpdateStatus when present; UpdateAvailable is only the last-resort fallback.
         const sso = r.service_software_options;
-        const avail = flag(walk(sso, 'update_available'));
         const cur = walk(sso, 'current_version');
-        if (avail === true) return `update available: ${cur ?? '?'} → ${walk(sso, 'new_version') ?? '?'}`;
-        if (avail === false) return `up to date${cur != null ? ` (${cur})` : ''}`;
+        const next = walk(sso, 'new_version');
+        const status = walk(sso, 'update_status');
+        if (typeof status === 'string' && status) {
+          const st = status.toUpperCase();
+          if (st === 'COMPLETED') return `up to date${cur != null ? ` (${cur})` : ''}`;
+          if (st === 'IN_PROGRESS' || st === 'PENDING_UPDATE') return `update in progress: ${cur ?? '?'} → ${next ?? '?'}`;
+          if (st === 'NOT_ELIGIBLE') return `not eligible for update${cur != null ? ` (${cur})` : ''} — domain upgrade required`;
+          if (st === 'ELIGIBLE') return `update available: ${cur ?? '?'} → ${next ?? '?'}`;
+          return `${status}${cur != null ? ` (${cur})` : ''}`;
+        }
+        const avail = flag(walk(sso, 'update_available'));
+        if (avail === true) return `update available: ${cur ?? '?'} → ${next ?? '?'}`;
+        if (avail === false) return `no update available${cur != null ? ` (${cur})` : ''}`;
         return undefined;
       })(),
       enforce_https_h: flag(walk(r.domain_endpoint_options, 'enforce_https')),

@@ -48,6 +48,22 @@ describe('GET /api/inventory/security_group/inbound (gap L154)', () => {
     expect(g.rules[2]).toMatchObject({ protocol: 'all', portRange: 'all' });
   });
 
+  it('ICMP renders type/code, never a garbled "8--1" port range', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [{
+      resource_id: 'sg-11112222',
+      data: { ip_permissions: [
+        { IpProtocol: 'icmp', FromPort: 8, ToPort: -1, IpRanges: [{ CidrIp: '10.0.0.0/8' }] },
+        { IpProtocol: 'icmp', FromPort: -1, ToPort: -1, IpRanges: [{ CidrIp: '10.0.0.0/8' }] },
+        { IpProtocol: 'icmp', FromPort: 3, ToPort: 4, IpRanges: [{ CidrIp: '10.0.0.0/8' }] },
+      ] },
+    }] });
+    const { GET } = await import('./route');
+    const body = await (await GET(req('ids=sg-11112222'))).json();
+    expect(body.groups[0].rules.map((r: { portRange: string }) => r.portRange))
+      .toEqual(['type 8', 'all types', 'type 3/code 4']);
+  });
+
   it('snake_case JSONB (plugin casing drift) parses identically', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({ rows: [{

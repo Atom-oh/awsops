@@ -57,9 +57,13 @@ function parseRules(ipPermissions: unknown): SgInboundRule[] {
     const proto = asStr(pick(p, 'ip_protocol')) ?? '-1';
     const from = pick(p, 'from_port');
     const to = pick(p, 'to_port');
+    // ICMP puts type/code in From/ToPort (-1 = any) — a "8--1" port range would be garbled.
+    const icmp = proto === 'icmp' || proto === 'icmpv6' || proto === '58';
     const portRange = proto === '-1' || from == null
       ? 'all'
-      : from === to ? String(from) : `${from}-${to}`;
+      : icmp
+        ? (Number(from) === -1 ? 'all types' : `type ${from}${to != null && Number(to) !== -1 ? `/code ${to}` : ''}`)
+        : from === to ? String(from) : `${from}-${to}`;
     const sources: SgRuleSource[] = [];
     for (const rng of asArray(pick(p, 'ip_ranges'))) {
       const cidr = asStr(pick(rng, 'cidr_ip'));

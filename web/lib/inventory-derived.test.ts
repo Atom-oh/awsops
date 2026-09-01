@@ -117,12 +117,27 @@ describe('deriveRow opensearch structured detail (gap L150)', () => {
     expect(d.snapshot_hour_h).toBe('3:00 UTC');
   });
 
+  it('L153: UpdateStatus drives the label — NOT_ELIGIBLE/IN_PROGRESS never read as healthy', () => {
+    const notEligible = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: false, UpdateStatus: 'NOT_ELIGIBLE', CurrentVersion: 'ES_7.10' },
+    });
+    expect(notEligible.software_update_h).toBe('not eligible for update (ES_7.10) — domain upgrade required');
+    const inProgress = deriveRow('opensearch', {
+      service_software_options: { UpdateAvailable: false, UpdateStatus: 'IN_PROGRESS', CurrentVersion: 'OpenSearch_2.11', NewVersion: 'OpenSearch_2.13' },
+    });
+    expect(inProgress.software_update_h).toBe('update in progress: OpenSearch_2.11 → OpenSearch_2.13');
+    const completed = deriveRow('opensearch', {
+      service_software_options: { UpdateStatus: 'COMPLETED', CurrentVersion: 'OpenSearch_2.13' },
+    });
+    expect(completed.software_update_h).toBe('up to date (OpenSearch_2.13)');
+  });
+
   it('L153: up-to-date software, enabled custom endpoint (domain shown), absent blobs → undefined', () => {
     const upToDate = deriveRow('opensearch', {
       service_software_options: { UpdateAvailable: false, CurrentVersion: 'OpenSearch_2.13' },
       domain_endpoint_options: { CustomEndpointEnabled: true, CustomEndpoint: 'search.example.com' },
     });
-    expect(upToDate.software_update_h).toBe('up to date (OpenSearch_2.13)');
+    expect(upToDate.software_update_h).toBe('no update available (OpenSearch_2.13)');
     expect(upToDate.custom_endpoint_h).toBe('search.example.com');
     const empty = deriveRow('opensearch', { resource_id: 'dom-2' });
     expect(empty.software_update_h).toBeUndefined();

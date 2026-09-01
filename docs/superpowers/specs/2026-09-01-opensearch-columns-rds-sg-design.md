@@ -60,3 +60,19 @@ are existing paths; new sync columns live inside the existing `data` JSONB).
   blobs → undefined).
 - Component: cards render rules + sources, 'No inbound rules', not-synced state, fetch error.
 - Full `npm test` + `tsc` + build + pytest; gap-audit ticks with a batch-16 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **`software_update_h` derives from `UpdateStatus`, not `UpdateAvailable`** — `UpdateAvailable:
+  false` also covers `IN_PROGRESS` and the persistently unhealthy `NOT_ELIGIBLE` (domain must
+  upgrade before it can receive updates), so the old "up to date" label asserted a falsely
+  healthy state in exactly the cases an operator needs to see. Status-driven labels:
+  COMPLETED → up to date; IN_PROGRESS/PENDING_UPDATE → update in progress; NOT_ELIGIBLE →
+  not eligible — domain upgrade required; ELIGIBLE → update available; unknown statuses pass
+  through verbatim. The raw `service_software_options` blob is also VISIBLE again (Operations
+  section, out of hideKeys) so the label can always be cross-checked.
+- **ICMP port formatting** — From/ToPort carry ICMP type/code (-1 = any); rules now render
+  `type 8`, `all types`, `type 3/code 4` instead of a garbled "8--1" range.
+- **`docs/api-reference.md` + route counts** — the new route is indexed and the exhaustive
+  97→98 count is bumped in all seven declaration sites (api-reference ×2, README ×4-ish,
+  root CLAUDE.md, web/app/CLAUDE.md).
