@@ -286,7 +286,7 @@ describe('computeHighlights (per-type highlight cards)', () => {
         ...spec.columns.map((c) => c.key),
         ...(spec.sections ?? []).flatMap((sec) => sec.keys),
         ...(spec.hideKeys ?? []),
-        ...[spec.stateKey, spec.distKey, spec.distKey2, spec.barKey?.col].filter((k): k is string => Boolean(k)),
+        ...[spec.stateKey, spec.distKey, spec.distKey2, spec.barKey?.col, spec.countBarKey?.col].filter((k): k is string => Boolean(k)),
       ]);
       for (const h of hls) {
         const refs = [

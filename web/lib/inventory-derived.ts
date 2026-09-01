@@ -92,6 +92,16 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       storage_gb_h: walk(ebs, 'volume_size'),
       n2n_enc_h: boolH(r.node_to_node_encryption_options_enabled),
       rest_enc_h: boolH(walk(enc, 'enabled')),
+      // L236: Full/Partial/No Encryption from the at-rest + n2n pair; unknown EITHER side →
+      // undefined (an unknown must never count as 'No Encryption' in the donut).
+      encryption_status_h: (() => {
+        const rest = flag(walk(enc, 'enabled'));
+        const n2n = flag(r.node_to_node_encryption_options_enabled);
+        if (rest == null || n2n == null) return undefined;
+        if (rest && n2n) return 'Full Encryption';
+        if (rest || n2n) return 'Partial';
+        return 'No Encryption';
+      })(),
       dedicated_master_h: dm === true
         ? `${walk(cc, 'dedicated_master_type') ?? '?'} × ${walk(cc, 'dedicated_master_count') ?? '?'}`
         : dm === false ? 'disabled' : undefined,

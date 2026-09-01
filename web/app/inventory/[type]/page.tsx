@@ -180,7 +180,9 @@ export default function InventoryTypePage() {
     [allRows, spec?.distKey],
   );
   const distData2 = useMemo(
-    () => (spec?.distKey2 ? top6(countBy(allRows, spec.distKey2)) : []),
+    () => (spec?.distKey2
+      ? top6(countBy(allRows, spec.distKey2).filter((d) => !(spec.distKey2DropNone && d.name === '(none)')))
+      : []),
     [allRows, spec?.distKey2],
   );
 
@@ -234,6 +236,15 @@ export default function InventoryTypePage() {
         .map((d) => ({ label: `${d.name}${spec.histKey!.suffix ?? ''}`, value: d.value }))
     : []), [allRows, spec?.histKey]);
 
+  // Count-distribution bar data (gap L221) — hook ABOVE the !spec early return (rules of
+  // hooks; the histData precedent), top-10 by count with '(none)' filtered.
+  const countBarData = useMemo(
+    () => (spec?.countBarKey
+      ? countBy(allRows, spec.countBarKey.col).filter((d) => d.name !== '(none)').sort((a, b) => b.value - a.value).slice(0, 10)
+      : []),
+    [allRows, spec?.countBarKey],
+  );
+
   if (!spec) {
     return (
       <>
@@ -280,7 +291,7 @@ export default function InventoryTypePage() {
     ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
     : null;
   const donut2 = spec.distKey2 && spec.distKey2 !== spec.distKey && distData2.length > 0
-    ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
+    ? <DonutBreakdown title={`${spec.distKey2Label ?? colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
     : null;
   // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
   const hist = spec.histKey && histData.length > 0
@@ -311,6 +322,12 @@ export default function InventoryTypePage() {
   // Server-computed ranking chart (gap L138): the metrics route's optional `bar` payload.
   const serverBar = metricBar
     ? <BarDistribution title={metricBar.title} data={metricBar.data} xKey="label" yKey="value" decimals={1} />
+    : null;
+  // Count-distribution bar (gap L221): row counts per distinct value, count-desc (the
+  // BarDistribution default) — distinct from barKey (numeric ranking) and hist (numeric axis).
+
+  const countBar = spec.countBarKey && countBarData.length > 0
+    ? <BarDistribution title={spec.countBarKey.label} data={countBarData} xKey="name" yKey="value" />
     : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
   const graphBand = donut && donut2
@@ -374,7 +391,7 @@ export default function InventoryTypePage() {
             )}
             {graphBand}
             {(() => {
-              const charts = [barChart, hist, serverBar].filter(Boolean);
+              const charts = [barChart, hist, countBar, serverBar].filter(Boolean);
               if (charts.length === 0) return null;
               if (charts.length === 1) return charts[0];
               return <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{charts.map((c, i) => <div key={i} className="min-w-0">{c}</div>)}</div>;
