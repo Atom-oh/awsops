@@ -225,13 +225,18 @@ export default function Home() {
     const last = pts[pts.length - 1];
     const w = nearestSnapshot(pts, 7);
     const m = nearestSnapshot(pts, 30);
+    // Key ABSENCE means "no successful sync for that type that day" (the route no longer
+    // pre-seeds zeros) — it must render '—', never a fabricated Current 0 / −100%.
+    const val = (p: Record<string, unknown> | null, t: string): number | null =>
+      p && typeof p[t] === 'number' ? (p[t] as number) : null;
     return (resTrend?.types ?? []).map((t) => {
-      const cur = Number(last[t] ?? 0);
-      const wv = w ? Number(w[t] ?? 0) : null;
-      const mv = m && m !== w ? Number(m[t] ?? 0) : null;
-      const pct = (from: number | null) => (from == null || from === 0 ? null : ((cur - from) / from) * 100);
+      const cur = val(last, t);
+      const wv = val(w, t);
+      const mv = m && m !== w ? val(m, t) : null;
+      const pct = (from: number | null) =>
+        cur == null || from == null || from === 0 ? null : ((cur - from) / from) * 100;
       return { type: t, label: INV_LABEL(t), cur, w: wv, m: mv, wPct: pct(wv), mPct: pct(mv) };
-    }).filter((r) => r.cur > 0 || (r.w ?? 0) > 0);
+    }).filter((r) => (r.cur ?? 0) > 0 || (r.w ?? 0) > 0);
   })();
 
   const loading = !ov && !ovErr && !sum && !sumErr;
@@ -507,7 +512,7 @@ export default function Home() {
                     return (
                       <tr key={r.type} className="border-b border-ink-50 last:border-0">
                         <td className="px-4 py-1.5 text-ink-700">{r.label}</td>
-                        <td className="tabular px-4 py-1.5 text-right font-semibold text-ink-800">{r.cur.toLocaleString()}</td>
+                        <td className="tabular px-4 py-1.5 text-right font-semibold text-ink-800">{r.cur == null ? '—' : r.cur.toLocaleString()}</td>
                         <td className="tabular px-4 py-1.5 text-right text-ink-500">{r.w == null ? '—' : r.w.toLocaleString()}</td>
                         <td className="tabular px-4 py-1.5 text-right">{pctCell(r.wPct)}</td>
                         <td className="tabular px-4 py-1.5 text-right text-ink-500">{r.m == null ? '—' : r.m.toLocaleString()}</td>

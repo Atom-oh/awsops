@@ -19,13 +19,21 @@ describe('nearestSnapshot (±2 CALENDAR days, date-normalized)', () => {
 });
 
 describe('netChange honest-degrade branches (gap L127)', () => {
-  it('diffs only types present on BOTH days — a partial sync day never reads as a fleet change', () => {
+  it('STRICT type-set parity: a partial sync day (different type set) is null, never a partial diff', () => {
     const pts = [
       { date: day(7), total: 30, ec2: 10, s3: 20 },
       { date: day(0), total: 12, ec2: 12 }, // s3 snapshot missing today (mid-fan-out/failed)
     ];
-    // raw total-diff would say -18; coverage-parity diff says +2 (ec2 only)
-    expect(netChange(pts, 7)).toBe(2);
+    // raw total-diff would say -18; an intersection diff would say +2 — BOTH are sync
+    // artifacts presented as fleet changes. Parity mismatch → null ('—').
+    expect(netChange(pts, 7)).toBeNull();
+  });
+  it('equal type sets diff normally', () => {
+    const pts = [
+      { date: day(7), total: 30, ec2: 10, s3: 20 },
+      { date: day(0), total: 35, ec2: 12, s3: 23 },
+    ];
+    expect(netChange(pts, 7)).toBe(5);
   });
   it('null when the baseline IS the latest point (stale sync self-diff would fabricate 0)', () => {
     // date-ascending: latest = day(6), which is also the only point within the 7d±2 window

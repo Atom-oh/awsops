@@ -44,18 +44,20 @@ export async function GET(request: Request) {
       latestByType.set(row.resource_type, Number(row.n)); // rows are date-ordered → last write wins
     }
     const trend = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-    // Types ranked by the LATEST DAY's counts; a type ABSENT from the latest day (stopped
-    // syncing / failed slice) ranks below every present type — never holding a Core slot on
-    // a stale count — with its last-seen value only as the tie-break among absentees.
+    // Types ranked by the latest day's counts. Mid-fan-out tolerance: the daily sync writes
+    // one row per type progressively, so a type absent from the LATEST day but present on the
+    // PREVIOUS day is treated as in-flight and keeps its last-seen rank (a transient slice
+    // failure must not demote e.g. ec2 into the default-hidden group and churn chip state).
+    // Only a type absent from BOTH of the last two days (dead/stopped syncing) ranks below
+    // every recent type, its stale last-seen value serving only as the tie-break there.
     const lastPt = trend[trend.length - 1] as Record<string, unknown> | undefined;
-    const present = (t: string) => typeof lastPt?.[t] === 'number';
+    const prevPt = trend[trend.length - 2] as Record<string, unknown> | undefined;
+    const recent = (t: string) => typeof lastPt?.[t] === 'number' || typeof prevPt?.[t] === 'number';
     const types = [...latestByType.keys()].sort((a, b) => {
-      const pa = present(a) ? 1 : 0;
-      const pb = present(b) ? 1 : 0;
-      if (pa !== pb) return pb - pa;
-      const va = pa ? (lastPt![a] as number) : latestByType.get(a) ?? 0;
-      const vb = pb ? (lastPt![b] as number) : latestByType.get(b) ?? 0;
-      return vb - va;
+      const ra = recent(a) ? 1 : 0;
+      const rb = recent(b) ? 1 : 0;
+      if (ra !== rb) return rb - ra;
+      return (latestByType.get(b) ?? 0) - (latestByType.get(a) ?? 0);
     });
     return Response.json({ trend, types });
   } catch (e) {

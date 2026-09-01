@@ -46,9 +46,21 @@ describe('GET /api/inventory/trend', () => {
     ] });
     const { GET } = await import('./route');
     const body = await (await GET(req())).json();
-    // ec2 key absent (coverage signal for the client's coverage-parity diff), not 0
+    // ec2 key absent (coverage signal for the client's parity check), not 0
     expect(Object.prototype.hasOwnProperty.call(body.trend[1], 'ec2')).toBe(false);
-    // ec2 absent from the latest day → ranks below lambda despite the larger stale count
+    // absent from the LATEST day only = in-flight (mid-fan-out tolerance) → keeps its rank
+    expect(body.types).toEqual(['ec2', 'lambda']);
+  });
+
+  it('a type absent from BOTH of the last two days ranks below every recent type', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValueOnce({ rows: [
+      { d: '2026-07-01', resource_type: 'ec2', n: 500 }, // dead since 07-01
+      { d: '2026-07-02', resource_type: 'lambda', n: 12 },
+      { d: '2026-07-03', resource_type: 'lambda', n: 12 },
+    ] });
+    const { GET } = await import('./route');
+    const body = await (await GET(req())).json();
     expect(body.types).toEqual(['lambda', 'ec2']);
   });
 

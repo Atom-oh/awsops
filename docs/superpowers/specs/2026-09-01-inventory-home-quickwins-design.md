@@ -31,17 +31,18 @@ chips), L127 (summary KPI bar).
   '—' when <2 snapshots, no baseline in tolerance, the baseline IS the latest point (stale-
   sync self-diff would fabricate 0), the LATEST point itself is >2 days old (a short diff
   labeled "7d"), or the account/region scope is narrowed (the trend endpoint is
-  `account_id='self'`-fixed with no region dimension — open audit L124). COVERAGE PARITY:
-  the diff sums only types snapshotted on BOTH days — the snapshot writer emits one row per
-  type on its own success path, so a mid-fan-out/partially-failed day drops types from
-  `total`, and a raw total-diff would render that as a large confident negative (a sync
-  artifact, worse than a fabricated 0).
+  `account_id='self'`-fixed with no region dimension — open audit L124). STRICT TYPE-SET
+  PARITY: both days must snapshot the SAME type set — the writer emits one row per type on its
+  own success path, so a mid-fan-out or partially failed day carries a different type set, and
+  ANY diff over it (raw or intersection) is a sync artifact presented as a fleet change;
+  mismatch → '—'. The adjacent delta table renders '—' (never Current 0/−100%) for a type
+  whose key is absent from a compared day, honoring the same absence-is-coverage signal.
 - The trend route no longer PRE-SEEDS `ec2: 0` on every point — key ABSENCE is the coverage
-  signal both the client's coverage-parity diff and the ranking rely on; the seed made a
-  failed-EC2 day indistinguishable from a genuine zero (a −fleet-size "7d change"). `types`
-  rank by the LATEST day's counts, and a type absent from the latest day ranks below every
-  present type (its last-seen value is only the tie-break among absentees) — never holding a
-  Core slot on a stale count.
+  signal the parity check, the delta table, and the ranking rely on; the seed made a
+  failed-EC2 day indistinguishable from a genuine zero. Ranking is fan-out tolerant: a type
+  absent from the LATEST day but present on the PREVIOUS one is in-flight (the daily sync
+  writes rows progressively) and keeps its last-seen rank — only a type absent from BOTH of
+  the last two days (dead/stopped) demotes below every recent type.
 - `nearestSnapshot`/`netChange` sort their input defensively (order not assumed) and resolve
   distance ties toward the NEWER candidate (−8d vs −6d at equal gap must not label a 9-day
   span "7d").

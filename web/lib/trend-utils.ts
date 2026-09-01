@@ -25,10 +25,10 @@ export function nearestSnapshot<T extends TrendPointLike>(pts: T[], daysAgo: num
  *  - fewer than 2 snapshots, or no baseline within the ±2-calendar-day tolerance;
  *  - the qualifying baseline IS the latest snapshot (a stale-sync self-diff fabricates 0);
  *  - the LATEST snapshot itself is >2 days old (a 2-day-old-vs-9-day-old diff labeled "7d");
- *  - COVERAGE PARITY: the diff sums only the types snapshotted on BOTH days — the snapshot
- *    writer emits one row per type on its own success path, so a mid-fan-out or partially
- *    failed day drops types from `total`, which a raw total-diff would render as a large
- *    confident negative (a sync artifact — worse than a fabricated 0). */
+ *  - STRICT TYPE-SET PARITY: both days must snapshot the SAME type set — the writer emits one
+ *    row per type on its own success path, so a mid-fan-out or partially failed day carries a
+ *    different type set, and any diff over it (raw OR intersection) is a sync artifact
+ *    presented as a fleet change. Parity mismatch → null ('—'). */
 export function netChange(pts: TrendPointLike[], daysAgo: number): number | null {
   if (pts.length < 2) return null;
   const sorted = [...pts].sort((a, b) => a.date.localeCompare(b.date)); // input order not assumed
@@ -36,10 +36,15 @@ export function netChange(pts: TrendPointLike[], daysAgo: number): number | null
   if (nearestSnapshot(sorted, 0) !== last) return null; // latest point itself is stale
   const base = nearestSnapshot(sorted, daysAgo);
   if (!base || base === last) return null;
-  const keys = Object.keys(last).filter(
-    (k) => k !== 'date' && k !== 'total' && typeof last[k] === 'number' && typeof base[k] === 'number',
-  );
-  if (!keys.length) return null;
-  const sumOf = (p: TrendPointLike) => keys.reduce((s, k) => s + Number(p[k] ?? 0), 0);
+  // STRICT type-set parity: the two days must snapshot the SAME type set, else null ('—').
+  // An intersection diff was still a confident partial number for a mid-fan-out day (the
+  // latest day builds progressively — one snapshot row per type on its own success path);
+  // parity also nulls the window where a genuinely new type has no 7d-old baseline yet.
+  const typeKeys = (p: TrendPointLike) =>
+    Object.keys(p).filter((k) => k !== 'date' && k !== 'total' && typeof p[k] === 'number').sort();
+  const lastKeys = typeKeys(last);
+  const baseKeys = typeKeys(base);
+  if (!lastKeys.length || lastKeys.join(',') !== baseKeys.join(',')) return null;
+  const sumOf = (p: TrendPointLike) => lastKeys.reduce((s, k) => s + Number(p[k] ?? 0), 0);
   return sumOf(last) - sumOf(base);
 }
