@@ -93,7 +93,10 @@ def test_alb_listener_collector_returns_good_rows_and_safe_partial_metadata(monk
     assert "arn:secret" not in output
 
 
-def test_s3_security_collector_keeps_row_and_reports_only_failure_codes(capsys):
+def test_s3_security_collector_keeps_row_and_counts_only_transient_failures(capsys):
+    # Steady-state denials (versioning AccessDenied) are excluded from sdk_partial — the
+    # row already carries them as "unknown -> None". Throttles (logging SlowDown) still
+    # count, keeping the run partial until a complete sweep.
     class FakeS3:
         def list_buckets(self):
             return {"Buckets": [{"Name": "secret-bucket"}]}
@@ -122,8 +125,8 @@ def test_s3_security_collector_keeps_row_and_reports_only_failure_codes(capsys):
     assert rows[0]["encryption"] == "none"
     assert rows[0]["logging_enabled"] is None
     assert failures == {
-        "failure_count": 2,
-        "failure_types": ["ClientError:AccessDenied", "ClientError:SlowDown"],
+        "failure_count": 1,
+        "failure_types": ["ClientError:SlowDown"],
     }
     output = capsys.readouterr().out
     assert "supersecret" not in output

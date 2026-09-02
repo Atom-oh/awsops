@@ -409,6 +409,17 @@ def _safe_sdk_failure_type(error):
     return label if _SAFE_FAILURE_LABEL_RE.fullmatch(label) else error_type
 
 
+# Steady-state authorization denials on per-bucket ATTRIBUTE calls (PAB/policy-status/
+# versioning/encryption/logging) are already modeled as "unknown -> None" on the row —
+# counting them toward sdk_partial would make one SCP-denied bucket disable stale-pruning
+# and freeze last_success_at on every run forever. Location failures are NOT in this
+# carve-out: a bucket we cannot place is skipped for the run (see the fetchers), which
+# must keep the run partial so its last-good row survives the skipped prunes.
+_S3_STEADY_DENIAL_CODES = frozenset(
+    {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "AllAccessDisabled"}
+)
+
+
 def _safe_sdk_response_failure_type(error):
     code = str(error.get("errorCode") or "") if isinstance(error, dict) else ""
     label = f"CollectionError:{code}" if code else "CollectionError"
@@ -553,8 +564,13 @@ def _fetch_s3_public_access(s3=None):
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"  # null LocationConstraint => us-east-1
         except ClientError as e:
-            region = ""
+            # Never upsert under region "" — that lands a NEW row under a different
+            # conflict key while the partial run skips both prune phases, leaving the
+            # old-region row AND the ""-region row for the same bucket. Skip the bucket
+            # for this run instead: counting the failure keeps the run partial, so the
+            # bucket's last-good row is preserved by the skipped prunes.
             failures.append(_safe_sdk_failure_type(e))
+            continue
         rec = {"name": name, "region": region, "bucket_policy_is_public": None,
                "block_public_acls": None, "block_public_policy": None,
                "restrict_public_buckets": None, "ignore_public_acls": None}
@@ -565,21 +581,24 @@ def _fetch_s3_public_access(s3=None):
             rec["restrict_public_buckets"] = cfg.get("RestrictPublicBuckets")
             rec["ignore_public_acls"] = cfg.get("IgnorePublicAcls")
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "NoSuchPublicAccessBlock":
+            code = e.response.get("Error", {}).get("Code")
+            if code == "NoSuchPublicAccessBlock":
                 rec["block_public_acls"] = False
                 rec["block_public_policy"] = False
                 rec["restrict_public_buckets"] = False
                 rec["ignore_public_acls"] = False
-            else:
+            elif code not in _S3_STEADY_DENIAL_CODES:
                 failures.append(_safe_sdk_failure_type(e))
-            # AccessDenied / other → leave None (unknown)
+            # steady-state denial -> leave None (unknown) WITHOUT counting toward
+            # sdk_partial — see _S3_STEADY_DENIAL_CODES
         try:
             rec["bucket_policy_is_public"] = (
                 s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") != "NoSuchBucketPolicy":
+            code = e.response.get("Error", {}).get("Code")
+            if code != "NoSuchBucketPolicy" and code not in _S3_STEADY_DENIAL_CODES:
                 failures.append(_safe_sdk_failure_type(e))
-            # AccessDenied / NoSuchBucketPolicy → leave None
+            # steady-state denial / NoSuchBucketPolicy → leave None (unknown), uncounted
         rows.append(rec)
     return _sdk_collection(rows, "name", "region", failures)
 
@@ -598,8 +617,13 @@ def _fetch_s3_security(s3=None):
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"
         except ClientError as e:
-            region = ""
+            # Never upsert under region "" — that lands a NEW row under a different
+            # conflict key while the partial run skips both prune phases, leaving the
+            # old-region row AND the ""-region row for the same bucket. Skip the bucket
+            # for this run instead: counting the failure keeps the run partial, so the
+            # bucket's last-good row is preserved by the skipped prunes.
             failures.append(_safe_sdk_failure_type(e))
+            continue
         rec = {
             "name": name, "region": region,
             "arn": f"arn:aws:s3:::{name}",
@@ -610,8 +634,11 @@ def _fetch_s3_security(s3=None):
             v = s3.get_bucket_versioning(Bucket=name)
             rec["versioning_enabled"] = v.get("Status") == "Enabled"
         except ClientError as e:
-            failures.append(_safe_sdk_failure_type(e))
-            # denied → unknown (None)
+            code = e.response.get("Error", {}).get("Code")
+            if code not in _S3_STEADY_DENIAL_CODES:
+                failures.append(_safe_sdk_failure_type(e))
+            # steady-state denial → unknown (None) WITHOUT counting toward sdk_partial
+            # — see _S3_STEADY_DENIAL_CODES
         try:
             enc = s3.get_bucket_encryption(Bucket=name)
             rules = enc.get("ServerSideEncryptionConfiguration", {}).get("Rules", [])
@@ -619,16 +646,20 @@ def _fetch_s3_security(s3=None):
                     if rules else None)
             rec["encryption"] = algo or "enabled"
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "ServerSideEncryptionConfigurationNotFoundError":
+            code = e.response.get("Error", {}).get("Code")
+            if code == "ServerSideEncryptionConfigurationNotFoundError":
                 rec["encryption"] = "none"
-            else:
+            elif code not in _S3_STEADY_DENIAL_CODES:
                 failures.append(_safe_sdk_failure_type(e))
-            # denied → unknown (None)
+            # steady-state denial → unknown (None), uncounted — see _S3_STEADY_DENIAL_CODES
         try:
             log = s3.get_bucket_logging(Bucket=name)
             rec["logging_enabled"] = bool(log.get("LoggingEnabled"))
         except ClientError as e:
-            failures.append(_safe_sdk_failure_type(e))
+            code = e.response.get("Error", {}).get("Code")
+            if code not in _S3_STEADY_DENIAL_CODES:
+                failures.append(_safe_sdk_failure_type(e))
+            # steady-state denial → unknown (None), uncounted — see _S3_STEADY_DENIAL_CODES
         rows.append(rec)
     return _sdk_collection(rows, "name", "region", failures)
 

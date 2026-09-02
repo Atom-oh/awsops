@@ -5,16 +5,22 @@ import sync_lambda  # PYTHONPATH must include scripts/v2/steampipe
 
 
 class FakeS3:
-    def __init__(self, buckets, denied=(), no_pab=(), no_policy=()):
+    def __init__(self, buckets, denied=(), no_pab=(), no_policy=(), loc_denied=()):
         self._buckets = buckets
         self._denied = set(denied)
         self._no_pab = set(no_pab)
         self._no_policy = set(no_policy)
+        self._loc_denied = set(loc_denied)
 
     def list_buckets(self):
         return {"Buckets": [{"Name": b} for b in self._buckets]}
 
     def get_bucket_location(self, Bucket):
+        if Bucket in self._loc_denied:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": f"secret={Bucket}"}},
+                "GetBucketLocation",
+            )
         return {"LocationConstraint": "ap-northeast-2"}
 
     def get_public_access_block(self, Bucket):
@@ -50,7 +56,10 @@ def test_contract_shape_includes_empty_failure_metadata():
     assert failures == {"failure_count": 0, "failure_types": []}
 
 
-def test_one_denied_bucket_keeps_rows_and_returns_redacted_partial_metadata(capsys):
+def test_attribute_denied_bucket_keeps_row_with_unknowns_and_is_not_partial(capsys):
+    # A steady-state attribute-level denial (SCP-denied bucket) is already modeled as
+    # "unknown -> None" on the row, so it must NOT make the run partial — otherwise one
+    # such bucket would disable stale-pruning and freeze last_success_at forever.
     fake = FakeS3(buckets=["pub", "priv", "locked"], denied=["locked"])
     rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(fake)
     by = {r["name"]: r for r in rows}
@@ -61,11 +70,39 @@ def test_one_denied_bucket_keeps_rows_and_returns_redacted_partial_metadata(caps
     assert "locked" in by
     assert by["locked"]["bucket_policy_is_public"] is None
     assert by["locked"]["block_public_acls"] is None
+    assert failures == {"failure_count": 0, "failure_types": []}
+    assert "locked" not in capsys.readouterr().out
+
+
+def test_location_denied_bucket_is_skipped_and_counts_as_partial(capsys):
+    # A bucket we cannot place is skipped for the run instead of upserted under
+    # region "" (which would land a duplicate row under a different conflict key).
+    # Counting the failure keeps the run partial, so the skipped prunes preserve the
+    # bucket's last-good row.
+    fake = FakeS3(buckets=["pub", "nowhere"], loc_denied=["nowhere"])
+    rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(fake)
+    by = {r["name"]: r for r in rows}
+    assert "nowhere" not in by
+    assert by["pub"]["bucket_policy_is_public"] is True
     assert failures == {
-        "failure_count": 2,
+        "failure_count": 1,
         "failure_types": ["ClientError:AccessDenied"],
     }
-    assert "locked" not in capsys.readouterr().out
+    assert "nowhere" not in capsys.readouterr().out
+
+
+def test_throttle_on_attribute_call_still_counts_as_partial():
+    # Throttles are transient (not steady-state denials) — they must keep the run
+    # partial so pruning/last_success_at wait for a complete sweep.
+    class ThrottledS3(FakeS3):
+        def get_public_access_block(self, Bucket):
+            raise ClientError({"Error": {"Code": "SlowDown"}}, "GetPublicAccessBlock")
+
+    rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(ThrottledS3(["pub"]))
+    assert rows[0]["block_public_acls"] is None
+    assert rows[0]["block_public_policy"] is None
+    assert failures["failure_count"] == 1
+    assert "ClientError:SlowDown" in failures["failure_types"]
 
 
 def test_no_public_access_block_marks_blocks_false():
