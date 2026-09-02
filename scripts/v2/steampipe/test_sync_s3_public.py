@@ -6,10 +6,11 @@ import sync_lambda  # PYTHONPATH must include scripts/v2/steampipe
 
 
 class FakeS3:
-    def __init__(self, buckets, denied=(), no_pab=()):
+    def __init__(self, buckets, denied=(), no_pab=(), no_policy=()):
         self._buckets = buckets
         self._denied = set(denied)
         self._no_pab = set(no_pab)
+        self._no_policy = set(no_policy)
 
     def list_buckets(self):
         return {"Buckets": [{"Name": b} for b in self._buckets]}
@@ -29,6 +30,8 @@ class FakeS3:
     def get_bucket_policy_status(self, Bucket):
         if Bucket in self._denied:
             raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetBucketPolicyStatus")
+        if Bucket in self._no_policy:
+            raise ClientError({"Error": {"Code": "NoSuchBucketPolicy"}}, "GetBucketPolicyStatus")
         return {"PolicyStatus": {"IsPublic": Bucket == "pub"}}
 
 
@@ -56,6 +59,14 @@ def test_no_public_access_block_marks_blocks_false():
     rec = rows[0]
     assert rec["block_public_acls"] is False
     assert rec["block_public_policy"] is False
+
+
+def test_no_bucket_policy_is_definitively_not_public():
+    """NoSuchBucketPolicy => False — kept in LOCKSTEP with _fetch_s3_security's identical call:
+    the same column on the same bucket must never carry different semantics across the two
+    inventory types (/inventory/s3 vs /inventory/s3_public_access)."""
+    rows, _id, _rg = sync_lambda._fetch_s3_public_access(FakeS3(["bare"], no_policy=["bare"]))
+    assert rows[0]["bucket_policy_is_public"] is False
 
 
 def test_registered_in_sdk_syncs():

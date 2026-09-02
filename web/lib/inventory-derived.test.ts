@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveRow } from './inventory-derived';
+import { deriveRow, countFlags } from './inventory-derived';
 
 // lambda deriver (gap-audit L137, v1 parity): null runtime → 'custom'; last_modified formatted.
 describe('deriveRow lambda formatting', () => {
@@ -228,5 +228,40 @@ describe('opensearch encryption_status_h (gap L236)', () => {
     expect(row(undefined, true).encryption_status_h).toBeUndefined();
     expect(row(true, undefined).encryption_status_h).toBeUndefined();
     expect(deriveRow('opensearch', { resource_id: 'd' }).encryption_status_h).toBeUndefined();
+  });
+});
+
+describe('countFlags (gap L240 — flagBarKey Security Status bars)', () => {
+  const FLAGS = [
+    { name: 'Private', col: 'bucket_policy_is_public', negate: true },
+    { name: 'Public', col: 'bucket_policy_is_public' },
+    { name: 'Versioned', col: 'versioning_enabled' },
+  ];
+  it('counts strict true / strict false (negate) with string coercion', () => {
+    const rows = [
+      { bucket_policy_is_public: false, versioning_enabled: true },
+      { bucket_policy_is_public: 'false', versioning_enabled: 'true' },
+      { bucket_policy_is_public: true, versioning_enabled: false },
+    ];
+    expect(countFlags(rows, FLAGS)).toEqual([
+      { name: 'Private', value: 2 },
+      { name: 'Public', value: 1 },
+      { name: 'Versioned', value: 2 },
+    ]);
+  });
+  it('an all-unknown column drops its flags entirely (0/0 must not read as all-clear)', () => {
+    const rows = [
+      { bucket_policy_is_public: null, versioning_enabled: true },
+      { versioning_enabled: false },
+      { bucket_policy_is_public: 'maybe', versioning_enabled: true },
+    ];
+    // bucket_policy_is_public has no known value on any row (unsynced/denied) → Private AND
+    // Public are omitted; Versioned (known values exist) still charts.
+    expect(countFlags(rows, FLAGS)).toEqual([{ name: 'Versioned', value: 2 }]);
+  });
+  it('keeps the declared order and zero bars once the column has ANY known value', () => {
+    const out = countFlags([{ bucket_policy_is_public: false }, { versioning_enabled: true }], FLAGS);
+    expect(out.map((d) => d.name)).toEqual(['Private', 'Public', 'Versioned']);
+    expect(out[1]).toEqual({ name: 'Public', value: 0 }); // a real zero — signal, kept
   });
 });

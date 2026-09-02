@@ -157,3 +157,57 @@ def test_self_count_matches_rec_account_self_only(monkeypatch):
 
 def test_self_count_empty():
     assert sync_lambda._self_count([]) == 0
+
+
+class _FakeS3PolicyStatus:
+    """Minimal boto3-s3 stand-in for _fetch_s3_security (gap L240: bucket_policy_is_public
+    lands on the bucket row itself so the page's Private/Public flag bars can chart it)."""
+
+    def __init__(self, policy_status_by_bucket):
+        self._ps = policy_status_by_bucket
+
+    def list_buckets(self):
+        return {"Buckets": [{"Name": n} for n in self._ps]}
+
+    def get_bucket_location(self, Bucket):
+        return {"LocationConstraint": "ap-northeast-2"}
+
+    def get_bucket_versioning(self, Bucket):
+        return {"Status": "Enabled"}
+
+    def get_bucket_encryption(self, Bucket):
+        return {"ServerSideEncryptionConfiguration": {"Rules": []}}
+
+    def get_bucket_logging(self, Bucket):
+        return {}
+
+    def get_bucket_policy_status(self, Bucket):
+        out = self._ps[Bucket]
+        if isinstance(out, Exception):
+            raise out
+        return {"PolicyStatus": {"IsPublic": out}}
+
+
+def _client_error(code):
+    from botocore.exceptions import ClientError
+
+    return ClientError({"Error": {"Code": code}}, "GetBucketPolicyStatus")
+
+
+def test_s3_security_rows_carry_bucket_policy_is_public():
+    fake = _FakeS3PolicyStatus({
+        "pub": True,
+        "priv": False,
+        "denied": _client_error("AccessDenied"),
+        "nopolicy": _client_error("NoSuchBucketPolicy"),
+    })
+    rows, id_col, region_col = sync_lambda._fetch_s3_security(s3=fake)
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["pub"]["bucket_policy_is_public"] is True
+    assert by_name["priv"]["bucket_policy_is_public"] is False
+    # denial => unknown (None), never a fabricated verdict
+    assert by_name["denied"]["bucket_policy_is_public"] is None
+    # NO bucket policy at all is a DEFINITIVE "not public via policy" (the majority case) —
+    # None here would zero the Policy Private bar on a typical fleet.
+    assert by_name["nopolicy"]["bucket_policy_is_public"] is False
+    assert id_col == "name" and region_col == "region"
