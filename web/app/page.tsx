@@ -263,6 +263,10 @@ export default function Home() {
     if (nearestSnapshot(pts, 0) !== last) return []; // latest point itself is stale
     const base = nearestSnapshot(pts, 30);
     if (!base || base === last) return [];
+    // actual-span validation (the netChange precedent): a ~26/34-day span must not be
+    // priced and labeled as a 30-day delta.
+    const spanDays = (new Date(last.date).getTime() - new Date(base.date).getTime()) / 86_400_000;
+    if (Math.abs(spanDays - 30) > 2) return [];
     const val = (p: Record<string, unknown>, t: string): number | null =>
       typeof p[t] === 'number' ? (p[t] as number) : null;
     return estimateCostImpact(

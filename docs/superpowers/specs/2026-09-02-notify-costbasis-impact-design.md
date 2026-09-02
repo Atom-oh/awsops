@@ -86,3 +86,20 @@ Estimation panel).
   govern compliance mail (4 locales); ecs-container-cost guide's dangling KO/JA clauses and
   the caution headings fixed, "cost KPI tiles" → the actual single daily-cost-total tile;
   ASCII minus sign in the impact rows; Card subtitle double-tt removed.
+
+## Round-2 corrections (review-driven)
+
+- **The dedup window is now an ATOMIC pre-publish claim (the gate MAJOR, 7 panel reviews)** —
+  round 1's SELECT → publish → UPDATE was a check-then-publish race: `POST
+  /api/compliance/run` has no in-flight guard and pg8000 autocommits per statement, so N
+  concurrent same-benchmark runs each passed the SELECT before any stamped `notified_at`,
+  bypassing the documented one-mail-per-hour guarantee. The claim is now a single
+  autocommitted `UPDATE … NOT EXISTS … RETURNING` taken BEFORE the publish, serialized
+  across connections by a per-benchmark advisory lock (namespace 772026, session-scoped —
+  auto-released on connection close), and a publish failure KEEPS the claim (no retry-blast,
+  `publish_failed` recorded). Tests assert claim-before-publish ordering, lock/unlock
+  pairing, and claim retention on publish failure; ADR-013's amendment records the claim
+  mechanics.
+- Minors: an `awsops_class=compliance_completed` MessageAttribute lets subscribers filter
+  the new class via SNS filter policies (no IAM change); the impact list adds the netChange
+  actual-span validation (|span − 30d| ≤ 2 — a ~26/34-day span must not be labeled 30-day).

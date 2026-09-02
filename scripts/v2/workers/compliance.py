@@ -148,10 +148,13 @@ def notify_completed(conn, run_id, benchmark, totals, scope="all"):
     sns:Publish grant the worker already carries when diagnosis_notify_enabled (env absent →
     silent no-op, zero Terraform), the notify._client publish path, and the
     diagnosis_notify_paused app_settings admin pause (paused → skip; a pause-read failure
-    fails OPEN to publishing — the digest precedent). Flood guard: per-benchmark
-    _NOTIFY_DEDUP_MINUTES dedup on compliance_runs.notified_at. Every path records a durable
-    notify_outcome on the run row. NEVER raises: notification must not fail the run.
-    Returns the MessageId or None. Recorded in ADR-013 (2026-09-02 amendment)."""
+    fails OPEN to publishing — the digest precedent). Flood guard: an ATOMIC per-benchmark
+    _NOTIFY_DEDUP_MINUTES window claim on compliance_runs.notified_at, taken BEFORE the
+    publish and serialized by an advisory lock — concurrent same-benchmark runs cannot each
+    pass a check and all publish (round-2 race fix); a publish failure keeps the claim (no
+    retry-blast). Every path records a durable notify_outcome on the run row. NEVER raises:
+    notification must not fail the run. Returns the MessageId or None. Recorded in ADR-013
+    (2026-09-02 amendment)."""
     topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
     if not topic:
         _record_notify_outcome(conn, run_id, "skipped_no_topic")
@@ -167,18 +170,40 @@ def notify_completed(conn, run_id, benchmark, totals, scope="all"):
         except Exception as e:  # noqa: BLE001 — fail-open: a settings-read failure must not mute mail
             print(f"[compliance] pause-flag read failed (fail-open, publishing): {e}")
             failopen = True
+        # ATOMIC window claim (review round-2: the SELECT→publish→UPDATE flow was a
+        # check-then-publish race — N concurrent runs each passed the SELECT before any
+        # stamped notified_at, bypassing the documented one-mail-per-hour guard). The claim
+        # is a single autocommitted UPDATE … NOT EXISTS … RETURNING, serialized across
+        # connections by a per-benchmark advisory lock (namespaced 772026; session-scoped —
+        # auto-released on connection close if the worker dies mid-claim). notified_at now
+        # means "window claimed": a publish failure KEEPS the claim (no retry-blast) and
+        # records publish_failed. Claim failure (e.g. pre-migration columns absent) fails
+        # OPEN to publishing — a broken claim path must not mute mail (logged).
+        claimed = False
+        locked = False
         try:
+            conn.run("SELECT pg_advisory_lock(772026, hashtext(:b))", b=benchmark)
+            locked = True
             rows = conn.run(
-                "SELECT 1 FROM compliance_runs WHERE benchmark=:b AND id<>:id "
-                "AND notified_at > now() - make_interval(mins => :m) LIMIT 1",
-                b=benchmark, id=run_id, m=_NOTIFY_DEDUP_MINUTES)
-            if bool(rows):
+                "UPDATE compliance_runs SET notified_at = now() "
+                "WHERE id = :id AND NOT EXISTS ("
+                "  SELECT 1 FROM compliance_runs c2 WHERE c2.benchmark = :b AND c2.id <> :id "
+                "  AND c2.notified_at > now() - make_interval(mins => :m)) RETURNING id",
+                id=run_id, b=benchmark, m=_NOTIFY_DEDUP_MINUTES)
+            if not rows:
                 print(f"[compliance] dedup — a {benchmark} mail went out within {_NOTIFY_DEDUP_MINUTES}m, skipping")
                 _record_notify_outcome(conn, run_id, "skipped_dedup")
                 return None
-        except Exception as e:  # noqa: BLE001 — fail-open (transient read error must not mute mail)
-            print(f"[compliance] dedup read failed (fail-open, publishing): {e}")
+            claimed = True
+        except Exception as e:  # noqa: BLE001 — fail-open (a broken claim path must not mute mail)
+            print(f"[compliance] dedup claim failed (fail-open, publishing): {e}")
             failopen = True
+        finally:
+            if locked:
+                try:
+                    conn.run("SELECT pg_advisory_unlock(772026, hashtext(:b))", b=benchmark)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[compliance] advisory unlock failed (non-fatal): {e}")
 
         from diagnosis import notify  # the governed publish path (hardened _client)
 
@@ -198,7 +223,10 @@ def notify_completed(conn, run_id, benchmark, totals, scope="all"):
         parts += ["", "이 메일은 AWSops 벤치마크 완료 시 발송되었습니다.",
                   "수신 거부 / 구독 관리는 관리자에게 문의하세요."]
         resp = notify._client(None).publish(
-            TopicArn=topic, Subject=_NOTIFY_SUBJECT, Message="\n".join(parts))
+            TopicArn=topic, Subject=_NOTIFY_SUBJECT, Message="\n".join(parts),
+            # message-class discriminator: lets subscribers filter compliance mail from
+            # diagnosis mail on the shared topic (SNS filter policy) — no IAM change.
+            MessageAttributes={"awsops_class": {"DataType": "String", "StringValue": "compliance_completed"}})
         mid = resp.get("MessageId")
         print(f"[compliance] published completion mail → {topic} (MessageId={mid})")
         _record_notify_outcome(conn, run_id, "emailed_failopen" if failopen else "emailed", notified=True)
