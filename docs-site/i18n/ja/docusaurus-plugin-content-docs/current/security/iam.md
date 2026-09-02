@@ -114,7 +114,7 @@ MFA が有効化されていないユーザーがいる場合、上部に警告�
 | `roleDetail` | クリック時の動的 SQL — 信頼ポリシー + インスタンスプロファイルを含む |
 
 :::info SCP でブロックされるカラムの回避
-`mfa_enabled`、`attached_policy_arns` は一覧クエリから除外されます（組織の SCP が `ListMFADevices`、`ListAttachedUserPolicies` をブロックする環境への対応）。MFA 統計は別の `summary` クエリで集計します。
+`iam_user` の `mfa_enabled` と `iam_role` の `attached_policy_arns` は行ごとのハイドレート列です — SCP が該当 API（`ListMFADevices`/`ListAttachedRolePolicies`）をブロックするアカウントでは、そのアカウントの sync が partial に降格し last-good 行が保持されます（ADR-010 2026-09-02 改訂、ADR-021 の degrade 機構）。MFA 統計は別の `summary` クエリで集計します。
 :::
 
 ## 関連ページ

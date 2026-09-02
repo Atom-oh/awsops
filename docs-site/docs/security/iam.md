@@ -114,7 +114,7 @@ MFA가 활성화되지 않은 사용자가 있으면 상단에 경고 배너가 
 | `roleDetail` | 클릭 시 동적 SQL — 트러스트 정책 + 인스턴스 프로파일 포함 |
 
 :::info SCP 차단 컬럼 회피
-`mfa_enabled`, `attached_policy_arns`는 목록 쿼리에서 제외됩니다 (조직 SCP가 `ListMFADevices`, `ListAttachedUserPolicies`를 차단하는 환경 대응). MFA 통계는 별도 `summary` 쿼리에서 집계합니다.
+`iam_user`의 `mfa_enabled`와 `iam_role`의 `attached_policy_arns`는 per-row 하이드레이트 컬럼입니다 — SCP가 해당 API(`ListMFADevices`/`ListAttachedRolePolicies`)를 차단하는 계정에서는 그 계정의 sync가 partial로 강등되고 last-good 행이 보존됩니다(ADR-010 2026-09-02 개정, ADR-021 degrade 체계). MFA 통계는 별도 `summary` 쿼리에서 집계합니다.
 :::
 
 ## 관련 페이지

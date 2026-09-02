@@ -14,7 +14,7 @@ type Row = Record<string, unknown>;
 type Status = 'public' | 'versioned' | 'standard' | 'unknown';
 
 const STATUS_META: Record<Status, { label: string; cls: string }> = {
-  public: { label: 'Public', cls: 'bg-rose-100 border-rose-400 text-rose-800' },
+  public: { label: 'Policy Public', cls: 'bg-rose-100 border-rose-400 text-rose-800' },
   versioned: { label: 'Versioned', cls: 'bg-emerald-100 border-emerald-400 text-emerald-800' },
   standard: { label: 'Standard', cls: 'bg-cyan-50 border-cyan-400 text-cyan-800' },
   unknown: { label: 'Unknown', cls: 'bg-ink-100 border-ink-300 text-ink-500' },
@@ -25,10 +25,12 @@ const known = (v: unknown) => v === true || v === false || v === 'true' || v ===
 
 export function bucketStatus(r: Row): Status {
   if (truthy(r.bucket_policy_is_public)) return 'public';
+  // an UNKNOWN public flag must not color the tile a reassuring green/cyan (a denied
+  // policy-status lookup could be masking real exposure) — unknown wins over versioned.
+  if (!known(r.bucket_policy_is_public)) return 'unknown';
   if (truthy(r.versioning_enabled)) return 'versioned';
-  // both signals unknown → unknown (unsynced policy flag + unknown versioning must not
-  // read as a confident Standard)
-  if (!known(r.bucket_policy_is_public) && !known(r.versioning_enabled)) return 'unknown';
+  // public known-false but versioning unknown: 'Standard' claims not-versioned too → unknown.
+  if (!known(r.versioning_enabled)) return 'unknown';
   return 'standard';
 }
 

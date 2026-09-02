@@ -114,7 +114,7 @@ IAM（Identity and Access Management）页面可一目了然地查看 AWS 账户
 | `roleDetail` | 点击时的动态 SQL — 包含信任策略 + 实例配置文件 |
 
 :::info 规避 SCP 阻断列
-`mfa_enabled`、`attached_policy_arns` 已从列表查询中排除（应对组织 SCP 阻断 `ListMFADevices`、`ListAttachedUserPolicies` 的环境）。MFA 统计在单独的 `summary` 查询中汇总。
+`iam_user` 的 `mfa_enabled` 与 `iam_role` 的 `attached_policy_arns` 为逐行水合列 — 在 SCP 阻断相应 API（`ListMFADevices`/`ListAttachedRolePolicies`）的账户中，该账户的同步降级为 partial 并保留最近一次成功的行（ADR-010 2026-09-02 修订，ADR-021 降级机制）。MFA 统计在单独的 `summary` 查询中汇总。
 :::
 
 ## 相关页面

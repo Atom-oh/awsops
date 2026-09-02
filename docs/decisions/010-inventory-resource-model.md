@@ -31,6 +31,8 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
   (**Remove SCP-blocked columns from list queries** — `mfa_enabled`, `attached_policy_arns`, `tags` in lists, etc. Lists hydrate many resources, so one blocked column fails the whole query.)
 - **상세 쿼리에서는 차단 컬럼을 유지**한다 — 단일 리소스 조회라 실패 가능성이 낮다.
   (**Keep blocked columns in detail queries** — single-resource lookups, lower failure probability.)
+- **(개정 2026-09-02)** 이 규칙은 ADR-021의 degrade 체계 도입 이후 **절대 금지가 아니라 위험-공지 규칙**으로 완화된다: SCP 차단 하이드레이트 컬럼이 리스트 쿼리를 실패시켜도 이제 해당 계정의 sync는 `partial`로 강등되고 last-good 행이 보존된다(하드 실패 아님). 이에 따라 `iam_role` 리스트에 `attached_policy_arns`가 재도입되었다(S3 상세의 접근 role 드릴다운용 — per-row `ListAttachedRolePolicies` 하이드레이트). SCP가 이 API를 차단하는 환경에서는 그 계정의 iam_role sync가 partial로 표시된다. (참고: `iam_user` 리스트의 `mfa_enabled`는 본 개정 전부터 이미 존재하던 선례.)
+  (**Amended 2026-09-02**: with ADR-021's degrade machinery, this rule softens from a hard ban to a risk-disclosure rule — an SCP-blocked hydrate column now degrades that account's sync to `partial` with last-good rows preserved rather than hard-failing. `attached_policy_arns` is accordingly reintroduced on the `iam_role` list (for the S3 detail's access-role drill-down; a per-row `ListAttachedRolePolicies` hydrate). In an environment whose SCP blocks that API, the account's iam_role sync reads partial. Note: `mfa_enabled` on the `iam_user` list predates this amendment as an existing precedent.)
 
 차단된 API 목록 / Blocked APIs found:
 

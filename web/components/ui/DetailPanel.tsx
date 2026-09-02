@@ -439,7 +439,7 @@ export default function DetailPanel({
           )}
           {resourceType === 's3' && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
-              <S3IamAccessSection />
+              <S3IamAccessSection accountId={typeof data.account_id === 'string' ? data.account_id : undefined} />
             </section>
           )}
           {ebsVolumeId && (

@@ -5,17 +5,19 @@ import { S3BucketMap, bucketStatus } from './S3BucketMap';
 
 afterEach(cleanup);
 
-describe('bucketStatus (gap L241 — v1 palette precedence + honest unknown)', () => {
-  it('Public beats Versioned; Versioned beats Standard', () => {
+describe('bucketStatus (gap L241 — v1 palette precedence + unknown-first honesty)', () => {
+  it('Public beats Versioned; Versioned beats Standard (all signals known)', () => {
     expect(bucketStatus({ bucket_policy_is_public: true, versioning_enabled: true })).toBe('public');
     expect(bucketStatus({ bucket_policy_is_public: false, versioning_enabled: true })).toBe('versioned');
     expect(bucketStatus({ bucket_policy_is_public: false, versioning_enabled: false })).toBe('standard');
   });
-  it('BOTH signals unknown → unknown (an unsynced bucket must not read as a confident Standard)', () => {
+  it('an UNKNOWN public flag → unknown even when versioning is known (a denied policy lookup must not paint a reassuring green)', () => {
+    expect(bucketStatus({ versioning_enabled: true })).toBe('unknown');
+    expect(bucketStatus({ versioning_enabled: false })).toBe('unknown');
     expect(bucketStatus({})).toBe('unknown');
-    expect(bucketStatus({ bucket_policy_is_public: null, versioning_enabled: null })).toBe('unknown');
-    // one known signal is enough to classify honestly
-    expect(bucketStatus({ versioning_enabled: false })).toBe('standard');
+  });
+  it('public known-false but versioning unknown → unknown (Standard also claims not-versioned)', () => {
+    expect(bucketStatus({ bucket_policy_is_public: false })).toBe('unknown');
   });
 });
 
@@ -35,7 +37,7 @@ describe('S3BucketMap', () => {
   });
   it('renders the four-status legend and the truncation label', () => {
     render(<S3BucketMap rows={rows} isTruncated />);
-    for (const l of ['Public', 'Versioned', 'Standard', 'Unknown']) expect(screen.getByText(l)).toBeTruthy();
+    for (const l of ['Policy Public', 'Versioned', 'Standard', 'Unknown']) expect(screen.getByText(l)).toBeTruthy();
     expect(screen.getByText(/표본 기준|sampled/)).toBeTruthy();
   });
 });

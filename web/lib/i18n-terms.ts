@@ -53,6 +53,8 @@ export const TERMS: Record<string, Pair> = {
   '서비스별 비용 (일간, CPU vs Memory)': { en: 'Cost by Service (daily, CPU vs Memory)', zh: '按服务的成本（日，CPU vs Memory）', ja: 'サービス別コスト（日次、CPU vs Memory）' },
   'Node별 일일 비용 + Pod 수': { en: 'Node Daily Cost + Pod Count', zh: '按节点的每日成本 + Pod 数', ja: 'ノード別日次コスト + Pod 数' },
   '일일 비용': { en: 'Daily cost', zh: '每日成本', ja: '日次コスト' },
+  '관리자 전용 데이터입니다 (iam_role 인벤토리 조회 권한 필요).': { en: 'Admin-only data (requires iam_role inventory access).', zh: '仅管理员数据（需要 iam_role 库存查看权限）。', ja: '管理者専用データです（iam_role インベントリの閲覧権限が必要）。' },
+  '표본 내 일치하는 role이 없습니다 — 전체 role이 500개를 넘어 확정 아님.': { en: 'No matching role in the sample — more than 500 roles exist, so this is not conclusive.', zh: '样本中没有匹配的角色 — 角色总数超过 500，因此并非定论。', ja: 'サンプル内に一致するロールはありません — ロール総数が 500 を超えるため確定ではありません。' },
   '리전별 버킷 맵': { en: 'Bucket Map by Region', zh: '按区域的存储桶地图', ja: 'リージョン別バケットマップ' },
   'S3 접근 권한 보유 IAM Role': { en: 'IAM Roles with S3 Access', zh: '拥有 S3 访问权限的 IAM 角色', ja: 'S3 アクセス権限を持つ IAM ロール' },
   'IAM Role 목록을 불러오지 못했습니다.': { en: 'Failed to load the IAM role list.', zh: '未能加载 IAM 角色列表。', ja: 'IAM ロール一覧を読み込めませんでした。' },
