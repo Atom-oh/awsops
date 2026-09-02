@@ -283,6 +283,12 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
               const ready = allRows.filter((r) => String(r.status ?? '') === 'Ready').length;
               const cpu = allRows.reduce((s, r) => s + (Number(r.cpuCapacity) || 0), 0);
               const memMiB = allRows.reduce((s, r) => s + (Number(r.memCapacity) || 0), 0);
+              // gap L234 (v1 memory analysis KPI): allocatable + reserved% — shown only when
+              // allocatable is actually reported (an unreported fleet must not read 'reserved 100%').
+              const memAllocMiB = allRows.reduce((s, r) => s + (Number(r.memAllocatable) || 0), 0);
+              const memHint = memAllocMiB > 0 && memMiB > 0
+                ? `allocatable ${Math.round(memAllocMiB / 1024).toLocaleString()} GiB · reserved ${Math.round((1 - memAllocMiB / memMiB) * 100)}%`
+                : undefined;
               const types = new Map<string, number>();
               for (const r of allRows) {
                 const t = String(r.instanceType ?? '') || 'unknown';
@@ -295,7 +301,7 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
                     <StatCard label="총 노드" value={allRows.length} />
                     <StatCard label="Ready" value={ready} variant={ready < allRows.length ? 'warn' : 'default'} />
                     <StatCard label="총 vCPU" value={Math.round(cpu).toLocaleString()} />
-                    <StatCard label="총 Memory (GiB)" value={Math.round(memMiB / 1024).toLocaleString()} />
+                    <StatCard label="총 Memory (GiB)" value={Math.round(memMiB / 1024).toLocaleString()} hint={memHint} />
                   </div>
                   <DonutBreakdown title="Instance Types" data={donut} nameKey="name" valueKey="value" />
                 </>

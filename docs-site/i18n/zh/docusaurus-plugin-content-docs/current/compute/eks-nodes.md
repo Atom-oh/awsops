@@ -18,7 +18,7 @@ import Screenshot from '@site/src/components/Screenshot';
 - **Total Nodes**：全部节点数量（青色）
 - **Ready**：Ready 状态的节点数量（绿色）
 - **Total CPU**：全部 vCPU 容量总和（紫色）
-- **Total Memory**：全部内存容量总和（橙色）
+- **Total Memory**：全部内存容量总和（橙色）— 同时以提示显示 allocatable 总和与 reserved %（Capacity − Allocatable）（allocatable 未上报时省略提示）
 
 ### CPU Usage per Node 图表
 以三段式柱状图显示各节点的 CPU 资源状态：

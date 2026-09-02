@@ -296,6 +296,23 @@ QUERIES = {
         "name",
         "region",
     ),
+    "waf_rule_group": (
+        # gap L253 — columns verified against the pinned plugin source
+        # (v0.142.0 table_aws_wafv2_rule_group.go); List needs no key quals.
+        "SELECT name, region, account_id, id, arn, scope, capacity, description, rules, "
+        "visibility_config, tags "
+        "FROM aws_wafv2_rule_group ORDER BY name",
+        "name",
+        "region",
+    ),
+    "waf_ip_set": (
+        # gap L253 — columns verified against v0.142.0 table_aws_wafv2_ip_set.go.
+        "SELECT name, region, account_id, id, arn, scope, description, ip_address_version, "
+        "addresses, tags "
+        "FROM aws_wafv2_ip_set ORDER BY name",
+        "name",
+        "region",
+    ),
     "cloudwatch_alarm": (
         "SELECT name, region, account_id, arn, state_value, state_reason, state_updated_timestamp, "
         "namespace, metric_name, comparison_operator, threshold, period, evaluation_periods, statistic, "

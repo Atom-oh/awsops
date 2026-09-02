@@ -237,3 +237,20 @@ def test_s3_security_rows_fold_tags_to_a_dict():
     assert by["tagged"]["tags"] == {"env": "prod", "team": "infra"}
     assert by["bare"]["tags"] == {}
     assert "tags" not in by["denied"]
+
+
+def test_waf_rule_group_and_ip_set_registered():
+    """gap L253: two new WAF types — columns verified against the pinned plugin source
+    (v0.142.0 table_aws_wafv2_{rule_group,ip_set}.go; List needs no key quals)."""
+    for t, table, cols in (
+        ("waf_rule_group", "aws_wafv2_rule_group",
+         ("name", "scope", "capacity", "rules", "visibility_config", "tags")),
+        ("waf_ip_set", "aws_wafv2_ip_set",
+         ("name", "scope", "ip_address_version", "addresses", "tags")),
+    ):
+        assert t in sync_lambda.QUERIES and t in sync_lambda._ALLOWED
+        sql, id_col, region_col = sync_lambda.QUERIES[t]
+        assert table in sql
+        for c in cols:
+            assert c in sql, (t, c)
+        assert id_col == "name" and region_col == "region"
