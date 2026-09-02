@@ -286,7 +286,11 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
               // gap L234 (v1 memory analysis KPI): allocatable + reserved% — shown only when
               // allocatable is actually reported (an unreported fleet must not read 'reserved 100%').
               const memAllocMiB = allRows.reduce((s, r) => s + (Number(r.memAllocatable) || 0), 0);
-              const memHint = memAllocMiB > 0 && memMiB > 0
+              // every capacity-bearing node must report allocatable — a partial fleet would
+              // inflate reserved% (missing allocatable counts 0 in the numerator but full
+              // capacity in the denominator).
+              const allocComplete = allRows.every((r) => !(Number(r.memCapacity) > 0) || Number(r.memAllocatable) > 0);
+              const memHint = allocComplete && memAllocMiB > 0 && memMiB > 0
                 ? `allocatable ${Math.round(memAllocMiB / 1024).toLocaleString()} GiB · reserved ${Math.round((1 - memAllocMiB / memMiB) * 100)}%`
                 : undefined;
               const types = new Map<string, number>();

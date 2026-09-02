@@ -235,7 +235,7 @@ export default function EksFleetCostPage() {
             {results.length === 0 ? (
               <Card>
                 <p className="text-[13px] text-ink-600">
-                  연결된 EKS 클러스터가 없습니다 — EKS 페이지에서 클러스터를 등록하세요.
+                  {tt('연결된 EKS 클러스터가 없습니다 — EKS 페이지에서 클러스터를 등록하세요.')}
                 </p>
               </Card>
             ) : (
@@ -244,11 +244,11 @@ export default function EksFleetCostPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {results.map(({ cluster, data }) =>
                     data === null ? (
-                      <Badge key={cluster} tone="neutral" variant="soft">{cluster}: 미가용</Badge>
+                      <Badge key={cluster} tone="neutral" variant="soft">{cluster}: {tt('미가용')}</Badge>
                     ) : data.source === 'request-estimate' ? (
-                      <Badge key={cluster} tone="brand" variant="soft" dot>{cluster}: 요청 기반 추정</Badge>
+                      <Badge key={cluster} tone="brand" variant="soft" dot>{cluster}: {tt('요청 기반 추정')}</Badge>
                     ) : (
-                      <Badge key={cluster} tone="positive" variant="soft" dot>{cluster}: OpenCost 실측</Badge>
+                      <Badge key={cluster} tone="positive" variant="soft" dot>{cluster}: {tt('OpenCost 실측')}</Badge>
                     ),
                   )}
                 </div>

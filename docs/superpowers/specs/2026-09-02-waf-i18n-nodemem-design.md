@@ -45,3 +45,19 @@ L219 (eks-container-cost page i18n), L234 (K8s node memory Capacity/Allocatable/
 - Registry invariants keep passing (new specs validated like every type).
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; gap-audit ticks
   with a batch-32 note; CHANGELOG EN/KO; docs-site guides in 4 locales.
+
+## Round-1 corrections (review-driven)
+
+- **L219 actually finished (the gate MAJOR)** — the page still rendered untranslated Korean
+  in three places the first pass missed: the no-cluster empty state (a Card CHILD — Card
+  translates only its title/subtitle props) and the three per-cluster source chips (Badge
+  has no useI18n). All now go through `tt()` with the missing TERMS keys registered
+  (미가용/OpenCost 실측/the empty-state sentence; 요청 기반 추정 was already registered).
+- The reserved% hint requires EVERY capacity-bearing node to report allocatable (a partial
+  fleet inflated reserved% — missing allocatable counted 0 in the numerator but full
+  capacity in the denominator). The hint's `allocatable N GiB · reserved M%` phrasing stays
+  English shorthand, matching the NodeCapacityList caption precedent ('avail X | rsv Y').
+- Noted, non-gating: keying the new WAF types by `arn` instead of `name` is a possible
+  follow-up hardening (the chair verified no collision exists — CLOUDFRONT keys under
+  region 'global'); whether the WAF family should join ADMIN_ONLY_TYPES deserves a
+  deliberate owner decision (the existing `waf` type already exposes rules ungated).
