@@ -61,7 +61,7 @@ interface FleetCluster {
 const fmtMib = (mib: number): string => (mib >= 1024 ? `${(mib / 1024).toFixed(1)}G` : `${Math.round(mib)}M`);
 
 export default function EksPage() {
-  const { tt } = useI18n();
+  const { tt, lang } = useI18n();
   const [activeAccount] = useActiveAccount();
   const [rows, setRows] = useState<Cluster[] | null>(null);
   const [admin, setAdmin] = useState(false);
@@ -129,7 +129,7 @@ export default function EksPage() {
           try {
             const r = await fetch('/api/eks/fleet');
             const d = r.ok ? await r.json() : null;
-            if (d && seq === fleetSeqRef.current) setFleet(d.clusters ?? []);
+            if (d && seq === fleetSeqRef.current) { setFleet(d.clusters ?? []); setFleetLoaded(true); }
           } catch { /* keep previous fleet */ }
         })(),
       ]);
@@ -330,8 +330,12 @@ export default function EksPage() {
           {(() => { const firstErr = fleet.find((f) => f.error)?.error; return firstErr ? (
             <pre className="mt-2 overflow-x-auto rounded bg-white/70 p-2 font-mono text-[11.5px] text-amber-900">{firstErr}</pre>
           ) : null; })()}
+          {/* v2-current EKS overview guide (registration + Access Entry / Register ViewPolicy
+              flow) — NOT the archived v1 eks-auth page. Locale-aware: ko is the docs-site
+              default locale (root path), others live under /{lang}. A constant, not an env —
+              NEXT_PUBLIC_* inlines at build time and the Dockerfile passes no such ARG. */}
           <a
-            href={`${process.env.NEXT_PUBLIC_DOCS_URL ?? 'https://www.atomai.click/awsops'}/compute/eks-auth`}
+            href={`https://www.atomai.click/awsops${lang === 'ko' ? '' : `/${lang}`}/compute/eks`}
             target="_blank" rel="noreferrer"
             className="mt-2 inline-block text-[13px] font-medium text-amber-800 underline underline-offset-2"
           >

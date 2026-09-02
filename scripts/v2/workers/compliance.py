@@ -128,15 +128,18 @@ _NOTIFY_SUBJECT = "[AWSops] Compliance Benchmark Completed"
 _NOTIFY_DEDUP_MINUTES = 60
 
 
-def _record_notify_outcome(conn, run_id, outcome, notified=False):
+def _record_notify_outcome(conn, run_id, outcome, notified=False, only_if_blank=False):
     """Durable delivery record (the ADR-013 diagnosis_reports.notify_outcome precedent).
-    Best-effort: a pre-migration DB (columns absent) must not fail the run."""
+    Best-effort: a pre-migration DB (columns absent) must not fail the run. only_if_blank
+    guards skip-class outcomes: a manual SFN re-drive of an already-notified run lands in the
+    dedup branch and must not overwrite the run's own emailed/publish_failed record."""
     try:
+        guard = " AND notify_outcome=''" if only_if_blank else ""
         if notified:
-            conn.run("UPDATE compliance_runs SET notified_at=now(), notify_outcome=:o WHERE id=:id",
+            conn.run(f"UPDATE compliance_runs SET notified_at=now(), notify_outcome=:o WHERE id=:id{guard}",
                      o=outcome, id=run_id)
         else:
-            conn.run("UPDATE compliance_runs SET notify_outcome=:o WHERE id=:id", o=outcome, id=run_id)
+            conn.run(f"UPDATE compliance_runs SET notify_outcome=:o WHERE id=:id{guard}", o=outcome, id=run_id)
     except Exception as e:  # noqa: BLE001
         print(f"[compliance] notify-outcome record failed (non-fatal): {e}")
 
@@ -193,7 +196,7 @@ def notify_completed(conn, run_id, benchmark, totals, scope="all"):
                 id=run_id, b=benchmark, m=_NOTIFY_DEDUP_MINUTES)
             if not rows:
                 print(f"[compliance] dedup — a {benchmark} mail went out within {_NOTIFY_DEDUP_MINUTES}m, skipping")
-                _record_notify_outcome(conn, run_id, "skipped_dedup")
+                _record_notify_outcome(conn, run_id, "skipped_dedup", only_if_blank=True)
                 return None
             claimed = True
         except Exception as e:  # noqa: BLE001 — fail-open (a broken claim path must not mute mail)

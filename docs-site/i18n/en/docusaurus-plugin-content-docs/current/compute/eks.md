@@ -28,7 +28,7 @@ Display key information for each cluster in card format:
 - **Click to filter**: Click a cluster card to filter all data to that cluster (cyan border)
 
 :::tip Cluster Access
-Unregistered clusters cannot display data. Use the "Register ViewPolicy" button or ask the cluster owner to follow the [Authentication Guide](./eks-auth).
+When clusters are registered but live data can't be read from ANY of them, a page-level no-access banner appears with the raw failure reason and a link to this guide. Unregistered clusters cannot display data. Use the "Register ViewPolicy" button or ask the cluster owner to follow the [Authentication Guide](./eks-auth).
 :::
 
 ### Stats Cards (Click to Navigate)

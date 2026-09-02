@@ -57,6 +57,8 @@ export async function GET(request: Request) {
     } catch (e) {
       // gap L227: surface the live-read failure (truncated) so the /eks no-access banner can
       // show WHY (v1 parity — it showed the raw error string); still degrades to reachable:false.
+      // INVARIANT this leans on: eks-incluster's eksToken() swallows credential-path errors
+      // internally, so no secret material can appear in this message — keep it that way.
       return { ...empty(name), error: String(e instanceof Error ? e.message : e).slice(0, 300) };
     }
   }));

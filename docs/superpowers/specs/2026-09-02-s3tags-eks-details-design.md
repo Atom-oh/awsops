@@ -23,14 +23,18 @@ no-access banner with error detail + docs link).
   Created): `PodRow` gains `serviceAccount` (`spec.serviceAccountName`, '' when absent) and
   the node-drilldown pods table gains **Pod IP** and **Service Account** columns ('-' when
   unknown — a terminated pod has no IP).
-- **L227** — `/eks` gains a page-level no-access banner rendered when the cluster list
-  loaded non-empty but ZERO clusters are connected, or every connected cluster's live fleet
-  read failed: title + description (Access Entry / 등록 안내), the raw per-cluster error in
-  a mono box (the fleet route now carries a truncated `error` string on unreachable entries
-  instead of swallowing it — v1 showed the raw Steampipe error), and a link to the docs-site
-  EKS auth guide (`NEXT_PUBLIC_DOCS_URL` env override, defaulting to the published docs URL;
-  the guide page `compute/eks-auth` exists in all 4 locales). The banner never renders while
-  loading or when at least one cluster serves data.
+- **L227** (as amended by round 1) — `/eks` gains a page-level no-access banner rendered
+  when the fleet loaded non-empty and EVERY fleet cluster is unreachable (registered clusters
+  exist but zero live K8s data — unregistered clusters keep their existing per-cluster
+  onboarding guides instead): title + description (Access Entry / 등록 안내), the raw
+  per-cluster error in a mono box (the fleet route now carries a truncated `error` string on
+  unreachable entries instead of swallowing it — v1 showed the raw Steampipe error; the
+  eksToken() no-secret-in-message invariant is documented at the catch site), and a
+  LOCALE-AWARE link to the docs-site **`compute/eks` v2-current overview guide** (NOT the
+  archived v1 `eks-auth` page — round-1 gate; the URL is a build-time constant, not an env:
+  `NEXT_PUBLIC_*` inlines at build and the Dockerfile passes no such ARG). The banner never
+  renders while the fleet is still loading (fleetLoaded is set by both the initial load and
+  manual refresh) or when any cluster serves data.
 
 ## Drive-by hardenings (PR #275 round-3 review MINORs, one-liners)
 - The compliance notify dedup claim adds `AND notified_at IS NULL` on the target row —
@@ -48,3 +52,21 @@ no-access banner with error detail + docs link).
 - notify claim: a run whose own notified_at is already set cannot re-claim.
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; gap-audit ticks
   with a batch-31 note; CHANGELOG EN/KO; docs-site guides in 4 locales.
+
+## Round-1 corrections (review-driven)
+
+- **The banner links the v2-current `compute/eks` guide, not the archived v1 `eks-auth` page
+  (the L5 MAJOR, 3/3 models)** — eks-auth's own caution says "do not apply to v2"; the
+  banner note moved into eks.md (4 locales), the eks-auth :::info additions were reverted,
+  and the href is locale-aware (`/{lang}` for non-ko).
+- **The cost-impact parity gate is a weighted-subset check, not all-type equality (the L4
+  MAJOR)** — equality self-disabled the panel for ~30 days on any new/failed type, including
+  unweighted ones the estimator ignores; now it hides only when the LATEST day is missing a
+  weighted type the baseline has. The batch-30 CHANGELOG bullet's hide-condition enumeration
+  was amended in place.
+- Minors: `fleetLoaded` is also set by manual refresh (a failed initial load no longer
+  suppresses the banner for the session); skip-class notify outcomes never overwrite an
+  existing emailed/publish_failed record (`only_if_blank`, ADR-013 sentence added); the
+  unwireable `NEXT_PUBLIC_DOCS_URL` claim removed (constant + comment); tags empty-state
+  wording aligned to the actual '—' rendering and the deploy precondition spelled out
+  (terraform apply + sync) in CHANGELOG/docs; fleet error-string invariant comment added.

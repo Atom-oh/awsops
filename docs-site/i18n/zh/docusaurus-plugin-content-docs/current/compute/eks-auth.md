@@ -6,9 +6,6 @@ description: 在 AWSops EC2 实例上访问 EKS 集群的认证配置指南
 
 # EKS 认证配置
 
-:::info
-当已注册集群但无法从任何集群读取实时数据时，`/eks` 页面会显示无法访问横幅，包含原始失败原因和本指南的链接。
-:::
 
 :::caution v1 归档文档 — 不适用于 v2
 本页描述的是 v1（EC2 实例 + Steampipe）架构的认证步骤。v2 基于 ECS Fargate，EKS 认证改为由 `terraform/v2/foundation/eks.tf` 为 **web 任务角色授予 Access Entry + `AmazonEKSAdminViewPolicy`**。请不要将本页的命令（SSH、`AmazonEKSClusterAdminPolicy`、`data/config.json` 等）应用于 v2 环境。

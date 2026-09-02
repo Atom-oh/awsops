@@ -6,9 +6,6 @@ description: Guide for authenticating AWSops EC2 instance to EKS clusters
 
 # EKS Authentication Setup
 
-:::info
-When clusters are registered but live data can't be read from any of them, the `/eks` page shows a no-access banner with the raw failure reason and a link to this guide.
-:::
 
 :::caution v1 archive — not applicable to v2
 This page describes the v1 (EC2 instance + Steampipe) authentication procedure. v2 runs on ECS Fargate, and EKS authentication is instead handled by `terraform/v2/foundation/eks.tf` granting the **web task role an Access Entry + `AmazonEKSAdminViewPolicy`**. Do not apply this page's commands (SSH, `AmazonEKSClusterAdminPolicy`, `data/config.json`, etc.) to a v2 environment.

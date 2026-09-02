@@ -28,7 +28,7 @@ import Screenshot from '@site/src/components/Screenshot';
 - **点击筛选**：点击集群卡片后仅筛选该集群（青色边框）
 
 :::tip 集群访问权限
-未注册 Access Entry 的集群无法查询数据。请使用 "Register ViewPolicy" 按钮进行注册，或参考[认证指南](./eks-auth)请求集群所有者进行注册。
+当已注册集群但无法从任何集群读取实时数据时，页面顶部会显示无法访问横幅，包含原始失败原因和本指南的链接。未注册 Access Entry 的集群无法查询数据。请使用 "Register ViewPolicy" 按钮进行注册，或参考[认证指南](./eks-auth)请求集群所有者进行注册。
 :::
 
 ### 统计卡片（点击跳转）
