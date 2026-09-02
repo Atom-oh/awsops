@@ -347,7 +347,11 @@ resource "aws_lambda_function" "inv_sync" {
   handler                        = "sync_lambda.lambda_handler"
   filename                       = data.archive_file.inv_sync_src[0].output_path
   source_code_hash               = data.archive_file.inv_sync_src[0].output_base64sha256
-  timeout                        = 120
+  # 300s: headroom for per-row hydrate columns (iam_role.attached_policy_arns ≈ one
+  # ListAttachedRolePolicies per role) under the shared 2 req/s awsops_global limiter —
+  # 120s left ~240 sequential permits for ALL concurrent type syncs combined; 300s bounds
+  # a ~100-role account comfortably. Busier fleets tune the limiter fill_rate (ADR-021 knobs).
+  timeout                        = 300
   memory_size                    = 512
   layers                         = [aws_lambda_layer_version.inv_pg8000[0].arn]
   reserved_concurrent_executions = var.steampipe_sync_reserved_concurrency

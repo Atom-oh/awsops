@@ -98,3 +98,26 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
 - **s3.md (4 locales) states the shipped contract (the gate MAJOR)** — admin-only, the full
   checked policy set, and the run-status gating; the legend notes green/cyan are
   policy-scoped too (ACL exposure is separate).
+
+## Round-4 corrections (review-driven)
+
+- **The hydrate budget is real, not asserted (the L4 gate MAJOR)** — the "quota-safe
+  (ADR-021)" comment claimed a budget ADR-021 never validated for this path. The sync
+  Lambda's timeout is raised 120s → 300s (Terraform, with the math in the comment: one
+  ListAttachedRolePolicies per role through the shared 2 req/s limiter ≈ 50s worst-case for
+  ~100 roles, and 120s left only ~240 permits for ALL concurrent type syncs combined); the
+  sync comment now carries those numbers and the ADR-010 failure semantics instead of the
+  blanket claim. A remaining-time guard / running-state reaper is noted as a follow-up.
+- **The how-to line matches the feature (the L5 gate MAJOR)** — s3.md's "Check IAM
+  Permissions" step in all 4 locales no longer promises per-bucket access analysis: it now
+  says account-wide roles holding broad S3 managed policies, admin-only, same list on every
+  bucket.
+- **troubleshooting.md / test-coverage-plan.md follow the amendment (the L5 gate MAJOR)** —
+  both now offer the ADR-010 2026-09-02 accept-and-disclose path beside column removal, and
+  the test invariant names the currently-accepted columns.
+- **The compensating-control claim is scoped (the L5 gate MAJOR)** — ADR-010 + the 4 iam.md
+  boxes now say the S3 access SECTION surfaces the run status (the general iam_role
+  inventory page's run-status exposure is an acknowledged follow-up — its RefreshButton
+  reads finished_at, which a failed run also stamps).
+- Follow-ups noted, not shipped: an age gate on the conclusive empty state (a years-old
+  succeeded run still reads conclusive); PAB/ACL-informed at-risk tile state.

@@ -126,7 +126,11 @@ QUERIES = {
     ),
     "iam_role": (
         # attached_policy_arns (gap L242): a per-row ListAttachedRolePolicies hydrate in the
-        # pinned plugin — role counts are modest and the sweep is quota-safe (ADR-021).
+        # pinned plugin — cost ≈ one call per role through the shared 2 req/s awsops_global
+        # limiter (~100 roles ≈ 50s worst-case if fully serialized). The sync Lambda timeout
+        # is raised to 300s as headroom; ADR-021's limiter knobs (fill_rate env) cover busier
+        # fleets, and an SCP-blocked hydrate fails this type's run per the ADR-010 2026-09-02
+        # amendment (whole-type last-good freeze, disclosed).
         "SELECT name, region, account_id, arn, role_id, create_date, path, description, "
         "max_session_duration, role_last_used_date, role_last_used_region, instance_profile_arns, "
         "permissions_boundary_arn, assume_role_policy, attached_policy_arns, tags "

@@ -114,7 +114,7 @@ IAM（Identity and Access Management）页面可一目了然地查看 AWS 账户
 | `roleDetail` | 点击时的动态 SQL — 包含信任策略 + 实例配置文件 |
 
 :::info 规避 SCP 阻断列
-`iam_user` 的 `mfa_enabled` 与 `iam_role` 的 `attached_policy_arns` 为逐行水合列 — 若 SCP 阻断相应 API（`ListMFADevices`/`ListAttachedRolePolicies`），**该类型的整个同步 run 将记录为 failed**（并非按账户 partial），同时跳过清理，所有账户的最近成功行被保留并冻结（ADR-010 2026-09-02 修订 — 将全账户冻结作为已披露的风险接受；消费 UI 会一并显示 run 状态）。MFA 统计在单独的 `summary` 查询中汇总。
+`iam_user` 的 `mfa_enabled` 与 `iam_role` 的 `attached_policy_arns` 为逐行水合列 — 若 SCP 阻断相应 API（`ListMFADevices`/`ListAttachedRolePolicies`），**该类型的整个同步 run 将记录为 failed**（并非按账户 partial），同时跳过清理，所有账户的最近成功行被保留并冻结（ADR-010 2026-09-02 修订 — 将全账户冻结作为已披露的风险接受；S3 详情的访问角色部分会显示 run 状态（在通用库存页面显示为后续事项））。MFA 统计在单独的 `summary` 查询中汇总。
 :::
 
 ## 相关页面
