@@ -24,7 +24,7 @@ import Screenshot from '@site/src/components/Screenshot';
 - Cluster Name、Status (ACTIVE)
 - Kubernetes Version、VPC ID、Platform Version、Region
 - **Access Entry 状态徽章**：K8s Connected（绿色）/ 未注册（红色）
-- **集群注册按钮（管理员）**：以三种模式注册未连接的集群 — Access Entry 查询注册（确认已存在的 Access Entry 后注册 — 运行时绝不新建 Access Entry [ADR-005]；不存在时返回 409 并给出 Terraform/CLI 上线脚本）、ServiceAccount 令牌（在集群内创建只读 SA 并粘贴其令牌 — 无需 AWS 侧配置）、AssumeRole（通过已在该集群持有 Access Entry 的 IAM 角色进行 K8s 认证 — 角色 ARN + external ID；集群本身必须属于宿主账户，注册路由会按宿主账户的集群列表校验）。Terraform 路径为 `make configure` 的 EKS 多选 → `eks.tf` 为 web 任务角色授予 Access Entry + AmazonEKSAdminViewPolicy
+- **集群注册按钮（管理员）**：以三种模式注册未连接的集群 — Access Entry 查询注册（确认已存在的 Access Entry 后注册 — 运行时绝不新建 Access Entry [ADR-005]；不存在时返回 409 并给出 Terraform/CLI 上线脚本）、ServiceAccount 令牌（在集群内创建只读 SA 并粘贴其令牌 — 无需 AWS 侧配置）、AssumeRole（通过已在该集群持有 Access Entry 的 IAM 角色进行 K8s 认证 — 角色 ARN + external ID；角色名必须为 `AWSopsReadOnlyRole`[web 任务的 sts:AssumeRole 权限固定为该名称]，且集群本身必须属于宿主账户，注册路由会按宿主账户的集群列表校验）。Terraform 路径为 `make configure` 的 EKS 多选 → `eks.tf` 为 web 任务角色授予 Access Entry + AmazonEKSAdminViewPolicy
 - **点击筛选**：点击集群卡片后仅筛选该集群（青色边框）
 
 :::tip 集群访问权限

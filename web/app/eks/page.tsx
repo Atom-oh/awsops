@@ -394,7 +394,7 @@ export default function EksPage() {
                 <input
                   value={authRole}
                   onChange={(e) => setAuthRole(e.target.value)}
-                  placeholder={tt('arn:aws:iam::123456789012:role/eks-read (클러스터에 Access Entry 보유)')}
+                  placeholder={tt('arn:aws:iam::123456789012:role/AWSopsReadOnlyRole (클러스터에 Access Entry 보유)')}
                   className="w-full max-w-xl rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
                 />
                 <input
@@ -403,7 +403,7 @@ export default function EksPage() {
                   placeholder={tt('External ID (선택)')}
                   className="w-full max-w-xl rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
                 />
-                <p className="text-ink-400">{tt('해당 클러스터에 Access Entry가 있는 IAM Role을 AssumeRole 해서 조회합니다.')}</p>
+                <p className="text-ink-400">{tt('해당 클러스터에 Access Entry가 있는 IAM Role을 AssumeRole 해서 조회합니다. web 태스크의 AssumeRole 권한은 role 이름 AWSopsReadOnlyRole로 고정되어 있어, 다른 이름의 role은 조회 시점에 실패합니다.')}</p>
               </div>
             )}
             {regMode === 'entry' && (
@@ -562,7 +562,7 @@ export default function EksPage() {
                         <input
                           value={authRole}
                           onChange={(e) => setAuthRole(e.target.value)}
-                          placeholder={tt('arn:aws:iam::123456789012:role/eks-read (클러스터에 Access Entry 보유)')}
+                          placeholder={tt('arn:aws:iam::123456789012:role/AWSopsReadOnlyRole (클러스터에 Access Entry 보유)')}
                           className="w-full rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
                         />
                         <input

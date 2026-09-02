@@ -24,7 +24,7 @@ EKS クラスターの全体状況、ノードリソース、Pod の状態を一
 - Cluster Name、Status (ACTIVE)
 - Kubernetes Version、VPC ID、Platform Version、Region
 - **Access Entry ステータスバッジ**: K8s Connected(緑)/ 未登録(赤)
-- **クラスター登録ボタン（管理者）**: 未接続クラスターを 3 つのモードで登録 — Access Entry 照会登録（既存の Access Entry を確認して登録 — 実行時に Access Entry を新規作成しない [ADR-005]。存在しない場合は 409 と Terraform/CLI オンボーディングスクリプトを案内）、ServiceAccount トークン（クラスター内に読み取り専用 SA を作成しトークンを貼り付け — AWS 側の設定不要）、AssumeRole（そのクラスターに既に Access Entry を持つ IAM ロールで K8s 認証 — ロール ARN + external ID。クラスター自体はホストアカウント所属である必要があり、登録ルートがホストのクラスター一覧で検証）。Terraform 経路は `make configure` の EKS 複数選択 → `eks.tf` が web タスクロールに Access Entry + AmazonEKSAdminViewPolicy を付与
+- **クラスター登録ボタン（管理者）**: 未接続クラスターを 3 つのモードで登録 — Access Entry 照会登録（既存の Access Entry を確認して登録 — 実行時に Access Entry を新規作成しない [ADR-005]。存在しない場合は 409 と Terraform/CLI オンボーディングスクリプトを案内）、ServiceAccount トークン（クラスター内に読み取り専用 SA を作成しトークンを貼り付け — AWS 側の設定不要）、AssumeRole（そのクラスターに既に Access Entry を持つ IAM ロールで K8s 認証 — ロール ARN + external ID。ロール名は必ず `AWSopsReadOnlyRole`[web タスクの sts:AssumeRole 権限がこの名前に固定]、クラスター自体はホストアカウント所属である必要があり、登録ルートがホストのクラスター一覧で検証）。Terraform 経路は `make configure` の EKS 複数選択 → `eks.tf` が web タスクロールに Access Entry + AmazonEKSAdminViewPolicy を付与
 - **クリックフィルタリング**: クラスターカードをクリックすると該当クラスターのみにフィルタリング(シアンの枠線)
 
 :::tip クラスターへのアクセス権限

@@ -115,3 +115,12 @@ no-access banner with error detail + docs link).
   allocation only, and the now-single-tab chart heading loses its "(tab switching)" phrasing.
   The banner keeps linking this page — now truthful about what v2 renders.
 - ADR-013's References gains `compliance.py` and the `compliance_runs_notify` migration.
+
+## Round-6 corrections (review-driven)
+
+- **The AssumeRole docs + UI state the AWSopsReadOnlyRole name pin (the gate MAJOR)** — the
+  web task's sole `sts:AssumeRole` grant is name-pinned to `arn:aws:iam::*:role/
+  AWSopsReadOnlyRole` (workload.tf), so a role with any other name fails at read time; the
+  register route stores the ARN without an STS probe. The 4-locale docs bullet, the in-app
+  helper text, and the placeholder (previously suggesting `role/eks-read`) now all state the
+  required name.
