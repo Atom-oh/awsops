@@ -54,6 +54,7 @@ export const TERMS: Record<string, Pair> = {
   'Node별 일일 비용 + Pod 수': { en: 'Node Daily Cost + Pod Count', zh: '按节点的每日成本 + Pod 数', ja: 'ノード別日次コスト + Pod 数' },
   '일일 비용': { en: 'Daily cost', zh: '每日成本', ja: '日次コスト' },
   '마지막 iam_role sync가 성공하지 못했습니다 — 아래 목록은 마지막 성공 시점의 데이터일 수 있습니다.': { en: 'The last iam_role sync did not succeed — the list below may reflect the last successful sync.', zh: '上次 iam_role 同步未成功 — 下方列表可能是最近一次成功同步的数据。', ja: '直近の iam_role sync は成功していません — 以下の一覧は最後に成功した時点のデータの可能性があります。' },
+  'sync 이력 정보가 없어 아래 목록의 최신 여부를 확인할 수 없습니다.': { en: 'No sync-run record exists — the freshness of the list below cannot be verified.', zh: '没有同步运行记录 — 无法确认下方列表是否为最新。', ja: 'sync 実行記録がないため、以下の一覧が最新かどうか確認できません。' },
   '동기화된 IAM role이 없습니다.': { en: 'No IAM roles are synced (none exist).', zh: '没有已同步的 IAM 角色（不存在角色）。', ja: '同期された IAM ロールはありません（ロールが存在しません）。' },
   'IAM role 데이터가 아직 없습니다 — sync 상태를 확인하세요.': { en: 'No IAM role data yet — check the sync status.', zh: '尚无 IAM 角色数据 — 请检查同步状态。', ja: 'IAM ロールデータがまだありません — sync の状態を確認してください。' },
   '표본/마지막 성공 데이터 내 일치하는 role이 없습니다 — 확정 아님.': { en: 'No matching role in the sampled/last-successful data — not conclusive.', zh: '在样本/最近成功的数据中没有匹配的角色 — 并非定论。', ja: 'サンプル/最終成功データ内に一致するロールはありません — 確定ではありません。' },

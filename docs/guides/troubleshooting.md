@@ -38,7 +38,7 @@ connection "aws" {
 }
 ```
 
-> ⚠️ `ignore_error_codes`는 **테이블 레벨** 에러만 무시. **컬럼 hydrate 에러**는 해당 컬럼을 쿼리에서 제거하거나, ADR-010 2026-09-02 개정 경로로 위험을 수용·공지해야 함(수용 시 SCP 차단은 해당 타입 run 전체 failed + 전 계정 last-good 동결).
+> ⚠️ `ignore_error_codes`는 **테이블 레벨** 에러만 무시. **컬럼 hydrate 에러**는 해당 컬럼을 쿼리에서 제거하거나, ADR-010 2026-09-02 개정 경로로 위험을 수용·공지해야 함(수용 시맨틱: 하이드레이트 실패는 하이드레이트-프리 폴백 1회 재시도로 기본 인벤토리 유지·컬럼만 부재 — inventory_sync_hydrate_fallback 로그가 fill_rate 노브 안내; 기본 쿼리까지 실패 시에만 해당 타입 run 전체 failed + 전 계정 last-good 동결).
 
 ---
 

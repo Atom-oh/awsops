@@ -114,7 +114,7 @@ IAM（Identity and Access Management）页面可一目了然地查看 AWS 账户
 | `roleDetail` | 点击时的动态 SQL — 包含信任策略 + 实例配置文件 |
 
 :::info 规避 SCP 阻断列
-`iam_user` 的 `mfa_enabled` 与 `iam_role` 的 `attached_policy_arns` 为逐行水合列 — 若 SCP 阻断相应 API（`ListMFADevices`/`ListAttachedRolePolicies`），**该类型的整个同步 run 将记录为 failed**（并非按账户 partial），同时跳过清理，所有账户的最近成功行被保留并冻结（ADR-010 2026-09-02 修订 — 将全账户冻结作为已披露的风险接受；S3 详情的访问角色部分会显示 run 状态（在通用库存页面显示为后续事项））。MFA 统计在单独的 `summary` 查询中汇总。
+`iam_user` 的 `mfa_enabled` 与 `iam_role` 的 `attached_policy_arns` 为逐行水合列。对 `iam_role`，若水合查询失败（SCP 阻断 `ListAttachedRolePolicies`，或所有已连接账户的角色总数超过限流预算导致超时），同步会**去掉水合列重试一次** — 基础 iam_role 库存照常刷新，只有策略列表列缺失，S3 详情的访问角色部分将其显示为“未同步”；运维人员可通过 `inventory_sync_hydrate_fallback` 日志事件与限流器 `fill_rate` 旋钮（ADR-021）恢复水合。仅当基础查询也失败时，该类型的整个同步 run 才记录为 failed（并非按账户 partial），跳过清理并保留冻结所有账户的最近成功行（ADR-010 2026-09-02 修订披露的语义；在通用库存页面显示 run 状态为后续事项）。`iam_user` 的 `mfa_enabled` 无回退保留，被阻断时仍适用整类型语义。MFA 统计在单独的 `summary` 查询中汇总。
 :::
 
 ## 相关页面

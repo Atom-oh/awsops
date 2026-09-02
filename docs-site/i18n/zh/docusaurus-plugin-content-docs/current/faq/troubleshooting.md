@@ -70,7 +70,7 @@ AWSops 使用自托管登录表单（`/login`）。以未认证状态访问受�
 | `ce:GetCostAndUsage` | 无法查询 Cost 数据 |
 | `cloudwatch:GetMetricData` | 无法查询指标/图表 |
 
-AWSops 是只读的，对于被拦截的 API，大多数情况下相应条目会显示为空值，其余部分正常工作 — 但若逐行水合列（iam_user.mfa_enabled、iam_role.attached_policy_arns）被拦截，该类型的整个同步 run 会记录为 failed，last-good 数据被冻结（ADR-010 2026-09-02 修订）。如果需要缺失的数据，请为相应 API 添加读取权限。在不变更权限的情况下，若可以用自然语言进行部分查询，向 AI 助手提问即可获得可用范围内数据的回答。
+AWSops 是只读的，对于被拦截的 API，大多数情况下相应条目会显示为空值，其余部分正常工作 — 但逐行水合列被拦截时例外：iam_role.attached_policy_arns 被拦截会触发一次去掉水合列的重试，基础库存保持可用、仅策略列表列缺失（运维人员可通过 inventory_sync_hydrate_fallback 日志与限流器 fill_rate 旋钮恢复）；而 iam_user.mfa_enabled 被拦截、或基础查询本身也失败时，该类型的整个同步 run 会记录为 failed，last-good 数据被冻结（ADR-010 2026-09-02 修订）。如果需要缺失的数据，请为相应 API 添加读取权限。在不变更权限的情况下，若可以用自然语言进行部分查询，向 AI 助手提问即可获得可用范围内数据的回答。
 
 ## 页面加载缓慢
 

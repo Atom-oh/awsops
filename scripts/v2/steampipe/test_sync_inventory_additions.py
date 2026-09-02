@@ -4,6 +4,8 @@ DescribeSnapshots from fetching public AWS snapshots.
 
 (ecs_service [g-01] landed via the concurrent merge — keyed by cluster+service — and is covered
 by scripts/v2/steampipe/test_sync_lambda_queries.py, so it is intentionally not re-tested here.)"""
+import pytest
+
 import sync_lambda  # PYTHONPATH must include scripts/v2/steampipe
 
 
@@ -262,3 +264,87 @@ def test_iam_role_query_carries_attached_policy_arns():
     sql, id_col, _rg = sync_lambda.QUERIES["iam_role"]
     assert "attached_policy_arns" in sql
     assert id_col == "name"
+
+
+def test_iam_role_hydrate_fallback_sql_is_the_query_minus_the_hydrate():
+    """Round-8 gate: a fleet whose aggregate role count exceeds the hydrate budget must not
+    permanently fail the whole iam_role sync — the fallback SQL is EXACTLY the primary query
+    with the hydrate column removed, so the base inventory never regresses and only the
+    drill-down column disappears (its consumer renders 'not synced yet')."""
+    sql, _id, _rg = sync_lambda.QUERIES["iam_role"]
+    fallback = sync_lambda.HYDRATE_FALLBACK_SQL["iam_role"]
+    assert "attached_policy_arns" not in fallback
+    assert fallback == sql.replace("attached_policy_arns, ", "")
+    # the hydrated attempt runs under a TIGHTER statement_timeout than the 240s default so
+    # the fallback + Aurora upserts still fit inside the 300s Lambda budget
+    assert sync_lambda.HYDRATE_STATEMENT_TIMEOUT == "180s"
+    assert sync_lambda.HYDRATE_FALLBACK_STATEMENT_TIMEOUT == "90s"
+
+
+def _fake_steampipe_factory(script, timeouts):
+    """script: list of ('raise'|rows) per successive query; timeouts collects each conn's
+    statement_timeout."""
+    state = {"i": 0}
+
+    class FakeConn:
+        def __init__(self):
+            self.columns = [{"name": "name"}, {"name": "region"}]
+            self.closed = False
+
+        def run(self, q):
+            step = script[state["i"]]
+            state["i"] += 1
+            if step == "raise":
+                raise RuntimeError("canceling statement due to statement timeout")
+            return step
+
+        def close(self):
+            self.closed = True
+
+    def fake(timeout="240s"):
+        timeouts.append(timeout)
+        return FakeConn()
+
+    return fake
+
+
+def test_hydrated_query_failure_falls_back_to_base_inventory(monkeypatch):
+    """Round-8 gate control flow: primary (hydrated, 180s) fails → ONE hydrate-free retry
+    (90s) succeeds, and the base rows come back — never a whole-type failure."""
+    timeouts = []
+    monkeypatch.setattr(
+        sync_lambda, "_steampipe",
+        _fake_steampipe_factory(["raise", [["r1", "global"]]], timeouts))
+    rows, cols = sync_lambda._run_steampipe_query(
+        "iam_role", sync_lambda.QUERIES["iam_role"][0])
+    assert rows == [["r1", "global"]] and cols == ["name", "region"]
+    assert timeouts == ["180s", "90s"]
+
+
+def test_non_hydrate_types_do_not_retry(monkeypatch):
+    timeouts = []
+    monkeypatch.setattr(
+        sync_lambda, "_steampipe", _fake_steampipe_factory(["raise"], timeouts))
+    with pytest.raises(RuntimeError):
+        sync_lambda._run_steampipe_query("iam_user", sync_lambda.QUERIES["iam_user"][0])
+    assert timeouts == ["240s"]
+
+
+def test_steampipe_conn_rejects_arbitrary_statement_timeouts(monkeypatch):
+    """_steampipe() interpolates the timeout into SQL — pin the closed set of allowed values
+    so a future call site can't accidentally open an injection/typo hole."""
+    calls = []
+
+    class FakeConn:
+        def run(self, q):
+            calls.append(q)
+
+    monkeypatch.setattr(sync_lambda.pg8000.native, "Connection", lambda **kw: FakeConn())
+    monkeypatch.setattr(sync_lambda, "_secret", lambda arn: "pw")
+    monkeypatch.setattr(sync_lambda, "_ssl_ctx", lambda: None)
+    monkeypatch.setenv("STEAMPIPE_SECRET_ARN", "arn:x")
+    monkeypatch.setenv("STEAMPIPE_HOST", "h")
+    sync_lambda._steampipe("180s")
+    assert calls == ["SET statement_timeout = '180s'"]
+    with pytest.raises(AssertionError):
+        sync_lambda._steampipe("999s")

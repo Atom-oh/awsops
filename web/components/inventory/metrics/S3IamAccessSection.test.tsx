@@ -62,6 +62,12 @@ describe('S3IamAccessSection conclusive gating (round-3)', () => {
     await waitFor(() => expect(screen.getByText(/마지막 iam_role sync가 성공하지 못했습니다/)).toBeTruthy());
     expect(screen.getByText('r1')).toBeTruthy(); // last-good data still listed
   });
+  it('run:null WITH matches renders the unverifiable-freshness note alongside the list (round-8)', async () => {
+    stub({ rows: [{ resource_id: 'r1', data: { attached_policy_arns: ['arn:aws:iam::aws:policy/AdministratorAccess'] } }], run: null });
+    render(<S3IamAccessSection />);
+    await waitFor(() => expect(screen.getByText(/sync 이력 정보가 없어/)).toBeTruthy());
+    expect(screen.getByText('r1')).toBeTruthy(); // the list still renders — caveated, not hidden
+  });
   it('403 renders the admin-only note, not a generic failure', async () => {
     stub({}, 403);
     render(<S3IamAccessSection />);

@@ -685,7 +685,7 @@ def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(
     adb = MainAurora()
     connections = iter([adb, FinalizerAurora()])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
-    monkeypatch.setattr(mod, "_steampipe", FakeSteampipe)
+    monkeypatch.setattr(mod, "_steampipe", lambda timeout="240s": FakeSteampipe())
     monkeypatch.setattr(mod, "_enabled_target_accounts", lambda adb: ["222222222222"])
     monkeypatch.setattr(mod, "_account_reachable", lambda account_id: False)
     mod.QUERIES["partial_account_test"] = ("SELECT id, region, account_id", "id", "region")
@@ -801,7 +801,7 @@ def test_zero_row_success_is_durable_across_later_failure(capsys, monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_steampipe", FakeSteampipe)
+    monkeypatch.setattr(mod, "_steampipe", lambda timeout="240s": FakeSteampipe())
     mod._ACCOUNT_CACHE["id"] = "111111111111"
     mod.QUERIES["zero_row_history_test"] = (
         "SELECT id, region, account_id",

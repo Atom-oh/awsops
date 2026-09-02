@@ -347,10 +347,14 @@ resource "aws_lambda_function" "inv_sync" {
   handler                        = "sync_lambda.lambda_handler"
   filename                       = data.archive_file.inv_sync_src[0].output_path
   source_code_hash               = data.archive_file.inv_sync_src[0].output_base64sha256
-  # 300s: headroom for per-row hydrate columns (iam_role.attached_policy_arns ≈ one
-  # ListAttachedRolePolicies per role) under the shared 2 req/s awsops_global limiter —
-  # 120s left ~240 sequential permits for ALL concurrent type syncs combined; 300s bounds
-  # a ~100-role account comfortably. Busier fleets tune the limiter fill_rate (ADR-021 knobs).
+  # 300s, split by sync_lambda.py: hydrate-carrying queries (iam_role.attached_policy_arns ≈
+  # one ListAttachedRolePolicies per role, and the aggregator makes that the role total across
+  # ALL connected accounts) get a 180s statement_timeout (≈360 aggregate hydrates at the shared
+  # 2 req/s awsops_global limiter when idle — less under concurrent type syncs), a hydrate-free
+  # fallback retry gets 90s (the base inventory never regresses to a whole-type failure), and
+  # ~30s remains for Aurora upserts/prune. Fleets beyond the hydrate budget see the
+  # inventory_sync_hydrate_fallback log event and tune the limiter fill_rate (ADR-021 knobs,
+  # 0.1–20) to restore the drill-down column.
   timeout                        = 300
   memory_size                    = 512
   layers                         = [aws_lambda_layer_version.inv_pg8000[0].arn]

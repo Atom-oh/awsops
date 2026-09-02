@@ -9,9 +9,11 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 // 'no role has S3 access' is never claimed. Reads the EXISTING /api/inventory/iam_role route — an
 // ADMIN-ONLY type: non-admins get a distinct permission note. Honest bounds:
 // - the LAST SYNC RUN's status gates every conclusion — a failed/partial run renders a
-//   stale-data banner and the empty state is never conclusive (an SCP-blocked hydrate fails
-//   the WHOLE iam_role run for all accounts, freezing last-good rows — the ADR-010 2026-09-02
-//   amendment's disclosed blast radius);
+//   stale-data banner, a MISSING ledger row renders an unverifiable-freshness note, and the
+//   empty state is never conclusive. A failed hydrate no longer fails the whole run: the sync
+//   retries hydrate-free (the base inventory stays live) and this section sees the absent
+//   column as "not synced yet" — the ADR-010 2026-09-02 amendment's disclosed degrade;
+//   whole-type last-good freeze remains only when the base query also fails;
 // - a full page (fetched cap+1) is labeled sampled and its empty state is non-conclusive;
 // - pre-sync rows (column absent) render "not synced yet"; a succeeded run with zero rows
 //   renders "no roles exist" (a different truth). Named export per the metrics convention.
@@ -97,6 +99,13 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
       {dataAsOf ? ` (${tt('기준:')} ${new Date(dataAsOf).toLocaleString()})` : ''}
     </p>
   ) : null;
+  // run:null with matches (a missing ledger row, e.g. pre-ADR-021 data): the list must not
+  // render as implicitly current — freshness is unverifiable, say so
+  const noLedgerNote = !state.loading && !state.err && state.run == null ? (
+    <p className="mb-1.5 text-[11.5px] text-amber-700">
+      {tt('sync 이력 정보가 없어 아래 목록의 최신 여부를 확인할 수 없습니다.')}
+    </p>
+  ) : null;
 
   if (state.loading) return <>{heading}<p className="text-[12px] text-ink-400">{tt('로딩 중…')}</p></>;
   if (state.forbidden) {
@@ -121,6 +130,7 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
     <>
       {heading}
       {staleBanner}
+      {noLedgerNote}
       <ul className="flex flex-col gap-1">
         {state.hits.map((h) => (
           <li key={h.name} className="flex items-center justify-between gap-2 text-[12px]">

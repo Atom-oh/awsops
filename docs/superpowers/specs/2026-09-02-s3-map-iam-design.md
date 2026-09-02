@@ -166,3 +166,28 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
 - The gap-audit L242 tick's '버킷 계정 스코프' wording is softened to the actual contract
   (s3 rows carry no account_id today — the prop is a documented future-sync hook, and the
   'self' default is exactly where host iam_role rows live).
+
+## Round-8 corrections (review-driven)
+
+- **The hydrate budget closes via a hydrate-free fallback (the gate MAJOR)** — the verified
+  arithmetic (aggregator = the role total across ALL connected accounts; 2 req/s shared
+  limiter; 240s ≈ ~480 hydrates, less under concurrent syncs) meant fleets above ~400 roles
+  hit a PERMANENT whole-type iam_role failure — a regression to a pre-existing feature with
+  no run-status surface on the general IAM page. The fix restructures the failure mode
+  instead of just re-sizing it: the hydrated query runs under a tighter 180s statement
+  timeout (~360 aggregate hydrates when the limiter is idle), and ANY failure triggers one
+  retry with the SAME query minus the hydrate column (90s) — the base iam_role inventory
+  never regresses, the run records succeeded, and only the drill-down column is absent,
+  which S3IamAccessSection already renders as the non-conclusive "not synced" state. An
+  `inventory_sync_hydrate_fallback` log event names the limiter `fill_rate` knob (0.1–20,
+  ADR-021) as the operator's restore path. Whole-type last-good freeze now applies ONLY when
+  the base query also fails. ADR-010/BASELINE/iam.md(4)/faq(4)/guides/CHANGELOG/audit-note
+  all restate the corrected semantics (iam_user.mfa_enabled keeps the no-fallback whole-type
+  semantics — stated explicitly). Tests pin: fallback SQL ≡ primary minus the column, the
+  180s/90s split, the retry control flow, no retry for non-hydrate types, and the
+  statement_timeout closed-set guard.
+- **run:null with matches is caveated (MINOR)** — a missing ledger row now renders an
+  unverifiable-freshness note above the list instead of an implicitly-current list.
+- Noted, not shipped (MINOR): client-clock freshness (`Date.now()` can misclassify under
+  skew — server-side classification is the tighter follow-up); a 500-row full-payload fetch
+  where a projection would do (data-minimization follow-up).
