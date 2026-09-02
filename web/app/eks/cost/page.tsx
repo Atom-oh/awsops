@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import CostBasisPanel from '@/components/eks/CostBasisPanel';
 import { DollarSign, CalendarDays, Boxes, Crown, Search } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -226,15 +227,15 @@ export default function EksFleetCostPage() {
         right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
       <div className="px-8 py-8 flex flex-col gap-6">
-        {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
-        {!results && !err && <div className="text-ink-400">로딩 중…</div>}
+        {err && <div className="text-[13px] text-rose-600">{tt('로드 실패:')} {err}</div>}
+        {!results && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
 
         {results && !err && (
           <>
             {results.length === 0 ? (
               <Card>
                 <p className="text-[13px] text-ink-600">
-                  연결된 EKS 클러스터가 없습니다 — EKS 페이지에서 클러스터를 등록하세요.
+                  {tt('연결된 EKS 클러스터가 없습니다 — EKS 페이지에서 클러스터를 등록하세요.')}
                 </p>
               </Card>
             ) : (
@@ -243,11 +244,11 @@ export default function EksFleetCostPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {results.map(({ cluster, data }) =>
                     data === null ? (
-                      <Badge key={cluster} tone="neutral" variant="soft">{cluster}: 미가용</Badge>
+                      <Badge key={cluster} tone="neutral" variant="soft">{cluster}: {tt('미가용')}</Badge>
                     ) : data.source === 'request-estimate' ? (
-                      <Badge key={cluster} tone="brand" variant="soft" dot>{cluster}: 요청 기반 추정</Badge>
+                      <Badge key={cluster} tone="brand" variant="soft" dot>{cluster}: {tt('요청 기반 추정')}</Badge>
                     ) : (
-                      <Badge key={cluster} tone="positive" variant="soft" dot>{cluster}: OpenCost 실측</Badge>
+                      <Badge key={cluster} tone="positive" variant="soft" dot>{cluster}: {tt('OpenCost 실측')}</Badge>
                     ),
                   )}
                 </div>
@@ -258,7 +259,7 @@ export default function EksFleetCostPage() {
 
                 {anyEstimate && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-[12px] text-amber-700">
-                    일부 클러스터는 OpenCost 미가용 — Pod 리소스 <b>요청(request) 기반 추정</b>입니다 (요청 × 단가, 실측 아님). 정확한 비용은 OpenCost 설치 후 표시됩니다.
+                    {tt('일부 클러스터는 OpenCost 미가용 — Pod 리소스 요청(request) 기반 추정입니다 (요청 × 단가, 실측 아님). 정확한 비용은 OpenCost 설치 후 표시됩니다.')}
                   </div>
                 )}
 
@@ -266,8 +267,8 @@ export default function EksFleetCostPage() {
                   <Card>
                     <p className="text-[13px] text-ink-600">
                       {sel === ALL
-                        ? '비용 데이터를 사용할 수 있는 클러스터가 없습니다 — 각 클러스터의 OpenCost 설치 상태를 확인하세요.'
-                        : `${sel}: 비용 데이터 미가용 — 클러스터의 OpenCost 설치 상태를 확인하세요.`}
+                        ? tt('비용 데이터를 사용할 수 있는 클러스터가 없습니다 — 각 클러스터의 OpenCost 설치 상태를 확인하세요.')
+                        : `${sel}: ${tt('비용 데이터 미가용 — 클러스터의 OpenCost 설치 상태를 확인하세요.')}`}
                     </p>
                   </Card>
                 ) : (
@@ -298,7 +299,7 @@ export default function EksFleetCostPage() {
                       <div className="w-full max-w-[280px]">
                         <Input
                           inputSize="sm"
-                          placeholder="검색…"
+                          placeholder={tt('검색…')}
                           value={query}
                           onChange={(e) => setQuery(e.target.value)}
                           icon={<Search className="h-3.5 w-3.5" />}
@@ -361,6 +362,9 @@ export default function EksFleetCostPage() {
         )}
 
         {clusterNames.length > 0 && <PodTransferSection clusters={clusterNames} />}
+
+        {/* Gap L217: collapsible calculation-transparency panel — always available. */}
+        <CostBasisPanel />
       </div>
 
       <DetailPanel

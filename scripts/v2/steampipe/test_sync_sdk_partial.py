@@ -126,6 +126,12 @@ def test_s3_security_collector_skips_transiently_degraded_row_and_discloses_unkn
         def get_bucket_logging(self, Bucket):
             raise _client_error("SlowDown", "GetBucketLogging")
 
+        def get_bucket_tagging(self, Bucket):
+            raise _client_error("NoSuchTagSet", "GetBucketTagging")
+
+        def get_bucket_policy_status(self, Bucket):
+            raise _client_error("NoSuchBucketPolicy", "GetBucketPolicyStatus")
+
     rows, id_col, region_col, failures = sync_lambda._fetch_s3_security(FakeS3())
 
     assert id_col == "name"

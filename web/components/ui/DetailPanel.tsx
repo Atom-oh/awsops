@@ -14,6 +14,7 @@ import { EbsRelatedSection } from '@/components/inventory/metrics/EbsRelatedSect
 import { RdsTrendsSection } from '@/components/inventory/metrics/RdsTrendsSection';
 import { LiveTrendsSection } from '@/components/inventory/metrics/LiveTrendsSection';
 import { RdsSgRulesSection } from '@/components/inventory/metrics/RdsSgRulesSection';
+import { EbsVerdictBanners } from '@/components/inventory/metrics/EbsVerdictBanners';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // v1-parity: each detail section is a titled card with a leading icon. Section labels are a small
@@ -114,7 +115,8 @@ function copyText(fmt: DetailValue): string | null {
     case 'tags':
       return fmt.entries!.map(([k, v]) => `${k}=${v}`).join('\n') || null;
     case 'idlist':
-      return fmt.items!.map((it) => [it.id, it.name, it.extra].filter(Boolean).join(' ')).join('\n') || null;
+      // include the flag — a copied Attachments list must not drop DeleteOnTermination/BLACKHOLE.
+      return fmt.items!.map((it) => [it.id, it.name, it.extra, it.flag].filter(Boolean).join(' ')).join('\n') || null;
     default:
       return fmt.text?.trim() ? fmt.text : null;
   }
@@ -369,6 +371,7 @@ export default function DetailPanel({
         </header>
         {actions && <div className="border-b border-ink-100 px-4 py-3">{actions}</div>}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          {ebsVolumeId != null && <EbsVerdictBanners data={data} />}
           {groups.map((group, gi) => {
             // v1-parity: each section is a rounded card with a leading icon + title. An unlabelled
             // group (no spec/sections) renders as a plain card without the header row.

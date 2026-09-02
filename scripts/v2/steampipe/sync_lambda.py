@@ -335,6 +335,23 @@ QUERIES = {
         "name",
         "region",
     ),
+    "waf_rule_group": (
+        # gap L253 — columns verified against the pinned plugin source
+        # (v0.142.0 table_aws_wafv2_rule_group.go); List needs no key quals.
+        "SELECT name, region, account_id, id, arn, scope, capacity, description, rules, "
+        "visibility_config, tags "
+        "FROM aws_wafv2_rule_group ORDER BY name",
+        "name",
+        "region",
+    ),
+    "waf_ip_set": (
+        # gap L253 — columns verified against v0.142.0 table_aws_wafv2_ip_set.go.
+        "SELECT name, region, account_id, id, arn, scope, description, ip_address_version, "
+        "addresses, tags "
+        "FROM aws_wafv2_ip_set ORDER BY name",
+        "name",
+        "region",
+    ),
     "cloudwatch_alarm": (
         "SELECT name, region, account_id, arn, state_value, state_reason, state_updated_timestamp, "
         "namespace, metric_name, comparison_operator, threshold, period, evaluation_periods, statistic, "
@@ -347,7 +364,10 @@ QUERIES = {
         "SELECT name, region, account_id, arn, home_region, is_multi_region_trail, is_logging, "
         "log_file_validation_enabled, s3_bucket_name, s3_key_prefix, sns_topic_arn, kms_key_id, "
         "log_group_arn, is_organization_trail, include_global_service_events, has_custom_event_selectors, "
-        "has_insight_selectors, latest_delivery_time, latest_delivery_error, start_logging_time, tags "
+        "has_insight_selectors, latest_delivery_time, latest_delivery_error, start_logging_time, "
+        # L189 detail fields (all verified present in the pinned plugin aws@0.142.0)
+        "cloudwatch_logs_role_arn, latest_cloudwatch_logs_delivery_time, latest_cloudwatch_logs_delivery_error, "
+        "latest_digest_delivery_time, latest_digest_delivery_error, stop_logging_time, tags "
         "FROM aws_cloudtrail_trail ORDER BY name",
         "name",
         "region",
@@ -577,6 +597,9 @@ def _fetch_s3_public_access(s3=None):
     GetPublicAccessBlock, and ONE denied bucket fails the WHOLE table query — so source via boto3
     and tolerate per-bucket AccessDenied. STRICTLY READ-ONLY (List/Get only).
     NoSuchPublicAccessBlock => no PAB configured => blocks are effectively False (a real signal);
+    NoSuchBucketPolicy => no bucket policy at all => policy is definitively NOT public => False
+    (kept in lockstep with _fetch_s3_security's identical call — the two types must never carry
+    different semantics for the same column on the same bucket);
     AccessDenied => genuinely unknown => leave None (FINDING_SQL treats None as non-public)."""
     s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
     rows = []
@@ -630,14 +653,17 @@ def _fetch_s3_public_access(s3=None):
                 s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code")
-            if code in _S3_STEADY_DENIAL_CODES:
+            if code == "NoSuchBucketPolicy":
+                # NoSuchBucketPolicy → definitively not public via policy (False, in
+                # lockstep with _fetch_s3_security's gap-L240 handler).
+                rec["bucket_policy_is_public"] = False
+            elif code in _S3_STEADY_DENIAL_CODES:
                 # steady-state denial → unknown (None), uncounted as a failure but disclosed
                 unknown_attrs += 1
                 denied_attrs.append("bucket_policy_is_public")
-            elif code != "NoSuchBucketPolicy":
+            else:
                 failures.append(_safe_sdk_failure_type(e))
                 transient_failed = True
-            # NoSuchBucketPolicy → expected absence, leave None and disclose nothing
         if transient_failed:
             # A transiently-degraded rec must never overwrite the bucket's last-known-good
             # row content: the upsert runs BEFORE sdk_partial gates the prunes, so writing
@@ -686,6 +712,7 @@ def _fetch_s3_security(s3=None):
             "arn": f"arn:aws:s3:::{name}",
             "creation_date": b.get("CreationDate").isoformat() if b.get("CreationDate") else None,
             "versioning_enabled": None, "encryption": None, "logging_enabled": None,
+            "bucket_policy_is_public": None,
         }
         try:
             v = s3.get_bucket_versioning(Bucket=name)
@@ -727,6 +754,43 @@ def _fetch_s3_security(s3=None):
                 # steady-state denial → unknown (None), uncounted as a failure but disclosed
                 unknown_attrs += 1
                 denied_attrs.append("logging_enabled")
+            else:
+                failures.append(_safe_sdk_failure_type(e))
+                transient_failed = True
+        try:
+            # gap L243: per-bucket tags for the detail Tags section. NoSuchTagSet is a
+            # DEFINITIVE "no tags" -> {} (v1 renders 'No tags'); a steady denial leaves the
+            # key absent (unknown — the panel shows nothing, never a fabricated empty list)
+            # and is disclosed via attributes_unknown; transient failures skip the rec so a
+            # degraded row never overwrites last-known-good tags.
+            tagset = s3.get_bucket_tagging(Bucket=name).get("TagSet", []) or []
+            rec["tags"] = {t.get("Key", ""): t.get("Value", "") for t in tagset if t.get("Key")}
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code")
+            if code == "NoSuchTagSet":
+                rec["tags"] = {}
+            elif code in _S3_STEADY_DENIAL_CODES:
+                unknown_attrs += 1
+                denied_attrs.append("tags")
+            else:
+                failures.append(_safe_sdk_failure_type(e))
+                transient_failed = True
+        try:
+            # gap L240: the Policy Private/Public flag bars chart this off the bucket row
+            # itself (the separate s3_public_access fetch keeps the public-access-block
+            # detail). NoSuchBucketPolicy (no bucket policy at all — the common case) is a
+            # DEFINITIVE "not public via policy" → False (the _fetch_s3_public_access
+            # NoSuchPublicAccessBlock→False precedent; its policy-status handler is kept in
+            # lockstep); a steady denial → None (unknown), disclosed via attributes_unknown.
+            rec["bucket_policy_is_public"] = (
+                s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code")
+            if code == "NoSuchBucketPolicy":
+                rec["bucket_policy_is_public"] = False
+            elif code in _S3_STEADY_DENIAL_CODES:
+                unknown_attrs += 1
+                denied_attrs.append("bucket_policy_is_public")
             else:
                 failures.append(_safe_sdk_failure_type(e))
                 transient_failed = True

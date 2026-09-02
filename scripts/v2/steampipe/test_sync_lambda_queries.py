@@ -1549,3 +1549,14 @@ def test_sync_reraises_base_exception_after_best_effort_cleanup_without_terminal
     assert caught.value is termination
     assert cleanup == ["unlock", "close"]
     assert capsys.readouterr().out == ""
+def test_cloudtrail_query_carries_the_l189_delivery_columns():
+    """Gap L189: CW-Logs/digest delivery + stop_logging_time detail fields (all present in the
+    pinned plugin aws@0.142.0)."""
+    mod = load_sync_lambda()
+    sql = mod.QUERIES["cloudtrail"][0]
+    for col in (
+        "cloudwatch_logs_role_arn", "latest_cloudwatch_logs_delivery_time",
+        "latest_cloudwatch_logs_delivery_error", "latest_digest_delivery_time",
+        "latest_digest_delivery_error", "stop_logging_time",
+    ):
+        assert col in sql, col

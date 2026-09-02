@@ -148,15 +148,25 @@ def test_no_public_access_block_marks_blocks_false():
 
 
 def test_no_bucket_policy_is_expected_absence_not_a_partial_failure():
+    # NoSuchBucketPolicy is a definitive "not public via policy" (False, lockstep with
+    # _fetch_s3_security's gap-L240 handler) — an expected absence, never a partial failure.
     rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(
         FakeS3(["private"], no_policy=["private"])
     )
-    assert rows[0]["bucket_policy_is_public"] is None
+    assert rows[0]["bucket_policy_is_public"] is False
     assert failures == {
         "failure_count": 0,
         "failure_types": [],
         "unknown_attribute_count": 0,
     }
+
+
+def test_no_bucket_policy_is_definitively_not_public():
+    """NoSuchBucketPolicy => False — kept in LOCKSTEP with _fetch_s3_security's identical call:
+    the same column on the same bucket must never carry different semantics across the two
+    inventory types (/inventory/s3 vs /inventory/s3_public_access)."""
+    rows, _id, _rg, _meta = sync_lambda._fetch_s3_public_access(FakeS3(["bare"], no_policy=["bare"]))
+    assert rows[0]["bucket_policy_is_public"] is False
 
 
 def test_registered_in_sdk_syncs():
