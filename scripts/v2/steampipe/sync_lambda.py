@@ -631,7 +631,11 @@ def _fetch_s3_public_access(s3=None):
             rec["ignore_public_acls"] = cfg.get("IgnorePublicAcls")
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code")
-            if code == "NoSuchPublicAccessBlock":
+            # The live API returns "NoSuchPublicAccessBlockConfiguration"; the short
+            # "NoSuchPublicAccessBlock" is kept for compatibility. Matching only the short
+            # form made every PAB-less bucket (the common case) count as a transient
+            # failure — rec skipped, run permanently partial, last_success_at frozen.
+            if code in ("NoSuchPublicAccessBlockConfiguration", "NoSuchPublicAccessBlock"):
                 rec["block_public_acls"] = False
                 rec["block_public_policy"] = False
                 rec["restrict_public_buckets"] = False
