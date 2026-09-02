@@ -121,3 +121,23 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   reads finished_at, which a failed run also stamps).
 - Follow-ups noted, not shipped: an age gate on the conclusive empty state (a years-old
   succeeded run still reads conclusive); PAB/ACL-informed at-risk tile state.
+
+## Round-5 corrections (review-driven)
+
+- **Freshness bound on the conclusive all-clear (the gate MAJOR)** — a months-old succeeded
+  run no longer renders a conclusive security conclusion: conclusive now requires the run to
+  be succeeded, untruncated AND within 24h, and a data-as-of timestamp rides the footer.
+  Tests pin the stale-succeeded → non-conclusive path.
+- **The hard-timeout ledger hole is closed at the DB (the gate MAJOR)** — `_steampipe()` sets
+  `statement_timeout = 240s` (below the 300s Lambda budget): a runaway hydrate query is
+  killed by Postgres, control returns, and the run records `failed` with last-good rows
+  preserved — instead of the process dying with the ledger stuck non-terminal.
+- **BASELINE.md ADR-010 row amended in the same PR (the gate MAJOR)** — the dated
+  flat-ban→risk-accept change is now live per BASELINE §1's anti-drift rule; the ADR's
+  Status line records the amendment and §2's first bullet cross-references it.
+- Minors: the misleading normalizeAccount comment corrected (the generic route has no
+  host-id normalization — a future account-stamping s3 sync must map to 'self');
+  troubleshooting gains a distinct ListAttachedRolePolicies row; the 8 reviewer/agent rule
+  files reference the amendment; s3.md's conclusive condition states 24h+untruncated in 4
+  locales; CHANGELOG EN gains the unknown-first clause (KO parity); the EN iam.md box drops
+  the unintroduced summary-query sentence.

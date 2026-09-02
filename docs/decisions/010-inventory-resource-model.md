@@ -1,7 +1,7 @@
 # ADR-010: 인벤토리 · 리소스 모델 / Inventory · Resource Model
 
 ## 상태 / Status
-**Accepted (2026-06-22) — consolidated.** consolidates: 003 (SCP 차단 컬럼 처리), 007 (리소스 인벤토리 베이스라인)
+**Accepted (2026-06-22) — consolidated.** consolidates: 003 (SCP 차단 컬럼 처리), 007 (리소스 인벤토리 베이스라인) amended 2026-09-02 (SCP-blocked hydrate-column rule: flat ban → risk-accept-and-disclose; `iam_role.attached_policy_arns` reintroduced — see §2) / 개정 2026-09-02 (SCP 차단 하이드레이트 컬럼 규칙 완화 — §2 참조).
 
 ## 컨텍스트 / Context
 
@@ -27,7 +27,7 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
 ### 2. SCP 차단 컬럼 처리 (쿼리 견고성) / SCP-blocked column handling (query robustness)
 - `aws.spc`(Steampipe 커넥션 설정)에서 테이블 수준 오류를 위한 `ignore_error_codes`를 설정한다.
   (Set `ignore_error_codes` in `aws.spc` (the Steampipe connection config) for table-level errors.)
-- **리스트 쿼리에서 SCP 차단 컬럼을 제거**한다 — `mfa_enabled`, `attached_policy_arns`, 리스트에서의 `tags` 등. 리스트는 다수 리소스를 하이드레이트하므로 단일 차단 컬럼이 전체 쿼리를 실패시킨다.
+- **리스트 쿼리에서 SCP 차단 컬럼을 제거**한다(기본 규칙 — 2026-09-02 개정으로 명시적 위험 수용 예외 허용, 아래 개정 항목 참조) — `mfa_enabled`, `attached_policy_arns`, 리스트에서의 `tags` 등. 리스트는 다수 리소스를 하이드레이트하므로 단일 차단 컬럼이 전체 쿼리를 실패시킨다.
   (**Remove SCP-blocked columns from list queries** — `mfa_enabled`, `attached_policy_arns`, `tags` in lists, etc. Lists hydrate many resources, so one blocked column fails the whole query.)
 - **상세 쿼리에서는 차단 컬럼을 유지**한다 — 단일 리소스 조회라 실패 가능성이 낮다.
   (**Keep blocked columns in detail queries** — single-resource lookups, lower failure probability.)

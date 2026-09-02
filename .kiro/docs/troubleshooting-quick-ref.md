@@ -5,7 +5,7 @@
 | 증상 | 원인 | 해결 |
 |------|------|------|
 | 쿼리 실패 (column not found) | 컬럼명 오류 | `information_schema.columns`로 확인 |
-| 전체 쿼리 실패 (hydrate error) | SCP 차단 컬럼 | 해당 컬럼 제거 (mfa_enabled, attached_policy_arns, Lambda tags) |
+| 전체 쿼리 실패 (hydrate error) | SCP 차단 컬럼 | 해당 컬럼 제거 (mfa_enabled, attached_policy_arns, Lambda tags) | (ADR-010 2026-09-02 개정: 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
 | 연결 거부 | Steampipe 미실행 | `steampipe service start --database-listen network --database-port 9193` |
 | 느린 쿼리 (4s+) | CLI 사용 중 | pg Pool 사용 확인 (steampipe.ts) |
 

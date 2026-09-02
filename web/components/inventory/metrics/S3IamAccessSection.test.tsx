@@ -46,8 +46,13 @@ describe('S3IamAccessSection conclusive gating (round-3)', () => {
     render(<S3IamAccessSection />);
     await waitFor(() => expect(screen.getByText(/확정 아님/)).toBeTruthy());
   });
-  it('a succeeded untruncated run with zero matches renders the matched-set-framed conclusive line', async () => {
-    stub({ rows: [{ resource_id: 'r1', data: { attached_policy_arns: ['arn:aws:iam::aws:policy/AmazonEC2FullAccess'] } }], run: { status: 'succeeded', finished_at: null } });
+  it('a STALE succeeded run (>24h) with zero matches is NON-conclusive (freshness bound)', async () => {
+    stub({ rows: [{ resource_id: 'r1', data: { attached_policy_arns: ['arn:aws:iam::aws:policy/AmazonEC2FullAccess'] } }], run: { status: 'succeeded', finished_at: new Date(Date.now() - 48 * 3600_000).toISOString() } });
+    render(<S3IamAccessSection />);
+    await waitFor(() => expect(screen.getByText(/확정 아님/)).toBeTruthy());
+  });
+  it('a FRESH succeeded untruncated run with zero matches renders the matched-set-framed conclusive line', async () => {
+    stub({ rows: [{ resource_id: 'r1', data: { attached_policy_arns: ['arn:aws:iam::aws:policy/AmazonEC2FullAccess'] } }], run: { status: 'succeeded', finished_at: new Date().toISOString() } });
     render(<S3IamAccessSection />);
     await waitFor(() => expect(screen.getByText(/검사 대상 관리형 정책/)).toBeTruthy());
   });

@@ -47,11 +47,11 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
 
   useEffect(() => {
     let alive = true;
-    // s3 rows are host-collected and carry no account_id today, so accountId is normally
-    // absent (→ the route's 'self' default = exactly where host iam_role rows live). If a
-    // future s3 sync adds one, it threads through as-is — the inbound route's
-    // normalizeAccount handles the host-id→'self' mapping server-side for that route; here
-    // we simply pass what the row carries.
+    // s3 rows are host-collected (SDK collector) and carry no account_id today, so accountId
+    // is normally absent (→ the route's 'self' default = exactly where host iam_role rows
+    // live). CAUTION for a future s3 sync that stamps the raw host 12-digit id: the generic
+    // inventory route has NO host-id→'self' normalization (only security_group/inbound and
+    // ebs_volume/related do), so map it to 'self' here before threading.
     const scope = accountId ? `&accounts=${encodeURIComponent(accountId)}` : '';
     fetch(`/api/inventory/iam_role?limit=${ROW_CAP}${scope}`)
       .then((r) => {
@@ -79,6 +79,11 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
   }, [accountId]);
 
   const degraded = state.run != null && state.run.status !== 'succeeded';
+  // freshness bound (round-5 gate): a months-old 'succeeded' run must not keep rendering a
+  // conclusive security all-clear — conclusive requires the run to be within 24h.
+  const FRESH_MS = 24 * 3600_000;
+  const fresh = state.run?.status === 'succeeded' && !!state.run.finished_at
+    && Date.now() - new Date(state.run.finished_at).getTime() < FRESH_MS;
   const heading = (
     <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
       {tt('S3 접근 권한 보유 IAM Role')}{state.truncated ? ` (${tt('표본 기준')})` : ''}
@@ -106,7 +111,7 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
   if (state.hits.length === 0) {
     // conclusive requires a SUCCEEDED, untruncated run — run:null (no ledger row, e.g.
     // pre-ADR-021 data) is NOT healthy enough for an all-clear
-    const conclusive = !state.truncated && state.run?.status === 'succeeded';
+    const conclusive = !state.truncated && fresh;
     return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{conclusive ? tt('검사 대상 관리형 정책(AmazonS3*/Admin/PowerUser/ReadOnly)에 일치하는 role이 없습니다 — 다른 정책 경유 S3 접근은 별도 확인 필요.') : tt('표본/마지막 성공 데이터 내 일치하는 role이 없습니다 — 확정 아님.')}</p></>;
   }
   return (
@@ -121,7 +126,7 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
           </li>
         ))}
       </ul>
-      <p className="mt-1.5 text-[10.5px] text-ink-400">{tt('AWS 관리형 정책 기준 (인라인 정책·버킷 정책 경유 접근은 미포함) · 최대 30개')}</p>
+      <p className="mt-1.5 text-[10.5px] text-ink-400">{tt('AWS 관리형 정책 기준 (인라인 정책·버킷 정책 경유 접근은 미포함) · 최대 30개')}{state.run?.finished_at ? ` · ${tt('기준:')} ${new Date(state.run.finished_at).toLocaleString()}` : ''}</p>
     </>
   );
 }

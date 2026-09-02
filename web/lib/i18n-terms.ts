@@ -59,6 +59,7 @@ export const TERMS: Record<string, Pair> = {
   '표본/마지막 성공 데이터 내 일치하는 role이 없습니다 — 확정 아님.': { en: 'No matching role in the sampled/last-successful data — not conclusive.', zh: '在样本/最近成功的数据中没有匹配的角色 — 并非定论。', ja: 'サンプル/最終成功データ内に一致するロールはありません — 確定ではありません。' },
   'AWS 관리형 정책 기준 (인라인 정책·버킷 정책 경유 접근은 미포함) · 최대 30개': { en: 'AWS managed policies only (inline policies and bucket-policy-granted access are not included) · max 30', zh: '仅基于 AWS 托管策略（不含内联策略与经由桶策略授予的访问）· 最多 30 个', ja: 'AWS マネージドポリシー基準（インラインポリシー・バケットポリシー経由のアクセスは含みません）・最大 30 件' },
   '검사 대상 관리형 정책(AmazonS3*/Admin/PowerUser/ReadOnly)에 일치하는 role이 없습니다 — 다른 정책 경유 S3 접근은 별도 확인 필요.': { en: 'No role matched the checked managed policies (AmazonS3*/Admin/PowerUser/ReadOnly) — S3 access via other policies needs separate review.', zh: '没有角色匹配所检查的托管策略（AmazonS3*/Admin/PowerUser/ReadOnly）— 经由其他策略的 S3 访问需另行确认。', ja: '検査対象のマネージドポリシー（AmazonS3*/Admin/PowerUser/ReadOnly）に一致するロールはありません — 他のポリシー経由の S3 アクセスは別途確認が必要です。' },
+  '기준:': { en: 'as of:', zh: '数据时间：', ja: '基準:' },
   '관리자 전용 데이터입니다 (iam_role 인벤토리 조회 권한 필요).': { en: 'Admin-only data (requires iam_role inventory access).', zh: '仅管理员数据（需要 iam_role 库存查看权限）。', ja: '管理者専用データです（iam_role インベントリの閲覧権限が必要）。' },
   '리전별 버킷 맵': { en: 'Bucket Map by Region', zh: '按区域的存储桶地图', ja: 'リージョン別バケットマップ' },
   'S3 접근 권한 보유 IAM Role': { en: 'IAM Roles with S3 Access', zh: '拥有 S3 访问权限的 IAM 角色', ja: 'S3 アクセス権限を持つ IAM ロール' },

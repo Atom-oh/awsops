@@ -27,7 +27,8 @@ steampipe query "SELECT column_name FROM information_schema.columns WHERE table_
 |-----------|------|------|
 | `iam:ListMFADevices` | mfa_enabled 컬럼 조회 실패 → 전체 쿼리 실패 | mfa_enabled 참조 제거 |
 | `lambda:GetFunction` | tags 컬럼 hydrate 실패 → 전체 쿼리 실패 | tags 참조 제거 (list 쿼리) |
-| `iam:ListAttachedUserPolicies` | attached_policy_arns 조회 실패 | 컬럼 제거 또는 ADR-010 2026-09-02 개정 경로로 위험 수용·공지 (iam_role.attached_policy_arns는 후자 — SCP 차단 시 해당 타입 run 전체 failed·last-good 동결) |
+| `iam:ListAttachedUserPolicies` | iam_user attached_policy_arns 조회 실패 | 컬럼 제거 (기본 규칙) |
+| `iam:ListAttachedRolePolicies` | iam_role attached_policy_arns 조회 실패 | ADR-010 2026-09-02 개정 경로로 위험 수용·공지됨 — SCP 차단 시 해당 타입 run 전체 failed·last-good 동결 |
 
 **aws.spc 설정으로 에러 무시:**
 ```hcl

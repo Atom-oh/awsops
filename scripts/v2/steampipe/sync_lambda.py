@@ -890,9 +890,16 @@ def _aurora():
 
 
 def _steampipe():
-    return pg8000.native.Connection(user="steampipe", password=_secret(os.environ["STEAMPIPE_SECRET_ARN"]).strip(),
+    conn = pg8000.native.Connection(user="steampipe", password=_secret(os.environ["STEAMPIPE_SECRET_ARN"]).strip(),
                                     host=os.environ["STEAMPIPE_HOST"], database="steampipe",
                                     port=9193, ssl_context=_ssl_ctx())
+    # Remaining-time guard (round-5 gate, with the iam_role hydrate column): a query that
+    # outlives the Lambda would hard-timeout the process BEFORE the failure handler runs,
+    # leaving the ledger row 'running' forever. statement_timeout below the 300s Lambda
+    # budget makes the DB kill the query first — control returns, the run records 'failed',
+    # and last-good rows stay preserved (ADR-010 2026-09-02 amendment semantics).
+    conn.run("SET statement_timeout = '240s'")
+    return conn
 
 
 _ACCT_RE = re.compile(r"^\d{12}$")
