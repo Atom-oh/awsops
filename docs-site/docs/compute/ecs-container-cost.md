@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 아카이브 문서 — v2에는 이 페이지가 없음
-이 문서는 v1의 전용 **ECS Container Cost** 페이지(통계 카드, 차트, "Cost Calculation Basis" 토글 포함)를 설명합니다. **v2에 전용 페이지는 없고 대응 기능이 `/inventory/ecs_task` 인벤토리 뷰에 있습니다**: **Cost/Day, Cost/Mo** 컬럼, 비용 KPI 타일, 그리고 테이블 하단의 접이식 **비용 계산 근거** 패널(v1 'Cost Calculation Basis' 대응). 컬럼 값은, 이 값은 CloudWatch Container Insights의 사용량 메트릭이 아니라 **태스크 정의에 할당된 cpu/memory로 계산한 정적(static) 추정치**입니다(`web/lib/inventory-derived.ts`의 `ecs_task` deriver — 단가 상수는 `web/lib/cost-basis.ts` 단일 소스). 아래 **가격 상수·계산 공식**(`$0.04656`/`$0.00511`, `(CPU units/1024)×단가×24 + (MB/1024)×단가×24`)은 그 정적 추정치를 만드는 실제 로직과 일치해 정확합니다 — 손대지 마세요. 이 문서의 차트와 "CloudWatch Container Insights 메트릭 기반으로 계산"이라는 서술은 v1 전용이며 v2에는 없습니다(v2 추정은 정적 상수 기반이며, 임시 스토리지 단가는 미반영).
+:::caution v1 아카이브 문서 — v2 대응 기능은 /inventory/ecs_task
+이 문서는 v1의 전용 **ECS Container Cost** 페이지(통계 카드, 차트, "Cost Calculation Basis" 토글 포함)를 설명합니다. **v2에 전용 페이지는 없고 대응 기능이 `/inventory/ecs_task` 인벤토리 뷰에 있습니다**: **Cost/Day, Cost/Mo** 컬럼, '일일 비용 합 (est.)' KPI 타일, 그리고 테이블 하단의 접이식 **비용 계산 근거** 패널(v1 'Cost Calculation Basis' 대응). 컬럼 값은 CloudWatch Container Insights의 사용량 메트릭이 아니라 **태스크 정의에 할당된 cpu/memory로 계산한 정적(static) 추정치**입니다(`web/lib/inventory-derived.ts`의 `ecs_task` deriver — 단가 상수는 `web/lib/cost-basis.ts` 단일 소스). 아래 **가격 상수·계산 공식**(`$0.04656`/`$0.00511`, `(CPU units/1024)×단가×24 + (MB/1024)×단가×24`)은 그 정적 추정치를 만드는 실제 로직과 일치해 정확합니다 — 손대지 마세요. 이 문서의 차트와 "CloudWatch Container Insights 메트릭 기반으로 계산"이라는 서술은 v1 전용이며 v2에는 없습니다(v2 추정은 정적 상수 기반이며, 임시 스토리지 단가는 미반영).
 :::
 
 ECS Fargate 태스크의 비용을 분석하는 페이지입니다. Fargate 가격과 CloudWatch Container Insights 메트릭을 기반으로 비용을 계산합니다.

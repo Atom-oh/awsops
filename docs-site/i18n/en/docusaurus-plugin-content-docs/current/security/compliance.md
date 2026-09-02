@@ -72,7 +72,7 @@ Compares the number of failures (Alarm) by section. Focus on sections with the m
 
 ## Completion Email Notification
 
-When a benchmark run completes, an SNS email is sent with the benchmark name, scope, total/passed/failed (Alarm) counts, the pass rate, and a `/compliance` link. It uses the same SNS topic/subscriptions as the AI-diagnosis notifications (gated by `diagnosis_notify_enabled`), and the admin pause switch (diagnosis email pause) silences it too. A notification failure never affects the benchmark result (best-effort).
+When a benchmark run **successfully** completes (failed runs send nothing), an SNS email is sent with the benchmark name, scope, total/passed/failed (Alarm) counts, the pass rate, and a `/compliance` link. It uses the same SNS topic/subscriptions as the AI-diagnosis notifications (gated by `diagnosis_notify_enabled`), and the admin pause switch (diagnosis email pause) silences it too. Mail for the same benchmark is limited to one per 60 minutes (re-runs don't re-blast). A notification failure never affects the benchmark result (best-effort).
 
 ## Section Details
 

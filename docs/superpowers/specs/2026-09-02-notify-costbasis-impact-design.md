@@ -9,17 +9,24 @@ email), L194 (container-cost Cost Calculation Basis panel), L225 (inventory-home
 Estimation panel).
 
 ## Decisions
-- **L192** — `compliance.notify_completed(...)`: best-effort SNS publish after a benchmark run
-  persists as succeeded (benchmark name, scope, total/alarm/ok/pass-rate, `/compliance` link) —
-  the `diagnosis/notify.publish_report` pattern (NEVER raises; notification must not fail the
-  run). Reuses the EXISTING notify plumbing end-to-end: the same `DIAGNOSIS_SNS_TOPIC_ARN`
-  env + topic + `sns:Publish` grant the Fargate worker already carries when
-  `diagnosis_notify_enabled` (ZERO Terraform change — flag off ⇒ env absent ⇒ silent no-op),
-  and the same `diagnosis_notify_paused` app_settings admin pause (paused ⇒ skip publish;
-  pause-read failure fails OPEN to publishing, the digest precedent). Called from the
-  `_compliance` handler after `persist`; failures print and return None.
+- **L192** (as amended by round 1) — `compliance.notify_completed(...)`: best-effort SNS
+  publish ONLY after a benchmark run SUCCESSFULLY persists (benchmark name, scope,
+  total/alarm/ok, rounded pass-rate, `/compliance` link). **Subject is pinned ASCII** — SNS
+  rejects a non-ASCII Subject (the diagnosis `_SUBJECT` precedent; tests assert `isascii()`),
+  Korean lives in the body. Publishes via the governed `diagnosis/notify._client` path.
+  Reuses the EXISTING notify plumbing end-to-end: the same `DIAGNOSIS_SNS_TOPIC_ARN` env +
+  topic + `sns:Publish` grant (ZERO Terraform change — flag off ⇒ env absent ⇒ silent no-op)
+  and the same `diagnosis_notify_paused` admin pause (paused ⇒ skip; pause-read failure fails
+  OPEN, the digest precedent). **Flood guard**: runs are user-triggerable, so a 60-minute
+  per-benchmark dedup window (on `compliance_runs.notified_at`) blocks re-blasts — the
+  per-report instant mail the digest retired is not reintroduced unbounded. **Durable
+  delivery record**: every path writes `compliance_runs.notify_outcome` (the ADR-013
+  diagnosis vocabulary + `skipped_dedup`; a new ULID migration also re-projects
+  `sql_reader.compliance_runs`). Recorded as a dated **ADR-013 amendment + BASELINE row
+  update in this PR** (the third message class on the sole LIVE external-write channel).
+  NEVER raises; failures print and record `publish_failed`.
 - **L194** — the ECS Tasks inventory page (v2's container-cost surface — it already carries
-  the cost KPI tiles and the Daily $ bar) gains a collapsible `EcsCostBasisPanel` (the
+  the daily-cost-total KPI tile and the Daily $ bar) gains a collapsible `EcsCostBasisPanel` (the
   batch-25 `CostBasisPanel` precedent), mounted via the existing per-type embed slot. The
   ecs_task deriver's duplicated `0.04656/0.00511` constants are REPLACED by imports from
   `web/lib/cost-basis.ts` (the single-source rule that batch 25 established — the panel's
@@ -31,15 +38,17 @@ Estimation panel).
   static constants (v1's config.json override does not exist in v2), **ephemeral storage is
   not priced** (a deliberate deviation from v1's 3-row table — v2's estimator has no storage
   term), Spot/Savings-Plans discounts not reflected. 4-language i18n.
-- **L225** — the home dashboard gains a "월 비용 영향 추정" list beside the trend delta
-  table: 30-day count delta per resource type × a STATIC monthly-unit-cost heuristic
-  (`web/lib/cost-impact.ts`, v1's static-weight approach with ap-northeast-2-flavored
-  approximations), rendered as `±$N/mo est.` sorted by |impact| descending (top 8). Honest
-  bounds: a type with no 30d baseline (the delta table's own '—' semantics) or no weight
-  entry contributes NOTHING (never a fabricated $0 delta); the panel renders only when at
-  least one row qualifies; an explicit disclaimer marks it a static heuristic, not billing
-  data (실제 청구 아님 — Cost 페이지가 실측). Pure client; no new fetch, no new component
-  file (inline dashboard section).
+- **L225** (as amended by round 1) — the home dashboard gains a "월 비용 영향 추정" list:
+  30-day count delta per type × a STATIC monthly-unit-cost heuristic
+  (`web/lib/cost-impact.ts`), `±$N/mo est.` sorted by |impact| (top 8). Data source is a
+  DEDICATED fixed `?days=35` trend fetch (the default chart fetch is 14d — without this the
+  30d baseline never exists and the panel is invisible on the default view), computed over
+  ALL trend types rather than the delta table's presentation-filtered rows (a type that went
+  to zero >7d ago is precisely the biggest genuine saving). Honest bounds: the netChange
+  stale-latest guard (a sync that died days ago must not be priced as a 30d delta), the net7
+  default-scope gate (trend history is host-account-only — a narrowed scope must not show
+  host-wide dollars), no-baseline/no-weight types excluded (never a fabricated $0), and an
+  explicit not-billing-data disclaimer. Pure client; inline dashboard section.
 
 ## Testing
 - `notify_completed`: publishes with topic + not paused (subject/body carry benchmark +
@@ -52,3 +61,28 @@ Estimation panel).
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/workers`; gap-audit ticks with a
   batch-30 note; CHANGELOG EN/KO; component counts 104 → 105 (README ×4,
   web/components/CLAUDE.md); docs-site guides in 4 locales.
+
+## Round-1 corrections (review-driven)
+
+- **ASCII SNS Subject (the CRITICAL)** — the Korean Subject violated the repo's own
+  documented constraint (diagnosis `notify._SUBJECT`: "a non-ASCII Subject is rejected by
+  SNS → publish fails → no email"), making the whole feature a silent no-op behind the
+  best-effort catch. Subject pinned English/ASCII; tests assert `isascii()` and ≤100 chars;
+  the fake SNS now captures Subject.
+- **Per-benchmark 60-minute dedup window + durable notify_outcome (the mail-blast MAJOR)** —
+  `POST /api/compliance/run` is non-admin user-triggerable, and per-run mail reintroduced the
+  exact pattern the diagnosis digest retired. New migration adds
+  `compliance_runs.notified_at/notify_outcome` (CHECK vocabulary = diagnosis + skipped_dedup,
+  `sql_reader.compliance_runs` re-projected in lockstep); every notify path records an
+  outcome; publish goes through `diagnosis/notify._client` (the governed path).
+- **Dedicated 35d baseline fetch + honest gates (the invisible-panel MAJOR)** — the impact
+  list no longer derives from the 14d-default chart fetch nor from the delta table's
+  presentation-filtered rows; stale-latest and default-scope gates added (netChange/net7
+  precedents), fully-removed types now contribute their savings.
+- **ADR-013 amendment + BASELINE row (the L5 MAJOR)** — dated 2026-09-02 amendment records
+  the third message class, worker-only publish, dedup window, shared pause, durable record.
+- Minors: rounded pass rate in the mail body; docs say "successfully completes" and mention
+  the 60-minute dedup (4 locales); ai-diagnosis.md notes the pause switch/subscribers also
+  govern compliance mail (4 locales); ecs-container-cost guide's dangling KO/JA clauses and
+  the caution headings fixed, "cost KPI tiles" → the actual single daily-cost-total tile;
+  ASCII minus sign in the impact rows; Card subtitle double-tt removed.

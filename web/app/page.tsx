@@ -76,6 +76,10 @@ export default function Home() {
   const [sumErr, setSumErr] = useState('');
   const [cost, setCost] = useState<Cost | null>(null);
   const [resTrend, setResTrend] = useState<ResourceTrend | null>(null);
+  // Cost-impact baseline (gap L225, review round-1): a FIXED 35-day trend fetch, independent
+  // of the chart-period selector — with the default 14d fetch the 30d baseline never exists
+  // and the panel would be invisible on the default view.
+  const [impactTrend, setImpactTrend] = useState<ResourceTrend | null>(null);
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
@@ -103,6 +107,10 @@ export default function Home() {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setResTrend)
         .catch(() => setResTrend({ trend: [] })),
+      fetch('/api/inventory/trend?days=35')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(setImpactTrend)
+        .catch(() => setImpactTrend({ trend: [] })),
     ]);
     setBusy(false);
 
@@ -241,9 +249,26 @@ export default function Home() {
   })();
 
   // Cost Impact Estimation (gap L225, v1 parity): 30d count delta × static monthly weight,
-  // |impact| desc — pure client heuristic off the SAME deltaRows the table renders (a type
-  // with no 30d baseline or no weight entry is excluded, never a fabricated $0).
-  const impactRows = estimateCostImpact(deltaRows);
+  // |impact| desc. Built from the dedicated 35d fetch over ALL trend types (NOT the delta
+  // table's presentation-filtered rows — a type that went to zero >7d ago is precisely the
+  // biggest genuine saving). Honest bounds: requires a non-stale latest point (the netChange
+  // guard — a sync that died days ago must not be priced as a 30d delta), a 30d baseline
+  // within tolerance, and the default scope (the trend history is host-account-only; a
+  // narrowed scope must not show host-wide dollar impact — the net7 gate).
+  const impactRows = (() => {
+    if (!scopeIsDefault) return [];
+    const pts = [...(impactTrend?.trend ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+    if (pts.length < 2) return [];
+    const last = pts[pts.length - 1];
+    if (nearestSnapshot(pts, 0) !== last) return []; // latest point itself is stale
+    const base = nearestSnapshot(pts, 30);
+    if (!base || base === last) return [];
+    const val = (p: Record<string, unknown>, t: string): number | null =>
+      typeof p[t] === 'number' ? (p[t] as number) : null;
+    return estimateCostImpact(
+      (impactTrend?.types ?? []).map((t) => ({ type: t, cur: val(last, t), m: val(base, t) })),
+    );
+  })();
 
   const loading = !ov && !ovErr && !sum && !sumErr;
 
@@ -536,7 +561,7 @@ export default function Home() {
         {impactRows.length > 0 && (
           <Card
             title="월 비용 영향 추정"
-            subtitle={tt('30일 수량 변화 × 타입별 정적 단가 근사 — 실제 청구액이 아닙니다 (실측은 Cost 페이지)')}
+            subtitle="30일 수량 변화 × 타입별 정적 단가 근사 — 실제 청구액이 아닙니다 (실측은 Cost 페이지)"
           >
             <ul className="flex flex-col gap-1.5">
               {impactRows.map((r) => (
@@ -547,7 +572,7 @@ export default function Home() {
                       {r.delta > 0 ? '+' : ''}{r.delta.toLocaleString()}
                     </span>
                     <span className={'tabular font-semibold ' + (r.monthly > 0 ? 'text-brand-700' : 'text-positive-text')}>
-                      {r.monthly > 0 ? '+' : '−'}${Math.abs(r.monthly).toLocaleString()}/mo est.
+                      {r.monthly > 0 ? '+' : '-'}${Math.abs(r.monthly).toLocaleString()}/mo est.
                     </span>
                   </span>
                 </li>

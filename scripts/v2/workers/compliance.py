@@ -119,26 +119,68 @@ def persist(conn, run_id, totals, controls):
                  de=c["description"])
 
 
-def notify_completed(conn, benchmark, totals, scope="all"):
-    """Best-effort SNS mail when a benchmark run completes (gap L192, v1
+# SNS rejects a non-ASCII Subject (→ publish fails → no email) — keep the subject English,
+# Korean goes in the body (the diagnosis/notify._SUBJECT precedent; tests assert isascii).
+_NOTIFY_SUBJECT = "[AWSops] Compliance Benchmark Completed"
+# Per-benchmark dedup window: a user-triggerable per-run mail must not re-blast the subscriber
+# list (the retired per-report diagnosis mail is exactly what the digest replaced) — at most
+# one completion mail per benchmark per hour, dedup'd on compliance_runs.notified_at.
+_NOTIFY_DEDUP_MINUTES = 60
+
+
+def _record_notify_outcome(conn, run_id, outcome, notified=False):
+    """Durable delivery record (the ADR-013 diagnosis_reports.notify_outcome precedent).
+    Best-effort: a pre-migration DB (columns absent) must not fail the run."""
+    try:
+        if notified:
+            conn.run("UPDATE compliance_runs SET notified_at=now(), notify_outcome=:o WHERE id=:id",
+                     o=outcome, id=run_id)
+        else:
+            conn.run("UPDATE compliance_runs SET notify_outcome=:o WHERE id=:id", o=outcome, id=run_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"[compliance] notify-outcome record failed (non-fatal): {e}")
+
+
+def notify_completed(conn, run_id, benchmark, totals, scope="all"):
+    """Best-effort SNS mail when a benchmark run SUCCESSFULLY completes (gap L192, v1
     notifyBenchmarkCompleted parity: benchmark name + scope + total/alarm/ok counts).
     Reuses the diagnosis notify plumbing end-to-end — the DIAGNOSIS_SNS_TOPIC_ARN env +
     sns:Publish grant the worker already carries when diagnosis_notify_enabled (env absent →
-    silent no-op, zero Terraform), and the diagnosis_notify_paused app_settings admin pause
-    (paused → skip; a pause-read failure fails OPEN to publishing — the digest precedent).
-    NEVER raises: notification must not fail the run. Returns the MessageId or None."""
+    silent no-op, zero Terraform), the notify._client publish path, and the
+    diagnosis_notify_paused app_settings admin pause (paused → skip; a pause-read failure
+    fails OPEN to publishing — the digest precedent). Flood guard: per-benchmark
+    _NOTIFY_DEDUP_MINUTES dedup on compliance_runs.notified_at. Every path records a durable
+    notify_outcome on the run row. NEVER raises: notification must not fail the run.
+    Returns the MessageId or None. Recorded in ADR-013 (2026-09-02 amendment)."""
     topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
     if not topic:
+        _record_notify_outcome(conn, run_id, "skipped_no_topic")
         return None
     try:
+        failopen = False
         try:
             rows = conn.run("SELECT value FROM app_settings WHERE key = 'diagnosis_notify_paused'")
             if bool(rows) and str(rows[0][0]).strip().lower() == "true":
                 print("[compliance] notify paused (diagnosis_notify_paused) — skipping publish")
+                _record_notify_outcome(conn, run_id, "dropped_paused")
                 return None
         except Exception as e:  # noqa: BLE001 — fail-open: a settings-read failure must not mute mail
             print(f"[compliance] pause-flag read failed (fail-open, publishing): {e}")
-        import boto3  # deferred: keeps parse-only unit tests free of boto3
+            failopen = True
+        try:
+            rows = conn.run(
+                "SELECT 1 FROM compliance_runs WHERE benchmark=:b AND id<>:id "
+                "AND notified_at > now() - make_interval(mins => :m) LIMIT 1",
+                b=benchmark, id=run_id, m=_NOTIFY_DEDUP_MINUTES)
+            if bool(rows):
+                print(f"[compliance] dedup — a {benchmark} mail went out within {_NOTIFY_DEDUP_MINUTES}m, skipping")
+                _record_notify_outcome(conn, run_id, "skipped_dedup")
+                return None
+        except Exception as e:  # noqa: BLE001 — fail-open (transient read error must not mute mail)
+            print(f"[compliance] dedup read failed (fail-open, publishing): {e}")
+            failopen = True
+
+        from diagnosis import notify  # the governed publish path (hardened _client)
 
         domain = os.environ.get("APP_DOMAIN", "")
         pr = totals.get("pass_rate")
@@ -147,22 +189,21 @@ def notify_completed(conn, benchmark, totals, scope="all"):
             "=" * 40,
             f"벤치마크: {benchmark}",
             f"범위(scope): {scope}",
-            f"전체 컨트롤: {totals.get('total_controls', 0)} · 통과: {totals.get('ok', 0)} · 실패(Alarm): {totals.get('alarm', 0)}",
+            f"전체 컨트롤: {totals.get('total_controls', 0)} (info/skip/error 포함) · 통과: {totals.get('ok', 0)} · 실패(Alarm): {totals.get('alarm', 0)}",
         ]
         if pr is not None:
-            parts.append(f"통과율: {pr}%")
+            parts.append(f"통과율: {round(float(pr), 1)}%")
         if domain:
             parts += ["", f"상세 보기: https://{domain}/compliance"]
         parts += ["", "이 메일은 AWSops 벤치마크 완료 시 발송되었습니다.",
                   "수신 거부 / 구독 관리는 관리자에게 문의하세요."]
-        resp = boto3.client("sns").publish(
-            TopicArn=topic,
-            Subject="[AWSops] 컴플라이언스 벤치마크 완료",
-            Message="\n".join(parts),
-        )
+        resp = notify._client(None).publish(
+            TopicArn=topic, Subject=_NOTIFY_SUBJECT, Message="\n".join(parts))
         mid = resp.get("MessageId")
         print(f"[compliance] published completion mail → {topic} (MessageId={mid})")
+        _record_notify_outcome(conn, run_id, "emailed_failopen" if failopen else "emailed", notified=True)
         return mid
     except Exception as e:  # noqa: BLE001 — best-effort; never fail the run over a mail
         print(f"[compliance] notify publish failed (non-fatal): {e}")
+        _record_notify_outcome(conn, run_id, "publish_failed")
         return None

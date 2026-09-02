@@ -105,15 +105,23 @@ def test_run_powerpipe_scope_search_path(monkeypatch):
 
 
 class _FakeConn:
-    """conn.run stub for the notify pause-flag read (gap L192)."""
+    """conn.run stub for the notify reads/writes (gap L192): pause flag, dedup window,
+    durable notify_outcome record."""
 
-    def __init__(self, paused=None, raise_on_read=False):
+    def __init__(self, paused=None, raise_on_read=False, recent_mail=False):
         self._paused = paused
         self._raise = raise_on_read
+        self._recent = recent_mail
+        self.outcomes = []  # (outcome, notified) writes
 
-    def run(self, *_a, **_k):
+    def run(self, sql, **kw):
+        if "UPDATE compliance_runs" in sql:
+            self.outcomes.append((kw.get("o"), "notified_at=now()" in sql))
+            return []
         if self._raise:
             raise RuntimeError("db down")
+        if "notified_at >" in sql:
+            return [[1]] if self._recent else []
         return [] if self._paused is None else [[str(self._paused).lower()]]
 
 
@@ -126,53 +134,77 @@ class _FakeSns:
         return {"MessageId": "m-1"}
 
 
-TOTALS = {"pass_rate": 75.0, "total_controls": 4, "ok": 3, "alarm": 1, "info": 0, "skip": 0, "error": 0}
+TOTALS = {"pass_rate": 66.66666666666666, "total_controls": 4, "ok": 3, "alarm": 1, "info": 0, "skip": 0, "error": 0}
 
 
 def _patch_sns(monkeypatch, captured):
-    import boto3
+    from diagnosis import notify
 
-    monkeypatch.setattr(boto3, "client", lambda *_a, **_k: _FakeSns(captured))
+    monkeypatch.setattr(notify, "_client", lambda *_a, **_k: _FakeSns(captured))
 
 
 def test_notify_completed_noop_without_topic(monkeypatch):
     monkeypatch.delenv("DIAGNOSIS_SNS_TOPIC_ARN", raising=False)
-    assert compliance.notify_completed(_FakeConn(), "cis_v300", TOTALS) is None
+    conn = _FakeConn()
+    assert compliance.notify_completed(conn, 9, "cis_v300", TOTALS) is None
+    assert conn.outcomes == [("skipped_no_topic", False)]
 
 
-def test_notify_completed_publishes_benchmark_and_counts(monkeypatch):
+def test_notify_completed_publishes_ascii_subject_and_counts(monkeypatch):
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
     monkeypatch.setenv("APP_DOMAIN", "awsops.example.com")
     captured = {}
     _patch_sns(monkeypatch, captured)
-    assert compliance.notify_completed(_FakeConn(paused=False), "cis_v300", TOTALS, scope="all") == "m-1"
+    conn = _FakeConn(paused=False)
+    assert compliance.notify_completed(conn, 9, "cis_v300", TOTALS, scope="all") == "m-1"
     assert captured["TopicArn"] == "arn:aws:sns:x:1:t"
+    # SNS REJECTS a non-ASCII Subject (diagnosis notify._SUBJECT precedent) — a Korean subject
+    # makes the whole feature a silent no-op.
+    assert captured["Subject"].isascii() and len(captured["Subject"]) <= 100
     assert "cis_v300" in captured["Message"]
     assert "통과: 3" in captured["Message"] and "실패(Alarm): 1" in captured["Message"]
+    assert "통과율: 66.7%" in captured["Message"]  # rounded, not 66.66666666666666%
     assert "https://awsops.example.com/compliance" in captured["Message"]
+    assert conn.outcomes == [("emailed", True)]
 
 
 def test_notify_completed_respects_admin_pause(monkeypatch):
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
     captured = {}
     _patch_sns(monkeypatch, captured)
-    assert compliance.notify_completed(_FakeConn(paused=True), "cis_v300", TOTALS) is None
+    conn = _FakeConn(paused=True)
+    assert compliance.notify_completed(conn, 9, "cis_v300", TOTALS) is None
     assert captured == {}  # paused → no publish
+    assert conn.outcomes == [("dropped_paused", False)]
+
+
+def test_notify_completed_dedup_window_blocks_reblast(monkeypatch):
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+    captured = {}
+    _patch_sns(monkeypatch, captured)
+    conn = _FakeConn(paused=False, recent_mail=True)
+    assert compliance.notify_completed(conn, 9, "cis_v300", TOTALS) is None
+    assert captured == {}  # a same-benchmark mail went out within the window → skip
+    assert conn.outcomes == [("skipped_dedup", False)]
 
 
 def test_notify_completed_pause_read_failure_fails_open(monkeypatch):
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
     captured = {}
     _patch_sns(monkeypatch, captured)
-    assert compliance.notify_completed(_FakeConn(raise_on_read=True), "cis_v300", TOTALS) == "m-1"
+    conn = _FakeConn(raise_on_read=True)
+    assert compliance.notify_completed(conn, 9, "cis_v300", TOTALS) == "m-1"
+    assert conn.outcomes == [("emailed_failopen", True)]
 
 
 def test_notify_completed_never_raises_on_publish_failure(monkeypatch):
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
-    import boto3
+    from diagnosis import notify
 
     def boom(*_a, **_k):
         raise RuntimeError("sns down")
 
-    monkeypatch.setattr(boto3, "client", boom)
-    assert compliance.notify_completed(_FakeConn(paused=False), "cis_v300", TOTALS) is None
+    monkeypatch.setattr(notify, "_client", boom)
+    conn = _FakeConn(paused=False)
+    assert compliance.notify_completed(conn, 9, "cis_v300", TOTALS) is None
+    assert conn.outcomes == [("publish_failed", False)]
