@@ -177,7 +177,7 @@ CloudWatch Logs에서 다음 JSON event 이름을 조회한다:
 - `inventory_sync_dispatch` — `type=all` fan-out 결과. `status=dispatched|partial|failed`,
   `queued_count`/`failed_count`, `queued_types`/`failed_types`만 포함하며 invoke exception
   text는 포함하지 않는다.
-- `inventory_sync_complete` — full success이면 `degraded=false`, `freshness=healthy`, `age_minutes=0`; expected account 일부가 도달 불가한 partial이면 `degraded=true`, `freshness=degraded`, `age_minutes=null`, `unreachable_account_count`가 있고 account ID는 없다. SDK per-resource sub-call partial이면 `failure_count`와 safe `failure_types`만 있으며 stale row pruning과 snapshot replacement를 건너뛴다.
+- `inventory_sync_complete` — full success이면 `degraded=false`, `freshness=healthy`, `age_minutes=0`; expected account 일부가 도달 불가한 partial이면 `degraded=true`, `freshness=degraded`, `age_minutes=null`, `unreachable_account_count`가 있고 account ID는 없다. SDK per-resource sub-call partial이면 `failure_count`와 safe `failure_types`만 있으며 stale row pruning과 snapshot replacement를 건너뛴다. `unknown_attribute_count`는 steady-state denial로 blind 처리된 attribute read 수이며, `status=succeeded` 여도 이 값이 0보다 크면 `freshness=degraded`로 공개된다(`degraded=false` 유지 — pruning과 `last_success_at`은 막지 않는다).
 - `inventory_sync_busy` — `degraded=true`, `throttled=false`; 해당 type의 advisory lock이 이미 사용 중이며 retry storm을 만들지 않는다.
 - `inventory_sync_failed` — `resource_type`, `elapsed_ms`, `error_category`, `error_type`, `degraded=true`, structured `throttled`; raw exception text는 로그에 쓰지 않는다.
   - `error_category=superseded`는 이 실행이 lock을 해제한 뒤 더 새 실행이 같은 ledger row를 교체했다는 뜻이다. stale finalizer는 새 row를 수정하지 않고 안전한 degraded failure 하나만 기록하며 run token/account ID를 로그에 쓰지 않는다.
@@ -187,7 +187,7 @@ CloudWatch Logs에서 다음 JSON event 이름을 조회한다:
 
 ```text
 fields @timestamp, event, resource_type, row_count, unreachable_account_count,
-  elapsed_ms, degraded, throttled,
+  unknown_attribute_count, elapsed_ms, degraded, throttled,
   freshness, age_minutes, error_category, error_type,
   max_concurrency, bucket_size, fill_rate
 | filter event like /^inventory_sync_/ or event = "steampipe_limiter_config"
@@ -201,12 +201,16 @@ In Aurora, `inventory_sync_runs` is the per-type current-run ledger; `last_succe
 
 - `unavailable`: no durable last success, including a first failed/partial run with current rows.
 - `stale`: effective data age is greater than `inventory_stale_after_minutes` (default 30).
-- `degraded`: current status is `partial`, `failed`, or `running`, while effective data is still within the threshold.
-- `healthy`: current status is `succeeded` and effective data is within the threshold.
+- `degraded`: current status is `partial`, `failed`, or `running`, while effective data is still within the threshold — or current status is `succeeded` with `unknown_attribute_count > 0`.
+- `healthy`: current status is `succeeded`, `unknown_attribute_count` is 0/null, and effective data is within the threshold.
+
+`unknown_attribute_count`는 steady-state denial(예: SCP로 막힌 bucket의 PAB/policy-status/versioning/encryption/logging 읽기)로 blind 처리된 attribute read 수다. 이 값은 공개되는 freshness를 degrade시키지만 stale row pruning이나 durable `last_success_at`을 막지 않는다 — 하나의 denied bucket이 pruning을 영구히 비활성화하면 안 되기 때문이다. 반대로 transient 실패(throttle 등)로 일부 attribute가 unknown이 된 rec은 아예 upsert하지 않고 건너뛴다: upsert는 `sdk_partial`이 prune을 막기 *전에* 실행되므로, 쓰면 이미 알고 있던 값이 NULL로 덮이면서 `captured_at`은 최신으로 갱신된다. rec을 건너뛰면 counted failure가 run을 partial로 유지하고, 건너뛴 prune이 그 row의 last-known-good 내용을 그대로 보존한다. CloudFront VPC origin의 `get_distribution_config` 실패도 모든 row의 origin-ref 귀속을 불완전하게 만들므로 같은 이유로 rows 전체를 버린다.
+
+`unknown_attribute_count` is the number of attribute reads blinded by steady-state denials (e.g. the PAB/policy-status/versioning/encryption/logging read on an SCP-denied bucket). It degrades the disclosed freshness but never blocks stale-row pruning or the durable `last_success_at` — one denied bucket must not disable pruning forever. Conversely, a rec whose attributes went unknown through a TRANSIENT failure (a throttle) is skipped rather than upserted: the upsert runs *before* `sdk_partial` gates the prunes, so writing it would null out previously-known fields while refreshing `captured_at` to now. Skipping the rec keeps the counted failure making the run partial, and the skipped prunes preserve that row's last-known-good content intact. A CloudFront VPC-origin `get_distribution_config` failure leaves origin-ref attribution incomplete for every row, so the whole row set is dropped for the same reason.
 
 ```sql
 SELECT resource_type, status, finished_at, row_count,
-       last_success_at, last_success_row_count
+       last_success_at, last_success_row_count, unknown_attribute_count
 FROM inventory_sync_runs
 WHERE account_id = 'self'
 ORDER BY resource_type;

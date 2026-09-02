@@ -390,11 +390,17 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     terminal = [record for record in records if record["event"].startswith("inventory_sync_") and
                 record["event"] != "inventory_sync_dispatch"]
-    assert result == {"status": "succeeded", "type": "log_test_success", "row_count": 1}
+    assert result == {
+        "status": "succeeded",
+        "type": "log_test_success",
+        "row_count": 1,
+        "unknown_attribute_count": 0,
+    }
     assert len(terminal) == 1
     assert terminal[0]["event"] == "inventory_sync_complete"
     assert terminal[0]["resource_type"] == "log_test_success"
     assert terminal[0]["row_count"] == 1
+    assert terminal[0]["unknown_attribute_count"] == 0
     assert terminal[0]["degraded"] is False
     assert terminal[0]["throttled"] is False
     assert terminal[0]["freshness"] == "healthy"
@@ -414,6 +420,7 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
         "SET status='succeeded'" in sql
         and "last_success_at=now()" in sql
         and "last_success_row_count=:n" in sql
+        and "unknown_attribute_count=:u" in sql
         and "run_token=:run_token" in sql
         and "RETURNING 1" in sql
         for sql in finalizer_sql
@@ -423,6 +430,8 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
         if "INSERT INTO inventory_sync_runs" in sql
     )
     assert "run_token" in running[0]
+    # a new run must not inherit the previous run's disclosed attribute blind spots
+    assert "unknown_attribute_count=NULL" in running[0]
     assert running[1]["run_token"] == connections[1].sql_log[-1][1]["run_token"]
 
 
@@ -468,6 +477,7 @@ def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success
         {
             "failure_count": 1,
             "failure_types": ["ClientError:AccessDenied"],
+            "unknown_attribute_count": 2,
         },
     )
     mod._ALLOWED.add("sdk_partial_test")
@@ -480,6 +490,7 @@ def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success
         "row_count": 1,
         "failure_count": 1,
         "failure_types": ["ClientError:AccessDenied"],
+        "unknown_attribute_count": 2,
     }
     assert any("INSERT INTO inventory_resources" in sql for sql, _ in main_calls)
     assert mod.PHASE1_PRUNE_SQL not in [sql for sql, _ in main_calls]
@@ -487,6 +498,8 @@ def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success
     assert not any("inventory_snapshots" in sql for sql, _ in main_calls)
     assert len(finalizer_calls) == 1
     assert "SET status='partial'" in finalizer_calls[0][0]
+    assert "unknown_attribute_count=:u" in finalizer_calls[0][0]
+    assert finalizer_calls[0][1]["u"] == 2
     assert "last_success_at" not in finalizer_calls[0][0]
     assert "last_success_row_count" not in finalizer_calls[0][0]
 
@@ -498,6 +511,7 @@ def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success
         "row_count": 1,
         "failure_count": 1,
         "failure_types": ["ClientError:AccessDenied"],
+        "unknown_attribute_count": 2,
         "degraded": True,
         "throttled": False,
         "freshness": "degraded",
@@ -697,6 +711,7 @@ def test_zero_row_success_is_durable_across_later_failure(capsys, monkeypatch):
         "status": "succeeded",
         "type": "zero_row_history_test",
         "row_count": 0,
+        "unknown_attribute_count": 0,
     }
     assert second["status"] == "failed"
     assert reachable == ["111111111111", "222222222222"]
@@ -1303,6 +1318,7 @@ def test_stale_finalizer_cannot_overwrite_newer_run(capsys, monkeypatch):
         "status": "succeeded",
         "type": "cas_interleaving_test",
         "row_count": 2,
+        "unknown_attribute_count": 0,
     }
     assert result == {
         "status": "failed",
@@ -1368,6 +1384,7 @@ def test_finalizer_close_failure_does_not_downgrade_committed_success(capsys, mo
         "status": "succeeded",
         "type": "finalizer_close_failure_test",
         "row_count": 1,
+        "unknown_attribute_count": 0,
     }
     assert len(finalizer_calls) == 1
     assert "SET status='succeeded'" in finalizer_calls[0][0]

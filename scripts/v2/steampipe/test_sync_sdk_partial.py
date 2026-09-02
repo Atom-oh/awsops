@@ -8,7 +8,9 @@ def _client_error(code, operation, message="credential=supersecret resource=secr
     return ClientError({"Error": {"Code": code, "Message": message}}, operation)
 
 
-def test_cloudfront_collector_returns_rows_and_redacted_failure_metadata(monkeypatch, capsys):
+def test_cloudfront_collector_drops_rows_on_incomplete_origin_refs_with_redacted_metadata(
+    monkeypatch, capsys
+):
     class FakeCloudFront:
         def list_vpc_origins(self, **kwargs):
             return {"VpcOriginList": {"Items": [{"Id": "vo-good"}, {"Id": "vo-secret"}]}}
@@ -40,10 +42,14 @@ def test_cloudfront_collector_returns_rows_and_redacted_failure_metadata(monkeyp
 
     assert id_col == "resource_id"
     assert region_col == "region"
-    assert [row["resource_id"] for row in rows] == ["vo-good"]
+    # A failed get_distribution_config leaves origin-ref attribution incomplete for EVERY
+    # row (any distribution can reference any vpc-origin), so no row may be upserted over
+    # complete last-known-good content — the counted failure keeps the run partial instead.
+    assert rows == []
     assert failures == {
         "failure_count": 2,
         "failure_types": ["ClientError:AccessDenied", "ClientError:ThrottlingException"],
+        "unknown_attribute_count": 0,
     }
     output = capsys.readouterr().out
     assert "supersecret" not in output
@@ -87,16 +93,20 @@ def test_alb_listener_collector_returns_good_rows_and_safe_partial_metadata(monk
     assert failures == {
         "failure_count": 1,
         "failure_types": ["ClientError:AccessDeniedException"],
+        "unknown_attribute_count": 0,
     }
     output = capsys.readouterr().out
     assert "supersecret" not in output
     assert "arn:secret" not in output
 
 
-def test_s3_security_collector_keeps_row_and_counts_only_transient_failures(capsys):
+def test_s3_security_collector_skips_transiently_degraded_row_and_discloses_unknowns(capsys):
     # Steady-state denials (versioning AccessDenied) are excluded from sdk_partial — the
-    # row already carries them as "unknown -> None". Throttles (logging SlowDown) still
-    # count, keeping the run partial until a complete sweep.
+    # row already carries them as "unknown -> None" — but they ARE disclosed as
+    # unknown_attribute_count so freshness can degrade. A transient failure (logging
+    # SlowDown) still counts, keeping the run partial, AND drops the rec: upserting it
+    # would overwrite the bucket's last-known-good row content with None fields while the
+    # partial run skips both prune phases.
     class FakeS3:
         def list_buckets(self):
             return {"Buckets": [{"Name": "secret-bucket"}]}
@@ -120,13 +130,11 @@ def test_s3_security_collector_keeps_row_and_counts_only_transient_failures(caps
 
     assert id_col == "name"
     assert region_col == "region"
-    assert rows[0]["name"] == "secret-bucket"
-    assert rows[0]["versioning_enabled"] is None
-    assert rows[0]["encryption"] == "none"
-    assert rows[0]["logging_enabled"] is None
+    assert rows == []
     assert failures == {
         "failure_count": 1,
         "failure_types": ["ClientError:SlowDown"],
+        "unknown_attribute_count": 1,
     }
     output = capsys.readouterr().out
     assert "supersecret" not in output
@@ -167,6 +175,7 @@ def test_opensearch_serverless_response_errors_become_safe_partial_metadata(caps
     assert failures == {
         "failure_count": 1,
         "failure_types": ["CollectionError:AccessDeniedException"],
+        "unknown_attribute_count": 0,
     }
     output = capsys.readouterr().out
     assert "supersecret" not in output

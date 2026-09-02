@@ -337,6 +337,72 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
             freshness_sql.index("WHEN status IN ('partial', 'failed', 'running') THEN 'degraded'"),
         )
 
+    def test_succeeded_run_with_attribute_blind_spots_is_degraded_not_healthy(self):
+        calls = []
+
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            return [
+                {
+                    "resource_type": "s3_public_access",
+                    "status": "succeeded",
+                    "last_success_at": "2026-08-31T00:25:00+00:00",
+                    "unknown_attribute_count": 2,
+                    "oldest_captured_at": "2026-08-31T00:25:00+00:00",
+                    "latest_success_at": "2026-08-31T00:25:00+00:00",
+                    "freshness": "degraded",
+                    "age_minutes": 2,
+                    "stale_after_minutes": 30,
+                },
+                {
+                    "resource_type": "s3",
+                    "status": "succeeded",
+                    "last_success_at": "2026-08-31T00:25:00+00:00",
+                    "unknown_attribute_count": 0,
+                    "oldest_captured_at": "2026-08-31T00:25:00+00:00",
+                    "latest_success_at": "2026-08-31T00:25:00+00:00",
+                    "freshness": "healthy",
+                    "age_minutes": 2,
+                    "stale_after_minutes": 30,
+                },
+                {
+                    "resource_type": "alb",
+                    "status": "succeeded",
+                    "last_success_at": "2026-08-31T00:25:00+00:00",
+                    "unknown_attribute_count": None,
+                    "oldest_captured_at": "2026-08-31T00:25:00+00:00",
+                    "latest_success_at": "2026-08-31T00:25:00+00:00",
+                    "freshness": "healthy",
+                    "age_minutes": 2,
+                    "stale_after_minutes": 30,
+                },
+            ]
+
+        inv._execute_override = fake
+        rows = inv._sync_freshness()
+
+        by_type = {row["resource_type"]: row for row in rows}
+        # blind attribute reads degrade the DISCLOSED freshness; an explicit 0/None stays healthy
+        self.assertEqual(by_type["s3_public_access"]["freshness"], "degraded")
+        self.assertEqual(by_type["s3_public_access"]["unknown_attribute_count"], 2)
+        self.assertEqual(by_type["s3"]["freshness"], "healthy")
+        self.assertEqual(by_type["alb"]["freshness"], "healthy")
+        freshness_sql = calls[0][0]
+        self.assertIn("runs.unknown_attribute_count", freshness_sql)
+        self.assertIn(
+            "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 "
+            "THEN 'degraded'",
+            freshness_sql,
+        )
+        # the unknown-attribute arm must precede the plain succeeded->healthy arm
+        self.assertLess(
+            freshness_sql.index(
+                "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 "
+                "THEN 'degraded'"
+            ),
+            freshness_sql.index("WHEN status = 'succeeded' THEN 'healthy'"),
+        )
+
     def test_inventory_summary_binds_threshold_and_returns_per_type_freshness(self):
         calls = []
 

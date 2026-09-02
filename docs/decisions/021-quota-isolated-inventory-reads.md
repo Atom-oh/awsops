@@ -37,6 +37,9 @@ When Aurora inventory is stale or unavailable, it must not silently fall back to
 `inventory_sync_runs`는 current-run singleton row이지만 `last_success_at`과 `last_success_row_count`를 별도로 보존한다. 모든 expected host/target account가 도달 가능해야 full `succeeded`이며, 진짜 0-row도 full success로 기록된다. expected account 일부가 도달 불가하면 last-good row를 삭제하지 않고 current status를 `partial`로 기록하며 durable last-success를 전진시키지 않는다.
 `inventory_sync_runs` remains a singleton current-run row but separately preserves `last_success_at` and `last_success_row_count`. Full `succeeded` requires every expected host/target account to be reachable, including a genuine zero-row result. If an expected account is unreachable, the sync preserves its last-good rows, records current status `partial`, and does not advance durable last-success.
 
+`unknown_attribute_count`는 steady-state denial로 blind 처리된 attribute read 수를 기록한다. 이 값은 공개되는 freshness를 degrade시키지만(`succeeded` + unknowns > 0 → `degraded`) `last_success_at` 전진이나 pruning을 막지 않는다. 반면 transient 실패로 degrade된 rec은 upsert하지 않고 건너뛴다 — partial run이 last-known-good row 내용을 덮어쓰는 일은 없어야 한다.
+`unknown_attribute_count` records how many attribute reads were blinded by steady-state denials. It degrades the DISCLOSED freshness (`succeeded` with unknowns > 0 reports `degraded`) without blocking `last_success_at` or pruning. Transiently degraded recs are skipped rather than upserted, so a partial run never overwrites last-known-good row content.
+
 ### Migration-gated rollout / Migration 선행 롤아웃
 
 Terraform이 `inv-sync` Lambda source를 소유·패키징하며 새 running UPSERT는

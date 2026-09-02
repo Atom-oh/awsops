@@ -53,13 +53,18 @@ def test_contract_shape_includes_empty_failure_metadata():
     rows, id_col, region_col, failures = sync_lambda._fetch_s3_public_access(FakeS3(["x"]))
     assert id_col == "name" and region_col == "region"
     assert isinstance(rows, list) and rows[0]["name"] == "x" and rows[0]["region"] == "ap-northeast-2"
-    assert failures == {"failure_count": 0, "failure_types": []}
+    assert failures == {
+        "failure_count": 0,
+        "failure_types": [],
+        "unknown_attribute_count": 0,
+    }
 
 
 def test_attribute_denied_bucket_keeps_row_with_unknowns_and_is_not_partial(capsys):
     # A steady-state attribute-level denial (SCP-denied bucket) is already modeled as
     # "unknown -> None" on the row, so it must NOT make the run partial — otherwise one
-    # such bucket would disable stale-pruning and freeze last_success_at forever.
+    # such bucket would disable stale-pruning and freeze last_success_at forever. The blind
+    # reads are still DISCLOSED as unknown_attribute_count so freshness can degrade.
     fake = FakeS3(buckets=["pub", "priv", "locked"], denied=["locked"])
     rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(fake)
     by = {r["name"]: r for r in rows}
@@ -70,7 +75,12 @@ def test_attribute_denied_bucket_keeps_row_with_unknowns_and_is_not_partial(caps
     assert "locked" in by
     assert by["locked"]["bucket_policy_is_public"] is None
     assert by["locked"]["block_public_acls"] is None
-    assert failures == {"failure_count": 0, "failure_types": []}
+    # 'locked' is denied on PAB + policy-status = 2 blind attribute reads
+    assert failures == {
+        "failure_count": 0,
+        "failure_types": [],
+        "unknown_attribute_count": 2,
+    }
     assert "locked" not in capsys.readouterr().out
 
 
@@ -87,21 +97,30 @@ def test_location_denied_bucket_is_skipped_and_counts_as_partial(capsys):
     assert failures == {
         "failure_count": 1,
         "failure_types": ["ClientError:AccessDenied"],
+        "unknown_attribute_count": 0,
     }
     assert "nowhere" not in capsys.readouterr().out
 
 
 def test_throttle_on_attribute_call_still_counts_as_partial():
     # Throttles are transient (not steady-state denials) — they must keep the run
-    # partial so pruning/last_success_at wait for a complete sweep.
+    # partial so pruning/last_success_at wait for a complete sweep. The transiently
+    # degraded rec is also SKIPPED: upserting it would overwrite the bucket's
+    # last-known-good row content with None fields while the prunes are skipped.
     class ThrottledS3(FakeS3):
         def get_public_access_block(self, Bucket):
-            raise ClientError({"Error": {"Code": "SlowDown"}}, "GetPublicAccessBlock")
+            if Bucket == "throttled":
+                raise ClientError({"Error": {"Code": "SlowDown"}}, "GetPublicAccessBlock")
+            return super().get_public_access_block(Bucket)
 
-    rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(ThrottledS3(["pub"]))
-    assert rows[0]["block_public_acls"] is None
-    assert rows[0]["block_public_policy"] is None
+    rows, _id, _rg, failures = sync_lambda._fetch_s3_public_access(
+        ThrottledS3(["pub", "throttled"])
+    )
+    by = {r["name"]: r for r in rows}
+    assert "throttled" not in by
+    assert by["pub"]["block_public_acls"] is True
     assert failures["failure_count"] == 1
+    assert failures["unknown_attribute_count"] == 0
     assert "ClientError:SlowDown" in failures["failure_types"]
 
 
@@ -112,7 +131,11 @@ def test_no_public_access_block_marks_blocks_false():
     rec = rows[0]
     assert rec["block_public_acls"] is False
     assert rec["block_public_policy"] is False
-    assert failures == {"failure_count": 0, "failure_types": []}
+    assert failures == {
+        "failure_count": 0,
+        "failure_types": [],
+        "unknown_attribute_count": 0,
+    }
 
 
 def test_no_bucket_policy_is_expected_absence_not_a_partial_failure():
@@ -120,7 +143,11 @@ def test_no_bucket_policy_is_expected_absence_not_a_partial_failure():
         FakeS3(["private"], no_policy=["private"])
     )
     assert rows[0]["bucket_policy_is_public"] is None
-    assert failures == {"failure_count": 0, "failure_types": []}
+    assert failures == {
+        "failure_count": 0,
+        "failure_types": [],
+        "unknown_attribute_count": 0,
+    }
 
 
 def test_registered_in_sdk_syncs():

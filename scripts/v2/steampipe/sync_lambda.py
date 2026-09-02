@@ -426,7 +426,7 @@ def _safe_sdk_response_failure_type(error):
     return label if _SAFE_FAILURE_LABEL_RE.fullmatch(label) else "CollectionError"
 
 
-def _sdk_failure_metadata(failure_types=()):
+def _sdk_failure_metadata(failure_types=(), unknown_attribute_count=0):
     labels = tuple(failure_types)
     safe_types = sorted({
         label for label in labels
@@ -435,11 +435,16 @@ def _sdk_failure_metadata(failure_types=()):
     return {
         "failure_count": len(labels),
         "failure_types": safe_types,
+        # Attribute reads blinded by a steady-state denial: disclosed as a count so readers can
+        # degrade freshness, never counted as a failure (which would block pruning forever).
+        "unknown_attribute_count": max(0, int(unknown_attribute_count)),
     }
 
 
-def _sdk_collection(rows, id_col, region_col, failures=()):
-    return rows, id_col, region_col, _sdk_failure_metadata(tuple(failures))
+def _sdk_collection(rows, id_col, region_col, failures=(), unknown_attribute_count=0):
+    return rows, id_col, region_col, _sdk_failure_metadata(
+        tuple(failures), unknown_attribute_count
+    )
 
 
 def _normalize_sdk_collection(result):
@@ -455,9 +460,11 @@ def _normalize_sdk_collection(result):
         label for label in metadata.get("failure_types", [])
         if isinstance(label, str) and _SAFE_FAILURE_LABEL_RE.fullmatch(label)
     })
+    unknown_attribute_count = max(0, int(metadata.get("unknown_attribute_count", 0)))
     return rows, id_col, region_col, {
         "failure_count": max(0, failure_count),
         "failure_types": failure_types,
+        "unknown_attribute_count": unknown_attribute_count,
     }
 
 
@@ -489,6 +496,7 @@ def _fetch_cloudfront_vpc_origins():
     # live. Capture (distribution_id, origin domain) per vo so the topology builder links only the
     # SPECIFIC origin (not every origin on the distribution → no false edge for a co-resident origin).
     dists, refs, marker = {}, {}, None
+    distribution_config_failed = False
     while True:
         resp = cf.list_distributions(**({"Marker": marker} if marker else {}))
         dl = resp.get("DistributionList", {}) or {}
@@ -503,9 +511,17 @@ def _fetch_cloudfront_vpc_origins():
                         refs.setdefault(vid, []).append({"distribution_id": did, "domain": o.get("DomainName")})
             except ClientError as e:
                 failures.append(_safe_sdk_failure_type(e))
+                distribution_config_failed = True
         marker = dl.get("NextMarker")
         if not marker:
             break
+    if distribution_config_failed:
+        # A failed get_distribution_config leaves dists/refs incomplete for EVERY row (any
+        # distribution can reference any vpc-origin), so every rec's origin-ref attribution is
+        # now partial. Upserting them would overwrite complete last-known-good rows with a
+        # truncated distribution_ids/origin_refs set. Drop the rows instead: the counted
+        # failure keeps the run partial and the skipped prunes preserve last-good content.
+        return _sdk_collection([], "resource_id", "region", failures)
     rows = [{"resource_id": vid, "region": "global", "vpc_origin_id": vid, "name": v["name"],
              "arn": v["arn"], "status": v["status"], "distribution_ids": sorted(dists.get(vid, [])),
              "origin_refs": refs.get(vid, [])}
@@ -558,8 +574,10 @@ def _fetch_s3_public_access(s3=None):
     s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
     rows = []
     failures = []
+    unknown_attrs = 0
     for b in s3.list_buckets().get("Buckets", []) or []:
         name = b["Name"]
+        transient_failed = False
         try:
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"  # null LocationConstraint => us-east-1
@@ -587,20 +605,35 @@ def _fetch_s3_public_access(s3=None):
                 rec["block_public_policy"] = False
                 rec["restrict_public_buckets"] = False
                 rec["ignore_public_acls"] = False
-            elif code not in _S3_STEADY_DENIAL_CODES:
+            elif code in _S3_STEADY_DENIAL_CODES:
+                # steady-state denial -> leave None (unknown) WITHOUT counting toward
+                # sdk_partial (see _S3_STEADY_DENIAL_CODES); disclosed on the ledger as an
+                # unknown attribute so freshness can degrade without blocking pruning.
+                unknown_attrs += 1
+            else:
                 failures.append(_safe_sdk_failure_type(e))
-            # steady-state denial -> leave None (unknown) WITHOUT counting toward
-            # sdk_partial — see _S3_STEADY_DENIAL_CODES
+                transient_failed = True
         try:
             rec["bucket_policy_is_public"] = (
                 s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code")
-            if code != "NoSuchBucketPolicy" and code not in _S3_STEADY_DENIAL_CODES:
+            if code in _S3_STEADY_DENIAL_CODES:
+                # steady-state denial → unknown (None), uncounted as a failure but disclosed
+                unknown_attrs += 1
+            elif code != "NoSuchBucketPolicy":
                 failures.append(_safe_sdk_failure_type(e))
-            # steady-state denial / NoSuchBucketPolicy → leave None (unknown), uncounted
+                transient_failed = True
+            # NoSuchBucketPolicy → expected absence, leave None and disclose nothing
+        if transient_failed:
+            # A transiently-degraded rec must never overwrite the bucket's last-known-good
+            # row content: the upsert runs BEFORE sdk_partial gates the prunes, so writing
+            # this rec would null out previously-known fields while freshness reads
+            # healthy-recent (fresh captured_at). Skip the rec — the counted failure keeps
+            # the run partial, and the skipped prunes preserve the existing row intact.
+            continue
         rows.append(rec)
-    return _sdk_collection(rows, "name", "region", failures)
+    return _sdk_collection(rows, "name", "region", failures, unknown_attrs)
 
 
 def _fetch_s3_security(s3=None):
@@ -611,8 +644,10 @@ def _fetch_s3_security(s3=None):
     s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
     rows = []
     failures = []
+    unknown_attrs = 0
     for b in s3.list_buckets().get("Buckets", []) or []:
         name = b["Name"]
+        transient_failed = False
         try:
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"
@@ -635,10 +670,14 @@ def _fetch_s3_security(s3=None):
             rec["versioning_enabled"] = v.get("Status") == "Enabled"
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code")
-            if code not in _S3_STEADY_DENIAL_CODES:
+            if code in _S3_STEADY_DENIAL_CODES:
+                # steady-state denial → unknown (None) WITHOUT counting toward sdk_partial
+                # (see _S3_STEADY_DENIAL_CODES); disclosed on the ledger as an unknown
+                # attribute so freshness can degrade without blocking pruning.
+                unknown_attrs += 1
+            else:
                 failures.append(_safe_sdk_failure_type(e))
-            # steady-state denial → unknown (None) WITHOUT counting toward sdk_partial
-            # — see _S3_STEADY_DENIAL_CODES
+                transient_failed = True
         try:
             enc = s3.get_bucket_encryption(Bucket=name)
             rules = enc.get("ServerSideEncryptionConfiguration", {}).get("Rules", [])
@@ -649,19 +688,32 @@ def _fetch_s3_security(s3=None):
             code = e.response.get("Error", {}).get("Code")
             if code == "ServerSideEncryptionConfigurationNotFoundError":
                 rec["encryption"] = "none"
-            elif code not in _S3_STEADY_DENIAL_CODES:
+            elif code in _S3_STEADY_DENIAL_CODES:
+                # steady-state denial → unknown (None), uncounted as a failure but disclosed
+                unknown_attrs += 1
+            else:
                 failures.append(_safe_sdk_failure_type(e))
-            # steady-state denial → unknown (None), uncounted — see _S3_STEADY_DENIAL_CODES
+                transient_failed = True
         try:
             log = s3.get_bucket_logging(Bucket=name)
             rec["logging_enabled"] = bool(log.get("LoggingEnabled"))
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code")
-            if code not in _S3_STEADY_DENIAL_CODES:
+            if code in _S3_STEADY_DENIAL_CODES:
+                # steady-state denial → unknown (None), uncounted as a failure but disclosed
+                unknown_attrs += 1
+            else:
                 failures.append(_safe_sdk_failure_type(e))
-            # steady-state denial → unknown (None), uncounted — see _S3_STEADY_DENIAL_CODES
+                transient_failed = True
+        if transient_failed:
+            # A transiently-degraded rec must never overwrite the bucket's last-known-good
+            # row content: the upsert runs BEFORE sdk_partial gates the prunes, so writing
+            # this rec would null out previously-known fields while freshness reads
+            # healthy-recent (fresh captured_at). Skip the rec — the counted failure keeps
+            # the run partial, and the skipped prunes preserve the existing row intact.
+            continue
         rows.append(rec)
-    return _sdk_collection(rows, "name", "region", failures)
+    return _sdk_collection(rows, "name", "region", failures, unknown_attrs)
 
 
 def _fetch_opensearch_serverless(aoss=None):
@@ -872,7 +924,8 @@ def _new_run_token():
 
 
 def _finalize_sync_ledger(
-    resource_type, run_token, status, row_count=None, error=None
+    resource_type, run_token, status, row_count=None, error=None,
+    unknown_attribute_count=0,
 ):
     """Write one terminal ledger state on a fresh connection after main cleanup.
 
@@ -886,22 +939,24 @@ def _finalize_sync_ledger(
         if status == "succeeded":
             updated = finalizer.run(
                 "UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), "
-                "row_count=:n, error=NULL, last_success_at=now(), "
+                "row_count=:n, error=NULL, unknown_attribute_count=:u, last_success_at=now(), "
                 "last_success_row_count=:n "
                 "WHERE resource_type=:t AND account_id='self' "
                 "AND run_token=:run_token RETURNING 1",
                 t=resource_type,
                 n=row_count,
+                u=unknown_attribute_count,
                 run_token=run_token,
             )
         elif status == "partial":
             updated = finalizer.run(
                 "UPDATE inventory_sync_runs SET status='partial', finished_at=now(), "
-                "row_count=:n, error=NULL "
+                "row_count=:n, error=NULL, unknown_attribute_count=:u "
                 "WHERE resource_type=:t AND account_id='self' "
                 "AND run_token=:run_token RETURNING 1",
                 t=resource_type,
                 n=row_count,
+                u=unknown_attribute_count,
                 run_token=run_token,
             )
         elif status == "failed":
@@ -942,6 +997,7 @@ def sync(resource_type):
     pending_ledger_error = None
     run_token = None
     sdk_failure_count = 0
+    sdk_unknown_attrs = 0
     sdk_failure_types = []
     sdk_partial = False
     try:
@@ -967,11 +1023,12 @@ def sync(resource_type):
             # mark running INSIDE the try so a throw here records 'failed' and the finally still unlocks
             adb.run(
                 "INSERT INTO inventory_sync_runs "
-                "(resource_type, status, started_at, finished_at, row_count, error, run_token) "
-                "VALUES (:t,'running',now(),NULL,NULL,NULL,:run_token) "
+                "(resource_type, status, started_at, finished_at, row_count, error, "
+                "unknown_attribute_count, run_token) "
+                "VALUES (:t,'running',now(),NULL,NULL,NULL,NULL,:run_token) "
                 "ON CONFLICT (resource_type, account_id) DO UPDATE SET "
                 "status='running', started_at=now(), finished_at=NULL, row_count=NULL, error=NULL, "
-                "run_token=:run_token",
+                "unknown_attribute_count=NULL, run_token=:run_token",
                 t=resource_type,
                 run_token=run_token,
             )
@@ -984,6 +1041,7 @@ def sync(resource_type):
                     SDK_SYNCS[resource_type]()
                 )
                 sdk_failure_count = sdk_metadata["failure_count"]
+                sdk_unknown_attrs = sdk_metadata["unknown_attribute_count"]
                 sdk_failure_types = sdk_metadata["failure_types"]
                 sdk_partial = sdk_failure_count > 0
             else:
@@ -1076,6 +1134,7 @@ def sync(resource_type):
                     "row_count": len(recs),
                     "failure_count": sdk_failure_count,
                     "failure_types": sdk_failure_types,
+                    "unknown_attribute_count": sdk_unknown_attrs,
                 }
                 terminal_event = "inventory_sync_complete"
                 terminal_fields = {
@@ -1083,6 +1142,7 @@ def sync(resource_type):
                     "row_count": len(recs),
                     "failure_count": sdk_failure_count,
                     "failure_types": sdk_failure_types,
+                    "unknown_attribute_count": sdk_unknown_attrs,
                     "degraded": True,
                     "throttled": any(
                         "throttl" in failure_type.lower()
@@ -1114,14 +1174,23 @@ def sync(resource_type):
             else:
                 pending_ledger_status = "succeeded"
                 pending_ledger_row_count = len(recs)
-                result = {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
+                result = {
+                    "status": "succeeded",
+                    "type": resource_type,
+                    "row_count": len(recs),
+                    "unknown_attribute_count": sdk_unknown_attrs,
+                }
                 terminal_event = "inventory_sync_complete"
                 terminal_fields = {
                     "resource_type": resource_type,
                     "row_count": len(recs),
+                    "unknown_attribute_count": sdk_unknown_attrs,
                     "degraded": False,
                     "throttled": False,
-                    "freshness": "healthy",
+                    # Attribute blind spots degrade the DISCLOSED freshness while the status stays
+                    # succeeded — pruning and last_success_at must not be blocked by a steady
+                    # denial, but readers must not be told the sweep saw everything either.
+                    "freshness": "degraded" if sdk_unknown_attrs else "healthy",
                     "age_minutes": 0,
                 }
             # Daily inventory_snapshots row (dashboard "리소스 추세" chart, self-scoped only —
@@ -1191,6 +1260,9 @@ def sync(resource_type):
                     pending_ledger_status,
                     row_count=pending_ledger_row_count,
                     error=pending_ledger_error,
+                    # Only the succeeded/partial statements write this column; 'failed' leaves
+                    # the previous disclosure untouched.
+                    unknown_attribute_count=sdk_unknown_attrs,
                 )
                 if not finalized:
                     result = {

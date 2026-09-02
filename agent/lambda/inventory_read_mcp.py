@@ -312,6 +312,10 @@ def _sync_freshness(resource_type=None):
     Current rows use their oldest captured_at so a partial refresh cannot hide preserved stale
     rows behind newer rows. When no rows exist, the durable last_success_at keeps a genuine
     zero-row success visible across later running/failed/partial attempts.
+
+    A succeeded run with attribute blind spots (unknown_attribute_count > 0 — attribute reads
+    denied in steady state) reports 'degraded', not 'healthy': the denial must not block pruning
+    or last_success_at, but the reader must not be told the sweep saw everything either.
     """
     stale_after = _inventory_stale_after_minutes()
     params = [{
@@ -335,6 +339,7 @@ def _sync_freshness(resource_type=None):
         "), per_type AS ("
         "SELECT types.resource_type, runs.status, runs.finished_at, runs.row_count, "
         "runs.last_success_at, runs.last_success_row_count, "
+        "runs.unknown_attribute_count, "
         "COALESCE(resources.current_count, 0) AS current_count, "
         "resources.oldest_captured_at "
         "FROM types "
@@ -344,19 +349,21 @@ def _sync_freshness(resource_type=None):
         "ON resources.resource_type = types.resource_type"
         "), classified AS ("
         "SELECT resource_type, status, finished_at, row_count, last_success_at, "
-        "last_success_row_count, current_count, oldest_captured_at, "
+        "last_success_row_count, unknown_attribute_count, current_count, oldest_captured_at, "
         "CASE WHEN last_success_at IS NULL THEN NULL ELSE "
         "LEAST(last_success_at, COALESCE(oldest_captured_at, last_success_at)) END "
         "AS latest_success_at "
         "FROM per_type"
         ") "
         "SELECT resource_type, status, finished_at, row_count, last_success_at, "
-        "last_success_row_count, current_count, oldest_captured_at, latest_success_at, "
+        "last_success_row_count, unknown_attribute_count, current_count, oldest_captured_at, "
+        "latest_success_at, "
         "CASE "
         "WHEN latest_success_at IS NULL THEN 'unavailable' "
         "WHEN latest_success_at < CURRENT_TIMESTAMP - "
         "(:stale_after_minutes * INTERVAL '1 minute') THEN 'stale' "
         "WHEN status IN ('partial', 'failed', 'running') THEN 'degraded' "
+        "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 THEN 'degraded' "
         "WHEN status = 'succeeded' THEN 'healthy' "
         "ELSE 'unavailable' END AS freshness, "
         "CASE WHEN latest_success_at IS NULL THEN NULL ELSE "
@@ -381,6 +388,7 @@ def _freshness_for_type(resource_type):
         "current_count": 0,
         "last_success_at": None,
         "last_success_row_count": None,
+        "unknown_attribute_count": None,
         "oldest_captured_at": None,
         "latest_success_at": None,
         "freshness": "unavailable",

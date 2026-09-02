@@ -25,6 +25,11 @@ MIGRATION = os.path.join(
 FRESHNESS_MIGRATION_GLOB = os.path.join(
     os.path.dirname(__file__), "..", "..", "terraform", "v2", "foundation", "migrations",
     "*_inventory_sync_freshness.sql")
+# The CURRENT owner of sql_reader.inventory_sync_runs: it recreates the view the freshness
+# migration first widened, adding unknown_attribute_count.
+UNKNOWN_ATTRS_MIGRATION_GLOB = os.path.join(
+    os.path.dirname(__file__), "..", "..", "terraform", "v2", "foundation", "migrations",
+    "*_inventory_sync_unknown_attrs.sql")
 
 
 def _entries():
@@ -137,6 +142,29 @@ class TestInventoryViewContract(unittest.TestCase):
         for column in (
             "resource_type", "account_id", "started_at", "finished_at", "status", "row_count",
             "last_success_at", "last_success_row_count",
+        ):
+            self.assertRegex(columns, rf"\b{column}\b")
+        self.assertNotRegex(columns, r"\berror\b")
+        self.assertNotRegex(columns, r"\brun_token\b")
+
+    def test_inventory_sync_runs_view_exposes_unknown_attribute_count(self):
+        # _sync_freshness() selects unknown_attribute_count to degrade a succeeded run with
+        # attribute blind spots; the view that ships last must expose it, or the reader role
+        # gets "column does not exist" — the same outage class this file exists to prevent.
+        matches = glob(UNKNOWN_ATTRS_MIGRATION_GLOB)
+        self.assertEqual(len(matches), 1, "expected one inventory_sync_unknown_attrs migration")
+        src = open(matches[0], encoding="utf-8").read()
+        match = re.search(
+            r"CREATE\s+VIEW\s+sql_reader\.inventory_sync_runs.*?AS\s+SELECT\s+(.*?)"
+            r"\s+FROM\s+public\.inventory_sync_runs",
+            src,
+            re.I | re.S,
+        )
+        self.assertIsNotNone(match, "unknown_attrs migration must recreate inventory_sync_runs view")
+        columns = match.group(1).lower()
+        for column in (
+            "resource_type", "account_id", "started_at", "finished_at", "status", "row_count",
+            "last_success_at", "last_success_row_count", "unknown_attribute_count",
         ):
             self.assertRegex(columns, rf"\b{column}\b")
         self.assertNotRegex(columns, r"\berror\b")
