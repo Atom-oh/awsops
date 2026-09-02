@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Security/topology quick wins: the Security page gains v1's Security Issues Summary bar chart (one bar per issue class — the four checks by finding count plus CVE Critical/High summed from the ECR scan details; zero bars are filtered and an all-zero chart is omitted) and an explicit loading line on first fetch (no more zero-valued tiles/empty charts posing as an all-clear before data arrives); the request-flow topology page gains a kind/health color legend (chips for the kinds and target-health states present in the loaded graph, theme-aware), and the infra/K8s map legend now also explains the card status dots (ok/warn/bad/neutral).
 - Chart quick wins: the ElastiCache page renders v1's Node Type Distribution count bar in the chart band alongside the engine donut (a new generic count-distribution spec option), and the OpenSearch page's second donut becomes the derived Encryption Status (Full/Partial/No, semantic colors; a domain with an unknown side is excluded rather than counted as unencrypted).
 - Detail/column quick wins: the IAM roles table gains a Description column, the Lambda table gains a human-readable Code Size column (the detail panel shows the readable value instead of raw bytes), the Lambda detail gains a per-layer name:version list and a Network section with an explicit 'Not in VPC' state, and the WAF detail shows the default action as Allow/Block ahead of the raw JSON.
 - EKS cost page: a collapsible Cost Calculation Basis panel — the OpenCost-vs-estimate method table (5 cost items), the estimate formula rendered from the SAME unit constants the estimator computes with (single source — the documented numbers can never drift), a worked example, and the caveats (Fargate-style rates, no Spot/RI discounts, requests ≠ usage, network/PV/GPU only with OpenCost).
@@ -608,6 +609,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
+- 보안/토폴로지 퀵윈: Security 페이지에 v1의 Security Issues Summary 막대 차트(이슈 클래스별 1개 막대 — 4개 점검의 발견 건수 + ECR 스캔 상세에서 합산한 CVE Critical/High; 0건 막대는 제외, 전부 0건이면 차트 자체를 생략)와 최초 조회 중 명시적 로딩 표시(데이터 도착 전 0값 타일/빈 차트가 이상 없음처럼 보이던 문제 해소) 추가; 요청 흐름 토폴로지 페이지에 종류/health 색상 범례(현재 그래프에 존재하는 종류·타깃 health 상태 칩, 다크 모드 대응) 추가, 인프라/K8s 맵 범례에 카드 상태 점(ok/warn/bad/neutral) 설명 추가.
 - 차트 퀵윈: ElastiCache 페이지에 v1의 Node Type Distribution 카운트 바를 차트 밴드에 표시(엔진 도넛과 같은 화면)(신규 generic 카운트 분포 spec 옵션), OpenSearch 페이지의 두 번째 도넛을 파생 Encryption Status(Full/Partial/No, 시맨틱 색상 — 한쪽이라도 미상인 도메인은 미암호화로 세지 않고 제외)로 교체.
 - 상세/컬럼 퀵윈: IAM 역할 테이블에 Description 컬럼, Lambda 테이블에 사람이 읽는 Code Size 컬럼(상세 패널도 원시 바이트 대신 표시), Lambda 상세에 레이어별 name:version 목록과 명시적 'Not in VPC' 상태의 Network 섹션, WAF 상세에 원시 JSON 앞에 Allow/Block 기본 액션 표시 추가.
 - EKS 비용 페이지: 접이식 '비용 계산 근거' 패널 — OpenCost 실측 vs 요청 기반 추정 비교표(5개 비용 항목), 추정기가 실제로 계산에 쓰는 동일 단가 상수로 렌더링되는 수식(단일 소스 — 문서 숫자가 계산과 어긋날 수 없음), 계산 예시, 주의사항(Fargate형 단가, Spot/RI 할인 미반영, 요청≠사용량, Network/PV/GPU는 OpenCost 설치 시에만).
