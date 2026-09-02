@@ -4,7 +4,7 @@
 
 Accepted (2026-06-22; amended 2026-06-24, 2026-08-11) — consolidated / 채택 (2026-06-22; 2026-06-24, 2026-08-11 개정) — 통합
 
-> **Consolidates / 통합 대상**: ADR-013 (자동 수집 조사 에이전트), ADR-016 (Bedrock 모델 선택 전략), 구 ADR-019 (진단 리포트 포맷 매트릭스, 현재 살아있는 ADR-019와는 다른 문서), ADR-021 (AI 응답 SSE 스트리밍), ADR-033 (AIOps LLM 비용 최적화), ADR-045 (AI 진단 지연 — 병렬 렌더 + 스트리밍).
+> **Consolidates / 통합 대상**: ADR-013 (자동 수집 조사 에이전트), ADR-016 (Bedrock 모델 선택 전략), 구 ADR-019 (진단 리포트 포맷 매트릭스, 현재 살아있는 ADR-019와는 다른 문서), 구 ADR-021 (AI 응답 SSE 스트리밍 — 현재 살아있는 ADR-021과는 다른 문서), ADR-033 (AIOps LLM 비용 최적화), ADR-045 (AI 진단 지연 — 병렬 렌더 + 스트리밍).
 >
 > 이 ADR은 위 6개 ADR을 하나의 진단 파이프라인 결정으로 합치며, **현행(net) 상태만** 기술한다. v1(`src/`) 시점의 메커니즘(컬렉터 레지스트리·SSE `SendFn`·Puppeteer PDF·node-cache 등)은 *역사적 맥락*으로만 참조하고, v2 라이브 동작을 진실의 기준으로 삼는다.
 >
@@ -121,7 +121,7 @@ For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtim
 - `scripts/v2/workers/diagnosis/report.py` — 진단 워커 `generate()`(병렬 렌더), `_bedrock_render` non-streaming `invoke_model`. 스트리밍(#6-2)은 미구현.
 - `agent/agent.py` — Strands 챗 에이전트(도구 루프) — 진단 경로와 별개, 본 ADR이 변경하지 않음.
 - `docs/reviews/2026-06-21-docs-reality-audit.md` §B8 (ai-09~14) — 진단 raw boto3 direct·병렬화 구현·스트리밍 미구현(ai-10 DRIFT)·환각 방지 검증.
-- Consolidates: ADR-013 / ADR-016 / legacy ADR-019 (report format matrix — distinct from the current live ADR-019) / ADR-021 / ADR-033 / ADR-045.
+- Consolidates: ADR-013 / ADR-016 / legacy ADR-019 (report format matrix — distinct from the current live ADR-019) / legacy ADR-021 (SSE streaming — distinct from the current live ADR-021) / ADR-033 / ADR-045.
 
 ### External
 - [Amazon Bedrock cross-region inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html)

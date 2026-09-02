@@ -155,6 +155,6 @@ Data access is granted **only through read-only VIEWS** in a dedicated `sql_read
 
 - 통합 출처 ADR: 004, 018, 027, 031(P1/P2), 039(P1/P2). / Consolidated from: 004, 018, 027, 031 (P1/P2), 039 (P1/P2).
 - 동결 위임: ADR-029/036(mutating substrate, REVERSED), ADR-031 P3/P4, ADR-039 READ_WRITE; 비-AWS 외부 write 거버넌스 = ADR-040/041. / Frozen delegation.
-- 인접: ADR-002/038/044(라우팅), ADR-008(멀티계정·캐시키 격리), ADR-011(SSRF allowlist), ADR-015(FinOps MCP), ADR-021(SSE), ADR-022(웹훅 ingress), ADR-023(admin), ADR-032(Lead/Sub triage·federation), ADR-033(비용 통제), ADR-037/030(v2 파운데이션).
+- 인접: ADR-002/038/044(라우팅), ADR-008(멀티계정·캐시키 격리), ADR-011(SSRF allowlist), ADR-015(FinOps MCP), 구 ADR-021(SSE — legacy, 현재 live ADR-021 아님), ADR-022(웹훅 ingress), ADR-023(admin), ADR-032(Lead/Sub triage·federation), ADR-033(비용 통제), ADR-037/030(v2 파운데이션).
 - 감사 근거: `docs/reviews/2026-06-21-docs-reality-audit.md` §B5 (agentcore-01: net=9 프로비저닝 / 8 라우트; `agent.py:339`=8, `catalog.py:18`=9, `provision.py:5`=9; SSM SoT `ai.tf:306`; `agentcore_enabled` `ai.tf:61`; Memory 365 `provision.py:164`).
 - 소스: `agent/agent.py`(8 섹션 라우팅 + registry-agnostic 실행 + egress MCP substrate), `scripts/v2/agentcore/{catalog.py,provision.py}`(9 게이트웨이 프로비저닝 + Memory + Code Interpreter), `terraform/v2/foundation/ai.tf`(`agentcore_enabled` 게이트 + SSM).

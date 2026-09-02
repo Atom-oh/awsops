@@ -1,11 +1,11 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0d1c5dd2af19 · generated-at: 2026-08-26 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 398f4adb3042 · generated-at: 2026-09-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # Decisions — Reviewer Context
 
 **Current truth = `BASELINE.md`** + the consolidated ADRs in this directory (`0NN-*.md`, highest
-currently **020**). Old ADR 001–046 bodies are not in the tree (git tag
+currently **021**). Old ADR 001–046 bodies are not in the tree (git tag
 `adr-legacy-2026-06-22`) — never read them without an explicit request; resolve legacy numbers
 via `ADR-MAPPING.md`.
 
