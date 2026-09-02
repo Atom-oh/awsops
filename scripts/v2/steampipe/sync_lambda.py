@@ -511,6 +511,7 @@ def _fetch_s3_security(s3=None):
             "arn": f"arn:aws:s3:::{name}",
             "creation_date": b.get("CreationDate").isoformat() if b.get("CreationDate") else None,
             "versioning_enabled": None, "encryption": None, "logging_enabled": None,
+            "bucket_policy_is_public": None,
         }
         try:
             v = s3.get_bucket_versioning(Bucket=name)
@@ -530,6 +531,14 @@ def _fetch_s3_security(s3=None):
         try:
             log = s3.get_bucket_logging(Bucket=name)
             rec["logging_enabled"] = bool(log.get("LoggingEnabled"))
+        except ClientError:
+            pass
+        try:
+            # gap L240: the Private/Public flag bars chart this off the bucket row itself
+            # (the separate s3_public_access fetch keeps the full public-access-block detail).
+            # AccessDenied / NoSuchBucketPolicy → None (unknown counts into neither side).
+            rec["bucket_policy_is_public"] = (
+                s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
         except ClientError:
             pass
         rows.append(rec)

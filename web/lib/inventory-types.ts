@@ -28,6 +28,11 @@ export interface InvType {
   /** Optional count-distribution bar (gap L221): row COUNTS per distinct value of `col`,
    *  count-descending (distinct from barKey's numeric ranking and histKey's numeric axis). */
   countBarKey?: { col: string; label: string };
+  /** Optional independent flag-count bars (gap L240): each flag counts rows whose `col` is
+   *  strictly true (strictly false when `negate`) — null/absent (unknown) rows count into
+   *  NEITHER side, and a row can count into several bars (not a distribution of one column,
+   *  which is countBarKey's job). Bars keep the declared order and zero bars are kept. */
+  flagBarKey?: { label: string; flags: { name: string; col: string; negate?: boolean }[] };
   /** Optional value-distribution histogram (gap L135): row COUNTS per distinct numeric value
    *  of `col` (top 10 by count, then numerically sorted; e.g. lambda functions per
    *  memory_size). Rendered beside the Top-N bar as a second BarDistribution. */
@@ -147,12 +152,22 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['region', 'image_tag_mutability'] },
-  s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', distKey2: 'encryption', filterKeys: ['region', 'versioning_enabled', 'encryption', 'logging_enabled'], columns: [
+  // Security Status flag bars (gap L240, v1 parity): Private/Public need the synced
+  // bucket_policy_is_public (populated by the next sync run — until then those bars read 0
+  // while Versioned/Logging chart immediately); unknown (null) buckets count into neither.
+  s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', distKey2: 'encryption',
+    flagBarKey: { label: 'Security Status', flags: [
+      { name: 'Private', col: 'bucket_policy_is_public', negate: true },
+      { name: 'Public', col: 'bucket_policy_is_public' },
+      { name: 'Versioned', col: 'versioning_enabled' },
+      { name: 'Logging', col: 'logging_enabled' },
+    ] },
+    filterKeys: ['region', 'versioning_enabled', 'encryption', 'logging_enabled', 'bucket_policy_is_public'], columns: [
     { key: 'versioning_enabled', label: 'Versioning' }, { key: 'encryption', label: 'Encryption' },
     { key: 'logging_enabled', label: 'Logging' }, { key: 'creation_date', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date'] },
-      { label: 'Security', keys: ['versioning_enabled', 'encryption', 'logging_enabled'] },
+      { label: 'Security', keys: ['versioning_enabled', 'encryption', 'logging_enabled', 'bucket_policy_is_public'] },
     ] },
   ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', stateKey: 'state', distKey: 'volume_type', distKey2: 'encrypted', columns: [
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
@@ -212,7 +227,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['region', 'name', 'cidr_block', 'is_default'] },
-  subnet: { label: 'Subnets', group: 'Network', distKey: 'availability_zone', distKey2: 'map_public_ip_on_launch', barKey: { col: 'available_ip_address_count', label: 'Available IPs' }, columns: [
+  subnet: { label: 'Subnets', group: 'Network', distKey: 'availability_zone', distKey2: 'map_public_ip_on_launch', barKey: { col: 'available_ip_address_count', label: 'Available IPs' }, countBarKey: { col: 'vpc_id', label: 'Subnets per VPC' }, columns: [
     { key: 'name', label: 'Name' }, { key: 'vpc_id', label: 'VPC' }, { key: 'cidr_block', label: 'CIDR' },
     { key: 'state', label: 'State' }, { key: 'availability_zone', label: 'AZ' },
     { key: 'available_ip_address_count', label: 'Free IPs' }, { key: 'map_public_ip_on_launch', label: 'Auto-public-IP' } ],

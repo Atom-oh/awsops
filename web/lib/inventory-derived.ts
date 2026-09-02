@@ -49,6 +49,20 @@ function dateH(v: unknown): string | undefined {
 const boolH = (v: unknown): string | undefined =>
   v === true || v === 'true' ? 'true' : v === false || v === 'false' ? 'false' : undefined;
 
+/** Independent flag-count bars (gap L240 — InvType.flagBarKey): each flag counts rows whose
+ *  `col` is strictly true (strictly false when `negate`), with 'true'/'false' string coercion.
+ *  Unknown (null/absent/other) rows count into NEITHER side, a row can count into several
+ *  bars, declared order is kept, and zero bars are kept (a zero Public bar is signal). */
+export function countFlags(
+  rows: Row[],
+  flags: { name: string; col: string; negate?: boolean }[],
+): { name: string; value: number }[] {
+  return flags.map((f) => ({
+    name: f.name,
+    value: rows.filter((r) => boolH(r[f.col]) === (f.negate ? 'false' : 'true')).length,
+  }));
+}
+
 function _ecsTaskBase(r: Row): Row {
   return {
     task_short: typeof r.resource_id === 'string' ? r.resource_id.split('/').pop()?.slice(0, 12) : undefined,

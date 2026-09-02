@@ -19,7 +19,7 @@ import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf, worstFirst } 
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
 import { useI18n } from '@/components/shell/LanguageProvider';
-import { deriveRow } from '@/lib/inventory-derived';
+import { deriveRow, countFlags } from '@/lib/inventory-derived';
 
 type Row = Record<string, unknown>;
 
@@ -245,6 +245,13 @@ export default function InventoryTypePage() {
     [allRows, spec?.countBarKey],
   );
 
+  // Independent flag-count bars (gap L240) — hook ABOVE the !spec early return (rules of
+  // hooks). Declared order kept; zero bars kept (a zero Public bar is signal).
+  const flagBarData = useMemo(
+    () => (spec?.flagBarKey ? countFlags(allRows, spec.flagBarKey.flags) : []),
+    [allRows, spec?.flagBarKey],
+  );
+
   if (!spec) {
     return (
       <>
@@ -329,6 +336,11 @@ export default function InventoryTypePage() {
   const countBar = spec.countBarKey && countBarData.length > 0
     ? <BarDistribution title={spec.countBarKey.label} data={countBarData} xKey="name" yKey="value" />
     : null;
+  // Flag-count bars (gap L240): rendered only when rows exist — preserveOrder keeps the
+  // declared semantic order (Private/Public/…) instead of the count-desc re-sort.
+  const flagBar = spec.flagBarKey && allRows.length > 0
+    ? <BarDistribution title={spec.flagBarKey.label} data={flagBarData} xKey="name" yKey="value" preserveOrder />
+    : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
   const graphBand = donut && donut2
     ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{donut}{donut2}</div>
@@ -391,7 +403,7 @@ export default function InventoryTypePage() {
             )}
             {graphBand}
             {(() => {
-              const charts = [barChart, hist, countBar, serverBar].filter(Boolean);
+              const charts = [barChart, hist, countBar, flagBar, serverBar].filter(Boolean);
               if (charts.length === 0) return null;
               if (charts.length === 1) return charts[0];
               return <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{charts.map((c, i) => <div key={i} className="min-w-0">{c}</div>)}</div>;

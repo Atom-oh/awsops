@@ -68,7 +68,7 @@ CIS Compliance 페이지에서는 AWS CIS(Center for Internet Security) 벤치�
 - **Info** (청록색): 정보성
 
 ### Alarms by Section (막대 차트)
-섹션별 실패(Alarm) 수를 비교합니다. 가장 많은 실패가 발생한 섹션에 우선 집중하세요.
+섹션별 실패(Alarm) 수를 비교합니다. 가장 많은 실패가 발생한 섹션에 우선 집중하세요. Alarm이 0건인 섹션 막대는 표시되지 않으며, 모든 섹션이 0건이면 차트 자체가 표시되지 않습니다.
 
 ## 섹션별 상세
 

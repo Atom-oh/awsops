@@ -68,7 +68,7 @@ Displays the distribution of control statuses:
 - **Info** (Cyan): Informational
 
 ### Alarms by Section (Bar Chart)
-Compares the number of failures (Alarm) by section. Focus on sections with the most failures first.
+Compares the number of failures (Alarm) by section. Focus on sections with the most failures first. Zero-alarm sections get no bar, and when every section is alarm-free the chart itself is omitted.
 
 ## Section Details
 
