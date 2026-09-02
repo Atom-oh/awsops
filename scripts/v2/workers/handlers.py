@@ -143,6 +143,9 @@ def _compliance(payload, dry_run):
             doc = compliance.run_powerpipe(benchmark, compliance.steampipe_db_url(), scope)
             totals, controls = compliance.parse_powerpipe_json(doc)
             compliance.persist(conn, run_id, totals, controls)
+            # gap L192 (v1 notifyBenchmarkCompleted parity): best-effort, never raises,
+            # no-op without DIAGNOSIS_SNS_TOPIC_ARN, respects diagnosis_notify_paused.
+            compliance.notify_completed(conn, benchmark, totals, scope=scope)
             return {"run_id": run_id, "benchmark": benchmark, **totals}, None
         except Exception as e:  # noqa: BLE001 — surface on the run row, then re-raise (SFN Catch → failed)
             print(traceback.format_exc())  # full trace → CloudWatch only

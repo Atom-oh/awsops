@@ -102,3 +102,77 @@ def test_run_powerpipe_scope_search_path(monkeypatch):
     import pytest
     with pytest.raises(ValueError):
         compliance.run_powerpipe("cis_v400", "postgres://x", "123; DROP TABLE x")
+
+
+class _FakeConn:
+    """conn.run stub for the notify pause-flag read (gap L192)."""
+
+    def __init__(self, paused=None, raise_on_read=False):
+        self._paused = paused
+        self._raise = raise_on_read
+
+    def run(self, *_a, **_k):
+        if self._raise:
+            raise RuntimeError("db down")
+        return [] if self._paused is None else [[str(self._paused).lower()]]
+
+
+class _FakeSns:
+    def __init__(self, captured):
+        self._c = captured
+
+    def publish(self, **kw):
+        self._c.update(kw)
+        return {"MessageId": "m-1"}
+
+
+TOTALS = {"pass_rate": 75.0, "total_controls": 4, "ok": 3, "alarm": 1, "info": 0, "skip": 0, "error": 0}
+
+
+def _patch_sns(monkeypatch, captured):
+    import boto3
+
+    monkeypatch.setattr(boto3, "client", lambda *_a, **_k: _FakeSns(captured))
+
+
+def test_notify_completed_noop_without_topic(monkeypatch):
+    monkeypatch.delenv("DIAGNOSIS_SNS_TOPIC_ARN", raising=False)
+    assert compliance.notify_completed(_FakeConn(), "cis_v300", TOTALS) is None
+
+
+def test_notify_completed_publishes_benchmark_and_counts(monkeypatch):
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+    monkeypatch.setenv("APP_DOMAIN", "awsops.example.com")
+    captured = {}
+    _patch_sns(monkeypatch, captured)
+    assert compliance.notify_completed(_FakeConn(paused=False), "cis_v300", TOTALS, scope="all") == "m-1"
+    assert captured["TopicArn"] == "arn:aws:sns:x:1:t"
+    assert "cis_v300" in captured["Message"]
+    assert "통과: 3" in captured["Message"] and "실패(Alarm): 1" in captured["Message"]
+    assert "https://awsops.example.com/compliance" in captured["Message"]
+
+
+def test_notify_completed_respects_admin_pause(monkeypatch):
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+    captured = {}
+    _patch_sns(monkeypatch, captured)
+    assert compliance.notify_completed(_FakeConn(paused=True), "cis_v300", TOTALS) is None
+    assert captured == {}  # paused → no publish
+
+
+def test_notify_completed_pause_read_failure_fails_open(monkeypatch):
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+    captured = {}
+    _patch_sns(monkeypatch, captured)
+    assert compliance.notify_completed(_FakeConn(raise_on_read=True), "cis_v300", TOTALS) == "m-1"
+
+
+def test_notify_completed_never_raises_on_publish_failure(monkeypatch):
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+    import boto3
+
+    def boom(*_a, **_k):
+        raise RuntimeError("sns down")
+
+    monkeypatch.setattr(boto3, "client", boom)
+    assert compliance.notify_completed(_FakeConn(paused=False), "cis_v300", TOTALS) is None

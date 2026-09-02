@@ -117,3 +117,52 @@ def persist(conn, run_id, totals, controls):
                  r=run_id, cid=c["control_id"], ti=c["title"], se=c["section"], st=c["status"],
                  re=c["reason"], res=c["resource"], reg=c["region"], sev=c["severity"],
                  de=c["description"])
+
+
+def notify_completed(conn, benchmark, totals, scope="all"):
+    """Best-effort SNS mail when a benchmark run completes (gap L192, v1
+    notifyBenchmarkCompleted parity: benchmark name + scope + total/alarm/ok counts).
+    Reuses the diagnosis notify plumbing end-to-end — the DIAGNOSIS_SNS_TOPIC_ARN env +
+    sns:Publish grant the worker already carries when diagnosis_notify_enabled (env absent →
+    silent no-op, zero Terraform), and the diagnosis_notify_paused app_settings admin pause
+    (paused → skip; a pause-read failure fails OPEN to publishing — the digest precedent).
+    NEVER raises: notification must not fail the run. Returns the MessageId or None."""
+    topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
+    if not topic:
+        return None
+    try:
+        try:
+            rows = conn.run("SELECT value FROM app_settings WHERE key = 'diagnosis_notify_paused'")
+            if bool(rows) and str(rows[0][0]).strip().lower() == "true":
+                print("[compliance] notify paused (diagnosis_notify_paused) — skipping publish")
+                return None
+        except Exception as e:  # noqa: BLE001 — fail-open: a settings-read failure must not mute mail
+            print(f"[compliance] pause-flag read failed (fail-open, publishing): {e}")
+        import boto3  # deferred: keeps parse-only unit tests free of boto3
+
+        domain = os.environ.get("APP_DOMAIN", "")
+        pr = totals.get("pass_rate")
+        parts = [
+            "컴플라이언스 벤치마크 완료",
+            "=" * 40,
+            f"벤치마크: {benchmark}",
+            f"범위(scope): {scope}",
+            f"전체 컨트롤: {totals.get('total_controls', 0)} · 통과: {totals.get('ok', 0)} · 실패(Alarm): {totals.get('alarm', 0)}",
+        ]
+        if pr is not None:
+            parts.append(f"통과율: {pr}%")
+        if domain:
+            parts += ["", f"상세 보기: https://{domain}/compliance"]
+        parts += ["", "이 메일은 AWSops 벤치마크 완료 시 발송되었습니다.",
+                  "수신 거부 / 구독 관리는 관리자에게 문의하세요."]
+        resp = boto3.client("sns").publish(
+            TopicArn=topic,
+            Subject="[AWSops] 컴플라이언스 벤치마크 완료",
+            Message="\n".join(parts),
+        )
+        mid = resp.get("MessageId")
+        print(f"[compliance] published completion mail → {topic} (MessageId={mid})")
+        return mid
+    except Exception as e:  # noqa: BLE001 — best-effort; never fail the run over a mail
+        print(f"[compliance] notify publish failed (non-fatal): {e}")
+        return None

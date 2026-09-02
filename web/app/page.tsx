@@ -20,6 +20,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
 import { nearestSnapshot, netChange } from '@/lib/trend-utils';
+import { estimateCostImpact } from '@/lib/cost-impact';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
 
@@ -238,6 +239,11 @@ export default function Home() {
       return { type: t, label: INV_LABEL(t), cur, w: wv, m: mv, wPct: pct(wv), mPct: pct(mv) };
     }).filter((r) => (r.cur ?? 0) > 0 || (r.w ?? 0) > 0);
   })();
+
+  // Cost Impact Estimation (gap L225, v1 parity): 30d count delta × static monthly weight,
+  // |impact| desc — pure client heuristic off the SAME deltaRows the table renders (a type
+  // with no 30d baseline or no weight entry is excluded, never a fabricated $0).
+  const impactRows = estimateCostImpact(deltaRows);
 
   const loading = !ov && !ovErr && !sum && !sumErr;
 
@@ -523,6 +529,30 @@ export default function Home() {
                 </tbody>
               </table>
             </div>
+          </Card>
+        )}
+
+        {/* ---- Cost Impact Estimation (gap L225): 30d delta x static monthly weight ---- */}
+        {impactRows.length > 0 && (
+          <Card
+            title="월 비용 영향 추정"
+            subtitle={tt('30일 수량 변화 × 타입별 정적 단가 근사 — 실제 청구액이 아닙니다 (실측은 Cost 페이지)')}
+          >
+            <ul className="flex flex-col gap-1.5">
+              {impactRows.map((r) => (
+                <li key={r.type} className="flex items-center justify-between gap-3 text-[13px]">
+                  <span className="min-w-0 truncate text-ink-700">{INV_LABEL(r.type)}</span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="tabular text-[11.5px] text-ink-400">
+                      {r.delta > 0 ? '+' : ''}{r.delta.toLocaleString()}
+                    </span>
+                    <span className={'tabular font-semibold ' + (r.monthly > 0 ? 'text-brand-700' : 'text-positive-text')}>
+                      {r.monthly > 0 ? '+' : '−'}${Math.abs(r.monthly).toLocaleString()}/mo est.
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
           </Card>
         )}
 
