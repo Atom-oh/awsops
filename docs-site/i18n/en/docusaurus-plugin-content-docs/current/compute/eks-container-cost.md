@@ -29,7 +29,7 @@ The current data source is displayed at the top of the page:
 Pie chart showing daily cost distribution by namespace
 
 ### Node Daily Cost + Pod Count Chart
-Dual-axis bar chart showing daily cost and Pod count per node
+Shows daily cost and Pod count per node. In v2 this renders as **grouped bars with per-series scaling** (a cost track + a pod-count track, real values/units on the labels) instead of a dual axis — above the node cost table on `/eks/cost`.
 
 ### Pods Tab
 | Column | Description |

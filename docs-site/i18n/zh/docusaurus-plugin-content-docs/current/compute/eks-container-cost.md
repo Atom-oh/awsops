@@ -29,7 +29,7 @@ import Screenshot from '@site/src/components/Screenshot';
 以饼图显示各命名空间的每日成本分布
 
 ### Node Daily Cost + Pod Count 图表
-以双轴条形图显示各节点的每日成本和 Pod 数量
+显示各节点的每日成本和 Pod 数量。在 v2 中以**按序列自适应缩放的分组条**（成本轨道 + Pod 数轨道，标签带真实数值/单位）替代双轴 — 位于 `/eks/cost` 节点成本表上方。
 
 ### Pods 标签页
 | 列 | 说明 |

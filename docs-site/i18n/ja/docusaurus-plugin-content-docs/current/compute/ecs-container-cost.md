@@ -9,7 +9,7 @@ import Screenshot from '@site/src/components/Screenshot';
 # ECS Container Cost
 
 :::caution v1 アーカイブ文書 — v2 の対応機能は /inventory/ecs_task にあります
-この文書は v1 専用の **ECS Container Cost** ページ（統計カード、チャート、"Cost Calculation Basis" トグルを含む）について説明しています。**v2 に専用ページはなく、対応機能は `/inventory/ecs_task` インベントリビューにあります**（**Cost/Day・Cost/Mo** 列、「日次コスト合計 (est.)」KPI タイル、テーブル下部の折りたたみ式**コスト計算根拠**パネル — v1 の 'Cost Calculation Basis' に対応）。列の値は CloudWatch Container Insights の使用率メトリクスではなく、**タスク定義に割り当てられた cpu/memory から算出した静的な推定値**です（`web/lib/inventory-derived.ts` の `ecs_task` deriver — 単価定数は単一ソース `web/lib/cost-basis.ts` 由来）。以下の**価格定数・計算式**（`$0.04656`/`$0.00511`、`(CPU units/1024)×単価×24 + (MB/1024)×単価×24`）はこの静的推定値の実際のロジックと一致しており正確です — 変更しないでください。ただし、この文書にあるチャートと「CloudWatch Container Insights メトリクスに基づいて計算」という記述は v1 専用であり、v2 には存在しません（v2 の推定は静的定数ベースで、一時ストレージ単価は反映されません）。
+この文書は v1 専用の **ECS Container Cost** ページ（統計カード、チャート、"Cost Calculation Basis" トグルを含む）について説明しています。**v2 に専用ページはなく、対応機能は `/inventory/ecs_task` インベントリビューにあります**（**Cost/Day・Cost/Mo** 列、「日次コスト合計 (est.)」KPI タイル、テーブル下部の折りたたみ式**コスト計算根拠**パネル — v1 の 'Cost Calculation Basis' に対応）。列の値は CloudWatch Container Insights の使用率メトリクスではなく、**タスク定義に割り当てられた cpu/memory から算出した静的な推定値**です（`web/lib/inventory-derived.ts` の `ecs_task` deriver — 単価定数は単一ソース `web/lib/cost-basis.ts` 由来）。以下の**価格定数・計算式**（`$0.04656`/`$0.00511`、`(CPU units/1024)×単価×24 + (MB/1024)×単価×24`）はこの静的推定値の実際のロジックと一致しており正確です — 変更しないでください。ただし、この文書にある円グラフと「CloudWatch Container Insights メトリクスに基づいて計算」という記述は v1 専用であり、v2 には存在しません（v2 の推定は静的定数ベースで、一時ストレージ単価は反映されません）。なお **Cost by Service (CPU vs Memory)** チャートは v2 にも存在します — `/inventory/ecs_task` にサービス別グループバー（FARGATE タスクのみ、静的推定、上位 10）として表示されます。
 :::
 
 ECS Fargate タスクのコストを分析するページです。Fargate の価格と CloudWatch Container Insights メトリクスに基づいてコストを計算します。

@@ -1,0 +1,34 @@
+// @vitest-environment jsdom
+import { afterEach, describe, it, expect } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import { EcsCostByService } from './EcsCostByService';
+import { estimateDailyParts } from '@/lib/cost-basis';
+
+afterEach(cleanup);
+
+const task = (over: Record<string, unknown>) => ({
+  resource_id: 'arn:t', launch_type: 'FARGATE', task_group: 'service:web', cpu: 512, memory: 1024, ...over,
+});
+
+describe('EcsCostByService (gap L195)', () => {
+  it('groups FARGATE tasks by service and splits CPU vs Memory from the shared estimator', () => {
+    render(<EcsCostByService rows={[task({}), task({ resource_id: 'arn:t2' })]} />);
+    expect(screen.getByText('web')).toBeTruthy();
+    // two identical tasks → 2× the shared estimateDailyParts split (lockstep by import)
+    const parts = estimateDailyParts(512 / 1024, 1024 / 1024);
+    expect(screen.getByText(`$${(2 * parts.cpu).toFixed(2)}`)).toBeTruthy();
+    expect(screen.getByText(`$${(2 * parts.ram).toFixed(2)}`)).toBeTruthy();
+  });
+  it('excludes EC2 launch-type and non-service groups (no estimate → no bar), renders nothing when empty', () => {
+    const { container } = render(
+      <EcsCostByService rows={[task({ launch_type: 'EC2' }), task({ task_group: 'family:batch' })]} />,
+    );
+    expect(container.innerHTML).toBe('');
+  });
+  it('caps to top 10 services by total', () => {
+    const rows = Array.from({ length: 12 }, (_, i) => task({ task_group: `service:s${i}`, cpu: 256 * (i + 1) }));
+    render(<EcsCostByService rows={rows} />);
+    expect(screen.queryByText('s0')).toBeNull(); // smallest two fall off
+    expect(screen.getByText('s11')).toBeTruthy();
+  });
+});

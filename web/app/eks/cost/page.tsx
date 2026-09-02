@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CostBasisPanel from '@/components/eks/CostBasisPanel';
+import GroupedBarList from '@/components/charts/GroupedBarList';
 import { DollarSign, CalendarDays, Boxes, Crown, Search } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -333,6 +334,24 @@ export default function EksFleetCostPage() {
                       rows={rows}
                       onRowClick={(r) => setSelected((r._raw ?? r) as Record<string, unknown>)}
                     />
+
+                    {/* gap L218 (v1 dual-axis parity → per-series-scaled grouped bars): node
+                        daily cost + pod count from the SAME merged data (no new fetch). */}
+                    {merged.nodes.length > 0 && (
+                      <GroupedBarList
+                        title={tt('Node별 일일 비용 + Pod 수')}
+                        data={merged.nodes.map((n) => ({
+                          label: `${n.cluster}/${n.node}`,
+                          cost: n.totalCost,
+                          pods: merged.pods.filter((p) => p.cluster === n.cluster && p.node === n.node).length,
+                        }))}
+                        labelKey="label"
+                        series={[
+                          { key: 'cost', label: tt('일일 비용'), color: '#3D6FB5', fmt: (v) => usd(v) },
+                          { key: 'pods', label: 'Pods', color: '#39C2B0' },
+                        ]}
+                      />
+                    )}
 
                     {merged.nodes.length > 0 && (
                       <Card title="Node별 비용 (일간)" padded={false}>
