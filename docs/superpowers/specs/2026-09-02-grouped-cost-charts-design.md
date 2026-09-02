@@ -26,8 +26,10 @@ Service CPU vs Memory grouped bar), L218 (eks-container-cost Node Daily Cost + P
   cost table: cost ($/day, from the existing OpenCost per-node allocation) and pod count
   (counted client-side from the SAME merged pods list, matched by cluster+node — no new
   fetch). v1's dual-axis becomes per-series-scaled grouped bars (deliberate idiom deviation,
-  disclosed). Renders only when the node list is non-empty; a node with zero matched pods
-  shows a real 0 (the pods list is the page's own data, not an unknown).
+  disclosed). Renders only when the node list is non-empty, Top 15 by cost; pod counts
+  render only for clusters whose pod→node attribution is COMPLETE — any unattributed pod
+  makes the cluster's counts unknowable (undercount risk), so its nodes render '—' (as
+  amended by rounds 2–3).
 
 ## Testing
 - GroupedBarList: per-series vs sharedScale track widths + legend/format labels (real test).
@@ -52,8 +54,8 @@ Service CPU vs Memory grouped bar), L218 (eks-container-cost Node Daily Cost + P
   `isTruncated` and appends the page's standard `(표본 기준)` label (the in-file
   one-signal-for-every-sample-consumer convention).
 - Minors: /eks/cost pod counts precompute a cluster/node Map (was O(nodes×pods) per render),
-  rows sort cost-desc (the primitive's callers-sort contract), and the pods series is DROPPED
-  when no pod carries node attribution (a confident 0 must not stand in for unknown);
+  rows sort cost-desc (the primitive's callers-sort contract), and unattributed clusters'
+  nodes render '—' pod values (the series/legend stays — corrected in round 3);
   CHANGELOG's serviceless wording corrected (excluded for lack of a grouping key, not lack of
   an estimate).
 
@@ -72,3 +74,14 @@ Service CPU vs Memory grouped bar), L218 (eks-container-cost Node Daily Cost + P
   tested); the node chart caps Top 15 with a count-labeled title; the doc quotes use the
   SHIPPED localized labels (en 'sampled' / zh '基于样本' / ja 'サンプル基準' — the zh typo
   fixed).
+
+## Round-3 corrections (review-driven)
+
+- **Attribution must be COMPLETE per cluster (the gate MAJOR)** — round 2's any-pod-attributed
+  flag still rendered confident 0s/undercounts when a cluster's attribution was PARTIAL
+  (OpenCost sets pod.node per pod — one response can attribute some pods and omit others).
+  A cluster with ANY unattributed pod now renders '—' on all its nodes' pod values.
+- **The 'pods series is dropped' claim corrected everywhere (the L5 MAJOR)** — what ships is
+  per-node '—' values with the series/legend persistent, not a dropped series; the CHANGELOG
+  (EN/KO), audit note, spec decisions/round-1/round-2 bullets, and the code comment now all
+  describe the shipped behavior, and the Top-15 cap is disclosed in CHANGELOG/audit/docs.

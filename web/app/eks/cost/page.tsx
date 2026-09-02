@@ -337,19 +337,16 @@ export default function EksFleetCostPage() {
 
                     {/* gap L218 (v1 dual-axis parity → per-series-scaled grouped bars): node
                         daily cost + pod count from the SAME merged data (no new fetch).
-                        Cost-desc sorted (the primitive's callers-sort contract); the pods
-                        series is DROPPED when no pod carries node attribution (a confident 0
-                        must not stand in for unknown — OpenCost can omit pod→node). */}
+                        Cost-desc sorted, Top 15. Pod counts render ONLY for clusters whose
+                        attribution is COMPLETE (every pod carries a node — OpenCost can omit
+                        pod→node per pod); any unattributed pod makes the whole cluster's
+                        counts unknowable (a shown count could undercount), so its nodes
+                        render '—', never a confident 0. */}
                     {merged.nodes.length > 0 && (() => {
                       const podsByNode = new Map<string, number>();
-                      // attribution is PER CLUSTER (round-2 gate: a fleet-global flag let one
-                      // attributed cluster flip confident 0s onto another cluster's nodes):
-                      // a node's pod count renders only when ITS cluster has attributed pods —
-                      // otherwise the value is omitted ('—'), never zeroed.
-                      const clustersWithAttr = new Set<string>();
+                      const clustersWithUnattributed = new Set<string>();
                       for (const pd of merged.pods) {
-                        if (!pd.node) continue;
-                        clustersWithAttr.add(pd.cluster);
+                        if (!pd.node) { clustersWithUnattributed.add(pd.cluster); continue; }
                         const k = `${pd.cluster}/${pd.node}`;
                         podsByNode.set(k, (podsByNode.get(k) ?? 0) + 1);
                       }
@@ -359,7 +356,7 @@ export default function EksFleetCostPage() {
                         .map((n) => ({
                           label: `${n.cluster}/${n.node}`,
                           cost: n.totalCost,
-                          pods: clustersWithAttr.has(n.cluster) ? podsByNode.get(`${n.cluster}/${n.node}`) ?? 0 : null,
+                          pods: clustersWithUnattributed.has(n.cluster) ? null : podsByNode.get(`${n.cluster}/${n.node}`) ?? 0,
                         }));
                       return (
                         <GroupedBarList
