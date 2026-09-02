@@ -205,7 +205,9 @@ def test_s3_security_rows_carry_bucket_policy_is_public():
     by_name = {r["name"]: r for r in rows}
     assert by_name["pub"]["bucket_policy_is_public"] is True
     assert by_name["priv"]["bucket_policy_is_public"] is False
-    # denial / no policy => unknown (None), never a fabricated verdict
+    # denial => unknown (None), never a fabricated verdict
     assert by_name["denied"]["bucket_policy_is_public"] is None
-    assert by_name["nopolicy"]["bucket_policy_is_public"] is None
+    # NO bucket policy at all is a DEFINITIVE "not public via policy" (the majority case) —
+    # None here would zero the Policy Private bar on a typical fleet.
+    assert by_name["nopolicy"]["bucket_policy_is_public"] is False
     assert id_col == "name" and region_col == "region"

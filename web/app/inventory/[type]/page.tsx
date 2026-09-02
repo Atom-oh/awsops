@@ -46,6 +46,7 @@ const FACET_LABELS: Record<string, string> = {
   http_version: 'HTTP Version', is_ipv6_enabled: 'IPv6', role_last_used_region: 'Last Used Region',
   include_global_service_events: 'Global Service Events', statistic: 'Statistic',
   comparison_operator: 'Comparison', period: 'Period (s)',
+  bucket_policy_is_public: 'Policy Public',
 };
 
 // Count rows by a column value (stringified), descending by count.
@@ -334,12 +335,12 @@ export default function InventoryTypePage() {
   // BarDistribution default) — distinct from barKey (numeric ranking) and hist (numeric axis).
 
   const countBar = spec.countBarKey && countBarData.length > 0
-    ? <BarDistribution title={spec.countBarKey.label} data={countBarData} xKey="name" yKey="value" />
+    ? <BarDistribution title={isTruncated ? `${spec.countBarKey.label} (${tt('표본 기준')})` : spec.countBarKey.label} data={countBarData} xKey="name" yKey="value" />
     : null;
   // Flag-count bars (gap L240): rendered only when rows exist — preserveOrder keeps the
-  // declared semantic order (Private/Public/…) instead of the count-desc re-sort.
+  // declared semantic order (Policy Private/Public/…) instead of the count-desc re-sort.
   const flagBar = spec.flagBarKey && allRows.length > 0
-    ? <BarDistribution title={spec.flagBarKey.label} data={flagBarData} xKey="name" yKey="value" preserveOrder />
+    ? <BarDistribution title={isTruncated ? `${spec.flagBarKey.label} (${tt('표본 기준')})` : spec.flagBarKey.label} data={flagBarData} xKey="name" yKey="value" preserveOrder />
     : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
   const graphBand = donut && donut2

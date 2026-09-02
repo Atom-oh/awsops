@@ -152,13 +152,16 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['region', 'image_tag_mutability'] },
-  // Security Status flag bars (gap L240, v1 parity): Private/Public need the synced
-  // bucket_policy_is_public (populated by the next sync run — until then those bars read 0
-  // while Versioned/Logging chart immediately); unknown (null) buckets count into neither.
+  // Security Status flag bars (gap L240, v1 parity): the policy bars need the synced
+  // bucket_policy_is_public (populated by the next sync run — until then they read 0 while
+  // Versioned/Logging chart immediately); unknown (null) buckets count into neither. The
+  // labels say POLICY Private/Public on purpose: the flag measures bucket-policy status only,
+  // narrower than PUBLIC_S3_WHERE's full exposure predicate (policy OR BPA-disabled) — a
+  // plain 'Private' here would false-all-clear a BPA-disabled bucket /security flags.
   s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', distKey2: 'encryption',
     flagBarKey: { label: 'Security Status', flags: [
-      { name: 'Private', col: 'bucket_policy_is_public', negate: true },
-      { name: 'Public', col: 'bucket_policy_is_public' },
+      { name: 'Policy Private', col: 'bucket_policy_is_public', negate: true },
+      { name: 'Policy Public', col: 'bucket_policy_is_public' },
       { name: 'Versioned', col: 'versioning_enabled' },
       { name: 'Logging', col: 'logging_enabled' },
     ] },

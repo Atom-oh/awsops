@@ -237,10 +237,15 @@ export default function CompliancePage() {
   const passRate = run?.pass_rate != null ? Number(run.pass_rate) : null;
 
   // v1 'Alarms by Section' parity (gap L191): alarm counts per section from the SAME rollup
-  // the pass-rate list uses — zero-alarm sections filtered, chart omitted when none alarm.
+  // the pass-rate list uses — zero-alarm sections filtered, chart omitted when none alarm,
+  // top-10 by count (the countBarKey cap precedent — a deeply-grouped benchmark could yield
+  // a long list). Counts are per FINDING (one leaf result per checked resource), while the
+  // status donut counts CONTROLS — the title hint keeps the two side-by-side charts honest.
   const alarmBySection = sections
     .filter((s) => s.alarm > 0)
-    .map((s) => ({ name: s.section, value: s.alarm }));
+    .map((s) => ({ name: s.section, value: s.alarm }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
 
   return (
     <div>
@@ -377,7 +382,13 @@ export default function CompliancePage() {
                 </div>
               </Card>
               {alarmBySection.length > 0 && (
-                <BarDistribution title="Alarms by Section" data={alarmBySection} xKey="name" yKey="value" />
+                <BarDistribution
+                  title="Alarms by Section"
+                  right={<span className="text-[11px] text-ink-400">per finding</span>}
+                  data={alarmBySection}
+                  xKey="name"
+                  yKey="value"
+                />
               )}
             </div>
 

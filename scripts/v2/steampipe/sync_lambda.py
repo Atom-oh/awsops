@@ -534,13 +534,16 @@ def _fetch_s3_security(s3=None):
         except ClientError:
             pass
         try:
-            # gap L240: the Private/Public flag bars chart this off the bucket row itself
-            # (the separate s3_public_access fetch keeps the full public-access-block detail).
-            # AccessDenied / NoSuchBucketPolicy → None (unknown counts into neither side).
+            # gap L240: the Policy Private/Public flag bars chart this off the bucket row
+            # itself (the separate s3_public_access fetch keeps the public-access-block
+            # detail). NoSuchBucketPolicy (no bucket policy at all — the common case) is a
+            # DEFINITIVE "not public via policy" → False (the NoSuchPublicAccessBlock→False
+            # precedent above); AccessDenied/other → None (unknown counts into neither side).
             rec["bucket_policy_is_public"] = (
                 s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
-        except ClientError:
-            pass
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchBucketPolicy":
+                rec["bucket_policy_is_public"] = False
         rows.append(rec)
     return rows, "name", "region"
 

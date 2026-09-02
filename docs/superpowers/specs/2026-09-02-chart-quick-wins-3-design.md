@@ -43,3 +43,25 @@ bar chart), L240 (S3 Security Status bars), L251 (Subnets per VPC distribution).
   invariant suite checks those).
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/steampipe`; gap-audit ticks with a
   batch-29 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **NoSuchBucketPolicy is a DEFINITIVE "not public via policy" → False (the gate MAJOR)** —
+  the first cut lumped it with AccessDenied as None, which would have zeroed BOTH Policy bars
+  on a typical fleet (most buckets have no bucket policy at all), contradicting this spec's
+  own claim. Follows the `NoSuchPublicAccessBlock → False` precedent 30 lines above in the
+  same file; the sync test now pins nopolicy → False.
+- **The bars are labeled Policy Private / Policy Public (the gate MAJOR)** — the flag
+  measures bucket-policy status only, narrower than `PUBLIC_S3_WHERE`'s full exposure
+  predicate (policy OR BPA-disabled); a plain 'Private' would false-all-clear a BPA-disabled
+  bucket that /security simultaneously flags HIGH. Guides/CHANGELOG renamed to match (the
+  s3_public_access 'Policy public' labeling precedent).
+- HBarList's 2% visibility floor now applies only to NONZERO values — a kept zero bar must
+  render visually empty; `bucket_policy_is_public` gains a FACET_LABELS entry ('Policy
+  Public'); countBar/flagBar titles get the hist-precedent `(표본 기준)` suffix when the
+  500-row fetch is truncated; Alarms by Section is capped top-10 by count (the countBarKey
+  precedent) and its title carries a '· per finding' hint (the bars count leaf results — one
+  per checked resource — while the adjacent donut counts controls).
+- Wording: the sync deploy is a **terraform apply (ZIP `source_code_hash`)**, not an image
+  redeploy; the ticked audit line carries an inline 2026-09-02 correction per the file's
+  correction precedent.
