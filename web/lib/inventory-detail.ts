@@ -145,9 +145,12 @@ function structuredList(key: string, value: unknown): DetailListItem[] | null {
         flag: act?.toLowerCase() === 'block' ? 'BLOCK' : undefined,
       });
     } else if (key === 'security_groups') {
-      const id = o.GroupId ?? o.group_id;
+      // shapes: EC2 [{GroupId, GroupName}] · ElastiCache [{SecurityGroupId, Status}] — the same
+      // cluster whose rules section resolves via SecurityGroupId must not fall back to raw JSON.
+      const id = o.GroupId ?? o.group_id ?? o.SecurityGroupId ?? o.security_group_id;
       if (typeof id !== 'string') return null;
-      rows.push({ id, name: typeof (o.GroupName ?? o.group_name) === 'string' ? String(o.GroupName ?? o.group_name) : undefined });
+      const name = o.GroupName ?? o.group_name ?? o.Status ?? o.status;
+      rows.push({ id, name: typeof name === 'string' ? name : undefined });
     } else if (key === 'block_device_mappings') {
       const id = o.DeviceName ?? o.device_name;
       if (typeof id !== 'string') return null;

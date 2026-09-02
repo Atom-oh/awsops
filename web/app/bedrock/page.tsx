@@ -111,7 +111,9 @@ export default function BedrockPage() {
   const cacheHitRate = totalInput + totalCacheRead > 0 ? (totalCacheRead / (totalInput + totalCacheRead)) * 100 : 0;
 
   // Model drill-down (v1 parity): unit prices + cost breakdown + 4xx/5xx split, flat fields.
-  const pickedModel = models.find((m) => m.label === picked) ?? null;
+  // keyed on modelId (round-2 gate): getModelLabel collides across ids (e.g. regional
+  // prefix variants), and the charts' whole purpose is per-model attribution.
+  const pickedModel = models.find((m) => m.modelId === picked) ?? null;
   const pickedDetail = pickedModel
     ? (() => {
         const pr = getModelPricing(pickedModel.modelId);
@@ -146,6 +148,7 @@ export default function BedrockPage() {
   const costRows = models.map((m) => ({ label: m.label, cost: m.cost.total }));
   const invRows = models.map((m) => ({ label: m.label, invocations: m.invocations }));
   const tableRows = models.map((m) => ({
+    modelId: m.modelId, // row key for selection (labels collide across regional id variants)
     model: m.label,
     invocations: m.invocations.toLocaleString(),
     inputTokens: compact(m.inputTokens),
@@ -247,7 +250,7 @@ export default function BedrockPage() {
                     { key: 'cost', label: '비용' },
                   ]}
                   rows={tableRows}
-                  onRowClick={(row) => setPicked(String(row.model))}
+                  onRowClick={(row) => setPicked(String(row.modelId))}
                 />
               </section>
             </>
@@ -257,7 +260,7 @@ export default function BedrockPage() {
         {/* v1-parity AI-call ops stats — independent of the CloudWatch range/account above
             (own /api/chat/stats fetch); self-hides when nothing is recorded. */}
         <ChatOpsStatsCard />
-        <DetailPanel title={picked ?? undefined} data={pickedDetail} onClose={() => setPicked(null)}>
+        <DetailPanel title={pickedModel?.label ?? picked ?? undefined} data={pickedDetail} onClose={() => setPicked(null)}>
           {/* gap L184 (v1 parity): per-model Invocations / Token time series over the selected
               range — an empty series reads 'no data', never a fabricated flat line. */}
           {pickedModel && (

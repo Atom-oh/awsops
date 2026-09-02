@@ -50,3 +50,22 @@ charts), L223 (ElastiCache SG inbound-rule drill-down), L233 (EBS measured Read 
 - The client sparkline formatter gains the `iops` case (EBS Avg/Max/Min no longer render
   unitless integer-rounded values) and `VolumeQueueLength` uses a new `dec1` format —
   fractional queue-length averages must not integer-round to 0.
+
+## Round-2 corrections (review-driven)
+
+- **Complete-bucket selection for perSecond metrics (the gate MAJOR)** — the latest grid
+  divided the still-filling newest hour bucket by 3600 (systematic understatement — the
+  partial bucket is the value ALWAYS displayed), and the spark's trailing partial 5-min
+  bucket ÷300 ended every chart in a fake dip. The latest grid now picks the newest bucket
+  whose end is past (only-partial data reads '—'), the spark drops the incomplete trailing
+  bucket, and tests exercise the partial/complete relationship rather than encoding ÷N.
+- **Model selection keyed on modelId (the gate MAJOR)** — getModelLabel collides across
+  regional id variants and the merge keys rows by modelId; row clicks now set modelId (label
+  kept for display/title only).
+- **L233 audit note disclosed the residue (the L5 MAJOR)** — v1's list-table latest-IOPS +
+  measured-at columns and row-click Avg/Max/Min tiles are NOT delivered (detail-panel grid +
+  sparkline instead; Avg/Max/Min exists only in the ≤2-sample fallback).
+- Minors: inventory-detail's security_groups reader learns the SecurityGroupId shape (the
+  same cluster's own SG row no longer falls back to raw JSON); iops/dec1 gain thousands
+  grouping; TERMS en aligned to 'Token Usage (input+output)'; docs add the BurstBalance
+  gp2/st1/sc1 qualifier and EBS joins the why-awsops inline-CloudWatch list (4 locales).

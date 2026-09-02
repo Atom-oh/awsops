@@ -554,7 +554,7 @@ export const TERMS: Record<string, Pair> = {
   '모델 상세': { en: 'Model detail', zh: '模型明细', ja: 'モデル詳細' },
   '모델별 호출 수': { en: 'Invocations by model', zh: '按模型的调用数', ja: 'モデル別呼び出し数' },
   '모델별 비용': { en: 'Cost by model', zh: '按模型的费用', ja: 'モデル別コスト' },
-  '토큰 추이 (입력+출력)': { en: 'Token trend (in+out)', zh: '令牌趋势 (输入+输出)', ja: 'トークン推移 (入力+出力)' },
+  '토큰 추이 (입력+출력)': { en: 'Token Usage (input+output)', zh: '令牌趋势 (输入+输出)', ja: 'トークン推移 (入力+出力)' },
   'Prompt Caching 요약': { en: 'Prompt caching summary', zh: 'Prompt 缓存摘要', ja: 'Prompt Caching 概要' },
   '캐시 적중률': { en: 'Cache hit rate', zh: '缓存命中率', ja: 'キャッシュヒット率' },
   '캐시 읽기': { en: 'Cache read', zh: '缓存读取', ja: 'キャッシュ読み取り' },

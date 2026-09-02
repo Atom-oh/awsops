@@ -446,8 +446,8 @@ function fmtLive(v: number, fmt: LiveFmt): string {
     case 'mbRaw': return `${v.toFixed(1)} MB`; // source metric already in megabytes (AWS/ES)
     case 'ms': return `${Math.round(v * 1000) / 1000} ms`;
     case 'bps': return `${(v / 1e6).toFixed(1)} MB/s`;
-    case 'iops': return `${Math.round(v * 10) / 10} IOPS`;
-    case 'dec1': return `${Math.round(v * 10) / 10}`; // fractional averages (queue length) must not integer-round to 0
+    case 'iops': return `${(Math.round(v * 10) / 10).toLocaleString(undefined, { maximumFractionDigits: 1 })} IOPS`;
+    case 'dec1': return (Math.round(v * 10) / 10).toLocaleString(undefined, { maximumFractionDigits: 1 }); // fractional averages (queue length) must not integer-round to 0
     default: return Math.round(v).toLocaleString();
   }
 }
@@ -471,7 +471,22 @@ export async function liveResourceMetrics(type: string, id: string, accountId?: 
     for (const res of r.MetricDataResults ?? []) {
       const i = Number((res.Id ?? '').replace('lm', ''));
       const def = spec.metrics[i];
-      const raw = res.Values?.[0];
+      // perSecond (÷Period) makes bucket COMPLETENESS load-bearing: the newest bucket is the
+      // still-filling current hour (default newest-first order), and dividing its partial Sum
+      // by the full period systematically understates the value — pick the newest bucket
+      // whose end (ts + Period) is already past. Averages/Maximums keep Values[0] (a partial
+      // bucket is a valid sample for them).
+      let raw: number | undefined;
+      if (def?.perSecond) {
+        const ts = res.Timestamps ?? [];
+        const vals = res.Values ?? [];
+        for (let k = 0; k < ts.length; k++) {
+          const t = ts[k] instanceof Date ? (ts[k] as Date) : new Date(String(ts[k]));
+          if (t.getTime() + 3600_000 <= Date.now()) { raw = vals[k]; break; }
+        }
+      } else {
+        raw = res.Values?.[0];
+      }
       const v = typeof raw === 'number' && def?.perSecond ? raw / 3600 : raw;
       if (def) out.push({ label: def.label, value: typeof v === 'number' ? fmtLive(v, def.fmt) : '—' });
     }
@@ -508,6 +523,9 @@ export async function liveResourceTrends(type: string, id: string, accountId?: s
       for (let k = 0; k < (res?.Timestamps?.length ?? 0); k++) {
         const ts = res!.Timestamps![k] instanceof Date ? (res!.Timestamps![k] as Date) : new Date(String(res!.Timestamps![k]));
         const v = res!.Values?.[k];
+        // perSecond: a still-filling 5-min bucket ÷300 would end every spark in a fake dip —
+        // include only buckets whose end is already past.
+        if (def.perSecond && ts.getTime() + 300_000 > Date.now()) continue;
         if (typeof v === 'number' && ts.getTime() >= Date.now() - 3600_000) {
           const scaled = def.perSecond ? v / 300 : v;
           samples.push({ t: ts.toISOString(), v: Math.round(scaled * 100) / 100 });
