@@ -12,6 +12,13 @@ describe('s3AccessRoles (gap L242 — managed-policy matching)', () => {
     expect(anySynced).toBe(true);
     expect(hits.map((h) => h.name)).toEqual(['r1', 'r2']);
     expect(hits[0].policies).toEqual(['AmazonS3ReadOnlyAccess']);
+    // admin-equivalent + job-function path also grant S3; deny-shaped customer policies never match
+    const extra = s3AccessRoles([
+      { resource_id: 'p1', attached_policy_arns: ['arn:aws:iam::aws:policy/PowerUserAccess'] },
+      { resource_id: 'p2', attached_policy_arns: ['arn:aws:iam::aws:policy/job-function/PowerUserAccess'] },
+      { resource_id: 'p3', attached_policy_arns: ['arn:aws:iam::123456789012:policy/AmazonS3Deny'] },
+    ]);
+    expect(extra.hits.map((h) => h.name)).toEqual(['p1', 'p2']);
   });
   it('rows without the synced column set anySynced=false (pre-apply state ≠ genuinely empty)', () => {
     const { hits, anySynced } = s3AccessRoles([{ resource_id: 'r1' }, { resource_id: 'r2' }]);

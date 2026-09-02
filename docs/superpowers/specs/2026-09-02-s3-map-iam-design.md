@@ -12,16 +12,18 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   blocks grouped by region, colored by security status with v1's palette and PRECEDENCE —
   **Public** (red, `bucket_policy_is_public === true`) > **Versioned** (green,
   `versioning_enabled === true`) > **Standard** (cyan) — plus an **Unknown** (gray) state v1
-  didn't need: a bucket whose policy flag is unsynced/denied AND whose versioning is unknown
-  must not silently render as Standard. Block click opens the SAME DetailPanel the table
+  didn't need: an UNKNOWN policy flag always renders Unknown (even with known versioning —
+  a denied policy lookup must not paint a reassuring color), and public-false with unknown
+  versioning is Unknown too (as amended by round 1). Block click opens the SAME DetailPanel the table
   uses (an `onSelect` callback wired from the page); a legend row explains the colors; the
   500-row `(표본 기준)` label applies (the page's one truncation signal).
 - **L242** — two parts:
   - **Sync**: `iam_role` gains `attached_policy_arns` (verified against the pinned plugin
     source — a per-row `ListAttachedRolePolicies` hydrate; ADR-010's list-hydrate rule is
-    AMENDED in this PR: with ADR-021's degrade machinery an SCP-blocked hydrate now demotes
-    that account's sync to partial instead of hard-failing). Visible after the sync terraform
-    apply + a sync run.
+    AMENDED in this PR with the TRUE failure semantics: an SCP-blocked hydrate fails the
+    WHOLE iam_role run for all accounts (last-good rows preserved but frozen, status failed —
+    the accepted, disclosed blast radius; the consuming section surfaces the run status)).
+    Visible after the sync terraform apply + a sync run.
   - **Panel**: new `S3IamAccessSection` in DetailPanel (s3 rows only): fetches the SYNCED
     iam_role inventory via the EXISTING `/api/inventory/iam_role` route (no new route — no
     99-route churn; iam_role is an ADMIN-ONLY type, so the section shows a distinct
@@ -60,3 +62,21 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   policy must not count as access).
 - Docs: the residual 'TreeMap' heading/legend/usage strings swept in 4 locales with the
   Unknown legend row and the Policy-Public qualifier.
+
+## Round-2 corrections (review-driven)
+
+- **The degrade contract is stated truthfully (the L4/L5 gate MAJORs)** — round 1's ADR-010
+  amendment claimed a per-account `partial` demotion that does not exist: a Steampipe hydrate
+  exception fails the ENTIRE iam_role run for all accounts (pruning skipped, last-good rows
+  frozen, status `failed`). The ADR-010 amendment, the ko/zh/ja iam.md boxes, and a NEW en
+  iam.md box (closing the pre-existing locale asymmetry) now state exactly that, with the
+  whole-type freeze accepted as the disclosed risk.
+- **The section consumes `run.status`/`finished_at` (the L3 gate MAJOR)** — a non-succeeded
+  last run renders a stale-data banner, the conclusive "no role has access" line requires a
+  succeeded, untruncated run, and `rows: []` distinguishes "no roles exist" (succeeded run)
+  from "no data yet".
+- Minors: the policy regex adds `PowerUserAccess` and the `job-function/` path (still
+  anchored to the aws-managed prefix); the spec's L241 decision text matches the
+  unknown-first implementation; the accountId prop's host-vs-'self' caveat is documented at
+  the consumption site (s3 rows carry no account_id today — the 'self' default is exactly
+  where host iam_role rows live).

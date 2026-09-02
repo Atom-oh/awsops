@@ -86,6 +86,10 @@ Click a role in the table to view detailed information:
 - Displays `AssumeRolePolicyDocument` in JSON format
 - Shows which entities (services, accounts, users) can assume this role
 
+:::info SCP-blocked hydrate columns
+`iam_user`'s `mfa_enabled` and `iam_role`'s `attached_policy_arns` are per-row hydrate columns — if an SCP blocks the underlying API (`ListMFADevices`/`ListAttachedRolePolicies`), the ENTIRE sync run for that type records failed (not a per-account partial), pruning is skipped, and last-good rows for all accounts are preserved but frozen (ADR-010 amendment, 2026-09-02 — the whole-type freeze is the accepted, disclosed risk; consuming UIs surface the run status). MFA statistics aggregate in a separate `summary` query.
+:::
+
 :::info Trust Policy Analysis
 The trust policy defines the principals that can assume the role. Check the `Principal` field for allowed services, account IDs, and user ARNs.
 :::
