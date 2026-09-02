@@ -30,7 +30,8 @@ class FakeS3:
                 "GetPublicAccessBlock",
             )
         if Bucket in self._no_pab:
-            raise ClientError({"Error": {"Code": "NoSuchPublicAccessBlock"}}, "GetPublicAccessBlock")
+            # the REAL live error code (the short "NoSuchPublicAccessBlock" is also accepted)
+            raise ClientError({"Error": {"Code": "NoSuchPublicAccessBlockConfiguration"}}, "GetPublicAccessBlock")
         return {"PublicAccessBlockConfiguration": {
             "BlockPublicAcls": True, "BlockPublicPolicy": True,
             "RestrictPublicBuckets": True, "IgnorePublicAcls": True}}
