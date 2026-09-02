@@ -156,8 +156,8 @@
       "id": "upsert",
       "from": "sync",
       "to": "resources",
-      "label": "upsert; prune only on full success",
-      "classification": "partial → prunes skipped",
+      "label": "upsert; SDK-partial skips both prunes",
+      "classification": "unreachable-acct partial still prunes reachable",
       "variant": "emphasis"
     },
     {
@@ -217,7 +217,8 @@
       "items": [
         "A transiently-degraded rec is skipped, never upserted over last-known-good row content",
         "Steady-state denials keep the row with None fields plus a per-row attributes_unknown marker",
-        "Failed runs return and persist only the bounded 'sync failed: <ExceptionType>' label"
+        "Failed runs return and persist only the bounded 'sync failed: <ExceptionType>' label",
+        "An unreachable-account partial still prunes reachable accounts — only that account's last-good rows are preserved"
       ]
     },
     {

@@ -5051,7 +5051,7 @@
         <path data-edge-from="steampipe" data-edge-to="sync" data-edge-label="rows per connection" data-edge-key="2" data-edge-id="sp-rows" data-composition-points="371,157;422.5,157;422.5,264;474,264" d="M 371 157 L 422.5 157 L 422.5 264 L 474 264" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="sdk" data-edge-to="sync" data-edge-label="recs + failure metadata" data-edge-key="3" data-edge-id="sdk-recs" data-composition-points="371,385;422.5,385;422.5,278;474,278" d="M 371 385 L 422.5 385 L 422.5 278 L 474 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="sync" data-edge-to="guard" data-edge-label="failure classification" data-edge-key="4" data-edge-id="classify" data-composition-points="530,300;530,470" d="M 530 300 L 530 470" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="sync" data-edge-to="resources" data-edge-label="upsert; prune only on full success" data-edge-key="5" data-edge-id="upsert" data-composition-points="586,264;637.5,264;637.5,157;689,157" d="M 586 264 L 637.5 264 L 637.5 157 L 689 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="sync" data-edge-to="resources" data-edge-label="upsert; SDK-partial skips both prunes" data-edge-key="5" data-edge-id="upsert" data-composition-points="586,264;637.5,264;637.5,157;689,157" d="M 586 264 L 637.5 264 L 637.5 157 L 689 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="sync" data-edge-to="ledger" data-edge-label="status + last_success_at (CAS)" data-edge-key="6" data-edge-id="finalize" data-composition-points="586,278;637.5,278;637.5,385;689,385" d="M 586 278 L 637.5 278 L 637.5 385 L 689 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="ledger" data-edge-to="mcp" data-edge-label="per-type freshness" data-edge-key="7" data-edge-id="fresh" data-composition-points="801,385;904,385" d="M 801 385 L 904 385" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="resources" data-edge-to="mcp" data-edge-label="sql_reader views" data-edge-key="8" data-edge-id="reader" data-composition-points="801,157;852.5,157;852.5,385;904,385" d="M 801 157 L 852.5 157 L 852.5 385 L 904 385" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
@@ -5199,10 +5199,10 @@
           <text x="530" y="350" class="t-security" font-size="8" text-anchor="middle">failure classification</text>
         <text data-detail="fine" x="530" y="361" class="t-dim" font-size="7" text-anchor="middle">steady vs transient</text>
         </g>
-        <g data-detail="context" data-edge-from="sync" data-edge-to="resources" data-edge-label="upsert; prune only on full success" data-edge-key="5" data-edge-id="upsert">
-          <rect x="548.2" y="189.5" width="178.6" height="27" rx="4" class="c-mask"/>
-          <text x="637.5" y="200.5" class="t-backend" font-size="8" text-anchor="middle">upsert; prune only on full success</text>
-        <text data-detail="fine" x="637.5" y="211.5" class="t-dim" font-size="7" text-anchor="middle">partial → prunes skipped</text>
+        <g data-detail="context" data-edge-from="sync" data-edge-to="resources" data-edge-label="upsert; SDK-partial skips both prunes" data-edge-key="5" data-edge-id="upsert">
+          <rect x="516.35" y="189.5" width="242.3" height="27" rx="4" class="c-mask"/>
+          <text x="637.5" y="200.5" class="t-backend" font-size="8" text-anchor="middle">upsert; SDK-partial skips both prunes</text>
+        <text data-detail="fine" x="637.5" y="211.5" class="t-dim" font-size="7" text-anchor="middle">unreachable-acct partial still prunes reachable</text>
         </g>
         <g data-detail="context" data-edge-from="sync" data-edge-to="ledger" data-edge-label="status + last_success_at (CAS)" data-edge-key="6" data-edge-id="finalize">
           <rect x="558" y="310.5" width="159" height="27" rx="4" class="c-mask"/>
@@ -5452,6 +5452,7 @@
           <li>&bull; A transiently-degraded rec is skipped, never upserted over last-known-good row content</li>
           <li>&bull; Steady-state denials keep the row with None fields plus a per-row attributes_unknown marker</li>
           <li>&bull; Failed runs return and persist only the bounded &#39;sync failed: &lt;ExceptionType&gt;&#39; label</li>
+          <li>&bull; An unreachable-account partial still prunes reachable accounts — only that account&#39;s last-good rows are preserved</li>
         </ul>
       </div>
 
