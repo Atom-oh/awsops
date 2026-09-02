@@ -585,6 +585,7 @@ def _fetch_s3_public_access(s3=None):
     for b in s3.list_buckets().get("Buckets", []) or []:
         name = b["Name"]
         transient_failed = False
+        denied_attrs = []
         try:
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"  # null LocationConstraint => us-east-1
@@ -617,6 +618,10 @@ def _fetch_s3_public_access(s3=None):
                 # sdk_partial (see _S3_STEADY_DENIAL_CODES); disclosed on the ledger as an
                 # unknown attribute so freshness can degrade without blocking pruning.
                 unknown_attrs += 1
+                denied_attrs.extend([
+                    "block_public_acls", "block_public_policy",
+                    "restrict_public_buckets", "ignore_public_acls",
+                ])
             else:
                 failures.append(_safe_sdk_failure_type(e))
                 transient_failed = True
@@ -628,6 +633,7 @@ def _fetch_s3_public_access(s3=None):
             if code in _S3_STEADY_DENIAL_CODES:
                 # steady-state denial → unknown (None), uncounted as a failure but disclosed
                 unknown_attrs += 1
+                denied_attrs.append("bucket_policy_is_public")
             elif code != "NoSuchBucketPolicy":
                 failures.append(_safe_sdk_failure_type(e))
                 transient_failed = True
@@ -639,6 +645,14 @@ def _fetch_s3_public_access(s3=None):
             # healthy-recent (fresh captured_at). Skip the rec — the counted failure keeps
             # the run partial, and the skipped prunes preserve the existing row intact.
             continue
+        if denied_attrs:
+            # Per-row disclosure of the blind spot: without this, upserting None over
+            # previously-known values makes a known-public bucket read as clean on the
+            # security page (its WHERE matches only explicit true/false), indistinguishable
+            # from verified-private. The row-level marker lets readers render
+            # "unassessable" instead of silence; the per-type unknown_attribute_count
+            # aggregate alone names neither the bucket nor the fields.
+            rec["attributes_unknown"] = denied_attrs
         rows.append(rec)
     return _sdk_collection(rows, "name", "region", failures, unknown_attrs)
 
@@ -655,6 +669,7 @@ def _fetch_s3_security(s3=None):
     for b in s3.list_buckets().get("Buckets", []) or []:
         name = b["Name"]
         transient_failed = False
+        denied_attrs = []
         try:
             loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
             region = loc or "us-east-1"
@@ -682,6 +697,7 @@ def _fetch_s3_security(s3=None):
                 # (see _S3_STEADY_DENIAL_CODES); disclosed on the ledger as an unknown
                 # attribute so freshness can degrade without blocking pruning.
                 unknown_attrs += 1
+                denied_attrs.append("versioning_enabled")
             else:
                 failures.append(_safe_sdk_failure_type(e))
                 transient_failed = True
@@ -698,6 +714,7 @@ def _fetch_s3_security(s3=None):
             elif code in _S3_STEADY_DENIAL_CODES:
                 # steady-state denial → unknown (None), uncounted as a failure but disclosed
                 unknown_attrs += 1
+                denied_attrs.append("encryption")
             else:
                 failures.append(_safe_sdk_failure_type(e))
                 transient_failed = True
@@ -709,6 +726,7 @@ def _fetch_s3_security(s3=None):
             if code in _S3_STEADY_DENIAL_CODES:
                 # steady-state denial → unknown (None), uncounted as a failure but disclosed
                 unknown_attrs += 1
+                denied_attrs.append("logging_enabled")
             else:
                 failures.append(_safe_sdk_failure_type(e))
                 transient_failed = True
@@ -719,6 +737,10 @@ def _fetch_s3_security(s3=None):
             # healthy-recent (fresh captured_at). Skip the rec — the counted failure keeps
             # the run partial, and the skipped prunes preserve the existing row intact.
             continue
+        if denied_attrs:
+            # Per-row disclosure of the blind spot (see _fetch_s3_public_access for why the
+            # aggregate count alone is not enough).
+            rec["attributes_unknown"] = denied_attrs
         rows.append(rec)
     return _sdk_collection(rows, "name", "region", failures, unknown_attrs)
 
@@ -1095,6 +1117,12 @@ def sync(resource_type):
             # same phantom-inventory class rounds 3-5 fixed, reached through a different door).
             # 'self' is excluded here — the host always scans all regions regardless of the flag
             # (C1 host-parity guard) and is handled by phase 2 below.
+            # Assumption (documented, not newly introduced): Steampipe partiality is
+            # connection-level — an intra-connection region/page error fails the whole
+            # table scan (run records 'failed', no prune) rather than silently omitting
+            # rows, so an account that returned SOME rows can be treated as fully
+            # present. Connection-level omission is handled by the reachability probe
+            # below; SDK collectors handle sub-call failures via sdk_partial.
             present = {a for (a, _, _) in seen}
             unreachable_accounts = set()
             if not sdk_partial:

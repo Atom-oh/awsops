@@ -75,6 +75,15 @@ def test_attribute_denied_bucket_keeps_row_with_unknowns_and_is_not_partial(caps
     assert "locked" in by
     assert by["locked"]["bucket_policy_is_public"] is None
     assert by["locked"]["block_public_acls"] is None
+    # ...and the blind fields travel WITH the row, so a reader can render "unassessable"
+    # instead of silently showing the None flags as verified-clean.
+    assert by["locked"]["attributes_unknown"] == [
+        "block_public_acls", "block_public_policy",
+        "restrict_public_buckets", "ignore_public_acls",
+        "bucket_policy_is_public",
+    ]
+    # a fully-read bucket carries no marker at all
+    assert "attributes_unknown" not in by["pub"]
     # 'locked' is denied on PAB + policy-status = 2 blind attribute reads
     assert failures == {
         "failure_count": 0,

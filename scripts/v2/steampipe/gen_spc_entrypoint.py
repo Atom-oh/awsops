@@ -15,6 +15,10 @@ network-listening Steampipe process (port 9193) cannot leak a DB credential it n
 On Aurora-unreachable: bounded retry, then fail-closed (exit non-zero) — never start with an
 empty/stale config. A background watchdog re-queries Aurora every SCOPE_WATCH_INTERVAL seconds and
 restarts Steampipe when account/region scope changes (MAJOR 3 fix — M3).
+
+Every render also discloses the effective plugin rate-limiter knobs to stderr as a
+`steampipe_limiter_config` JSON event (max_concurrency / bucket_size / fill_rate), so the
+quota posture a task actually started with is visible in its logs.
 """
 import json
 import os

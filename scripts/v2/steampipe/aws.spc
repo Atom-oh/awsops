@@ -1,3 +1,4 @@
+# Keep in lockstep with LimiterConfig defaults in spc_render.py — nothing pins these together mechanically.
 plugin "aws" {
   limiter "awsops_global" {
     max_concurrency = 4

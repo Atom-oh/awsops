@@ -6,6 +6,10 @@ otherwise the explicit enabled regions; an account that is NOT all-regions and h
 regions is skipped (never the backwards ["*"]-on-empty). Non-host connections carry `assume_role_arn`
 (+ `assume_role_external_id` only when set; 1st-party omits it). An `aws` aggregator spans every per-account
 connection so existing `aws.*` queries transparently fan out. All rendered values are HCL-escaped.
+Also renders a leading `plugin "aws" { limiter "awsops_global" { ... } }` block from a
+`LimiterConfig` — defaults, or env-tunable values (`STEAMPIPE_AWS_MAX_CONCURRENCY` /
+`STEAMPIPE_AWS_BUCKET_SIZE` / `STEAMPIPE_AWS_FILL_RATE`) each bounds-validated by
+`limiter_config_from_env` so a bad/out-of-range knob raises instead of rendering.
 """
 from dataclasses import dataclass
 import math
