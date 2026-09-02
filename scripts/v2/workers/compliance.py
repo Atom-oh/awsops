@@ -160,7 +160,7 @@ def notify_completed(conn, run_id, benchmark, totals, scope="all"):
     (2026-09-02 amendment)."""
     topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
     if not topic:
-        _record_notify_outcome(conn, run_id, "skipped_no_topic")
+        _record_notify_outcome(conn, run_id, "skipped_no_topic", only_if_blank=True)
         return None
     try:
         failopen = False
@@ -168,7 +168,7 @@ def notify_completed(conn, run_id, benchmark, totals, scope="all"):
             rows = conn.run("SELECT value FROM app_settings WHERE key = 'diagnosis_notify_paused'")
             if bool(rows) and str(rows[0][0]).strip().lower() == "true":
                 print("[compliance] notify paused (diagnosis_notify_paused) — skipping publish")
-                _record_notify_outcome(conn, run_id, "dropped_paused")
+                _record_notify_outcome(conn, run_id, "dropped_paused", only_if_blank=True)
                 return None
         except Exception as e:  # noqa: BLE001 — fail-open: a settings-read failure must not mute mail
             print(f"[compliance] pause-flag read failed (fail-open, publishing): {e}")

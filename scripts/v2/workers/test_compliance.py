@@ -165,6 +165,32 @@ def test_notify_completed_noop_without_topic(monkeypatch):
     assert conn.outcomes == [("skipped_no_topic", False)]
 
 
+def test_all_skip_class_outcomes_never_overwrite_a_durable_record(monkeypatch):
+    """Round-2 gate: EVERY skip-class outcome (skipped_no_topic / dropped_paused /
+    skipped_dedup) must carry the notify_outcome='' guard — a manual SFN re-drive of an
+    already-emailed run passes through these branches and must not clobber the record."""
+    seen = []
+
+    class _SqlConn(_FakeConn):
+        def run(self, sql, **kw):
+            if "notify_outcome=:o" in sql:
+                seen.append((kw.get("o"), "notify_outcome=''" in sql))
+            return super().run(sql, **kw)
+
+    # no topic
+    monkeypatch.delenv("DIAGNOSIS_SNS_TOPIC_ARN", raising=False)
+    compliance.notify_completed(_SqlConn(), 9, "cis_v300", TOTALS)
+    # paused
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+    compliance.notify_completed(_SqlConn(paused=True), 9, "cis_v300", TOTALS)
+    # dedup'd
+    captured = {}
+    _patch_sns(monkeypatch, captured)
+    compliance.notify_completed(_SqlConn(paused=False, recent_mail=True), 9, "cis_v300", TOTALS)
+    assert [o for o, _ in seen] == ["skipped_no_topic", "dropped_paused", "skipped_dedup"]
+    assert all(guarded for _, guarded in seen), seen
+
+
 def test_notify_completed_publishes_ascii_subject_and_counts(monkeypatch):
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
     monkeypatch.setenv("APP_DOMAIN", "awsops.example.com")

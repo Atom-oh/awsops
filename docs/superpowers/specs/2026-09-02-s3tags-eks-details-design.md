@@ -70,3 +70,16 @@ no-access banner with error detail + docs link).
   unwireable `NEXT_PUBLIC_DOCS_URL` claim removed (constant + comment); tags empty-state
   wording aligned to the actual '—' rendering and the deploy precondition spelled out
   (terraform apply + sync) in CHANGELOG/docs; fleet error-string invariant comment added.
+
+## Round-2 corrections (review-driven)
+
+- **ALL three skip-class outcomes are blank-guarded (the gate MAJOR)** — round 1 guarded only
+  `skipped_dedup`; `skipped_no_topic` and `dropped_paused` run EARLIER in the flow and could
+  still overwrite a durable emailed/publish_failed record on a manual SFN re-drive,
+  contradicting the ADR-013 sentence added in round 1. Both call sites now pass
+  `only_if_blank=True`; a test walks all three branches and asserts the `notify_outcome=''`
+  guard on each.
+- Noted as follow-ups (chair MINORs, not gated): the banner reflects the page's pre-existing
+  unscoped fleet next to account-scoped rows; the raw K8s error mono box could be
+  admin-gated or code-mapped; `s3:GetBucketTagging` shares the statement's pre-existing
+  `Resource = "*"` shape.
