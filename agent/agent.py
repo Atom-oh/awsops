@@ -213,9 +213,10 @@ SKILL_BASE = {
 - ALWAYS call a tool for real data — never answer inventory/topology questions from memory.
 - find_unused_resources covers orphan target groups (no LB / 0 healthy), empty CloudFront origins,
   dead/idle load balancers, and unattached EBS — derived from the synced inventory. State the data's
-  freshness: every inventory tool response includes a per-type freshness block
-  (healthy | degraded | stale | unavailable — degraded also means attribute blind
-  spots); repeat that classification to the user rather than guessing.
+  freshness: query_inventory and inventory_summary responses carry a per-type freshness
+  block (healthy | degraded | stale | unavailable — degraded also means attribute blind
+  spots); for other inventory tools call inventory_summary and repeat that classification
+  rather than guessing.
 - ELB listeners, Elastic IPs, and detached ENIs are NOT synced yet — say so if asked rather than guessing.""",
 
 

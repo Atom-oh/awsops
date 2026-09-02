@@ -435,6 +435,53 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
     assert running[1]["run_token"] == connections[1].sql_log[-1][1]["run_token"]
 
 
+def test_sync_success_with_unknown_attrs_marks_degraded(capsys, monkeypatch):
+    """A succeeded run with attribute blind spots must degrade BOTH the freshness and the
+    'degraded' flag — a dashboard keying on either field must read the same story."""
+    mod = load_sync_lambda()
+
+    class MainAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            return []
+
+        def close(self):
+            pass
+
+    class FinalizerAurora:
+        def run(self, sql, **kwargs):
+            return [(1,)]
+
+        def close(self):
+            pass
+
+    connections = iter([MainAurora(), FinalizerAurora()])
+    monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
+    monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    mod.SDK_SYNCS["sdk_unknown_attrs_test"] = lambda: (
+        [{"id": "new-good", "region": "ap-northeast-2"}],
+        "id",
+        "region",
+        {"failure_count": 0, "failure_types": [], "unknown_attribute_count": 2},
+    )
+    mod._ALLOWED.add("sdk_unknown_attrs_test")
+
+    result = mod.sync("sdk_unknown_attrs_test")
+
+    assert result["status"] == "succeeded"
+    terminal = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+        if json.loads(line)["event"] == "inventory_sync_complete"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0]["unknown_attribute_count"] == 2
+    assert terminal[0]["freshness"] == "degraded"
+    assert terminal[0]["degraded"] is True
+    assert terminal[0]["throttled"] is False
+
+
 def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success(
     capsys, monkeypatch
 ):

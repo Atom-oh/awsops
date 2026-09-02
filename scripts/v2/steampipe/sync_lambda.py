@@ -1191,11 +1191,13 @@ def sync(resource_type):
                     "resource_type": resource_type,
                     "row_count": len(recs),
                     "unknown_attribute_count": sdk_unknown_attrs,
-                    "degraded": False,
+                    "degraded": bool(sdk_unknown_attrs),
                     "throttled": False,
                     # Attribute blind spots degrade the DISCLOSED freshness while the status stays
                     # succeeded — pruning and last_success_at must not be blocked by a steady
                     # denial, but readers must not be told the sweep saw everything either.
+                    # Both 'degraded' and 'freshness' derive from the same signal, so a dashboard
+                    # keying on either field reads the same story.
                     "freshness": "degraded" if sdk_unknown_attrs else "healthy",
                     "age_minutes": 0,
                 }
@@ -1235,6 +1237,11 @@ def sync(resource_type):
         cleanup_error = None
         if adb is not None:
             if locked:
+                # Unlock BEFORE ledger finalization is deliberate: pg advisory locks are
+                # session-scoped, so the fresh finalizer connection could never hold this
+                # one anyway, and the run_token CAS makes the window fail-safe — a run
+                # superseded here loses its last_success_at advance and reports
+                # "superseded" (freshness may under-report, never corrupt).
                 try:
                     adb.run("SELECT pg_advisory_unlock(hashtext(:t))", t=f"inv:{resource_type}")
                 except Exception as e:

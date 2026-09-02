@@ -52,10 +52,11 @@ TOPOLOGY_TYPES = ["cloudfront", "alb", "nlb", "target_group", "ec2", "ebs", "sec
 # and unattached EIP/ENI are out of scope for the Aurora-backed detector (live-API only).
 COVERAGE_NOTE = ("Derived from the synced Aurora inventory (inventory_resources). Elastic IPs, "
                  "detached ENIs, and ELB listeners are not synced yet, so those are out of scope "
-                 "here. Every response carries a per-type freshness block (healthy | degraded | "
-                 "stale | unavailable) classified from the durable last_success_at and the oldest "
-                 "captured_at of current rows; degraded also covers succeeded runs with attribute "
-                 "blind spots (unknown_attribute_count > 0). inventory_summary() lists all types.")
+                 "here. query_inventory and inventory_summary carry a per-type freshness block "
+                 "(healthy | degraded | stale | unavailable) classified from the durable "
+                 "last_success_at and the oldest captured_at of current rows; degraded also covers "
+                 "succeeded runs with attribute blind spots (unknown_attribute_count > 0). For this "
+                 "tool's data, call inventory_summary().")
 
 
 # ── Pure detection logic (fixture-testable; no DB) ───────────────────────────────────────────────
