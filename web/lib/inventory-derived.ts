@@ -1,5 +1,6 @@
 // Client-side derived fields per inventory type — flattens JSONB nests / formats raw values
 // into table-ready columns (v1 parity: readable MSK/DynamoDB/EBS/ECS-task lists). Pure, no React.
+import { estimateDailyCost } from './cost-basis';
 
 type Row = Record<string, unknown>;
 
@@ -286,14 +287,14 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
     return { last_delivery_h: dateH(raw) };
   },
   ecs_task: (r) => {
-    // Fargate on-demand (ap-northeast-2): $/vCPU-h + $/GB-h — v1 constants (config-overridable in v1).
-    const VCPU_H = 0.04656;
-    const GB_H = 0.00511;
+    // Fargate on-demand (ap-northeast-2) — the SHARED cost-basis constants (gap L194: the
+    // EcsCostBasisPanel documents these numbers, so the deriver must compute from the same
+    // source; the batch-25 single-source rule). v1's config.json override does not exist in v2.
     const cpu = Number(r.cpu);
     const mem = Number(r.memory);
     const isFargate = String(r.launch_type ?? '').toUpperCase() === 'FARGATE';
     const daily = isFargate && Number.isFinite(cpu) && Number.isFinite(mem)
-      ? (cpu / 1024) * VCPU_H * 24 + (mem / 1024) * GB_H * 24
+      ? estimateDailyCost(cpu / 1024, mem / 1024)
       : undefined;
     const clusterArn = String(r.cluster_arn ?? '');
     return {
