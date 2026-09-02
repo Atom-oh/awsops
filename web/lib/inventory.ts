@@ -26,7 +26,7 @@ export async function assertInventoryTypeAllowed(
   return null;
 }
 
-export interface SyncRun { status: string; finished_at: string | null; row_count: number | null; error?: string | null }
+export interface SyncRun { status: string; finished_at: string | null; row_count: number | null; error?: string | null; last_success_at?: string | null }
 export interface InventoryPage { rows: Record<string, unknown>[]; run: SyncRun | null }
 
 /** Region allow-list, or '__all__' for no region filter. */
@@ -102,7 +102,7 @@ export async function readResources(type: string, { limit, offset, regions = '__
     params,
   );
   const s = await pool.query(
-    `SELECT status, finished_at, row_count, error FROM inventory_sync_runs WHERE resource_type = $1 AND account_id = 'self'`,
+    `SELECT status, finished_at, row_count, error, last_success_at FROM inventory_sync_runs WHERE resource_type = $1 AND account_id = 'self'`,
     [type],
   );
   return { rows: r.rows, run: s.rows[0] ?? null };

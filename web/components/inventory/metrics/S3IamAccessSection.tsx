@@ -23,7 +23,7 @@ const ROW_CAP = 500; // the route's hard limit; we request cap and treat rows.le
 const S3_POLICY_RE = /^arn:aws[a-z-]*:iam::aws:policy\/(job-function\/)?(AmazonS3[A-Za-z]*|AdministratorAccess|PowerUserAccess|ReadOnlyAccess)$/;
 
 type RoleHit = { name: string; policies: string[] };
-type Run = { status?: string; finished_at?: string | null } | null;
+type Run = { status?: string; finished_at?: string | null; last_success_at?: string | null } | null;
 
 export function s3AccessRoles(rows: Record<string, unknown>[]): { hits: RoleHit[]; anySynced: boolean } {
   const hits: RoleHit[] = [];
@@ -79,11 +79,13 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
   }, [accountId]);
 
   const degraded = state.run != null && state.run.status !== 'succeeded';
-  // freshness bound (round-5 gate): a months-old 'succeeded' run must not keep rendering a
-  // conclusive security all-clear — conclusive requires the run to be within 24h.
+  // freshness bound (round-5 gate) on the DATA time: last_success_at is when the listed
+  // rows were actually captured (finished_at is merely the last ATTEMPT — a failed run
+  // stamps it too). Conclusive requires succeeded + data within 24h.
   const FRESH_MS = 24 * 3600_000;
-  const fresh = state.run?.status === 'succeeded' && !!state.run.finished_at
-    && Date.now() - new Date(state.run.finished_at).getTime() < FRESH_MS;
+  const dataAsOf = state.run?.last_success_at ?? (state.run?.status === 'succeeded' ? state.run?.finished_at : null);
+  const fresh = state.run?.status === 'succeeded' && !!dataAsOf
+    && Date.now() - new Date(dataAsOf).getTime() < FRESH_MS;
   const heading = (
     <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
       {tt('S3 접근 권한 보유 IAM Role')}{state.truncated ? ` (${tt('표본 기준')})` : ''}
@@ -92,7 +94,7 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
   const staleBanner = degraded ? (
     <p className="mb-1.5 text-[11.5px] text-amber-700">
       {tt('마지막 iam_role sync가 성공하지 못했습니다 — 아래 목록은 마지막 성공 시점의 데이터일 수 있습니다.')}
-      {state.run?.finished_at ? ` (${new Date(state.run.finished_at).toLocaleString()})` : ''}
+      {dataAsOf ? ` (${tt('기준:')} ${new Date(dataAsOf).toLocaleString()})` : ''}
     </p>
   ) : null;
 
@@ -102,8 +104,9 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
   }
   if (state.err) return <>{heading}<p className="text-[12px] text-amber-700">{tt('IAM Role 목록을 불러오지 못했습니다.')}</p></>;
   if (state.empty) {
-    // rows: [] — a succeeded run means genuinely no roles; otherwise unknowable
-    return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{state.run?.status === 'succeeded' ? tt('동기화된 IAM role이 없습니다.') : tt('IAM role 데이터가 아직 없습니다 — sync 상태를 확인하세요.')}</p></>;
+    // rows: [] — conclusive 'no roles exist' needs the SAME fresh-succeeded gate as the
+    // zero-hits branch (a months-old succeeded run must not render a current-tense all-clear)
+    return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{fresh ? tt('동기화된 IAM role이 없습니다.') : tt('IAM role 데이터가 아직 없습니다 — sync 상태를 확인하세요.')}</p></>;
   }
   if (!state.anySynced) {
     return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{tt('연결 정책 목록이 아직 동기화되지 않았습니다 — 다음 sync 이후 표시됩니다.')}</p></>;
@@ -126,7 +129,7 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
           </li>
         ))}
       </ul>
-      <p className="mt-1.5 text-[10.5px] text-ink-400">{tt('AWS 관리형 정책 기준 (인라인 정책·버킷 정책 경유 접근은 미포함) · 최대 30개')}{state.run?.finished_at ? ` · ${tt('기준:')} ${new Date(state.run.finished_at).toLocaleString()}` : ''}</p>
+      <p className="mt-1.5 text-[10.5px] text-ink-400">{tt('AWS 관리형 정책 기준 (인라인 정책·버킷 정책 경유 접근은 미포함) · 최대 30개')}{dataAsOf ? ` · ${tt('기준:')} ${new Date(dataAsOf).toLocaleString()}` : ''}</p>
     </>
   );
 }

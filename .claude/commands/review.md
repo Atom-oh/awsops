@@ -9,7 +9,7 @@ Review all unstaged changes against AWSops project conventions.
 
 ### Query Files (`src/lib/queries/*.ts`)
 - Column names verified against `information_schema.columns`
-- No SCP-blocked columns: `mfa_enabled`, `tags`, `attached_policy_arns` (ADR-010 2026-09-02 개정: 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
+- No SCP-blocked columns: `mfa_enabled`, `tags`, `attached_policy_arns` (ADR-010 2026-09-02 개정: v2 sync 한정, 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
 - Uses `trivy_scan_vulnerability` not `trivy_vulnerability`
 - No `$` in SQL — use `::text LIKE`
 - List queries include `account_id` column

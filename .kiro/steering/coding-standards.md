@@ -55,7 +55,7 @@ steampipe query "SELECT column_name FROM information_schema.columns WHERE table_
 
 ### 금지 패턴
 - `$` in SQL → `conditions::text LIKE '%..%'` 사용
-- SCP 차단 컬럼 (list 쿼리): `mfa_enabled`, `attached_policy_arns`, Lambda `tags` (ADR-010 2026-09-02 개정: 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
+- SCP 차단 컬럼 (list 쿼리): `mfa_enabled`, `attached_policy_arns`, Lambda `tags` (ADR-010 2026-09-02 개정: v2 sync 한정, 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
 - `trivy_vulnerability` → `trivy_scan_vulnerability`
 - `versioning` → `versioning_enabled` (S3)
 

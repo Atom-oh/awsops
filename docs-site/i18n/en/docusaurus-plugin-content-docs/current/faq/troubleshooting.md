@@ -70,7 +70,7 @@ When SCP (Service Control Policy) or an IAM boundary blocks specific AWS APIs, o
 | `ce:GetCostAndUsage` | Cannot query Cost data |
 | `cloudwatch:GetMetricData` | Cannot query metrics/graphs |
 
-Because AWSops is read-only, blocked APIs simply render as empty for that item while everything else works. If you need the missing data, add read permission for that API. When a partial query is possible without permission changes, asking the AI assistant returns whatever data is available.
+Because AWSops is read-only, blocked APIs mostly render as empty for that item while everything else works — except per-row hydrate columns (iam_user.mfa_enabled, iam_role.attached_policy_arns): blocking those fails that type's entire sync run and freezes its last-good data (ADR-010 amendment, 2026-09-02). If you need the missing data, add read permission for that API. When a partial query is possible without permission changes, asking the AI assistant returns whatever data is available.
 
 ## Pages load slowly
 

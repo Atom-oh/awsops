@@ -128,7 +128,7 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   run no longer renders a conclusive security conclusion: conclusive now requires the run to
   be succeeded, untruncated AND within 24h, and a data-as-of timestamp rides the footer.
   Tests pin the stale-succeeded → non-conclusive path.
-- **The hard-timeout ledger hole is closed at the DB (the gate MAJOR)** — `_steampipe()` sets
+- **The hard-timeout ledger hole is NARROWED at the DB (the gate MAJOR)** — `_steampipe()` sets
   `statement_timeout = 240s` (below the 300s Lambda budget): a runaway hydrate query is
   killed by Postgres, control returns, and the run records `failed` with last-good rows
   preserved — instead of the process dying with the ledger stuck non-terminal.
@@ -141,3 +141,19 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   files reference the amendment; s3.md's conclusive condition states 24h+untruncated in 4
   locales; CHANGELOG EN gains the unknown-first clause (KO parity); the EN iam.md box drops
   the unintroduced summary-query sentence.
+
+## Round-6 corrections (review-driven)
+
+- **The rows:[] empty branch is freshness-gated too (the gate MAJOR)** — 'no roles exist'
+  now requires the same fresh-succeeded gate as the zero-hits branch (a months-old succeeded
+  run rendered a current-tense all-clear).
+- **The as-of timestamp is the DATA time (the gate MAJOR)** — `readResources` now selects
+  `last_success_at` (written by the sync ledger; `finished_at` is merely the last ATTEMPT —
+  a failed run stamps it too); the footer, the stale banner, and the 24h freshness check all
+  use it.
+- Minors: the quick-ref table cell is well-formed and the swept rule-file notes say 'v2 sync
+  only'; architecture-decisions' unconditional removal line carries the amendment cross-ref;
+  the FAQ's 'blocked APIs simply render empty' claim (ko/en — zh/ja never had it) gains the
+  hydrate exception; the round-5 'closed at the DB' wording is corrected to 'narrowed' (a
+  near-240s query still races Aurora work against the 300s wall — the remaining-time
+  guard/reaper stays a follow-up).

@@ -70,7 +70,7 @@ SCP(Service Control Policy)나 IAM 경계로 특정 AWS API가 차단되면, 해
 | `ce:GetCostAndUsage` | Cost 데이터 조회 불가 |
 | `cloudwatch:GetMetricData` | 메트릭/그래프 조회 불가 |
 
-AWSops는 읽기 전용이므로 차단된 API에 대해서는 해당 항목을 빈 값으로 표시하고 나머지는 정상 동작합니다. 누락된 데이터가 필요하면 해당 API에 대한 읽기 권한을 추가하세요. 권한 변경 없이 자연어로 부분 조회가 가능한 경우, AI 어시스턴트에 질의하면 사용 가능한 범위의 데이터로 답합니다.
+AWSops는 읽기 전용이므로 차단된 API는 대부분 해당 항목을 빈 값으로 표시하고 나머지는 정상 동작합니다 — 단, per-row 하이드레이트 컬럼(iam_user.mfa_enabled, iam_role.attached_policy_arns)이 차단되면 그 타입의 sync run 전체가 failed로 기록되고 last-good 데이터가 동결됩니다(ADR-010 2026-09-02 개정). 누락된 데이터가 필요하면 해당 API에 대한 읽기 권한을 추가하세요. 권한 변경 없이 자연어로 부분 조회가 가능한 경우, AI 어시스턴트에 질의하면 사용 가능한 범위의 데이터로 답합니다.
 
 ## 페이지 로딩이 느려요
 

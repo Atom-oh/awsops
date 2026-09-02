@@ -27,8 +27,8 @@
 
 ### Security: SCP Column Handling
 - `ignore_error_codes`는 테이블 레벨만 처리
-- 컬럼 hydrate 에러는 해당 컬럼을 쿼리에서 제거해야 함
-- 영향 컬럼: `mfa_enabled`, `attached_policy_arns`, Lambda `tags` (ADR-010 2026-09-02 개정: 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
+- 컬럼 hydrate 에러는 해당 컬럼을 쿼리에서 제거(기본 규칙 — ADR-010 2026-09-02 개정으로 v2 sync 한정 명시적 위험 수용 예외 허용)
+- 영향 컬럼: `mfa_enabled`, `attached_policy_arns`, Lambda `tags` (ADR-010 2026-09-02 개정: v2 sync 한정, 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
 
 ### Infra: Single EC2
 - 모든 서비스(Next.js, Steampipe, Powerpipe, code-server, Docker)가 단일 EC2에서 실행
