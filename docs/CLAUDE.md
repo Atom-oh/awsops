@@ -11,6 +11,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 | [decisions/](decisions/) | **Decision single source of truth = `BASELINE.md`** + consolidated ADRs 001–021 + `ADR-MAPPING.md` (old ADR 001–046 bodies are at git tag `adr-legacy-2026-06-22`) |
 | [reference/](reference/) | Current v2 design, one file per component (single source per component) |
 | [runbooks/](runbooks/) | Operational playbooks by scenario |
+| [diagrams/](diagrams/) | Interactive archify diagrams (spec `.json` + delivered standalone `.html`) — regenerate via the archify skill, never hand-edit the HTML |
 | [reviews/](reviews/) | Code review / cross-review results |
 | [plans/](plans/) | Old planning docs (legacy) — current plans live under `superpowers/plans/` |
 | [superpowers/specs/](superpowers/specs/) | Design specs (brainstorming output) |
@@ -26,7 +27,9 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
   `docs/runbooks/CLAUDE.md`, `docs/CLAUDE.md` itself, etc. — these are context files Claude Code
   auto-loads, so the goal is context-size savings), and (b) implementation-facing design specs
   under `docs/superpowers/specs/` (technical documents whose primary readers are AI
-  agents/implementers) are also **English-only**. "Stays bilingual" applies to a directory's
+  agents/implementers) are also **English-only**, and (c) generated archify artifacts under
+  `docs/diagrams/` (spec JSON + rendered HTML — tool output regenerated via the archify skill,
+  never hand-translated) are **English-only**. "Stays bilingual" applies to a directory's
   **body content**, not its `CLAUDE.md` — `docs/runbooks/*.md` (the runbook bodies, excluding
   `CLAUDE.md`), `docs/decisions/BASELINE.md`/`0NN-*.md` (ADR bodies), and other
   user-/operator-facing documents keep the bilingual rule.
