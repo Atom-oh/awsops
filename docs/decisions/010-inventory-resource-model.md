@@ -35,6 +35,7 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
   (**Amended 2026-09-02** — softened from a hard ban to a risk-disclosure rule, with the failure semantics stated PRECISELY: an SCP-blocked hydrate raises a Steampipe query exception that records the ENTIRE type run `failed` (NOT a per-account `partial` — aggregator queries are not account-isolated). Pruning is skipped, so last-good rows for ALL accounts are preserved but frozen (ADR-021's last-good preservation and freshness disclosure still apply — `query_inventory` surfaces stale/degraded). Accepting that whole-type blast radius as the disclosed risk, `attached_policy_arns` is reintroduced on the `iam_role` list for the S3 detail's access-role drill-down (a per-row `ListAttachedRolePolicies` hydrate; the consuming UI surfaces the run status and never draws conclusive results under a failed run). Note: `mfa_enabled` on the `iam_user` list predates this amendment.)
 
 차단된 API 목록 / Blocked APIs found:
+(2026-09-02 개정 관련: `iam:ListAttachedRolePolicies` / `aws_iam_role.attached_policy_arns` — 차단 시 위 개정의 전 계정 동결 시맨틱 적용 / amendment-related: `iam:ListAttachedRolePolicies` on `aws_iam_role.attached_policy_arns` — the amendment's whole-type-freeze semantics apply when blocked)
 
 | 컬럼 (Column) | API | 테이블 (Table) |
 |---|---|---|
@@ -45,16 +46,16 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
 ## 결과 / Consequences
 
 ### Positive
-- 타입 레지스트리 기반 sync로 표시 리소스 타입을 한 곳에서 관리. SCP 차단 컬럼을 리스트에서 제거하여 sync가 부분 차단 환경에서도 견고하게 동작.
-  (Registry-driven sync centralizes surfaced types; removing SCP-blocked columns from lists keeps the sync robust under partially-restricted environments.)
+- 타입 레지스트리 기반 sync로 표시 리소스 타입을 한 곳에서 관리. SCP 차단 컬럼을 리스트에서 제거하면 sync가 부분 차단 환경에서도 견고하게 동작 — 단, 2026-09-02 개정으로 명시적 위험 수용 하에 하이드레이트 컬럼을 유지하는 예외가 허용된다(§2 개정 참조: `iam_role.attached_policy_arns`).
+  (Registry-driven sync centralizes surfaced types; removing SCP-blocked columns from lists keeps the sync robust under partially-restricted environments — with the 2026-09-02 amendment permitting exceptions under explicit risk acceptance (see the §2 amendment: `iam_role.attached_policy_arns`).)
 - `steampipe_enabled` 게이트로 기본 비활성($0), 활성화 시에만 Fargate sync 비용 발생.
   (`steampipe_enabled` gate keeps it off by default ($0); Fargate sync cost only accrues when enabled.)
 
 ### Negative
 - SCP가 컬럼을 차단하는 환경에서는 일부 대시보드 카드(특히 IAM MFA 관련 지표)가 0 또는 결측으로 표시될 수 있다.
   (Under SCP-blocking environments, some dashboard cards — notably IAM MFA metrics — may show 0 or missing values.)
-- 신규 컬럼 하이드레이트 오류 발생 시 해당 컬럼을 리스트 SQL에서 제거하는 후속 조치가 필요하다.
-  (New column hydrate errors require follow-up to remove that column from list SQL.)
+- 신규 컬럼 하이드레이트 오류 발생 시 해당 컬럼을 리스트 SQL에서 제거하거나, 2026-09-02 개정 경로로 위험을 수용·공지한다. 수용 시 blast radius: SCP 차단 하이드레이트는 해당 타입 run 전체를 failed로 만들고 전 계정 last-good 행을 동결한다(소비 UI가 run 상태를 표기).
+  (New column hydrate errors require either removing the column from list SQL or accepting+disclosing the risk per the 2026-09-02 amendment. Accepted blast radius: an SCP-blocked hydrate fails the whole type run and freezes last-good rows for ALL accounts — consuming UIs surface the run status.)
 
 ### 해결된 갭 / Resolved gap
 - **parity-12: ECS 서비스 차원 구현됨.** `sync_lambda.py`의 `ecs_service` 수집은 cluster/service 복합 키와 desired/running/pending count, launch type을 Aurora에 적재하며 v2 inventory registry/UI가 이를 사용한다.
@@ -65,8 +66,8 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
   (The type registry drives collection/navigation from a single source and persists the current contract, including `ecs_service`, in Aurora.)
 - **보안 (Security)** — read-only 인벤토리 수집. SCP 차단은 권한 경계를 존중하며, 차단 컬럼 제거는 우회가 아니라 부분 데이터로의 graceful degradation.
   (Read-only collection. SCP blocking respects permission boundaries; dropping blocked columns is graceful degradation to partial data, not a bypass.)
-- **신뢰성 (Reliability)** — `ignore_error_codes` + 리스트 컬럼 제거로 부분 차단 환경에서도 sync가 전체 실패 없이 완료.
-  (`ignore_error_codes` plus list-column removal lets the sync complete without total failure under partial blocking.)
+- **신뢰성 (Reliability)** — `ignore_error_codes` + 리스트 컬럼 제거로 부분 차단 환경에서도 sync가 전체 실패 없이 완료. 2026-09-02 개정으로 유지되는 하이드레이트 컬럼(`iam_role.attached_policy_arns`)은 예외 — SCP 차단 시 그 타입 run이 failed가 되며 last-good 동결로 격리된다.
+  (`ignore_error_codes` plus list-column removal lets the sync complete without total failure under partial blocking. Hydrate columns retained under the 2026-09-02 amendment (`iam_role.attached_policy_arns`) are the exception — an SCP block fails that type's run, isolated by the last-good freeze.)
 - **성능 효율성 (Performance Efficiency)** — Fargate sync는 비동기 워커 티어에서 수행되어 thin-BFF 부하와 분리.
   (Fargate sync runs in the async worker tier, decoupled from thin-BFF load.)
 - **비용 최적화 (Cost Optimization)** — `steampipe_enabled` 기본 false → 비활성 시 $0. 인벤토리는 Aurora에 영속되어 반복 라이브 쿼리 회피.

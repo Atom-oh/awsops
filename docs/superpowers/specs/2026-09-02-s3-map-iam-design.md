@@ -28,8 +28,10 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
     iam_role inventory via the EXISTING `/api/inventory/iam_role` route (no new route — no
     99-route churn; iam_role is an ADMIN-ONLY type, so the section shows a distinct
     permission note to non-admins rather than pretending to be a generic failure) and lists
-    roles whose `attached_policy_arns` match S3-scoped or admin policies (`AmazonS3.*` /
-    `AdministratorAccess`), max 30 (v1's cap). Honest bounds: a fetch failure renders an
+    roles whose `attached_policy_arns` match the checked set — `AmazonS3*` /
+    `AdministratorAccess` / `PowerUserAccess` / `ReadOnlyAccess`, job-function paths
+    included, partition-tolerant anchor (as amended by rounds 2–3) — max 30 (v1's cap),
+    with matched-set framing on the empty state (other policies can also grant S3). Honest bounds: a fetch failure renders an
     error line; roles synced WITHOUT the new column (pre-apply) render an explicit
     "정책 목록 미동기화" state, never an empty "no roles have access" claim.
 
@@ -80,3 +82,19 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   unknown-first implementation; the accountId prop's host-vs-'self' caveat is documented at
   the consumption site (s3 rows carry no account_id today — the 'self' default is exactly
   where host iam_role rows live).
+
+## Round-3 corrections (review-driven)
+
+- **`run: null` is not healthy (the gate MAJOR)** — the conclusive empty state now requires
+  `run.status === 'succeeded'` explicitly; a missing ledger row (pre-ADR-021 data) renders
+  the non-conclusive wording. Render tests pin run:null/succeeded/failed/403 paths.
+- **Matched-set framing + ReadOnlyAccess (the gate MAJOR)** — `ReadOnlyAccess` (which grants
+  s3:Get*/List*) joins the checked set with a partition-tolerant anchor, and the conclusive
+  line/footnote say "no role matched the CHECKED policies" instead of "no role has S3
+  access" (other managed policies can also grant S3). Three superseded i18n entries removed.
+- **ADR-010 reads as one policy (the gate MAJOR)** — the §Consequences Positive/Negative and
+  §Reliability lines now carry the 2026-09-02 exception with the whole-type-freeze blast
+  radius; the blocked-API list gains the ListAttachedRolePolicies note.
+- **s3.md (4 locales) states the shipped contract (the gate MAJOR)** — admin-only, the full
+  checked policy set, and the run-status gating; the legend notes green/cyan are
+  policy-scoped too (ACL exposure is separate).

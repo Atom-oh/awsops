@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
-import { s3AccessRoles } from './S3IamAccessSection';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { s3AccessRoles, S3IamAccessSection } from './S3IamAccessSection';
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('s3AccessRoles (gap L242 — managed-policy matching)', () => {
   it('matches AmazonS3* and AdministratorAccess policies; others do not count', () => {
@@ -30,5 +33,33 @@ describe('s3AccessRoles (gap L242 — managed-policy matching)', () => {
       resource_id: `r${i}`, attached_policy_arns: ['arn:aws:iam::aws:policy/AmazonS3FullAccess'],
     }));
     expect(s3AccessRoles(rows).hits).toHaveLength(30);
+  });
+});
+
+
+describe('S3IamAccessSection conclusive gating (round-3)', () => {
+  const stub = (body: unknown, status = 200) =>
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: status === 200, status, json: async () => body }));
+
+  it('run:null (no ledger row) + zero matches is NON-conclusive — never an all-clear', async () => {
+    stub({ rows: [{ resource_id: 'r1', data: { attached_policy_arns: ['arn:aws:iam::aws:policy/AmazonEC2FullAccess'] } }], run: null });
+    render(<S3IamAccessSection />);
+    await waitFor(() => expect(screen.getByText(/확정 아님/)).toBeTruthy());
+  });
+  it('a succeeded untruncated run with zero matches renders the matched-set-framed conclusive line', async () => {
+    stub({ rows: [{ resource_id: 'r1', data: { attached_policy_arns: ['arn:aws:iam::aws:policy/AmazonEC2FullAccess'] } }], run: { status: 'succeeded', finished_at: null } });
+    render(<S3IamAccessSection />);
+    await waitFor(() => expect(screen.getByText(/검사 대상 관리형 정책/)).toBeTruthy());
+  });
+  it('a failed run renders the stale-data banner', async () => {
+    stub({ rows: [{ resource_id: 'r1', data: { attached_policy_arns: ['arn:aws:iam::aws:policy/AdministratorAccess'] } }], run: { status: 'failed', finished_at: '2026-09-01T00:00:00Z' } });
+    render(<S3IamAccessSection />);
+    await waitFor(() => expect(screen.getByText(/마지막 iam_role sync가 성공하지 못했습니다/)).toBeTruthy());
+    expect(screen.getByText('r1')).toBeTruthy(); // last-good data still listed
+  });
+  it('403 renders the admin-only note, not a generic failure', async () => {
+    stub({}, 403);
+    render(<S3IamAccessSection />);
+    await waitFor(() => expect(screen.getByText(/관리자 전용 데이터/)).toBeTruthy());
   });
 });

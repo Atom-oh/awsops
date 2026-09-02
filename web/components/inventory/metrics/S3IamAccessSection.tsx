@@ -3,8 +3,10 @@ import { useEffect, useState } from 'react';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // 'IAM Roles with S3 Access' (gap L242, v1 parity): roles whose SYNCED attached AWS-managed
-// policies grant S3 (AmazonS3*/AdministratorAccess/PowerUserAccess, incl. job-function
-// paths), max 30 (v1's cap). Reads the EXISTING /api/inventory/iam_role route — an
+// policies MATCH the checked set (AmazonS3*/AdministratorAccess/PowerUserAccess/
+// ReadOnlyAccess, incl. job-function paths; partition-tolerant anchor), max 30 (v1's cap).
+// The empty state uses MATCHED-SET framing — other managed policies can also grant S3, so
+// 'no role has S3 access' is never claimed. Reads the EXISTING /api/inventory/iam_role route — an
 // ADMIN-ONLY type: non-admins get a distinct permission note. Honest bounds:
 // - the LAST SYNC RUN's status gates every conclusion — a failed/partial run renders a
 //   stale-data banner and the empty state is never conclusive (an SCP-blocked hydrate fails
@@ -18,7 +20,7 @@ const MAX_ROLES = 30;
 const ROW_CAP = 500; // the route's hard limit; we request cap and treat rows.length >= cap as sampled
 // AWS-managed policies only (anchored — a customer policy NAMED AmazonS3Deny... could be
 // deny-only). Covers the plain and job-function paths.
-const S3_POLICY_RE = /^arn:aws:iam::aws:policy\/(job-function\/)?(AmazonS3[A-Za-z]*|AdministratorAccess|PowerUserAccess)$/;
+const S3_POLICY_RE = /^arn:aws[a-z-]*:iam::aws:policy\/(job-function\/)?(AmazonS3[A-Za-z]*|AdministratorAccess|PowerUserAccess|ReadOnlyAccess)$/;
 
 type RoleHit = { name: string; policies: string[] };
 type Run = { status?: string; finished_at?: string | null } | null;
@@ -102,9 +104,10 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
     return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{tt('연결 정책 목록이 아직 동기화되지 않았습니다 — 다음 sync 이후 표시됩니다.')}</p></>;
   }
   if (state.hits.length === 0) {
-    // never a conclusive all-clear under truncation OR a non-succeeded run
-    const conclusive = !state.truncated && !degraded;
-    return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{conclusive ? tt('S3 관리형 정책(AmazonS3*/AdministratorAccess/PowerUserAccess)이 연결된 role이 없습니다.') : tt('표본/마지막 성공 데이터 내 일치하는 role이 없습니다 — 확정 아님.')}</p></>;
+    // conclusive requires a SUCCEEDED, untruncated run — run:null (no ledger row, e.g.
+    // pre-ADR-021 data) is NOT healthy enough for an all-clear
+    const conclusive = !state.truncated && state.run?.status === 'succeeded';
+    return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{conclusive ? tt('검사 대상 관리형 정책(AmazonS3*/Admin/PowerUser/ReadOnly)에 일치하는 role이 없습니다 — 다른 정책 경유 S3 접근은 별도 확인 필요.') : tt('표본/마지막 성공 데이터 내 일치하는 role이 없습니다 — 확정 아님.')}</p></>;
   }
   return (
     <>
