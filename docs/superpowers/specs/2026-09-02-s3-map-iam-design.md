@@ -153,7 +153,16 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   use it.
 - Minors: the quick-ref table cell is well-formed and the swept rule-file notes say 'v2 sync
   only'; architecture-decisions' unconditional removal line carries the amendment cross-ref;
-  the FAQ's 'blocked APIs simply render empty' claim (ko/en — zh/ja never had it) gains the
-  hydrate exception; the round-5 'closed at the DB' wording is corrected to 'narrowed' (a
+  the FAQ's 'blocked APIs simply render empty' claim gained the hydrate exception in ko/en (round 6 — zh/ja were MISSED there, corrected in round 7); the round-5 'closed at the DB' wording is corrected to 'narrowed' (a
   near-240s query still races Aurora work against the 300s wall — the remaining-time
   guard/reaper stays a follow-up).
+
+## Round-7 corrections (review-driven)
+
+- **The ja/zh FAQ carries the hydrate exception too (the gate MAJOR)** — round 6 amended
+  ko/en but MISSED the equivalent ja/zh sentences (a grep with the wrong phrasing), and the
+  round-6 note falsely recorded that ja/zh never had the claim. Both locales now state the
+  whole-type-freeze semantics, and the round-6 note is corrected in place.
+- The gap-audit L242 tick's '버킷 계정 스코프' wording is softened to the actual contract
+  (s3 rows carry no account_id today — the prop is a documented future-sync hook, and the
+  'self' default is exactly where host iam_role rows live).
