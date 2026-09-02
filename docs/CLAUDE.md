@@ -27,7 +27,9 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
   `docs/runbooks/CLAUDE.md`, `docs/CLAUDE.md` itself, etc. — these are context files Claude Code
   auto-loads, so the goal is context-size savings), and (b) implementation-facing design specs
   under `docs/superpowers/specs/` (technical documents whose primary readers are AI
-  agents/implementers) are also **English-only**. "Stays bilingual" applies to a directory's
+  agents/implementers) are also **English-only**, and (c) generated archify artifacts under
+  `docs/diagrams/` (spec JSON + rendered HTML — tool output regenerated via the archify skill,
+  never hand-translated) are **English-only**. "Stays bilingual" applies to a directory's
   **body content**, not its `CLAUDE.md` — `docs/runbooks/*.md` (the runbook bodies, excluding
   `CLAUDE.md`), `docs/decisions/BASELINE.md`/`0NN-*.md` (ADR bodies), and other
   user-/operator-facing documents keep the bilingual rule.
