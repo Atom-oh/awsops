@@ -68,7 +68,7 @@ CIS Compliance 页面基于 AWS CIS（Center for Internet Security）基准评�
 - **Info**（青色）：信息性
 
 ### Alarms by Section（柱状图）
-比较各章节的失败（Alarm）数量。请优先关注失败最多的章节。Alarm 为 0 的章节不显示柱；所有章节均为 0 时不显示该图表。
+比较各章节的失败（Alarm）数量。请优先关注失败最多的章节。Alarm 为 0 的章节不显示柱；所有章节均为 0 时不显示该图表。柱值按**受检资源（finding）**统计，因此可能大于按控制项统计的 Alarm KPI 磁贴（卡片标注 'per finding'）；告警章节超过 10 个时仅显示前 10（标注 Top 10 of N）。
 
 ## 各章节详情
 

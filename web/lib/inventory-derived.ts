@@ -52,15 +52,23 @@ const boolH = (v: unknown): string | undefined =>
 /** Independent flag-count bars (gap L240 — InvType.flagBarKey): each flag counts rows whose
  *  `col` is strictly true (strictly false when `negate`), with 'true'/'false' string coercion.
  *  Unknown (null/absent/other) rows count into NEITHER side, a row can count into several
- *  bars, declared order is kept, and zero bars are kept (a zero Public bar is signal). */
+ *  bars, declared order is kept, and zero bars are kept (a zero Public bar is signal) —
+ *  EXCEPT when a column has no known value on ANY row (e.g. the field isn't synced yet, or
+ *  every read was denied): its flags are dropped entirely, because an all-unknown 0 rendered
+ *  as a bar would read as an affirmative all-clear. */
 export function countFlags(
   rows: Row[],
   flags: { name: string; col: string; negate?: boolean }[],
 ): { name: string; value: number }[] {
-  return flags.map((f) => ({
-    name: f.name,
-    value: rows.filter((r) => boolH(r[f.col]) === (f.negate ? 'false' : 'true')).length,
-  }));
+  const known = new Set(
+    flags.map((f) => f.col).filter((col) => rows.some((r) => boolH(r[col]) !== undefined)),
+  );
+  return flags
+    .filter((f) => known.has(f.col))
+    .map((f) => ({
+      name: f.name,
+      value: rows.filter((r) => boolH(r[f.col]) === (f.negate ? 'false' : 'true')).length,
+    }));
 }
 
 function _ecsTaskBase(r: Row): Row {

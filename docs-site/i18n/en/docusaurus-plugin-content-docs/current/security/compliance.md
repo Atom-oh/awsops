@@ -68,7 +68,7 @@ Displays the distribution of control statuses:
 - **Info** (Cyan): Informational
 
 ### Alarms by Section (Bar Chart)
-Compares the number of failures (Alarm) by section. Focus on sections with the most failures first. Zero-alarm sections get no bar, and when every section is alarm-free the chart itself is omitted.
+Compares the number of failures (Alarm) by section. Focus on sections with the most failures first. Zero-alarm sections get no bar, and when every section is alarm-free the chart itself is omitted. Bar values count **per checked resource (finding)**, so they can exceed the control-level Alarm KPI tile (the card says 'per finding'); with more than 10 alarming sections only the top 10 show ('Top 10 of N').
 
 ## Section Details
 

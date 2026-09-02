@@ -337,9 +337,10 @@ export default function InventoryTypePage() {
   const countBar = spec.countBarKey && countBarData.length > 0
     ? <BarDistribution title={isTruncated ? `${spec.countBarKey.label} (${tt('표본 기준')})` : spec.countBarKey.label} data={countBarData} xKey="name" yKey="value" />
     : null;
-  // Flag-count bars (gap L240): rendered only when rows exist — preserveOrder keeps the
-  // declared semantic order (Policy Private/Public/…) instead of the count-desc re-sort.
-  const flagBar = spec.flagBarKey && allRows.length > 0
+  // Flag-count bars (gap L240): rendered only when at least one flag column has a known
+  // value (countFlags drops all-unknown columns — a 0/0 must not read as all-clear);
+  // preserveOrder keeps the declared semantic order instead of the count-desc re-sort.
+  const flagBar = spec.flagBarKey && flagBarData.length > 0
     ? <BarDistribution title={isTruncated ? `${spec.flagBarKey.label} (${tt('표본 기준')})` : spec.flagBarKey.label} data={flagBarData} xKey="name" yKey="value" preserveOrder />
     : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.

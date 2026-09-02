@@ -241,11 +241,12 @@ export default function CompliancePage() {
   // top-10 by count (the countBarKey cap precedent — a deeply-grouped benchmark could yield
   // a long list). Counts are per FINDING (one leaf result per checked resource), while the
   // status donut counts CONTROLS — the title hint keeps the two side-by-side charts honest.
-  const alarmBySection = sections
+  const alarmSections = sections
     .filter((s) => s.alarm > 0)
     .map((s) => ({ name: s.section, value: s.alarm }))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 10);
+    .sort((a, b) => b.value - a.value);
+  const alarmBySection = alarmSections.slice(0, 10);
+  const alarmSectionsTruncated = alarmSections.length > alarmBySection.length;
 
   return (
     <div>
@@ -384,7 +385,11 @@ export default function CompliancePage() {
               {alarmBySection.length > 0 && (
                 <BarDistribution
                   title="Alarms by Section"
-                  right={<span className="text-[11px] text-ink-400">per finding</span>}
+                  right={
+                    <span className="text-[11px] text-ink-400">
+                      {alarmSectionsTruncated ? `Top 10 of ${alarmSections.length} · ` : ''}per finding
+                    </span>
+                  }
                   data={alarmBySection}
                   xKey="name"
                   yKey="value"

@@ -249,21 +249,19 @@ describe('countFlags (gap L240 — flagBarKey Security Status bars)', () => {
       { name: 'Versioned', value: 2 },
     ]);
   });
-  it('unknown (null/absent/other) counts into NEITHER side', () => {
+  it('an all-unknown column drops its flags entirely (0/0 must not read as all-clear)', () => {
     const rows = [
-      { bucket_policy_is_public: null },
-      {},
-      { bucket_policy_is_public: 'maybe' },
+      { bucket_policy_is_public: null, versioning_enabled: true },
+      { versioning_enabled: false },
+      { bucket_policy_is_public: 'maybe', versioning_enabled: true },
     ];
-    expect(countFlags(rows, FLAGS)).toEqual([
-      { name: 'Private', value: 0 },
-      { name: 'Public', value: 0 },
-      { name: 'Versioned', value: 0 },
-    ]);
+    // bucket_policy_is_public has no known value on any row (unsynced/denied) → Private AND
+    // Public are omitted; Versioned (known values exist) still charts.
+    expect(countFlags(rows, FLAGS)).toEqual([{ name: 'Versioned', value: 2 }]);
   });
-  it('keeps the declared order and zero bars (a zero Public bar is signal)', () => {
-    const out = countFlags([{ bucket_policy_is_public: false }], FLAGS);
+  it('keeps the declared order and zero bars once the column has ANY known value', () => {
+    const out = countFlags([{ bucket_policy_is_public: false }, { versioning_enabled: true }], FLAGS);
     expect(out.map((d) => d.name)).toEqual(['Private', 'Public', 'Versioned']);
-    expect(out[1]).toEqual({ name: 'Public', value: 0 });
+    expect(out[1]).toEqual({ name: 'Public', value: 0 }); // a real zero — signal, kept
   });
 });

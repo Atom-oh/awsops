@@ -457,6 +457,9 @@ def _fetch_s3_public_access(s3=None):
     GetPublicAccessBlock, and ONE denied bucket fails the WHOLE table query — so source via boto3
     and tolerate per-bucket AccessDenied. STRICTLY READ-ONLY (List/Get only).
     NoSuchPublicAccessBlock => no PAB configured => blocks are effectively False (a real signal);
+    NoSuchBucketPolicy => no bucket policy at all => policy is definitively NOT public => False
+    (kept in lockstep with _fetch_s3_security's identical call — the two types must never carry
+    different semantics for the same column on the same bucket);
     AccessDenied => genuinely unknown => leave None (FINDING_SQL treats None as non-public)."""
     s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
     rows = []
@@ -486,8 +489,11 @@ def _fetch_s3_public_access(s3=None):
         try:
             rec["bucket_policy_is_public"] = (
                 s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
-        except ClientError:
-            pass  # AccessDenied / NoSuchBucketPolicy → leave None
+        except ClientError as e:
+            # NoSuchBucketPolicy → definitively not public via policy (False, in lockstep with
+            # _fetch_s3_security); AccessDenied/other → leave None (unknown).
+            if e.response.get("Error", {}).get("Code") == "NoSuchBucketPolicy":
+                rec["bucket_policy_is_public"] = False
         rows.append(rec)
     return rows, "name", "region"
 
@@ -537,8 +543,9 @@ def _fetch_s3_security(s3=None):
             # gap L240: the Policy Private/Public flag bars chart this off the bucket row
             # itself (the separate s3_public_access fetch keeps the public-access-block
             # detail). NoSuchBucketPolicy (no bucket policy at all — the common case) is a
-            # DEFINITIVE "not public via policy" → False (the NoSuchPublicAccessBlock→False
-            # precedent above); AccessDenied/other → None (unknown counts into neither side).
+            # DEFINITIVE "not public via policy" → False (the _fetch_s3_public_access
+            # NoSuchPublicAccessBlock→False precedent; its policy-status handler is kept in
+            # lockstep); AccessDenied/other → None (unknown counts into neither side).
             rec["bucket_policy_is_public"] = (
                 s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
         except ClientError as e:
