@@ -14,6 +14,7 @@ import BarDistribution from '@/components/charts/BarDistribution';
 import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import EcsCostBasisPanel from '@/components/inventory/EcsCostBasisPanel';
+import { EcsCostByService } from '@/components/inventory/metrics/EcsCostByService';
 import VpcResourceMap from '@/components/inventory/VpcResourceMap';
 import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes, RdsInstanceMetrics, DynamoTableMetrics, AlbMetrics, NlbMetrics, S3Metrics, EbsMetrics, Ec2Metrics, LambdaMetrics, TgwSection } from '@/components/inventory/NodeMetricsTables';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf, worstFirst } from '@/lib/inventory-types';
@@ -424,7 +425,8 @@ export default function InventoryTypePage() {
             {type === 'nlb' && <NlbMetrics rows={filteredRows} />}
             {type === 's3' && <S3Metrics rows={filteredRows} />}
             {type === 'ebs_volume' && <EbsMetrics rows={filteredRows} />}
-            {/* Cost Calculation Basis (gap L194): documents the Daily $/Monthly estimate above. */}
+            {/* Cost by Service grouped bar (gap L195) + Cost Calculation Basis (gap L194). */}
+            {type === 'ecs_task' && <EcsCostByService rows={filteredRows} isTruncated={isTruncated} />}
             {type === 'ecs_task' && <EcsCostBasisPanel />}
             {type === 'ec2' && <Ec2Metrics rows={filteredRows} />}
             {type === 'lambda' && <LambdaMetrics rows={filteredRows} />}

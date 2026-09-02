@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CostBasisPanel from '@/components/eks/CostBasisPanel';
+import GroupedBarList from '@/components/charts/GroupedBarList';
 import { DollarSign, CalendarDays, Boxes, Crown, Search } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -333,6 +334,42 @@ export default function EksFleetCostPage() {
                       rows={rows}
                       onRowClick={(r) => setSelected((r._raw ?? r) as Record<string, unknown>)}
                     />
+
+                    {/* gap L218 (v1 dual-axis parity → per-series-scaled grouped bars): node
+                        daily cost + pod count from the SAME merged data (no new fetch).
+                        Cost-desc sorted, Top 15. Pod counts render ONLY for clusters whose
+                        attribution is COMPLETE (every pod carries a node — OpenCost can omit
+                        pod→node per pod); any unattributed pod makes the whole cluster's
+                        counts unknowable (a shown count could undercount), so its nodes
+                        render '—', never a confident 0. */}
+                    {merged.nodes.length > 0 && (() => {
+                      const podsByNode = new Map<string, number>();
+                      const clustersWithUnattributed = new Set<string>();
+                      for (const pd of merged.pods) {
+                        if (!pd.node) { clustersWithUnattributed.add(pd.cluster); continue; }
+                        const k = `${pd.cluster}/${pd.node}`;
+                        podsByNode.set(k, (podsByNode.get(k) ?? 0) + 1);
+                      }
+                      const data = [...merged.nodes]
+                        .sort((a, b) => b.totalCost - a.totalCost)
+                        .slice(0, 15)
+                        .map((n) => ({
+                          label: `${n.cluster}/${n.node}`,
+                          cost: n.totalCost,
+                          pods: clustersWithUnattributed.has(n.cluster) ? null : podsByNode.get(`${n.cluster}/${n.node}`) ?? 0,
+                        }));
+                      return (
+                        <GroupedBarList
+                          title={merged.nodes.length > 15 ? `${tt('Node별 일일 비용 + Pod 수')} (Top 15/${merged.nodes.length})` : tt('Node별 일일 비용 + Pod 수')}
+                          data={data}
+                          labelKey="label"
+                          series={[
+                            { key: 'cost', label: tt('일일 비용'), color: '#3D6FB5', fmt: (v) => usd(v) },
+                            { key: 'pods', label: 'Pods', color: '#39C2B0' },
+                          ]}
+                        />
+                      );
+                    })()}
 
                     {merged.nodes.length > 0 && (
                       <Card title="Node별 비용 (일간)" padded={false}>
