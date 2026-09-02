@@ -105,3 +105,13 @@ no-access banner with error detail + docs link).
   cluster discovery uses the host-account client. The 4-locale bullet now matches the in-app
   helper text: AssumeRole authenticates the K8s API via an IAM role that ALREADY holds an
   Access Entry on a HOST-account cluster.
+
+## Round-5 corrections (review-driven)
+
+- **compute/eks.md's remaining v1-only claims purged (the gate MAJOR)** — the guide still
+  documented a "Service Resources" tab (CPU/Memory per Service — gap L229, unchecked) and
+  per-ENI NetworkIn/Out traffic (gap L228, unchecked). All 4 locales: the Service Resources
+  tab section + usage step 6 dropped (steps renumbered), the ENI bullet rewords to IP
+  allocation only, and the now-single-tab chart heading loses its "(tab switching)" phrasing.
+  The banner keeps linking this page — now truthful about what v2 renders.
+- ADR-013's References gains `compliance.py` and the `compliance_runs_notify` migration.

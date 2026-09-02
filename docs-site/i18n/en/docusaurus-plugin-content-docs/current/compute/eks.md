@@ -48,18 +48,13 @@ Visually display resource usage for each node:
 ### Node Detail View
 Click a node card to navigate to the detail page:
 - **CPU/Memory/Pod Info cards**: Capacity, Allocatable, Requested, Available
-- **ENI list**: IP allocation per network interface, traffic (NetworkIn/Out)
+- **ENI list**: IP allocation per network interface
 - **Pods table**: List of Pods running on that node
 
-### Visualization Charts (Tab Switching)
+### Visualization Charts
 
-**Pod Analysis tab:**
 - **Pod Status Distribution**: Running, Pending, Failed, Succeeded distribution (pie chart)
 - **Pods per Namespace**: Pod count by namespace (bar chart)
-
-**Service Resources tab:**
-- **CPU per Service (millicores)**: Sum of CPU requests for pods belonging to each Service (bar chart)
-- **Memory per Service (MiB)**: Sum of memory requests for pods belonging to each Service (bar chart)
 
 ### Warning Events Table
 Display Kubernetes Warning events in real-time:
@@ -72,8 +67,7 @@ Display Kubernetes Warning events in real-time:
 3. Click stats cards to navigate to Pods/Nodes/Deployments/Services detail pages
 4. Identify nodes with high resource usage from the node cards
 5. Click a node to view detailed resources and Pod list
-6. Switch to **Service Resources** tab to analyze CPU/Memory allocation per Service
-7. Monitor problem events in Warning Events
+6. Monitor problem events in Warning Events
 
 ## Tips
 

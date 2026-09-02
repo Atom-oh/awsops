@@ -48,18 +48,13 @@ EKS 클러스터의 전체 현황과 노드 리소스, Pod 상태를 한눈에 �
 ### 노드 상세 뷰
 노드 카드를 클릭하면 상세 페이지로 이동:
 - **CPU/Memory/Pod Info 카드**: Capacity, Allocatable, Requested, Available
-- **ENI 목록**: 네트워크 인터페이스별 IP 할당, 트래픽 (NetworkIn/Out)
+- **ENI 목록**: 네트워크 인터페이스별 IP 할당
 - **Pods 테이블**: 해당 노드에서 실행 중인 Pod 목록
 
-### 시각화 차트 (탭 전환)
+### 시각화 차트
 
-**Pod Analysis 탭:**
 - **Pod Status Distribution**: Running, Pending, Failed, Succeeded 분포 (파이 차트)
 - **Pods per Namespace**: 네임스페이스별 Pod 수 (바 차트)
-
-**Service Resources 탭:**
-- **CPU per Service (millicores)**: Service에 속한 Pod들의 CPU 요청량 합산 (바 차트)
-- **Memory per Service (MiB)**: Service에 속한 Pod들의 Memory 요청량 합산 (바 차트)
 
 ### Warning Events 테이블
 Kubernetes Warning 이벤트를 실시간으로 표시:
@@ -72,8 +67,7 @@ Kubernetes Warning 이벤트를 실시간으로 표시:
 3. 통계 카드를 클릭하면 Pods/Nodes/Deployments/Services 상세 페이지로 이동합니다
 4. 노드 카드에서 리소스 사용률이 높은 노드를 식별합니다
 5. 노드를 클릭하여 상세 리소스와 Pod 목록을 확인합니다
-6. **Service Resources** 탭에서 Service별 CPU/Memory 할당량을 분석합니다
-7. Warning Events에서 문제 이벤트를 모니터링합니다
+6. Warning Events에서 문제 이벤트를 모니터링합니다
 
 ## 사용 팁
 

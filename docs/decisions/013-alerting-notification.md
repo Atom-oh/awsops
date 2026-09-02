@@ -81,6 +81,9 @@ Report downloads are proxied by the BFF (no presigned URL exposed): the route fe
 
 ## References / 참고
 
+- `scripts/v2/workers/compliance.py` — `notify_completed` (2026-09-02 amendment: compliance completion mail, atomic dedup claim, durable outcome)
+- `terraform/v2/foundation/migrations/01M1FWJNXWQDP5B929S2MJYBMS_compliance_runs_notify.sql` — notified_at/notify_outcome + sql_reader re-projection
+
 ### Internal
 - `web/app/api/incidents/webhook/route.ts` — HMAC active/standby + rate-limit + SNS confirm + SSM secrets (ADR-022 이식; `INCIDENT_LIFECYCLE_ENABLED` 게이트)
 - `web/lib/diagnosis-notify.ts` — 단일 SNS 토픽 이메일 구독 관리 (`diagnosis_notify_enabled` 게이트, LIVE)

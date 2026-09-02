@@ -48,18 +48,13 @@ import Screenshot from '@site/src/components/Screenshot';
 ### 节点详情视图
 点击节点卡片可跳转到详情页面：
 - **CPU/Memory/Pod Info 卡片**：Capacity、Allocatable、Requested、Available
-- **ENI 列表**：各网络接口的 IP 分配、流量（NetworkIn/Out）
+- **ENI 列表**：各网络接口的 IP 分配
 - **Pods 表格**：在该节点上运行的 Pod 列表
 
-### 可视化图表（标签页切换）
+### 可视化图表
 
-**Pod Analysis 标签页：**
 - **Pod Status Distribution**：Running、Pending、Failed、Succeeded 分布（饼图）
 - **Pods per Namespace**：各命名空间的 Pod 数量（柱状图）
-
-**Service Resources 标签页：**
-- **CPU per Service (millicores)**：属于 Service 的 Pod 的 CPU 请求量合计（柱状图）
-- **Memory per Service (MiB)**：属于 Service 的 Pod 的 Memory 请求量合计（柱状图）
 
 ### Warning Events 表格
 实时显示 Kubernetes Warning 事件：
@@ -72,8 +67,7 @@ import Screenshot from '@site/src/components/Screenshot';
 3. 点击统计卡片跳转到 Pods/Nodes/Deployments/Services 详情页面
 4. 在节点卡片中识别资源使用率较高的节点
 5. 点击节点查看详细资源和 Pod 列表
-6. 在 **Service Resources** 标签页中分析各 Service 的 CPU/Memory 分配量
-7. 通过 Warning Events 监控问题事件
+6. 通过 Warning Events 监控问题事件
 
 ## 使用技巧
 
