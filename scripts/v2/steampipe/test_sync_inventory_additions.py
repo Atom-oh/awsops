@@ -187,6 +187,16 @@ class _FakeS3PolicyStatus:
             raise out
         return {"PolicyStatus": {"IsPublic": out}}
 
+    def get_bucket_tagging(self, Bucket):
+        out = self._tags.get(Bucket) if hasattr(self, "_tags") else None
+        if isinstance(out, Exception):
+            raise out
+        if out is None:
+            from botocore.exceptions import ClientError as _CE
+
+            raise _CE({"Error": {"Code": "NoSuchTagSet"}}, "GetBucketTagging")
+        return {"TagSet": out}
+
 
 def _client_error(code):
     from botocore.exceptions import ClientError
@@ -211,3 +221,19 @@ def test_s3_security_rows_carry_bucket_policy_is_public():
     # None here would zero the Policy Private bar on a typical fleet.
     assert by_name["nopolicy"]["bucket_policy_is_public"] is False
     assert id_col == "name" and region_col == "region"
+
+
+def test_s3_security_rows_fold_tags_to_a_dict():
+    """gap L243: TagSet list -> {Key: Value} dict; NoSuchTagSet -> {} (definitive 'no tags');
+    denial -> key absent (unknown, never a fabricated empty list)."""
+    fake = _FakeS3PolicyStatus({"tagged": False, "bare": False, "denied": False})
+    fake._tags = {
+        "tagged": [{"Key": "env", "Value": "prod"}, {"Key": "team", "Value": "infra"}],
+        "denied": _client_error("AccessDenied"),
+        # "bare" absent -> NoSuchTagSet
+    }
+    rows, _id, _rg = sync_lambda._fetch_s3_security(s3=fake)
+    by = {r["name"]: r for r in rows}
+    assert by["tagged"]["tags"] == {"env": "prod", "team": "infra"}
+    assert by["bare"]["tags"] == {}
+    assert "tags" not in by["denied"]

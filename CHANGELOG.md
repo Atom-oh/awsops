@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Drill-down/onboarding quick wins: the S3 bucket detail gains a Tags section (per-bucket tags newly synced — no tags renders an empty list, an access-denied bucket shows nothing; visible after the next sync), the EKS node drilldown's pods table gains Pod IP and Service Account columns ('-' when unknown), and the /eks page shows a no-access banner when clusters are registered but zero live K8s data is reachable — with the raw per-cluster failure reason and a link to the docs-site EKS auth guide.
 - Compliance completion email: when a benchmark run successfully completes, a best-effort SNS email goes out with the benchmark name, scope, total/passed/failed counts, pass rate, and a /compliance link — reusing the AI-diagnosis notification topic, flag, and admin pause switch (paused or unconfigured ⇒ silently skipped; a mail failure never affects the run), limited to one mail per benchmark per 60 minutes (re-runs don't re-blast subscribers), with a durable per-run delivery record (a new compliance_runs notified_at/notify_outcome migration, agent read view re-projected; recorded as a dated ADR-013 amendment).
 - ECS Tasks page: a collapsible Cost Calculation Basis panel documents the Daily $/Monthly estimates — the Fargate unit-price table and formula rendered from the SAME constants the estimator computes with (the deriver now imports the shared cost-basis source), a worked example, and caveats (Fargate launch type only, ephemeral storage not priced, static prices, ×30 monthly).
 - Home dashboard: a Monthly Cost Impact (est.) list — 30-day resource-count change × a static per-type unit-cost heuristic, sorted by |impact| (top 8), explicitly labeled as a heuristic rather than billing data; fed by its own fixed 35-day trend fetch (visible on the default view), including fully-removed types' savings, hidden when the latest snapshot is stale or the account/region scope is narrowed, and excluding no-baseline/no-weight types rather than showing $0.
@@ -613,6 +614,7 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
+- 드릴다운/온보딩 퀵윈: S3 버킷 상세에 Tags 섹션(버킷별 태그 신규 sync — 태그 없음은 빈 목록, 권한 거부 버킷은 미표시; 다음 sync 후 표시), EKS 노드 드릴다운 Pods 테이블에 Pod IP·Service Account 컬럼('-'=미상), /eks 페이지에 접근 불가 배너(클러스터는 등록됐지만 라이브 K8s 데이터를 하나도 읽지 못할 때 — 클러스터별 실패 원문과 docs 사이트 EKS 인증 가이드 링크 표시) 추가.
 - 컴플라이언스 완료 이메일: 벤치마크 실행이 성공적으로 완료되면 벤치마크명·scope·전체/통과/실패 건수·통과율·/compliance 링크가 담긴 best-effort SNS 이메일 발송 — AI 진단 알림의 토픽·플래그·관리자 일시중지 스위치를 재사용(중지/미설정이면 조용히 생략, 메일 실패는 실행 결과에 영향 없음), 벤치마크당 60분 1건 제한(재실행 재발송 방지), 실행별 내구 배달 레코드(compliance_runs notified_at/notify_outcome 신규 마이그레이션, agent 읽기 뷰 재투영; ADR-013 개정으로 기록).
 - ECS Tasks 페이지: 접이식 '비용 계산 근거' 패널 — Daily $/Monthly 추정의 Fargate 단가표와 수식을 추정기가 실제로 쓰는 동일 상수로 렌더링(deriver가 공용 cost-basis 소스를 import하도록 변경), 계산 예시와 주의사항(FARGATE launch type 한정, 임시 스토리지 미반영, 고정 단가, ×30 월 추정) 포함.
 - 홈 대시보드: '월 비용 영향 추정' 리스트 — 30일 리소스 수량 변화 × 타입별 정적 단가 휴리스틱, |영향| 내림차순 상위 8, 청구 데이터가 아닌 근사임을 명시; 전용 35일 추이 조회로 기본 화면에서도 표시, 완전히 제거된 타입의 절감도 포함, 최신 스냅샷이 오래됐거나 계정/리전 스코프가 좁혀지면 숨김, 30일 기준값·단가 항목 없는 타입은 $0로 표시하지 않고 제외.

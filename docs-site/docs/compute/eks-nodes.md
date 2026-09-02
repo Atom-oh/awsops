@@ -51,6 +51,9 @@ Kubernetes 노드의 용량, 할당 가능 리소스, Pod 요청량을 상세히
 | Allocatable Memory | 할당 가능한 메모리 |
 | Created | 생성 시간 |
 
+### 노드 드릴다운 Pods 테이블
+노드를 클릭하면 해당 노드에 스케줄된 Pods 테이블이 열립니다 — Namespace / Pod / Status / Owner / **Pod IP** / **Service Account** / Restarts / CPU / Mem / Age 컬럼(값이 없으면 '-', 예: 종료된 Pod는 IP 없음).
+
 ## 리소스 개념 이해
 
 ![노드 리소스 계층](/diagrams/eks-node-resources.png)

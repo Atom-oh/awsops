@@ -267,6 +267,11 @@ export default function Home() {
     // priced and labeled as a 30-day delta.
     const spanDays = (new Date(last.date).getTime() - new Date(base.date).getTime()) / 86_400_000;
     if (Math.abs(spanDays - 30) > 2) return [];
+    // strict type-set parity (the netChange precedent): a mid-fan-out latest day snapshots a
+    // partial type set — hide rather than transiently render an incomplete top-8.
+    const typeSet = (pt: Record<string, unknown>) =>
+      (impactTrend?.types ?? []).filter((t) => typeof pt[t] === 'number').join(',');
+    if (typeSet(last) !== typeSet(base)) return [];
     const val = (p: Record<string, unknown>, t: string): number | null =>
       typeof p[t] === 'number' ? (p[t] as number) : null;
     return estimateCostImpact(

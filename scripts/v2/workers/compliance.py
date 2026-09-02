@@ -186,7 +186,8 @@ def notify_completed(conn, run_id, benchmark, totals, scope="all"):
             locked = True
             rows = conn.run(
                 "UPDATE compliance_runs SET notified_at = now() "
-                "WHERE id = :id AND NOT EXISTS ("
+                # notified_at IS NULL: a manual SFN re-drive of an already-notified run must not re-claim its own window
+                "WHERE id = :id AND notified_at IS NULL AND NOT EXISTS ("
                 "  SELECT 1 FROM compliance_runs c2 WHERE c2.benchmark = :b AND c2.id <> :id "
                 "  AND c2.notified_at > now() - make_interval(mins => :m)) RETURNING id",
                 id=run_id, b=benchmark, m=_NOTIFY_DEDUP_MINUTES)

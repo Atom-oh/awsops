@@ -233,6 +233,25 @@ def test_notify_completed_claims_window_before_publish(monkeypatch):
     assert conn.locks == 1 and conn.unlocks == 1
 
 
+def test_notify_claim_requires_own_row_unnotified(monkeypatch):
+    """Round-3 hardening: the claim's target row must require notified_at IS NULL — a manual
+    SFN re-drive of an already-notified run must not re-claim its own window and re-publish."""
+    monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
+    captured = {}
+    _patch_sns(monkeypatch, captured)
+    seen_sql = []
+
+    class _SqlConn(_FakeConn):
+        def run(self, sql, **kw):
+            seen_sql.append(sql)
+            return super().run(sql, **kw)
+
+    conn = _SqlConn(paused=False)
+    compliance.notify_completed(conn, 9, "cis_v300", TOTALS)
+    claim = next(q for q in seen_sql if "NOT EXISTS" in q)
+    assert "notified_at IS NULL" in claim
+
+
 def test_notify_completed_pause_read_failure_fails_open(monkeypatch):
     monkeypatch.setenv("DIAGNOSIS_SNS_TOPIC_ARN", "arn:aws:sns:x:1:t")
     captured = {}

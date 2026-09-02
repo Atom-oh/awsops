@@ -6,6 +6,10 @@ description: AWSops EC2 인스턴스에서 EKS 클러스터에 접근하기 위�
 
 # EKS 인증 설정
 
+:::info
+`/eks` 페이지는 등록된 클러스터가 있는데도 어느 클러스터에서도 라이브 데이터를 읽지 못하면, 실패 원인(원문 오류)과 이 가이드 링크가 담긴 접근 불가 배너를 표시합니다.
+:::
+
 :::caution v1 아카이브 문서 — v2 미적용
 이 페이지는 v1(EC2 인스턴스 + Steampipe) 아키텍처의 인증 절차를 설명합니다. v2는 ECS Fargate 기반이며 EKS 인증은 `terraform/v2/foundation/eks.tf`가 **web 태스크 롤에 Access Entry + `AmazonEKSAdminViewPolicy`**를 부여하는 방식으로 대체되었습니다. 이 페이지의 명령어(SSH, `AmazonEKSClusterAdminPolicy`, `data/config.json` 등)를 v2 환경에 적용하지 마세요.
 :::

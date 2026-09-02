@@ -51,6 +51,9 @@ Kubernetes ノードの容量、割り当て可能リソース、Pod のリク�
 | Allocatable Memory | 割り当て可能なメモリ |
 | Created | 作成時刻 |
 
+### ノードドリルダウン Pods テーブル
+ノードをクリックすると、そのノードにスケジュールされた Pods テーブルが開きます — Namespace / Pod / Status / Owner / **Pod IP** / **Service Account** / Restarts / CPU / Mem / Age 列（不明の場合は「-」。例: 終了した Pod には IP がありません）。
+
 ## リソースの概念を理解する
 
 ![ノードリソースの階層](/diagrams/eks-node-resources.png)

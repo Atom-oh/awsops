@@ -51,6 +51,9 @@ import Screenshot from '@site/src/components/Screenshot';
 | Allocatable Memory | 可分配的内存 |
 | Created | 创建时间 |
 
+### 节点钻取 Pods 表
+点击节点会打开该节点上已调度的 Pods 表 — Namespace / Pod / Status / Owner / **Pod IP** / **Service Account** / Restarts / CPU / Mem / Age 列（未知时显示 '-'，例如已终止的 Pod 没有 IP）。
+
 ## 理解资源概念
 
 ![节点资源层级](/diagrams/eks-node-resources.png)

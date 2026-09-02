@@ -48,7 +48,7 @@ interface FleetEvent {
   count: number; lastSeen: string; lastSeenTs: number;
 }
 interface FleetCluster {
-  name: string; reachable: boolean;
+  name: string; reachable: boolean; error?: string;
   counts: { nodes: number; nodesReady: number; pods: number; podsRunning: number; deployments: number; services: number };
   nodeAgg: NodeAgg[];
   instanceTypes: Array<{ type: string; count: number }>;
@@ -81,6 +81,7 @@ export default function EksPage() {
   const [regMode, setRegMode] = useState<'entry' | 'sa-token' | 'assume-role'>('sa-token');
   const [busyCluster, setBusyCluster] = useState('');
   const [fleet, setFleet] = useState<FleetCluster[]>([]);
+  const [fleetLoaded, setFleetLoaded] = useState(false);
   const [copied, setCopied] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
@@ -107,7 +108,7 @@ export default function EksPage() {
     const seq = ++fleetSeqRef.current;
     fetch('/api/eks/fleet')
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d && seq === fleetSeqRef.current) setFleet(d.clusters ?? []); })
+      .then((d) => { if (d && seq === fleetSeqRef.current) { setFleet(d.clusters ?? []); setFleetLoaded(true); } })
       .catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -316,6 +317,28 @@ export default function EksPage() {
       {err && <div className="text-[13px] text-rose-600">{tt('로드 실패:')} {err}</div>}
       {notice && <div className="text-[13px] text-brand-700">{notice}</div>}
       {!rows && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
+
+      {/* Page-level no-access banner (gap L227, v1 parity): clusters exist but ZERO K8s data
+          is reachable — title + why (the fleet route's per-cluster error, mono box) + the
+          docs-site EKS auth guide link. Never while the fleet is still loading. */}
+      {rows && rows.length > 0 && fleetLoaded && fleet.length > 0 && fleet.every((f) => !f.reachable) && (
+        <div className="rounded-lg border border-amber-300 border-l-[3px] bg-amber-50 p-4">
+          <div className="text-[14px] font-semibold text-amber-800">{tt('K8s 데이터에 접근할 수 없습니다')}</div>
+          <p className="mt-1 text-[13px] text-amber-700">
+            {tt('등록된 클러스터가 있지만 어느 클러스터에서도 라이브 데이터를 읽지 못했습니다. Access Entry(AmazonEKSAdminViewPolicy) 부여와 클러스터 등록(인증) 상태를 확인하세요.')}
+          </p>
+          {(() => { const firstErr = fleet.find((f) => f.error)?.error; return firstErr ? (
+            <pre className="mt-2 overflow-x-auto rounded bg-white/70 p-2 font-mono text-[11.5px] text-amber-900">{firstErr}</pre>
+          ) : null; })()}
+          <a
+            href={`${process.env.NEXT_PUBLIC_DOCS_URL ?? 'https://www.atomai.click/awsops'}/compute/eks-auth`}
+            target="_blank" rel="noreferrer"
+            className="mt-2 inline-block text-[13px] font-medium text-amber-800 underline underline-offset-2"
+          >
+            {tt('EKS 인증 가이드 문서 →')}
+          </a>
+        </div>
+      )}
 
       {admin && regOpen && (
         <Card title="클러스터 등록" subtitle="클러스터를 선택하고 연결 방식을 지정하세요 — 인증은 Aurora에 저장되며 조회 전용입니다 (v1 kubeconfig 등록 대응).">
