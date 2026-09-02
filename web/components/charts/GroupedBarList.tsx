@@ -4,10 +4,11 @@ import type { ReactNode } from 'react';
 import Card from '@/components/ui/Card';
 
 // GroupedBarList (gap L195/L218) — the multi-series sibling of HBarList: per row, one thin
-// track PER SERIES, each scaled to ITS OWN series max. Per-series scaling is the honest
-// equivalent of v1's dual-axis charts (two series, two scales): a shared scale would let a
-// large series visually flatten the other, while the formatted value labels carry the real
-// numbers/units. Rows keep the caller's order (callers sort by their own total).
+// track PER SERIES. Scaling is per-caller: SAME-unit series (L195's $ vs $) share one scale
+// (sharedScale — per-series would visually equalize unequal costs), while MIXED-unit series
+// (L218's $ vs pod count) scale each to its own max — the honest equivalent of v1's
+// dual-axis, with formatted value labels carrying the real numbers/units. Rows keep the
+// caller's order (callers sort by their own total).
 
 export interface GroupedSeries {
   key: string;
@@ -23,6 +24,7 @@ export default function GroupedBarList({
   data,
   labelKey,
   series,
+  sharedScale = false,
   className,
 }: {
   title: ReactNode;
@@ -30,11 +32,18 @@ export default function GroupedBarList({
   data: Array<Record<string, unknown>>;
   labelKey: string;
   series: GroupedSeries[];
+  /** SAME-unit series must share one scale (comparing $ to $ per-series-scaled would render
+   *  the largest Memory bar as wide as the largest CPU bar); mixed units keep per-series. */
+  sharedScale?: boolean;
   className?: string;
 }) {
   const max: Record<string, number> = {};
   for (const s of series) {
     max[s.key] = Math.max(0, ...data.map((d) => Number(d[s.key]) || 0));
+  }
+  if (sharedScale) {
+    const global = Math.max(0, ...Object.values(max));
+    for (const s of series) max[s.key] = global;
   }
   return (
     <Card

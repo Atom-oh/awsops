@@ -336,22 +336,37 @@ export default function EksFleetCostPage() {
                     />
 
                     {/* gap L218 (v1 dual-axis parity → per-series-scaled grouped bars): node
-                        daily cost + pod count from the SAME merged data (no new fetch). */}
-                    {merged.nodes.length > 0 && (
-                      <GroupedBarList
-                        title={tt('Node별 일일 비용 + Pod 수')}
-                        data={merged.nodes.map((n) => ({
+                        daily cost + pod count from the SAME merged data (no new fetch).
+                        Cost-desc sorted (the primitive's callers-sort contract); the pods
+                        series is DROPPED when no pod carries node attribution (a confident 0
+                        must not stand in for unknown — OpenCost can omit pod→node). */}
+                    {merged.nodes.length > 0 && (() => {
+                      const podsByNode = new Map<string, number>();
+                      for (const pd of merged.pods) {
+                        if (!pd.node) continue;
+                        const k = `${pd.cluster}/${pd.node}`;
+                        podsByNode.set(k, (podsByNode.get(k) ?? 0) + 1);
+                      }
+                      const attributed = podsByNode.size > 0;
+                      const data = [...merged.nodes]
+                        .sort((a, b) => b.totalCost - a.totalCost)
+                        .map((n) => ({
                           label: `${n.cluster}/${n.node}`,
                           cost: n.totalCost,
-                          pods: merged.pods.filter((p) => p.cluster === n.cluster && p.node === n.node).length,
-                        }))}
-                        labelKey="label"
-                        series={[
-                          { key: 'cost', label: tt('일일 비용'), color: '#3D6FB5', fmt: (v) => usd(v) },
-                          { key: 'pods', label: 'Pods', color: '#39C2B0' },
-                        ]}
-                      />
-                    )}
+                          pods: podsByNode.get(`${n.cluster}/${n.node}`) ?? 0,
+                        }));
+                      return (
+                        <GroupedBarList
+                          title={tt('Node별 일일 비용 + Pod 수')}
+                          data={data}
+                          labelKey="label"
+                          series={[
+                            { key: 'cost', label: tt('일일 비용'), color: '#3D6FB5', fmt: (v) => usd(v) },
+                            ...(attributed ? [{ key: 'pods', label: 'Pods', color: '#39C2B0' }] : []),
+                          ]}
+                        />
+                      );
+                    })()}
 
                     {merged.nodes.length > 0 && (
                       <Card title="Node별 비용 (일간)" padded={false}>

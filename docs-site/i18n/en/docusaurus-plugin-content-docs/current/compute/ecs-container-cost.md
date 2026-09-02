@@ -28,7 +28,7 @@ A page for analyzing the cost of ECS Fargate tasks. Costs are calculated based o
 Pie chart showing daily cost distribution by service
 
 ### Cost by Service (CPU vs Memory) Chart
-Stacked bar chart comparing CPU cost vs Memory cost per service
+Compares CPU cost vs Memory cost per service. In v2 this renders as **shared-scale grouped bars** (both $ series on one scale — real proportions preserved) instead of stacked bars, with cluster/service labels, FARGATE-only scope, top 10, and a 'sample-based' tag past the 500-row cap.
 
 ### ECS Tasks Table
 | Column | Description |

@@ -426,7 +426,7 @@ export default function InventoryTypePage() {
             {type === 's3' && <S3Metrics rows={filteredRows} />}
             {type === 'ebs_volume' && <EbsMetrics rows={filteredRows} />}
             {/* Cost by Service grouped bar (gap L195) + Cost Calculation Basis (gap L194). */}
-            {type === 'ecs_task' && <EcsCostByService rows={filteredRows} />}
+            {type === 'ecs_task' && <EcsCostByService rows={filteredRows} isTruncated={isTruncated} />}
             {type === 'ecs_task' && <EcsCostBasisPanel />}
             {type === 'ec2' && <Ec2Metrics rows={filteredRows} />}
             {type === 'lambda' && <LambdaMetrics rows={filteredRows} />}

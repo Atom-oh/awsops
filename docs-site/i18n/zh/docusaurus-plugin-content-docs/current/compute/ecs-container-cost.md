@@ -28,7 +28,7 @@ import Screenshot from '@site/src/components/Screenshot';
 以饼图显示各服务的每日成本分布
 
 ### Cost by Service (CPU vs Memory) 图表
-以堆叠条形图对比各服务的 CPU 成本和 Memory 成本
+对比各服务的 CPU 成本和 Memory 成本。在 v2 中以**共用刻度的分组条**（两个 $ 序列共用一个刻度 — 保持真实比例）替代堆叠条，带集群/服务标签、仅 FARGATE、前 10，超过 500 行时标注'表本基准（抽样）'。
 
 ### ECS Tasks 表格
 | 列 | 说明 |

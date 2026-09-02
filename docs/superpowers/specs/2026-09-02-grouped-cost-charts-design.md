@@ -8,12 +8,13 @@ Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L195 (container-cost C
 Service CPU vs Memory grouped bar), L218 (eks-container-cost Node Daily Cost + Pod Count).
 
 ## Decisions
-- **New primitive `GroupedBarList`** (charts/) — the multi-series extension both items need
-  (v2's BarDistribution/HBarList are single-series): per row, one thin track PER SERIES,
-  each track scaled to ITS OWN series max, with a legend chip row and per-value formatted
-  labels. Per-series scaling is the honest equivalent of v1's dual-axis chart (two series,
-  two scales) — mixing units on one shared scale would let a large series visually flatten
-  the other; the formatted value labels carry the real numbers/units.
+- **New primitive `GroupedBarList`** (charts/, as amended by round 1) — the multi-series
+  extension both items need: per row, one thin track PER SERIES, legend chips, formatted
+  value labels. Scaling is PER-CALLER: same-unit series (L195's $ vs $) share ONE scale via
+  `sharedScale` — per-series would render the largest Memory bar as wide as the largest CPU
+  bar and destroy the comparison — while mixed-unit series (L218's $ vs pod count) scale each
+  to its own max, the honest equivalent of v1's dual axis. (v1's L195 chart was a shared-
+  scale stacked $ chart, NOT dual-axis; only L218 was dual-axis.)
 - **L195** — new `EcsCostByService` metrics component on the ECS Tasks inventory page (the
   existing per-type embed slot): FARGATE tasks group by their `group` value's `service:` name
   (rows without a service group or with EC2 launch type are EXCLUDED — the deriver gives EC2
@@ -29,9 +30,29 @@ Service CPU vs Memory grouped bar), L218 (eks-container-cost Node Daily Cost + P
   shows a real 0 (the pods list is the page's own data, not an unknown).
 
 ## Testing
-- GroupedBarList: renders per-series tracks scaled to each series' own max; legend labels.
+- GroupedBarList: per-series vs sharedScale track widths + legend/format labels (real test).
 - EcsCostByService: service grouping (strips `service:`), EC2/no-group exclusion, top-10 cap,
   parts from estimateDailyParts (lockstep by import).
 - Full `npm test` + `tsc` + build; component counts 105 → 107 (README ×4,
   web/components/CLAUDE.md); gap-audit ticks + batch-34 note; CHANGELOG EN/KO; docs-site 4
   locales.
+
+## Round-1 corrections (review-driven)
+
+- **sharedScale for same-unit series (the gate MAJOR)** — per-series scaling on two $ series
+  visually equalized unequal CPU/Memory costs, the exact comparison L195 exists for (v1's
+  chart was shared-scale stacked $, not dual-axis — the provenance claim was wrong in the
+  CHANGELOG/spec/audit note and is amended in place). GroupedBarList gains `sharedScale`;
+  ECS uses it, EKS keeps per-series; a new GroupedBarList test pins both scaling modes (the
+  spec's testing claim previously named a test that didn't exist).
+- **Cluster-scoped service keys (the gate MAJOR)** — service names are unique only within a
+  cluster; bars now key and label as `cluster/service` (test: same-named services in two
+  clusters stay separate).
+- **The 500-row truncation signal (the gate MAJOR)** — EcsCostByService now receives
+  `isTruncated` and appends the page's standard `(표본 기준)` label (the in-file
+  one-signal-for-every-sample-consumer convention).
+- Minors: /eks/cost pod counts precompute a cluster/node Map (was O(nodes×pods) per render),
+  rows sort cost-desc (the primitive's callers-sort contract), and the pods series is DROPPED
+  when no pod carries node attribution (a confident 0 must not stand in for unknown);
+  CHANGELOG's serviceless wording corrected (excluded for lack of a grouping key, not lack of
+  an estimate).

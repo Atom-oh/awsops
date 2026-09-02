@@ -15,9 +15,11 @@ import type { Row } from './shared';
 
 const usd = (v: number) => `$${v.toFixed(2)}`;
 
-export function EcsCostByService({ rows }: { rows: Row[] }) {
+export function EcsCostByService({ rows, isTruncated = false }: { rows: Row[]; isTruncated?: boolean }) {
   const { tt } = useI18n();
   const data = useMemo(() => {
+    // keyed on cluster+service (ECS service names are unique only within a cluster — a 'web'
+    // in two clusters must not merge into one bar); labeled cluster/service.
     const byService = new Map<string, { cpu: number; mem: number }>();
     for (const r of rows) {
       if (String(r.launch_type ?? '').toUpperCase() !== 'FARGATE') continue;
@@ -27,9 +29,11 @@ export function EcsCostByService({ rows }: { rows: Row[] }) {
       const mem = Number(r.memory);
       if (!Number.isFinite(cpu) || !Number.isFinite(mem)) continue;
       const parts = estimateDailyParts(cpu / 1024, mem / 1024);
-      const e = byService.get(g.slice('service:'.length)) ?? { cpu: 0, mem: 0 };
+      const cluster = String(r.cluster_h ?? r.cluster_arn ?? '');
+      const key = `${cluster}/${g.slice('service:'.length)}`;
+      const e = byService.get(key) ?? { cpu: 0, mem: 0 };
       e.cpu += parts.cpu; e.mem += parts.ram;
-      byService.set(g.slice('service:'.length), e);
+      byService.set(key, e);
     }
     return [...byService.entries()]
       .map(([service, v]) => ({ service, cpu: Math.round(v.cpu * 100) / 100, mem: Math.round(v.mem * 100) / 100 }))
@@ -38,11 +42,16 @@ export function EcsCostByService({ rows }: { rows: Row[] }) {
   }, [rows]);
 
   if (data.length === 0) return null;
+  const title = tt('서비스별 비용 (일간, CPU vs Memory)');
   return (
     <GroupedBarList
-      title={tt('서비스별 비용 (일간, CPU vs Memory)')}
+      // 표본 기준: the page's ONE truncation signal for every sample-based consumer.
+      title={isTruncated ? `${title} (${tt('표본 기준')})` : title}
       data={data}
       labelKey="service"
+      // both series are USD/day → ONE shared scale (per-series would render the largest
+      // Memory bar as wide as the largest CPU bar, destroying the comparison).
+      sharedScale
       series={[
         { key: 'cpu', label: 'CPU', color: '#3D6FB5', fmt: usd },
         { key: 'mem', label: 'Memory', color: '#8A5BD0', fmt: usd },
