@@ -171,6 +171,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date'] },
       { label: 'Security', keys: ['versioning_enabled', 'encryption', 'logging_enabled', 'bucket_policy_is_public'] },
+      { label: 'Tags', keys: ['tags'] },
     ] },
   ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', stateKey: 'state', distKey: 'volume_type', distKey2: 'encrypted', columns: [
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },

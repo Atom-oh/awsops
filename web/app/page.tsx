@@ -20,7 +20,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
 import { nearestSnapshot, netChange } from '@/lib/trend-utils';
-import { estimateCostImpact } from '@/lib/cost-impact';
+import { estimateCostImpact, COST_IMPACT_WEIGHTS } from '@/lib/cost-impact';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
 
@@ -267,6 +267,15 @@ export default function Home() {
     // priced and labeled as a 30-day delta.
     const spanDays = (new Date(last.date).getTime() - new Date(base.date).getTime()) / 86_400_000;
     if (Math.abs(spanDays - 30) > 2) return [];
+    // Partial-LATEST guard, scoped to WEIGHTED types only (review: an equality check over all
+    // types self-disabled the panel for ~30 days whenever any type — even an unweighted one —
+    // appeared or failed once). Hide only when the latest day is missing a weighted type the
+    // baseline has (a mid-fan-out latest day, or a died sync — indistinguishable, so fail
+    // safe); a type new since the baseline is handled per-type (no baseline → excluded).
+    const partialLatest = (impactTrend?.types ?? []).some(
+      (t) => COST_IMPACT_WEIGHTS[t] != null && typeof base[t] === 'number' && typeof last[t] !== 'number',
+    );
+    if (partialLatest) return [];
     const val = (p: Record<string, unknown>, t: string): number | null =>
       typeof p[t] === 'number' ? (p[t] as number) : null;
     return estimateCostImpact(

@@ -51,6 +51,9 @@ Display Memory resource status per node with the same 3-level bar chart:
 | Allocatable Memory | Allocatable memory |
 | Created | Creation time |
 
+### Node drilldown Pods table
+Clicking a node opens the pods-scheduled-on-this-node table — Namespace / Pod / Status / Owner / **Pod IP** / **Service Account** / Restarts / CPU / Mem / Age columns ('-' when unknown, e.g. a terminated pod has no IP).
+
 ## Understanding Resource Concepts
 
 ![Node Resource Hierarchy](/diagrams/eks-node-resources.png)

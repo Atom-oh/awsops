@@ -540,6 +540,15 @@ def _fetch_s3_security(s3=None):
         except ClientError:
             pass
         try:
+            # gap L243: per-bucket tags for the detail Tags section. NoSuchTagSet is a
+            # DEFINITIVE "no tags" -> {} (v1 renders 'No tags'); AccessDenied/other -> key
+            # stays absent (unknown - the panel shows nothing, never a fabricated empty list).
+            tagset = s3.get_bucket_tagging(Bucket=name).get("TagSet", []) or []
+            rec["tags"] = {t.get("Key", ""): t.get("Value", "") for t in tagset if t.get("Key")}
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchTagSet":
+                rec["tags"] = {}
+        try:
             # gap L240: the Policy Private/Public flag bars chart this off the bucket row
             # itself (the separate s3_public_access fetch keeps the public-access-block
             # detail). NoSuchBucketPolicy (no bucket policy at all — the common case) is a
