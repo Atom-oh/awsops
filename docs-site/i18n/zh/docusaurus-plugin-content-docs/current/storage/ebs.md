@@ -34,6 +34,7 @@ import Screenshot from '@site/src/components/Screenshot';
 点击卷后可在右侧面板中查看：
 - 卷 ID、名称、类型、大小
 - IOPS、Throughput、AZ
+- 实测实时指标（Read/Write IOPS · Queue Length · Burst Balance）— 最新值 + 1 小时 5 分钟迷你趋势图（CloudWatch；无序列时显示 'no data'）
 - Multi-Attach 设置
 - **加密判定横幅**：已加密（绿色，显示 KMS 密钥）/ 未加密（红色，附加密副本建议）— 加密状态未知时不显示横幅
 - **闲置卷提示**：上次同步时未挂载（available）则显示成本清理建议横幅

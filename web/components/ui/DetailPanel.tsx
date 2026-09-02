@@ -205,7 +205,7 @@ function RdsMetricsSection({ instanceId }: { instanceId: string }) {
 
 // Generic live CloudWatch metrics (ElastiCache/OpenSearch/MSK) — the BFF returns pre-formatted
 // {label, value} rows from /api/inventory/<type>/metrics?id=. Same degrade behavior as RDS.
-const LIVE_METRIC_TYPES = new Set(['elasticache', 'opensearch', 'msk']);
+const LIVE_METRIC_TYPES = new Set(['elasticache', 'opensearch', 'msk', 'ebs_volume']);
 
 function LiveMetricsSection({ type, id, accountId, region }: { type: string; id: string; accountId?: string; region?: string }) {
   const { tt } = useI18n();
@@ -294,19 +294,25 @@ export default function DetailPanel({
   const rdsInstanceId = resourceType === 'rds' && typeof data.resource_id === 'string' ? data.resource_id : null;
   // SG inbound chaining (gap L154): parse attached SG ids from the row's vpc_security_groups
   // (Steampipe JSONB — PascalCase or snake_case depending on plugin version; string ids too).
+  const sgIdList = (src: unknown): string[] =>
+    (Array.isArray(src) ? src : [])
+      .map((g) => {
+        if (typeof g === 'string') return g;
+        if (g && typeof g === 'object') {
+          const o = g as Record<string, unknown>;
+          const v = o.VpcSecurityGroupId ?? o.vpc_security_group_id ?? o.GroupId ?? o.group_id
+            ?? o.SecurityGroupId ?? o.security_group_id;
+          return typeof v === 'string' ? v : null;
+        }
+        return null;
+      })
+      .filter((v): v is string => !!v && v.startsWith('sg-'));
+  // SG inbound-rule chaining (RDS gap L154; elasticache gap L223 reuses the same section/route).
   const rdsSgIds = rdsInstanceId
-    ? (Array.isArray(data.vpc_security_groups) ? data.vpc_security_groups : [])
-        .map((g) => {
-          if (typeof g === 'string') return g;
-          if (g && typeof g === 'object') {
-            const o = g as Record<string, unknown>;
-            const v = o.VpcSecurityGroupId ?? o.vpc_security_group_id ?? o.GroupId ?? o.group_id;
-            return typeof v === 'string' ? v : null;
-          }
-          return null;
-        })
-        .filter((v): v is string => !!v && v.startsWith('sg-'))
-    : [];
+    ? sgIdList(data.vpc_security_groups)
+    : resourceType === 'elasticache'
+      ? sgIdList(data.security_groups)
+      : [];
   // EBS drill-down (gap L97/L98): per-volume snapshots + attached-instance enrichment.
   const ebsVolumeId = resourceType === 'ebs_volume' && typeof data.resource_id === 'string' ? data.resource_id : null;
   const liveMetricId =

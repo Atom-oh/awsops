@@ -34,6 +34,7 @@ EBS(Elastic Block Store)のボリュームとスナップショットを管理�
 ボリュームをクリックすると右側のパネルで確認:
 - ボリューム ID、名前、タイプ、サイズ
 - IOPS、Throughput、AZ
+- 実測ライブメトリクス（Read/Write IOPS・Queue Length・Burst Balance）— 最新値 + 1 時間 5 分スパークライン（CloudWatch。系列がない場合は 'no data'）
 - Multi-Attach の設定
 - **暗号化判定バナー**: 暗号化済み（緑、KMS キー表示）/ 未暗号化（赤、暗号化コピーの推奨）— 暗号化状態が不明な場合はバナーを表示しません
 - **アイドルボリュームヒント**: 最終同期時点で未接続（available）の場合、コスト削減の推奨バナーを表示

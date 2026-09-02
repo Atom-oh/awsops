@@ -20,6 +20,9 @@ interface CostBreakdown { inputCost: number; outputCost: number; cacheReadCost: 
 interface ModelMetric {
   modelId: string; label: string; invocations: number; inputTokens: number; outputTokens: number;
   avgLatencyMs: number; clientErrors: number; serverErrors: number; cacheReadTokens: number; cacheWriteTokens: number; cost: CostBreakdown;
+  // gap L184: per-model series (optional — an older cached API response may omit them).
+  invSeries?: { t: string; v: number }[];
+  tokenSeries?: { t: string; v: number }[];
 }
 interface BedrockData { range: string; models: ModelMetric[]; totalCost: number; series: { t: string; tokens: number }[] }
 
@@ -290,7 +293,24 @@ export default function BedrockPage() {
         {/* v1-parity AI-call ops stats — independent of the CloudWatch range/account above
             (own /api/chat/stats fetch); self-hides when nothing is recorded. */}
         <ChatOpsStatsCard />
-        <DetailPanel title={picked ?? undefined} data={pickedDetail} onClose={() => setPicked(null)} />
+        <DetailPanel title={picked ?? undefined} data={pickedDetail} onClose={() => setPicked(null)}>
+          {/* gap L184 (v1 parity): per-model Invocations / Token time series over the selected
+              range — an empty series reads 'no data', never a fabricated flat line. */}
+          {pickedModel && (
+            (pickedModel.invSeries?.length ?? 0) > 0 || (pickedModel.tokenSeries?.length ?? 0) > 0 ? (
+              <div className="flex flex-col gap-3">
+                {(pickedModel.invSeries?.length ?? 0) > 0 && (
+                  <AreaTrend title={tt('호출 추이')} data={pickedModel.invSeries ?? []} xKey="t" yKey="v" />
+                )}
+                {(pickedModel.tokenSeries?.length ?? 0) > 0 && (
+                  <AreaTrend title={tt('토큰 추이 (입력+출력)')} data={pickedModel.tokenSeries ?? []} xKey="t" yKey="v" />
+                )}
+              </div>
+            ) : (
+              <p className="text-[12px] text-ink-400">{tt('선택 구간에 시계열 데이터가 없습니다.')}</p>
+            )
+          )}
+        </DetailPanel>
       </div>
     </>
   );

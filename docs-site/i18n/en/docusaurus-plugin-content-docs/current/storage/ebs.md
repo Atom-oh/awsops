@@ -34,6 +34,7 @@ View volumes and snapshots in separate tabs:
 Click on a volume to view in the right panel:
 - Volume ID, name, type, size
 - IOPS, Throughput, AZ
+- Live measured metrics (Read/Write IOPS · Queue Length · Burst Balance) — latest values + 1-hour 5-min sparklines (CloudWatch; a missing series reads 'no data')
 - Multi-Attach setting
 - **Encryption verdict banner**: encrypted (green, with the KMS key) / unencrypted (red, with the encrypted-copy recommendation) — no banner when encryption is unknown
 - **Idle-volume hint**: a banner recommending cleanup when the volume was detached (available) at the last sync
