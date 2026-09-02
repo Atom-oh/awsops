@@ -4,6 +4,7 @@ import { DollarSign, Activity, ArrowDownToLine, ArrowUpFromLine, PiggyBank, Time
 import Card from '@/components/ui/Card';
 import DetailPanel from '@/components/ui/DetailPanel';
 import { getModelPricing } from '@/lib/bedrock';
+import { mergeBedrock, type ModelMetric, type BedrockData } from '@/lib/bedrock-merge';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -17,14 +18,6 @@ import ChatOpsStatsCard from '@/components/chat/ChatOpsStatsCard';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 interface CostBreakdown { inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number; total: number; cacheSavings: number }
-interface ModelMetric {
-  modelId: string; label: string; invocations: number; inputTokens: number; outputTokens: number;
-  avgLatencyMs: number; clientErrors: number; serverErrors: number; cacheReadTokens: number; cacheWriteTokens: number; cost: CostBreakdown;
-  // gap L184: per-model series (optional — an older cached API response may omit them).
-  invSeries?: { t: string; v: number }[];
-  tokenSeries?: { t: string; v: number }[];
-}
-interface BedrockData { range: string; models: ModelMetric[]; totalCost: number; series: { t: string; tokens: number }[] }
 
 const RANGES = ['1h', '6h', '24h', '7d', '30d'];
 const DASH = '—';
@@ -41,35 +34,6 @@ async function fetchBedrock(range: string, accountId: string): Promise<BedrockDa
   return r.json();
 }
 
-/** Merge per-account BedrockData: sum per modelId (tokens/invocations/cost), invocation-weighted latency. */
-function mergeBedrock(parts: BedrockData[]): BedrockData {
-  const byModel = new Map<string, ModelMetric>();
-  const lat = new Map<string, { lat: number; inv: number }>();
-  let totalCost = 0;
-  const seriesByT = new Map<string, number>();
-  for (const p of parts) {
-    totalCost += p.totalCost ?? 0;
-    for (const m of p.models ?? []) {
-      const la = lat.get(m.modelId) ?? { lat: 0, inv: 0 };
-      la.lat += (m.avgLatencyMs || 0) * (m.invocations || 0); la.inv += m.invocations || 0;
-      lat.set(m.modelId, la);
-      const e = byModel.get(m.modelId);
-      if (!e) { byModel.set(m.modelId, { ...m, cost: { ...m.cost } }); continue; }
-      e.invocations += m.invocations; e.inputTokens += m.inputTokens; e.outputTokens += m.outputTokens;
-      e.cacheReadTokens += m.cacheReadTokens; e.cacheWriteTokens += m.cacheWriteTokens;
-      e.clientErrors += m.clientErrors; e.serverErrors += m.serverErrors;
-      e.cost = {
-        inputCost: e.cost.inputCost + m.cost.inputCost, outputCost: e.cost.outputCost + m.cost.outputCost,
-        cacheReadCost: e.cost.cacheReadCost + m.cost.cacheReadCost, cacheWriteCost: e.cost.cacheWriteCost + m.cost.cacheWriteCost,
-        total: e.cost.total + m.cost.total, cacheSavings: e.cost.cacheSavings + m.cost.cacheSavings,
-      };
-    }
-    for (const s of p.series ?? []) seriesByT.set(s.t, (seriesByT.get(s.t) ?? 0) + s.tokens);
-  }
-  for (const [id, e] of byModel) { const la = lat.get(id)!; e.avgLatencyMs = la.inv ? la.lat / la.inv : 0; }
-  const series = [...seriesByT.entries()].map(([t, tokens]) => ({ t, tokens })).sort((a, b) => (a.t < b.t ? -1 : 1));
-  return { range: parts[0]?.range ?? '', models: [...byModel.values()], totalCost, series };
-}
 
 /** Client-side fan-out: fetch every enabled account in bounded parallel + aggregate (thin-BFF). */
 async function loadAllAccounts(range: string): Promise<BedrockData> {

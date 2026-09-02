@@ -37,3 +37,16 @@ charts), L223 (ElastiCache SG inbound-rule drill-down), L233 (EBS measured Read 
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; gap-audit ticks
   with a batch-33 note; CHANGELOG EN/KO; docs-site guides in 4 locales (bedrock row-click,
   elasticache SG drill-down source, ebs live metrics).
+
+## Round-1 corrections (review-driven)
+
+- **mergeBedrock merges the per-model series across accounts (the gate MAJOR)** — the
+  All-accounts merge copied the first account's model object and summed only scalars, so the
+  detail charts silently showed ONE account while the surrounding totals summed all (the
+  L184 item's own '멀티계정 fan-out' half). `mergeBedrock` moved to `lib/bedrock-merge.ts`
+  (a Next.js page may not export helpers) with timestamp-merge for invSeries/tokenSeries,
+  unit-tested across two accounts; lib module count declaration re-verified (the stale 118 →
+  measured 134).
+- The client sparkline formatter gains the `iops` case (EBS Avg/Max/Min no longer render
+  unitless integer-rounded values) and `VolumeQueueLength` uses a new `dec1` format —
+  fractional queue-length averages must not integer-round to 0.

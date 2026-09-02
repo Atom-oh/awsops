@@ -368,7 +368,7 @@ export async function bedrockModelMetrics(range = '24h', accountId?: string): Pr
 // One GetMetricData call per resource; every failure degrades to [] (never blanks the panel).
 export interface LiveMetric { label: string; value: string }
 
-export type LiveFmt = 'pct' | 'ratioPct' | 'gb' | 'mb' | 'mbRaw' | 'count' | 'ms' | 'bps' | 'iops';
+export type LiveFmt = 'pct' | 'ratioPct' | 'gb' | 'mb' | 'mbRaw' | 'count' | 'ms' | 'bps' | 'iops' | 'dec1';
 // perSecond: the metric is a period SUM — both call sites divide by their own Period before
 // formatting (latest grid 3600s, spark trends 300s), so 'iops' renders true ops/sec.
 interface LiveMetricDef { name: string; label: string; stat: 'Average' | 'Sum' | 'Maximum'; fmt: LiveFmt; perSecond?: boolean }
@@ -419,7 +419,7 @@ const LIVE_SPECS: Record<string, LiveMetricSpec> = {
     metrics: [
       { name: 'VolumeReadOps', label: 'Read IOPS', stat: 'Sum', fmt: 'iops', perSecond: true },
       { name: 'VolumeWriteOps', label: 'Write IOPS', stat: 'Sum', fmt: 'iops', perSecond: true },
-      { name: 'VolumeQueueLength', label: 'Queue Length', stat: 'Average', fmt: 'count' },
+      { name: 'VolumeQueueLength', label: 'Queue Length', stat: 'Average', fmt: 'dec1' },
       { name: 'BurstBalance', label: 'Burst Balance', stat: 'Average', fmt: 'pct' },
     ],
   },
@@ -447,6 +447,7 @@ function fmtLive(v: number, fmt: LiveFmt): string {
     case 'ms': return `${Math.round(v * 1000) / 1000} ms`;
     case 'bps': return `${(v / 1e6).toFixed(1)} MB/s`;
     case 'iops': return `${Math.round(v * 10) / 10} IOPS`;
+    case 'dec1': return `${Math.round(v * 10) / 10}`; // fractional averages (queue length) must not integer-round to 0
     default: return Math.round(v).toLocaleString();
   }
 }
