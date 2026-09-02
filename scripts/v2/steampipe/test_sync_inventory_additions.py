@@ -254,3 +254,11 @@ def test_waf_rule_group_and_ip_set_registered():
         for c in cols:
             assert c in sql, (t, c)
         assert id_col == "name" and region_col == "region"
+
+
+def test_iam_role_query_carries_attached_policy_arns():
+    """gap L242: the S3 detail's IAM-access drill-down reads the SYNCED attached policies —
+    a per-row ListAttachedRolePolicies hydrate in the pinned plugin (quota-safe post-ADR-021)."""
+    sql, id_col, _rg = sync_lambda.QUERIES["iam_role"]
+    assert "attached_policy_arns" in sql
+    assert id_col == "name"

@@ -125,9 +125,11 @@ QUERIES = {
         "region",
     ),
     "iam_role": (
+        # attached_policy_arns (gap L242): a per-row ListAttachedRolePolicies hydrate in the
+        # pinned plugin — role counts are modest and the sweep is quota-safe (ADR-021).
         "SELECT name, region, account_id, arn, role_id, create_date, path, description, "
         "max_session_duration, role_last_used_date, role_last_used_region, instance_profile_arns, "
-        "permissions_boundary_arn, assume_role_policy, tags "
+        "permissions_boundary_arn, assume_role_policy, attached_policy_arns, tags "
         "FROM aws_iam_role ORDER BY create_date DESC",
         "name",
         "region",
