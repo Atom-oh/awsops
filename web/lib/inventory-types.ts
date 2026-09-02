@@ -400,6 +400,21 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['region', 'scope'] },
+  waf_rule_group: { label: 'WAF Rule Groups', group: 'Security', distKey: 'scope', barKey: { col: 'capacity', label: 'WCU Capacity' }, filterKeys: ['region', 'scope'], columns: [
+    { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'WCU' }, { key: 'description', label: 'Description' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'id', 'scope', 'description'] },
+      { label: 'Rules', keys: ['capacity', 'rules', 'visibility_config'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
+  waf_ip_set: { label: 'WAF IP Sets', group: 'Security', distKey: 'scope', distKey2: 'ip_address_version', filterKeys: ['region', 'scope', 'ip_address_version'], columns: [
+    { key: 'scope', label: 'Scope' }, { key: 'ip_address_version', label: 'IP Version' },
+    { key: 'addresses_count', label: 'Addresses' }, { key: 'description', label: 'Description' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'id', 'scope', 'description'] },
+      { label: 'Addresses', keys: ['ip_address_version', 'addresses_count', 'addresses'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   cloudtrail: { label: 'CloudTrail Trails', group: 'Security', distKey: 'home_region', columns: [
     { key: 'is_logging', label: 'Logging' }, { key: 'last_delivery_h', label: 'Last Delivery (UTC)' },
     { key: 'is_multi_region_trail', label: 'Multi-region' }, { key: 'home_region', label: 'Home region' },
@@ -635,7 +650,7 @@ const GROUPS: Record<string, GroupMeta> = {
   },
   'Security': {
     slug: 'security', labelKey: 'group.security', splitKeys: ['iamUserNoMfa'],
-    order: ['iam_role', 'iam_user', 'iam_policy', 'waf', 'cloudtrail', 's3_public_access'],
+    order: ['iam_role', 'iam_user', 'iam_policy', 'waf', 'waf_rule_group', 'waf_ip_set', 'cloudtrail', 's3_public_access'],
   },
   'Monitoring': {
     slug: 'monitoring', labelKey: 'group.monitoring', singleton: true, splitKeys: [],
@@ -906,6 +921,16 @@ export function computeHighlights(
 
 // High-value types first (synced columns only). EKS is a feature route (/eks), not an inventory type.
 export const HIGHLIGHTS: Record<string, Highlight[]> = {
+  waf_rule_group: [
+    { kind: 'sum', label: 'WCU 합', col: 'capacity' },
+    { kind: 'countWhere', label: 'CLOUDFRONT scope', col: 'scope', eq: 'CLOUDFRONT' },
+    { kind: 'countWhere', label: 'REGIONAL scope', col: 'scope', eq: 'REGIONAL' },
+  ],
+  waf_ip_set: [
+    { kind: 'countWhere', label: 'IPv4', col: 'ip_address_version', eq: 'IPV4' },
+    { kind: 'countWhere', label: 'IPv6', col: 'ip_address_version', eq: 'IPV6' },
+    { kind: 'distinct', label: 'Scope 종류', col: 'scope' },
+  ],
   ec2: [
     { kind: 'countWhere', label: '실행 중', col: 'instance_state', eq: 'running', tone: 'accent' },
     { kind: 'countWhere', label: '중지됨', col: 'instance_state', eq: 'stopped', tone: 'danger' },

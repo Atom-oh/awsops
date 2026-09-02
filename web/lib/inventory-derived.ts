@@ -286,6 +286,12 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
       : r.latest_delivery_time;
     return { last_delivery_h: dateH(raw) };
   },
+  waf_ip_set: (r) => {
+    // gap L253: address count from the addresses array — undefined when the field is absent
+    // (unknown must never read a confident 0).
+    const a = Array.isArray(r.addresses) ? r.addresses : undefined;
+    return { addresses_count: a ? a.length : undefined };
+  },
   ecs_task: (r) => {
     // Fargate on-demand (ap-northeast-2) — the SHARED cost-basis constants (gap L194: the
     // EcsCostBasisPanel documents these numbers, so the deriver must compute from the same

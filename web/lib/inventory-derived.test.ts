@@ -265,3 +265,11 @@ describe('countFlags (gap L240 — flagBarKey Security Status bars)', () => {
     expect(out[1]).toEqual({ name: 'Public', value: 0 }); // a real zero — signal, kept
   });
 });
+
+describe('deriveRow waf_ip_set addresses_count (gap L253)', () => {
+  it('counts the addresses array; undefined when absent (never a fabricated 0)', () => {
+    expect(deriveRow('waf_ip_set', { resource_id: 'a', addresses: ['1.2.3.4/32', '10.0.0.0/8'] }).addresses_count).toBe(2);
+    expect(deriveRow('waf_ip_set', { resource_id: 'b', addresses: [] }).addresses_count).toBe(0);
+    expect(deriveRow('waf_ip_set', { resource_id: 'c' }).addresses_count).toBeUndefined();
+  });
+});
