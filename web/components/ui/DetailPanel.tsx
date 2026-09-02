@@ -205,6 +205,7 @@ function RdsMetricsSection({ instanceId }: { instanceId: string }) {
 
 // Generic live CloudWatch metrics (ElastiCache/OpenSearch/MSK) — the BFF returns pre-formatted
 // {label, value} rows from /api/inventory/<type>/metrics?id=. Same degrade behavior as RDS.
+// live-metric detail types (latest grid + 1h sparklines): elasticache/opensearch/msk/ebs_volume
 const LIVE_METRIC_TYPES = new Set(['elasticache', 'opensearch', 'msk', 'ebs_volume']);
 
 function LiveMetricsSection({ type, id, accountId, region }: { type: string; id: string; accountId?: string; region?: string }) {

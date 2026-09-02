@@ -69,3 +69,23 @@ charts), L223 (ElastiCache SG inbound-rule drill-down), L233 (EBS measured Read 
   same cluster's own SG row no longer falls back to raw JSON); iops/dec1 gain thousands
   grouping; TERMS en aligned to 'Token Usage (input+output)'; docs add the BurstBalance
   gp2/st1/sc1 qualifier and EBS joins the why-awsops inline-CloudWatch list (4 locales).
+
+## Round-3 corrections (review-driven)
+
+- **perSecond metrics query at Period 300 in the latest grid (the freshness MAJOR)** — the
+  round-2 complete-HOURLY-bucket fix traded understatement for staleness (a headline up to
+  1–2h old above a 5-minute sparkline, and '—' on any volume younger than the first complete
+  hour). The latest value now derives from the newest complete 5-minute bucket ÷300 (fresh
+  ≤5min); non-perSecond metrics keep Period 3600. Tests pin both the bucket selection and the
+  per-metric Period split.
+- **The per-model token chart gets its own TERMS key (the L5 MAJOR)** — round-2's EN rename
+  of the SHARED key also retitled the fleet chart, contradicting the EN guide's untouched
+  "Token trend" lines and colliding the two chart titles in every locale. The fleet key's EN
+  is aligned to the documented fleet label ('Token trend (input + output)'); the detail chart
+  uses the new '모델별 토큰 추이 (입력+출력)' key ('Token Usage (input+output)'), and the
+  ko/zh/ja guide sentences quote the new title.
+- Minors: single-point per-model series falls to the honest no-data line (> 1 guards —
+  AreaTrend draws nothing for a singleton with dot={false}); the ebs_volume detail id pins
+  the vol- shape like the sibling fleet branch; merge tests moved to
+  lib/bedrock-merge.test.ts (colocation convention); stale "ElastiCache/OpenSearch/MSK"
+  comments widened to include EBS.

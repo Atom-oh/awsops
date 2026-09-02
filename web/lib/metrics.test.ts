@@ -281,21 +281,26 @@ describe('liveResourceTrends (gap L118)', () => {
 });
 
 describe('ebs_volume live spec (gap L233 — measured IOPS)', () => {
-  it('latest grid: skips the still-filling newest bucket and divides the newest COMPLETE hour by 3600', async () => {
+  it('latest grid: perSecond metrics query Period 300 and divide the newest COMPLETE 5-min bucket by 300 (fresh, never a partial underestimate)', async () => {
     cwSend.mockResolvedValueOnce({ MetricDataResults: [
-      // newest-first (CloudWatch default): a 10-min-old PARTIAL bucket must be skipped —
-      // dividing its partial Sum by 3600 would systematically understate the headline IOPS.
+      // newest-first (CloudWatch default): a 2-min-old PARTIAL bucket must be skipped —
+      // dividing a still-filling Sum by the period systematically understates the headline.
       { Id: 'lm0',
-        Timestamps: [new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 90 * 60_000)],
-        Values: [1200, 7200] }, // partial (skip) · complete 7200/3600 = 2 IOPS
+        Timestamps: [new Date(Date.now() - 2 * 60_000), new Date(Date.now() - 7 * 60_000)],
+        Values: [100, 600] }, // partial (skip) · complete 600/300 = 2 IOPS
     ] });
     const { liveResourceMetrics } = await import('./metrics');
     const rows = await liveResourceMetrics('ebs_volume', 'vol-0abc');
     expect(rows.find((r) => r.label === 'Read IOPS')?.value).toBe('2 IOPS');
+    // the perSecond queries went out at Period 300 (an hourly bucket made the headline
+    // 1–2h stale — round-3 gate); non-perSecond stay 3600
+    const q = (cwSend.mock.calls[0][0] as { input: { MetricDataQueries: { MetricStat: { Period: number; Metric: { MetricName: string } } }[] } }).input.MetricDataQueries;
+    expect(q.find((x) => x.MetricStat.Metric.MetricName === 'VolumeReadOps')?.MetricStat.Period).toBe(300);
+    expect(q.find((x) => x.MetricStat.Metric.MetricName === 'BurstBalance')?.MetricStat.Period).toBe(3600);
   });
   it("latest grid: only-partial data renders '—' (never a partial-bucket underestimate)", async () => {
     cwSend.mockResolvedValueOnce({ MetricDataResults: [
-      { Id: 'lm0', Timestamps: [new Date(Date.now() - 5 * 60_000)], Values: [600] },
+      { Id: 'lm0', Timestamps: [new Date(Date.now() - 60_000)], Values: [600] },
     ] });
     const { liveResourceMetrics } = await import('./metrics');
     const rows = await liveResourceMetrics('ebs_volume', 'vol-0abc');

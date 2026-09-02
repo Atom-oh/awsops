@@ -364,7 +364,7 @@ export async function bedrockModelMetrics(range = '24h', accountId?: string): Pr
   return { models: out, totalCost, series };
 }
 
-// ── Generic per-resource live CloudWatch metrics (v1 parity for ElastiCache/OpenSearch/MSK) ──
+// ── Generic per-resource live CloudWatch metrics (ElastiCache/OpenSearch/MSK/EBS) ──
 // One GetMetricData call per resource; every failure degrades to [] (never blanks the panel).
 export interface LiveMetric { label: string; value: string }
 
@@ -464,7 +464,10 @@ export async function liveResourceMetrics(type: string, id: string, accountId?: 
       StartTime: new Date(Date.now() - 3 * 3600_000), EndTime: new Date(),
       MetricDataQueries: spec.metrics.map((m, i) => ({
         Id: `lm${i}`, ReturnData: true,
-        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id, accountId) }, Period: 3600, Stat: m.stat },
+        // perSecond metrics query at Period 300: an hourly bucket made the headline up to
+        // 1–2h stale (round-3 gate) — the newest COMPLETE 5-min bucket is both fresh and
+        // honestly convertible (÷300).
+        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id, accountId) }, Period: m.perSecond ? 300 : 3600, Stat: m.stat },
       })),
     }));
     const out: LiveMetric[] = [];
@@ -482,12 +485,12 @@ export async function liveResourceMetrics(type: string, id: string, accountId?: 
         const vals = res.Values ?? [];
         for (let k = 0; k < ts.length; k++) {
           const t = ts[k] instanceof Date ? (ts[k] as Date) : new Date(String(ts[k]));
-          if (t.getTime() + 3600_000 <= Date.now()) { raw = vals[k]; break; }
+          if (t.getTime() + 300_000 <= Date.now()) { raw = vals[k]; break; }
         }
       } else {
         raw = res.Values?.[0];
       }
-      const v = typeof raw === 'number' && def?.perSecond ? raw / 3600 : raw;
+      const v = typeof raw === 'number' && def?.perSecond ? raw / 300 : raw;
       if (def) out.push({ label: def.label, value: typeof v === 'number' ? fmtLive(v, def.fmt) : '—' });
     }
     return out;

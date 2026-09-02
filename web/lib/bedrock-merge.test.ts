@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeBedrock } from '@/lib/bedrock-merge';
+import { mergeBedrock } from './bedrock-merge';
 
 const model = (over: Record<string, unknown>) => ({
   modelId: 'm1', label: 'M1', invocations: 1, inputTokens: 0, outputTokens: 0,

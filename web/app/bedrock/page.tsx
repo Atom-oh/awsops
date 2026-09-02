@@ -264,13 +264,13 @@ export default function BedrockPage() {
           {/* gap L184 (v1 parity): per-model Invocations / Token time series over the selected
               range — an empty series reads 'no data', never a fabricated flat line. */}
           {pickedModel && (
-            (pickedModel.invSeries?.length ?? 0) > 0 || (pickedModel.tokenSeries?.length ?? 0) > 0 ? (
+            (pickedModel.invSeries?.length ?? 0) > 1 || (pickedModel.tokenSeries?.length ?? 0) > 1 ? (
               <div className="flex flex-col gap-3">
-                {(pickedModel.invSeries?.length ?? 0) > 0 && (
+                {(pickedModel.invSeries?.length ?? 0) > 1 && (
                   <AreaTrend title={tt('호출 추이')} data={pickedModel.invSeries ?? []} xKey="t" yKey="v" />
                 )}
-                {(pickedModel.tokenSeries?.length ?? 0) > 0 && (
-                  <AreaTrend title={tt('토큰 추이 (입력+출력)')} data={pickedModel.tokenSeries ?? []} xKey="t" yKey="v" />
+                {(pickedModel.tokenSeries?.length ?? 0) > 1 && (
+                  <AreaTrend title={tt('모델별 토큰 추이 (입력+출력)')} data={pickedModel.tokenSeries ?? []} xKey="t" yKey="v" />
                 )}
               </div>
             ) : (
