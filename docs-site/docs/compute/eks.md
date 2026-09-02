@@ -24,7 +24,7 @@ EKS 클러스터의 전체 현황과 노드 리소스, Pod 상태를 한눈에 �
 - Cluster Name, Status (ACTIVE)
 - Kubernetes Version, VPC ID, Platform Version, Region
 - **Access Entry 상태 배지**: K8s Connected (초록) / 미등록 (빨강)
-- **클러스터 등록 버튼(관리자)**: 미연결 클러스터를 3가지 모드로 등록 — Access Entry 조회 등록(이미 존재하는 Access Entry 확인 후 등록 — 런타임에 Access Entry를 새로 만들지 않음[ADR-005], 없으면 409와 함께 Terraform/CLI 온보딩 스크립트 안내), ServiceAccount 토큰(클러스터 안에 읽기 전용 SA를 만들고 토큰 붙여넣기 — AWS 쪽 설정 불필요), AssumeRole(대상 계정의 읽기 전용 role ARN + external ID). Terraform 경로는 `make configure`의 EKS 다중 선택 → `eks.tf`가 web 태스크 롤에 Access Entry + AmazonEKSAdminViewPolicy를 부여
+- **클러스터 등록 버튼(관리자)**: 미연결 클러스터를 3가지 모드로 등록 — Access Entry 조회 등록(이미 존재하는 Access Entry 확인 후 등록 — 런타임에 Access Entry를 새로 만들지 않음[ADR-005], 없으면 409와 함께 Terraform/CLI 온보딩 스크립트 안내), ServiceAccount 토큰(클러스터 안에 읽기 전용 SA를 만들고 토큰 붙여넣기 — AWS 쪽 설정 불필요), AssumeRole(해당 클러스터에 Access Entry를 이미 보유한 IAM Role의 ARN + external ID로 K8s 인증 — 클러스터 자체는 호스트 계정 소속이어야 하며, 등록 라우트가 호스트 계정의 클러스터 목록으로 검증). Terraform 경로는 `make configure`의 EKS 다중 선택 → `eks.tf`가 web 태스크 롤에 Access Entry + AmazonEKSAdminViewPolicy를 부여
 - **클릭 필터링**: 클러스터 카드를 클릭하면 해당 클러스터만 필터링 (시안 테두리)
 
 :::tip 클러스터 접근 권한

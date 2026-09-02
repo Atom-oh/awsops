@@ -24,7 +24,7 @@ Display key information for each cluster in card format:
 - Cluster Name, Status (ACTIVE)
 - Kubernetes Version, VPC ID, Platform Version, Region
 - **Access Entry badge**: K8s Connected (green) / No Access (red)
-- **Cluster registration button (admin)**: register an unconnected cluster in one of three modes — Access Entry lookup-register (verifies an EXISTING Access Entry then registers — never creates one at runtime [ADR-005]; a missing entry returns 409 with a Terraform/CLI onboarding script), ServiceAccount token (create a read-only SA in the cluster and paste its token — no AWS-side setup), or AssumeRole (target account's read-only role ARN + external ID). The Terraform path is `make configure`'s EKS multi-select → `eks.tf` granting the web task role an Access Entry + AmazonEKSAdminViewPolicy
+- **Cluster registration button (admin)**: register an unconnected cluster in one of three modes — Access Entry lookup-register (verifies an EXISTING Access Entry then registers — never creates one at runtime [ADR-005]; a missing entry returns 409 with a Terraform/CLI onboarding script), ServiceAccount token (create a read-only SA in the cluster and paste its token — no AWS-side setup), or AssumeRole (authenticate to the K8s API via an IAM role that ALREADY holds an Access Entry on that cluster — role ARN + external ID; the cluster itself must belong to the host account, which the register route verifies against the host cluster list). The Terraform path is `make configure`'s EKS multi-select → `eks.tf` granting the web task role an Access Entry + AmazonEKSAdminViewPolicy
 - **Click to filter**: Click a cluster card to filter all data to that cluster (cyan border)
 
 :::tip Cluster Access

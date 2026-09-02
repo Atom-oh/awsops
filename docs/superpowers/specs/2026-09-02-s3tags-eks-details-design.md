@@ -96,3 +96,12 @@ no-access banner with error detail + docs link).
   making the CHANGELOG's "per-cluster failure reason" literally true); the spec's Drive-by
   section was aligned to the round-1 weighted-subset gate; ADR-013's Status line gains the
   dated 2026-09-02 amendment entry.
+
+## Round-4 corrections (review-driven)
+
+- **The AssumeRole docs bullet no longer claims cross-account registration (the gate
+  MAJOR)** — round 3's rewrite said "target account's read-only role ARN," but the register
+  route hard-blocks any non-host-account cluster (404 on the host `listClusters()`), and
+  cluster discovery uses the host-account client. The 4-locale bullet now matches the in-app
+  helper text: AssumeRole authenticates the K8s API via an IAM role that ALREADY holds an
+  Access Entry on a HOST-account cluster.
