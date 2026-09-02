@@ -44,6 +44,13 @@ def _is_throttling_error(exc: Exception) -> bool:
     )
 
 
+def _failure_label_is_throttling(label):
+    """Match a safe failure label's structured code suffix (e.g. 'ClientError:SlowDown')
+    against _THROTTLING_CODES — same contract as _is_throttling_error, no raw text."""
+    code = str(label).rsplit(":", 1)[-1].lower()
+    return code in _THROTTLING_CODES or "throttl" in code or "slowdown" in code
+
+
 # resource_type -> (steampipe SQL, resource_id column, region column). Waves add rows here.
 QUERIES = {
     "ec2": (
@@ -1145,8 +1152,7 @@ def sync(resource_type):
                     "unknown_attribute_count": sdk_unknown_attrs,
                     "degraded": True,
                     "throttled": any(
-                        "throttl" in failure_type.lower()
-                        or "slowdown" in failure_type.lower()
+                        _failure_label_is_throttling(failure_type)
                         for failure_type in sdk_failure_types
                     ),
                     "freshness": "degraded",
@@ -1203,13 +1209,16 @@ def sync(resource_type):
                         "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
     except Exception as e:
         if locked:
-            # Keep the pre-existing result and Aurora-ledger contracts, but never put raw
-            # exception text (which can contain SQL, secrets, or resource payloads) in logs.
-            error = str(e)[:300]
-            result = {"status": "failed", "type": resource_type, "error": error}
+            # The sanitization threat model applies to EVERY sink, not just logs: raw
+            # exception text (which can contain SQL, secrets, or resource payloads) must
+            # not reach the Lambda result (the BFF forwards it to authenticated callers)
+            # or the ledger error column either. Return/persist the same bounded
+            # category+type vocabulary the structured logs use; detail stays server-side.
             error_category = "sync"
+            error = f"{error_category} failed: {type(e).__name__}"
+            result = {"status": "failed", "type": resource_type, "error": error}
             pending_ledger_status = "failed"
-            pending_ledger_error = str(e)[:2000]
+            pending_ledger_error = error
         else:
             result = {"status": "failed", "type": resource_type, "error": "inventory sync failed"}
             error_category = "lifecycle"

@@ -10,7 +10,7 @@ Tools (all read-only — SELECT only; no AWS mutation, no arbitrary SQL):
   - find_unused_resources : orphan TGs, empty CloudFront origins, dead/idle LBs, unattached EBS …
   - query_inventory       : list/filter synced resources by type, including ecs_service
   - get_topology          : topology_nodes/edges graph (nodes+edges, matches /api/graph contract)
-  - inventory_summary     : counts by type + sync freshness
+  - inventory_summary     : counts by type + per-type freshness (healthy|degraded|stale|unavailable)
 
 Aurora access uses the **RDS Data API** (boto3 `rds-data`, bundled in the Lambda runtime) — no VPC
 attachment and no pg8000 packaging needed (the agent Lambdas are zipped from raw .py with no pip
@@ -52,7 +52,10 @@ TOPOLOGY_TYPES = ["cloudfront", "alb", "nlb", "target_group", "ec2", "ebs", "sec
 # and unattached EIP/ENI are out of scope for the Aurora-backed detector (live-API only).
 COVERAGE_NOTE = ("Derived from the synced Aurora inventory (inventory_resources). Elastic IPs, "
                  "detached ENIs, and ELB listeners are not synced yet, so those are out of scope "
-                 "here. Freshness = the latest inventory sync; see inventory_summary().")
+                 "here. Every response carries a per-type freshness block (healthy | degraded | "
+                 "stale | unavailable) classified from the durable last_success_at and the oldest "
+                 "captured_at of current rows; degraded also covers succeeded runs with attribute "
+                 "blind spots (unknown_attribute_count > 0). inventory_summary() lists all types.")
 
 
 # ── Pure detection logic (fixture-testable; no DB) ───────────────────────────────────────────────

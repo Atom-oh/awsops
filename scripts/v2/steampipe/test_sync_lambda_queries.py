@@ -522,6 +522,66 @@ def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success
     assert "old-missing-from-partial" not in output
 
 
+def test_failure_label_is_throttling_matches_structured_code_suffix():
+    """Loose substring matching on a safe label would miss the structured throttle codes."""
+    mod = load_sync_lambda()
+
+    assert mod._failure_label_is_throttling("ClientError:TooManyRequestsException") is True
+    assert mod._failure_label_is_throttling("ClientError:RequestLimitExceeded") is True
+    assert mod._failure_label_is_throttling("ClientError:SlowDown") is True
+    assert mod._failure_label_is_throttling("ClientError:AccessDenied") is False
+    assert mod._failure_label_is_throttling("UnsupportedApi") is False
+
+
+def test_sync_partial_marks_throttled_from_structured_failure_label(capsys, monkeypatch):
+    """A throttle-coded SDK sub-call failure must set the partial run's throttled telemetry."""
+    mod = load_sync_lambda()
+
+    class MainAurora:
+        def run(self, sql, **kwargs):
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            return []
+
+        def close(self):
+            pass
+
+    class FinalizerAurora:
+        def run(self, sql, **kwargs):
+            return [(1,)]
+
+        def close(self):
+            pass
+
+    connections = iter([MainAurora(), FinalizerAurora()])
+    monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
+    monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
+    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    mod.SDK_SYNCS["sdk_partial_throttle_test"] = lambda: (
+        [{"id": "new-good", "region": "ap-northeast-2"}],
+        "id",
+        "region",
+        {
+            "failure_count": 1,
+            "failure_types": ["ClientError:TooManyRequestsException"],
+            "unknown_attribute_count": 0,
+        },
+    )
+    mod._ALLOWED.add("sdk_partial_throttle_test")
+
+    mod.sync("sdk_partial_throttle_test")
+
+    terminal = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+        if json.loads(line)["event"] == "inventory_sync_complete"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0]["failure_types"] == ["ClientError:TooManyRequestsException"]
+    assert terminal[0]["throttled"] is True
+    assert terminal[0]["degraded"] is True
+    assert terminal[0]["freshness"] == "degraded"
+
+
 def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(
     capsys, monkeypatch
 ):
@@ -737,11 +797,17 @@ def test_zero_row_success_is_durable_across_later_failure(capsys, monkeypatch):
 
 
 def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkeypatch):
-    """A raw work exception in logs would expose sensitive query or credential text."""
+    """A raw work exception in logs, the Lambda result, or the ledger error column would
+    expose sensitive query or credential text. All three sinks carry only the bounded
+    category+type label."""
     mod = load_sync_lambda()
+
+    ledger_writes = []
 
     class FakeAurora:
         def run(self, sql, **kwargs):
+            if "status='failed'" in sql:
+                ledger_writes.append(kwargs)
             if "pg_try_advisory_lock" in sql:
                 return [(True,)]
             if "RETURNING 1" in sql:
@@ -762,7 +828,15 @@ def test_sync_failure_logs_one_terminal_record_with_bounded_error(capsys, monkey
     records = [json.loads(line) for line in output.splitlines()]
     terminal = [record for record in records if record["event"].startswith("inventory_sync_") and
                 record["event"] != "inventory_sync_dispatch"]
-    assert result == {"status": "failed", "type": "log_test_failure", "error": failure[:300]}
+    assert result == {
+        "status": "failed",
+        "type": "log_test_failure",
+        "error": "sync failed: RuntimeError",
+    }
+    assert "supersecret" not in json.dumps(result)
+    assert ledger_writes
+    assert ledger_writes[-1]["e"] == "sync failed: RuntimeError"
+    assert "supersecret" not in ledger_writes[-1]["e"]
     assert len(terminal) == 1
     assert terminal[0]["event"] == "inventory_sync_failed"
     assert terminal[0]["resource_type"] == "log_test_failure"
@@ -950,7 +1024,7 @@ def test_sync_logs_work_failure_when_failure_ledger_write_fails(capsys, monkeypa
     assert result == {
         "status": "failed",
         "type": "log_test_ledger_failure",
-        "error": work_secret[:300],
+        "error": "sync failed: ValueError",
     }
     assert terminal[0]["event"] == "inventory_sync_failed"
     assert terminal[0]["error_category"] == "sync"
