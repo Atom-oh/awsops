@@ -211,7 +211,7 @@ def test_s3_security_rows_carry_bucket_policy_is_public():
         "denied": _client_error("AccessDenied"),
         "nopolicy": _client_error("NoSuchBucketPolicy"),
     })
-    rows, id_col, region_col = sync_lambda._fetch_s3_security(s3=fake)
+    rows, id_col, region_col, _meta = sync_lambda._fetch_s3_security(s3=fake)
     by_name = {r["name"]: r for r in rows}
     assert by_name["pub"]["bucket_policy_is_public"] is True
     assert by_name["priv"]["bucket_policy_is_public"] is False
@@ -232,7 +232,7 @@ def test_s3_security_rows_fold_tags_to_a_dict():
         "denied": _client_error("AccessDenied"),
         # "bare" absent -> NoSuchTagSet
     }
-    rows, _id, _rg = sync_lambda._fetch_s3_security(s3=fake)
+    rows, _id, _rg, _meta = sync_lambda._fetch_s3_security(s3=fake)
     by = {r["name"]: r for r in rows}
     assert by["tagged"]["tags"] == {"env": "prod", "team": "infra"}
     assert by["bare"]["tags"] == {}

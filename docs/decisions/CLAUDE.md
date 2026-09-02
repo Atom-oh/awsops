@@ -13,7 +13,7 @@
   without an explicit request.**
 
 ## Adding a new ADR
-1. Number = current highest + 1 (currently **020**).
+1. Number = current highest + 1 (currently **021**).
 2. Structure = Status (single, Accepted) / Context / Decision / Consequences / 6 Pillars. Do
    not narrate the reversal chain — state only the current net decision.
 3. **Must update `BASELINE.md` §3 (or §2) in the same PR** — without it the ADR is "not live"

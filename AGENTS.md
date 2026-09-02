@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 84fc58d39999 · generated-at: 2026-09-01 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 23616e58b0fb · generated-at: 2026-09-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -6,7 +6,7 @@
 
 **v2 is live on `main`** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is decommissioned per ADR-016 — its code left the tree 2026-07-12 (`git tag v1-pre-code-removal-20260712`); AWS teardown Phase 4.1-4.3 (CFN stack `AwsopsStack`, ALB/SQS) is complete (2026-08-25), Phase 4.4/4.5 (orphan Lambdas, AgentCore gateways/Memory/Interpreter, deploy bucket) is UNCONFIRMED as of 2026-08-27 pending a re-run against a corrected 21-name list — see `docs/runbooks/v1-decommission.md` §Phase 4. v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2.
 
-**ADR numbering:** current truth = `docs/decisions/BASELINE.md` + consolidated ADRs **001–020** (new ADR = highest+1, BASELINE updated in the same PR). Legacy ADRs 001–046 are out of tree (tag `adr-legacy-2026-06-22`); docs cite them as `ADR-0NN[legacy 0XX]` — the live number is authoritative, resolve via `docs/decisions/ADR-MAPPING.md`, never read the tag bodies.
+**ADR numbering:** current truth = `docs/decisions/BASELINE.md` + consolidated ADRs **001–021** (new ADR = highest+1, BASELINE updated in the same PR). Legacy ADRs 001–046 are out of tree (tag `adr-legacy-2026-06-22`); docs cite them as `ADR-0NN[legacy 0XX]` — the live number is authoritative, resolve via `docs/decisions/ADR-MAPPING.md`, never read the tag bodies.
 
 ## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
 v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *proposal* (read-only).**

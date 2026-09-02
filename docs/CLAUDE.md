@@ -8,7 +8,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 |---|---|
 | [architecture.md](architecture.md) | System architecture (single file) |
 | [onboarding.md](onboarding.md) | New-joiner onboarding |
-| [decisions/](decisions/) | **Decision single source of truth = `BASELINE.md`** + consolidated ADRs 001–020 + `ADR-MAPPING.md` (old ADR 001–046 bodies are at git tag `adr-legacy-2026-06-22`) |
+| [decisions/](decisions/) | **Decision single source of truth = `BASELINE.md`** + consolidated ADRs 001–021 + `ADR-MAPPING.md` (old ADR 001–046 bodies are at git tag `adr-legacy-2026-06-22`) |
 | [reference/](reference/) | Current v2 design, one file per component (single source per component) |
 | [runbooks/](runbooks/) | Operational playbooks by scenario |
 | [reviews/](reviews/) | Code review / cross-review results |
@@ -31,7 +31,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
   `CLAUDE.md`), `docs/decisions/BASELINE.md`/`0NN-*.md` (ADR bodies), and other
   user-/operator-facing documents keep the bilingual rule.
 - Decision current truth = `docs/decisions/BASELINE.md`. New ADR = consolidated-ADR highest
-  number + 1 (currently **020**); update BASELINE in the same PR.
+  number + 1 (currently **021**); update BASELINE in the same PR.
 - ADR filename: `NNN-kebab-case-title.md`.
 - **Don't mix current truth (`decisions/BASELINE.md` + `reference/`) with old plans/history.**
   `superpowers/plans|specs` and `history/archive/` contain reversed/frozen-era/superseded

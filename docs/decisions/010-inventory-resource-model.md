@@ -21,6 +21,8 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
   (A **type registry** defines which resource types are surfaced; this registry drives both what the inventory sync collects and the navigation.)
 - **flag-gated Steampipe Fargate sync → Aurora** — `steampipe_enabled` 플래그로 게이트된 Steampipe Fargate 워커가 인벤토리를 수집하여 Aurora `inventory_resources` 테이블로 적재한다(기본 false → $0). 라이브 쿼리는 별도로 AgentCore MCP Lambda 도구가 담당한다.
   (A `steampipe_enabled`-gated Steampipe Fargate worker collects inventory and loads it into the Aurora `inventory_resources` table (default false → $0). Live queries remain the responsibility of AgentCore MCP Lambda tools.)
+- **2026-08-31 rollout note (ADR-021)** — Phase 1의 전역 limiter, sync backpressure, durable last-success ledger, `partial` 상태, stale threshold는 저장소에 구현됐다. 성공한 0-row 실행도 `last_success_at`/`last_success_row_count`에 남고, 계정 일부가 도달 불가하면 last-good row를 보존한 채 `partial`로 기록한다. 이 변경을 수행한 에이전트는 apply를 실행하지 않았고 실제 배포는 controller 확인 대상이다. **현재 ops gateway의 제한된 Aurora `inventory-read-target`과 direct domain inventory/configuration target이 공존**하며, `query_inventory`/`inventory_summary`는 `healthy|degraded|stale|unavailable` freshness를 공개한다. Phase 2는 domain-aware Aurora coverage를 확장하고 parity 뒤 direct target을 retirement한다. Aurora-only는 아직 live가 아니다.
+  (**2026-08-31 rollout note (ADR-021)** — Phase 1's global limiter, sync backpressure, durable last-success ledger, `partial` status, and stale threshold are implemented in the repository. A successful zero-row run remains in `last_success_at`/`last_success_row_count`; an unreachable expected account preserves last-good rows and records `partial`. The agent making this change did not run apply; actual deployment is a controller verification item. **The ops gateway's limited Aurora `inventory-read-target` currently coexists with direct domain inventory/configuration targets**, and `query_inventory`/`inventory_summary` disclose `healthy|degraded|stale|unavailable` freshness. Phase 2 expands domain-aware Aurora coverage and retires direct targets after parity. Aurora-only is not live.)
 
 ### 2. SCP 차단 컬럼 처리 (쿼리 견고성) / SCP-blocked column handling (query robustness)
 - `aws.spc`(Steampipe 커넥션 설정)에서 테이블 수준 오류를 위한 `ignore_error_codes`를 설정한다.
@@ -52,13 +54,13 @@ AWSops는 운영 대시보드로서 AWS 리소스 인벤토리를 수집·표시
 - 신규 컬럼 하이드레이트 오류 발생 시 해당 컬럼을 리스트 SQL에서 제거하는 후속 조치가 필요하다.
   (New column hydrate errors require follow-up to remove that column from list SQL.)
 
-### 알려진 갭 (백로그) / Known gaps (backlog)
-- **parity-12 (P0): ECS 서비스 차원 미구현.** 현행 인벤토리 sync(`sync_lambda.py`)는 `ecs_cluster`/`ecs_task` 차원만 수집하고 **ECS 서비스 목록(desired/running 카운트)은 수집하지 않는다.** v1 대비 핵심 운영 기능 결손으로, Phase 3 갭 백로그 P0로 명시한다. (출처: `docs/reviews/2026-06-21-docs-reality-audit.md` §C parity-12 — MISSING ✓V.)
-  (**parity-12 (P0): ECS service dimension not implemented.** The current inventory sync (`sync_lambda.py`) collects only the `ecs_cluster`/`ecs_task` dimensions and **does not collect the ECS service list (desired/running counts).** This is a core operational feature gap versus v1, recorded as a Phase 3 gap-backlog P0 item. Source: `docs/reviews/2026-06-21-docs-reality-audit.md` §C parity-12 — MISSING ✓V.)
+### 해결된 갭 / Resolved gap
+- **parity-12: ECS 서비스 차원 구현됨.** `sync_lambda.py`의 `ecs_service` 수집은 cluster/service 복합 키와 desired/running/pending count, launch type을 Aurora에 적재하며 v2 inventory registry/UI가 이를 사용한다.
+  (**parity-12: ECS service dimension implemented.** `sync_lambda.py` now materializes `ecs_service` with a cluster/service composite key, desired/running/pending counts, and launch type for the v2 inventory registry/UI.)
 
 ## 6 기둥 / Six Pillars (Well-Architected)
-- **운영 우수성 (Operational Excellence)** — 타입 레지스트리로 인벤토리 수집·네비게이션을 단일 출처에서 구동. ECS 서비스 차원 결손(parity-12)은 운영 가시성 갭으로 백로그화.
-  (Type registry drives collection/navigation from a single source. The missing ECS service dimension (parity-12) is a backlogged operational-visibility gap.)
+- **운영 우수성 (Operational Excellence)** — 타입 레지스트리로 인벤토리 수집·네비게이션을 단일 출처에서 구동하며, `ecs_service`를 포함한 현재 타입 계약을 Aurora에 영속한다.
+  (The type registry drives collection/navigation from a single source and persists the current contract, including `ecs_service`, in Aurora.)
 - **보안 (Security)** — read-only 인벤토리 수집. SCP 차단은 권한 경계를 존중하며, 차단 컬럼 제거는 우회가 아니라 부분 데이터로의 graceful degradation.
   (Read-only collection. SCP blocking respects permission boundaries; dropping blocked columns is graceful degradation to partial data, not a bypass.)
 - **신뢰성 (Reliability)** — `ignore_error_codes` + 리스트 컬럼 제거로 부분 차단 환경에서도 sync가 전체 실패 없이 완료.
