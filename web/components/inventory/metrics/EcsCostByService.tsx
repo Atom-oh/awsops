@@ -20,23 +20,27 @@ export function EcsCostByService({ rows, isTruncated = false }: { rows: Row[]; i
   const data = useMemo(() => {
     // keyed on cluster+service (ECS service names are unique only within a cluster — a 'web'
     // in two clusters must not merge into one bar); labeled cluster/service.
-    const byService = new Map<string, { cpu: number; mem: number }>();
+    const byService = new Map<string, { label: string; cpu: number; mem: number }>();
     for (const r of rows) {
       if (String(r.launch_type ?? '').toUpperCase() !== 'FARGATE') continue;
       const g = String(r.task_group ?? '');
       if (!g.startsWith('service:')) continue;
       const cpu = Number(r.cpu);
       const mem = Number(r.memory);
-      if (!Number.isFinite(cpu) || !Number.isFinite(mem)) continue;
+      // > 0, not isFinite: a null/'' cpu coerces to 0 and would contribute a confident $0.00
+      if (!(cpu > 0) || !(mem > 0)) continue;
       const parts = estimateDailyParts(cpu / 1024, mem / 1024);
-      const cluster = String(r.cluster_h ?? r.cluster_arn ?? '');
-      const key = `${cluster}/${g.slice('service:'.length)}`;
-      const e = byService.get(key) ?? { cpu: 0, mem: 0 };
+      // KEY on the full cluster_arn (round-2 gate: same-named clusters exist per region per
+      // account — 'default' everywhere); the short cluster_h stays the display label.
+      const svc = g.slice('service:'.length);
+      const key = `${String(r.cluster_arn ?? '')}|${svc}`;
+      const label = `${String(r.cluster_h ?? r.cluster_arn ?? '')}/${svc}`;
+      const e = byService.get(key) ?? { label, cpu: 0, mem: 0 };
       e.cpu += parts.cpu; e.mem += parts.ram;
       byService.set(key, e);
     }
-    return [...byService.entries()]
-      .map(([service, v]) => ({ service, cpu: Math.round(v.cpu * 100) / 100, mem: Math.round(v.mem * 100) / 100 }))
+    return [...byService.values()]
+      .map((v) => ({ service: v.label, cpu: Math.round(v.cpu * 100) / 100, mem: Math.round(v.mem * 100) / 100 }))
       .sort((a, b) => (b.cpu + b.mem) - (a.cpu + a.mem))
       .slice(0, 10);
   }, [rows]);

@@ -69,15 +69,19 @@ export default function GroupedBarList({
             </div>
             <div className="flex flex-col gap-1">
               {series.map((s) => {
-                const n = Number(d[s.key]) || 0;
-                const pct = max[s.key] > 0 && n > 0 ? Math.max(2, (n / max[s.key]) * 100) : 0;
+                // null/undefined = UNKNOWN for this row (e.g. missing pod→node attribution) —
+                // renders '—' with an empty track, never a confident 0.
+                const rawV = d[s.key];
+                const unknown = rawV == null;
+                const n = unknown ? 0 : Number(rawV) || 0;
+                const pct = !unknown && max[s.key] > 0 && n > 0 ? Math.max(2, (n / max[s.key]) * 100) : 0;
                 return (
                   <div key={s.key} className="flex items-center gap-2">
                     <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-paper-muted">
                       <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: s.color }} />
                     </span>
                     <span className="tabular w-24 shrink-0 text-right text-[11.5px] text-ink-700">
-                      {(s.fmt ?? ((v: number) => v.toLocaleString()))(n)}
+                      {unknown ? '—' : (s.fmt ?? ((v: number) => v.toLocaleString()))(n)}
                     </span>
                   </div>
                 );

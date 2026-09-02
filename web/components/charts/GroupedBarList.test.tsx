@@ -30,6 +30,13 @@ describe('GroupedBarList', () => {
     );
     expect(widths(container)).toEqual([100, 25]);
   });
+  it("a null value renders '—' with an empty track (unknown must never read as 0)", () => {
+    const { container } = render(
+      <GroupedBarList title="t" data={[{ n: 'x', a: 10, b: null }]} labelKey="n" series={SERIES} />,
+    );
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(widths(container)).toEqual([100, 0]);
+  });
   it('renders legend chips and per-series formatted values', () => {
     render(<GroupedBarList title="t" data={[{ n: 'x', a: 12.5, b: 3 }]} labelKey="n" series={SERIES} />);
     expect(screen.getByText('Alpha')).toBeTruthy();

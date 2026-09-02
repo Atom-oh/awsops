@@ -342,27 +342,33 @@ export default function EksFleetCostPage() {
                         must not stand in for unknown — OpenCost can omit pod→node). */}
                     {merged.nodes.length > 0 && (() => {
                       const podsByNode = new Map<string, number>();
+                      // attribution is PER CLUSTER (round-2 gate: a fleet-global flag let one
+                      // attributed cluster flip confident 0s onto another cluster's nodes):
+                      // a node's pod count renders only when ITS cluster has attributed pods —
+                      // otherwise the value is omitted ('—'), never zeroed.
+                      const clustersWithAttr = new Set<string>();
                       for (const pd of merged.pods) {
                         if (!pd.node) continue;
+                        clustersWithAttr.add(pd.cluster);
                         const k = `${pd.cluster}/${pd.node}`;
                         podsByNode.set(k, (podsByNode.get(k) ?? 0) + 1);
                       }
-                      const attributed = podsByNode.size > 0;
                       const data = [...merged.nodes]
                         .sort((a, b) => b.totalCost - a.totalCost)
+                        .slice(0, 15)
                         .map((n) => ({
                           label: `${n.cluster}/${n.node}`,
                           cost: n.totalCost,
-                          pods: podsByNode.get(`${n.cluster}/${n.node}`) ?? 0,
+                          pods: clustersWithAttr.has(n.cluster) ? podsByNode.get(`${n.cluster}/${n.node}`) ?? 0 : null,
                         }));
                       return (
                         <GroupedBarList
-                          title={tt('Node별 일일 비용 + Pod 수')}
+                          title={merged.nodes.length > 15 ? `${tt('Node별 일일 비용 + Pod 수')} (Top 15/${merged.nodes.length})` : tt('Node별 일일 비용 + Pod 수')}
                           data={data}
                           labelKey="label"
                           series={[
                             { key: 'cost', label: tt('일일 비용'), color: '#3D6FB5', fmt: (v) => usd(v) },
-                            ...(attributed ? [{ key: 'pods', label: 'Pods', color: '#39C2B0' }] : []),
+                            { key: 'pods', label: 'Pods', color: '#39C2B0' },
                           ]}
                         />
                       );

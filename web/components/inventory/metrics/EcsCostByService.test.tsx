@@ -7,7 +7,8 @@ import { estimateDailyParts } from '@/lib/cost-basis';
 afterEach(cleanup);
 
 const task = (over: Record<string, unknown>) => ({
-  resource_id: 'arn:t', launch_type: 'FARGATE', task_group: 'service:web', cluster_h: 'prod', cpu: 512, memory: 1024, ...over,
+  resource_id: 'arn:t', launch_type: 'FARGATE', task_group: 'service:web', cluster_h: 'prod',
+  cluster_arn: 'arn:aws:ecs:ap-northeast-2:1:cluster/prod', cpu: 512, memory: 1024, ...over,
 });
 
 describe('EcsCostByService (gap L195)', () => {
@@ -26,9 +27,21 @@ describe('EcsCostByService (gap L195)', () => {
     expect(container.innerHTML).toBe('');
   });
   it('same-named services in DIFFERENT clusters stay separate bars (names are cluster-scoped)', () => {
-    render(<EcsCostByService rows={[task({}), task({ resource_id: 'arn:t2', cluster_h: 'staging' })]} />);
+    render(<EcsCostByService rows={[task({}), task({ resource_id: 'arn:t2', cluster_h: 'staging', cluster_arn: 'arn:aws:ecs:ap-northeast-2:1:cluster/staging' })]} />);
     expect(screen.getByText('prod/web')).toBeTruthy();
     expect(screen.getByText('staging/web')).toBeTruthy();
+  });
+  it('same-NAMED clusters in different regions/accounts stay separate (keyed on the full cluster_arn)', () => {
+    render(<EcsCostByService rows={[
+      task({}),
+      task({ resource_id: 'arn:t2', cluster_arn: 'arn:aws:ecs:us-east-1:2:cluster/prod' }),
+    ]} />);
+    // two bars, both labeled prod/web — distinct keys, so both render
+    expect(screen.getAllByText('prod/web')).toHaveLength(2);
+  });
+  it('null/zero cpu or memory rows are excluded (a confident $0.00 must not render)', () => {
+    const { container } = render(<EcsCostByService rows={[task({ cpu: null }), task({ resource_id: 'arn:t3', memory: 0 })]} />);
+    expect(container.innerHTML).toBe('');
   });
   it('labels the title as sample-based when the 500-row fetch is truncated', () => {
     render(<EcsCostByService rows={[task({})]} isTruncated />);

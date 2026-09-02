@@ -56,3 +56,19 @@ Service CPU vs Memory grouped bar), L218 (eks-container-cost Node Daily Cost + P
   when no pod carries node attribution (a confident 0 must not stand in for unknown);
   CHANGELOG's serviceless wording corrected (excluded for lack of a grouping key, not lack of
   an estimate).
+
+## Round-2 corrections (review-driven)
+
+- **ECS keys on the FULL cluster_arn (the gate MAJOR)** — round 1 keyed on the short cluster
+  name, which merges same-named clusters across regions/accounts (ECS's implicit `default`
+  exists per region per account); the short name stays the display label (test: two
+  same-named clusters render two bars).
+- **Pod attribution is judged PER CLUSTER with per-node OMISSION (the gate MAJOR)** — the
+  fleet-global flag let one attributed cluster flip confident 0s onto another cluster's
+  unattributed nodes (mixed measured/request-estimate fleets); a node whose cluster has no
+  attributed pods now renders '—' (GroupedBarList gains null-value omission — tested), never
+  a zero.
+- Minors: `> 0` guards on cpu/memory (a null/'' coerced 0 must not contribute $0.00 —
+  tested); the node chart caps Top 15 with a count-labeled title; the doc quotes use the
+  SHIPPED localized labels (en 'sampled' / zh '基于样本' / ja 'サンプル基準' — the zh typo
+  fixed).
