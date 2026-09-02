@@ -40,9 +40,9 @@ no-access banner with error detail + docs link).
 - The compliance notify dedup claim adds `AND notified_at IS NULL` on the target row —
   defense-in-depth against a manual SFN re-drive of an already-notified run re-claiming its
   own window.
-- The dashboard cost-impact list hides when the two trend endpoints snapshot DIFFERENT type
-  sets (the `netChange` strict type-set-parity precedent) — a mid-fan-out latest day must
-  not transiently render an incomplete top-8.
+- The dashboard cost-impact list hides when the LATEST day is missing a WEIGHTED type the
+  baseline has (a partial sync fan-out; as amended by round 1 — an all-type equality check
+  self-disabled the panel on any new or transiently-failed type).
 
 ## Testing
 - Sync: tags fold to a dict; NoSuchTagSet → {}; denial → absent key.
@@ -83,3 +83,16 @@ no-access banner with error detail + docs link).
   unscoped fleet next to account-scoped rows; the raw K8s error mono box could be
   admin-gated or code-mapped; `s3:GetBucketTagging` shares the statement's pre-existing
   `Resource = "*"` shape.
+
+## Round-3 corrections (review-driven)
+
+- **The eks.md registration docs describe the REAL v2 flow (the gate MAJOR)** — the guide
+  (all 4 locales) claimed a nonexistent "Register ViewPolicy 자동 등록" button; the actual
+  flow never creates an Access Entry at runtime (ADR-005): Access Entry lookup-register
+  (409 + onboarding script when absent) / SA token / AssumeRole, plus the Terraform
+  onboarding (`make configure` → `eks.tf`). The stats-card `/k8s/*` route refs were fixed
+  to `/eks/*` in passing.
+- The banner's mono box now shows up to two `cluster: error` pairs (naming the cluster —
+  making the CHANGELOG's "per-cluster failure reason" literally true); the spec's Drive-by
+  section was aligned to the round-1 weighted-subset gate; ADR-013's Status line gains the
+  dated 2026-09-02 amendment entry.

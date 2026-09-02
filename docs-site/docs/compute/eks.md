@@ -24,19 +24,19 @@ EKS 클러스터의 전체 현황과 노드 리소스, Pod 상태를 한눈에 �
 - Cluster Name, Status (ACTIVE)
 - Kubernetes Version, VPC ID, Platform Version, Region
 - **Access Entry 상태 배지**: K8s Connected (초록) / 미등록 (빨강)
-- **Register ViewPolicy 버튼**: 미등록 클러스터에 Access Entry + AdminViewPolicy 자동 등록
+- **클러스터 등록 버튼(관리자)**: 미연결 클러스터를 3가지 모드로 등록 — Access Entry 조회 등록(이미 존재하는 Access Entry 확인 후 등록 — 런타임에 Access Entry를 새로 만들지 않음[ADR-005], 없으면 409와 함께 Terraform/CLI 온보딩 스크립트 안내), ServiceAccount 토큰(클러스터 안에 읽기 전용 SA를 만들고 토큰 붙여넣기 — AWS 쪽 설정 불필요), AssumeRole(대상 계정의 읽기 전용 role ARN + external ID). Terraform 경로는 `make configure`의 EKS 다중 선택 → `eks.tf`가 web 태스크 롤에 Access Entry + AmazonEKSAdminViewPolicy를 부여
 - **클릭 필터링**: 클러스터 카드를 클릭하면 해당 클러스터만 필터링 (시안 테두리)
 
 :::tip 클러스터 접근 권한
-등록된 클러스터가 있는데도 어느 클러스터에서도 라이브 데이터를 읽지 못하면, 페이지 상단에 실패 원인(원문 오류)과 이 가이드 링크가 담긴 접근 불가 배너가 표시됩니다. Access Entry가 미등록인 클러스터는 데이터를 조회할 수 없습니다. "Register ViewPolicy" 버튼으로 등록하거나, 클러스터 소유자에게 [인증 가이드](./eks-auth)를 참고하여 등록을 요청하세요.
+등록된 클러스터가 있는데도 어느 클러스터에서도 라이브 데이터를 읽지 못하면, 페이지 상단에 실패 원인(원문 오류)과 이 가이드 링크가 담긴 접근 불가 배너가 표시됩니다. 미연결 클러스터는 데이터를 조회할 수 없습니다 — 위의 클러스터 등록 버튼(조회 등록 / SA 토큰 / AssumeRole) 또는 Terraform 온보딩(`make configure` → `eks.tf`)으로 연결하세요. 조회 등록이 409를 반환하면 화면에 표시되는 온보딩 스크립트를 클러스터 소유자에게 전달하면 됩니다.
 :::
 
 ### 통계 카드 (클릭 이동)
 각 카드를 클릭하면 상세 페이지로 이동합니다:
-- **Nodes** → 노드 상세 (`/k8s/nodes`)
-- **Pods** → Pod 상세 (`/k8s/pods`)
-- **Deployments** → 디플로이먼트 상세 (`/k8s/deployments`)
-- **Services** → 서비스 상세 (`/k8s/services`)
+- **Nodes** → 노드 상세 (`/eks/nodes`)
+- **Pods** → Pod 상세 (`/eks/pods`)
+- **Deployments** → 디플로이먼트 상세 (`/eks/deployments`)
+- **Services** → 서비스 상세 (`/eks/services`)
 
 ### 노드 카드 그리드
 각 노드의 리소스 사용량을 시각적으로 표시:

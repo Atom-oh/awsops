@@ -24,19 +24,19 @@ EKS クラスターの全体状況、ノードリソース、Pod の状態を一
 - Cluster Name、Status (ACTIVE)
 - Kubernetes Version、VPC ID、Platform Version、Region
 - **Access Entry ステータスバッジ**: K8s Connected(緑)/ 未登録(赤)
-- **Register ViewPolicy ボタン**: 未登録クラスターに Access Entry + AdminViewPolicy を自動登録
+- **クラスター登録ボタン（管理者）**: 未接続クラスターを 3 つのモードで登録 — Access Entry 照会登録（既存の Access Entry を確認して登録 — 実行時に Access Entry を新規作成しない [ADR-005]。存在しない場合は 409 と Terraform/CLI オンボーディングスクリプトを案内）、ServiceAccount トークン（クラスター内に読み取り専用 SA を作成しトークンを貼り付け — AWS 側の設定不要）、AssumeRole（対象アカウントの読み取り専用ロール ARN + external ID）。Terraform 経路は `make configure` の EKS 複数選択 → `eks.tf` が web タスクロールに Access Entry + AmazonEKSAdminViewPolicy を付与
 - **クリックフィルタリング**: クラスターカードをクリックすると該当クラスターのみにフィルタリング(シアンの枠線)
 
 :::tip クラスターへのアクセス権限
-クラスターが登録されているのにどのクラスターからもライブデータを読み取れない場合、ページ上部に失敗理由（生のエラー）と本ガイドへのリンクを含むアクセス不可バナーが表示されます。Access Entry が未登録のクラスターはデータを取得できません。「Register ViewPolicy」ボタンで登録するか、クラスターの所有者に[認証ガイド](./eks-auth)を参照して登録を依頼してください。
+クラスターが登録されているのにどのクラスターからもライブデータを読み取れない場合、ページ上部に失敗理由（生のエラー）と本ガイドへのリンクを含むアクセス不可バナーが表示されます。未接続のクラスターはデータを取得できません — クラスター登録ボタン（照会登録 / SA トークン / AssumeRole）または Terraform オンボーディング（`make configure` → `eks.tf`）で接続してください。照会登録が 409 を返した場合は、画面に表示されるオンボーディングスクリプトをクラスター所有者に渡してください。
 :::
 
 ### 統計カード(クリックで移動)
 各カードをクリックすると詳細ページに移動します:
-- **Nodes** → ノード詳細(`/k8s/nodes`)
-- **Pods** → Pod 詳細(`/k8s/pods`)
-- **Deployments** → デプロイメント詳細(`/k8s/deployments`)
-- **Services** → サービス詳細(`/k8s/services`)
+- **Nodes** → ノード詳細(`/eks/nodes`)
+- **Pods** → Pod 詳細(`/eks/pods`)
+- **Deployments** → デプロイメント詳細(`/eks/deployments`)
+- **Services** → サービス詳細(`/eks/services`)
 
 ### ノードカードグリッド
 各ノードのリソース使用量を視覚的に表示:

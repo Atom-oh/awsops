@@ -327,8 +327,8 @@ export default function EksPage() {
           <p className="mt-1 text-[13px] text-amber-700">
             {tt('등록된 클러스터가 있지만 어느 클러스터에서도 라이브 데이터를 읽지 못했습니다. Access Entry(AmazonEKSAdminViewPolicy) 부여와 클러스터 등록(인증) 상태를 확인하세요.')}
           </p>
-          {(() => { const firstErr = fleet.find((f) => f.error)?.error; return firstErr ? (
-            <pre className="mt-2 overflow-x-auto rounded bg-white/70 p-2 font-mono text-[11.5px] text-amber-900">{firstErr}</pre>
+          {(() => { const errs = fleet.filter((f) => f.error).slice(0, 2); return errs.length > 0 ? (
+            <pre className="mt-2 overflow-x-auto rounded bg-white/70 p-2 font-mono text-[11.5px] text-amber-900">{errs.map((f) => `${f.name}: ${f.error}`).join('\n')}</pre>
           ) : null; })()}
           {/* v2-current EKS overview guide (registration + Access Entry / Register ViewPolicy
               flow) — NOT the archived v1 eks-auth page. Locale-aware: ko is the docs-site

@@ -24,19 +24,19 @@ Display key information for each cluster in card format:
 - Cluster Name, Status (ACTIVE)
 - Kubernetes Version, VPC ID, Platform Version, Region
 - **Access Entry badge**: K8s Connected (green) / No Access (red)
-- **Register ViewPolicy button**: Auto-register Access Entry + AdminViewPolicy for unregistered clusters
+- **Cluster registration button (admin)**: register an unconnected cluster in one of three modes — Access Entry lookup-register (verifies an EXISTING Access Entry then registers — never creates one at runtime [ADR-005]; a missing entry returns 409 with a Terraform/CLI onboarding script), ServiceAccount token (create a read-only SA in the cluster and paste its token — no AWS-side setup), or AssumeRole (target account's read-only role ARN + external ID). The Terraform path is `make configure`'s EKS multi-select → `eks.tf` granting the web task role an Access Entry + AmazonEKSAdminViewPolicy
 - **Click to filter**: Click a cluster card to filter all data to that cluster (cyan border)
 
 :::tip Cluster Access
-When clusters are registered but live data can't be read from ANY of them, a page-level no-access banner appears with the raw failure reason and a link to this guide. Unregistered clusters cannot display data. Use the "Register ViewPolicy" button or ask the cluster owner to follow the [Authentication Guide](./eks-auth).
+When clusters are registered but live data can't be read from ANY of them, a page-level no-access banner appears with the raw failure reason and a link to this guide. Unconnected clusters cannot display data — connect via the cluster registration button (lookup-register / SA token / AssumeRole) or the Terraform onboarding (`make configure` → `eks.tf`). If lookup-register returns 409, hand the on-screen onboarding script to the cluster owner.
 :::
 
 ### Stats Cards (Click to Navigate)
 Click each card to navigate to the detail page:
-- **Nodes** → Node Details (`/k8s/nodes`)
-- **Pods** → Pod Details (`/k8s/pods`)
-- **Deployments** → Deployment Details (`/k8s/deployments`)
-- **Services** → Service Details (`/k8s/services`)
+- **Nodes** → Node Details (`/eks/nodes`)
+- **Pods** → Pod Details (`/eks/pods`)
+- **Deployments** → Deployment Details (`/eks/deployments`)
+- **Services** → Service Details (`/eks/services`)
 
 ### Node Card Grid
 Visually display resource usage for each node:

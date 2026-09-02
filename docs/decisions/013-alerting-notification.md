@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-**Accepted (2026-06-22) — consolidated.** consolidates: ADR-012 (SNS 알림 전략), ADR-014 (리포트 프록시 다운로드 URL), ADR-022 (알림 웹훅 HMAC-SHA256 인증). amended 2026-08-31 (web task additionally holds a single-topic-scoped `sns:Publish` for the admin-only test notification — `POST /api/diagnosis/subscribers/test`) / 개정 2026-08-31 (web 태스크가 관리자 전용 테스트 발송용으로 동일 토픽 한정 `sns:Publish`를 추가 보유 — `POST /api/diagnosis/subscribers/test`). amended 2026-09-01 (runtime pause toggle for report/digest emails — `app_settings.diagnosis_notify_paused`) / 개정 2026-09-01 (리포트/다이제스트 이메일 런타임 일시중지 토글 — `app_settings.diagnosis_notify_paused`).
+**Accepted (2026-06-22) — consolidated.** consolidates: ADR-012 (SNS 알림 전략), ADR-014 (리포트 프록시 다운로드 URL), ADR-022 (알림 웹훅 HMAC-SHA256 인증). amended 2026-08-31 (web task additionally holds a single-topic-scoped `sns:Publish` for the admin-only test notification — `POST /api/diagnosis/subscribers/test`) / 개정 2026-08-31 (web 태스크가 관리자 전용 테스트 발송용으로 동일 토픽 한정 `sns:Publish`를 추가 보유 — `POST /api/diagnosis/subscribers/test`). amended 2026-09-01 (runtime pause toggle for report/digest emails — `app_settings.diagnosis_notify_paused`) / 개정 2026-09-01 (리포트/다이제스트 이메일 런타임 일시중지 토글 — `app_settings.diagnosis_notify_paused`). amended 2026-09-02 (compliance benchmark completion mail — a third worker-only message class on the same topic, atomic per-benchmark dedup claim, durable compliance_runs.notify_outcome) / 개정 2026-09-02 (컴플라이언스 벤치마크 완료 메일 — 동일 토픽의 제3 worker 전용 메시지 클래스, 벤치마크당 원자적 dedup 선점, compliance_runs.notify_outcome 내구 레코드).
 
 이 ADR은 v2 현행(net) 결정만을 기술한다. 세 레거시 ADR의 v1 메커니즘(EC2 `data/config.json` 시크릿, `src/lib/alert-sqs-poller.ts` 폴러, `/awsops/api/*` 프록시 등)은 v1 이력으로만 남으며 여기서 재서술하지 않는다.
 

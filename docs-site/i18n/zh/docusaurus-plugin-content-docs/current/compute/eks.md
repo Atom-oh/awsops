@@ -24,19 +24,19 @@ import Screenshot from '@site/src/components/Screenshot';
 - Cluster Name、Status (ACTIVE)
 - Kubernetes Version、VPC ID、Platform Version、Region
 - **Access Entry 状态徽章**：K8s Connected（绿色）/ 未注册（红色）
-- **Register ViewPolicy 按钮**：为未注册的集群自动注册 Access Entry + AdminViewPolicy
+- **集群注册按钮（管理员）**：以三种模式注册未连接的集群 — Access Entry 查询注册（确认已存在的 Access Entry 后注册 — 运行时绝不新建 Access Entry [ADR-005]；不存在时返回 409 并给出 Terraform/CLI 上线脚本）、ServiceAccount 令牌（在集群内创建只读 SA 并粘贴其令牌 — 无需 AWS 侧配置）、AssumeRole（目标账户的只读角色 ARN + external ID）。Terraform 路径为 `make configure` 的 EKS 多选 → `eks.tf` 为 web 任务角色授予 Access Entry + AmazonEKSAdminViewPolicy
 - **点击筛选**：点击集群卡片后仅筛选该集群（青色边框）
 
 :::tip 集群访问权限
-当已注册集群但无法从任何集群读取实时数据时，页面顶部会显示无法访问横幅，包含原始失败原因和本指南的链接。未注册 Access Entry 的集群无法查询数据。请使用 "Register ViewPolicy" 按钮进行注册，或参考[认证指南](./eks-auth)请求集群所有者进行注册。
+当已注册集群但无法从任何集群读取实时数据时，页面顶部会显示无法访问横幅，包含原始失败原因和本指南的链接。未连接的集群无法查询数据 — 请通过集群注册按钮（查询注册 / SA 令牌 / AssumeRole）或 Terraform 上线（`make configure` → `eks.tf`）进行连接。若查询注册返回 409，将屏幕上显示的上线脚本交给集群所有者即可。
 :::
 
 ### 统计卡片（点击跳转）
 点击每个卡片可跳转到详情页面：
-- **Nodes** → 节点详情（`/k8s/nodes`）
-- **Pods** → Pod 详情（`/k8s/pods`）
-- **Deployments** → 部署详情（`/k8s/deployments`）
-- **Services** → 服务详情（`/k8s/services`）
+- **Nodes** → 节点详情（`/eks/nodes`）
+- **Pods** → Pod 详情（`/eks/pods`）
+- **Deployments** → 部署详情（`/eks/deployments`）
+- **Services** → 服务详情（`/eks/services`）
 
 ### 节点卡片网格
 以可视化方式显示每个节点的资源使用量：
