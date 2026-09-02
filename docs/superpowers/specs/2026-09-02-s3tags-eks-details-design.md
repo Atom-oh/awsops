@@ -15,7 +15,10 @@ no-access banner with error detail + docs link).
   unknown (the detail panel simply shows nothing rather than a fabricated empty list). The
   TagSet list is folded to a `{Key: Value}` dict (the Steampipe-jsonb shape DetailPanel's
   existing `tags` renderer already handles). `s3` spec gains a Tags section. Visible after
-  the sync terraform apply + a sync run (existing deploy debt).
+  the sync terraform apply + a sync run (existing deploy debt). The inv-sync role's
+  ENUMERATED S3 action list gains `s3:GetBucketTagging` (a read-only Get, same class as the
+  batch-29 `GetBucketPolicyStatus` — without it every bucket's tag read is denied and the
+  feature is dead-on-arrival; caught by self-check against `steampipe.tf`).
 - **L226** — the remaining half of the item (the Pod Info card already shows Pod CIDR +
   Created): `PodRow` gains `serviceAccount` (`spec.serviceAccountName`, '' when absent) and
   the node-drilldown pods table gains **Pod IP** and **Service Account** columns ('-' when
