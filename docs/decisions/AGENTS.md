@@ -9,7 +9,7 @@
 Old ADR bodies (001–046) are **not in the tree** — preserved in git tag `adr-legacy-2026-06-22`, mapped in `ADR-MAPPING.md` (canonical, same directory; the copy under `../history/` is a link-compat pointer stub, not the source). **Do not read old bodies unless explicitly asked.**
 
 ## Conventions a reviewer must enforce
-- New ADR number = current highest + 1 (currently 018).
+- New ADR number = current highest + 1 (currently 019).
 - ADR structure: single Status (Accepted) / Context / Decision / Consequences / 6 Pillars. No narrating the reversal chain — state only the current net decision.
 - **Same PR must update `BASELINE.md` §3 (or §2)** — an ADR without a BASELINE update is "not live" (anti-drift). Flag any ADR-adding PR missing this.
 - Litmus test for a new/changed ADR: "can an AI block/pass a PR from reading only this document?"

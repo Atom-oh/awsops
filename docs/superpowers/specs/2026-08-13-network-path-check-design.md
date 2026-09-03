@@ -48,7 +48,13 @@ layers AWSops could inspect:
   therefore always leaves a `not_run` row behind — never a silently missing one. Surfaced in
   per-layer results but never as a standalone top-level status.
 - `failed` - an execution-level failure (e.g. identity could not be resolved) prevented meaningful
-  inspection; also the per-candidate status when every required layer is `not_run`
+  inspection; also the per-candidate status when every required layer is `not_run`. **`failed` is a
+  per-candidate/per-run status only — it is never a per-layer status value.** The per-layer JSON enum
+  (`allowed|blocked|unknown|conditional|not_run`, see Result semantics below) intentionally excludes
+  it: no individual layer adapter ever reports `failed` for itself, since an adapter that errors before
+  finishing leaves its layer at the pre-seeded `not_run` instead (see `not_run` above) — `failed` only
+  emerges afterward, at candidate reduction, from a pattern across layers (or across candidates, at the
+  run level).
 
 The engine evaluates cached topology first, then live read-only AWS and Kubernetes policy data. It
 never creates a Reachability Analyzer path, executes `kubectl exec`, changes a rule, or performs any
@@ -193,7 +199,11 @@ verdict of `allowed` from that adapter is scoped to that probed port only, and t
 generalize it to "the real client's ephemeral port is also allowed" without a matching check. Concretely
 (2026-08-19 review fix): unless the adapter checks the *actual* ephemeral range in play, it emits layer
 status `conditional`, not `allowed`, for this layer — see Result semantics below for how `conditional`
-propagates through candidate reduction.
+propagates through candidate reduction. "The actual ephemeral range in play" means the client-side OS's
+outbound ephemeral source-port range for the return traffic (varies by OS — e.g. Linux's default
+32768–60999 vs. the wider 1024–65535 some NACL configurations assume) — the adapter can only emit
+`allowed` for this layer once it has that value for the specific client and has checked the NACL's
+return-path rule against that exact range, not the single representative port it probed.
 
 ### Result semantics
 
@@ -238,7 +248,11 @@ required.
 > disappear), not a rule a future implementer has to separately remember to enforce. One consequence
 > worth stating explicitly: **a candidate's required-layer set is never actually empty** — pre-seeding
 > always seeds at least the source-identity layer, so rule 1 and rule 4 below never both vacuously
-> match an empty set; there is always at least one row to reduce over.
+> match an empty set; there is always at least one row to reduce over. This pre-seeding applies
+> identically regardless of `candidate_kind` — each `hypothesis` candidate is itself a distinct
+> candidate row and gets its own full pre-seeded layer set from its own endpoint/path shape, exactly
+> like a `resolved` candidate; hypothesis status is about *which topology is the real one*, not about
+> which layers apply once a hypothesis is chosen, so it has no bearing on the pre-seeding mechanism.
 
 **Per-candidate status** (computed independently for each candidate path; rules apply **in the order
 listed** — an earlier-listed rule that matches takes precedence over a later one):

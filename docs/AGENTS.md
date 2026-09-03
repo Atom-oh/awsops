@@ -19,7 +19,7 @@ Project documentation, organized by purpose. This directory is an index; each su
 
 ### Conventions a reviewer must enforce
 - **All new docs are bilingual** (Korean + English).
-- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing + 1 (currently 018; monotonic, no gaps/reuse). Same PR must update `decisions/BASELINE.md`.
+- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing + 1 (currently 019; monotonic, no gaps/reuse). Same PR must update `decisions/BASELINE.md`.
 - Runbooks must follow `docs/runbooks/AGENTS.md` rules.
 - Design content belongs in `reference/` (one component = one file). Edit the reference file rather than adding parallel docs or reviving archived ones.
 

@@ -558,17 +558,23 @@ When the feature is enabled, the worker needs:
 
 - Athena Start/Get/Stop query execution and `GetWorkGroup`, scoped to the configured workgroup's ARN
   (never `Resource: "*"` for these verbs)
-- Glue GetDatabase/GetTable/GetPartitions
+- Glue `GetDatabase`/`GetTable`/`GetPartitions`, scoped to the configured catalog/database/table ARNs
+  (never `Resource: "*"`) — this allowlist is exhaustive; no other Glue verb is granted
 - `s3:GetBucketLocation`, `s3:GetObject`, `s3:ListBucket` on the configured Flow Log table location
   (source, read-only)
-- `s3:GetObject`, `s3:ListBucket`, `s3:PutObject`, `s3:AbortMultipartUpload` on the workgroup's
-  query-result prefix (destination). **The read half is required here too, not just the write
-  half** — Athena itself reads back the objects it writes to serve `GetQueryResults` and (when
-  enabled) to evaluate query-result reuse; a write-only grant on this prefix does not let queries
-  actually complete. (2026-08-19 correction: an earlier revision of this section granted write-only,
-  which ADR-019 §Decision — the authority for this exact grant — never ratified; both documents now
-  agree.)
-- EC2 DescribeSecurityGroupRules and DescribeNetworkInterfaces
+- `s3:GetBucketLocation`, `s3:GetObject`, `s3:ListBucket`, `s3:PutObject`, `s3:AbortMultipartUpload`
+  on the workgroup's query-result prefix (destination) — `GetBucketLocation` is needed here too
+  because the result bucket can be a different bucket, in a different account, from the source
+  bucket. **The read half of this prefix's grant is required too, not just the write half** —
+  Athena itself reads back the objects it writes to serve `GetQueryResults` and (when enabled) to
+  evaluate query-result reuse; a write-only grant on this prefix does not let queries actually
+  complete.
+- Conditional, only when a source explicitly configures SSE-KMS: `kms:Decrypt` on that source's
+  registered CMK ARN (source bucket), and `kms:Decrypt`+`kms:GenerateDataKey` on that source's
+  registered CMK ARN (result-prefix bucket) — both scoped to the specific key ARN(s) recorded in
+  that source's validated config, never an account-wide or wildcard key grant. Sources that do not
+  configure SSE-KMS carry no KMS grant at all.
+- EC2 `DescribeSecurityGroupRules`, `DescribeNetworkInterfaces`, `DescribeFlowLogs`
 
 > **`s3:ListBucket`'s prefix scope is a condition key, not implicit from the grant's `Resource`
 > line.** `ListBucket` is a bucket-ARN-level action; "scoped to that prefix" requires an explicit
@@ -581,12 +587,13 @@ When the feature is enabled, the worker needs:
 > **`athena:StopQueryExecution` has no per-query ownership boundary IAM can enforce.** Athena does
 > not expose a condition key restricting `StopQueryExecution` to query executions this role itself
 > started, so a workgroup shared with other principals means this role can technically cancel
-> unrelated in-flight queries in that workgroup. Mitigation is at the source-validation and
-> application layers, not IAM: source validation should prefer (and this feature's own dedicated
-> result prefix, once implemented, effectively enforces) a workgroup used only by this feature's
-> queries, and the worker only ever calls `StopQueryExecution` on a query-execution ID it itself
-> received from its own `StartQueryExecution` call — it never accepts or derives one from outside
-> input.
+> unrelated in-flight queries in that workgroup. Mitigation is at the source-validation layer, not
+> IAM, and is a **hard precondition, not a preference**: source validation rejects any source whose
+> configured workgroup cannot be verified as exclusive to this feature (no other principal sharing
+> it) — an unverifiable workgroup means the source is not onboarded at all, not "onboarded with a
+> caveat." The worker additionally only ever calls `StopQueryExecution` on a query-execution ID it
+> itself received from its own `StartQueryExecution` call — it never accepts or derives one from
+> outside input. Together these bound the exception's blast radius to this feature's own queries.
 
 `Athena StartQueryExecution`/`StopQueryExecution` and the query-result S3 write are not read actions.
 `AWSopsReadOnlyRole` itself gains **no new permissions and no new policy of any kind** (managed or
@@ -601,7 +608,11 @@ verb at all, only S3 write, so the result-prefix/source-location disjointness ch
 grant's real defense against those forms, not the Glue exclusion list); this is exactly the two-role
 split ADR-019 §4 ratifies as a narrow ADR-005 owner-override exception for Role B only (see Feature
 gate above and ADR-019 §Decision) — the classification question is resolved, applied here at the IAM
-boundary the same as at the flag. The host account uses its execution role and does not self-assume.
+boundary the same as at the flag. When the target is the host account itself, the worker does not
+self-assume `AWSopsSgRuleAthenaRole` — instead the same Permitted/Excluded list is granted directly to
+the host's own dedicated task role/task definition or broker Lambda (the same isolated principal named
+below under **Assumption path**), with no assume-role hop. This is the host-account instance of the same
+ADR-019 owner-override exception, not a separate or broader one.
 
 **Trust policy** (this is the first write-capable role in a repo whose existing cross-account path is
 entirely read-only, so nothing to copy from): the target account's `AWSopsSgRuleAthenaRole` trust policy
@@ -619,9 +630,10 @@ share one Fargate task role/task definition. Granting *that* role `sts:AssumeRol
 `AWSopsSgRuleAthenaRole` would expose every job type this worker fleet runs — not just this feature — to
 Flow Log S3 reads, Athena execution, and result-prefix writes, making "assumed only by this feature's
 worker path" a documentation claim with no IAM enforcement behind it. This feature's Athena-executing
-work needs either (a) a dedicated task role/task definition (a separate Fargate service or a distinct
-container definition within the existing task, so `sts:AssumeRole` on the Athena role is scoped to that
-role alone) or (b) a broker Lambda that is the only principal allowed to assume `AWSopsSgRuleAthenaRole`,
+work needs either (a) a dedicated task role/task definition (a separate Fargate service — task roles are
+task-definition-scoped, not container-scoped, so a second container inside the same task definition would
+still share the one task role and defeat the isolation) or (b) a broker Lambda that is the only principal
+allowed to assume `AWSopsSgRuleAthenaRole`,
 with the Fargate worker calling the broker rather than assuming the role directly. Pick one before
 implementation — this is not an optional hardening step, it's what makes the isolation claim true.
 
