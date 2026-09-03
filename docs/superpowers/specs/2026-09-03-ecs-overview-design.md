@@ -63,3 +63,24 @@ them across three sidebar leaves with no ECS-subgroup overview).
   running/partial say what they are) and a missing ledger row WITH rows present reads
   "freshness unverifiable"; the spec's phantom 'Instances' column is dropped (the component
   never rendered it); the docs-site caption wording covers all non-succeeded states.
+
+## Round-2 corrections (review-driven)
+
+- **Header freshness is the DATA time (the gate MAJOR)** — `capturedAt` now follows the
+  S3IamAccessSection convention (`last_success_at ?? (succeeded ? finished_at : null)` —
+  `finished_at` alone is merely the last ATTEMPT, stamped by failed/partial runs too) and
+  takes the OLDER of the two tables' data times so a fresh cluster sync can't mask stale
+  service data; a failed run reads 미수집 in the header (test-pinned), never the failure time.
+- **The KPI band never fabricates (the gate MAJOR)** — cluster/service tiles render '—' in
+  the pre-sync state (empty rows + no ledger row); the deficit rollup additionally requires
+  the service run to be `succeeded` (mid-refresh/stale rows under running/partial/failed runs
+  render '—' with a '집계 보류' qualifier). A succeeded run with zero services stays a TRUE 0.
+- **The task KPI is run-gated and absence is disambiguated (the gate MAJOR)** — a `limit=1`
+  ecs_task fetch supplies the run ledger: succeeded + byType-absent is a TRUE 0 (a GROUP BY
+  omits both never-synced and genuinely-empty — the run status tells them apart); any
+  non-succeeded run dashes the count with a state hint (running vs not-successful).
+- Minors: a `useRef` sequence guard drops a slower earlier response on scope change (the
+  base page's alive-flag pattern); the docs-site rollup wording distinguishes the withheld
+  service-derived rollup from the always-full-summary Tasks KPI (4 locales); README KO's
+  pre-existing '통합 ADR 20개' → 21 drive-by fix. Follow-ups noted, not shipped: the v1-era
+  docs-site ECS screenshot and the guide body's 3-route-focused walkthrough.

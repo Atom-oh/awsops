@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -41,51 +41,71 @@ export default function EcsOverview() {
   const [clusters, setClusters] = useState<TypeState>(EMPTY);
   const [services, setServices] = useState<TypeState>(EMPTY);
   const [taskCount, setTaskCount] = useState<number | null>(null);
+  const [taskRun, setTaskRun] = useState<Run>(null);
+  const [taskLoaded, setTaskLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   // Global account/region scope (round-1 review): the type pages scope BOTH the rows and the
   // summary fetches — this page must describe the same fleet its '전체 보기' links open, and
   // must reload on scope change.
   const [scope] = useActiveScope();
 
+  // A scope change re-fires load; the seq guard drops a slower earlier response so it can't
+  // overwrite the newer scope's data (round-2 review — the base page's alive-flag pattern).
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    const fresh = () => seq === loadSeq.current;
     setBusy(true);
     const fetchType = async (type: string, set: (s: TypeState) => void) => {
       try {
         const r = await fetch(`/api/inventory/${type}?limit=${ROW_CAP}&${scopeParams(scope)}`);
         if (!r.ok) throw new Error(String(r.status));
         const j = await r.json();
-        set({ rows: j.rows ?? [], run: j.run ?? null, err: false, loaded: true });
+        if (fresh()) set({ rows: j.rows ?? [], run: j.run ?? null, err: false, loaded: true });
       } catch {
-        set({ ...EMPTY, err: true, loaded: true });
+        if (fresh()) set({ ...EMPTY, err: true, loaded: true });
       }
     };
     await Promise.allSettled([
       fetchType('ecs_cluster', setClusters),
       fetchType('ecs_service', setServices),
-      // task COUNT from the shared summary (the tasks table itself stays on its type page).
-      // A never-synced type is ABSENT from byType (GROUP BY resource_type) — absence must
-      // stay null ('—'), never a fabricated 0 (round-1 review).
-      fetch(`/api/inventory/summary?${scopeParams(scope)}`)
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((j) => {
-          const hit = (j.byType ?? []).find((x: { type: string }) => x.type === 'ecs_task');
+      // Task COUNT from the shared summary + the ecs_task RUN ledger (limit=1 — the count
+      // comes from the summary, the run gates freshness). byType absence is ambiguous
+      // (never-synced AND a genuinely empty fleet are both absent from a GROUP BY), so the
+      // run status disambiguates: succeeded + absent = a TRUE 0; anything else = '—'.
+      Promise.all([
+        fetch(`/api/inventory/summary?${scopeParams(scope)}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))),
+        fetch(`/api/inventory/ecs_task?limit=1&${scopeParams(scope)}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))),
+      ])
+        .then(([sum, task]) => {
+          if (!fresh()) return;
+          const hit = (sum.byType ?? []).find((x: { type: string }) => x.type === 'ecs_task');
           setTaskCount(hit ? Number(hit.count) : null);
+          setTaskRun(task.run ?? null);
+          setTaskLoaded(true);
         })
-        .catch(() => setTaskCount(null)),
+        .catch(() => {
+          if (!fresh()) return;
+          setTaskCount(null);
+          setTaskRun(null);
+          setTaskLoaded(true);
+        }),
     ]);
-    setBusy(false);
+    if (fresh()) setBusy(false);
   }, [scope]);
   useEffect(() => { load(); }, [load]);
 
   const cTrunc = clusters.rows.length >= ROW_CAP;
   const sTrunc = services.rows.length >= ROW_CAP;
-  // Service-health rollup: only from a LOADED, UNTRUNCATED service page — a 500-row sample
-  // sum must not present itself as the fleet total. The deficit is PER-SERVICE
-  // Σ max(0, desired − running): running can legitimately exceed desired mid-deployment
-  // (maximumPercent 200), and a surplus must never cancel another service's shortfall
-  // (round-1 review). Rows whose desired/running fields are absent are skipped from the
-  // deficit (their cells honestly render '—' — an unknown must not inflate the number).
-  const rollup = services.loaded && !services.err && !sTrunc
+  // Service-health rollup: only from a LOADED, UNTRUNCATED page whose last run SUCCEEDED —
+  // a 500-row sample sum must not present itself as the fleet total, and mid-refresh/stale
+  // rows under a running/partial/failed run must not emit a confident deficit (round-2).
+  // A succeeded run with zero services is a TRUE zero (the fleet genuinely has none).
+  // The deficit is PER-SERVICE Σ max(0, desired − running): running can legitimately exceed
+  // desired mid-deployment (maximumPercent 200), and a surplus must never cancel another
+  // service's shortfall (round-1). Rows whose desired/running fields are absent are skipped
+  // from the deficit (their cells honestly render '—' — an unknown must not inflate the number).
+  const rollup = services.loaded && !services.err && !sTrunc && services.run?.status === 'succeeded'
     ? services.rows.reduce(
         (a, r) => {
           const desired = d(r, 'desired_count');
@@ -102,12 +122,17 @@ export default function EcsOverview() {
     : null;
   const lagging = rollup ? rollup.deficit : null;
 
-  // Header freshness = the DATA time (the newer of the two runs' finished_at), never the
-  // browser fetch time — a page of failed fetches must not read freshly-updated (round-1).
-  const runTimes = [clusters.run?.finished_at, services.run?.finished_at]
-    .filter((x): x is string => Boolean(x))
-    .map((x) => new Date(x).getTime());
-  const capturedAt = runTimes.length ? new Date(Math.max(...runTimes)).toISOString() : null;
+  // Header freshness = the DATA time per the S3IamAccessSection convention:
+  // last_success_at ?? (succeeded ? finished_at : null) — finished_at alone is merely the
+  // last ATTEMPT (failed/partial runs stamp it too, sync_lambda's finalizer). The header
+  // takes the OLDER of the two tables' data times so a fresh cluster sync can't mask stale
+  // service data; no data time on either → 미수집 (round-2 review).
+  const dataTime = (run: Run): number | null => {
+    const t = run?.last_success_at ?? (run?.status === 'succeeded' ? run?.finished_at : null);
+    return t ? new Date(t).getTime() : null;
+  };
+  const runTimes = [dataTime(clusters.run), dataTime(services.run)].filter((x): x is number => x != null);
+  const capturedAt = runTimes.length === 2 ? new Date(Math.min(...runTimes)).toISOString() : null;
 
   const preSync = (t: TypeState) => t.loaded && !t.err && t.rows.length === 0 && t.run == null;
   // Non-succeeded runs are distinguished (round-1): 'failed' asserts failure, 'running'/'partial'
@@ -151,14 +176,30 @@ export default function EcsOverview() {
         <section className="flex flex-col gap-3">
           <SectionLabel>{tt('요약')}</SectionLabel>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatTile label={tt('클러스터')} value={clusters.loaded && !clusters.err ? clusters.rows.length + (cTrunc ? '+' : '') : '—'} href="/inventory/ecs_cluster" />
-            <StatTile label={tt('서비스')} value={services.loaded && !services.err ? services.rows.length + (sTrunc ? '+' : '') : '—'} href="/inventory/ecs_service" />
-            <StatTile label={tt('태스크')} value={taskCount ?? '—'} href="/inventory/ecs_task" />
+            {/* pre-sync (empty rows + no ledger row) reads '—', never a confident 0 (round-2) */}
+            <StatTile label={tt('클러스터')} value={clusters.loaded && !clusters.err && !preSync(clusters) ? clusters.rows.length + (cTrunc ? '+' : '') : '—'} href="/inventory/ecs_cluster" />
+            <StatTile label={tt('서비스')} value={services.loaded && !services.err && !preSync(services) ? services.rows.length + (sTrunc ? '+' : '') : '—'} href="/inventory/ecs_service" />
+            {/* the count rides the summary; the ecs_task RUN gates its trustworthiness —
+                succeeded + byType-absent is a TRUE 0, anything non-succeeded reads '—' */}
+            <StatTile
+              label={tt('태스크')}
+              value={taskLoaded && taskRun?.status === 'succeeded' ? (taskCount ?? 0) : '—'}
+              href="/inventory/ecs_task"
+              hint={taskLoaded && taskRun != null && taskRun.status !== 'succeeded'
+                ? tt(taskRun.status === 'running' ? 'sync 실행 중' : '마지막 sync 미성공 — 확정 수치 아님')
+                : undefined}
+            />
             <StatTile
               label={tt('Desired 대비 미달 태스크')}
-              value={lagging == null ? `— ${sTrunc ? `(${tt('표본 기준')})` : ''}`.trim() : lagging}
+              value={lagging == null ? '—' : lagging}
               variant={lagging != null && lagging > 0 ? 'danger' : 'default'}
-              hint={rollup ? `${rollup.running}/${rollup.desired} running` : sTrunc ? tt('표본에서는 집계하지 않음') : undefined}
+              hint={rollup
+                ? `${rollup.running}/${rollup.desired} running`
+                : sTrunc
+                  ? tt('표본에서는 집계하지 않음')
+                  : services.loaded && !services.err && services.run != null && services.run.status !== 'succeeded'
+                    ? tt('동기화 상태 미확정 — 집계 보류')
+                    : undefined}
             />
           </div>
         </section>

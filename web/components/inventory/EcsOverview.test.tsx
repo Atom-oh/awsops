@@ -19,6 +19,7 @@ function stubApis({ clusters = [cluster('c1')], services = [service('svc-a', 2, 
     const body =
       url.includes('ecs_cluster') ? { rows: clusters, run } :
       url.includes('ecs_service') ? { rows: services, run } :
+      url.includes('ecs_task') ? { rows: [], run } : // run ledger only (limit=1 gate fetch)
       // a never-synced type is ABSENT from byType (GROUP BY) — null models that
       { byType: taskCount == null ? [] : [{ type: 'ecs_task', count: taskCount }] };
     return Promise.resolve({ ok: true, status: 200, json: async () => body });
@@ -81,7 +82,30 @@ describe('EcsOverview (gap L216 — unified one-screen view)', () => {
   it("a 'running' run renders the in-progress caption, not a failure assertion", async () => {
     stubApis({ run: { status: 'running' } });
     render(<EcsOverview />);
-    await waitFor(() => expect(screen.getAllByText(/sync 실행 중/).length).toBe(2));
+    await waitFor(() => expect(screen.getAllByText(/sync 실행 중/).length).toBeGreaterThanOrEqual(2));
     expect(screen.queryByText(/성공하지 못했습니다/)).toBeNull();
+  });
+
+  it('a succeeded run + byType-absent task type is a TRUE 0; a failed run dashes the count', async () => {
+    stubApis({ taskCount: null }); // absent from byType, run succeeded
+    render(<EcsOverview />);
+    await waitFor(() => expect(screen.getByText('c1')).toBeTruthy());
+    const taskTile = screen.getByText('태스크').closest('div')!.parentElement!;
+    expect(taskTile.textContent).toContain('0');
+    cleanup();
+    stubApis({ run: { status: 'failed', finished_at: '2026-09-01T00:00:00Z' }, taskCount: 9 });
+    render(<EcsOverview />);
+    await waitFor(() => expect(screen.getByText('c1')).toBeTruthy());
+    const tile2 = screen.getByText('태스크').closest('div')!.parentElement!;
+    expect(tile2.textContent).not.toContain('9');
+    expect(tile2.textContent).toContain('—');
+  });
+
+  it('capturedAt is the DATA time — a failed run reads 미수집 in the header, never the attempt time', async () => {
+    stubApis({ run: { status: 'failed', finished_at: '2026-09-01T00:00:00Z' } });
+    render(<EcsOverview />);
+    await waitFor(() => expect(screen.getByText('c1')).toBeTruthy());
+    expect(screen.getByText(/미수집/)).toBeTruthy(); // RefreshButton's no-data-time label
+    expect(screen.queryByText(/업데이트:/)).toBeNull();
   });
 });

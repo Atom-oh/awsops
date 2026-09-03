@@ -326,7 +326,7 @@ awsops/
   terraform/v2/foundation/  # 단일 Terraform 루트: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/               # configure/deploy/migrate/agentcore/workers 도구(전부 Node.js/Python)
   tests/                    # repo 전반의 hook/structure 테스트 + PR-review/Steampipe/ExternalId 배선 체크
-  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 20개)
+  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 21개)
   docs-site/                # Docusaurus 사용자 가이드(별도 배포)
 ```
 
