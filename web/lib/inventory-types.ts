@@ -602,7 +602,11 @@ const GROUPS: Record<string, GroupMeta> = {
           { key: 'eks-cost', href: '/eks/cost', labelKey: 'nav.eksCost' },
         ],
       },
-      { key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_service', 'ecs_task'] },
+      {
+        key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_service', 'ecs_task'],
+        // gap L216: unified one-screen overview (KPI + clusters + services) above the type leaves
+        links: [{ key: 'ecs-overview', href: '/inventory/ecs', labelKey: 'nav.ecsOverview' }],
+      },
     ],
   },
   'Storage & DB': {

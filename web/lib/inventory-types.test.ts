@@ -110,7 +110,11 @@ describe('navTree (sidebar IA hierarchy)', () => {
       '/eks', '/eks/nodes', '/eks/pods', '/eks/deployments', '/eks/services', '/eks/explorer', '/eks/cost',
     ]);
     const ecs = c.subgroups.find((s) => s.key === 'ecs')!;
-    expect(ecs.items.map((l) => l.type)).toEqual(['ecs_cluster', 'ecs_service', 'ecs_task']);
+    // gap L216: the unified overview rides as a feature link AFTER the type leaves
+    // (the sidebar renders a subgroup's types before its links)
+    expect(ecs.items.map((l) => (l.kind === 'inventory' ? l.type : l.href))).toEqual([
+      'ecs_cluster', 'ecs_service', 'ecs_task', '/inventory/ecs',
+    ]);
   });
 
   it('Network nests Load Balancing + API Gateway and excludes them from direct items', () => {
