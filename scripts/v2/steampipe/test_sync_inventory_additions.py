@@ -66,7 +66,7 @@ def test_host_probe_symmetric_with_target_probe_via_real_account_reachable(monke
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    monkeypatch.setattr(mod, "_steampipe", lambda *_a: FakeConn())
     assert mod._account_reachable(mod._caller_account()) is True
     assert "aws_111111111111.aws_caller_identity" in queried_schemas[0]
 
@@ -86,7 +86,7 @@ def test_host_probe_unreachable_protects_last_good_inventory(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    monkeypatch.setattr(mod, "_steampipe", lambda *_a: FakeConn())
     assert mod._account_reachable(mod._caller_account()) is False
 
 
@@ -296,6 +296,8 @@ def _fake_steampipe_factory(script, timeouts):
         def run(self, q):
             step = script[state["i"]]
             state["i"] += 1
+            if isinstance(step, Exception):
+                raise step
             if step == "raise":
                 raise RuntimeError("canceling statement due to statement timeout")
             return step
@@ -362,6 +364,56 @@ def test_query_budget_clamps_to_remaining_lambda_time(monkeypatch):
     monkeypatch.setattr(sync_lambda, "_DEADLINE", _time.monotonic() + 130)
     with pytest.raises(RuntimeError):
         sync_lambda._query_budget_s(180)
+
+
+def test_account_reachable_probe_is_remaining_time_clamped(monkeypatch):
+    """Round-10 gate: the prune-phase reachability probe must not inherit the 240s default —
+    it gets a short clamped budget, and when even that cannot fit ahead of the Aurora reserve
+    it refuses WITHOUT connecting and reports unreachable (conservative: last-good protected)."""
+    import time as _time
+    mod = sync_lambda
+    timeouts = []
+
+    class FakeConn:
+        def run(self, sql):
+            return [("111111111111",)]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_steampipe", lambda t=240: (timeouts.append(t), FakeConn())[1])
+    # plenty of remaining time → the short probe cap applies (never the 240s default)
+    monkeypatch.setattr(mod, "_DEADLINE", _time.monotonic() + 400)
+    assert mod._account_reachable("111111111111") is True
+    assert timeouts == [mod.REACHABILITY_PROBE_TIMEOUT_S]
+    # a sliver → refuse before connecting, report unreachable
+    connected = []
+    monkeypatch.setattr(mod, "_steampipe", lambda t=240: connected.append(t))
+    monkeypatch.setattr(mod, "_DEADLINE", _time.monotonic() + 125)
+    assert mod._account_reachable("111111111111") is False
+    assert connected == []
+
+
+def test_hydrate_fallback_log_is_sanitized(monkeypatch, capsys):
+    """Round-10 gate: the fallback event carries a bounded error_category + exception type,
+    NEVER raw exception text (which can embed role ARNs/account IDs/SQL — ADR-021 contract)."""
+    import json as _json
+    timeouts = []
+    secret_msg = ("AccessDenied: arn:aws:sts::999999999999:assumed-role/leaky is not "
+                  "authorized to perform iam:ListAttachedRolePolicies")
+    monkeypatch.setattr(
+        sync_lambda, "_steampipe",
+        _fake_steampipe_factory([RuntimeError(secret_msg), [["r1", "global"]]], timeouts))
+    rows, _cols, fallback_used = sync_lambda._run_steampipe_query(
+        "iam_role", sync_lambda.QUERIES["iam_role"][0])
+    assert fallback_used is True
+    events = [_json.loads(l) for l in capsys.readouterr().out.splitlines()
+              if '"inventory_sync_hydrate_fallback"' in l]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["error_category"] == "denial" and ev["error_type"] == "RuntimeError"
+    assert "error" not in ev
+    assert "999999999999" not in _json.dumps(ev)
 
 
 def test_hydrate_fallback_remedy_is_cause_specific():

@@ -461,6 +461,10 @@ HYDRATE_FALLBACK_SQL = {
 HYDRATE_STATEMENT_TIMEOUT_S = 180
 HYDRATE_FALLBACK_STATEMENT_TIMEOUT_S = 90
 DEFAULT_STATEMENT_TIMEOUT_S = 240
+# _account_reachable() probes are single-row caller-identity lookups that run in the PRUNE
+# phase, after the main query budgets — they must never inherit the 240s default (round-10
+# gate: that was the one unbudgeted query left that could race the Lambda wall).
+REACHABILITY_PROBE_TIMEOUT_S = 30
 # Post-query Aurora reserve (round-9 gate): per-row upserts + the two-phase prune's full
 # existing-rows scan + snapshots + the finalizer all run OUTSIDE the statement-timeout budgets,
 # so query budgets are clamped to (remaining Lambda time − this reserve) — a query never starts
@@ -1078,7 +1082,19 @@ def _account_reachable(account_id):
     to fetch or touch any real account data beyond the caller-identity check."""
     if not _ACCT_RE.match(str(account_id)):
         return False
-    conn = _steampipe()
+    # Remaining-time clamp (round-10 gate): the probe runs in the prune phase, AFTER the main
+    # query budgets and the Aurora upserts, once per unpresent account — a bare 240s default
+    # here would be the one query that can still race the 420s Lambda wall and strand the
+    # ledger at 'running'. A caller-identity probe is a single-row lookup: cap it at
+    # REACHABILITY_PROBE_TIMEOUT_S, clamped to the actual remaining time; when even that
+    # cannot fit ahead of the Aurora reserve, refuse the probe and report UNREACHABLE — the
+    # conservative direction (last-good rows protected, run records partial) — instead of
+    # starting a query that could outlive the invocation.
+    try:
+        budget = _query_budget_s(REACHABILITY_PROBE_TIMEOUT_S)
+    except RuntimeError:
+        return False
+    conn = _steampipe(budget)
     try:
         rows = conn.run(f"SELECT account_id FROM aws_{account_id}.aws_caller_identity LIMIT 1")
         return len(rows) > 0
@@ -1163,14 +1179,27 @@ def _finalize_sync_ledger(
                 pass
 
 
+def _hydrate_fallback_cause(exc):
+    """Bounded cause category for the fallback log event — NEVER the raw exception text
+    (ADR-021 observability contract: an IAM/SCP denial surfaced through Postgres typically
+    embeds assumed-role ARNs with account IDs and the failing SQL; detail stays server-side,
+    same as the inventory_sync_failed path)."""
+    msg = str(exc)
+    if "AccessDenied" in msg or "not authorized" in msg or "UnauthorizedOperation" in msg:
+        return "denial"
+    if "statement timeout" in msg or "canceling statement" in msg:
+        return "statement_timeout"
+    return "other"
+
+
 def _hydrate_fallback_remedy(exc):
     """Cause-specific operator guidance for the fallback log event: rate tuning cannot fix an
     IAM/SCP denial, and a permission grant cannot fix a budget timeout — name the right knob."""
-    msg = str(exc)
-    if "AccessDenied" in msg or "not authorized" in msg or "UnauthorizedOperation" in msg:
+    cause = _hydrate_fallback_cause(exc)
+    if cause == "denial":
         return ("SCP/IAM denial — grant iam:ListAttachedRolePolicies to the scanned accounts' "
                 "read role (raising the limiter fill_rate cannot fix a denial)")
-    if "statement timeout" in msg or "canceling statement" in msg:
+    if cause == "statement_timeout":
         return ("hydrate budget exceeded (aggregate role count across all connected accounts) — "
                 "raise the steampipe limiter fill_rate (0.1-20, ADR-021 knobs)")
     return ("unclassified — if it repeats: AccessDenied => grant iam:ListAttachedRolePolicies; "
@@ -1203,7 +1232,10 @@ def _run_steampipe_query(resource_type, sql):
         _log(
             "inventory_sync_hydrate_fallback",
             resource_type=resource_type,
-            error=str(hydrate_exc)[:400],
+            # sanitized like inventory_sync_failed: bounded category + exception type only —
+            # raw text can carry role ARNs/account IDs/SQL (ADR-021 observability contract)
+            error_category=_hydrate_fallback_cause(hydrate_exc),
+            error_type=type(hydrate_exc).__name__,
             remedy=_hydrate_fallback_remedy(hydrate_exc),
         )
         sdb = _steampipe(_query_budget_s(HYDRATE_FALLBACK_STATEMENT_TIMEOUT_S))
@@ -1399,12 +1431,16 @@ def sync(resource_type):
                     "type": resource_type,
                     "row_count": len(recs),
                     "unreachable_account_count": len(unreachable_accounts),
+                    # a hydrate fallback can coincide with an unreachable-account partial —
+                    # the blind-attribute count must not vanish from the event on that path
+                    "unknown_attribute_count": sdk_unknown_attrs,
                 }
                 terminal_event = "inventory_sync_complete"
                 terminal_fields = {
                     "resource_type": resource_type,
                     "row_count": len(recs),
                     "unreachable_account_count": len(unreachable_accounts),
+                    "unknown_attribute_count": sdk_unknown_attrs,
                     "degraded": True,
                     "throttled": False,
                     "freshness": "degraded",

@@ -228,3 +228,29 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   amended in place with the degraded-freshness disclosure.
 - Noted, not shipped: counting unhydrated rows under a `partial` run before the caveated
   list (round-9 L2 minor); client-clock freshness and the 500-row projection stay follow-ups.
+
+## Round-10 corrections (review-driven)
+
+- **The reachability probes are clamped too (the L2/L4/L5 gate MAJOR)** — round 9's "every
+  query is remaining-time-clamped" claim missed `_account_reachable()`: the prune-phase probe
+  called `_steampipe()` bare, inheriting the 240s default AFTER the main budgets — the one
+  query left that could race the 420s wall and strand the ledger at `running`. The probe now
+  gets `REACHABILITY_PROBE_TIMEOUT_S = 30` clamped via `_query_budget_s`, and when even that
+  cannot fit ahead of the Aurora reserve it refuses WITHOUT connecting and reports
+  unreachable — the conservative direction (last-good rows protected, run records partial).
+  The Terraform comment, runbook, and this spec now state the corrected, complete claim.
+- **The fallback log is sanitized (the L3/L5 gate MAJOR)** — `error=str(exc)[:400]` violated
+  the file's own contract and ADR-021's "only a safe error_category/type, never raw text"
+  (a Postgres-surfaced IAM denial embeds role ARNs/account IDs/SQL). The event now carries
+  `error_category` (denial | statement_timeout | other, via `_hydrate_fallback_cause`) +
+  `error_type` only; a test pins that a leaky AccessDenied message never reaches the log.
+- Minors fixed: the unreachable-partial `inventory_sync_complete` event now carries
+  `unknown_attribute_count` (a fallback can coincide with a partial); the FAQ (4 locales)
+  states both remedies (fill_rate for timeouts, permission grant for denials); ADR-021 gains
+  the definitional extension (the fallback routes transient hydrate failures into
+  succeeded+unknowns too — self-healing next cycle, by design); the "≥150s reserve" wording
+  now distinguishes the 120s dynamic clamp reserve from the 30s static slack.
+- Noted, not shipped: an exactly-500-row fleet is permanently non-conclusive (safe
+  direction; a cap+1 sentinel fetch is the tidier follow-up); `AmazonS3[A-Za-z]*` matching
+  S3-family specialty policies (over-inclusion in an advisory, matched-set-framed list);
+  client-clock freshness and the 500-row projection stay follow-ups.

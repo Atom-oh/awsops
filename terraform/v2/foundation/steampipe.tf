@@ -352,10 +352,12 @@ resource "aws_lambda_function" "inv_sync" {
   # ALL connected accounts) get ≤180s of statement_timeout (≈360 aggregate hydrates at the
   # shared 2 req/s awsops_global limiter when idle — less under concurrent type syncs), a
   # hydrate-free fallback retry gets ≤90s (the base inventory never regresses to a whole-type
-  # failure), and ≥150s is reserved for the post-query Aurora work (per-row upserts, two-phase
-  # prune, snapshots, finalizer — AURORA_RESERVE_S). Each budget is additionally clamped to the
-  # invocation's remaining time so a query never races the Lambda wall and strands the ledger
-  # at 'running'. Fleets beyond the hydrate budget see the inventory_sync_hydrate_fallback log
+  # failure), leaving 150s of static slack for the post-query Aurora work — of which
+  # AURORA_RESERVE_S=120s is the dynamic clamp's hard reserve (the remaining 30s is extra
+  # slack). EVERY Steampipe query — the main/fallback queries AND the prune-phase
+  # _account_reachable probes (≤30s each) — is clamped to the invocation's remaining time
+  # minus that reserve, refusing up-front rather than racing the Lambda wall and stranding
+  # the ledger at 'running'. Fleets beyond the hydrate budget see the inventory_sync_hydrate_fallback log
   # event, whose remedy is cause-specific: budget timeout → limiter fill_rate (ADR-021 knobs,
   # 0.1–20); SCP/IAM denial → grant iam:ListAttachedRolePolicies.
   timeout                        = 420

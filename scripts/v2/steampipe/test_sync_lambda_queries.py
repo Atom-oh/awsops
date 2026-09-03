@@ -111,7 +111,7 @@ def test_account_reachable_true_when_its_own_steampipe_connection_answers(monkey
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    monkeypatch.setattr(mod, "_steampipe", lambda *_a: FakeConn())
     assert mod._account_reachable("210987654321") is True
     assert "aws_210987654321.aws_caller_identity" in queries[0]
 
@@ -128,7 +128,7 @@ def test_account_reachable_false_when_connection_query_fails(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    monkeypatch.setattr(mod, "_steampipe", lambda *_a: FakeConn())
     assert mod._account_reachable("999999999999") is False
 
 
@@ -137,7 +137,7 @@ def test_account_reachable_rejects_non_account_id_without_connecting(monkeypatch
     reach SQL string interpolation — reject before ever calling _steampipe()."""
     mod = load_sync_lambda()
 
-    def _boom():
+    def _boom(*_a):
         raise AssertionError("must not connect for an invalid account id")
 
     monkeypatch.setattr(mod, "_steampipe", _boom)
@@ -156,7 +156,7 @@ def test_account_reachable_closes_connection_even_on_failure(monkeypatch):
         def close(self):
             closed.append(True)
 
-    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    monkeypatch.setattr(mod, "_steampipe", lambda *_a: FakeConn())
     mod._account_reachable("210987654321")
     assert closed == [True]
 
@@ -698,6 +698,7 @@ def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(
         "type": "partial_account_test",
         "row_count": 1,
         "unreachable_account_count": 1,
+        "unknown_attribute_count": 0,
     }
     partial_updates = [
         (sql, params) for sql, params in finalizer_calls
@@ -728,6 +729,7 @@ def test_sync_partial_account_omission_preserves_last_good_and_logs_only_count(
         "resource_type": "partial_account_test",
         "row_count": 1,
         "unreachable_account_count": 1,
+        "unknown_attribute_count": 0,
         "degraded": True,
         "throttled": False,
         "freshness": "degraded",
