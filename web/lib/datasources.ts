@@ -227,7 +227,7 @@ export async function updateDatasource(
   const row = await getDatasource(id, q);
   if (row?.isDefault) {
     const cred = await getCredentialById(id, row.kind);
-    if (cred) await mirrorDefaultCredential(row.kind, cred);
+    if (cred) await mirrorDefaultCredential(row.kind, cred, q === getPool() ? undefined : q);
   }
 }
 

@@ -284,3 +284,20 @@ Cache TTL / ClickHouse database — v1's Settings section).
   recorded follow-ups: a per-kind lifecycle lock covering default-switch/delete TOCTOU, a
   non-mutating name-availability check, and Phase-6 excision of the banner-wrapped v1
   Allowed-Networks body.
+
+## Round-12 corrections (review-driven)
+
+- **The credential writes ride the lock client too (the gate MAJOR)** — round 11 moved the
+  ROW queries onto the lock client but `mutateCredentialMap` still checked out its OWN pool
+  client for the credential advisory lock: a second checkout per PATCH, so three concurrent
+  PATCHes still pinned all three `max: 3` clients on the outer lock and starved themselves.
+  `setIntegrationCredentialById`/`mirrorDefaultCredential`/`mutateCredentialMap` now accept a
+  Queryable — inside the manage span the credential lock (`pg_advisory_xact_lock(LOCK_KEY)`)
+  is taken on the SAME connection (no second checkout; lock ordering stays acyclic:
+  ds-manage:<id> then LOCK_KEY, never the reverse). The standalone path (POST create, other
+  callers) keeps its own client + transaction unchanged.
+- Minor: `database` is kind-gated on the ROW settings too (POST and PATCH) — the blob-side
+  delete alone left stale, admin-visible row config for non-ClickHouse kinds.
+- Re-recorded follow-ups (chair-acknowledged, next batch): per-kind lifecycle lock covering
+  default-switch/delete TOCTOU; the `_SETTINGS_CLAUSE` token-order false positive on columns
+  literally named `settings`/`readonly` (fail-closed availability nit).

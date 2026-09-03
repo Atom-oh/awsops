@@ -133,7 +133,7 @@ describe('PATCH update', () => {
     const { PATCH } = await import('./route');
     const resp = await PATCH(req({ id: 7, endpoint: 'http://10.0.0.9:9090', authType: 'none' }, 'PATCH'));
     expect(resp.status).toBe(200);
-    expect(setIntegrationCredentialById).toHaveBeenCalledWith(7, { endpoint: 'http://10.0.0.9:9090', authType: 'none' });
+    expect(setIntegrationCredentialById).toHaveBeenCalledWith(7, { endpoint: 'http://10.0.0.9:9090', authType: 'none' }, expect.anything());
     expect(updateDatasource).toHaveBeenCalled();
   });
 

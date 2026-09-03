@@ -84,6 +84,9 @@ export async function POST(request: Request) {
   // bypassed the object-only guard); individually invalid keys alongside valid ones drop.
   if (settingsShapeInvalid(body)) return json({ error: 'settings must be an object' }, 400);
   const settings = sanitizeDsSettings(body.settings);
+  // database is ClickHouse-only config — never persist it on the row for other kinds either
+  // (round-12: the blob-side delete alone left stale, admin-visible row config).
+  if (kind !== 'clickhouse') delete settings.database;
   if (body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)
       && Object.keys(body.settings as object).length > 0 && Object.keys(settings).length === 0) {
     return json({ error: 'invalid settings (timeoutS 1–60 integer; database identifier, non-system)' }, 400);
@@ -135,6 +138,7 @@ export async function PATCH(request: Request) {
   // value is a 400 too (round-8) — never a silent clear.
   if (settingsShapeInvalid(body)) return json({ error: 'settings must be an object' }, 400);
   const settings = body.settings !== undefined ? sanitizeDsSettings(body.settings) : undefined;
+  if (settings !== undefined && ds.kind !== 'clickhouse') delete settings.database;
   if (body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)
       && Object.keys(body.settings as object).length > 0 && settings !== undefined && Object.keys(settings).length === 0) {
     return json({ error: 'invalid settings (timeoutS 1–60 integer; database identifier, non-system)' }, 400);
@@ -215,11 +219,11 @@ export async function PATCH(request: Request) {
     for (const k of CRED_KEYS) if (k !== 'org_id' && !(KEEP_BY_AUTH[effAuth] ?? []).includes(k)) delete blob[k];
     // database is ClickHouse-only config — never persist it for other kinds (inert but stale).
     if (ds.kind !== 'clickhouse') delete blob.database;
-    await setIntegrationCredentialById(id, blob);
+    await setIntegrationCredentialById(id, blob, client);
     // updateDatasource (below) re-mirrors from the freshly written id blob for a default
     // instance; this explicit refresh keeps the mirror correct even when the row update has
     // nothing to change.
-    if (ds.isDefault) await mirrorDefaultCredential(ds.kind, blob);
+    if (ds.isDefault) await mirrorDefaultCredential(ds.kind, blob, client);
     // A database change (set OR clear) re-grounds AI query generation — mirror POST's
     // connect-time warm (best-effort; the 6h isSchemaStale refresh remains).
     if (settings !== undefined && (settings.database ?? null) !== (ds.settings?.database ?? null)) {
