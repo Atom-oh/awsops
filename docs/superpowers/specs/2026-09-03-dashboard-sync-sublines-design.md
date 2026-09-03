@@ -84,3 +84,27 @@ sync), L82 (dashboard resource-tile micro-stat sublines).
   byType cross-counts (an unsynced type currently reads a confident 0 — pre-existing group
   page behavior); unifying the pre-existing per-type refresh catch's raw `e.message` with the
   'all' branch's generic-message contract.
+
+## Round-2 corrections (review-driven)
+
+- **The Sync-all button is admin-gated in the UI too (the gate MAJOR)** — the docs claimed
+  "admins additionally see the button" while page.tsx passed `onForceSync` unconditionally
+  (click-to-discover 403). The dashboard now fetches `/api/me` (the repo's sanctioned signal —
+  "so UI can hide admin-only controls accurately") and passes the prop only for admins; the
+  server-side isAdmin gate stays as the actual authorization.
+- **The EKS tile's two populations are reconciled or suppressed (the gate MAJOR)** — the
+  headline count (host-account ListClusters via /api/overview) and the subline source (the
+  unscoped registry: env ∪ eks_registrations) are DIFFERENT populations even under the
+  all-accounts scope. `fleetMicroOk` now additionally requires
+  `ov.clusterCount === clusters.length` — an equal cardinality is a consistency PROXY, not
+  proof of identity (disclosed here and in the 4-locale guide, which now says the subline
+  covers registered clusters and hides on a count mismatch rather than contradicting the
+  headline).
+- Minors: the pre-existing per-type refresh catch now returns the same generic message as the
+  'all' branch (no raw e.message — a Lambda/DB error can embed ARNs/account IDs); ADR-021's
+  Status/BASELINE carry a dated 2026-09-03 note documenting the manual all-types dispatch as
+  in-envelope (same payload as the schedule; no-cooldown disclosed as a tracked follow-up);
+  the audit L82 tick discloses the CloudFront HTTP-allowed omission (splits don't carry it —
+  follow-up) and the L79 item body gets an inline pointer to the shipped route-special-case
+  (the original 'sync job type' idea is superseded); the api-reference auth cell matches the
+  file's style.

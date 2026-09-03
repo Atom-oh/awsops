@@ -38,7 +38,9 @@ export async function POST(request: Request, { params }: { params: { type: strin
     const sync = await triggerSync(params.type); // enqueue bounded Steampipe -> Aurora refresh
     const page = await readResources(params.type, { limit: 100, offset: 0 });
     return Response.json({ ...page, sync });
-  } catch (e) {
-    return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 503 });
+  } catch {
+    // generic message, same non-disclosure contract as the 'all' branch (a Lambda/DB error
+    // can embed ARNs/account IDs); detail stays server-side
+    return Response.json({ status: 'error', message: 'refresh failed' }, { status: 503 });
   }
 }

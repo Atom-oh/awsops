@@ -80,6 +80,10 @@ export default function Home() {
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  // Sync-all visibility (round-2 review): /api/me's isAdmin exists exactly so the UI can hide
+  // admin-only controls accurately — the button renders for admins only (the server-side
+  // isAdmin gate on the route stays as the actual authorization, this is presentation).
+  const [isAdminUser, setIsAdminUser] = useState(false);
   const [scope] = useActiveScope();
   const [trendDays, setTrendDays] = useState(14);
 
@@ -126,6 +130,14 @@ export default function Home() {
   }, [scope, trendDays]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d) setIsAdminUser(Boolean(d.isAdmin)); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Header freshness = when the inventory was last SYNCED (falls back to fetch time).
   useEffect(() => {
@@ -194,7 +206,13 @@ export default function Home() {
   // renders only when EVERY cluster answered; (b) the fleet registry is UNSCOPED while the
   // tile's cluster count is account-scoped — under a non-default account selection the two
   // would describe different populations, so the subline is suppressed there.
-  const fleetMicroOk = hasFleet && clusters.every((c) => c.reachable) && scope.accounts === '__all__';
+  // (c) the fleet REGISTRY population (env ∪ eks_registrations) is not the same source as the
+  // tile's headline count (host-account ListClusters) — require the cardinalities to AGREE
+  // before fusing them onto one tile (an equal count is a consistency proxy, not proof of
+  // identity — the residual is disclosed in the spec/docs; on mismatch the subline is
+  // suppressed rather than shown against a contradicting headline).
+  const fleetMicroOk = hasFleet && clusters.every((c) => c.reachable)
+    && scope.accounts === '__all__' && ov?.clusterCount === clusters.length;
 
   // Security-issue rollup across the four /security findings (public S3 + open ingress +
   // unencrypted EBS + IAM without MFA). The public-S3 count is produced by the summary
@@ -318,7 +336,7 @@ export default function Home() {
       <PageHeader
         title="대시보드"
         subtitle="실시간 AWS · Kubernetes 운영 현황"
-        right={<RefreshButton busy={busy} onClick={loadAll} capturedAt={capturedAt} onForceSync={forceSync} />}
+        right={<RefreshButton busy={busy} onClick={loadAll} capturedAt={capturedAt} onForceSync={isAdminUser ? forceSync : undefined} />}
       />
       <div className="px-4 lg:px-8 py-8 flex flex-col gap-6">
         {loading && <div className="text-ink-400">{tt('로딩 중…')}</div>}
