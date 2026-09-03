@@ -211,7 +211,7 @@ AI 어시스턴트는 등록된 데이터소스를 활용하여 분석을 수행
 |------|--------|------|
 | **Database** | (서버 기본) | 기본 데이터베이스 이름 — 식별자만 허용, `system`/`information_schema`는 거부(웹 계층과 커넥터 양쪽 검증) |
 
-제한: ClickHouse 쿼리는 SELECT 전용 가드(테이블 함수·SYSTEM 차단)를 통과해야 하며, 반환 행은 최대 1,000행(`max_result_rows`)으로 제한됩니다.
+제한: ClickHouse 쿼리는 읽기 전용 가드(테이블 함수·SYSTEM 차단)를 통과해야 하며, 반환 행은 최대 1,000행(`max_result_rows`)으로 제한됩니다.
 
 ## Explore 페이지
 

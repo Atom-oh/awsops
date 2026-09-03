@@ -168,15 +168,26 @@ describe('resolveConnConfig', () => {
   });
 });
 
-describe('withDatasourceLock (round-10 — serializes the manage read→merge→write span)', () => {
-  it('acquires the per-id advisory lock, runs fn, and unlocks/releases even on throw', async () => {
+describe('withDatasourceLock (rounds 10–11 — single-client xact span, no pool re-entry)', () => {
+  it('runs fn ON the lock client inside a transaction; ROLLBACK + release on throw', async () => {
     const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
     const release = vi.fn();
     (getPoolMock as unknown as { connect?: unknown }).connect = vi.fn().mockResolvedValue({ query: clientQuery, release });
     await expect(withDatasourceLock(7, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
-    expect(clientQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
-    expect(clientQuery.mock.calls[0][1]).toEqual(['ds-manage:7']);
-    expect(clientQuery.mock.calls.at(-1)![0]).toContain('pg_advisory_unlock');
+    expect(clientQuery.mock.calls[0][0]).toBe('BEGIN');
+    expect(clientQuery.mock.calls[1][0]).toContain('pg_advisory_xact_lock');
+    expect(clientQuery.mock.calls[1][1]).toEqual(['ds-manage:7']);
+    expect(clientQuery.mock.calls.at(-1)![0]).toBe('ROLLBACK');
+    expect(release).toHaveBeenCalled();
+  });
+  it('the callback RECEIVES the lock client (the span must not re-enter the max:3 pool) and COMMITs', async () => {
+    const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
+    const release = vi.fn();
+    (getPoolMock as unknown as { connect?: unknown }).connect = vi.fn().mockResolvedValue({ query: clientQuery, release });
+    let received: unknown;
+    await withDatasourceLock(7, async (c) => { received = c; return 1; });
+    expect((received as { query: unknown }).query).toBe(clientQuery);
+    expect(clientQuery.mock.calls.at(-1)![0]).toBe('COMMIT');
     expect(release).toHaveBeenCalled();
   });
 });

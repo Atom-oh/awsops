@@ -122,8 +122,8 @@ export async function PATCH(request: Request) {
   // PATCHes could write a pre-scrub merge base back over a host-change scrub, rebinding
   // stored write-only credentials to the newly pointed endpoint). ds is read INSIDE the
   // lock so the merge always starts from the latest committed row.
-  return withDatasourceLock(id, async () => {
-  const ds = await getDatasource(id);
+  return withDatasourceLock(id, async (client) => {
+  const ds = await getDatasource(id, client);
   if (!ds) return json({ error: 'datasource not found' }, 404);
 
   const name = typeof body.name === 'string' ? body.name.trim() : undefined;
@@ -164,7 +164,7 @@ export async function PATCH(request: Request) {
   // the NEW credential can transmit to the OLD host until the admin retries.
   if (name !== undefined && name !== ds.name) {
     try {
-      await updateDatasource(id, { name });
+      await updateDatasource(id, { name }, client);
     } catch (e) {
       const msg = (e as Error).message || 'update failed';
       return json({ error: msg }, /duplicate/i.test(msg) ? 409 : 400);
@@ -227,7 +227,7 @@ export async function PATCH(request: Request) {
     }
   }
   try {
-    await updateDatasource(id, { endpoint, authType: authType as 'none' | undefined, settings });
+    await updateDatasource(id, { endpoint, authType: authType as 'none' | undefined, settings }, client);
     return json({ ok: true }, 200);
   } catch (e) {
     const msg = (e as Error).message || 'update failed';

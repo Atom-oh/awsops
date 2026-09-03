@@ -13,8 +13,10 @@ Cache TTL / ClickHouse database — v1's Settings section).
   row (new ULID migration; additive + idempotent). Validated by `sanitizeDsSettings`
   (web/lib/datasources.ts) on WRITE and RE-VALIDATED on READ (a hand-edited DB row can't
   smuggle an out-of-contract value): `timeoutS` int 1..60; `database` bare identifier
-  (`^[A-Za-z_][A-Za-z0-9_]*$`). Out-of-contract values are DROPPED, not errors (a stale
-  client must not brick the form). Unknown keys never pass through.
+  (`^[A-Za-z_][A-Za-z0-9_]*$`, ≤128 chars, never system/information_schema). Final contract
+  (as amended by rounds 6/8): a NON-OBJECT settings value, or a non-empty object sanitizing
+  to EMPTY, is a 400 — never a silent clear; individually invalid keys ALONGSIDE valid ones
+  are dropped (a stale client must not brick the form). Unknown keys never pass through.
 - **Timeout (v1: request timeout ms → v2: seconds 1..60, disclosed unit change)** — the
   per-datasource `timeoutS` is the upstream query execution bound:
   - prometheus/mimir: forwarded as the API `timeout` param, additionally CAPPED at 10s —
@@ -264,3 +266,21 @@ Cache TTL / ClickHouse database — v1's Settings section).
   `SsrfBlocked` below the docstring (it had displaced `__doc__` and used the wrong exception
   type); the write-order comment discloses the residual re-supplied-creds-to-old-host window
   instead of claiming "never a leak" absolutely.
+
+## Round-11 corrections (review-driven)
+
+- **The lock span no longer re-enters the pool (the gate MAJOR)** — round 10's
+  `withDatasourceLock` pinned a pooled client for the advisory lock while the callback's
+  queries re-entered the same `max: 3` pool: three concurrent PATCHes (even on different
+  ids) each held a client and each waited on an empty pool — the protected operation itself
+  failed at the 5s checkout timeout and unrelated routes stalled. The span now runs ENTIRELY
+  on the lock client inside a `pg_advisory_xact_lock` transaction (fn receives the client;
+  getDatasource/updateDatasource accept a Queryable), with the bonus that row writes in the
+  span are atomic — a later failure rolls the name preflight back too. Tests pin
+  BEGIN/xact-lock/COMMIT/ROLLBACK and that the callback receives the lock client.
+- Minors: the spec's head Decisions section states the FINAL validation contract (the
+  round-0 "dropped, not errors" wording predated the rounds-6/8 400s); the guide's Limits
+  line says "read-only guard" (SELECT/SHOW/DESCRIBE/EXISTS pass — 'SELECT-only' overstated);
+  recorded follow-ups: a per-kind lifecycle lock covering default-switch/delete TOCTOU, a
+  non-mutating name-availability check, and Phase-6 excision of the banner-wrapped v1
+  Allowed-Networks body.

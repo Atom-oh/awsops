@@ -207,7 +207,7 @@ Datasource-related questions are processed through the `datasource` route. The A
 |------|--------|------|
 | **Database** | (server default) | Default database name — identifier-only; `system`/`information_schema` are rejected (validated on both the web tier and the connector) |
 
-Limits: ClickHouse queries must pass the SELECT-only guard (table functions and SYSTEM blocked), and returned rows are capped at 1,000 (`max_result_rows`).
+Limits: ClickHouse queries must pass the read-only guard (table functions and SYSTEM blocked), and returned rows are capped at 1,000 (`max_result_rows`).
 
 ## Explore Page
 
