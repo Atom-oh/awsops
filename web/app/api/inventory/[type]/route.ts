@@ -26,7 +26,9 @@ export async function GET(request: Request, { params }: { params: { type: string
     const page = await readResources(params.type, { limit, offset, regions, includeGlobal, accounts });
     // MTD real cost isn't in inventory_resources (Steampipe has no CE access) — merge it in here.
     // Degrades silently: cost-allocation tag not active yet, or CE denied → rows just lack the field.
-    if (params.type === 'ecs_cluster') {
+    // ?cost=0 skips the billable Cost Explorer read for consumers that never render
+    // mtd_cost_usd (the ECS overview page) — the type page keeps the default merge.
+    if (params.type === 'ecs_cluster' && url.searchParams.get('cost') !== '0') {
       try {
         const costs = await getEcsClusterCosts();
         for (const row of page.rows) {

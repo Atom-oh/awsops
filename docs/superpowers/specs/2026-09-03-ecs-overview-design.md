@@ -84,3 +84,20 @@ them across three sidebar leaves with no ECS-subgroup overview).
   service-derived rollup from the always-full-summary Tasks KPI (4 locales); README KO's
   pre-existing '통합 ADR 20개' → 21 drive-by fix. Follow-ups noted, not shipped: the v1-era
   docs-site ECS screenshot and the guide body's 3-route-focused walkthrough.
+
+## Round-3 corrections (review-driven)
+
+- **The task run's data time joins the header min (the gate MAJOR)** — whenever the Tasks KPI
+  shows a count, `dataTime(taskRun)` is included in the older-of computation: a
+  stale-but-succeeded task sync can no longer ride under a fresher header time, and the
+  RefreshButton's 30-minute stale marker can fire for task data too.
+- Minors: `load()` resets to the loading state up-front so a scope change never shows the
+  previous scope's fleet (or a mixed-scope view while the three fetches commit
+  independently); a task/summary fetch failure renders a '불러오기 실패' hint instead of an
+  unexplained '—'; the cluster fetch passes `cost=0` — a new opt-out on the type route that
+  skips the billable Cost Explorer merge for consumers that never render `mtd_cost_usd`
+  (the type page keeps the default merge; route test pins both directions).
+- Recorded platform follow-ups (out of this diff's scope, per the chair): the fleet-wide
+  `inventory_sync_runs` ledger vs per-account scope (an empty scoped result under a global
+  succeeded run reads as a true 0 for a newly onboarded account), and the non-atomic
+  rows/ledger read pair in `readResources`.

@@ -661,6 +661,7 @@ export const TERMS: Record<string, Pair> = {
   '표본에서는 집계하지 않음': { en: 'not aggregated over a sample', zh: '不对样本进行汇总', ja: 'サンプルでは集計しません' },
   '동기화 상태 미확정 — 집계 보류': { en: 'sync state unsettled — aggregation withheld', zh: '同步状态未定 — 暂缓汇总', ja: '同期状態が未確定 — 集計を保留' },
   'sync 실행 중': { en: 'sync in progress', zh: '同步进行中', ja: 'sync 実行中' },
+  '불러오기 실패': { en: 'load failed', zh: '加载失败', ja: '読み込み失敗' },
   '마지막 sync 미성공 — 확정 수치 아님': { en: 'last sync not successful — not a confirmed number', zh: '上次同步未成功 — 非确定数值', ja: '直近の sync が未成功 — 確定値ではありません' },
   '동기화가 큐에 등록되었습니다 — 완료 보장은 아니며(실행 중인 타입은 건너뜀), 반영까지 수 분 걸릴 수 있습니다.': { en: 'Sync queued — an enqueue acknowledgement, not a completion guarantee (already-running types are skipped); data may take a few minutes.', zh: '同步已加入队列 — 仅为入队确认，并非完成保证（正在运行的类型会被跳过）；数据可能需要几分钟。', ja: '同期をキューに登録しました — 完了保証ではなく（実行中のタイプはスキップ）、反映まで数分かかる場合があります。' },
   '전체 동기화는 관리자 전용입니다.': { en: 'Sync-all is admin-only.', zh: '全量同步仅限管理员。', ja: '全体同期は管理者専用です。' },

@@ -43,6 +43,7 @@ export default function EcsOverview() {
   const [taskCount, setTaskCount] = useState<number | null>(null);
   const [taskRun, setTaskRun] = useState<Run>(null);
   const [taskLoaded, setTaskLoaded] = useState(false);
+  const [taskErr, setTaskErr] = useState(false);
   const [busy, setBusy] = useState(false);
   // Global account/region scope (round-1 review): the type pages scope BOTH the rows and the
   // summary fetches — this page must describe the same fleet its '전체 보기' links open, and
@@ -56,9 +57,19 @@ export default function EcsOverview() {
     const seq = ++loadSeq.current;
     const fresh = () => seq === loadSeq.current;
     setBusy(true);
+    // Reset to the loading state so a scope change never shows the PREVIOUS scope's fleet
+    // (or a briefly mixed-scope view while the three fetches commit independently) (round-3).
+    setClusters(EMPTY);
+    setServices(EMPTY);
+    setTaskCount(null);
+    setTaskRun(null);
+    setTaskLoaded(false);
+    setTaskErr(false);
     const fetchType = async (type: string, set: (s: TypeState) => void) => {
       try {
-        const r = await fetch(`/api/inventory/${type}?limit=${ROW_CAP}&${scopeParams(scope)}`);
+        // cost=0: the overview never renders mtd_cost_usd — skip the billable CE merge
+        const costParam = type === 'ecs_cluster' ? '&cost=0' : '';
+        const r = await fetch(`/api/inventory/${type}?limit=${ROW_CAP}${costParam}&${scopeParams(scope)}`);
         if (!r.ok) throw new Error(String(r.status));
         const j = await r.json();
         if (fresh()) set({ rows: j.rows ?? [], run: j.run ?? null, err: false, loaded: true });
@@ -89,6 +100,7 @@ export default function EcsOverview() {
           setTaskCount(null);
           setTaskRun(null);
           setTaskLoaded(true);
+          setTaskErr(true); // an unexplained '—' is not honest — the tile says load failed
         }),
     ]);
     if (fresh()) setBusy(false);
@@ -131,8 +143,14 @@ export default function EcsOverview() {
     const t = run?.last_success_at ?? (run?.status === 'succeeded' ? run?.finished_at : null);
     return t ? new Date(t).getTime() : null;
   };
-  const runTimes = [dataTime(clusters.run), dataTime(services.run)].filter((x): x is number => x != null);
-  const capturedAt = runTimes.length === 2 ? new Date(Math.min(...runTimes)).toISOString() : null;
+  // The task run's data time joins the min whenever the Tasks KPI actually shows a count —
+  // a stale-but-succeeded task sync must not ride under a fresher header time (round-3).
+  const shownTimes: (number | null)[] = [dataTime(clusters.run), dataTime(services.run)];
+  const taskShown = taskLoaded && taskRun?.status === 'succeeded';
+  if (taskShown) shownTimes.push(dataTime(taskRun));
+  const capturedAt = shownTimes.every((x): x is number => x != null)
+    ? new Date(Math.min(...(shownTimes as number[]))).toISOString()
+    : null;
 
   const preSync = (t: TypeState) => t.loaded && !t.err && t.rows.length === 0 && t.run == null;
   // Non-succeeded runs are distinguished (round-1): 'failed' asserts failure, 'running'/'partial'
@@ -185,9 +203,11 @@ export default function EcsOverview() {
               label={tt('태스크')}
               value={taskLoaded && taskRun?.status === 'succeeded' ? (taskCount ?? 0) : '—'}
               href="/inventory/ecs_task"
-              hint={taskLoaded && taskRun != null && taskRun.status !== 'succeeded'
-                ? tt(taskRun.status === 'running' ? 'sync 실행 중' : '마지막 sync 미성공 — 확정 수치 아님')
-                : undefined}
+              hint={taskErr
+                ? tt('불러오기 실패')
+                : taskLoaded && taskRun != null && taskRun.status !== 'succeeded'
+                  ? tt(taskRun.status === 'running' ? 'sync 실행 중' : '마지막 sync 미성공 — 확정 수치 아님')
+                  : undefined}
             />
             <StatTile
               label={tt('Desired 대비 미달 태스크')}
