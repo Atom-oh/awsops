@@ -347,7 +347,20 @@ resource "aws_lambda_function" "inv_sync" {
   handler                        = "sync_lambda.lambda_handler"
   filename                       = data.archive_file.inv_sync_src[0].output_path
   source_code_hash               = data.archive_file.inv_sync_src[0].output_base64sha256
-  timeout                        = 120
+  # 420s, split by sync_lambda.py: hydrate-carrying queries (iam_role.attached_policy_arns ≈
+  # one ListAttachedRolePolicies per role, and the aggregator makes that the role total across
+  # ALL connected accounts) get ≤180s of statement_timeout (≈360 aggregate hydrates at the
+  # shared 2 req/s awsops_global limiter when idle — less under concurrent type syncs), a
+  # hydrate-free fallback retry gets ≤90s (the base inventory never regresses to a whole-type
+  # failure), leaving 150s of static slack for the post-query Aurora work — of which
+  # AURORA_RESERVE_S=120s is the dynamic clamp's hard reserve (the remaining 30s is extra
+  # slack). EVERY Steampipe query — the main/fallback queries AND the prune-phase
+  # _account_reachable probes (≤30s each) — is clamped to the invocation's remaining time
+  # minus that reserve, refusing up-front rather than racing the Lambda wall and stranding
+  # the ledger at 'running'. Fleets beyond the hydrate budget see the inventory_sync_hydrate_fallback log
+  # event, whose remedy is cause-specific: budget timeout → limiter fill_rate (ADR-021 knobs,
+  # 0.1–20); SCP/IAM denial → grant iam:ListAttachedRolePolicies.
+  timeout                        = 420
   memory_size                    = 512
   layers                         = [aws_lambda_layer_version.inv_pg8000[0].arn]
   reserved_concurrent_executions = var.steampipe_sync_reserved_concurrency

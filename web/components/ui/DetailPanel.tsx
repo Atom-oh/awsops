@@ -14,6 +14,7 @@ import { EbsRelatedSection } from '@/components/inventory/metrics/EbsRelatedSect
 import { RdsTrendsSection } from '@/components/inventory/metrics/RdsTrendsSection';
 import { LiveTrendsSection } from '@/components/inventory/metrics/LiveTrendsSection';
 import { RdsSgRulesSection } from '@/components/inventory/metrics/RdsSgRulesSection';
+import { S3IamAccessSection } from '@/components/inventory/metrics/S3IamAccessSection';
 import { EbsVerdictBanners } from '@/components/inventory/metrics/EbsVerdictBanners';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
@@ -434,6 +435,11 @@ export default function DetailPanel({
                 accountId={typeof data.account_id === 'string' ? data.account_id : undefined}
                 region={typeof data.region === 'string' ? data.region : undefined}
               />
+            </section>
+          )}
+          {resourceType === 's3' && (
+            <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+              <S3IamAccessSection accountId={typeof data.account_id === 'string' ? data.account_id : undefined} />
             </section>
           )}
           {ebsVolumeId && (

@@ -14,7 +14,7 @@ triggers: review, PR, code quality
 
 ### 쿼리 파일 / Query Files (`src/lib/queries/*.ts`)
 - [ ] 컬럼명을 `information_schema.columns`로 검증 (Column names verified against `information_schema.columns`)
-- [ ] 목록 쿼리에 SCP 차단 컬럼 없음: mfa_enabled, tags, attached_policy_arns (No SCP-blocked columns in list queries)
+- [ ] 목록 쿼리에 SCP 차단 컬럼 없음: mfa_enabled, tags, attached_policy_arns (No SCP-blocked columns in list queries) (ADR-010 2026-09-02 개정: v2 sync 한정, 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
 - [ ] `trivy_vulnerability`가 아닌 `trivy_scan_vulnerability` 사용 (Uses `trivy_scan_vulnerability` not `trivy_vulnerability`)
 - [ ] SQL에 `$` 문자 없음 — `::text LIKE` 사용 (No `$` character in SQL — use `::text LIKE` instead)
 - [ ] CloudTrail 쿼리는 지연 로딩 사용, 페이지 수준 fetch 아님 (CloudTrail queries use lazy-load, not page-level fetch)

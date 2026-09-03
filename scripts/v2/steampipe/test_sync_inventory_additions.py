@@ -4,6 +4,8 @@ DescribeSnapshots from fetching public AWS snapshots.
 
 (ecs_service [g-01] landed via the concurrent merge — keyed by cluster+service — and is covered
 by scripts/v2/steampipe/test_sync_lambda_queries.py, so it is intentionally not re-tested here.)"""
+import pytest
+
 import sync_lambda  # PYTHONPATH must include scripts/v2/steampipe
 
 
@@ -64,7 +66,7 @@ def test_host_probe_symmetric_with_target_probe_via_real_account_reachable(monke
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    monkeypatch.setattr(mod, "_steampipe", lambda *_a: FakeConn())
     assert mod._account_reachable(mod._caller_account()) is True
     assert "aws_111111111111.aws_caller_identity" in queried_schemas[0]
 
@@ -84,7 +86,7 @@ def test_host_probe_unreachable_protects_last_good_inventory(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    monkeypatch.setattr(mod, "_steampipe", lambda *_a: FakeConn())
     assert mod._account_reachable(mod._caller_account()) is False
 
 
@@ -254,3 +256,201 @@ def test_waf_rule_group_and_ip_set_registered():
         for c in cols:
             assert c in sql, (t, c)
         assert id_col == "name" and region_col == "region"
+
+
+def test_iam_role_query_carries_attached_policy_arns():
+    """gap L242: the S3 detail's IAM-access drill-down reads the SYNCED attached policies —
+    a per-row ListAttachedRolePolicies hydrate in the pinned plugin (quota-safe post-ADR-021)."""
+    sql, id_col, _rg = sync_lambda.QUERIES["iam_role"]
+    assert "attached_policy_arns" in sql
+    assert id_col == "name"
+
+
+def test_iam_role_hydrate_fallback_sql_is_the_query_minus_the_hydrate():
+    """Round-8 gate: a fleet whose aggregate role count exceeds the hydrate budget must not
+    permanently fail the whole iam_role sync — the fallback SQL is EXACTLY the primary query
+    with the hydrate column removed, so the base inventory never regresses and only the
+    drill-down column disappears (its consumer renders 'not synced yet')."""
+    sql, _id, _rg = sync_lambda.QUERIES["iam_role"]
+    fallback = sync_lambda.HYDRATE_FALLBACK_SQL["iam_role"]
+    assert "attached_policy_arns" not in fallback
+    assert fallback == sql.replace("attached_policy_arns, ", "")
+    # the hydrated attempt runs under a TIGHTER statement_timeout than the 240s default so
+    # the fallback + the Aurora reserve still fit inside the 420s Lambda budget
+    assert sync_lambda.HYDRATE_STATEMENT_TIMEOUT_S == 180
+    assert sync_lambda.HYDRATE_FALLBACK_STATEMENT_TIMEOUT_S == 90
+    assert (sync_lambda.HYDRATE_STATEMENT_TIMEOUT_S + sync_lambda.HYDRATE_FALLBACK_STATEMENT_TIMEOUT_S
+            + sync_lambda.AURORA_RESERVE_S) <= 420 - 30  # 30s slack under the Terraform timeout
+
+
+def _fake_steampipe_factory(script, timeouts):
+    """script: list of ('raise'|rows) per successive query; timeouts collects each conn's
+    statement_timeout."""
+    state = {"i": 0}
+
+    class FakeConn:
+        def __init__(self):
+            self.columns = [{"name": "name"}, {"name": "region"}]
+            self.closed = False
+
+        def run(self, q):
+            step = script[state["i"]]
+            state["i"] += 1
+            if isinstance(step, Exception):
+                raise step
+            if step == "raise":
+                raise RuntimeError("canceling statement due to statement timeout")
+            return step
+
+        def close(self):
+            self.closed = True
+
+    def fake(timeout_s=240):
+        timeouts.append(timeout_s)
+        return FakeConn()
+
+    return fake
+
+
+def test_hydrated_query_failure_falls_back_to_base_inventory(monkeypatch):
+    """Round-8 gate control flow: primary (hydrated, 180s) fails → ONE hydrate-free retry
+    (90s) succeeds, the base rows come back, and fallback_used=True so the caller can
+    disclose the degraded sweep (round-9 gate) — never a whole-type failure."""
+    timeouts = []
+    monkeypatch.setattr(
+        sync_lambda, "_steampipe",
+        _fake_steampipe_factory(["raise", [["r1", "global"]]], timeouts))
+    rows, cols, fallback_used = sync_lambda._run_steampipe_query(
+        "iam_role", sync_lambda.QUERIES["iam_role"][0])
+    assert rows == [["r1", "global"]] and cols == ["name", "region"]
+    assert fallback_used is True
+    assert timeouts == [180, 90]
+
+
+def test_hydrated_query_success_reports_no_fallback(monkeypatch):
+    timeouts = []
+    monkeypatch.setattr(
+        sync_lambda, "_steampipe",
+        _fake_steampipe_factory([[["r1", "global"]]], timeouts))
+    rows, _cols, fallback_used = sync_lambda._run_steampipe_query(
+        "iam_role", sync_lambda.QUERIES["iam_role"][0])
+    assert rows and fallback_used is False
+    assert timeouts == [180]
+
+
+def test_non_hydrate_types_do_not_retry(monkeypatch):
+    timeouts = []
+    monkeypatch.setattr(
+        sync_lambda, "_steampipe", _fake_steampipe_factory(["raise"], timeouts))
+    with pytest.raises(RuntimeError):
+        sync_lambda._run_steampipe_query("iam_user", sync_lambda.QUERIES["iam_user"][0])
+    assert timeouts == [240]
+
+
+def test_query_budget_clamps_to_remaining_lambda_time(monkeypatch):
+    """Round-9 gate: budgets shrink with the invocation's remaining time (minus the Aurora
+    reserve) and a sliver refuses up-front instead of racing the Lambda wall."""
+    import time as _time
+    # no deadline armed → fixed caps apply
+    monkeypatch.setattr(sync_lambda, "_DEADLINE", None)
+    assert sync_lambda._query_budget_s(180, also_reserve_s=90) == 180
+    # plenty of time → cap wins
+    monkeypatch.setattr(sync_lambda, "_DEADLINE", _time.monotonic() + 415)
+    assert sync_lambda._query_budget_s(180, also_reserve_s=90) == 180
+    # mid-invocation → remaining-time clamp wins (remaining 200 − 120 reserve − 0 = 80)
+    monkeypatch.setattr(sync_lambda, "_DEADLINE", _time.monotonic() + 200)
+    assert sync_lambda._query_budget_s(90) <= 80
+    # sliver → refuse before starting a query
+    monkeypatch.setattr(sync_lambda, "_DEADLINE", _time.monotonic() + 130)
+    with pytest.raises(RuntimeError):
+        sync_lambda._query_budget_s(180)
+
+
+def test_account_reachable_probe_is_remaining_time_clamped(monkeypatch):
+    """Round-10 gate: the prune-phase reachability probe must not inherit the 240s default —
+    it gets a short clamped budget, and when even that cannot fit ahead of the Aurora reserve
+    it refuses WITHOUT connecting and reports unreachable (conservative: last-good protected)."""
+    import time as _time
+    mod = sync_lambda
+    timeouts = []
+
+    class FakeConn:
+        def run(self, sql):
+            return [("111111111111",)]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_steampipe", lambda t=240: (timeouts.append(t), FakeConn())[1])
+    # plenty of remaining time → the short probe cap applies (never the 240s default)
+    monkeypatch.setattr(mod, "_DEADLINE", _time.monotonic() + 400)
+    assert mod._account_reachable("111111111111") is True
+    assert timeouts == [mod.REACHABILITY_PROBE_TIMEOUT_S]
+    # a sliver → refuse before connecting, report unreachable
+    connected = []
+    monkeypatch.setattr(mod, "_steampipe", lambda t=240: connected.append(t))
+    monkeypatch.setattr(mod, "_DEADLINE", _time.monotonic() + 125)
+    assert mod._account_reachable("111111111111") is False
+    assert connected == []
+
+
+def test_hydrate_fallback_log_is_sanitized(monkeypatch, capsys):
+    """Round-10 gate: the fallback event carries a bounded error_category + exception type,
+    NEVER raw exception text (which can embed role ARNs/account IDs/SQL — ADR-021 contract)."""
+    import json as _json
+    timeouts = []
+    secret_msg = ("AccessDenied: arn:aws:sts::999999999999:assumed-role/leaky is not "
+                  "authorized to perform iam:ListAttachedRolePolicies")
+    monkeypatch.setattr(
+        sync_lambda, "_steampipe",
+        _fake_steampipe_factory([RuntimeError(secret_msg), [["r1", "global"]]], timeouts))
+    rows, _cols, fallback_used = sync_lambda._run_steampipe_query(
+        "iam_role", sync_lambda.QUERIES["iam_role"][0])
+    assert fallback_used is True
+    events = [_json.loads(l) for l in capsys.readouterr().out.splitlines()
+              if '"inventory_sync_hydrate_fallback"' in l]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["error_category"] == "denial" and ev["error_type"] == "RuntimeError"
+    assert "error" not in ev
+    assert "999999999999" not in _json.dumps(ev)
+
+
+def test_hydrate_fallback_remedy_is_cause_specific():
+    """Round-9 L5 gate: rate tuning cannot fix a denial and a grant cannot fix a timeout —
+    the log remedy must name the right knob per cause."""
+    denial = sync_lambda._hydrate_fallback_remedy(RuntimeError(
+        "AccessDenied: user is not authorized to perform iam:ListAttachedRolePolicies"))
+    assert "grant iam:ListAttachedRolePolicies" in denial and "fill_rate" not in denial.split("(")[0]
+    timeout = sync_lambda._hydrate_fallback_remedy(RuntimeError(
+        "canceling statement due to statement timeout"))
+    assert "fill_rate" in timeout and "grant" not in timeout
+    unknown = sync_lambda._hydrate_fallback_remedy(RuntimeError("connection reset"))
+    assert "AccessDenied" in unknown and "fill_rate" in unknown
+
+
+def test_steampipe_conn_rejects_arbitrary_statement_timeouts(monkeypatch):
+    """_steampipe() interpolates the timeout into SQL — a bounded int is enforced with a real
+    ValueError BEFORE connecting (no -O elision, no leaked connection on a bad value)."""
+    calls = []
+    connected = []
+
+    class FakeConn:
+        def run(self, q):
+            calls.append(q)
+
+    def fake_connection(**kw):
+        connected.append(1)
+        return FakeConn()
+
+    monkeypatch.setattr(sync_lambda.pg8000.native, "Connection", fake_connection)
+    monkeypatch.setattr(sync_lambda, "_secret", lambda arn: "pw")
+    monkeypatch.setattr(sync_lambda, "_ssl_ctx", lambda: None)
+    monkeypatch.setenv("STEAMPIPE_SECRET_ARN", "arn:x")
+    monkeypatch.setenv("STEAMPIPE_HOST", "h")
+    sync_lambda._steampipe(180)
+    assert calls == ["SET statement_timeout = '180s'"]
+    for bad in ("180s", 0, 241, 9.5):
+        with pytest.raises(ValueError):
+            sync_lambda._steampipe(bad)
+    assert len(connected) == 1  # rejected values never opened a connection

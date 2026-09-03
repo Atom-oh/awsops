@@ -28,7 +28,7 @@ AWS + Kubernetes 운영 대시보드 (Steampipe, Next.js 14, Amazon Bedrock Agen
 ### Steampipe SQL
 - 쿼리 전 `information_schema.columns`로 컬럼명 확인
 - `$` 사용 금지 → `conditions::text LIKE '%..%'` 사용
-- SCP 차단 컬럼 금지 (list 쿼리): `mfa_enabled`, `attached_policy_arns`, Lambda `tags`
+- SCP 차단 컬럼 금지 (list 쿼리): `mfa_enabled`, `attached_policy_arns`, Lambda `tags` (ADR-010 2026-09-02 개정: v2 sync 한정, 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
 - 컬럼명 주의: `versioning_enabled` (S3), `class` alias (RDS), `trivy_scan_vulnerability`, `"group"` (ECS)
 
 ### AI Routing (10 Routes)

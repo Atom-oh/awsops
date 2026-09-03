@@ -15,6 +15,7 @@ import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import EcsCostBasisPanel from '@/components/inventory/EcsCostBasisPanel';
 import { EcsCostByService } from '@/components/inventory/metrics/EcsCostByService';
+import { S3BucketMap } from '@/components/inventory/S3BucketMap';
 import VpcResourceMap from '@/components/inventory/VpcResourceMap';
 import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes, RdsInstanceMetrics, DynamoTableMetrics, AlbMetrics, NlbMetrics, S3Metrics, EbsMetrics, Ec2Metrics, LambdaMetrics, TgwSection } from '@/components/inventory/NodeMetricsTables';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf, worstFirst } from '@/lib/inventory-types';
@@ -423,6 +424,8 @@ export default function InventoryTypePage() {
             {type === 'dynamodb' && <DynamoTableMetrics rows={filteredRows} />}
             {type === 'alb' && <AlbMetrics rows={filteredRows} />}
             {type === 'nlb' && <NlbMetrics rows={filteredRows} />}
+            {/* Bucket Map by Region (gap L241) — block click opens the same detail panel. */}
+            {type === 's3' && <S3BucketMap rows={filteredRows} isTruncated={isTruncated} onSelect={setSelected} />}
             {type === 's3' && <S3Metrics rows={filteredRows} />}
             {type === 'ebs_volume' && <EbsMetrics rows={filteredRows} />}
             {/* Cost by Service grouped bar (gap L195) + Cost Calculation Basis (gap L194). */}

@@ -293,7 +293,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'role_id', label: 'Role ID' }, { key: 'max_session_duration', label: 'Max session(s)' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'role_id', 'path', 'create_date', 'description'] },
-      { label: 'Access', keys: ['assume_role_policy', 'permissions_boundary_arn', 'max_session_duration', 'instance_profile_arns'] },
+      { label: 'Access', keys: ['assume_role_policy', 'permissions_boundary_arn', 'attached_policy_arns', 'max_session_duration', 'instance_profile_arns'] },
       { label: 'Activity', keys: ['role_last_used_date', 'role_last_used_region'] },
       { label: 'Tags', keys: ['tags'] },
     ],

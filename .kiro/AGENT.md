@@ -27,7 +27,7 @@ Browser → CloudFront (Lambda@Edge JWT) → ALB → EC2 t4g.2xlarge (Private Su
 2. **basePath**: `/awsops` — 모든 fetch URL에 `/awsops/api/*` 접두사 필수
 3. **Exports**: 모든 컴포넌트 `export default` — named export 금지
 4. **Colors**: StatsCard/LiveResourceCard color prop은 이름('cyan') — hex 금지
-5. **SQL**: `$` 사용 금지, SCP 차단 컬럼 금지 (mfa_enabled, attached_policy_arns, Lambda tags)
+5. **SQL**: `$` 사용 금지, SCP 차단 컬럼 금지 (mfa_enabled, attached_policy_arns, Lambda tags) (ADR-010 2026-09-02 개정: v2 sync 한정, 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
 6. **Docker**: arm64 필수 (`docker buildx --platform linux/arm64`)
 
 ## AI Routing (10 Routes)
