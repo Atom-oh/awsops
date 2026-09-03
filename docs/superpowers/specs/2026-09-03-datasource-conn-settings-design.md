@@ -136,3 +136,25 @@ Cache TTL / ClickHouse database — v1's Settings section).
   (an endpoint-only PATCH carries no historical stale timeoutS/database); the row update runs
   BEFORE the blob write/schema warm (a duplicate-name 409 no longer leaves a half-committed
   secret).
+
+## Round-5 corrections (review-driven)
+
+- **The host-change guard is unconditional (the gate MAJORs, collapsed)** — round 4's
+  "re-supplied" heuristic was bypassable by a PARTIAL creds object ({username} carried the
+  stored password to the new origin). On a host change, ALL credential keys (org_id included)
+  are now dropped from the merge base unconditionally; whatever the client genuinely
+  re-supplied is reinstated by the creds spread. And `creds` is KEY-ALLOWLISTED
+  (`pickCredKeys`: auth keys + org_id only) in POST and PATCH, with the validated
+  endpoint/authType placed AFTER the spread — `creds.endpoint`/`creds.database` can no longer
+  smuggle values into the blob (that injection became credential exfiltration only once the
+  merge existed).
+- **Leak-safe write order (the gate MAJOR)** — the sequence is now: name preflight (the only
+  unique-constraint field — a duplicate-name 409 commits nothing) → credential strip/rewrite →
+  row update → mirror refresh. If the secret write fails, the row still points at the OLD
+  host (old creds never transmit to the new one); if the row update fails after the blob
+  write, the stripped blob is fail-safe (unauthenticated), never a leak.
+- Minors: the ClickHouse Database field gets the same inline validation as the timeout
+  (identifier + system rejection — a typo errors visibly instead of silently clearing); the
+  guide's two still-true limitation facts (SELECT-only guard, 1,000-row cap) are restored in
+  4 locales (the deleted section's "private IPs blocked" claim was false and stays out —
+  ADR-007 deliberately allows private datasource endpoints).

@@ -73,6 +73,10 @@ export default function DatasourceForm({
   // a typo like 999 silently clearing the stored setting is surprising — fail loud instead).
   const timeoutInvalid = timeoutS.trim() !== ''
     && !(Number.isInteger(Number(timeoutS)) && Number(timeoutS) >= 1 && Number(timeoutS) <= 60);
+  const dbTrim = database.trim();
+  const databaseInvalid = kind === 'clickhouse' && dbTrim !== ''
+    && (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(dbTrim) || dbTrim.length > 128
+        || ['system', 'information_schema'].includes(dbTrim.toLowerCase()));
   const settingsPayload = () => {
     const out: { timeoutS?: number; database?: string } = {};
     const t = Number(timeoutS);
@@ -182,6 +186,7 @@ export default function DatasourceForm({
           <div>
             <label className={labelCls}>{tt('Database (선택)')}</label>
             <Input value={database} onChange={(e) => setDatabase(e.target.value)} placeholder="default" />
+            {databaseInvalid && <p className="mt-1 text-[11px] text-rose-600">{tt('영문/숫자/밑줄 식별자만 가능하며 system 계열은 사용할 수 없습니다.')}</p>}
           </div>
         )}
       </div>
@@ -200,7 +205,7 @@ export default function DatasourceForm({
       {err && <p className="text-[13px] text-rose-600">{err}</p>}
 
       <div className="flex gap-2 pt-1">
-        <Button onClick={save} disabled={saving || !name.trim() || !endpoint.trim() || timeoutInvalid}>{saving ? tt('저장 중…') : tt('저장')}</Button>
+        <Button onClick={save} disabled={saving || !name.trim() || !endpoint.trim() || timeoutInvalid || databaseInvalid}>{saving ? tt('저장 중…') : tt('저장')}</Button>
         <Button variant="secondary" onClick={onCancel}>{tt('취소')}</Button>
       </div>
     </div>

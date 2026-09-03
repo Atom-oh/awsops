@@ -210,6 +210,8 @@ AI 助手可以利用已注册的数据源执行分析。
 |------|--------|------|
 | **Database** | （服务器默认） | 默认数据库名 — 仅允许标识符；`system`/`information_schema` 会被拒绝（Web 层与连接器双重校验） |
 
+限制：ClickHouse 查询必须通过仅 SELECT 守卫（拦截表函数与 SYSTEM），返回行数上限为 1,000 行（`max_result_rows`）。
+
 ## Explore 页面
 
 在 Explore 页面中可以对已注册的数据源直接执行查询并可视化结果。支持 AI 查询生成和多序列图表。

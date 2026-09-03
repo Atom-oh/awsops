@@ -666,6 +666,7 @@ export const TERMS: Record<string, Pair> = {
   '기본 10': { en: 'default 10', zh: '默认 10', ja: 'デフォルト 10' },
   'Database (선택)': { en: 'Database (optional)', zh: 'Database（可选）', ja: 'Database（任意）' },
   '1–60 사이의 정수를 입력하세요.': { en: 'Enter an integer between 1 and 60.', zh: '请输入 1–60 之间的整数。', ja: '1–60 の整数を入力してください。' },
+  '영문/숫자/밑줄 식별자만 가능하며 system 계열은 사용할 수 없습니다.': { en: 'Identifier characters only (letters/digits/underscore); system databases are not allowed.', zh: '仅允许字母/数字/下划线标识符；不允许 system 系列数据库。', ja: '英数字とアンダースコアの識別子のみ使用でき、system 系データベースは使用できません。' },
   '마지막 sync 미성공 — 확정 수치 아님': { en: 'last sync not successful — not a confirmed number', zh: '上次同步未成功 — 非确定数值', ja: '直近の sync が未成功 — 確定値ではありません' },
   '동기화가 큐에 등록되었습니다 — 완료 보장은 아니며(실행 중인 타입은 건너뜀), 반영까지 수 분 걸릴 수 있습니다.': { en: 'Sync queued — an enqueue acknowledgement, not a completion guarantee (already-running types are skipped); data may take a few minutes.', zh: '同步已加入队列 — 仅为入队确认，并非完成保证（正在运行的类型会被跳过）；数据可能需要几分钟。', ja: '同期をキューに登録しました — 完了保証ではなく（実行中のタイプはスキップ）、反映まで数分かかる場合があります。' },
   '전체 동기화는 관리자 전용입니다.': { en: 'Sync-all is admin-only.', zh: '全量同步仅限管理员。', ja: '全体同期は管理者専用です。' },

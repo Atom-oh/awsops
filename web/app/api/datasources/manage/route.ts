@@ -17,6 +17,18 @@ import { currentAccountId } from '@/lib/account';
 export const dynamic = 'force-dynamic';
 
 const AUTH_TYPES = ['none', 'basic', 'bearer', 'custom_header'];
+// The only keys a client may place in the credential blob via `creds` — anything else
+// (endpoint/database/timeoutS/...) must come through its own validated field, never smuggled
+// through the creds spread (round-5: creds.endpoint would otherwise override the validated
+// endpoint in the blob without tripping the host-change guard).
+const CRED_KEYS = ['username', 'password', 'token', 'headerName', 'headerValue', 'headerName2', 'headerValue2', 'org_id'] as const;
+function pickCredKeys(input: unknown): Record<string, unknown> | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const o = input as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of CRED_KEYS) if (k in o) out[k] = o[k];
+  return out;
+}
 
 function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
@@ -59,7 +71,7 @@ export async function POST(request: Request) {
   const kind = typeof body.kind === 'string' ? body.kind : '';
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
   const authType = typeof body.authType === 'string' && AUTH_TYPES.includes(body.authType) ? body.authType : 'none';
-  const creds = (body.creds && typeof body.creds === 'object' && !Array.isArray(body.creds)) ? (body.creds as Record<string, unknown>) : {};
+  const creds = pickCredKeys(body.creds) ?? {};
   // gap L203: connection settings — sanitized (out-of-contract values are dropped, not errors)
   const settings = sanitizeDsSettings(body.settings);
 
@@ -98,7 +110,7 @@ export async function PATCH(request: Request) {
   const name = typeof body.name === 'string' ? body.name.trim() : undefined;
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : undefined;
   const authType = typeof body.authType === 'string' && AUTH_TYPES.includes(body.authType) ? body.authType : undefined;
-  const creds = (body.creds && typeof body.creds === 'object' && !Array.isArray(body.creds)) ? (body.creds as Record<string, unknown>) : undefined;
+  const creds = pickCredKeys(body.creds);
   // gap L203: settings update only when the key is present (absent ≠ clear; {} clears)
   const settings = body.settings !== undefined ? sanitizeDsSettings(body.settings) : undefined;
 
@@ -117,13 +129,19 @@ export async function PATCH(request: Request) {
   //    (write-only credentials must not become admin-extractable by pointing the row at a
   //    new host — the next query would transmit them there);
   //  - keys outside the EFFECTIVE authType are pruned (basic→none leaves no residue).
-  // Row update FIRST (round-4 minor): it can 409 on a duplicate name — the secret blob and
-  // the schema warm must not commit ahead of a failed row update.
-  try {
-    await updateDatasource(id, { name, endpoint, authType: authType as 'none' | undefined, settings });
-  } catch (e) {
-    const msg = (e as Error).message || 'update failed';
-    return json({ error: msg }, /duplicate/i.test(msg) ? 409 : 400);
+  // Write order (rounds 4–5): (1) name preflight — the only unique-constraint field — so a
+  // duplicate-name 409 commits nothing; (2) the CREDENTIAL strip/rewrite; (3) the row update
+  // (endpoint etc.). On a host change this order is the safe one: if the secret write fails,
+  // the row still points at the OLD host and the old credential never transmits to the new
+  // one; if the row update fails after the blob write, the stripped blob is fail-safe
+  // (unauthenticated), never a leak.
+  if (name !== undefined && name !== ds.name) {
+    try {
+      await updateDatasource(id, { name });
+    } catch (e) {
+      const msg = (e as Error).message || 'update failed';
+      return json({ error: msg }, /duplicate/i.test(msg) ? 409 : 400);
+    }
   }
   if (endpoint !== undefined || authType !== undefined || creds !== undefined || settings !== undefined) {
     // Merge base: for a migrated DEFAULT instance the credential can live only under the
@@ -138,30 +156,31 @@ export async function PATCH(request: Request) {
     // Basic material would transmit in cleartext); a malformed URL counts as changed.
     const originOf = (u: string | null | undefined): string | null => { try { return new URL(u ?? '').origin; } catch { return null; } };
     const hostChanged = endpoint !== undefined && originOf(endpoint) !== originOf(ds.endpoint);
-    const AUTH_KEYS = ['username', 'password', 'token', 'headerName', 'headerValue', 'headerName2', 'headerValue2'] as const;
-    // The UI always sends creds (possibly {}) — "re-supplied" means ACTUAL auth keys present,
-    // not the mere presence of the object (round-4 gate: creds:{} must not defeat the guard).
-    const credsSupplied = creds !== undefined && AUTH_KEYS.some((k) => k in creds);
-    if (hostChanged && !credsSupplied) {
-      for (const k of AUTH_KEYS) delete existing[k];
-      delete existing.org_id; // tenant id is host-scoped too
+    // On a host change, stored auth material is dropped UNCONDITIONALLY (round-5: a partial
+    // creds object like {username} must not carry the stored password to the new origin) —
+    // whatever the client genuinely re-supplied is reinstated by the creds spread below.
+    if (hostChanged) {
+      for (const k of CRED_KEYS) delete existing[k]; // org_id included — tenant id is host-scoped
     }
     const effAuth = authType ?? ds.authType ?? 'none';
     const KEEP_BY_AUTH: Record<string, readonly string[]> = {
       none: [], basic: ['username', 'password'], bearer: ['token'],
       custom_header: ['headerName', 'headerValue', 'headerName2', 'headerValue2'],
     };
-    for (const k of AUTH_KEYS) if (!(KEEP_BY_AUTH[effAuth] ?? []).includes(k)) delete existing[k];
+    for (const k of CRED_KEYS) if (k !== 'org_id' && !(KEEP_BY_AUTH[effAuth] ?? []).includes(k)) delete existing[k];
+    // creds is key-allowlisted (pickCredKeys) so nothing here can override the validated
+    // endpoint/authType/settings fields regardless of spread order.
     const blob = {
       ...existing,
+      ...(creds ?? {}),
       endpoint: endpoint ?? ds.endpoint ?? '',
       authType: effAuth,
-      ...(creds ?? {}),
       ...(settings ?? ds.settings),
     };
     await setIntegrationCredentialById(id, blob);
-    // updateDatasource (above) re-mirrored the PRE-PATCH blob for a default instance —
-    // refresh the kind mirror with the post-merge blob so the agent no-inline path stays live.
+    // updateDatasource (below) re-mirrors from the freshly written id blob for a default
+    // instance; this explicit refresh keeps the mirror correct even when the row update has
+    // nothing to change.
     if (ds.isDefault) await mirrorDefaultCredential(ds.kind, blob);
     // A database change (set OR clear) re-grounds AI query generation — mirror POST's
     // connect-time warm (best-effort; the 6h isSchemaStale refresh remains).
@@ -169,5 +188,11 @@ export async function PATCH(request: Request) {
       warmSchemaCache(id, ds.kind, blob as ConnConfig);
     }
   }
-  return json({ ok: true }, 200);
+  try {
+    await updateDatasource(id, { endpoint, authType: authType as 'none' | undefined, settings });
+    return json({ ok: true }, 200);
+  } catch (e) {
+    const msg = (e as Error).message || 'update failed';
+    return json({ error: msg }, 400);
+  }
 }

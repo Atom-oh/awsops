@@ -178,6 +178,36 @@ describe('PATCH update', () => {
     expect(blob2.username).toBe('n');
   });
 
+  it('a PARTIAL creds object on a host change carries only what was re-supplied (round-5)', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, endpoint: 'http://new.internal:9090', creds: { username: 'x' } }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.username).toBe('x');
+    expect(blob.password).toBeUndefined(); // the STORED password never follows the new origin
+  });
+
+  it('creds cannot smuggle endpoint/database keys into the blob (key allowlist, round-5)', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, creds: { endpoint: 'https://attacker.example', database: 'system', username: 'u2' } }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.endpoint).toBe('http://old:9090'); // the validated row endpoint, not the smuggled one
+    expect(blob.database).toBeUndefined();
+    expect(blob.username).toBe('u2');
+  });
+
+  it('a duplicate-name 409 commits NOTHING (name preflight before any write)', async () => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+    updateDatasource.mockRejectedValueOnce(new Error('duplicate datasource name'));
+    const { PATCH } = await import('./route');
+    const res = await PATCH(req({ id: 7, name: 'dupe', endpoint: 'http://new:9090', settings: { timeoutS: 5 } }, 'PATCH'));
+    expect(res.status).toBe(409);
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
+  });
+
   it('an https→http downgrade counts as a host change (origin compare — no cleartext transmit)', async () => {
     getCredentialById.mockResolvedValue({ endpoint: 'https://prom:9090', authType: 'basic', username: 'u', password: 'pw' });
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'https://prom:9090', authType: 'basic', isDefault: false, settings: {} });
