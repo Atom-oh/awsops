@@ -11,7 +11,7 @@ import Screenshot from '@site/src/components/Screenshot';
 A page for monitoring the status of ECS clusters, services, and tasks.
 
 :::info How this is served in v2
-v1 monitored clusters/services/tasks together on one page, but **v2 splits this into 3 separate inventory routes** — `/inventory/ecs_cluster`, `/inventory/ecs_service`, `/inventory/ecs_task`. The sidebar just groups the three under "Compute" — each is its own page with its own table, filters, and detail panel. The content below reflects this 3-route structure, not v1's unified page.
+v1 monitored clusters/services/tasks together on one page. v2's primary structure is 3 separate inventory routes (`/inventory/ecs_cluster`, `/inventory/ecs_service`, `/inventory/ecs_task` — each with its own table, filters, and detail panel), now complemented by a **unified overview page `/inventory/ecs`** (sidebar 'ECS Overview') showing the summary KPI band (cluster/service/task counts + tasks below desired), the clusters table, and the services table on one screen. The overview is a read-only glance layer — search/facets/detail live on the three type pages, reachable via each table's 'View all' link. Pages at or over 500 rows are labeled as a sample (no task-total rollup over a sample), a failed sync renders a stale-data caption, and pre-sync data reads 'not collected yet'.
 :::
 
 <Screenshot src="/screenshots/compute/ecs.png" alt="ECS" />

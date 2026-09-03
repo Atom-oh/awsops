@@ -1,0 +1,46 @@
+# ECS unified overview page — 1 gap-audit item (L216)
+
+**Status:** Batch 37, 2026-09-03 (continuing the owner's standing "merge on review pass, keep
+going" authorization). Branch `feat/batch37`.
+**WA pillar:** Operational Excellence (one-screen ECS posture: KPI + clusters + services).
+
+Closes gap-audit item (docs/v1-gap-audit-2026-07-19.md): L216 (클러스터+서비스 통합 단일
+페이지 뷰 — v1 showed summary KPI, cluster table, and service table on ONE screen; v2 splits
+them across three sidebar leaves with no ECS-subgroup overview).
+
+## Decisions
+
+- **Route**: NEW page `/inventory/ecs` (static route — Next.js static segments beat the
+  `/inventory/[type]` dynamic catch-all, and `ecs` is not an inventory type, so no spec/route
+  collision; the generic API route is untouched). Registered in the sidebar's existing ECS
+  subgroup as a `links` entry (the EKS-subgroup pattern; the sidebar renders a subgroup's
+  `types` before its `links`, so the overview link sits after the three type leaves), with a
+  new `nav.ecsOverview` key in all 4 languages. Pages 40 → 41.
+- **Component**: `web/components/inventory/EcsOverview.tsx` (components 109 → 110) — client
+  page, v1 parity on one screen:
+  - **KPI band**: cluster/service counts from the fetched pages themselves ('+' suffix at
+    the 500 cap — the tiles describe exactly what the tables below show), the task count from
+    `/api/inventory/summary` byType, plus service-health tiles derived from the
+    fetched service rows (running/desired task rollup; a desired>running mismatch tile is the
+    attention signal). Rollups render only when the service rows are loaded and the page is
+    NOT truncated — a 500-row sample must not present a fleet-wide sum as authoritative
+    (rendered with the `(표본 기준)` qualifier instead).
+  - **Clusters table**: from `/api/inventory/ecs_cluster?limit=500` — Name, Status,
+    Running/Pending tasks, Services, Instances, Region (the type page's own column set,
+    compacted). **Services table**: from `/api/inventory/ecs_service?limit=500` — Service,
+    Cluster (ARN leaf), Status, Desired/Running, Launch, Region. Each table header carries a
+    "전체 보기 →" link to its full type page (search/facets/detail live there — the overview
+    is read-only glance parity, row click intentionally NOT wired to DetailPanel to keep this
+    page thin; the deviation from v1's single do-everything page is disclosed here).
+  - **Honesty**: per-type sync-run status rides the existing `{rows, run}` API contract — a
+    non-succeeded run renders a stale-data caption on that table; `rows.length >= 500` labels
+    the table `(표본 기준)`; pre-sync (empty rows + no run) reads "미수집" rather than a
+    fabricated empty fleet.
+- **Docs**: docs-site container/ECS guide updated in 4 locales; api-reference unchanged (no
+  new API); CHANGELOG EN/KO; audit tick + dated batch-37 note.
+
+## Testing
+- EcsOverview: KPI derivation (counts, running/desired rollup gated on untruncated loaded
+  rows), truncation labels, stale-run caption, pre-sync state, table rendering.
+- Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; page/component
+  counts 40→41 / 109→110; nav key registered in 4 languages.
