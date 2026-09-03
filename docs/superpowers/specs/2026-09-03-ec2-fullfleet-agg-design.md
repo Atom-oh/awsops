@@ -74,3 +74,26 @@ the 500-row sample — silently inaccurate above 500 resources).
   total — a stale-but-succeeded aggregate reads authoritative); rows and aggregates are two
   unsynchronized reads; a beyond-the-sample filter selection shows an empty table without a
   'not in the loaded sample' hint.
+
+## Round-2 corrections (review-driven)
+
+- **The coverage claim is per-dimension precise (the gate MAJOR, 3/3 convergence)** — the
+  CHANGELOG/api-reference/audit note stated unconditional whole-fleet coverage while
+  `AGG_DERIVED_KEYS` permanently keeps lambda's runtime and dynamodb's billing PRIMARY
+  donuts (plus the ecs_task/opensearch/msk keys) sample-based, and 50+-value option lists
+  fall back to the sample. All three docs now state the per-dimension coverage, the sample
+  self-disclosure, and the fleet-total 기타 semantics.
+- **The superseded L110 bullet is amended in place (the gate MAJOR)** — the older
+  `[Unreleased]` entry still said the true total comes from the summary endpoint (this PR
+  replaced that fetch); the clause now points at the per-type aggregation endpoint, keeping
+  the still-true summary region-scope clause (EN + KO).
+- **docs-site resources/inventory guide updated in 4 locales (the gate MAJOR)** — the '상위
+  6개 + 기타' description gains the new semantics: full-fleet aggregation past the cap, 기타
+  against the fleet total, and the client-derived-dimension sample fallback with its title
+  qualifier.
+- Noted (minors, not shipped): `aggListComplete` cannot distinguish exactly-50 distinct
+  values from a capped list (conservative-safe — a 51-row fetch or truncation flag is the
+  tidier follow-up); the highlight cards' count-kind tiles ignore the capped flag
+  (pre-existing — `computeHighlights` applies it to percent kinds and RiskHero only); the
+  15s agg budget/concurrency bound and the row-path raw-error catch stay recorded
+  hardening follow-ups.
