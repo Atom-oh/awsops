@@ -132,6 +132,31 @@ class TestTools(unittest.TestCase):
         self.assertIn("FORMAT JSON", captured["body"])
         self.assertEqual(captured["headers"]["Authorization"][:6], "Basic ")
 
+    def test_database_setting_appends_validated_param(self):
+        # gap L203: a per-datasource default database rides the conn config → &database=
+        captured = {}
+
+        def fake_http(method, url, headers=None, body=None, timeout=None):
+            captured.update(url=url)
+            return 200, {"data": []}
+
+        ds = dict(DS, database="metrics_db")
+        with mock.patch.object(ch, "load_datasource", return_value=ds), \
+             mock.patch.object(ch, "http_json", side_effect=fake_http):
+            out = ch.lambda_handler({"tool_name": "clickhouse_query",
+                                     "arguments": {"sql": "SELECT 1"}}, None)
+        self.assertEqual(out["statusCode"], 200)
+        self.assertIn("&database=metrics_db", captured["url"])
+
+    def test_database_setting_rejects_non_identifier_before_request(self):
+        ds = dict(DS, database="bad-db; DROP")
+        with mock.patch.object(ch, "load_datasource", return_value=ds), \
+             mock.patch.object(ch, "http_json") as hj:
+            out = ch.lambda_handler({"tool_name": "clickhouse_query",
+                                     "arguments": {"sql": "SELECT 1"}}, None)
+        self.assertEqual(out["statusCode"], 400)
+        hj.assert_not_called()
+
     def test_query_rejects_non_readonly_before_request(self):
         with mock.patch.object(ch, "http_json") as hj:
             out = ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": "DROP TABLE t"}}, None)

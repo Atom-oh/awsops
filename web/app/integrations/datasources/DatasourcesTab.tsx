@@ -10,7 +10,7 @@ import DatasourceForm, { type DatasourceFormValue } from './DatasourceForm';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 interface Instance {
-  id: number; name: string; kind: string; endpoint?: string | null; authType?: string | null; isDefault?: boolean; connected?: boolean;
+  id: number; name: string; kind: string; endpoint?: string | null; authType?: string | null; isDefault?: boolean; connected?: boolean; settings?: { timeoutS?: number; database?: string };
 }
 
 // Chat section per datasource kind (the deep-link prompt pins it with a leading /section —
@@ -145,7 +145,7 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                     </Link>
                   )}
                   <Link href={`/integrations/datasources/${i.id}`} className="text-[12px] text-brand-600 hover:underline mr-3">Explore →</Link>
-                  {canManage && <button className="text-[12px] text-ink-600 hover:underline mr-3" onClick={() => setForm({ mode: 'edit', value: { id: i.id, name: i.name, kind: i.kind, endpoint: i.endpoint ?? '', authType: i.authType ?? 'none' } })}>Edit</button>}
+                  {canManage && <button className="text-[12px] text-ink-600 hover:underline mr-3" onClick={() => setForm({ mode: 'edit', value: { id: i.id, name: i.name, kind: i.kind, endpoint: i.endpoint ?? '', authType: i.authType ?? 'none', settings: i.settings } })}>Edit</button>}
                   {canManage && <button className="text-[12px] text-rose-600 hover:underline" onClick={() => onDelete(i)} disabled={busyId === i.id}>Delete</button>}
                 </td>
               </tr>

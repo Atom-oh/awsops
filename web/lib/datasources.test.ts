@@ -12,7 +12,7 @@ vi.mock('@/lib/integration-credentials', () => ({
 }));
 
 import {
-  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource, resolveConnConfig,
+  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource, resolveConnConfig, sanitizeDsSettings,
 } from './datasources';
 
 beforeEach(() => {
@@ -20,6 +20,20 @@ beforeEach(() => {
   getCredentialById.mockReset();
   mirrorDefaultCredential.mockReset();
   deleteCredentialKeys.mockReset();
+});
+
+describe('sanitizeDsSettings (gap L203)', () => {
+  it('keeps in-contract values and drops everything else', () => {
+    expect(sanitizeDsSettings({ timeoutS: 30, database: 'metrics_db' })).toEqual({ timeoutS: 30, database: 'metrics_db' });
+    expect(sanitizeDsSettings({ timeoutS: 0 })).toEqual({});
+    expect(sanitizeDsSettings({ timeoutS: 61 })).toEqual({});
+    expect(sanitizeDsSettings({ timeoutS: 10.5 })).toEqual({});
+    expect(sanitizeDsSettings({ database: 'bad-db; DROP' })).toEqual({});
+    expect(sanitizeDsSettings({ database: '1starts_with_digit' })).toEqual({});
+    expect(sanitizeDsSettings(null)).toEqual({});
+    expect(sanitizeDsSettings([1])).toEqual({});
+    expect(sanitizeDsSettings({ extra: 'x' })).toEqual({}); // unknown keys never pass through
+  });
 });
 
 describe('createDatasource', () => {

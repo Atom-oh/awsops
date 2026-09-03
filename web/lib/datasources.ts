@@ -13,6 +13,32 @@ import {
   deleteCredentialKeys,
 } from '@/lib/integration-credentials';
 
+// Gap L203 (v1 parity): per-datasource connection settings persisted on the row.
+// - timeoutS: upstream query execution bound in SECONDS (v1 used ms; v2 stores seconds to match
+//   the connectors' own clamps — prometheus/mimir forward it as the API `timeout` param under the
+//   connector's 12s HTTP timeout, clickhouse as `max_execution_time`).
+// - database: ClickHouse default database (identifier-only; other kinds ignore it).
+// v1's result-cache TTL is deliberately NOT ported — the v2 thin-BFF query path is uncached by
+// design (disclosed deviation in the gap audit).
+export interface DsSettings {
+  timeoutS?: number;
+  database?: string;
+}
+
+const DB_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Server-side validation: drop anything out of contract rather than erroring (a stale client
+ *  must not brick the form). timeoutS: int 1..60; database: bare identifier. Exported for tests. */
+export function sanitizeDsSettings(input: unknown): DsSettings {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const o = input as Record<string, unknown>;
+  const out: DsSettings = {};
+  const t = Number(o.timeoutS);
+  if (Number.isInteger(t) && t >= 1 && t <= 60) out.timeoutS = t;
+  if (typeof o.database === 'string' && DB_IDENTIFIER.test(o.database)) out.database = o.database;
+  return out;
+}
+
 export interface DatasourceRow {
   id: number;
   name: string;
@@ -21,6 +47,7 @@ export interface DatasourceRow {
   authType: AuthType | null;
   isDefault: boolean;
   enabled: boolean;
+  settings: DsSettings;
 }
 
 export interface CreateDatasourceInput {
@@ -28,10 +55,11 @@ export interface CreateDatasourceInput {
   kind: string;
   endpoint: string;
   authType: AuthType;
+  settings?: DsSettings;
 }
 
 const SELECT_COLS =
-  'id, name, kind, endpoint, ds_auth_type, is_default, enabled';
+  'id, name, kind, endpoint, ds_auth_type, is_default, enabled, ds_settings';
 
 function mapRow(r: Record<string, unknown>): DatasourceRow {
   return {
@@ -44,6 +72,8 @@ function mapRow(r: Record<string, unknown>): DatasourceRow {
     authType: (r.ds_auth_type as AuthType) ?? null,
     isDefault: Boolean(r.is_default),
     enabled: Boolean(r.enabled),
+    // re-sanitized on READ too — a hand-edited DB row can't smuggle an out-of-contract value
+    settings: sanitizeDsSettings(r.ds_settings),
   };
 }
 
@@ -57,11 +87,11 @@ export async function createDatasource(i: CreateDatasourceInput): Promise<number
   try {
     const { rows } = await getPool().query(
       `INSERT INTO integrations
-         (name, kind, direction, capability, endpoint, ds_auth_type, enabled, is_default)
+         (name, kind, direction, capability, endpoint, ds_auth_type, enabled, is_default, ds_settings)
        VALUES ($1, $2, 'egress', 'read', $3, $4, true,
-               NOT EXISTS (SELECT 1 FROM integrations WHERE kind = $2 AND is_default))
+               NOT EXISTS (SELECT 1 FROM integrations WHERE kind = $2 AND is_default), $5::jsonb)
        RETURNING id`,
-      [i.name, i.kind, i.endpoint, i.authType],
+      [i.name, i.kind, i.endpoint, i.authType, JSON.stringify(sanitizeDsSettings(i.settings))],
     );
     // node-pg returns BIGSERIAL as a STRING — coerce so callers get a real number. (The credential
     // write keys on String(id) and assertPositiveId requires an integer; a string id silently threw,
@@ -108,6 +138,9 @@ export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> 
     ...(cred ?? {}),
     ...(ds.endpoint ? { endpoint: ds.endpoint } : {}),
     ...(ds.authType ? { authType: ds.authType } : {}),
+    // gap L203: the ClickHouse default database rides the conn config (identifier-validated on
+    // write AND read; other kinds never set it) — the connector appends it as &database=.
+    ...(ds.kind === 'clickhouse' && ds.settings.database ? { database: ds.settings.database } : {}),
   } as ConnConfig;
 }
 
@@ -123,7 +156,7 @@ export async function getDefaultDatasource(kind: string): Promise<DatasourceRow 
  *  agent gateway no-inline path doesn't serve stale credentials. */
 export async function updateDatasource(
   id: number,
-  fields: { name?: string; endpoint?: string; authType?: AuthType },
+  fields: { name?: string; endpoint?: string; authType?: AuthType; settings?: DsSettings },
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [];
@@ -131,6 +164,7 @@ export async function updateDatasource(
   if (fields.name !== undefined) { sets.push(`name = $${n++}`); vals.push(fields.name); }
   if (fields.endpoint !== undefined) { sets.push(`endpoint = $${n++}`); vals.push(fields.endpoint); }
   if (fields.authType !== undefined) { sets.push(`ds_auth_type = $${n++}`); vals.push(fields.authType); }
+  if (fields.settings !== undefined) { sets.push(`ds_settings = $${n++}::jsonb`); vals.push(JSON.stringify(sanitizeDsSettings(fields.settings))); }
   if (sets.length) {
     vals.push(id);
     try {

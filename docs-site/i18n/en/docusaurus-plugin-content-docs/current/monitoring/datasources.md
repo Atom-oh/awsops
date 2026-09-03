@@ -53,9 +53,12 @@ Creating, editing, and deleting datasources requires an admin role. Admins are u
 | **Type** | Yes | Datasource type (select from 7 types) |
 | **URL** | Yes | Endpoint URL (e.g., `http://prometheus:9090`) |
 | **Authentication** | No | Auth method (None, Basic, Bearer Token, Custom Header) |
-| **Timeout** | No | Request timeout (default: 30s) |
-| **Cache TTL** | No | Cache time-to-live (default: 5min) |
-| **Database** | No | Database name (ClickHouse only) |
+| **Timeout** | No | Upstream query execution bound (seconds, 1–60 · default 10) — forwarded as the API `timeout` param for Prometheus/Mimir and `max_execution_time` for ClickHouse |
+| **Database** | No | Default database name (ClickHouse only, identifier-only) |
+
+:::note Difference from v1
+v1's result-cache TTL setting does not exist in v2 — the v2 query path is deliberately uncached (thin-BFF; a result cache would need its own staleness disclosure). The Timeout unit also changed from v1's ms to seconds (1–60).
+:::
 
 ### Steps
 

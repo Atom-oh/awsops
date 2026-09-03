@@ -57,9 +57,12 @@ AWSops 数据源功能对外部可观测性平台进行集中管理。注册数�
 | **Type** | O | 数据源类型（从 7 种中选择） |
 | **URL** | O | 端点 URL（例：`http://prometheus:9090`） |
 | **Authentication** | - | 认证方式（None、Basic、Bearer Token、Custom Header） |
-| **Timeout** | - | 请求超时（默认值：30 秒） |
-| **Cache TTL** | - | 缓存有效时间（默认值：5 分钟） |
-| **Database** | - | 数据库名称（ClickHouse 专用） |
+| **Timeout** | - | 上游查询执行上限（秒，1–60 · 默认 10）— Prometheus/Mimir 通过 API `timeout` 参数转发，ClickHouse 通过 `max_execution_time` 转发 |
+| **Database** | - | 默认数据库名称（仅 ClickHouse，仅允许标识符） |
+
+:::note 与 v1 的差异
+v2 中没有 v1 的结果缓存 TTL 设置 — v2 查询路径刻意不做缓存（thin-BFF；结果缓存需要自己的过期披露机制）。Timeout 单位也从 v1 的毫秒改为秒（1–60）。
+:::
 
 ### 添加步骤
 

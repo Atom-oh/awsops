@@ -604,7 +604,8 @@ const GROUPS: Record<string, GroupMeta> = {
       },
       {
         key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_service', 'ecs_task'],
-        // gap L216: unified one-screen overview (KPI + clusters + services) above the type leaves
+        // gap L216: unified one-screen overview (KPI + clusters + services) — renders AFTER the
+        // type leaves (the sidebar's fixed types-then-links order)
         links: [{ key: 'ecs-overview', href: '/inventory/ecs', labelKey: 'nav.ecsOverview' }],
       },
     ],
@@ -709,8 +710,8 @@ export function navTree(): NavGroupNode[] {
       .map((s) => ({
         key: s.key,
         labelKey: s.labelKey,
-        // types before links: no existing subgroup mixes both (eks is links-only, ecs is
-        // types-only) — this order lets the new securityGroup subgroup put the existing
+        // types before links (since gap L216, ecs mixes both: three type leaves then the
+        // /inventory/ecs overview link) — this order lets the new securityGroup subgroup put the existing
         // /inventory/security_group route first, followed by the Rules/Usage feature links, per
         // docs/superpowers/specs/2026-08-13-security-group-rules-usage-design.md's nav order.
         items: [

@@ -105,6 +105,13 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     # Node's JSON.parse. Numeric consumers coerce string counts client-side (CardDashboard
     # finiteCell) — precision-lossless for display, no connector-wide change needed.
     url = f"{base}/?readonly=1&max_result_rows={max_rows}&default_format=JSON"
+    # Gap L203: per-datasource default database (identifier-only, validated on BOTH sides —
+    # the web tier's sanitizeDsSettings on write/read AND here before URL interpolation).
+    database = ds.get("database")
+    if database:
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", str(database)):
+            return err("invalid database identifier in datasource settings")
+        url += f"&database={database}"
     if max_execution_time:
         url += f"&max_execution_time={max_execution_time}&timeout_overflow_mode=throw"
     headers = dict(auth_headers(ds))

@@ -57,9 +57,12 @@ AWSops 데이터소스 기능은 외부 관측성 플랫폼을 중앙에서 관�
 | **Type** | O | 데이터소스 유형 (7종 중 선택) |
 | **URL** | O | 엔드포인트 URL (예: `http://prometheus:9090`) |
 | **Authentication** | - | 인증 방식 (None, Basic, Bearer Token, Custom Header) |
-| **Timeout** | - | 요청 타임아웃 (기본값: 30초) |
-| **Cache TTL** | - | 캐시 유효 시간 (기본값: 5분) |
-| **Database** | - | 데이터베이스 이름 (ClickHouse 전용) |
+| **Timeout** | - | 업스트림 쿼리 실행 제한(초, 1–60 · 기본 10) — Prometheus/Mimir는 API `timeout` 파라미터로, ClickHouse는 `max_execution_time`으로 전달 |
+| **Database** | - | 기본 데이터베이스 이름 (ClickHouse 전용, 식별자만 허용) |
+
+:::note v1과의 차이
+v1의 결과 캐시 TTL 설정은 v2에 없습니다 — v2의 질의 경로는 의도적으로 캐시하지 않습니다(thin-BFF; 결과 캐시는 자체적인 staleness 공지 장치가 필요). Timeout 단위도 v1의 ms에서 초(1–60)로 바뀌었습니다.
+:::
 
 ### 추가 절차
 

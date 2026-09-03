@@ -38,6 +38,8 @@ export interface DatasourceFormValue {
   endpoint: string;
   authType: string;
   isDefault?: boolean;
+  // gap L203: per-datasource connection settings (server-side sanitized; see lib/datasources.ts)
+  settings?: { timeoutS?: number; database?: string };
 }
 
 export default function DatasourceForm({
@@ -50,6 +52,9 @@ export default function DatasourceForm({
   const [endpoint, setEndpoint] = useState(initial?.endpoint ?? '');
   const [authType, setAuthType] = useState(initial?.authType ?? 'none');
   const [creds, setCreds] = useState<Record<string, string>>({});
+  // gap L203: settings kept as strings for the inputs; settingsPayload() validates/coerces
+  const [timeoutS, setTimeoutS] = useState(initial?.settings?.timeoutS != null ? String(initial.settings.timeoutS) : '');
+  const [database, setDatabase] = useState(initial?.settings?.database ?? '');
   const [test, setTest] = useState<{ ok: boolean; ms?: number; error?: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -63,6 +68,14 @@ export default function DatasourceForm({
     if (authType === 'custom_header') { if (creds.headerName) c.headerName = creds.headerName; if (creds.headerValue) c.headerValue = creds.headerValue; if (creds.headerName2) c.headerName2 = creds.headerName2; if (creds.headerValue2) c.headerValue2 = creds.headerValue2; }
     if (ORG_ID_KINDS.has(kind) && creds.org_id) c.org_id = creds.org_id;
     return c;
+  };
+  // Out-of-range values are simply not sent (the server sanitizes again); an empty field clears.
+  const settingsPayload = () => {
+    const out: { timeoutS?: number; database?: string } = {};
+    const t = Number(timeoutS);
+    if (timeoutS.trim() !== '' && Number.isInteger(t) && t >= 1 && t <= 60) out.timeoutS = t;
+    if (kind === 'clickhouse' && database.trim()) out.database = database.trim();
+    return out;
   };
 
   const runTest = async () => {
@@ -83,8 +96,8 @@ export default function DatasourceForm({
     setSaving(true); setErr('');
     try {
       const body = editing
-        ? { id: initial!.id, name, endpoint, authType, creds: credPayload() }
-        : { name, kind, endpoint, authType, creds: credPayload() };
+        ? { id: initial!.id, name, endpoint, authType, creds: credPayload(), settings: settingsPayload() }
+        : { name, kind, endpoint, authType, creds: credPayload(), settings: settingsPayload() };
       const r = await fetch('/api/datasources/manage', {
         method: editing ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -153,6 +166,21 @@ export default function DatasourceForm({
       {ORG_ID_KINDS.has(kind) && (
         <div><label className={labelCls}>{tt('Org ID (X-Scope-OrgID, 선택)')}</label><Input value={creds.org_id ?? ''} onChange={(e) => setCred('org_id', e.target.value)} /></div>
       )}
+
+      {/* gap L203: per-datasource connection settings (v1 Settings section parity — v1's
+          result-cache TTL is deliberately not ported: the v2 query path is uncached by design) */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>{tt('Timeout (초, 1–60 · 선택)')}</label>
+          <Input value={timeoutS} onChange={(e) => setTimeoutS(e.target.value)} placeholder={tt('기본 10')} inputMode="numeric" />
+        </div>
+        {kind === 'clickhouse' && (
+          <div>
+            <label className={labelCls}>{tt('Database (선택)')}</label>
+            <Input value={database} onChange={(e) => setDatabase(e.target.value)} placeholder="default" />
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center gap-2 pt-1">
         <Button variant="secondary" onClick={runTest} disabled={testing || !endpoint.trim()}>

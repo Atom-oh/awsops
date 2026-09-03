@@ -57,9 +57,12 @@ AWSops のデータソース機能は、外部オブザーバビリティプラ�
 | **Type** | O | データソースのタイプ（7 種から選択） |
 | **URL** | O | エンドポイント URL（例: `http://prometheus:9090`） |
 | **Authentication** | - | 認証方式 (None, Basic, Bearer Token, Custom Header) |
-| **Timeout** | - | リクエストタイムアウト（デフォルト: 30 秒） |
-| **Cache TTL** | - | キャッシュ有効時間（デフォルト: 5 分） |
-| **Database** | - | データベース名（ClickHouse 専用） |
+| **Timeout** | - | アップストリームのクエリ実行上限（秒、1–60・デフォルト 10）— Prometheus/Mimir は API `timeout` パラメータ、ClickHouse は `max_execution_time` として転送 |
+| **Database** | - | デフォルトのデータベース名（ClickHouse 専用、識別子のみ） |
+
+:::note v1 との違い
+v1 の結果キャッシュ TTL 設定は v2 にはありません — v2 のクエリ経路は意図的にキャッシュしません（thin-BFF。結果キャッシュには独自の鮮度開示の仕組みが必要）。Timeout の単位も v1 の ms から秒（1–60）に変わりました。
+:::
 
 ### 追加手順
 

@@ -12,6 +12,7 @@ const upsertSchema = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/datasources', () => ({
+  sanitizeDsSettings: (x: unknown) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
   createDatasource: (...a: unknown[]) => createDatasource(...a),
   updateDatasource: (...a: unknown[]) => updateDatasource(...a),
   getDatasource: (...a: unknown[]) => getDatasource(...a),
@@ -97,6 +98,15 @@ describe('POST create', () => {
     expect((await POST(req({ name: 'x', kind: 'notion', endpoint: 'http://10.0.0.5' }))).status).toBe(400);
     expect((await POST(req({ kind: 'loki', endpoint: 'http://10.0.0.5' }))).status).toBe(400);
   });
+
+  it('gap L203: settings ride create into createDatasource', async () => {
+    createDatasource.mockResolvedValue(11);
+    getDatasource.mockResolvedValue({ id: 11, kind: 'clickhouse', isDefault: false });
+    const { POST } = await import('./route');
+    const res = await POST(req({ name: 'ch', kind: 'clickhouse', endpoint: 'http://10.0.0.5:8123', settings: { timeoutS: 30, database: 'metrics' } }));
+    expect(res.status).toBe(201);
+    expect(createDatasource.mock.calls[0][0].settings).toEqual({ timeoutS: 30, database: 'metrics' });
+  });
 });
 
 describe('PATCH update', () => {
@@ -112,5 +122,15 @@ describe('PATCH update', () => {
     expect(resp.status).toBe(200);
     expect(setIntegrationCredentialById).toHaveBeenCalledWith(7, { endpoint: 'http://10.0.0.9:9090', authType: 'none' });
     expect(updateDatasource).toHaveBeenCalled();
+  });
+
+  it('gap L203: settings pass on PATCH only when present (absent ≠ clear; {} clears)', async () => {
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, settings: { timeoutS: 15 } }, 'PATCH'));
+    expect(updateDatasource.mock.calls.at(-1)![1].settings).toEqual({ timeoutS: 15 });
+    await PATCH(req({ id: 7, name: 'renamed' }, 'PATCH'));
+    expect(updateDatasource.mock.calls.at(-1)![1].settings).toBeUndefined();
+    await PATCH(req({ id: 7, settings: {} }, 'PATCH'));
+    expect(updateDatasource.mock.calls.at(-1)![1].settings).toEqual({});
   });
 });

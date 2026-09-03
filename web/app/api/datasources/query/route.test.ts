@@ -93,6 +93,30 @@ describe('POST /api/datasources/query', () => {
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
   });
 
+  // gap L203: per-datasource timeout setting
+  it('an instance timeoutS rides prometheus args (capped at 10s under the connector HTTP timeout)', async () => {
+    getDatasource.mockResolvedValue({ id: 3, kind: 'prometheus', settings: { timeoutS: 5 } });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom.internal:9090' });
+    invokeMcpLambdaTool.mockResolvedValue({ resultType: 'vector', result: [] });
+    const { POST } = await import('./route');
+    await POST(req({ id: 3, query: 'up' }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].args.timeout).toBe('5s');
+    getDatasource.mockResolvedValue({ id: 3, kind: 'prometheus', settings: { timeoutS: 60 } });
+    await POST(req({ id: 3, query: 'up' }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].args.timeout).toBe('10s'); // capped
+  });
+
+  it('an instance timeoutS becomes clickhouse max_execution_time (uncapped to the connector clamp)', async () => {
+    getDatasource.mockResolvedValue({ id: 4, kind: 'clickhouse', settings: { timeoutS: 30 } });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch.internal:8123' });
+    invokeMcpLambdaTool.mockResolvedValue({ rows: [] });
+    const { POST } = await import('./route');
+    await POST(req({ id: 4, query: 'SELECT 1' }));
+    const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
+    expect(call.args.max_execution_time).toBe(30);
+    expect(call.args.timeout).toBeUndefined();
+  });
+
   it('connector error → 502 with a clean message', async () => {
     invokeMcpLambdaTool.mockRejectedValue(new Error('connector prometheus error'));
     const { POST } = await import('./route');

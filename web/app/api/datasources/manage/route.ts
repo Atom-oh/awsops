@@ -4,7 +4,7 @@
 // no-inline path resolves to it. SECURITY: the credential value is never logged or echoed.
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
-import { createDatasource, updateDatasource, getDatasource } from '@/lib/datasources';
+import { createDatasource, updateDatasource, getDatasource, sanitizeDsSettings } from '@/lib/datasources';
 import { setIntegrationCredentialById, mirrorDefaultCredential } from '@/lib/integration-credentials';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
@@ -60,6 +60,8 @@ export async function POST(request: Request) {
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
   const authType = typeof body.authType === 'string' && AUTH_TYPES.includes(body.authType) ? body.authType : 'none';
   const creds = (body.creds && typeof body.creds === 'object' && !Array.isArray(body.creds)) ? (body.creds as Record<string, unknown>) : {};
+  // gap L203: connection settings — sanitized (out-of-contract values are dropped, not errors)
+  const settings = sanitizeDsSettings(body.settings);
 
   if (!name) return json({ error: 'name required' }, 400);
   if (!isDatasourceKind(kind)) return json({ error: 'unknown datasource kind' }, 400);
@@ -68,7 +70,7 @@ export async function POST(request: Request) {
 
   const blob = { endpoint, authType, ...creds };
   try {
-    const id = await createDatasource({ name, kind, endpoint, authType: authType as 'none' });
+    const id = await createDatasource({ name, kind, endpoint, authType: authType as 'none', settings });
     await setIntegrationCredentialById(id, blob);
     const ds = await getDatasource(id);
     if (ds?.isDefault) await mirrorDefaultCredential(kind, blob); // first of its kind → it is the default
@@ -95,6 +97,8 @@ export async function PATCH(request: Request) {
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : undefined;
   const authType = typeof body.authType === 'string' && AUTH_TYPES.includes(body.authType) ? body.authType : undefined;
   const creds = (body.creds && typeof body.creds === 'object' && !Array.isArray(body.creds)) ? (body.creds as Record<string, unknown>) : undefined;
+  // gap L203: settings update only when the key is present (absent ≠ clear; {} clears)
+  const settings = body.settings !== undefined ? sanitizeDsSettings(body.settings) : undefined;
 
   if (endpoint !== undefined) {
     try { assertDatasourceEndpointAllowed(endpoint); } catch (e) { return json({ error: (e as Error).message }, 400); }
@@ -109,7 +113,7 @@ export async function PATCH(request: Request) {
     await setIntegrationCredentialById(id, blob);
   }
   try {
-    await updateDatasource(id, { name, endpoint, authType: authType as 'none' | undefined });
+    await updateDatasource(id, { name, endpoint, authType: authType as 'none' | undefined, settings });
     return json({ ok: true }, 200);
   } catch (e) {
     const msg = (e as Error).message || 'update failed';
