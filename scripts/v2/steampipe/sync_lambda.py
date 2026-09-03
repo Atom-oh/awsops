@@ -131,14 +131,16 @@ QUERIES = {
         # accounts, through the shared 2 req/s awsops_global limiter (bucket_size 4). At the
         # default fill_rate the 180s hydrate budget below covers roughly (180*2)+4 ≈ 360
         # aggregate roles if the limiter is otherwise idle — LESS under concurrent type syncs
-        # (one limiter for everything). Fleets beyond that must raise the fill_rate knob
-        # (0.1–20, ADR-021 Phase-1 defaults) — the fallback log event names it. If the
-        # hydrated query fails (budget, SCP-blocked hydrate, anything), sync() retries ONCE
-        # with HYDRATE_FALLBACK_SQL (same columns minus the hydrate) so the BASE iam_role
-        # inventory never regresses; only the drill-down column is absent, which its sole
-        # consumer (the S3 IAM-access section) renders as "not synced yet" — the ADR-010
-        # 2026-09-02 amendment's disclosed degrade. Whole-type last-good freeze remains only
-        # if the base query ALSO fails.
+        # (one limiter for everything). If the hydrated query fails (budget timeout,
+        # SCP-blocked hydrate, anything), sync() retries ONCE with HYDRATE_FALLBACK_SQL (same
+        # columns minus the hydrate) so the BASE iam_role inventory never regresses; only the
+        # drill-down column is absent, and the run is DISCLOSED as degraded via
+        # unknown_attribute_count (ADR-021 freshness machinery) plus the
+        # inventory_sync_hydrate_fallback log event, whose remedy is cause-specific: budget
+        # timeout → raise the limiter fill_rate (0.1–20, ADR-021 Phase-1 defaults); SCP/IAM
+        # denial → grant iam:ListAttachedRolePolicies (rate tuning cannot fix a denial).
+        # Whole-type last-good freeze remains only if the base query ALSO fails — the ADR-010
+        # 2026-09-02 amendment's disclosed semantics.
         "SELECT name, region, account_id, arn, role_id, create_date, path, description, "
         "max_session_duration, role_last_used_date, role_last_used_region, instance_profile_arns, "
         "permissions_boundary_arn, assume_role_policy, attached_policy_arns, tags "
@@ -440,10 +442,14 @@ QUERIES = {
 # The fallback re-upserts every row's data JSON wholesale, so the hydrate column disappears from
 # ALL rows consistently — its consumer (S3IamAccessSection) detects the absent column and renders
 # the non-conclusive "not synced yet" state instead of a stale or false claim.
-# Budget split (Lambda timeout 300s): the hydrated attempt gets 180s (≈360 aggregate role-hydrates
-# at the default 2 req/s + bucket 4, limiter idle), the fallback 90s (plain paginated ListRoles —
-# a handful of calls per account), leaving ~30s for Aurora upserts/prune. The fallback log event
-# names the fill_rate knob so the operator can restore hydration for larger fleets.
+# Budget split (Lambda timeout 420s): the hydrated attempt gets ≤180s (≈360 aggregate
+# role-hydrates at the default 2 req/s + bucket 4, limiter idle), the fallback ≤90s (plain
+# paginated ListRoles — a handful of calls per account), leaving ≥150s for Aurora upserts +
+# two-phase prune + snapshots + finalizer (AURORA_RESERVE_S) — and every budget is further
+# clamped to the invocation's actual remaining time (_query_budget_s), so a query is refused
+# up-front rather than started when it could race the Lambda wall and strand the ledger at
+# 'running'. The fallback log event's remedy is cause-specific (fill_rate for budget timeouts,
+# a permission grant for SCP/IAM denials).
 HYDRATE_FALLBACK_SQL = {
     "iam_role": (
         "SELECT name, region, account_id, arn, role_id, create_date, path, description, "
@@ -452,8 +458,37 @@ HYDRATE_FALLBACK_SQL = {
         "FROM aws_iam_role ORDER BY create_date DESC"
     ),
 }
-HYDRATE_STATEMENT_TIMEOUT = "180s"
-HYDRATE_FALLBACK_STATEMENT_TIMEOUT = "90s"
+HYDRATE_STATEMENT_TIMEOUT_S = 180
+HYDRATE_FALLBACK_STATEMENT_TIMEOUT_S = 90
+DEFAULT_STATEMENT_TIMEOUT_S = 240
+# Post-query Aurora reserve (round-9 gate): per-row upserts + the two-phase prune's full
+# existing-rows scan + snapshots + the finalizer all run OUTSIDE the statement-timeout budgets,
+# so query budgets are clamped to (remaining Lambda time − this reserve) — a query never starts
+# if it could strand the ledger at 'running' by racing the Lambda wall.
+AURORA_RESERVE_S = 120
+_MIN_QUERY_BUDGET_S = 15
+
+# Wall-clock deadline for the CURRENT invocation (monotonic seconds), set by lambda_handler
+# from context.get_remaining_time_in_millis(). None (e.g. unit tests, local runs) disables the
+# remaining-time clamp and the fixed caps apply alone.
+_DEADLINE = None
+
+
+def _query_budget_s(cap_s, also_reserve_s=0):
+    """Clamp a statement-timeout cap to the remaining Lambda time minus the Aurora reserve
+    (and, for a hydrated attempt, minus the fallback's own budget so the retry always fits).
+    Raises instead of returning a sliver: failing fast records 'failed' cleanly, whereas a
+    query racing the Lambda wall would hard-kill the process mid-write."""
+    if _DEADLINE is None:
+        return cap_s
+    remaining = _DEADLINE - time.monotonic()
+    budget = int(min(cap_s, remaining - AURORA_RESERVE_S - also_reserve_s))
+    if budget < _MIN_QUERY_BUDGET_S:
+        raise RuntimeError(
+            f"insufficient remaining Lambda time for a Steampipe query "
+            f"(remaining={remaining:.0f}s, reserve={AURORA_RESERVE_S + also_reserve_s}s)"
+        )
+    return budget
 
 
 # ---- SDK-sourced inventory (NOT Steampipe) ---------------------------------------------------
@@ -921,19 +956,23 @@ def _aurora():
                                     port=5432, ssl_context=_ssl_ctx())
 
 
-def _steampipe(statement_timeout="240s"):
+def _steampipe(statement_timeout_s=DEFAULT_STATEMENT_TIMEOUT_S):
+    # Validate BEFORE connecting (a plain int seconds in a bounded range — the value is
+    # interpolated into SET, so this is also the injection guard; a real exception, not an
+    # assert, so -O can't elide it and no connection leaks on a bad value).
+    if not isinstance(statement_timeout_s, int) or not (1 <= statement_timeout_s <= DEFAULT_STATEMENT_TIMEOUT_S):
+        raise ValueError(f"statement_timeout_s out of range: {statement_timeout_s!r}")
     conn = pg8000.native.Connection(user="steampipe", password=_secret(os.environ["STEAMPIPE_SECRET_ARN"]).strip(),
                                     host=os.environ["STEAMPIPE_HOST"], database="steampipe",
                                     port=9193, ssl_context=_ssl_ctx())
     # Remaining-time guard (round-5 gate, with the iam_role hydrate column): a query that
     # outlives the Lambda would hard-timeout the process BEFORE the failure handler runs,
-    # leaving the ledger row 'running' forever. statement_timeout below the 300s Lambda
-    # budget makes the DB kill the query first — control returns, and the run either falls
-    # back hydrate-free (HYDRATE_FALLBACK_SQL types) or records 'failed' with last-good rows
-    # preserved (ADR-010 2026-09-02 amendment semantics). Hydrate-carrying queries pass a
-    # TIGHTER timeout so their fallback attempt still fits inside the Lambda budget.
-    assert statement_timeout in ("240s", HYDRATE_STATEMENT_TIMEOUT, HYDRATE_FALLBACK_STATEMENT_TIMEOUT)
-    conn.run(f"SET statement_timeout = '{statement_timeout}'")
+    # leaving the ledger row 'running' forever. A statement_timeout below the Lambda budget
+    # makes the DB kill the query first — control returns, and the run either falls back
+    # hydrate-free (HYDRATE_FALLBACK_SQL types) or records 'failed' with last-good rows
+    # preserved. Callers size the value via _query_budget_s (remaining time minus the Aurora
+    # reserve), so the budget shrinks as the invocation ages instead of racing the wall.
+    conn.run(f"SET statement_timeout = '{statement_timeout_s}s'")
     return conn
 
 
@@ -1124,18 +1163,38 @@ def _finalize_sync_ledger(
                 pass
 
 
+def _hydrate_fallback_remedy(exc):
+    """Cause-specific operator guidance for the fallback log event: rate tuning cannot fix an
+    IAM/SCP denial, and a permission grant cannot fix a budget timeout — name the right knob."""
+    msg = str(exc)
+    if "AccessDenied" in msg or "not authorized" in msg or "UnauthorizedOperation" in msg:
+        return ("SCP/IAM denial — grant iam:ListAttachedRolePolicies to the scanned accounts' "
+                "read role (raising the limiter fill_rate cannot fix a denial)")
+    if "statement timeout" in msg or "canceling statement" in msg:
+        return ("hydrate budget exceeded (aggregate role count across all connected accounts) — "
+                "raise the steampipe limiter fill_rate (0.1-20, ADR-021 knobs)")
+    return ("unclassified — if it repeats: AccessDenied => grant iam:ListAttachedRolePolicies; "
+            "statement timeout => raise the limiter fill_rate (ADR-021)")
+
+
 def _run_steampipe_query(resource_type, sql):
     """Execute one inventory query, with the hydrate-budget fallback for types that carry a
     per-row list hydrate: if the hydrated query fails for ANY reason (statement_timeout from
     an aggregate role count above the limiter budget, an SCP-blocked hydrate, a transient
     error), retry ONCE hydrate-free so the base inventory never regresses to a permanent
-    whole-type failure. The operator restores hydration by raising the shared limiter's
-    fill_rate (0.1–20; ADR-021 Phase-1 defaults, spc_render.py) — the log event names it."""
+    whole-type failure. Returns (rows, cols, fallback_used) — the caller MUST disclose a
+    fallback run through unknown_attribute_count so ADR-021's succeeded+unknowns→degraded
+    freshness machinery reaches every reader, not just the S3 section's column check."""
     fallback_sql = HYDRATE_FALLBACK_SQL.get(resource_type)
     try:
-        sdb = _steampipe(HYDRATE_STATEMENT_TIMEOUT if fallback_sql else "240s")
+        if fallback_sql:
+            budget = _query_budget_s(HYDRATE_STATEMENT_TIMEOUT_S,
+                                     also_reserve_s=HYDRATE_FALLBACK_STATEMENT_TIMEOUT_S)
+        else:
+            budget = _query_budget_s(DEFAULT_STATEMENT_TIMEOUT_S)
+        sdb = _steampipe(budget)
         try:
-            return sdb.run(sql), [c["name"] for c in sdb.columns]
+            return sdb.run(sql), [c["name"] for c in sdb.columns], False
         finally:
             sdb.close()  # close even if the Steampipe query throws
     except Exception as hydrate_exc:
@@ -1145,11 +1204,11 @@ def _run_steampipe_query(resource_type, sql):
             "inventory_sync_hydrate_fallback",
             resource_type=resource_type,
             error=str(hydrate_exc)[:400],
-            remedy="raise steampipe limiter fill_rate (ADR-021) to restore hydrate columns",
+            remedy=_hydrate_fallback_remedy(hydrate_exc),
         )
-        sdb = _steampipe(HYDRATE_FALLBACK_STATEMENT_TIMEOUT)
+        sdb = _steampipe(_query_budget_s(HYDRATE_FALLBACK_STATEMENT_TIMEOUT_S))
         try:
-            return sdb.run(fallback_sql), [c["name"] for c in sdb.columns]
+            return sdb.run(fallback_sql), [c["name"] for c in sdb.columns], True
         finally:
             sdb.close()
 
@@ -1221,8 +1280,17 @@ def sync(resource_type):
                     sql = sql.replace("{owner_ids}", _owner_ids_in(adb))
                 if "{account_id}" in sql:  # legacy single-account literal pushdown
                     sql = _inject_account(sql, _caller_account())
-                rows, cols = _run_steampipe_query(resource_type, sql)
+                rows, cols, hydrate_fallback_used = _run_steampipe_query(resource_type, sql)
                 recs = [dict(zip(cols, r)) for r in rows]
+                if hydrate_fallback_used:
+                    # ADR-021 disclosure (round-9 gate): every row is missing the hydrate
+                    # attribute, so a fallback run is a succeeded-but-degraded sweep — the
+                    # unknown-attribute count rides the existing succeeded+unknowns→degraded
+                    # freshness machinery (ledger column, terminal event, MCP reader), the
+                    # same channel the SDK collectors use. Without this, query_inventory/
+                    # inventory_summary would report 'healthy' while a security column is
+                    # blinded fleet-wide.
+                    sdk_unknown_attrs = len(recs)
             # EBS snapshots: the OwnerIds IN-list can surface snapshots SHARED into a connection but
             # owned by another enabled account; keep only those the connection actually OWNS
             # (owner_id == account_id) so each snapshot is attributed once, to its true owner.
@@ -1488,6 +1556,11 @@ def sync(resource_type):
 
 
 def lambda_handler(event, ctx):
+    # Arm the remaining-time clamp for this invocation (see _query_budget_s). getattr-guarded
+    # so local/test invocations with a bare ctx object simply run without the clamp.
+    global _DEADLINE
+    remaining_ms = getattr(ctx, "get_remaining_time_in_millis", lambda: None)()
+    _DEADLINE = (time.monotonic() + remaining_ms / 1000.0) if remaining_ms else None
     rtype = (event or {}).get("type", "all")
     if rtype == "all":
         types = list(QUERIES) + list(SDK_SYNCS)

@@ -124,7 +124,9 @@ export function S3IamAccessSection({ accountId }: { accountId?: string }) {
     // conclusive requires a SUCCEEDED, untruncated run — run:null (no ledger row, e.g.
     // pre-ADR-021 data) is NOT healthy enough for an all-clear
     const conclusive = !state.truncated && fresh;
-    return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{conclusive ? tt('검사 대상 관리형 정책(AmazonS3*/Admin/PowerUser/ReadOnly)에 일치하는 role이 없습니다 — 다른 정책 경유 S3 접근은 별도 확인 필요.') : tt('표본/마지막 성공 데이터 내 일치하는 role이 없습니다 — 확정 아님.')}</p></>;
+    // the conclusive all-clear carries its data-as-of time too (the CHANGELOG-promised
+    // footer must not exist only on the hits path)
+    return <>{heading}{staleBanner}<p className="text-[12px] text-ink-400">{conclusive ? tt('검사 대상 관리형 정책(AmazonS3*/Admin/PowerUser/ReadOnly)에 일치하는 role이 없습니다 — 다른 정책 경유 S3 접근은 별도 확인 필요.') : tt('표본/마지막 성공 데이터 내 일치하는 role이 없습니다 — 확정 아님.')}{dataAsOf ? ` (${tt('기준:')} ${new Date(dataAsOf).toLocaleString()})` : ''}</p></>;
   }
   return (
     <>

@@ -25,10 +25,10 @@ steampipe query "SELECT column_name FROM information_schema.columns WHERE table_
 
 | 차단된 API | 영향 | 해결 |
 |-----------|------|------|
-| `iam:ListMFADevices` | mfa_enabled 컬럼 조회 실패 → 전체 쿼리 실패 | mfa_enabled 참조 제거 |
+| `iam:ListMFADevices` | mfa_enabled 컬럼 조회 실패 → 전체 쿼리 실패 | v2 sync는 폴백 없이 유지 중(ADR-010 개정 前 선례) — 차단 시 iam_user run 전체 failed·last-good 동결, 필요하면 컬럼 제거 |
 | `lambda:GetFunction` | tags 컬럼 hydrate 실패 → 전체 쿼리 실패 | tags 참조 제거 (list 쿼리) |
 | `iam:ListAttachedUserPolicies` | iam_user attached_policy_arns 조회 실패 | 컬럼 제거 (기본 규칙) |
-| `iam:ListAttachedRolePolicies` | iam_role attached_policy_arns 조회 실패 | ADR-010 2026-09-02 개정 경로로 위험 수용·공지됨 — SCP 차단 시 해당 타입 run 전체 failed·last-good 동결 |
+| `iam:ListAttachedRolePolicies` | iam_role attached_policy_arns 하이드레이트 실패 | ADR-010 2026-09-02 개정 경로로 위험 수용·공지됨 — 하이드레이트-프리 폴백 1회 재시도로 기본 인벤토리 유지·컬럼만 부재(run은 succeeded + unknown_attribute_count로 degraded 공개, inventory_sync_hydrate_fallback 로그의 remedy가 원인별 조치 안내: SCP 거부→권한 부여, timeout→fill_rate 상향); 기본 쿼리까지 실패 시에만 run 전체 failed·last-good 동결 |
 
 **aws.spc 설정으로 에러 무시:**
 ```hcl

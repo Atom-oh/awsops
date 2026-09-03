@@ -101,6 +101,9 @@ Steampipe 시작/재생성 시 `steampipe_limiter_config` JSON 이벤트가 effe
 
 At Steampipe startup/regeneration, `steampipe_limiter_config` records the effective `max_concurrency`, `bucket_size`, and `fill_rate`. The Phase 1 sync Lambda emits `inventory_sync_dispatch`, `inventory_sync_complete`, `inventory_sync_busy`, and `inventory_sync_failed`. Full success emits `inventory_sync_complete` with `degraded=false`, `freshness=healthy`, and `age_minutes=0`. An unreachable-account partial completion uses the same complete event with `degraded=true`, `freshness=degraded`, `age_minutes=null`, and only `unreachable_account_count`; account IDs are never logged. Failures include only a safe `error_category`/type, not raw error text.
 
+(2026-09-02 추가 — ADR-010 개정 연동) `inventory_sync_hydrate_fallback` — 하이드레이트 컬럼 쿼리(현재 `iam_role.attached_policy_arns`)가 실패해 하이드레이트-프리 폴백으로 완료된 run을 기록한다. 이 run은 `succeeded`이되 `unknown_attribute_count`(행 수)로 blind 상태가 공개되어 본 ADR의 `succeeded+unknowns→degraded` freshness 채널을 그대로 탄다. event의 `remedy`는 원인별이다: statement timeout → 리미터 `fill_rate` 상향; SCP/IAM 거부 → `iam:ListAttachedRolePolicies` 권한 부여.
+(Added 2026-09-02, paired with the ADR-010 amendment) `inventory_sync_hydrate_fallback` records a run completed via the hydrate-free fallback (currently `iam_role.attached_policy_arns`): the run is `succeeded` but discloses the blind spot through `unknown_attribute_count` (the row count), riding this ADR's `succeeded+unknowns→degraded` freshness channel. The event's `remedy` is cause-specific: statement timeout → raise the limiter `fill_rate`; SCP/IAM denial → grant `iam:ListAttachedRolePolicies`.
+
 ## 6 기둥 / Six Pillars
 
 - **신뢰성 / Reliability:** shared limiter와 backpressure가 읽기 burst의 throttling 영향을 줄인다.

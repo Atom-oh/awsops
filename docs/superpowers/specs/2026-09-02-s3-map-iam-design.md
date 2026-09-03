@@ -20,10 +20,12 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
 - **L242** — two parts:
   - **Sync**: `iam_role` gains `attached_policy_arns` (verified against the pinned plugin
     source — a per-row `ListAttachedRolePolicies` hydrate; ADR-010's list-hydrate rule is
-    AMENDED in this PR with the TRUE failure semantics: an SCP-blocked hydrate fails the
-    WHOLE iam_role run for all accounts (last-good rows preserved but frozen, status failed —
-    the accepted, disclosed blast radius; the consuming section surfaces the run status)).
-    Visible after the sync terraform apply + a sync run.
+    AMENDED in this PR. Failure semantics as amended by round 8: a failed hydrate (SCP block
+    or aggregate-role-count budget timeout) triggers ONE hydrate-free retry — the base
+    inventory stays live, only the column is absent, and the run is disclosed degraded via
+    unknown_attribute_count [round 9]; the whole-type last-good freeze applies only when the
+    base query also fails; the consuming section surfaces the run status). Visible after the
+    sync terraform apply + a sync run.
   - **Panel**: new `S3IamAccessSection` in DetailPanel (s3 rows only): fetches the SYNCED
     iam_role inventory via the EXISTING `/api/inventory/iam_role` route (no new route — no
     99-route churn; iam_role is an ADMIN-ONLY type, so the section shows a distinct
@@ -191,3 +193,38 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
 - Noted, not shipped (MINOR): client-clock freshness (`Date.now()` can misclassify under
   skew — server-side classification is the tighter follow-up); a 500-row full-payload fetch
   where a projection would do (data-minimization follow-up).
+
+## Round-9 corrections (review-driven)
+
+- **A fallback run is DISCLOSED, not silently healthy (the L4 gate MAJOR)** —
+  `_run_steampipe_query` now returns a fallback-used flag and `sync()` records the run's
+  `unknown_attribute_count` as the row count, riding ADR-021's existing
+  `succeeded+unknowns→degraded` freshness machinery (ledger column → terminal event → the
+  MCP reader's `query_inventory`/`inventory_summary`) — the exact channel SDK collectors
+  already use, so no new contract. ADR-021's observability section and the
+  steampipe-quota-and-staleness runbook §5 event list gain the
+  `inventory_sync_hydrate_fallback` event with the budget split.
+- **Query budgets clamp to remaining Lambda time (the L2 gate MAJOR)** — the Lambda timeout
+  rises to 420s (≤180s hydrated + ≤90s fallback + ≥150s Aurora reserve), and every
+  statement-timeout is additionally clamped to
+  `remaining − AURORA_RESERVE_S(120) − (the fallback's own budget when applicable)` via a
+  deadline armed from `context.get_remaining_time_in_millis()`; a sliver refuses up-front
+  (recording `failed` cleanly) instead of racing the wall and stranding the ledger at
+  `running`. The `_steampipe` timeout guard is a real `ValueError` raised BEFORE connecting
+  (no `-O` elision, no leaked connection).
+- **Remediation guidance is cause-specific (the L5 gate MAJOR)** — the log event's remedy,
+  ADR-010 §2, and the iam.md boxes (4 locales) now split: statement timeout → raise the
+  limiter `fill_rate`; SCP/IAM denial → grant `iam:ListAttachedRolePolicies` (rate tuning
+  cannot fix a denial).
+- **The contradicting docs state one semantics (the L5 gate MAJOR)** —
+  `docs/guides/troubleshooting.md`'s ListAttachedRolePolicies row and this spec's §Decisions
+  L242 bullet now state the round-8 fallback semantics; the ListMFADevices row says the
+  column is retained without a fallback (whole-type semantics) rather than prescribing
+  removal.
+- Minors: ADR-010's blocked-API table gains the `aws_iam_role`/`ListAttachedRolePolicies`
+  row; test-coverage-plan frames `mfa_enabled` as the pre-existing precedent; the two
+  English-only `.claude` reviewer files' notes are English; the conclusive zero-match line
+  carries the data-as-of timestamp (CHANGELOG-promised footer parity); CHANGELOG EN/KO
+  amended in place with the degraded-freshness disclosure.
+- Noted, not shipped: counting unhydrated rows under a `partial` run before the caveated
+  list (round-9 L2 minor); client-clock freshness and the 500-row projection stay follow-ups.
