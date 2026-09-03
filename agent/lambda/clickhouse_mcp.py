@@ -52,6 +52,14 @@ _SETTINGS_CLAUSE = re.compile(
     r"\bSETTINGS\b[^;]*\b(max_execution_time|max_result_rows|readonly|timeout_overflow_mode)\b",
     re.IGNORECASE,
 )
+# Comment/string stripper for the SETTINGS check (round-8): the check must not fire on a
+# string literal containing the words, and a comment must not smuggle a ';' past the [^;]*
+# window (`SETTINGS /* ; */ max_execution_time=0`). ClickHouse block comments do NOT nest.
+_SQL_NOISE = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|/\*.*?\*/|--[^\n]*", re.DOTALL)
+
+
+def _strip_sql_noise(sql):
+    return _SQL_NOISE.sub(" ", sql)
 
 
 def _validate_identifier(name):
@@ -71,7 +79,7 @@ def _assert_read_only(sql):
     # version of the shared guard defaulted to Postgres-style nesting unconditionally, which let a
     # single crafted comment swallow real SQL (incl. a _TABLE_FN call) between two adjacent-looking
     # comments; see sql_readonly_guard.py's module docstring for the traced PoC.
-    if _SETTINGS_CLAUSE.search(sql):
+    if _SETTINGS_CLAUSE.search(_strip_sql_noise(sql)):
         raise ValueError("read-only: overriding execution bounds via query-level SETTINGS is not allowed")
     _shared_assert_read_only(
         sql,

@@ -261,6 +261,17 @@ describe('PATCH update', () => {
     expect(setIntegrationCredentialById).not.toHaveBeenCalled();
   });
 
+  it('non-object settings shapes are a 400, never a silent clear (round-8)', async () => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://ch:8123', authType: 'none', isDefault: false, settings: { database: 'metrics' } });
+    const { PATCH } = await import('./route');
+    for (const bad of [null, [1], 'garbage', 5]) {
+      const res = await PATCH(req({ id: 7, settings: bad }, 'PATCH'));
+      expect(res.status).toBe(400);
+    }
+    expect(updateDatasource).not.toHaveBeenCalled();
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
+  });
+
   it('an authType downgrade prunes residue auth keys from the blob', async () => {
     getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });

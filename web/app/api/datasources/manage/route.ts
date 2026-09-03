@@ -22,6 +22,12 @@ const AUTH_TYPES = ['none', 'basic', 'bearer', 'custom_header'];
 // through the creds spread (round-5: creds.endpoint would otherwise override the validated
 // endpoint in the blob without tripping the host-change guard).
 const CRED_KEYS = ['username', 'password', 'token', 'headerName', 'headerValue', 'headerName2', 'headerValue2', 'org_id'] as const;
+/** True when a present `settings` value is not a plain object — 400, never a silent clear
+ *  (round-8: null/array/string/number shapes bypassed the round-6 empty-sanitize guard). */
+function settingsShapeInvalid(body: Record<string, unknown>): boolean {
+  return 'settings' in body
+    && (body.settings === null || typeof body.settings !== 'object' || Array.isArray(body.settings));
+}
 function pickCredKeys(input: unknown): Record<string, unknown> | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const o = input as Record<string, unknown>;
@@ -74,7 +80,9 @@ export async function POST(request: Request) {
   const creds = pickCredKeys(body.creds) ?? {};
   // gap L203: connection settings — sanitized. A non-empty settings object that sanitizes to
   // EMPTY is a 400 (round-6: a fully-invalid direct-API payload must not read as an explicit
-  // clear); individually invalid keys alongside valid ones are still dropped.
+  // clear); a NON-OBJECT settings value is a 400 too (round-8 — null/array/string shapes
+  // bypassed the object-only guard); individually invalid keys alongside valid ones drop.
+  if (settingsShapeInvalid(body)) return json({ error: 'settings must be an object' }, 400);
   const settings = sanitizeDsSettings(body.settings);
   if (body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)
       && Object.keys(body.settings as object).length > 0 && Object.keys(settings).length === 0) {
@@ -118,7 +126,9 @@ export async function PATCH(request: Request) {
   const authType = typeof body.authType === 'string' && AUTH_TYPES.includes(body.authType) ? body.authType : undefined;
   const creds = pickCredKeys(body.creds);
   // gap L203: settings update only when the key is present (absent ≠ clear; {} clears).
-  // A NON-EMPTY object sanitizing to empty is a 400, not a silent clear (round-6).
+  // A NON-EMPTY object sanitizing to empty is a 400 (round-6), and a NON-OBJECT settings
+  // value is a 400 too (round-8) — never a silent clear.
+  if (settingsShapeInvalid(body)) return json({ error: 'settings must be an object' }, 400);
   const settings = body.settings !== undefined ? sanitizeDsSettings(body.settings) : undefined;
   if (body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)
       && Object.keys(body.settings as object).length > 0 && settings !== undefined && Object.keys(settings).length === 0) {

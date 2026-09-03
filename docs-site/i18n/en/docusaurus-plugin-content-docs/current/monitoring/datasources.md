@@ -21,7 +21,7 @@ The AWSops Datasources feature provides centralized management of external obser
 <DatasourceFlow />
 
 Key features:
-- **7 datasource types** supported (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+- **8 datasource types** supported (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 - **CRUD management**: Add, edit, delete datasources (admin only)
 - **Connection test**: One-click connectivity verification with latency measurement
 - **Query execution**: Native query language support for each datasource type

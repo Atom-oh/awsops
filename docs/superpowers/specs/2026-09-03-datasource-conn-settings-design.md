@@ -203,3 +203,21 @@ Cache TTL / ClickHouse database — v1's Settings section).
   "central" claim is corrected — the generic /api/integrations upsert writes endpoints through
   that guard); the pre-existing endpoint-rewrite-without-scrub and query-string/fragment
   hardening remain recorded follow-ups.
+
+## Round-8 corrections (review-driven)
+
+- **Non-object settings shapes are a 400 (the gate MAJOR)** — `settings: null/[1]/"x"/5`
+  bypassed the round-6 object-only empty-sanitize guard and read as an explicit clear.
+  A present `settings` that is not a plain object is now rejected in POST and PATCH before
+  any write; test pins all four shapes.
+- **The EN guide's intro line joins the 7→8 correction (the gate docs item)** — the round-6
+  sweep fixed ko/zh/ja intros and all four field tables but missed the EN intro bullet
+  ("**7 datasource types**" with no Mimir), leaving the page self-contradicting.
+- Minor: the SETTINGS check runs on comment/string-STRIPPED text — a block comment can no
+  longer smuggle a ';' past the clause window (`SETTINGS /* ; */ max_execution_time=0`), and
+  a string literal containing the words is no longer a false positive (both test-pinned;
+  ClickHouse block comments do not nest, matching the shared guard's dialect setting).
+- Recorded follow-ups reaffirmed (pre-existing, next batch candidates): origin compare inside
+  resolveConnConfig for the generic /api/integrations endpoint-rewrite path; connector-side
+  backslash re-rejection / stored-endpoint scan; query-string/fragment stripping on
+  datasource endpoints; row-level locking for concurrent admin PATCHes.
