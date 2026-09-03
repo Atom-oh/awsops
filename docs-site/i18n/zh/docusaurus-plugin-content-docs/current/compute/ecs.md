@@ -11,7 +11,7 @@ import Screenshot from '@site/src/components/Screenshot';
 用于监控 ECS 集群、服务和任务状态的页面。
 
 :::info v2 中的呈现方式
-v1 曾在一个页面中统一监控集群/服务/任务。v2 以 3 个独立的清单路由为主（`/inventory/ecs_cluster`、`/inventory/ecs_service`、`/inventory/ecs_task` —— 各自拥有表格、筛选器和详情面板），并新增了**统一概览页 `/inventory/ecs`**（侧边栏「ECS 概览」），在一个屏幕上展示摘要 KPI（集群/服务/任务数 + 低于期望数的任务）、集群表格和服务表格。概览是只读速览层 —— 搜索/分面/详情在三个类型页面上，可通过各表头的「查看全部」跳转。达到或超过 500 行会标注为样本（样本不做任务总数汇总），同步失败会显示过期数据提示，未采集时显示「尚未采集」。
+v1 曾在一个页面中统一监控集群/服务/任务。v2 以 3 个独立的清单路由为主（`/inventory/ecs_cluster`、`/inventory/ecs_service`、`/inventory/ecs_task` —— 各自拥有表格、筛选器和详情面板），并新增了**统一概览页 `/inventory/ecs`**（侧边栏「ECS 概览」），在一个屏幕上展示摘要 KPI（集群/服务/任务数 + 低于期望数的任务）、集群表格和服务表格。概览是只读速览层 —— 搜索/分面/详情在三个类型页面上，可通过各表头的「查看全部」跳转。达到或超过 500 行会标注为样本（样本不做任务总数汇总），同步未处于成功状态时会显示对应状态的提示（失败=过期数据提示、部分采集、进行中），未采集时显示「尚未采集」。
 :::
 
 <Screenshot src="/screenshots/compute/ecs.png" alt="ECS" />

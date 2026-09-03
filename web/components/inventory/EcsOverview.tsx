@@ -8,6 +8,7 @@ import StatTile from '@/components/ui/StatTile';
 import Card from '@/components/ui/Card';
 import StatePill from '@/components/ui/StatePill';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { useActiveScope, scopeParams } from '@/lib/account-context';
 
 // ECS unified overview (gap L216, v1 parity): summary KPI + clusters table + services table on
 // ONE screen. Read-only glance layer — search/facets/detail stay on the per-type pages (linked
@@ -41,13 +42,16 @@ export default function EcsOverview() {
   const [services, setServices] = useState<TypeState>(EMPTY);
   const [taskCount, setTaskCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  // Global account/region scope (round-1 review): the type pages scope BOTH the rows and the
+  // summary fetches — this page must describe the same fleet its '전체 보기' links open, and
+  // must reload on scope change.
+  const [scope] = useActiveScope();
 
   const load = useCallback(async () => {
     setBusy(true);
     const fetchType = async (type: string, set: (s: TypeState) => void) => {
       try {
-        const r = await fetch(`/api/inventory/${type}?limit=${ROW_CAP}`);
+        const r = await fetch(`/api/inventory/${type}?limit=${ROW_CAP}&${scopeParams(scope)}`);
         if (!r.ok) throw new Error(String(r.status));
         const j = await r.json();
         set({ rows: j.rows ?? [], run: j.run ?? null, err: false, loaded: true });
@@ -58,47 +62,79 @@ export default function EcsOverview() {
     await Promise.allSettled([
       fetchType('ecs_cluster', setClusters),
       fetchType('ecs_service', setServices),
-      // task COUNT from the shared summary (the tasks table itself stays on its type page)
-      fetch('/api/inventory/summary')
+      // task COUNT from the shared summary (the tasks table itself stays on its type page).
+      // A never-synced type is ABSENT from byType (GROUP BY resource_type) — absence must
+      // stay null ('—'), never a fabricated 0 (round-1 review).
+      fetch(`/api/inventory/summary?${scopeParams(scope)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((j) => setTaskCount(Number((j.byType ?? []).find((x: { type: string }) => x.type === 'ecs_task')?.count ?? 0)))
+        .then((j) => {
+          const hit = (j.byType ?? []).find((x: { type: string }) => x.type === 'ecs_task');
+          setTaskCount(hit ? Number(hit.count) : null);
+        })
         .catch(() => setTaskCount(null)),
     ]);
-    setCapturedAt(new Date().toISOString());
     setBusy(false);
-  }, []);
+  }, [scope]);
   useEffect(() => { load(); }, [load]);
 
   const cTrunc = clusters.rows.length >= ROW_CAP;
   const sTrunc = services.rows.length >= ROW_CAP;
   // Service-health rollup: only from a LOADED, UNTRUNCATED service page — a 500-row sample
-  // sum must not present itself as the fleet total.
+  // sum must not present itself as the fleet total. The deficit is PER-SERVICE
+  // Σ max(0, desired − running): running can legitimately exceed desired mid-deployment
+  // (maximumPercent 200), and a surplus must never cancel another service's shortfall
+  // (round-1 review). Rows whose desired/running fields are absent are skipped from the
+  // deficit (their cells honestly render '—' — an unknown must not inflate the number).
   const rollup = services.loaded && !services.err && !sTrunc
     ? services.rows.reduce(
         (a, r) => {
-          a.desired += num(d(r, 'desired_count'));
-          a.running += num(d(r, 'running_count'));
+          const desired = d(r, 'desired_count');
+          const running = d(r, 'running_count');
+          if (typeof desired === 'number' && typeof running === 'number') {
+            a.desired += desired;
+            a.running += running;
+            a.deficit += Math.max(0, desired - running);
+          }
           return a;
         },
-        { desired: 0, running: 0 },
+        { desired: 0, running: 0, deficit: 0 },
       )
     : null;
-  const lagging = rollup ? rollup.desired - rollup.running : null;
+  const lagging = rollup ? rollup.deficit : null;
 
-  const stale = (t: TypeState) => t.run != null && t.run.status !== 'succeeded';
+  // Header freshness = the DATA time (the newer of the two runs' finished_at), never the
+  // browser fetch time — a page of failed fetches must not read freshly-updated (round-1).
+  const runTimes = [clusters.run?.finished_at, services.run?.finished_at]
+    .filter((x): x is string => Boolean(x))
+    .map((x) => new Date(x).getTime());
+  const capturedAt = runTimes.length ? new Date(Math.max(...runTimes)).toISOString() : null;
+
   const preSync = (t: TypeState) => t.loaded && !t.err && t.rows.length === 0 && t.run == null;
-  const caption = (t: TypeState, trunc: boolean) => (
-    <>
-      {t.err && <span className="text-amber-700">{tt('목록을 불러오지 못했습니다.')}</span>}
-      {!t.err && stale(t) && (
-        <span className="text-amber-700">
-          {tt('마지막 sync가 성공하지 못했습니다 — 마지막 성공 시점 데이터일 수 있습니다.')}
-        </span>
-      )}
-      {!t.err && preSync(t) && <span>{tt('미수집 — sync 후 표시됩니다.')}</span>}
-      {trunc && <span> ({tt('표본 기준')})</span>}
-    </>
-  );
+  // Non-succeeded runs are distinguished (round-1): 'failed' asserts failure, 'running'/'partial'
+  // say what they are, and a MISSING ledger row with rows present says freshness is unverifiable.
+  const runCaption = (t: TypeState): { text: string; tone: 'warn' | 'muted' } | null => {
+    if (!t.loaded || t.err) return null;
+    if (t.run == null) {
+      return t.rows.length > 0
+        ? { text: 'sync 이력 정보가 없어 아래 목록의 최신 여부를 확인할 수 없습니다.', tone: 'warn' }
+        : null; // rows empty + no run = the preSync caption below
+    }
+    if (t.run.status === 'succeeded') return null;
+    if (t.run.status === 'running') return { text: 'sync 실행 중 — 목록이 곧 갱신됩니다.', tone: 'muted' };
+    if (t.run.status === 'partial') return { text: '부분 수집 — 일부 계정의 데이터가 오래되었을 수 있습니다.', tone: 'warn' };
+    return { text: '마지막 sync가 성공하지 못했습니다 — 마지막 성공 시점 데이터일 수 있습니다.', tone: 'warn' };
+  };
+  const caption = (t: TypeState, trunc: boolean) => {
+    const rc = runCaption(t);
+    return (
+      <>
+        {t.err && <span className="text-amber-700">{tt('목록을 불러오지 못했습니다.')}</span>}
+        {rc && <span className={rc.tone === 'warn' ? 'text-amber-700' : undefined}>{tt(rc.text)}</span>}
+        {!t.err && preSync(t) && <span>{tt('미수집 — sync 후 표시됩니다.')}</span>}
+        {trunc && <span> ({tt('표본 기준')})</span>}
+      </>
+    );
+  };
 
   const th = 'px-3 py-2 text-left text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400';
   const td = 'px-3 py-1.5 text-[12px] text-ink-700';

@@ -26,8 +26,7 @@ them across three sidebar leaves with no ECS-subgroup overview).
     NOT truncated — a 500-row sample must not present a fleet-wide sum as authoritative
     (rendered with the `(표본 기준)` qualifier instead).
   - **Clusters table**: from `/api/inventory/ecs_cluster?limit=500` — Name, Status,
-    Running/Pending tasks, Services, Instances, Region (the type page's own column set,
-    compacted). **Services table**: from `/api/inventory/ecs_service?limit=500` — Service,
+    Running/Pending tasks, Services, Region (the type page's column set, compacted). **Services table**: from `/api/inventory/ecs_service?limit=500` — Service,
     Cluster (ARN leaf), Status, Desired/Running, Launch, Region. Each table header carries a
     "전체 보기 →" link to its full type page (search/facets/detail live there — the overview
     is read-only glance parity, row click intentionally NOT wired to DetailPanel to keep this
@@ -44,3 +43,23 @@ them across three sidebar leaves with no ECS-subgroup overview).
   rows), truncation labels, stale-run caption, pre-sync state, table rendering.
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; page/component
   counts 40→41 / 109→110; nav key registered in 4 languages.
+
+## Round-1 corrections (review-driven)
+
+- **The page honors the global account/region scope (the gate MAJOR)** — all three fetches
+  now append `scopeParams(scope)` and reload on scope change (the type page's exact
+  template); the overview describes the same fleet its '전체 보기' links open.
+- **The deficit KPI is per-service (the gate MAJOR)** — `Σ max(0, desired − running)` per
+  service: a mid-deployment surplus (maximumPercent 200) must never cancel another service's
+  shortfall, and the tile can no longer go negative. Rows with absent desired/running fields
+  are skipped from the deficit (their cells render '—' — an unknown must not inflate the
+  number). The aggregate running/desired hint stays.
+- **The task tile never fabricates a pre-sync 0 (the gate MAJOR)** — a never-synced type is
+  ABSENT from the summary's byType (GROUP BY), so absence now stays null ('—'); the pre-sync
+  test stubs an EMPTY summary so the fixture actually catches it.
+- Minors: the header freshness is the DATA time (the newer of the two runs' finished_at),
+  never the browser fetch time — all-failed fetches read 미수집, and the stale badge can
+  actually fire; non-succeeded run captions are state-specific (failed asserts failure,
+  running/partial say what they are) and a missing ledger row WITH rows present reads
+  "freshness unverifiable"; the spec's phantom 'Instances' column is dropped (the component
+  never rendered it); the docs-site caption wording covers all non-succeeded states.

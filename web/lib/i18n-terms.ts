@@ -656,6 +656,8 @@ export const TERMS: Record<string, Pair> = {
   '목록을 불러오지 못했습니다.': { en: 'Failed to load the list.', zh: '无法加载列表。', ja: '一覧を読み込めませんでした。' },
   '마지막 sync가 성공하지 못했습니다 — 마지막 성공 시점 데이터일 수 있습니다.': { en: 'The last sync did not succeed — this may be last-good data.', zh: '上次同步未成功 — 可能是最近一次成功时的数据。', ja: '直近の sync は成功していません — 最後に成功した時点のデータの可能性があります。' },
   '미수집 — sync 후 표시됩니다.': { en: 'Not collected yet — appears after a sync.', zh: '尚未采集 — 同步后显示。', ja: '未収集 — sync 後に表示されます。' },
+  'sync 실행 중 — 목록이 곧 갱신됩니다.': { en: 'Sync in progress — the list refreshes shortly.', zh: '同步进行中 — 列表即将刷新。', ja: 'sync 実行中 — 一覧はまもなく更新されます。' },
+  '부분 수집 — 일부 계정의 데이터가 오래되었을 수 있습니다.': { en: 'Partial collection — some accounts may show stale data.', zh: '部分采集 — 部分账户的数据可能过期。', ja: '部分収集 — 一部アカウントのデータが古い可能性があります。' },
   '표본에서는 집계하지 않음': { en: 'not aggregated over a sample', zh: '不对样本进行汇总', ja: 'サンプルでは集計しません' },
   '동기화가 큐에 등록되었습니다 — 완료 보장은 아니며(실행 중인 타입은 건너뜀), 반영까지 수 분 걸릴 수 있습니다.': { en: 'Sync queued — an enqueue acknowledgement, not a completion guarantee (already-running types are skipped); data may take a few minutes.', zh: '同步已加入队列 — 仅为入队确认，并非完成保证（正在运行的类型会被跳过）；数据可能需要几分钟。', ja: '同期をキューに登録しました — 完了保証ではなく（実行中のタイプはスキップ）、反映まで数分かかる場合があります。' },
   '전체 동기화는 관리자 전용입니다.': { en: 'Sync-all is admin-only.', zh: '全量同步仅限管理员。', ja: '全体同期は管理者専用です。' },
