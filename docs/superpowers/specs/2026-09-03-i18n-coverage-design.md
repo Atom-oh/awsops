@@ -1,0 +1,41 @@
+# i18n coverage completion + lockstep guard — 4 gap-audit items (L186, L206, L207, L254)
+
+**Status:** Batch 40, 2026-09-03 (continuing the owner's standing "merge on review pass, keep
+going" authorization). Branch `feat/batch40`.
+**WA pillar:** Operational Excellence (a 4-language UI that actually translates).
+
+Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L186 (cloudfront i18n), L206
+(datasources i18n), L207 (dynamodb i18n), L254 (waf i18n).
+
+## Decisions
+
+- **These four items share ONE mechanism and are mostly already solved**: cloudfront/
+  dynamodb/waf all render through the generic `/inventory/[type]` page, and v2's `tt()`
+  translation (SUPPORTED_LANGS ko/en/zh/ja — one MORE language than v1's 3) already covers
+  the Korean UI strings the audit flagged ('총 N', '검색…', '전체 해제', '로딩 중…', …). The
+  audit items predate the tt() rollout. What remained was VERIFICATION plus the residue:
+  - 17 unregistered Korean literals on the datasources surfaces (DatasourceForm,
+    DatasourcesTab, CardDashboard, ExplorePanel) — registered in en/zh/ja;
+  - the composed donut title `'<label> 분포'` (+ optional `' (표본 기준)'` suffix) had no
+    RULE — added, so donut titles translate instead of passing through Korean-mixed.
+- **Lockstep guard**: `web/lib/i18n-coverage.test.ts` extracts every Korean `tt('…')`
+  literal on exactly these surfaces (the generic [type] page + the datasources components)
+  and asserts each resolves in en/zh/ja via `applyTerms` (an unregistered literal passes
+  through unchanged — that IS the failure, named in the assertion message). Sanity guards
+  pin that the glob finds the surfaces and that >30 literals were actually scanned (an
+  empty scan proves nothing).
+- **Disclosed deviations** (recorded in the audit ticks):
+  - spec/column labels deliberately stay ENGLISH across locales (the repo's
+    technical-identifiers convention, components/CLAUDE.md) — v1 translated them; v2 keeps
+    one canonical form;
+  - the guard watches these four surfaces; Korean literals on OTHER pages are out of this
+    batch's scope (they share the same tt() mechanism and registry).
+- Drive-bys: the batch-39 locale guides' literal `(표본 기준)` parenthetical now names each
+  locale's actually-rendered term (en 'sampled', zh '（基于样本）', ja '（サンプル基準）' —
+  the round-3 chair note on PR #287); the audit's L110 tick gains the batch-39 correction
+  pointer (the true total now comes from `view=agg`, not the summary endpoint).
+
+## Testing
+- lib/i18n-coverage.test.ts (the lockstep guard, with scan-size sanity assertions).
+- Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; audit ticks +
+  batch-40 note; CHANGELOG EN/KO.
