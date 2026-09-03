@@ -139,8 +139,10 @@ QUERIES = {
         # inventory_sync_hydrate_fallback log event, whose remedy is cause-specific: budget
         # timeout → raise the limiter fill_rate (0.1–20, ADR-021 Phase-1 defaults); SCP/IAM
         # denial → grant iam:ListAttachedRolePolicies (rate tuning cannot fix a denial).
-        # Whole-type last-good freeze remains only if the base query ALSO fails — the ADR-010
-        # 2026-09-02 amendment's disclosed semantics.
+        # On the query path the whole-type last-good freeze needs the base query to ALSO
+        # fail; the FINAL run status still follows the normal lifecycle (an overlapping
+        # unreachable account records partial; a later-stage Aurora error records failed) —
+        # the ADR-010 2026-09-02 amendment's disclosed semantics.
         "SELECT name, region, account_id, arn, role_id, create_date, path, description, "
         "max_session_duration, role_last_used_date, role_last_used_region, instance_profile_arns, "
         "permissions_boundary_arn, assume_role_policy, attached_policy_arns, tags "
@@ -966,9 +968,16 @@ def _steampipe(statement_timeout_s=DEFAULT_STATEMENT_TIMEOUT_S):
     # assert, so -O can't elide it and no connection leaks on a bad value).
     if not isinstance(statement_timeout_s, int) or not (1 <= statement_timeout_s <= DEFAULT_STATEMENT_TIMEOUT_S):
         raise ValueError(f"statement_timeout_s out of range: {statement_timeout_s!r}")
+    # Socket timeout bounds CONNECTION SETUP too (round-11): a stalled TCP/TLS/auth handshake
+    # was otherwise bounded by nothing but the Lambda wall — the statement_timeout below only
+    # applies once a session exists. pg8000's timeout is a per-socket-op (recv) timeout that
+    # ALSO ticks while waiting for query results, so it must sit ABOVE the statement budget
+    # (the server's statement_timeout fires first for a slow query; the socket timeout only
+    # catches a genuinely dead peer).
     conn = pg8000.native.Connection(user="steampipe", password=_secret(os.environ["STEAMPIPE_SECRET_ARN"]).strip(),
                                     host=os.environ["STEAMPIPE_HOST"], database="steampipe",
-                                    port=9193, ssl_context=_ssl_ctx())
+                                    port=9193, ssl_context=_ssl_ctx(),
+                                    timeout=statement_timeout_s + 15)
     # Remaining-time guard (round-5 gate, with the iam_role hydrate column): a query that
     # outlives the Lambda would hard-timeout the process BEFORE the failure handler runs,
     # leaving the ledger row 'running' forever. A statement_timeout below the Lambda budget

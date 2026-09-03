@@ -23,8 +23,9 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
     AMENDED in this PR. Failure semantics as amended by round 8: a failed hydrate (SCP block
     or aggregate-role-count budget timeout) triggers ONE hydrate-free retry — the base
     inventory stays live, only the column is absent, and the run is disclosed degraded via
-    unknown_attribute_count [round 9]; the whole-type last-good freeze applies only when the
-    base query also fails; the consuming section surfaces the run status). Visible after the
+    unknown_attribute_count [round 9]; the whole-type last-good freeze on this path requires the
+    base query to also fail (final run status otherwise follows the normal lifecycle —
+    round 11); the consuming section surfaces the run status). Visible after the
     sync terraform apply + a sync run.
   - **Panel**: new `S3IamAccessSection` in DetailPanel (s3 rows only): fetches the SYNCED
     iam_role inventory via the EXISTING `/api/inventory/iam_role` route (no new route — no
@@ -254,3 +255,31 @@ Region'), L242 (detail-panel 'IAM Roles with S3 Access').
   direction; a cap+1 sentinel fetch is the tidier follow-up); `AmazonS3[A-Za-z]*` matching
   S3-family specialty policies (over-inclusion in an advisory, matched-set-framed list);
   client-clock freshness and the 500-row projection stay follow-ups.
+
+## Round-11 corrections (review-driven)
+
+- **The ADR-021 amendment is registered (the gate MAJOR)** — this PR substantively changed
+  ADR-021's observability contract (new `inventory_sync_hydrate_fallback` event, the
+  `unknown_attribute_count` definitional extension, a new field on the partial complete
+  event) without touching its Status line or BASELINE §3 row — the same anti-drift rule this
+  PR applied to ADR-010. Both now carry a dated "Amended 2026-09-02" marker, and ADR-021
+  §Operational observability's "only `unreachable_account_count`" partial-event enumeration
+  is corrected to include `unknown_attribute_count`.
+- **Run-status absolutes are corrected to the real lifecycle (the gate MAJOR)** — "run
+  `succeeded`" / "ONLY a base-query failure records `failed`" contradicted base `sync()`: a
+  successful fallback coinciding with unreachable accounts records `partial`, and a
+  later-stage Aurora upsert/prune/finalizer error records `failed` even after a successful
+  fallback query. ADR-010 §2, iam.md ×4, the FAQ ×4, CHANGELOG EN/KO, this spec's §Decisions
+  bullet, and the sync comment now say: the hydrate failure itself never decides the run
+  status; the final status follows the normal lifecycle.
+- Minors: docs-site truncation boundary "≤500" → "<500" (4 locales — exactly-500 is treated
+  truncated); `_steampipe` passes a socket `timeout=statement_timeout_s+15` so connection
+  SETUP is bounded too (sized above the statement budget — pg8000's socket timeout also
+  ticks while waiting for results, so the server-side statement_timeout must fire first);
+  the runbook's pre-existing "`degraded=false` 유지" sentence is corrected in place (code
+  sets `degraded: bool(unknowns)`).
+- **Tracked follow-ups (round-11 §4, consolidated):** deadline-aware post-query Aurora work
+  or a stale-`running` reaper for `inventory_sync_runs` (the reserve is sized, not
+  enforced); cap+1 sentinel fetch for the exactly-500 case; server-side freshness
+  classification (client-clock skew); a server-side projection for the 500-row iam_role
+  fetch; an exact policy allowlist instead of `AmazonS3[A-Za-z]*`.
