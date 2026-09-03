@@ -163,6 +163,46 @@ describe('PATCH update', () => {
     expect(blob2.username).toBe('u');
   });
 
+  it("the UI's creds:{} does NOT defeat the host-change guard (round-4)", async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+    const { PATCH } = await import('./route');
+    // the shipped form always sends creds (possibly {}) — an endpoint host edit from the UI
+    await PATCH(req({ id: 7, endpoint: 'http://evil.internal:9090', creds: {} }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.username).toBeUndefined();
+    expect(blob.password).toBeUndefined();
+    // genuinely re-supplied creds DO follow the new host
+    await PATCH(req({ id: 7, endpoint: 'http://new.internal:9090', creds: { username: 'n', password: 'npw' } }, 'PATCH'));
+    const blob2 = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob2.username).toBe('n');
+  });
+
+  it('an https→http downgrade counts as a host change (origin compare — no cleartext transmit)', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'https://prom:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'https://prom:9090', authType: 'basic', isDefault: false, settings: {} });
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, endpoint: 'http://prom:9090', creds: {} }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.username).toBeUndefined();
+  });
+
+  it('a migrated DEFAULT instance merges from the kind mirror and re-mirrors the post-merge blob (round-4)', async () => {
+    // credential lives ONLY under the kind mirror — the id-keyed entry is empty
+    getCredentialById.mockImplementation(async (_id: number, kind?: string) => (kind ? { endpoint: 'http://p:9090', authType: 'bearer', token: 'tok' } : null));
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://p:9090', authType: 'bearer', isDefault: true, settings: {} });
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, settings: { timeoutS: 15 } }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.token).toBe('tok');       // NOT de-authenticated
+    expect(blob.timeoutS).toBe(15);
+    // the kind mirror is refreshed with the POST-merge blob (not the stale pre-PATCH one)
+    const mirrored = mirrorDefaultCredential.mock.calls.at(-1)!;
+    expect(mirrored[0]).toBe('prometheus');
+    expect(mirrored[1].token).toBe('tok');
+    expect(mirrored[1].timeoutS).toBe(15);
+  });
+
   it('an authType downgrade prunes residue auth keys from the blob', async () => {
     getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });

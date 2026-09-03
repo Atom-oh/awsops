@@ -115,3 +115,24 @@ Cache TTL / ClickHouse database — v1's Settings section).
   longer silently clears the stored value); clearing the database also triggers the schema
   re-warm; noted, not shipped — the manage-route tests stub the sanitizer (real enforcement
   is covered by the lib/connector tests).
+
+## Round-4 corrections (review-driven)
+
+- **The host-change guard survives the real UI path (the gate MAJOR)** — the shipped form
+  always sends `creds` (possibly `{}`), which round 3's `creds === undefined` check treated
+  as "re-supplied", keeping stored auth material on a host edit from the UI. "Re-supplied"
+  now means ACTUAL auth keys present (`AUTH_KEYS.some(k => k in creds)`); tests pin the
+  `creds:{}` UI shape and the genuinely-re-supplied shape.
+- **A migrated-default instance is never de-authenticated (the gate MAJOR)** — the merge
+  base now falls back to the kind mirror for a default instance
+  (`getCredentialById(id, ds.isDefault ? ds.kind : undefined)`): a settings-only PATCH on a
+  row whose credential lives only under the kind mirror previously produced an empty merge
+  base, wrote a de-authed id-keyed blob, and updateDatasource then mirrored that over the
+  working kind mirror (silent, unrecoverable — creds are write-only). The kind mirror is
+  additionally re-mirrored with the POST-merge blob after the write.
+- Minors: ORIGIN compare (scheme+host+port — an https→http downgrade counts as a change, no
+  cleartext Basic transmit); `org_id` is dropped with the auth keys on a host change
+  (tenant id is host-scoped); settings keys are stripped from the merge base UNCONDITIONALLY
+  (an endpoint-only PATCH carries no historical stale timeoutS/database); the row update runs
+  BEFORE the blob write/schema warm (a duplicate-name 409 no longer leaves a half-committed
+  secret).

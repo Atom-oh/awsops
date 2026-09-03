@@ -117,13 +117,35 @@ export async function PATCH(request: Request) {
   //    (write-only credentials must not become admin-extractable by pointing the row at a
   //    new host — the next query would transmit them there);
   //  - keys outside the EFFECTIVE authType are pruned (basic→none leaves no residue).
+  // Row update FIRST (round-4 minor): it can 409 on a duplicate name — the secret blob and
+  // the schema warm must not commit ahead of a failed row update.
+  try {
+    await updateDatasource(id, { name, endpoint, authType: authType as 'none' | undefined, settings });
+  } catch (e) {
+    const msg = (e as Error).message || 'update failed';
+    return json({ error: msg }, /duplicate/i.test(msg) ? 409 : 400);
+  }
   if (endpoint !== undefined || authType !== undefined || creds !== undefined || settings !== undefined) {
-    const existing: Record<string, unknown> = { ...((await getCredentialById(id)) ?? {}) };
-    if (settings !== undefined) { delete existing.timeoutS; delete existing.database; }
-    const hostOf = (u: string | null | undefined): string | null => { try { return new URL(u ?? '').host; } catch { return null; } };
-    const hostChanged = endpoint !== undefined && hostOf(endpoint) !== hostOf(ds.endpoint);
+    // Merge base: for a migrated DEFAULT instance the credential can live only under the
+    // kind mirror (round-4 gate) — an id-only read would come back empty and a settings-only
+    // PATCH would de-authenticate the instance AND clobber the mirror the agent path reads.
+    const existing: Record<string, unknown> = { ...((await getCredentialById(id, ds.isDefault ? ds.kind : undefined)) ?? {}) };
+    // Settings keys are stripped UNCONDITIONALLY (the row is authoritative; an endpoint-only
+    // PATCH must not carry a historical stale timeoutS/database forward either).
+    delete existing.timeoutS;
+    delete existing.database;
+    // ORIGIN compare (scheme+host+port — an https→http downgrade must count as a change, or
+    // Basic material would transmit in cleartext); a malformed URL counts as changed.
+    const originOf = (u: string | null | undefined): string | null => { try { return new URL(u ?? '').origin; } catch { return null; } };
+    const hostChanged = endpoint !== undefined && originOf(endpoint) !== originOf(ds.endpoint);
     const AUTH_KEYS = ['username', 'password', 'token', 'headerName', 'headerValue', 'headerName2', 'headerValue2'] as const;
-    if (hostChanged && creds === undefined) for (const k of AUTH_KEYS) delete existing[k];
+    // The UI always sends creds (possibly {}) — "re-supplied" means ACTUAL auth keys present,
+    // not the mere presence of the object (round-4 gate: creds:{} must not defeat the guard).
+    const credsSupplied = creds !== undefined && AUTH_KEYS.some((k) => k in creds);
+    if (hostChanged && !credsSupplied) {
+      for (const k of AUTH_KEYS) delete existing[k];
+      delete existing.org_id; // tenant id is host-scoped too
+    }
     const effAuth = authType ?? ds.authType ?? 'none';
     const KEEP_BY_AUTH: Record<string, readonly string[]> = {
       none: [], basic: ['username', 'password'], bearer: ['token'],
@@ -138,17 +160,14 @@ export async function PATCH(request: Request) {
       ...(settings ?? ds.settings),
     };
     await setIntegrationCredentialById(id, blob);
+    // updateDatasource (above) re-mirrored the PRE-PATCH blob for a default instance —
+    // refresh the kind mirror with the post-merge blob so the agent no-inline path stays live.
+    if (ds.isDefault) await mirrorDefaultCredential(ds.kind, blob);
     // A database change (set OR clear) re-grounds AI query generation — mirror POST's
     // connect-time warm (best-effort; the 6h isSchemaStale refresh remains).
     if (settings !== undefined && (settings.database ?? null) !== (ds.settings?.database ?? null)) {
       warmSchemaCache(id, ds.kind, blob as ConnConfig);
     }
   }
-  try {
-    await updateDatasource(id, { name, endpoint, authType: authType as 'none' | undefined, settings });
-    return json({ ok: true }, 200);
-  } catch (e) {
-    const msg = (e as Error).message || 'update failed';
-    return json({ error: msg }, /duplicate/i.test(msg) ? 409 : 400);
-  }
+  return json({ ok: true }, 200);
 }
