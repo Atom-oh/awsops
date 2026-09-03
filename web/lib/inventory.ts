@@ -91,6 +91,56 @@ function worstFirstOrderBy(type: string): string {
   return `CASE lower(data->>'${wf.col}') ${whens} ELSE ${Object.keys(wf.rank).length} END, ${tie}`;
 }
 
+export interface AggBucket { name: string; value: number }
+export interface InventoryAggregates {
+  total: number;
+  state: AggBucket[] | null;
+  dist: AggBucket[] | null;
+  dist2: AggBucket[] | null;
+  facets: Record<string, AggBucket[]>;
+}
+
+/** Full-fleet aggregates for a capped inventory page (gap L102, v1 parity): GROUP BYs over
+ *  the WHOLE scoped fleet for the spec's stateKey/distKey/distKey2/filterKeys, plus the true
+ *  total — v1 ran summary/statusCount/typeDistribution SQL fleet-wide; the v2 client computed
+ *  them from the 500-row sample. Keys come from the STATIC spec (trusted code), and are still
+ *  charset-validated before inlining (the worstFirstOrderBy defense-in-depth precedent).
+ *  Buckets are capped at 50 per key (count-desc); ''/NULL coalesce to '(none)' to match the
+ *  client-side countBy convention. */
+export async function readAggregates(
+  type: string,
+  { regions = '__all__', includeGlobal = true, accounts = ['self'] }: Omit<ReadResourcesOpts, 'limit' | 'offset'>,
+): Promise<InventoryAggregates> {
+  const spec = INVENTORY_TYPES[type];
+  const pool = getPool();
+  const params: unknown[] = [type];
+  const where = `resource_type = $1` + accountWhereClause(accounts, params) + regionWhereClause(regions, includeGlobal, params);
+  const ID = /^[a-z0-9_]{1,64}$/;
+  const keys = new Set<string>();
+  for (const k of [spec?.stateKey, spec?.distKey, spec?.distKey2, ...(spec?.filterKeys ?? [])]) {
+    if (k && ID.test(k)) keys.add(k);
+  }
+  const totalRes = await pool.query(`SELECT count(*)::int AS n FROM inventory_resources WHERE ${where}`, params);
+  const byKey: Record<string, AggBucket[]> = {};
+  for (const k of keys) {
+    const r = await pool.query(
+      `SELECT COALESCE(NULLIF(data->>'${k}', ''), '(none)') AS name, count(*)::int AS value
+       FROM inventory_resources WHERE ${where} GROUP BY 1 ORDER BY 2 DESC LIMIT 50`,
+      params,
+    );
+    byKey[k] = r.rows as AggBucket[];
+  }
+  const facets: Record<string, AggBucket[]> = {};
+  for (const k of spec?.filterKeys ?? []) if (byKey[k]) facets[k] = byKey[k];
+  return {
+    total: Number(totalRes.rows[0]?.n ?? 0),
+    state: spec?.stateKey ? byKey[spec.stateKey] ?? null : null,
+    dist: spec?.distKey ? byKey[spec.distKey] ?? null : null,
+    dist2: spec?.distKey2 ? byKey[spec.distKey2] ?? null : null,
+    facets,
+  };
+}
+
 export async function readResources(type: string, { limit, offset, regions = '__all__', includeGlobal = true, accounts = ['self'] }: ReadResourcesOpts): Promise<InventoryPage> {
   const pool = getPool();
   const params: unknown[] = [type];

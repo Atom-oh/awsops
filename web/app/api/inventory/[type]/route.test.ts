@@ -3,8 +3,10 @@ const verifyUser = vi.fn();
 const readResources = vi.fn();
 const assertInventoryTypeAllowed = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+const readAggregates = vi.fn();
 vi.mock('@/lib/inventory', () => ({
   readResources: (...a: unknown[]) => readResources(...a),
+  readAggregates: (...a: unknown[]) => readAggregates(...a),
   assertInventoryTypeAllowed: (...a: unknown[]) => assertInventoryTypeAllowed(...a),
 }));
 const getEcsClusterCosts = vi.fn();
@@ -90,5 +92,29 @@ describe('ecs_cluster cost merge opt-out (cost=0)', () => {
     const j = await res.json();
     expect(getEcsClusterCosts).not.toHaveBeenCalled();
     expect(j.rows[0].data.mtd_cost_usd).toBeUndefined();
+  });
+});
+
+describe('view=agg (gap L102 — full-fleet aggregates)', () => {
+  beforeEach(() => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    assertInventoryTypeAllowed.mockResolvedValue(null);
+    readAggregates.mockReset();
+    readAggregates.mockResolvedValue({ total: 1234, state: [], dist: [], dist2: null, facets: {} });
+  });
+  it('returns aggregates with the SAME scope parsing and never reads rows', async () => {
+    const { GET } = await import('./route');
+    const res = await GET(req('http://x/api/inventory/ec2?view=agg&regions=ap-northeast-2&accounts=__all__'), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).total).toBe(1234);
+    expect(readAggregates).toHaveBeenCalledWith('ec2', { regions: ['ap-northeast-2'], includeGlobal: true, accounts: '__all__' });
+    expect(readResources).not.toHaveBeenCalled();
+  });
+  it('keeps the type gate (admin-only iam types 403 on agg too)', async () => {
+    assertInventoryTypeAllowed.mockResolvedValue({ status: 403, message: 'admin only' });
+    const { GET } = await import('./route');
+    const res = await GET(req('http://x/api/inventory/iam_user?view=agg'), { params: { type: 'iam_user' } });
+    expect(res.status).toBe(403);
+    expect(readAggregates).not.toHaveBeenCalled();
   });
 });
