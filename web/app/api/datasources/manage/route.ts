@@ -4,7 +4,7 @@
 // no-inline path resolves to it. SECURITY: the credential value is never logged or echoed.
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
-import { createDatasource, updateDatasource, getDatasource, sanitizeDsSettings } from '@/lib/datasources';
+import { createDatasource, updateDatasource, getDatasource, sanitizeDsSettings, withDatasourceLock } from '@/lib/datasources';
 import { setIntegrationCredentialById, mirrorDefaultCredential, getCredentialById } from '@/lib/integration-credentials';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
@@ -118,6 +118,11 @@ export async function PATCH(request: Request) {
 
   const id = Number(body.id);
   if (!Number.isInteger(id) || id <= 0) return json({ error: 'valid id required' }, 400);
+  // The ENTIRE read→merge→write span is serialized per datasource (round-10: interleaved
+  // PATCHes could write a pre-scrub merge base back over a host-change scrub, rebinding
+  // stored write-only credentials to the newly pointed endpoint). ds is read INSIDE the
+  // lock so the merge always starts from the latest committed row.
+  return withDatasourceLock(id, async () => {
   const ds = await getDatasource(id);
   if (!ds) return json({ error: 'datasource not found' }, 404);
 
@@ -150,12 +155,13 @@ export async function PATCH(request: Request) {
   //    (write-only credentials must not become admin-extractable by pointing the row at a
   //    new host — the next query would transmit them there);
   //  - keys outside the EFFECTIVE authType are pruned (basic→none leaves no residue).
-  // Write order (rounds 4–5): (1) name preflight — the only unique-constraint field — so a
-  // duplicate-name 409 commits nothing; (2) the CREDENTIAL strip/rewrite; (3) the row update
-  // (endpoint etc.). On a host change this order is the safe one: if the secret write fails,
-  // the row still points at the OLD host and the old credential never transmits to the new
-  // one; if the row update fails after the blob write, the stripped blob is fail-safe
-  // (unauthenticated), never a leak.
+  // Write order (rounds 4–5, comment corrected round 10): (1) name preflight — the only
+  // unique-constraint field — so a duplicate-name 409 commits nothing; (2) the CREDENTIAL
+  // strip/rewrite; (3) the row update (endpoint etc.). On a host change WITHOUT re-supplied
+  // creds this order is fail-safe in both directions (secret-write failure → row stays on
+  // the old host; row failure → stripped blob is unauthenticated). Residual, disclosed:
+  // when creds ARE re-supplied together with a host change and the row update then fails,
+  // the NEW credential can transmit to the OLD host until the admin retries.
   if (name !== undefined && name !== ds.name) {
     try {
       await updateDatasource(id, { name });
@@ -197,13 +203,18 @@ export async function PATCH(request: Request) {
     for (const k of CRED_KEYS) if (k !== 'org_id' && !(KEEP_BY_AUTH[effAuth] ?? []).includes(k)) delete existing[k];
     // creds is key-allowlisted (pickCredKeys) so nothing here can override the validated
     // endpoint/authType/settings fields regardless of spread order.
-    const blob = {
+    const blob: Record<string, unknown> = {
       ...existing,
       ...(creds ?? {}),
       endpoint: endpoint ?? ds.endpoint ?? '',
       authType: effAuth,
       ...(settings ?? ds.settings),
     };
+    // Prune the FINAL blob too (round-10: {authType:'none', creds:{password}} re-added the
+    // key AFTER the merge-base pruning) — keys outside the effective authType never persist.
+    for (const k of CRED_KEYS) if (k !== 'org_id' && !(KEEP_BY_AUTH[effAuth] ?? []).includes(k)) delete blob[k];
+    // database is ClickHouse-only config — never persist it for other kinds (inert but stale).
+    if (ds.kind !== 'clickhouse') delete blob.database;
     await setIntegrationCredentialById(id, blob);
     // updateDatasource (below) re-mirrors from the freshly written id blob for a default
     // instance; this explicit refresh keeps the mirror correct even when the row update has
@@ -222,4 +233,5 @@ export async function PATCH(request: Request) {
     const msg = (e as Error).message || 'update failed';
     return json({ error: msg }, 400);
   }
+  });
 }

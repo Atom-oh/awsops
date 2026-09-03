@@ -27,6 +27,7 @@ from datasource_http import (
     set_request_conn,
 )
 from sql_readonly_guard import assert_read_only as _shared_assert_read_only
+from sql_readonly_guard import strip_sql as _shared_strip_sql
 
 SLUG = "clickhouse"
 DEFAULT_MAX_ROWS = 100
@@ -52,17 +53,15 @@ _SETTINGS_CLAUSE = re.compile(
     r"\bSETTINGS\b[^;]*\b(max_execution_time|max_result_rows|readonly|timeout_overflow_mode)\b",
     re.IGNORECASE,
 )
-# Comment/string stripper for the SETTINGS check (rounds 8–9): the check must not fire on a
-# SINGLE-QUOTED string literal, and no comment form may smuggle a ';' past the [^;]* window.
-# ClickHouse line comments are BOTH `--` and `#` (the shared guard's hash_comment dialect
-# flag), and block comments do NOT nest. Double-quoted text is an IDENTIFIER in ClickHouse
-# (`SETTINGS "max_execution_time" = 0`), so it is deliberately KEPT VISIBLE to the regex —
-# stripping it would blind the check to a quoted setting name (round-9).
-_SQL_NOISE = re.compile(r"'(?:[^'\\]|\\.)*'|/\*.*?\*/|--[^\n]*|#[^\n]*", re.DOTALL)
+# The SETTINGS check runs on the SHARED tokenizer's output (round-10: sequential regexes
+# desync — a quote inside a backtick identifier opened the string-literal branch and
+# swallowed the SETTINGS clause into a trailing comment, exactly the failure mode
+# sql_readonly_guard's docstring warns about). strip_sql keeps identifier inner names
+# visible (round-9's quoted-setting-name requirement) and uses the ClickHouse dialect flags.
 
 
 def _strip_sql_noise(sql):
-    return _SQL_NOISE.sub(" ", sql)
+    return _shared_strip_sql(sql, hash_comment=True, nested_block_comment=False)
 
 
 def _validate_identifier(name):

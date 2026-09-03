@@ -188,7 +188,10 @@ class TestTools(unittest.TestCase):
                     "SELECT 1 SETTINGS # ;\nmax_execution_time=0",
                     "SELECT 1 SETTINGS -- ;\nmax_execution_time=0",
                     'SELECT 1 SETTINGS "max_execution_time" = 0',
-                    "SELECT 1 SETTINGS `max_execution_time` = 0"):
+                    "SELECT 1 SETTINGS `max_execution_time` = 0",
+                    # round-10 desync PoC: a quote inside a backtick identifier must not let a
+                    # sequential stripper swallow the clause into the trailing comment
+                    "SELECT 1 AS `a'`, count() FROM t SETTINGS max_execution_time=0 --'"):
             with mock.patch.object(ch, "http_json") as hj:
                 out = ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": sql}}, None)
             self.assertEqual(out["statusCode"], 400, sql)

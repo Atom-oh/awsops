@@ -25,6 +25,7 @@ vi.mock('@/lib/datasources', () => ({
     return out;
   },
   createDatasource: (...a: unknown[]) => createDatasource(...a),
+  withDatasourceLock: (_id: number, fn: () => Promise<unknown>) => fn(),
   updateDatasource: (...a: unknown[]) => updateDatasource(...a),
   getDatasource: (...a: unknown[]) => getDatasource(...a),
 }));

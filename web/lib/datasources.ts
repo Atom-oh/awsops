@@ -120,6 +120,26 @@ export async function listDatasources(): Promise<DatasourceRow[]> {
   return rows.map(mapRow);
 }
 
+/** Serialize a datasource's manage-time read→merge→write span (round-10: the PATCH
+ *  credential merge reads the blob, merges in route code, then writes — two interleaved
+ *  PATCHes could otherwise write a pre-scrub blob back over a host-change scrub, rebinding
+ *  stored write-only credentials to a newly pointed endpoint). Session-scoped pg advisory
+ *  lock held on ONE pooled connection for the span; the credential store's own per-write
+ *  lock stays as the inner layer. */
+export async function withDatasourceLock<T>(id: number, fn: () => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [`ds-manage:${id}`]);
+    try {
+      return await fn();
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [`ds-manage:${id}`]);
+    }
+  } finally {
+    client.release();
+  }
+}
+
 export async function getDatasource(id: number): Promise<DatasourceRow | null> {
   const { rows } = await getPool().query(`SELECT ${SELECT_COLS} FROM integrations WHERE id = $1`, [id]);
   return rows.length ? mapRow(rows[0]) : null;

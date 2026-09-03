@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
-vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
+const getPoolMock: { query: unknown; connect?: unknown } = { query };
+vi.mock('@/lib/db', () => ({ getPool: () => getPoolMock }));
 const getCredentialById = vi.fn();
 const mirrorDefaultCredential = vi.fn();
 const deleteCredentialKeys = vi.fn();
@@ -12,7 +13,7 @@ vi.mock('@/lib/integration-credentials', () => ({
 }));
 
 import {
-  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource, resolveConnConfig, sanitizeDsSettings,
+  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource, resolveConnConfig, sanitizeDsSettings, withDatasourceLock,
 } from './datasources';
 
 beforeEach(() => {
@@ -164,5 +165,18 @@ describe('resolveConnConfig', () => {
     const cc = await resolveConnConfig({ ...row, endpoint: 'http://p:9090', authType: 'basic' as const });
     expect(cc).toMatchObject({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
     expect(cc.endpoint).not.toBe('http://STALE:9090'); // row endpoint wins over the stale secret
+  });
+});
+
+describe('withDatasourceLock (round-10 — serializes the manage read→merge→write span)', () => {
+  it('acquires the per-id advisory lock, runs fn, and unlocks/releases even on throw', async () => {
+    const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
+    const release = vi.fn();
+    (getPoolMock as unknown as { connect?: unknown }).connect = vi.fn().mockResolvedValue({ query: clientQuery, release });
+    await expect(withDatasourceLock(7, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(clientQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
+    expect(clientQuery.mock.calls[0][1]).toEqual(['ds-manage:7']);
+    expect(clientQuery.mock.calls.at(-1)![0]).toContain('pg_advisory_unlock');
+    expect(release).toHaveBeenCalled();
   });
 });

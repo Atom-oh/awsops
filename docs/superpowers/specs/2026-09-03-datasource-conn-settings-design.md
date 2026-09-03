@@ -240,3 +240,27 @@ Cache TTL / ClickHouse database — v1's Settings section).
   can't bind a foreign credential to this endpoint — no reachable path was constructed, belt
   only); the Python connector re-rejects backslash endpoints (`assert_host_allowed`) so a
   PRE-EXISTING stored endpoint can't exploit the parser differential either.
+
+## Round-10 corrections (review-driven)
+
+- **The manage read→merge→write span is serialized (the gate MAJOR)** — the round-3 merge
+  introduced a route-level race the credential store's per-write advisory lock does not
+  cover: an interleaved settings-only PATCH (merge base read before a host-change scrub,
+  written after it) could restore stripped auth material onto a row now pointing at the new
+  host — deliberate exfiltration by racing two PATCHes. `withDatasourceLock(id, fn)` holds a
+  per-datasource pg advisory lock on one pooled connection across the WHOLE span, and the
+  row is re-fetched INSIDE the lock so the merge always starts from the latest committed
+  state (unit test pins lock/unlock/release on success and throw).
+- **The SETTINGS check uses the shared tokenizer (the gate MAJOR)** — the round-8/9 regex
+  stripper was a sequential alternation, desyncing on a quote inside a backtick identifier
+  (`` SELECT 1 AS `a'`, ... SETTINGS max_execution_time=0 --' `` swallowed the clause into
+  the trailing comment) — the exact failure mode sql_readonly_guard's docstring warns about.
+  The check now runs on `strip_sql(sql, hash_comment=True, nested_block_comment=False)`
+  (single left-to-right tokenizer; identifier inner names stay visible per round 9); the
+  desync PoC is test-pinned.
+- Minors: auth-key pruning applies to the FINAL blob too ({authType:'none',
+  creds:{password}} no longer re-adds residue after the merge-base pruning); `database`
+  never persists for non-ClickHouse kinds; the connector's backslash re-rejection raises
+  `SsrfBlocked` below the docstring (it had displaced `__doc__` and used the wrong exception
+  type); the write-order comment discloses the residual re-supplied-creds-to-old-host window
+  instead of claiming "never a leak" absolutely.
