@@ -158,3 +158,27 @@ Cache TTL / ClickHouse database — v1's Settings section).
   guide's two still-true limitation facts (SELECT-only guard, 1,000-row cap) are restored in
   4 locales (the deleted section's "private IPs blocked" claim was false and stays out —
   ADR-007 deliberately allows private datasource endpoints).
+
+## Round-6 corrections (review-driven)
+
+- **The URL-parser differential is closed (the gate MAJOR)** — WHATWG `URL` (the Node-side
+  SSRF guard and origin compare) treats `\\` as a path separator while the Python connector's
+  urlparse reads the authority to the `@`: `http://victim:9090\\@attacker:9091` matched the
+  stored origin on the Node side yet connected (with retained credentials) to the attacker
+  host on the Python side. `assertDatasourceEndpointAllowed` now rejects ANY endpoint
+  containing a backslash (no legitimate endpoint has one) — central, so every datasource
+  endpoint write is covered; regression tests pin the shape on the guard and the PATCH.
+- Minors: a non-empty settings object that sanitizes to EMPTY is a 400 (a fully-invalid
+  direct-API payload must not read as an explicit clear — the manage tests now use the REAL
+  sanitizer logic instead of a pass-through stub); the connector blocks a query-level
+  `SETTINGS` token outright (readonly=1's changeable_in_readonly nuance is a server-profile
+  detail — belt over suspenders, test pinned); the guide's Timeout row states that
+  Loki/Tempo/Jaeger/Dynatrace/Datadog store but do not yet apply the value (4 locales).
+- Out-of-diff cleanups folded in (the same guide contradicted this PR's own corrections two
+  sections up): the v1 `adminEmails` admin model and the false "private IPs blocked" claim
+  corrected in 4 locales, the v1-only "Allowed Networks" section gets a v1-legacy caution,
+  and the stale "7 datasource kinds" count → 8 (Mimir).
+- Recorded follow-up (pre-existing, out of scope): apply the origin compare inside
+  `resolveConnConfig` (a row-endpoint change via the generic /api/integrations upsert path
+  carries stored creds at query time — predates this PR); the deprecated slug query path does
+  not load per-instance timeoutS (tighten-only gap, no UI caller).

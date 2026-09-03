@@ -13,7 +13,17 @@ const upsertSchema = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/datasources', () => ({
-  sanitizeDsSettings: (x: unknown) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
+  // REAL sanitizer (round-6: a pass-through stub hid the empty-sanitize 400 path and could
+  // mask a regression letting raw body.settings reach the blob)
+  sanitizeDsSettings: (x: unknown) => {
+    if (!x || typeof x !== 'object' || Array.isArray(x)) return {};
+    const o = x as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    if (typeof o.timeoutS === 'number' && Number.isInteger(o.timeoutS) && o.timeoutS >= 1 && o.timeoutS <= 60) out.timeoutS = o.timeoutS;
+    if (typeof o.database === 'string' && o.database.length <= 128 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(o.database)
+        && !['system', 'information_schema'].includes(o.database.toLowerCase())) out.database = o.database;
+    return out;
+  },
   createDatasource: (...a: unknown[]) => createDatasource(...a),
   updateDatasource: (...a: unknown[]) => updateDatasource(...a),
   getDatasource: (...a: unknown[]) => getDatasource(...a),
@@ -231,6 +241,24 @@ describe('PATCH update', () => {
     expect(mirrored[0]).toBe('prometheus');
     expect(mirrored[1].token).toBe('tok');
     expect(mirrored[1].timeoutS).toBe(15);
+  });
+
+  it('a backslash endpoint is rejected on PATCH (URL-parser differential, round-6)', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+    const { PATCH } = await import('./route');
+    const res = await PATCH(req({ id: 7, endpoint: 'http://old:9090\\@attacker.example:9091', creds: {} }, 'PATCH'));
+    expect(res.status).toBe(400);
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
+  });
+
+  it('a non-empty settings object that sanitizes to EMPTY is a 400, never a silent clear (round-6)', async () => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://ch:8123', authType: 'none', isDefault: false, settings: { database: 'metrics' } });
+    const { PATCH } = await import('./route');
+    const res = await PATCH(req({ id: 7, settings: { timeoutS: 0 } }, 'PATCH'));
+    expect(res.status).toBe(400);
+    expect(updateDatasource).not.toHaveBeenCalled();
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
   });
 
   it('an authType downgrade prunes residue auth keys from the blob', async () => {

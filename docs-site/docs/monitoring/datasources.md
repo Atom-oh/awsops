@@ -21,7 +21,7 @@ AWSops 데이터소스 기능은 외부 관측성 플랫폼을 중앙에서 관�
 <DatasourceFlow />
 
 주요 특징:
-- **7종 데이터소스** 지원 (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+- **8종 데이터소스** 지원 (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 - **CRUD 관리**: 데이터소스 추가, 수정, 삭제 (관리자 전용)
 - **연결 테스트**: 원클릭 연결 확인 및 응답 시간 측정
 - **쿼리 실행**: 각 데이터소스 고유 쿼리 언어 지원
@@ -42,7 +42,7 @@ AWSops 데이터소스 기능은 외부 관측성 플랫폼을 중앙에서 관�
 ## 데이터소스 추가
 
 :::info 관리자 전용
-데이터소스 생성, 수정, 삭제는 관리자 역할이 필요합니다. 관리자는 `data/config.json`의 `adminEmails`에 등록된 사용자입니다. 비 관리자는 페이지 진입 시 **Access Denied** 화면이 표시됩니다.
+데이터소스 생성, 수정, 삭제는 관리자 역할이 필요합니다. v2의 관리자는 Cognito 관리자 그룹 또는 SSM 이메일 허용 목록으로 판별됩니다(v1의 `data/config.json` `adminEmails` 방식은 폐기). 비 관리자는 페이지 진입 시 **Access Denied** 화면이 표시됩니다.
 :::
 
 :::info 멀티 어카운트와 무관
@@ -54,10 +54,10 @@ AWSops 데이터소스 기능은 외부 관측성 플랫폼을 중앙에서 관�
 | 필드 | 필수 | 설명 |
 |------|------|------|
 | **Name** | O | 데이터소스 식별 이름 |
-| **Type** | O | 데이터소스 유형 (7종 중 선택) |
+| **Type** | O | 데이터소스 유형 (8종 중 선택) |
 | **URL** | O | 엔드포인트 URL (예: `http://prometheus:9090`) |
 | **Authentication** | - | 인증 방식 (None, Basic, Bearer Token, Custom Header) |
-| **Timeout** | - | 업스트림 쿼리 실행 제한(초, 1–60 · 기본 10) — Prometheus/Mimir는 API `timeout` 파라미터로, ClickHouse는 `max_execution_time`으로 전달 |
+| **Timeout** | - | 업스트림 쿼리 실행 제한(초, 1–60 · 기본 10) — Prometheus/Mimir는 API `timeout` 파라미터로, ClickHouse는 `max_execution_time`으로 전달. 그 외 kind(Loki/Tempo/Jaeger/Dynatrace/Datadog)는 저장만 되고 현재는 적용되지 않음 |
 | **Database** | - | 기본 데이터베이스 이름 (ClickHouse 전용, 식별자만 허용) |
 
 :::note v1과의 차이
@@ -163,7 +163,7 @@ fetch logs | filter contains(content, "error") | limit 100
 
 데이터소스 URL에 대해 다음 보안 검사가 적용됩니다:
 
-- **프라이빗 IP 차단**: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `127.0.0.1` 등 내부 IP 차단
+- **차단 대상**: 메타데이터(169.254.169.254)·루프백·링크로컬 주소만 차단 — 사설(RFC1918) 데이터소스 엔드포인트는 ADR-007에 따라 허용됩니다(백슬래시 포함 URL은 파서 차이 악용 방지를 위해 거부)
 - **메타데이터 엔드포인트 차단**: `169.254.169.254` (EC2 인스턴스 메타데이터) 접근 차단
 - **링크-로컬 주소 차단**: `169.254.x.x` 대역 차단
 - **프로토콜 제한**: `http://`와 `https://`만 허용
@@ -277,6 +277,10 @@ Loki/Mimir/Tempo → `/monitoring`). 프롬프트는 자동으로 전송되지 �
 에이전트는 해당 커넥터의 쿼리/스키마 도구로 데이터소스의 응답 상태를 점검합니다.
 
 ## Allowed Networks
+
+:::caution v1 문서
+이 섹션은 v1의 Allowed Networks 기능을 설명합니다. v2에는 이 기능이 없습니다 — 사설(RFC1918) 데이터소스 엔드포인트는 ADR-007에 따라 기본 허용되며, 차단 대상은 메타데이터·루프백·링크로컬뿐입니다.
+:::
 
 관리자는 SSRF 방지로 차단되는 프라이빗 네트워크에 대해 예외 허용 목록을 설정할 수 있습니다.
 

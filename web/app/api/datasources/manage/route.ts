@@ -72,8 +72,14 @@ export async function POST(request: Request) {
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
   const authType = typeof body.authType === 'string' && AUTH_TYPES.includes(body.authType) ? body.authType : 'none';
   const creds = pickCredKeys(body.creds) ?? {};
-  // gap L203: connection settings — sanitized (out-of-contract values are dropped, not errors)
+  // gap L203: connection settings — sanitized. A non-empty settings object that sanitizes to
+  // EMPTY is a 400 (round-6: a fully-invalid direct-API payload must not read as an explicit
+  // clear); individually invalid keys alongside valid ones are still dropped.
   const settings = sanitizeDsSettings(body.settings);
+  if (body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)
+      && Object.keys(body.settings as object).length > 0 && Object.keys(settings).length === 0) {
+    return json({ error: 'invalid settings (timeoutS 1–60 integer; database identifier, non-system)' }, 400);
+  }
 
   if (!name) return json({ error: 'name required' }, 400);
   if (!isDatasourceKind(kind)) return json({ error: 'unknown datasource kind' }, 400);
@@ -111,8 +117,13 @@ export async function PATCH(request: Request) {
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : undefined;
   const authType = typeof body.authType === 'string' && AUTH_TYPES.includes(body.authType) ? body.authType : undefined;
   const creds = pickCredKeys(body.creds);
-  // gap L203: settings update only when the key is present (absent ≠ clear; {} clears)
+  // gap L203: settings update only when the key is present (absent ≠ clear; {} clears).
+  // A NON-EMPTY object sanitizing to empty is a 400, not a silent clear (round-6).
   const settings = body.settings !== undefined ? sanitizeDsSettings(body.settings) : undefined;
+  if (body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)
+      && Object.keys(body.settings as object).length > 0 && settings !== undefined && Object.keys(settings).length === 0) {
+    return json({ error: 'invalid settings (timeoutS 1–60 integer; database identifier, non-system)' }, 400);
+  }
 
   if (endpoint !== undefined) {
     try { assertDatasourceEndpointAllowed(endpoint); } catch (e) { return json({ error: (e as Error).message }, 400); }

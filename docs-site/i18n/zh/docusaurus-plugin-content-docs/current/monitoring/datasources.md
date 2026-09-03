@@ -21,7 +21,7 @@ AWSops 数据源功能对外部可观测性平台进行集中管理。注册数�
 <DatasourceFlow />
 
 主要特点：
-- 支持 **7 种数据源**（Prometheus、Loki、Tempo、ClickHouse、Jaeger、Dynatrace、Datadog）
+- 支持 **8 种数据源**（Prometheus、Mimir、Loki、Tempo、ClickHouse、Jaeger、Dynatrace、Datadog）
 - **CRUD 管理**：添加、修改、删除数据源（仅限管理员）
 - **连接测试**：一键连接确认与响应时间测量
 - **查询执行**：支持各数据源专有的查询语言
@@ -42,7 +42,7 @@ AWSops 数据源功能对外部可观测性平台进行集中管理。注册数�
 ## 添加数据源
 
 :::info 仅限管理员
-数据源的创建、修改、删除需要管理员角色。管理员是登记在 `data/config.json` 的 `adminEmails` 中的用户。非管理员进入页面时会显示 **Access Denied** 画面。
+数据源的创建、修改、删除需要管理员角色。v2 的管理员由 Cognito 管理员组或 SSM 邮箱允许列表判定（v1 的 `data/config.json` `adminEmails` 方式已废弃）。非管理员进入页面时会显示 **Access Denied** 画面。
 :::
 
 :::info 与多账户无关
@@ -54,10 +54,10 @@ AWSops 数据源功能对外部可观测性平台进行集中管理。注册数�
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | **Name** | O | 数据源识别名称 |
-| **Type** | O | 数据源类型（从 7 种中选择） |
+| **Type** | O | 数据源类型（从 8 种中选择） |
 | **URL** | O | 端点 URL（例：`http://prometheus:9090`） |
 | **Authentication** | - | 认证方式（None、Basic、Bearer Token、Custom Header） |
-| **Timeout** | - | 上游查询执行上限（秒，1–60 · 默认 10）— Prometheus/Mimir 通过 API `timeout` 参数转发，ClickHouse 通过 `max_execution_time` 转发 |
+| **Timeout** | - | 上游查询执行上限（秒，1–60 · 默认 10）— Prometheus/Mimir 通过 API `timeout` 参数转发，ClickHouse 通过 `max_execution_time` 转发；其他类型（Loki/Tempo/Jaeger/Dynatrace/Datadog）仅存储该值，目前不生效 |
 | **Database** | - | 默认数据库名称（仅 ClickHouse，仅允许标识符） |
 
 :::note 与 v1 的差异
@@ -163,7 +163,7 @@ fetch logs | filter contains(content, "error") | limit 100
 
 对数据源 URL 应用以下安全检查：
 
-- **拦截私有 IP**：拦截 `10.x.x.x`、`172.16-31.x.x`、`192.168.x.x`、`127.0.0.1` 等内部 IP
+- **拦截对象**：仅拦截元数据（169.254.169.254）、回环、链路本地地址 — 按 ADR-007，私有（RFC1918）数据源端点是允许的（含反斜杠的 URL 会被拒绝，以防解析器差异被利用）
 - **拦截元数据端点**：拦截对 `169.254.169.254`（EC2 实例元数据）的访问
 - **拦截链路本地地址**：拦截 `169.254.x.x` 网段
 - **协议限制**：仅允许 `http://` 和 `https://`
@@ -281,6 +281,10 @@ Loki/Mimir/Tempo → `/monitoring`)。**不会自动发送** — 请确认内容
 
 
 ## Allowed Networks
+
+:::caution v1 文档
+本节描述的是 v1 的 Allowed Networks 功能，v2 中不存在 — 按 ADR-007，私有（RFC1918）数据源端点默认允许；仅拦截元数据/回环/链路本地地址。
+:::
 
 管理员可以针对被 SSRF 防护拦截的私有网络设置例外允许列表。
 

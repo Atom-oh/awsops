@@ -43,6 +43,11 @@ _TABLE_FN = re.compile(
     re.IGNORECASE,
 )
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")  # db.table or table
+# Query-level SETTINGS is never legitimate in a generated/agent query and could try to relax
+# per-URL bounds (max_execution_time/max_result_rows). readonly=1 already rejects settings not
+# marked changeable_in_readonly, but that's a server-profile nuance — block the token outright
+# (PR #286 round-6; mirrors signal_catalog_gen's _SETTINGS_CLAUSE).
+_SETTINGS_CLAUSE = re.compile(r"\bSETTINGS\b", re.IGNORECASE)
 
 
 def _validate_identifier(name):
@@ -62,6 +67,8 @@ def _assert_read_only(sql):
     # version of the shared guard defaulted to Postgres-style nesting unconditionally, which let a
     # single crafted comment swallow real SQL (incl. a _TABLE_FN call) between two adjacent-looking
     # comments; see sql_readonly_guard.py's module docstring for the traced PoC.
+    if _SETTINGS_CLAUSE.search(sql):
+        raise ValueError("read-only: query-level SETTINGS is not allowed")
     _shared_assert_read_only(
         sql,
         extra_forbidden_re=_TABLE_FN,

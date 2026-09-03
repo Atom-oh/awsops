@@ -148,6 +148,13 @@ export function isAlwaysBlockedHost(hostOrIp: string): boolean {
  *  datasources). Any other non-literal hostname passes the registration guard and is re-checked at
  *  connection time by the connector Lambda (datasource_http). */
 export function assertDatasourceEndpointAllowed(urlString: string): void {
+  // URL-parser differential guard (PR #286 round-6): WHATWG URL (here, and the manage route's
+  // origin compare) treats '\\' as a path separator, while the Python connector's
+  // urlparse/urllib treats the authority as running to the '@' — so
+  // 'http://victim:9090\\@attacker:9091' reads as victim on the Node side but connects to
+  // attacker on the Python side, carrying the stored credential. No legitimate endpoint
+  // contains a backslash; reject outright so both parsers always see the same host.
+  if (urlString.includes('\\')) throw new Error('endpoint must not contain a backslash');
   let url: URL;
   try { url = new URL(urlString); } catch { throw new Error('endpoint must be a valid URL'); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {

@@ -21,7 +21,7 @@ AWSops のデータソース機能は、外部オブザーバビリティプラ�
 <DatasourceFlow />
 
 主な特徴:
-- **7 種のデータソース**をサポート (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+- **8 種のデータソース**をサポート (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 - **CRUD 管理**: データソースの追加、修正、削除（管理者専用）
 - **接続テスト**: ワンクリックでの接続確認と応答時間の測定
 - **クエリ実行**: 各データソース固有のクエリ言語をサポート
@@ -42,7 +42,7 @@ AWSops のデータソース機能は、外部オブザーバビリティプラ�
 ## データソースの追加
 
 :::info 管理者専用
-データソースの作成、修正、削除には管理者ロールが必要です。管理者は `data/config.json` の `adminEmails` に登録されたユーザーです。非管理者はページ表示時に **Access Denied** 画面が表示されます。
+データソースの作成、修正、削除には管理者ロールが必要です。v2 の管理者は Cognito 管理者グループまたは SSM メール許可リストで判定されます（v1 の `data/config.json` `adminEmails` 方式は廃止）。非管理者はページ表示時に **Access Denied** 画面が表示されます。
 :::
 
 :::info マルチアカウントとは無関係
@@ -54,10 +54,10 @@ AWSops のデータソース機能は、外部オブザーバビリティプラ�
 | フィールド | 必須 | 説明 |
 |------|------|------|
 | **Name** | O | データソースの識別名 |
-| **Type** | O | データソースのタイプ（7 種から選択） |
+| **Type** | O | データソースのタイプ（8 種から選択） |
 | **URL** | O | エンドポイント URL（例: `http://prometheus:9090`） |
 | **Authentication** | - | 認証方式 (None, Basic, Bearer Token, Custom Header) |
-| **Timeout** | - | アップストリームのクエリ実行上限（秒、1–60・デフォルト 10）— Prometheus/Mimir は API `timeout` パラメータ、ClickHouse は `max_execution_time` として転送 |
+| **Timeout** | - | アップストリームのクエリ実行上限（秒、1–60・デフォルト 10）— Prometheus/Mimir は API `timeout` パラメータ、ClickHouse は `max_execution_time` として転送。その他の種類（Loki/Tempo/Jaeger/Dynatrace/Datadog）は保存のみで現在は適用されません |
 | **Database** | - | デフォルトのデータベース名（ClickHouse 専用、識別子のみ） |
 
 :::note v1 との違い
@@ -163,7 +163,7 @@ fetch logs | filter contains(content, "error") | limit 100
 
 データソースの URL に対して以下のセキュリティ検査が適用されます：
 
-- **プライベート IP のブロック**: `10.x.x.x`、`172.16-31.x.x`、`192.168.x.x`、`127.0.0.1` などの内部 IP をブロック
+- **ブロック対象**: メタデータ（169.254.169.254）・ループバック・リンクローカルのみブロック — プライベート（RFC1918）データソースエンドポイントは ADR-007 により許可されます（バックスラッシュを含む URL はパーサー差異の悪用防止のため拒否）
 - **メタデータエンドポイントのブロック**: `169.254.169.254`（EC2 インスタンスメタデータ）へのアクセスをブロック
 - **リンクローカルアドレスのブロック**: `169.254.x.x` 帯域をブロック
 - **プロトコル制限**: `http://` と `https://` のみ許可
@@ -281,6 +281,10 @@ Loki/Mimir/Tempo → `/monitoring`)。**自動送信はされません** — 内
 
 
 ## Allowed Networks
+
+:::caution v1 ドキュメント
+このセクションは v1 の Allowed Networks 機能の説明であり、v2 には存在しません — ADR-007 によりプライベート（RFC1918）データソースエンドポイントは既定で許可され、ブロックされるのはメタデータ／ループバック／リンクローカルのみです。
+:::
 
 管理者は、SSRF 防止でブロックされるプライベートネットワークに対して、例外の許可リストを設定できます。
 

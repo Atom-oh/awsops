@@ -42,7 +42,7 @@ Key features:
 ## Adding Datasources
 
 :::info Admin Only
-Creating, editing, and deleting datasources requires an admin role. Admins are users listed in `adminEmails` in `data/config.json`.
+Creating, editing, and deleting datasources requires an admin role. In v2, admins are determined by the Cognito admin group or the SSM email allowlist (v1's `data/config.json` `adminEmails` model is retired).
 :::
 
 ### Configuration Fields
@@ -50,10 +50,10 @@ Creating, editing, and deleting datasources requires an admin role. Admins are u
 | Field | Required | Description |
 |-------|----------|-------------|
 | **Name** | Yes | Datasource display name |
-| **Type** | Yes | Datasource type (select from 7 types) |
+| **Type** | Yes | Datasource type (select from 8 types) |
 | **URL** | Yes | Endpoint URL (e.g., `http://prometheus:9090`) |
 | **Authentication** | No | Auth method (None, Basic, Bearer Token, Custom Header) |
-| **Timeout** | No | Upstream query execution bound (seconds, 1–60 · default 10) — forwarded as the API `timeout` param for Prometheus/Mimir and `max_execution_time` for ClickHouse |
+| **Timeout** | No | Upstream query execution bound (seconds, 1–60 · default 10) — forwarded as the API `timeout` param for Prometheus/Mimir and `max_execution_time` for ClickHouse; other kinds (Loki/Tempo/Jaeger/Dynatrace/Datadog) store the value but do not apply it today |
 | **Database** | No | Default database name (ClickHouse only, identifier-only) |
 
 :::note Difference from v1
@@ -159,7 +159,7 @@ Stored passwords and tokens are masked in the UI. New values can only be entered
 
 The following security checks are applied to datasource URLs:
 
-- **Private IP blocking**: Blocks `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `127.0.0.1` and other internal IPs
+- **Blocked targets**: only metadata (169.254.169.254), loopback, and link-local addresses — private (RFC1918) datasource endpoints are ALLOWED per ADR-007 (URLs containing a backslash are rejected to prevent parser-differential abuse)
 - **Metadata endpoint blocking**: Blocks `169.254.169.254` (EC2 instance metadata) access
 - **Link-local address blocking**: Blocks the `169.254.x.x` range
 - **Protocol restriction**: Only `http://` and `https://` are allowed
@@ -268,6 +268,10 @@ Loki/Mimir/Tempo → `/monitoring`). It is **never sent automatically** — revi
 and it starts a fresh conversation. The agent probes the datasource using that connector's
 query/schema tools.
 ## Allowed Networks
+
+:::caution v1 documentation
+This section describes v1's Allowed Networks feature, which does not exist in v2 — private (RFC1918) datasource endpoints are allowed by default per ADR-007; only metadata/loopback/link-local addresses are blocked.
+:::
 
 Admins can configure an allow list to exempt specific private network addresses from SSRF blocking.
 

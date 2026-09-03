@@ -174,6 +174,14 @@ class TestTools(unittest.TestCase):
         self.assertIn("max_execution_time=55", captured["url"])
         self.assertEqual(captured["timeout"], 58)
 
+    def test_settings_clause_rejected_before_request(self):
+        # a query-level SETTINGS could try to relax the per-URL bounds; blocked outright
+        with mock.patch.object(ch, "http_json") as hj:
+            out = ch.lambda_handler({"tool_name": "clickhouse_query",
+                                     "arguments": {"sql": "SELECT 1 SETTINGS max_execution_time=0"}}, None)
+        self.assertEqual(out["statusCode"], 400)
+        hj.assert_not_called()
+
     def test_configured_timeout_is_a_ceiling_not_a_default(self):
         captured = {}
 
