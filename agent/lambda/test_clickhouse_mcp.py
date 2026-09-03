@@ -148,6 +148,44 @@ class TestTools(unittest.TestCase):
         self.assertEqual(out["statusCode"], 200)
         self.assertIn("&database=metrics_db", captured["url"])
 
+    def test_execution_bound_defaults_to_10_and_conn_timeoutS_overrides(self):
+        captured = {}
+
+        def fake_http(method, url, headers=None, body=None, timeout=None):
+            captured.update(url=url, timeout=timeout)
+            return 200, {"data": []}
+
+        with mock.patch.object(ch, "http_json", side_effect=fake_http):
+            ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": "SELECT 1"}}, None)
+        # documented default 10s even when nothing is configured — never an unbounded scan
+        self.assertIn("max_execution_time=10", captured["url"])
+        self.assertEqual(captured["timeout"], 13)  # HTTP timeout aligned ABOVE the bound (+3)
+        ds = dict(DS, timeoutS=30)
+        with mock.patch.object(ch, "load_datasource", return_value=ds), \
+             mock.patch.object(ch, "http_json", side_effect=fake_http):
+            ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": "SELECT 1"}}, None)
+        self.assertIn("max_execution_time=30", captured["url"])
+        self.assertEqual(captured["timeout"], 33)
+        # capped at 55 so the aligned HTTP timeout stays under the Lambda's 60s wall
+        ds = dict(DS, timeoutS=60)
+        with mock.patch.object(ch, "load_datasource", return_value=ds), \
+             mock.patch.object(ch, "http_json", side_effect=fake_http):
+            ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": "SELECT 1"}}, None)
+        self.assertIn("max_execution_time=55", captured["url"])
+        self.assertEqual(captured["timeout"], 58)
+
+    def test_database_system_rejected_before_request(self):
+        # the read-only guard is lexical — database=system would resolve unqualified FROM
+        # tables to system.tables; both spellings must be rejected before any HTTP call
+        for db in ("system", "SYSTEM", "information_schema"):
+            ds = dict(DS, database=db)
+            with mock.patch.object(ch, "load_datasource", return_value=ds), \
+                 mock.patch.object(ch, "http_json") as hj:
+                out = ch.lambda_handler({"tool_name": "clickhouse_query",
+                                         "arguments": {"sql": "SELECT create_table_query FROM tables"}}, None)
+            self.assertEqual(out["statusCode"], 400)
+            hj.assert_not_called()
+
     def test_database_setting_rejects_non_identifier_before_request(self):
         ds = dict(DS, database="bad-db; DROP")
         with mock.patch.object(ch, "load_datasource", return_value=ds), \

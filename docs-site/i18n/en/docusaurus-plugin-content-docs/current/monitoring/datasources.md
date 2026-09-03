@@ -192,27 +192,19 @@ The AI assistant can leverage registered datasources for analysis.
 Datasource-related questions are processed through the `datasource` route. The AI can analyze both Steampipe data and external datasources together.
 :::
 
-## Settings Reference
+## Settings reference
 
-### Common Settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| **timeout** | 30s | Request timeout (max 120s) |
-| **cacheTTL** | 300s (5min) | Query result cache time-to-live |
-
-### ClickHouse Only
+### Common
 
 | Setting | Default | Description |
-|---------|---------|-------------|
-| **database** | `default` | Target database name |
+|------|--------|------|
+| **Timeout** | 10s | Upstream query execution bound (seconds, 1–60). ClickHouse applies it on every path (Explore, service graph, agent) with the connector aligning its own HTTP timeout above it; Prometheus/Mimir apply it as the Explore-path API `timeout` param, capped at 10s under the connector's 12s HTTP timeout |
 
-### Limitations
+### ClickHouse only
 
-- Maximum registered datasources: Unlimited
-- Maximum query result rows: 1,000
-- ClickHouse: SELECT queries only (DDL/DML blocked)
-- URLs: Private IPs and metadata endpoints blocked
+| Setting | Default | Description |
+|------|--------|------|
+| **Database** | (server default) | Default database name — identifier-only; `system`/`information_schema` are rejected (validated on both the web tier and the connector) |
 
 ## Explore Page
 

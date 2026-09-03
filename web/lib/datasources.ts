@@ -33,9 +33,16 @@ export function sanitizeDsSettings(input: unknown): DsSettings {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
   const o = input as Record<string, unknown>;
   const out: DsSettings = {};
-  const t = Number(o.timeoutS);
-  if (Number.isInteger(t) && t >= 1 && t <= 60) out.timeoutS = t;
-  if (typeof o.database === 'string' && DB_IDENTIFIER.test(o.database)) out.database = o.database;
+  // strict type check — no coercion ('30'/true must NOT pass; out-of-contract is dropped)
+  if (typeof o.timeoutS === 'number' && Number.isInteger(o.timeoutS) && o.timeoutS >= 1 && o.timeoutS <= 60) out.timeoutS = o.timeoutS;
+  // identifier-only, and NEVER the system databases: the connector's read-only guard is
+  // lexical over the SQL text — database=system would resolve an unqualified FROM tables to
+  // system.tables (create_table_query can carry plaintext engine credentials). Re-checked in
+  // the connector too (defense in depth on both sides of the trust boundary).
+  if (
+    typeof o.database === 'string' && DB_IDENTIFIER.test(o.database)
+    && !['system', 'information_schema'].includes(o.database.toLowerCase())
+  ) out.database = o.database;
   return out;
 }
 
@@ -138,9 +145,12 @@ export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> 
     ...(cred ?? {}),
     ...(ds.endpoint ? { endpoint: ds.endpoint } : {}),
     ...(ds.authType ? { authType: ds.authType } : {}),
-    // gap L203: the ClickHouse default database rides the conn config (identifier-validated on
-    // write AND read; other kinds never set it) — the connector appends it as &database=.
-    ...(ds.kind === 'clickhouse' && ds.settings.database ? { database: ds.settings.database } : {}),
+    // gap L203: the ClickHouse settings ride the conn config — database (identifier-validated
+    // on write AND read) becomes &database=, and timeoutS becomes the connector's DEFAULT
+    // max_execution_time, so the Explore route, the service-graph sources, and the agent
+    // path all get the same bound from one mechanism.
+    ...(ds.kind === 'clickhouse' && ds.settings?.database ? { database: ds.settings.database } : {}),
+    ...(ds.kind === 'clickhouse' && ds.settings?.timeoutS ? { timeoutS: ds.settings.timeoutS } : {}),
   } as ConnConfig;
 }
 

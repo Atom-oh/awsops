@@ -99,6 +99,15 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     ds = load_datasource(SLUG)
     assert_host_allowed(ds["endpoint"])
     base = ds["endpoint"].rstrip("/")
+    # Gap L203: the per-datasource timeoutS (riding the conn config / secret blob) is the
+    # DEFAULT execution bound when the caller passed none — one mechanism covers Explore,
+    # the service-graph sources, and the agent/worker path. Absent everything → 10s (the
+    # documented default; an unbounded server-side scan is exactly what _clamp_seconds's
+    # docstring exists to stop). Capped at 55s so the aligned HTTP timeout below (+3s)
+    # stays under the connector Lambda's 60s wall.
+    if max_execution_time is None:
+        max_execution_time = _clamp_seconds(ds.get("timeoutS")) or 10
+    max_execution_time = min(int(max_execution_time), 55)
     # ClickHouse's default output_format_json_quote_64bit_integers=1 (Int64 as JSON STRINGS) is
     # kept deliberately: this function serves EVERY consumer (Explore, graph queries, agent tools),
     # and forcing JSON numbers would silently round UInt64 values above 2^53 (hash/ID columns) in
@@ -107,17 +116,24 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     url = f"{base}/?readonly=1&max_result_rows={max_rows}&default_format=JSON"
     # Gap L203: per-datasource default database (identifier-only, validated on BOTH sides —
     # the web tier's sanitizeDsSettings on write/read AND here before URL interpolation).
+    # system/information_schema are REJECTED outright: the read-only guard is lexical over
+    # the SQL text, so database=system would resolve an unqualified `FROM tables` to
+    # system.tables (create_table_query/engine_full can carry plaintext engine credentials) —
+    # the exact reach the guard's own docstring forbids.
     database = ds.get("database")
     if database:
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", str(database)):
+        db = str(database)
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", db) or db.lower() in ("system", "information_schema"):
             return err("invalid database identifier in datasource settings")
-        url += f"&database={database}"
-    if max_execution_time:
-        url += f"&max_execution_time={max_execution_time}&timeout_overflow_mode=throw"
+        url += f"&database={db}"
+    url += f"&max_execution_time={max_execution_time}&timeout_overflow_mode=throw"
     headers = dict(auth_headers(ds))
     headers["Content-Type"] = "text/plain; charset=utf-8"
     body = f"{sql}\nFORMAT JSON"
-    status, data = http_json("POST", url, headers=headers, body=body)
+    # HTTP timeout ALIGNED ABOVE the execution bound (+3s margin): the shared default of 12s
+    # would client-abort a legitimately long query while the server kept scanning under
+    # timeout_overflow_mode=throw — the server-side bound must fire first.
+    status, data = http_json("POST", url, headers=headers, body=body, timeout=max_execution_time + 3)
     if status >= 400:
         snippet = data.get("raw") or data.get("exception") or data
         return err(f"ClickHouse query failed ({status}): {str(snippet)[:300]}")

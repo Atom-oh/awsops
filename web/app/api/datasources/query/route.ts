@@ -61,13 +61,14 @@ export async function POST(request: Request) {
   const args: Record<string, unknown> = { [spec.arg]: query, ...(spec.extra ?? {}) };
 
   // Upstream execution bound (review hardening + gap L203 per-datasource setting):
-  // prometheus/mimir accept a `timeout` API param (connector clamps 1..60s) — the effective
-  // value is the datasource's own timeoutS (already validated 1..60) further capped at 10s so
-  // it stays UNDER the connector's 12s HTTP timeout (a longer upstream bound than the HTTP
-  // client's is dead config). clickhouse forwards it as max_execution_time (connector clamps
-  // 1..60 — its HTTP timeout is longer). Other kinds see no unknown arg.
+  // prometheus/mimir accept a `timeout` API param — the effective value is the datasource's
+  // own timeoutS (validated 1..60) further capped at 10s so it stays UNDER the connector's
+  // 12s HTTP timeout (a longer upstream bound than the HTTP client's is dead config).
+  // clickhouse needs NO arg here: its timeoutS rides the conn config (resolveConnConfig) and
+  // the connector applies it as the default max_execution_time on EVERY path — Explore,
+  // service-graph sources, and the agent/worker secret path — aligning its own HTTP timeout
+  // above the bound. Other kinds see no unknown arg.
   if (kind === 'prometheus' || kind === 'mimir') args.timeout = `${Math.min(dsTimeoutS ?? 10, 10)}s`;
-  if (kind === 'clickhouse' && dsTimeoutS) args.max_execution_time = dsTimeoutS;
 
   // Range mode: absent/false = instant; true = legacy 1h range (connector default);
   // { window, step } = explicit time range. An object range is validated regardless of kind (so a bad

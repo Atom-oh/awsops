@@ -106,15 +106,16 @@ describe('POST /api/datasources/query', () => {
     expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].args.timeout).toBe('10s'); // capped
   });
 
-  it('an instance timeoutS becomes clickhouse max_execution_time (uncapped to the connector clamp)', async () => {
+  it('clickhouse sends NO timeout arg — the bound rides connConfig (the connector defaults/clamps it)', async () => {
     getDatasource.mockResolvedValue({ id: 4, kind: 'clickhouse', settings: { timeoutS: 30 } });
-    resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch.internal:8123' });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch.internal:8123', timeoutS: 30 });
     invokeMcpLambdaTool.mockResolvedValue({ rows: [] });
     const { POST } = await import('./route');
     await POST(req({ id: 4, query: 'SELECT 1' }));
     const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
-    expect(call.args.max_execution_time).toBe(30);
+    expect(call.args.max_execution_time).toBeUndefined();
     expect(call.args.timeout).toBeUndefined();
+    expect(call.connConfig.timeoutS).toBe(30);
   });
 
   it('connector error → 502 with a clean message', async () => {

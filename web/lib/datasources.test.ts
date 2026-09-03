@@ -28,6 +28,11 @@ describe('sanitizeDsSettings (gap L203)', () => {
     expect(sanitizeDsSettings({ timeoutS: 0 })).toEqual({});
     expect(sanitizeDsSettings({ timeoutS: 61 })).toEqual({});
     expect(sanitizeDsSettings({ timeoutS: 10.5 })).toEqual({});
+    expect(sanitizeDsSettings({ timeoutS: '30' })).toEqual({}); // no coercion — strings dropped
+    expect(sanitizeDsSettings({ timeoutS: true })).toEqual({});
+    expect(sanitizeDsSettings({ database: 'system' })).toEqual({}); // lexical-guard bypass vector
+    expect(sanitizeDsSettings({ database: 'SYSTEM' })).toEqual({});
+    expect(sanitizeDsSettings({ database: 'information_schema' })).toEqual({});
     expect(sanitizeDsSettings({ database: 'bad-db; DROP' })).toEqual({});
     expect(sanitizeDsSettings({ database: '1starts_with_digit' })).toEqual({});
     expect(sanitizeDsSettings(null)).toEqual({});
@@ -130,6 +135,17 @@ describe('resolveConnConfig', () => {
     await resolveConnConfig(row);
     expect(getCredentialById).toHaveBeenCalledWith(1);           // id only
     expect(getCredentialById).not.toHaveBeenCalledWith(1, 'prometheus'); // never the kind fallback
+  });
+
+  it('clickhouse settings ride the conn config (database + timeoutS); other kinds never set them', async () => {
+    getCredentialById.mockResolvedValueOnce(null);
+    const ch = { ...row, kind: 'clickhouse', settings: { database: 'metrics_db', timeoutS: 30 } };
+    expect(await resolveConnConfig(ch)).toMatchObject({ database: 'metrics_db', timeoutS: 30 });
+    getCredentialById.mockResolvedValueOnce(null);
+    const prom = { ...row, settings: { database: 'metrics_db', timeoutS: 30 } }; // kind: prometheus
+    const cc = await resolveConnConfig(prom);
+    expect(cc).not.toHaveProperty('database');
+    expect(cc).not.toHaveProperty('timeoutS');
   });
 
   it('takes auth material from the SM credential but keeps the ROW authoritative for endpoint+authType', async () => {

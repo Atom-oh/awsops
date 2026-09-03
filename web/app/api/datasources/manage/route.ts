@@ -68,7 +68,9 @@ export async function POST(request: Request) {
   if (!endpoint) return json({ error: 'endpoint required' }, 400);
   try { assertDatasourceEndpointAllowed(endpoint); } catch (e) { return json({ error: (e as Error).message }, 400); }
 
-  const blob = { endpoint, authType, ...creds };
+  // Settings ride the secret blob too (non-secret config, but it keeps the agent/worker
+  // connector path credential-blind — load_datasource reads only the secret map there).
+  const blob = { endpoint, authType, ...creds, ...settings };
   try {
     const id = await createDatasource({ name, kind, endpoint, authType: authType as 'none', settings });
     await setIntegrationCredentialById(id, blob);
@@ -104,11 +106,12 @@ export async function PATCH(request: Request) {
     try { assertDatasourceEndpointAllowed(endpoint); } catch (e) { return json({ error: (e as Error).message }, 400); }
   }
   // Re-write the id credential when any connection field changed (so updateDatasource's mirror is fresh).
-  if (endpoint !== undefined || authType !== undefined || creds !== undefined) {
+  if (endpoint !== undefined || authType !== undefined || creds !== undefined || settings !== undefined) {
     const blob = {
       endpoint: endpoint ?? ds.endpoint ?? '',
       authType: authType ?? ds.authType ?? 'none',
       ...(creds ?? {}),
+      ...(settings ?? ds.settings),
     };
     await setIntegrationCredentialById(id, blob);
   }

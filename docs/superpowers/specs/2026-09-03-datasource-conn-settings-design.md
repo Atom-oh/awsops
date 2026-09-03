@@ -45,3 +45,30 @@ Cache TTL / ClickHouse database — v1's Settings section).
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}` +
   `pytest agent/lambda/test_clickhouse_mcp.py`; docs-site field tables corrected in 4
   locales (they described v1's fields as if live); CHANGELOG EN/KO; audit tick + note.
+
+## Round-1 corrections (review-driven)
+
+- **`database=system` cannot bypass the lexical read-only guard (the L3 gate MAJOR)** —
+  `system`/`information_schema` (case-insensitive) are rejected in BOTH `sanitizeDsSettings`
+  and the connector's pre-URL check: with `database=system`, an unqualified `FROM tables`
+  would resolve to `system.tables` (create_table_query/engine_full can carry plaintext engine
+  credentials) with no `system` token in the SQL for the guard to see. Pre-HTTP regression
+  tests pin both spellings.
+- **The ClickHouse bound is honest end-to-end (the L2/L4 gate MAJORs)** — the round-0 comment
+  claiming "its HTTP timeout is longer" was FALSE (shared `HTTP_TIMEOUT = 12`); values 13–60
+  were dead config, and an unset setting left the scan unbounded despite the documented
+  default. Now: `timeoutS` rides the conn config/secret blob; the CONNECTOR owns the default
+  (10s when nothing is configured — never an unbounded scan), clamps to 55s, and aligns its
+  own HTTP timeout at bound+3s (under the Lambda's 60s wall) so the server-side bound always
+  fires first. One mechanism covers Explore, the service-graph sources
+  (ClickHouseOtelTraceSource/MetricsCallsSource resolve the same conn config), and the
+  agent/worker secret path (settings ride the per-instance blob — non-secret config, the
+  connector stays credential-blind). The Explore route no longer sends a ClickHouse arg.
+- **Claims narrowed to the real coverage (the L4/L5 gate MAJORs)** — CHANGELOG/spec/docs now
+  say: ClickHouse bound on every path; Prometheus/Mimir bound on the Explore path (API
+  `timeout` param, capped at 10s under the 12s connector HTTP timeout). The docs-site
+  "설정 참조" section (4 locales) — which still advertised v1's 30s/120s/cacheTTL semantics —
+  is rewritten to the shipped contract.
+- Minors: `sanitizeDsSettings` type-checks instead of coercing (`'30'`/`true` are dropped);
+  the settings-only PATCH also rewrites the per-instance secret blob so the agent path never
+  reads a stale bound.
