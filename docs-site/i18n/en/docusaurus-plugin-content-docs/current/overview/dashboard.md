@@ -51,7 +51,8 @@ Key resource metrics are organized into three groups.
 2. In the **AI Operations** row, click **Start chat** to begin a conversation, or reopen a previous one from **Recent AI conversations**.
 3. Check any tiles highlighted in warning/danger colors in the KPI section.
 4. Review the charts for resource composition, job status, and cost trend.
-5. Use the **Refresh** button in the header to reload all data. The last-updated time is shown alongside it.
+5. Use the **Refresh** button in the header to reload all data. The last-updated time is shown alongside it. Admins additionally see a **Sync all** button — it enqueues an on-demand all-types inventory sync (async batch: an enqueue acknowledgement, not a completion guarantee; already-running types are skipped; check via Refresh a few minutes later). Environments with sync disabled show a disabled note.
+6. Resource tiles carry state-decomposition sublines (e.g. EC2 running/stopped, EBS GiB · unencrypted, VPC subnets/NAT/TGW, ECS services/tasks, WAF rule groups/IP sets). A subline appears only once its data is loaded, and the EKS subline renders only when every registered cluster answered AND the account scope is all-accounts (partial data never fabricates a confident decomposition).
 
 :::tip Keeping data fresh
 The **Refresh** button shows the time data was last loaded (KST) and adds an **(outdated)** marker after 30 minutes. If highlighted tiles appear or the timestamp looks stale, refresh once.

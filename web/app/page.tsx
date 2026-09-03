@@ -146,7 +146,12 @@ export default function Home() {
       const r = await fetch('/api/inventory/all/refresh', { method: 'POST' });
       if (r.ok) return 'queued';
       if (r.status === 403) return 'forbidden';
-      if (r.status === 503) return 'unconfigured';
+      if (r.status === 503) {
+        // the route 503s for two DISTINCT states: sync disabled (permanent — latch the
+        // button) vs a transient enqueue failure (retryable) — branch on the body, not the code
+        const b = await r.json().catch(() => ({} as { status?: string }));
+        return b.status === 'unconfigured' ? 'unconfigured' : 'error';
+      }
       return 'error';
     } catch {
       return 'error';
@@ -184,6 +189,12 @@ export default function Home() {
     .sort((a, b) => (Number(b.lastSeenTs) || 0) - (Number(a.lastSeenTs) || 0))
     .slice(0, 8);
   const hasFleet = clusters.length > 0;
+  // Gap L82 EKS subline honesty gates (round-1 review): (a) an unreachable cluster comes back
+  // with ZERO counts — aggregating it would fabricate a confident '0/0 ready', so the subline
+  // renders only when EVERY cluster answered; (b) the fleet registry is UNSCOPED while the
+  // tile's cluster count is account-scoped — under a non-default account selection the two
+  // would describe different populations, so the subline is suppressed there.
+  const fleetMicroOk = hasFleet && clusters.every((c) => c.reachable) && scope.accounts === '__all__';
 
   // Security-issue rollup across the four /security findings (public S3 + open ingress +
   // unencrypted EBS + IAM without MFA). The public-S3 count is produced by the summary
@@ -458,21 +469,21 @@ export default function Home() {
           <div className="flex flex-col gap-3">
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400">COMPUTE &amp; CONTAINERS</div>
             <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-              <StatTile size="compact" label="EC2 인스턴스" value={n('ec2')} href="/inventory/ec2" icon={typeIcon('ec2')}micro={micro('ec2')} />
-              <StatTile size="compact" label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" icon={typeIcon('lambda')}micro={micro('lambda')} />
-              <StatTile size="compact" label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" icon={typeIcon('ecs_cluster')}micro={micro('ecs_cluster')} />
+              <StatTile size="compact" label="EC2 인스턴스" value={n('ec2')} href="/inventory/ec2" icon={typeIcon('ec2')} micro={micro('ec2')} />
+              <StatTile size="compact" label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" icon={typeIcon('lambda')} micro={micro('lambda')} />
+              <StatTile size="compact" label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" icon={typeIcon('ecs_cluster')} micro={micro('ecs_cluster')} />
               <StatTile size="compact" label="AgentCore" value={`${SECTION_GATEWAYS} GW`} href="/assistant" icon={<Cpu size={13} />} />
-              <StatTile size="compact" label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" icon={typeIcon('ecr')}micro={micro('ecr')} />
-              <StatTile size="compact" label="EKS 클러스터" value={ov ? ov.clusterCount ?? DASH : DASH} href="/eks" icon={<Container size={13} />} micro={hasFleet ? `${eks.nodesReady}/${eks.nodes} ready · ${eks.pods} pods · ${eks.deployments} deploys` : undefined} />
-              <StatTile size="compact" label="CloudFront" value={n('cloudfront')} href="/inventory/cloudfront" icon={typeIcon('cloudfront')}micro={micro('cloudfront')} />
+              <StatTile size="compact" label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" icon={typeIcon('ecr')} micro={micro('ecr')} />
+              <StatTile size="compact" label="EKS 클러스터" value={ov ? ov.clusterCount ?? DASH : DASH} href="/eks" icon={<Container size={13} />} micro={fleetMicroOk ? `${eks.nodesReady}/${eks.nodes} ready · ${eks.pods} pods · ${eks.deployments} deploys` : undefined} />
+              <StatTile size="compact" label="CloudFront" value={n('cloudfront')} href="/inventory/cloudfront" icon={typeIcon('cloudfront')} micro={micro('cloudfront')} />
             </div>
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400 mt-1">STORAGE &amp; NETWORK</div>
             <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3">
-              <StatTile size="compact" label="VPC" value={n('vpc')} href="/inventory/vpc" icon={typeIcon('vpc')}micro={micro('vpc')} />
-              <StatTile size="compact" label="WAF" value={n('waf')} href="/inventory/waf" icon={typeIcon('waf')}micro={micro('waf')} />
-              <StatTile size="compact" label="EBS 볼륨" value={n('ebs_volume')} href="/inventory/ebs_volume" icon={typeIcon('ebs_volume')}micro={micro('ebs_volume')} />
-              <StatTile size="compact" label="S3 버킷" value={n('s3')} href="/inventory/s3" icon={typeIcon('s3')}micro={micro('s3')} />
-              <StatTile size="compact" label="RDS 인스턴스" value={n('rds')} href="/inventory/rds" icon={typeIcon('rds')}micro={micro('rds')} />
+              <StatTile size="compact" label="VPC" value={n('vpc')} href="/inventory/vpc" icon={typeIcon('vpc')} micro={micro('vpc')} />
+              <StatTile size="compact" label="WAF" value={n('waf')} href="/inventory/waf" icon={typeIcon('waf')} micro={micro('waf')} />
+              <StatTile size="compact" label="EBS 볼륨" value={n('ebs_volume')} href="/inventory/ebs_volume" icon={typeIcon('ebs_volume')} micro={micro('ebs_volume')} />
+              <StatTile size="compact" label="S3 버킷" value={n('s3')} href="/inventory/s3" icon={typeIcon('s3')} micro={micro('s3')} />
+              <StatTile size="compact" label="RDS 인스턴스" value={n('rds')} href="/inventory/rds" icon={typeIcon('rds')} micro={micro('rds')} />
               <StatTile size="compact" label="DynamoDB 테이블" value={n('dynamodb')} href="/inventory/dynamodb" icon={typeIcon('dynamodb')} />
               <StatTile size="compact" label="ElastiCache" value={n('elasticache')} href="/inventory/elasticache" icon={typeIcon('elasticache')} />
               <StatTile size="compact" label="OpenSearch" value={n('opensearch')} href="/inventory/opensearch" icon={typeIcon('opensearch')} />
@@ -481,8 +492,8 @@ export default function Home() {
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400 mt-1">IAM</div>
             <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
               <StatTile size="compact" label="IAM 역할" value={n('iam_role')} href="/inventory/iam_role" icon={typeIcon('iam_role')} />
-              <StatTile size="compact" label="IAM 사용자" value={n('iam_user')} href="/inventory/iam_user" icon={typeIcon('iam_user')}micro={micro('iam_user')} />
-              <StatTile size="compact" label="보안 그룹" value={n('security_group')} href="/inventory/security_group" icon={typeIcon('security_group')}micro={micro('security_group')} />
+              <StatTile size="compact" label="IAM 사용자" value={n('iam_user')} href="/inventory/iam_user" icon={typeIcon('iam_user')} micro={micro('iam_user')} />
+              <StatTile size="compact" label="보안 그룹" value={n('security_group')} href="/inventory/security_group" icon={typeIcon('security_group')} micro={micro('security_group')} />
             </div>
           </div>
         </section>

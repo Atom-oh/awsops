@@ -12,7 +12,7 @@ export type ForceSyncOutcome = 'queued' | 'forbidden' | 'unconfigured' | 'error'
 // Async-semantics disclosure: v2's collection is a batch sync, so a force refresh ENQUEUES
 // a run — it does not synchronously requery live AWS (v1's ?bustCache did). The note says so.
 const SYNC_NOTES: Record<ForceSyncOutcome, string> = {
-  queued: '동기화 시작됨 — 데이터는 수 분 내 반영됩니다.',
+  queued: '동기화가 큐에 등록되었습니다 — 완료 보장은 아니며(실행 중인 타입은 건너뜀), 반영까지 수 분 걸릴 수 있습니다.',
   forbidden: '전체 동기화는 관리자 전용입니다.',
   unconfigured: '인벤토리 sync가 비활성화되어 있습니다.',
   error: '동기화 요청에 실패했습니다.',
@@ -54,7 +54,7 @@ export default function RefreshButton({
           {syncBusy ? tt('요청 중…') : tt('전체 동기화')}
         </Button>
       )}
-      <Button variant="secondary" size="sm" onClick={onClick} disabled={busy}>
+      <Button variant="secondary" size="sm" onClick={() => { setSyncNote((n) => (n === 'queued' || n === 'error' ? null : n)); onClick(); }} disabled={busy}>
         <RotateCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
         {busy ? tt('수집 중…') : 'Refresh'}
       </Button>

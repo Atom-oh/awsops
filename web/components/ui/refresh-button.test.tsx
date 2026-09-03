@@ -16,7 +16,7 @@ describe('RefreshButton force-sync (gap L79)', () => {
     const onForceSync = vi.fn().mockResolvedValue('queued');
     render(<RefreshButton busy={false} onClick={() => {}} onForceSync={onForceSync} />);
     fireEvent.click(screen.getByText('전체 동기화'));
-    await waitFor(() => expect(screen.getByText(/동기화 시작됨/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/동기화가 큐에 등록/)).toBeTruthy());
     expect(onForceSync).toHaveBeenCalledTimes(1);
   });
 
