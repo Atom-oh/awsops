@@ -202,7 +202,7 @@ AI 助手可以利用已注册的数据源执行分析。
 
 | 设置 | 默认值 | 说明 |
 |------|--------|------|
-| **Timeout** | 10 秒 | 上游查询执行上限（秒，1–60）。ClickHouse 在所有路径（Explore、服务图、代理）生效，连接器会将自身 HTTP 超时对齐到该上限之上；Prometheus/Mimir 通过 Explore 路径的 API `timeout` 参数生效，并在连接器 12 秒 HTTP 超时之下封顶为 10 秒 |
+| **Timeout** | 10 秒 | 上游查询执行上限（秒，1–60）。ClickHouse 在所有路径（Explore、服务图、代理）生效，连接器会将自身 HTTP 超时对齐到该上限之上（有效上限 55 秒 — 为保持在 Lambda 60 秒限制之下，56–60 秒的设置会缩短为 55 秒）；Prometheus/Mimir 通过 Explore 路径的 API `timeout` 参数生效，并在连接器 12 秒 HTTP 超时之下封顶为 10 秒 |
 
 ### 仅 ClickHouse
 

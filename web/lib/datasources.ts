@@ -40,7 +40,7 @@ export function sanitizeDsSettings(input: unknown): DsSettings {
   // system.tables (create_table_query can carry plaintext engine credentials). Re-checked in
   // the connector too (defense in depth on both sides of the trust boundary).
   if (
-    typeof o.database === 'string' && DB_IDENTIFIER.test(o.database)
+    typeof o.database === 'string' && o.database.length <= 128 && DB_IDENTIFIER.test(o.database)
     && !['system', 'information_schema'].includes(o.database.toLowerCase())
   ) out.database = o.database;
   return out;

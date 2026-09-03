@@ -198,7 +198,7 @@ Datasource-related questions are processed through the `datasource` route. The A
 
 | Setting | Default | Description |
 |------|--------|------|
-| **Timeout** | 10s | Upstream query execution bound (seconds, 1–60). ClickHouse applies it on every path (Explore, service graph, agent) with the connector aligning its own HTTP timeout above it; Prometheus/Mimir apply it as the Explore-path API `timeout` param, capped at 10s under the connector's 12s HTTP timeout |
+| **Timeout** | 10s | Upstream query execution bound (seconds, 1–60). ClickHouse applies it on every path (Explore, service graph, agent) with the connector aligning its own HTTP timeout above it (effective maximum 55s — values 56–60 are shortened to 55s to stay under the Lambda's 60s wall); Prometheus/Mimir apply it as the Explore-path API `timeout` param, capped at 10s under the connector's 12s HTTP timeout |
 
 ### ClickHouse only
 

@@ -6,6 +6,7 @@ const createDatasource = vi.fn();
 const updateDatasource = vi.fn();
 const getDatasource = vi.fn();
 const setIntegrationCredentialById = vi.fn();
+const getCredentialById = vi.fn();
 const mirrorDefaultCredential = vi.fn();
 const invokeMcpLambdaTool = vi.fn();
 const upsertSchema = vi.fn();
@@ -20,6 +21,7 @@ vi.mock('@/lib/datasources', () => ({
 vi.mock('@/lib/integration-credentials', () => ({
   setIntegrationCredentialById: (...a: unknown[]) => setIntegrationCredentialById(...a),
   mirrorDefaultCredential: (...a: unknown[]) => mirrorDefaultCredential(...a),
+  getCredentialById: (...a: unknown[]) => getCredentialById(...a),
 }));
 vi.mock('@/lib/mcp-lambda-invoke', () => ({ invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a) }));
 vi.mock('@/lib/datasource-schema', () => ({ upsertSchema: (...a: unknown[]) => upsertSchema(...a) }));
@@ -32,7 +34,7 @@ function req(body: unknown, method = 'POST') {
 }
 
 beforeEach(() => {
-  for (const m of [verifyUser, isAdmin, createDatasource, updateDatasource, getDatasource, setIntegrationCredentialById, mirrorDefaultCredential, invokeMcpLambdaTool, upsertSchema]) m.mockReset();
+  for (const m of [verifyUser, isAdmin, createDatasource, updateDatasource, getDatasource, setIntegrationCredentialById, getCredentialById, mirrorDefaultCredential, invokeMcpLambdaTool, upsertSchema]) m.mockReset();
   invokeMcpLambdaTool.mockResolvedValue({ version: '2.48.0', metrics: ['up'] });
   upsertSchema.mockResolvedValue(undefined);
   process.env.AURORA_ENDPOINT = 'aurora.example';
@@ -122,6 +124,17 @@ describe('PATCH update', () => {
     expect(resp.status).toBe(200);
     expect(setIntegrationCredentialById).toHaveBeenCalledWith(7, { endpoint: 'http://10.0.0.9:9090', authType: 'none' });
     expect(updateDatasource).toHaveBeenCalled();
+  });
+
+  it('a settings-only PATCH MERGES onto the existing credential — stored auth material survives', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    const { PATCH } = await import('./route');
+    const resp = await PATCH(req({ id: 7, settings: { timeoutS: 15 } }, 'PATCH'));
+    expect(resp.status).toBe(200);
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.username).toBe('u');    // NOT wiped by the settings-only rewrite
+    expect(blob.password).toBe('pw');
+    expect(blob.timeoutS).toBe(15);
   });
 
   it('gap L203: settings pass on PATCH only when present (absent ≠ clear; {} clears)', async () => {

@@ -19,8 +19,9 @@ Cache TTL / ClickHouse database — v1's Settings section).
   per-datasource `timeoutS` is the upstream query execution bound:
   - prometheus/mimir: forwarded as the API `timeout` param, additionally CAPPED at 10s —
     the connector's own HTTP timeout is 12s, so a longer upstream bound is dead config;
-  - clickhouse: forwarded as `max_execution_time` (the connector clamps 1..60; its HTTP
-    timeout is longer);
+  - clickhouse: applied as `max_execution_time` via the conn config (effective maximum 55s —
+    the connector aligns its HTTP timeout at bound+3s under the Lambda's 60s wall; as amended
+    by round 1);
   - other kinds: no arg is sent (their connectors read none).
 - **ClickHouse database** — rides `resolveConnConfig` (kind-gated: only clickhouse rows set
   it) → the connector appends `&database=` after ITS OWN identifier re-validation (defense
@@ -72,3 +73,21 @@ Cache TTL / ClickHouse database — v1's Settings section).
 - Minors: `sanitizeDsSettings` type-checks instead of coercing (`'30'`/`true` are dropped);
   the settings-only PATCH also rewrites the per-instance secret blob so the agent path never
   reads a stale bound.
+
+## Round-2 corrections (review-driven)
+
+- **A settings-only PATCH no longer destroys the credential (the gate MAJOR)** — the round-1
+  change made settings edits rewrite the secret blob, but the blob was RECONSTRUCTED from
+  scratch (`setIntegrationCredentialById` is a full replace): a timeout edit wiped the stored
+  username/password/token/headers and, for a default instance, `updateDatasource` mirrored
+  the de-authenticated blob to the kind key the agent path reads. The PATCH now MERGES onto
+  the existing blob (`getCredentialById(id)` spread first, then endpoint/authType/creds/
+  settings) — which also fixes the PRE-EXISTING endpoint-only variant of the same wipe. A
+  regression test pins that stored auth material survives a settings-only PATCH.
+- Minors: a database change on PATCH triggers the connect-time schema warm (POST parity —
+  AI query generation re-grounds on the new database without waiting for the 6h staleness
+  TTL); the connector identifier check uses `re.fullmatch` (Python's `$` matches before a
+  trailing newline) and both layers bound the database length at 128; the ClickHouse
+  EFFECTIVE maximum (55s — Lambda-wall alignment shortens 56–60s) is disclosed in the docs
+  (4 locales), api-reference, and this spec's Decisions section. The prometheus/mimir 10s cap
+  was already disclosed (round 1).

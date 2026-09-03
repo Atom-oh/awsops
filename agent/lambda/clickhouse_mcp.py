@@ -123,7 +123,8 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     database = ds.get("database")
     if database:
         db = str(database)
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", db) or db.lower() in ("system", "information_schema"):
+        # fullmatch (not match+$: Python's $ also matches before a trailing newline) + length bound
+        if len(db) > 128 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", db) or db.lower() in ("system", "information_schema"):
             return err("invalid database identifier in datasource settings")
         url += f"&database={db}"
     url += f"&max_execution_time={max_execution_time}&timeout_overflow_mode=throw"

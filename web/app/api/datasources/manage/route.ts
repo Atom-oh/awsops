@@ -5,7 +5,7 @@
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { createDatasource, updateDatasource, getDatasource, sanitizeDsSettings } from '@/lib/datasources';
-import { setIntegrationCredentialById, mirrorDefaultCredential } from '@/lib/integration-credentials';
+import { setIntegrationCredentialById, mirrorDefaultCredential, getCredentialById } from '@/lib/integration-credentials';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
@@ -106,14 +106,25 @@ export async function PATCH(request: Request) {
     try { assertDatasourceEndpointAllowed(endpoint); } catch (e) { return json({ error: (e as Error).message }, 400); }
   }
   // Re-write the id credential when any connection field changed (so updateDatasource's mirror is fresh).
+  // MERGE onto the EXISTING blob — setIntegrationCredentialById is a full replace, so a
+  // settings-only (or endpoint-only) PATCH that reconstructed the blob from scratch would
+  // silently destroy the stored auth material (username/password/token/headers) and, for a
+  // default instance, mirror the de-authenticated blob to the kind key the agent path reads.
   if (endpoint !== undefined || authType !== undefined || creds !== undefined || settings !== undefined) {
+    const existing = await getCredentialById(id);
     const blob = {
+      ...(existing ?? {}),
       endpoint: endpoint ?? ds.endpoint ?? '',
       authType: authType ?? ds.authType ?? 'none',
       ...(creds ?? {}),
       ...(settings ?? ds.settings),
     };
     await setIntegrationCredentialById(id, blob);
+    // A database change re-grounds AI query generation on the new database's tables —
+    // mirror POST's connect-time warm (best-effort; the 6h isSchemaStale refresh remains).
+    if (settings?.database !== undefined && settings.database !== ds.settings?.database) {
+      warmSchemaCache(id, ds.kind, blob as ConnConfig);
+    }
   }
   try {
     await updateDatasource(id, { name, endpoint, authType: authType as 'none' | undefined, settings });
