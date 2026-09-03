@@ -2,6 +2,7 @@ import { getPool } from '@/lib/db';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { isAdmin } from '@/lib/admin';
 import { INVENTORY_TYPES } from '@/lib/inventory-types';
+import { AGG_DERIVED_KEYS } from '@/lib/inventory-derived';
 import type { User } from '@/lib/auth';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
@@ -89,6 +90,89 @@ function worstFirstOrderBy(type: string): string {
   if (!whens) return '';
   const tie = wf.tieBreak ? `data->>'${wf.tieBreak}' DESC NULLS LAST, ` : '';
   return `CASE lower(data->>'${wf.col}') ${whens} ELSE ${Object.keys(wf.rank).length} END, ${tie}`;
+}
+
+export interface AggBucket { name: string; value: number }
+export interface InventoryAggregates {
+  total: number;
+  state: AggBucket[] | null;
+  dist: AggBucket[] | null;
+  dist2: AggBucket[] | null;
+  facets: Record<string, AggBucket[]>;
+}
+
+// Server-side bound for the aggregation statement (the auth.ts SET LOCAL precedent: the
+// timeout must be a literal integer — SET LOCAL can't take a bound parameter).
+const AGG_STATEMENT_TIMEOUT_MS = 15000;
+if (!Number.isInteger(AGG_STATEMENT_TIMEOUT_MS)) throw new Error('AGG_STATEMENT_TIMEOUT_MS must be a literal integer');
+
+/** Full-fleet aggregates for a capped inventory page (gap L102, v1 parity): GROUP BYs over
+ *  the WHOLE scoped fleet for the spec's stateKey/distKey/distKey2/filterKeys, plus the true
+ *  total — v1 ran summary/statusCount/typeDistribution SQL fleet-wide; the v2 client computed
+ *  them from the 500-row sample.
+ *  Round-1 hardening:
+ *  - CLIENT-DERIVED spec keys (AGG_DERIVED_KEYS — e.g. dynamodb billing_h, ecs_task
+ *    cluster_h, lambda's COALESCEd runtime) are EXCLUDED: the JSONB doesn't hold them (or
+ *    holds the untransformed value) — those dimensions stay sample-based on the page, with
+ *    the sample qualifier;
+ *  - ONE round-trip (UNION ALL of the total + every GROUP BY) inside a scoped transaction
+ *    with SET LOCAL statement_timeout — never a serial 1+N chain pinning a `max: 3` pool
+ *    connection unbounded (the web/lib/auth.ts pool-starvation precedent);
+ *  - deterministic bucket order (count DESC, name ASC) and a 50-bucket cap per key; the
+ *    CLIENT computes the remainder against `total` so donuts still sum to the fleet.
+ *  Keys come from the STATIC spec (trusted code) and are still charset-validated before
+ *  inlining (the worstFirstOrderBy defense-in-depth precedent); ''/NULL coalesce to '(none)'
+ *  to match the client-side countBy convention. */
+export async function readAggregates(
+  type: string,
+  { regions = '__all__', includeGlobal = true, accounts = ['self'] }: Omit<ReadResourcesOpts, 'limit' | 'offset'>,
+): Promise<InventoryAggregates> {
+  if (!Object.hasOwn(INVENTORY_TYPES, type)) return { total: 0, state: null, dist: null, dist2: null, facets: {} };
+  const spec = INVENTORY_TYPES[type];
+  const params: unknown[] = [type];
+  const where = `resource_type = $1` + accountWhereClause(accounts, params) + regionWhereClause(regions, includeGlobal, params);
+  const ID = /^[a-z0-9_]{1,64}$/;
+  const skip = new Set(AGG_DERIVED_KEYS[type] ?? []);
+  const keys = new Set<string>();
+  for (const k of [spec?.stateKey, spec?.distKey, spec?.distKey2, ...(spec?.filterKeys ?? [])]) {
+    if (k && ID.test(k) && !skip.has(k)) keys.add(k);
+  }
+  const parts = [
+    `SELECT '__total__' AS k, NULL::text AS name, count(*)::int AS value FROM inventory_resources WHERE ${where}`,
+  ];
+  for (const k of keys) {
+    parts.push(
+      `SELECT '${k}' AS k, name, value FROM (
+         SELECT COALESCE(NULLIF(data->>'${k}', ''), '(none)') AS name, count(*)::int AS value
+         FROM inventory_resources WHERE ${where} GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT 50
+       ) sub_${k}`,
+    );
+  }
+  const clientConn = await getPool().connect();
+  let rows: { k: string; name: string | null; value: number }[];
+  try {
+    await clientConn.query('BEGIN');
+    await clientConn.query(`SET LOCAL statement_timeout = ${AGG_STATEMENT_TIMEOUT_MS}`);
+    rows = (await clientConn.query(parts.join(' UNION ALL '), params)).rows;
+    await clientConn.query('COMMIT');
+  } catch (e) {
+    await clientConn.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    clientConn.release();
+  }
+  const byKey: Record<string, AggBucket[]> = {};
+  let total = 0;
+  for (const r of rows) {
+    if (r.k === '__total__') { total = Number(r.value) || 0; continue; }
+    (byKey[r.k] ??= []).push({ name: String(r.name ?? '(none)'), value: Number(r.value) || 0 });
+  }
+  // UNION ALL does not guarantee branch ordering — re-sort deterministically here.
+  for (const k of Object.keys(byKey)) byKey[k].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
+  const facets: Record<string, AggBucket[]> = {};
+  for (const k of spec?.filterKeys ?? []) if (byKey[k]) facets[k] = byKey[k];
+  const pick = (k?: string) => (k && byKey[k] ? byKey[k] : null);
+  return { total, state: pick(spec?.stateKey), dist: pick(spec?.distKey), dist2: pick(spec?.distKey2), facets };
 }
 
 export async function readResources(type: string, { limit, offset, regions = '__all__', includeGlobal = true, accounts = ['self'] }: ReadResourcesOpts): Promise<InventoryPage> {

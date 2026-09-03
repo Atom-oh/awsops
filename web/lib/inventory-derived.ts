@@ -81,6 +81,20 @@ function _ecsTaskBase(r: Row): Row {
   };
 }
 
+// Gap L102 (PR #287 round-1): spec aggregation keys that are CLIENT-DERIVED (produced or
+// transformed by DERIVERS below) — the server-side full-fleet aggregator must NEVER read
+// these as raw `data->>'key'` (the JSONB doesn't contain them, or contains an untransformed
+// value: lambda.runtime loses the null→'custom' COALESCE). LOCKSTEP with DERIVERS — when a
+// deriver starts writing a key that appears in a spec's stateKey/distKey/distKey2/filterKeys,
+// add it here (test-pinned in inventory-derived.test.ts against real fixtures).
+export const AGG_DERIVED_KEYS: Record<string, readonly string[]> = {
+  lambda: ['runtime', 'vpc_h'],
+  ecs_task: ['cluster_h', 'cpu_h', 'memory_h'],
+  dynamodb: ['billing_h'],
+  opensearch: ['encryption_status_h'],
+  msk: ['kafka_version'],
+};
+
 const DERIVERS: Record<string, (r: Row) => Row> = {
   opensearch: (r) => {
     // L150 structured detail: flatten cluster_config/ebs_options/vpc_options/encryption/

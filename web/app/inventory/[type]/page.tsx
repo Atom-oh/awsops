@@ -87,24 +87,33 @@ export default function InventoryTypePage() {
   const [metricBar, setMetricBar] = useState<{ title: string; data: { label: string; value: number }[] } | null>(null);
   const [scope] = useActiveScope();
 
-  // Accurate fleet total past the 500-row cap (gap L110): the summary endpoint's byType
-  // count is the true DB count (scoped by the SAME accounts+regions params as the rows).
-  // Fetched only once the cap is actually hit (it is the heaviest inventory aggregation);
-  // refreshTick refetches after an on-demand sync. Failure degrades silently to the row count.
+  // Full-fleet aggregates past the 500-row cap (gaps L110 + L102): ONE scoped server-side
+  // aggregation supplies the true total AND the state/dist/facet buckets (v1 ran its
+  // summary/statusCount/typeDistribution SQL fleet-wide; the sample-based client counts were
+  // silently inaccurate above 500). Fetched only once the cap is actually hit; refreshTick
+  // refetches after an on-demand sync. Failure degrades to the sample (donuts then carry the
+  // 표본 qualifier).
   const [trueTotal, setTrueTotal] = useState<number | null>(null);
+  const [aggs, setAggs] = useState<{
+    total: number;
+    state: { name: string; value: number }[] | null;
+    dist: { name: string; value: number }[] | null;
+    dist2: { name: string; value: number }[] | null;
+    facets: Record<string, { name: string; value: number }[]>;
+  } | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const atCap = (rows?.length ?? 0) >= ROW_LIMIT;
   useEffect(() => {
     setTrueTotal(null);
+    setAggs(null);
     if (!spec || !atCap) return;
     let alive = true;
-    fetch(`/api/inventory/summary?${scopeParams(scope)}`)
+    fetch(`/api/inventory/${type}?view=agg&${scopeParams(scope)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!alive) return;
-        const n = (d?.byType as { type: string; count: number }[] | undefined)
-          ?.find((t) => t.type === type)?.count;
-        if (typeof n === 'number') setTrueTotal(n);
+        if (!alive || !d) return;
+        if (typeof d.total === 'number') setTrueTotal(d.total);
+        setAggs(d);
       })
       .catch(() => {});
     return () => { alive = false; };
@@ -158,9 +167,13 @@ export default function InventoryTypePage() {
   const isTruncated = allRows.length >= ROW_LIMIT && (trueTotal == null || trueTotal > allRows.length);
 
   // KPI state breakdown — from the FULL row set (not filtered).
+  // A 50-bucket agg list HIT THE CAP — completeness untrustworthy for option lists; fall
+  // back to the sample for that dimension (donut remainders handle the cap via `total`).
+  const aggListComplete = (b: { name: string; value: number }[] | null | undefined) =>
+    (b && b.length < 50 ? b : null);
   const stateCounts = useMemo(
-    () => (spec?.stateKey ? countBy(allRows, spec.stateKey) : []),
-    [allRows, spec?.stateKey],
+    () => (spec?.stateKey ? (aggListComplete(aggs?.state) ?? countBy(allRows, spec.stateKey)) : []),
+    [allRows, spec?.stateKey, aggs],  // eslint-disable-line react-hooks/exhaustive-deps -- aggListComplete stable
   );
 
   // Per-type highlight cards (tailored top KPIs from synced columns). Empty → fall
@@ -179,15 +192,32 @@ export default function InventoryTypePage() {
     const rest = counts.slice(6).reduce((acc, c) => acc + c.value, 0);
     return rest > 0 ? [...head, { name: tt('기타'), value: rest }] : head;
   };
+  // Full-fleet donut: top 6 + a REMAINDER computed against the fleet total (the server caps
+  // buckets at 50 — summing only visible buckets would silently drop rank-51+ values, the
+  // exact sample-inaccuracy failure this feature exists to fix).
+  const top6Agg = (buckets: { name: string; value: number }[], total: number) => {
+    const head = buckets.slice(0, 6);
+    const rest = total - head.reduce((a, b) => a + b.value, 0);
+    return rest > 0 ? [...head, { name: tt('기타'), value: rest }] : head;
+  };
   const distData = useMemo(
-    () => (spec?.distKey ? top6(countBy(allRows, spec.distKey)) : []),
-    [allRows, spec?.distKey],
+    () => (spec?.distKey
+      ? (aggs?.dist ? top6Agg(aggs.dist, aggs.total) : top6(countBy(allRows, spec.distKey)))
+      : []),
+    [allRows, spec?.distKey, aggs],  // eslint-disable-line react-hooks/exhaustive-deps -- top6/tt stable
   );
   const distData2 = useMemo(
-    () => (spec?.distKey2
-      ? top6(countBy(allRows, spec.distKey2).filter((d) => !(spec.distKey2DropNone && d.name === '(none)')))
-      : []),
-    [allRows, spec?.distKey2],
+    () => {
+      if (!spec?.distKey2) return [];
+      if (aggs?.dist2) {
+        const filtered = aggs.dist2.filter((d) => !(spec.distKey2DropNone && d.name === '(none)'));
+        // DropNone removes real rows from the denominator — the remainder must not re-add
+        // them as 기타, so fall back to bucket-sum semantics for the dropped-none case.
+        return spec.distKey2DropNone ? top6(filtered) : top6Agg(filtered, aggs.total);
+      }
+      return top6(countBy(allRows, spec.distKey2).filter((d) => !(spec.distKey2DropNone && d.name === '(none)')));
+    },
+    [allRows, spec?.distKey2, aggs],  // eslint-disable-line react-hooks/exhaustive-deps -- top6/tt stable
   );
 
   // Reset transient filters when switching resource type (a stale facet key would filter to zero).
@@ -199,9 +229,13 @@ export default function InventoryTypePage() {
     return keys.map((key) => ({
       key,
       label: spec?.columns.find((c) => c.key === key)?.label ?? FACET_LABELS[key] ?? key,
-      options: countBy(allRows, key),
+      // full-fleet option list when available AND complete (<50 buckets — an at-cap list is
+      // an arbitrary top-50 and can even MISS values visible in the loaded table); a value
+      // that exists only beyond the cap now appears; selecting it filters the visible
+      // 500-row sample — the shown/total counter keeps the sample scope explicit
+      options: aggListComplete(aggs?.facets?.[key]) ?? countBy(allRows, key),
     }));
-  }, [spec, allRows]);
+  }, [spec, allRows, aggs]);
 
   // Filters narrow ONLY the displayed table rows.
   const filteredRows = useMemo(() => {
@@ -298,11 +332,15 @@ export default function InventoryTypePage() {
       {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
     </div>
   );
+  // Donuts are full-fleet only when THEIR dimension's aggregate landed (client-derived keys
+  // are server-excluded and stay sample-based) — each donut discloses its own fallback
+  // (previously a capped donut was silently sample-based with no label).
+  const sampleTag = (has: boolean) => (isTruncated && !has ? ` (${tt('표본 기준')})` : '');
   const donut = spec.distKey && distData.length > 0
-    ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
+    ? <DonutBreakdown title={`${distLabel} 분포${sampleTag(Boolean(aggs?.dist))}`} data={distData} nameKey="name" valueKey="value" />
     : null;
   const donut2 = spec.distKey2 && spec.distKey2 !== spec.distKey && distData2.length > 0
-    ? <DonutBreakdown title={`${spec.distKey2Label ?? colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
+    ? <DonutBreakdown title={`${spec.distKey2Label ?? colLabel(spec.distKey2)} 분포${sampleTag(Boolean(aggs?.dist2))}`} data={distData2} nameKey="name" valueKey="value" colors={spec.distKey2Colors} />
     : null;
   // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
   const hist = spec.histKey && histData.length > 0

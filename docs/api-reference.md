@@ -23,7 +23,7 @@
 ## inventory (8)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
-| `/api/inventory/[type]` | GET | 인벤토리 리소스 목록 — `iam_user`/`iam_role`은 admin 전용; `ecs_cluster`는 MTD 비용(CE) 병합 기본, `?cost=0`으로 생략(비용 미표시 소비자용) | verifyUser |
+| `/api/inventory/[type]` | GET | 인벤토리 리소스 목록 — `iam_user`/`iam_role`은 admin 전용; `ecs_cluster`는 MTD 비용(CE) 병합 기본, `?cost=0`으로 생략(비용 미표시 소비자용); `?view=agg`는 행 대신 전 플릿 집계(총계·state/dist/facet GROUP BY, 동일 스코프·게이트; 클라이언트 파생 키 차원은 제외되어 표본 유지, 버킷 상한 50) 반환 | verifyUser |
 | `/api/inventory/[type]/metrics` | GET | 보조 KPI 카드 (CloudWatch/Pricing) + `?ids=`/`?nodes=` 타입별 라이브 진단 플릿(ec2/rds/alb/nlb/s3/transit_gateway/lambda/ebs_volume/dynamodb/elasticache/opensearch/msk) — 실패 시 `{cards:[]}`로 조용히 degrade | verifyUser |
 | `/api/inventory/[type]/refresh` | POST | warm Steampipe → Aurora sync 트리거 + 첫 페이지 반환 (락 중이면 `busy`); admin 전용. `type=all`은 sync Lambda의 type=all fan-out을 1회 dispatch(행 미반환, `{status:'queued',dispatched:'all'}`; sync 비활성 시 503 `unconfigured`, enqueue 실패 시 503 `error`) | verifyUser |
 | `/api/inventory/cloudtrail/events` | GET | CloudTrail `LookupEvents` 조회 — 드릴다운(`raw`+`accessKeyId`)은 admin 전용 subset, 그 외 사용자는 flat 필드만 | verifyUser |
