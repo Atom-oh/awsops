@@ -193,7 +193,7 @@ export default function DatasourceForm({
 
       <div className="flex items-center gap-2 pt-1">
         <Button variant="secondary" onClick={runTest} disabled={testing || !endpoint.trim()}>
-          {testing ? tt('테스트 중…') : '🧪 Test connection'}
+          {testing ? tt('테스트 중…') : `🧪 ${tt('연결 테스트')}`}
         </Button>
         {test && (
           <span className={`text-[13px] ${test.ok ? 'text-emerald-600' : 'text-rose-600'}`}>

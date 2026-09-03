@@ -295,7 +295,7 @@ function ResultView({ result, kind, execMs }: { result: NormalizedResult; kind?:
         <p className="text-[12px] text-amber-700">{tt('결과가 잘렸습니다(상한 도달) — 쿼리를 좁혀 다시 시도하세요.')}</p>
       )}
       {result.shape === 'empty' && (
-        <Card className="p-6 text-center text-[13px] text-ink-400">{result.note || tt('결과 없음')}</Card>
+        <Card className="p-6 text-center text-[13px] text-ink-400">{result.note ? tt(result.note) : tt('결과 없음')}</Card>
       )}
       {result.shape === 'series' && result.series && (
         result.seriesKeys && result.seriesKeys.length > 0 ? (
@@ -318,7 +318,7 @@ function ResultView({ result, kind, execMs }: { result: NormalizedResult; kind?:
         )
       )}
       {result.shape === 'series' && result.note && (
-        <p className="text-[12px] text-ink-400">{result.note}</p>
+        <p className="text-[12px] text-ink-400">{tt(result.note)}</p>
       )}
       {result.shape === 'series' && result.rows && result.columns && (
         <DataTable columns={result.columns} rows={result.rows} />

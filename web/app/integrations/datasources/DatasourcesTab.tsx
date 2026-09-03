@@ -89,7 +89,7 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : undefined} />
           </button>
-          {canManage && <Button onClick={() => setForm({ mode: 'add' })}>＋ Add datasource</Button>}
+          {canManage && <Button onClick={() => setForm({ mode: 'add' })}>＋ {tt('데이터소스 추가')}</Button>}
         </div>
       </div>
 

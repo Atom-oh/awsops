@@ -39,3 +39,27 @@ Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L186 (cloudfront i18n)
 - lib/i18n-coverage.test.ts (the lockstep guard, with scan-size sanity assertions).
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; audit ticks +
   batch-40 note; CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **The sampled donut title translates at runtime (the gate MAJOR)** — the composed title
+  pre-translated the qualifier (`` ` (${tt('표본 기준')})` ``), so the string reaching Card's
+  single tt() was Korean-mixed (`Type 분포 (sampled)`) and matched NO rule — the exact case
+  the RULE was added for was dead. Titles are now composed FULLY in Korean (donuts and the
+  histogram bar) and one tt() pass translates them; a generic `<label> (표본 기준)` suffix
+  RULE covers English chart labels. The new donut RULE's ja phrasing folds to the
+  pre-existing `の分布` (it supersedes — first-match-wins — the older plain rule, which is
+  removed deliberately as dead code).
+- **The guard is an honest ratchet and the residue is closed (the gate MAJOR)** — the scan is
+  recursive (readdirSync — no fs.globSync Node/types floor question; `[id]/page.tsx` now
+  included) and also matches interpolation-free template literals. The dynamic tt(variable)
+  paths are covered by REGISTERING their finite catalogs (card_catalog.py's 9 titles,
+  datasource-render.ts's 6 notes — lockstep comments point both ways), a RULE covers the
+  parameterized series-cap note and the log-view caption, and ExplorePanel's raw
+  `result.note` renders are tt()-wrapped. The guard's comment/spec/CHANGELOG now say
+  RATCHET, not completeness proof.
+- **The over-claims are corrected (the gate MAJOR)** — the two English action buttons
+  ('＋ Add datasource', '🧪 Test connection') are localized via Korean sources (buttons are
+  not covered by the technical-identifier carve-out); the L207/L254/L186 ticks carry the
+  English-column-label 부분 편차 marker inline; the CHANGELOG bullet states the precise
+  coverage and the ratchet framing.

@@ -664,6 +664,24 @@ export const TERMS: Record<string, Pair> = {
   '표 형태가 아닌 응답': { en: 'Non-tabular response', zh: '非表格形式的响应', ja: '表形式ではない応答' },
   '예제:': { en: 'Examples:', zh: '示例：', ja: '例:' },
   '왕복': { en: 'round trip', zh: '往返', ja: '往復' },
+  // card_catalog.py card titles (dynamic tt(c.title) on the datasources dashboard — lockstep
+  // with scripts/v2/workers/card_catalog.py)
+  '가용 메모리': { en: 'Available memory', zh: '可用内存', ja: '空きメモリ' },
+  '네임스페이스별 컨테이너 CPU Top5': { en: 'Container CPU Top 5 by namespace', zh: '按命名空间的容器 CPU Top5', ja: 'ネームスペース別コンテナ CPU Top5' },
+  '노드 CPU 사용률': { en: 'Node CPU utilization', zh: '节点 CPU 使用率', ja: 'ノード CPU 使用率' },
+  '느린 트레이스 (>1s)': { en: 'Slow traces (>1s)', zh: '慢跟踪（>1s）', ja: '遅いトレース（>1s）' },
+  '로그 볼륨 (5m)': { en: 'Log volume (5m)', zh: '日志量（5m）', ja: 'ログ量（5m）' },
+  '에러 로그 (5m)': { en: 'Error logs (5m)', zh: '错误日志（5m）', ja: 'エラーログ（5m）' },
+  '에러 트레이스': { en: 'Error traces', zh: '错误跟踪', ja: 'エラートレース' },
+  '정상 타깃 수': { en: 'Healthy targets', zh: '正常目标数', ja: '正常ターゲット数' },
+  '최근 1시간 파드 재시작': { en: 'Pod restarts (last hour)', zh: '最近 1 小时 Pod 重启', ja: '直近 1 時間の Pod 再起動' },
+  // datasource-render.ts result notes (dynamic tt(note) — lockstep with lib/datasource-render.ts)
+  '시계열 포인트 없음': { en: 'No time-series points', zh: '无时序数据点', ja: '時系列ポイントなし' },
+  '로그 없음': { en: 'No logs', zh: '无日志', ja: 'ログなし' },
+  '트레이스 없음': { en: 'No traces', zh: '无跟踪', ja: 'トレースなし' },
+  '응답 없음': { en: 'No response', zh: '无响应', ja: '応答なし' },
+  '행 없음': { en: 'No rows', zh: '无行', ja: '行なし' },
+  '연결 테스트': { en: 'Test connection', zh: '测试连接', ja: '接続テスト' },
   'ECS 개요': { en: 'ECS Overview', zh: 'ECS 概览', ja: 'ECS 概要' },
   '요약': { en: 'Summary', zh: '摘要', ja: 'サマリー' },
   '클러스터·서비스·태스크 통합 현황': { en: 'Clusters · services · tasks at a glance', zh: '集群·服务·任务一览', ja: 'クラスタ・サービス・タスクの統合ビュー' },
@@ -1564,13 +1582,18 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^이 세션 (\d+)개 질의$/, en: (m) => `${m[1]} queries this session`, zh: (m) => `本会话 ${m[1]} 次查询`, ja: (m) => `このセッション ${m[1]} 件の質問` },
   { re: /^(\d+)건 · (.+)$/, en: (m) => `${m[1]} calls · ${m[2]}`, zh: (m) => `${m[1]} 次 · ${m[2]}`, ja: (m) => `${m[1]} 件 · ${m[2]}` },
   { re: /^총 비용 \((.+)\)$/, en: (m) => `Total cost (${m[1]})`, zh: (m) => `总费用 (${m[1]})`, ja: (m) => `総コスト (${m[1]})` },
-  // inventory donut titles: '<label> 분포' with the optional sample qualifier (gap L186/L207)
-  { re: /^(.+) 분포( \(표본 기준\))?$/, en: (m) => `${m[1]} distribution${m[2] ? ' (sampled)' : ''}`, zh: (m) => `${m[1]} 分布${m[2] ? '（基于样本）' : ''}`, ja: (m) => `${m[1]} 分布${m[2] ? '（サンプル基準）' : ''}` },
+  { re: /^상위 (\d+)개 시리즈만 차트에 표시 \(총 (\d+)\)$/, en: (m) => `Only the top ${m[1]} series are charted (of ${m[2]})`, zh: (m) => `图表仅显示前 ${m[1]} 个序列（共 ${m[2]}）`, ja: (m) => `上位 ${m[1]} 系列のみチャート表示（全 ${m[2]}）` },
+  { re: /^로그 ([\d,]+)줄 — 최신순, 표시 상한 적용 가능$/, en: (m) => `${m[1]} log lines — newest first, a display cap may apply`, zh: (m) => `${m[1]} 行日志 — 最新在前，可能应用显示上限`, ja: (m) => `ログ ${m[1]} 行 — 新しい順、表示上限が適用される場合あり` },
+  // inventory donut titles: '<label> 분포' with the optional sample qualifier (gap L186/L207).
+  // ja keeps the pre-existing 'の分布' phrasing (this rule supersedes the older plain
+  // '<label> 분포' rule below it — first-match-wins — so the phrasing must not drift).
+  { re: /^(.+) 분포( \(표본 기준\))?$/, en: (m) => `${m[1]} distribution${m[2] ? ' (sampled)' : ''}`, zh: (m) => `${m[1]} 分布${m[2] ? '（基于样本）' : ''}`, ja: (m) => `${m[1]} の分布${m[2] ? '（サンプル基準）' : ''}` },
+  // generic sampled-suffix on an otherwise-untranslated (usually English) chart label
+  { re: /^(.+) \(표본 기준\)$/, en: (m) => `${m[1]} (sampled)`, zh: (m) => `${m[1]}（基于样本）`, ja: (m) => `${m[1]}（サンプル基準）` },
   { re: /^계정 전체 호출 \((.+)\)$/, en: (m) => `Account-wide calls (${m[1]})`, zh: (m) => `账号整体调用 (${m[1]})`, ja: (m) => `アカウント全体呼び出し (${m[1]})` },
   { re: /^수집 실패 \((\d+)\)$/, en: (m) => `Collection failed (${m[1]})`, zh: (m) => `采集失败 (${m[1]})`, ja: (m) => `収集失敗 (${m[1]})` },
   { re: /^(.+) 필터$/, en: (m) => `${m[1]} filter`, zh: (m) => `${m[1]} 筛选`, ja: (m) => `${m[1]} フィルター` },
   { re: /^총 (.+)$/, en: (m) => `Total ${m[1]}`, zh: (m) => `${m[1]} 总数`, ja: (m) => `${m[1]} の合計` },
-  { re: /^(.+) 분포$/, en: (m) => `${m[1]} distribution`, zh: (m) => `${m[1]} 分布`, ja: (m) => `${m[1]} の分布` },
   { re: /^([\d,]+)개 리소스$/, en: (m) => `${m[1]} resources`, zh: (m) => `${m[1]} 个资源`, ja: (m) => `${m[1]} 件のリソース` },
   { re: /^주의 ([\d,]+)건(\+?)$/, en: (m) => `Attention: ${m[1]}${m[2]}`, zh: (m) => `注意 ${m[1]}${m[2]} 项`, ja: (m) => `注意: ${m[1]}${m[2]} 件` },
   { re: /^활성 경고 \((\d+)\)$/, en: (m) => `Active warnings (${m[1]})`, zh: (m) => `活动警告 (${m[1]})`, ja: (m) => `アクティブな警告 (${m[1]})` },

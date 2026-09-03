@@ -29,7 +29,7 @@ describe('DatasourcesTab', () => {
   it('hides Add/Edit/Delete for non-admins (read-only)', async () => {
     render(<DatasourcesTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
-    expect(screen.queryByText('＋ Add datasource')).toBeNull();
+    expect(screen.queryByText('＋ 데이터소스 추가')).toBeNull();
     expect(screen.queryByText('Edit')).toBeNull();
     expect(screen.queryByText('Delete')).toBeNull();
   });
@@ -37,9 +37,9 @@ describe('DatasourcesTab', () => {
   it('shows Add/Edit/Delete for admins and opens the form on Add', async () => {
     render(<DatasourcesTab canManage />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
-    expect(screen.getByText('＋ Add datasource')).toBeTruthy();
+    expect(screen.getByText('＋ 데이터소스 추가')).toBeTruthy();
     expect(screen.getAllByText('Delete').length).toBe(2);
-    fireEvent.click(screen.getByText('＋ Add datasource'));
+    fireEvent.click(screen.getByText('＋ 데이터소스 추가'));
     expect(screen.getByText('데이터소스 추가')).toBeTruthy();
   });
 
