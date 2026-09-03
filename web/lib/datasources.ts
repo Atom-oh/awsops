@@ -137,12 +137,17 @@ export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> 
   // DEFAULT instance's credential; blending it with THIS instance's endpoint (below) would send the
   // default's auth material to a different target (credential leak). A no-auth instance, or one whose
   // id-keyed secret was never written, simply resolves with no auth (the row endpoint still works).
-  const cred = await getCredentialById(ds.id);
+  const cred: Record<string, unknown> = { ...((await getCredentialById(ds.id)) ?? {}) };
+  // The ROW is authoritative for the L203 settings too — a stale blob (written before a
+  // clear/partial settings update) must never leak an old database/timeoutS through the
+  // cred-first spread (round-3 review).
+  delete cred.database;
+  delete cred.timeoutS;
   // Spread the SM cred FIRST (auth material / org_id), then FORCE the row's endpoint + authType on top
   // so the ROW stays authoritative (a stale/partial secret blob can't redirect the query to a different
   // endpoint). The endpoint is re-checked by the SSRF guard at the call site regardless.
   return {
-    ...(cred ?? {}),
+    ...cred,
     ...(ds.endpoint ? { endpoint: ds.endpoint } : {}),
     ...(ds.authType ? { authType: ds.authType } : {}),
     // gap L203: the ClickHouse settings ride the conn config — database (identifier-validated

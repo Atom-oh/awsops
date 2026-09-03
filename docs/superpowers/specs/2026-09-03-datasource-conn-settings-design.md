@@ -91,3 +91,27 @@ Cache TTL / ClickHouse database — v1's Settings section).
   EFFECTIVE maximum (55s — Lambda-wall alignment shortens 56–60s) is disclosed in the docs
   (4 locales), api-reference, and this spec's Decisions section. The prometheus/mimir 10s cap
   was already disclosed (round 1).
+
+## Round-3 corrections (review-driven)
+
+- **`settings:{}` genuinely clears (the gate MAJOR)** — the round-2 blind merge left cleared/
+  superseded settings keys live in the credential blob (and, cred-first, they leaked through
+  `resolveConnConfig` and the agent path). The PATCH now strips the settings keys from the
+  existing blob whenever the request carries `settings`, and `resolveConnConfig` deletes
+  `database`/`timeoutS` from the cred before overlaying the ROW's settings — the row is
+  authoritative on every path. Regression tests pin both layers.
+- **Auth material never follows an endpoint HOST change (the gate MAJOR)** — the round-2
+  merge would have transmitted stored write-only credentials to any newly pointed host on
+  the next query. Auth keys are now dropped on a host change unless creds are re-supplied
+  (fail-safe: the next query is unauthenticated against the new host — never a leak), and an
+  authType downgrade prunes residue keys (basic→none leaves nothing in Secrets Manager).
+  Disclosed semantics: same-host endpoint edits keep the credential; host changes require
+  re-entering it.
+- **The configured ClickHouse bound is a CEILING (the gate MAJOR)** — a caller-supplied
+  `max_execution_time` (agent tool call, the worker dry-run's pinned 5s) can only TIGHTEN
+  the admin's bound, never exceed it; docs/CHANGELOG restate 'applies on every path' as the
+  ceiling semantics (4 locales). Connector tests pin both directions.
+- Minors: an out-of-range form timeout is a visible inline error that blocks save (a typo no
+  longer silently clears the stored value); clearing the database also triggers the schema
+  re-warm; noted, not shipped — the manage-route tests stub the sanitizer (real enforcement
+  is covered by the lib/connector tests).

@@ -69,7 +69,10 @@ export default function DatasourceForm({
     if (ORG_ID_KINDS.has(kind) && creds.org_id) c.org_id = creds.org_id;
     return c;
   };
-  // Out-of-range values are simply not sent (the server sanitizes again); an empty field clears.
+  // An empty field clears; an OUT-OF-RANGE value is a visible validation error (round-3:
+  // a typo like 999 silently clearing the stored setting is surprising — fail loud instead).
+  const timeoutInvalid = timeoutS.trim() !== ''
+    && !(Number.isInteger(Number(timeoutS)) && Number(timeoutS) >= 1 && Number(timeoutS) <= 60);
   const settingsPayload = () => {
     const out: { timeoutS?: number; database?: string } = {};
     const t = Number(timeoutS);
@@ -173,6 +176,7 @@ export default function DatasourceForm({
         <div>
           <label className={labelCls}>{tt('Timeout (초, 1–60 · 선택)')}</label>
           <Input value={timeoutS} onChange={(e) => setTimeoutS(e.target.value)} placeholder={tt('기본 10')} inputMode="numeric" />
+          {timeoutInvalid && <p className="mt-1 text-[11px] text-rose-600">{tt('1–60 사이의 정수를 입력하세요.')}</p>}
         </div>
         {kind === 'clickhouse' && (
           <div>
@@ -196,7 +200,7 @@ export default function DatasourceForm({
       {err && <p className="text-[13px] text-rose-600">{err}</p>}
 
       <div className="flex gap-2 pt-1">
-        <Button onClick={save} disabled={saving || !name.trim() || !endpoint.trim()}>{saving ? tt('저장 중…') : tt('저장')}</Button>
+        <Button onClick={save} disabled={saving || !name.trim() || !endpoint.trim() || timeoutInvalid}>{saving ? tt('저장 중…') : tt('저장')}</Button>
         <Button variant="secondary" onClick={onCancel}>{tt('취소')}</Button>
       </div>
     </div>

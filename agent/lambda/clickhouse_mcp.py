@@ -100,13 +100,17 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     assert_host_allowed(ds["endpoint"])
     base = ds["endpoint"].rstrip("/")
     # Gap L203: the per-datasource timeoutS (riding the conn config / secret blob) is the
-    # DEFAULT execution bound when the caller passed none — one mechanism covers Explore,
-    # the service-graph sources, and the agent/worker path. Absent everything → 10s (the
-    # documented default; an unbounded server-side scan is exactly what _clamp_seconds's
-    # docstring exists to stop). Capped at 55s so the aligned HTTP timeout below (+3s)
-    # stays under the connector Lambda's 60s wall.
+    # CEILING for the execution bound — a caller-supplied max_execution_time can only
+    # TIGHTEN it, never exceed it (round-3 review: an agent tool call or the worker
+    # dry-run's pinned 5s must not override an admin's bound upward; a tighter caller value
+    # still wins downward). Absent everything → 10s (the documented default; an unbounded
+    # server-side scan is exactly what _clamp_seconds's docstring exists to stop). Capped at
+    # 55s so the aligned HTTP timeout below (+3s) stays under the Lambda's 60s wall.
+    configured = _clamp_seconds(ds.get("timeoutS"))
     if max_execution_time is None:
-        max_execution_time = _clamp_seconds(ds.get("timeoutS")) or 10
+        max_execution_time = configured or 10
+    elif configured:
+        max_execution_time = min(int(max_execution_time), configured)
     max_execution_time = min(int(max_execution_time), 55)
     # ClickHouse's default output_format_json_quote_64bit_integers=1 (Int64 as JSON STRINGS) is
     # kept deliberately: this function serves EVERY consumer (Explore, graph queries, agent tools),

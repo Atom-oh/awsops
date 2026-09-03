@@ -110,19 +110,37 @@ export async function PATCH(request: Request) {
   // settings-only (or endpoint-only) PATCH that reconstructed the blob from scratch would
   // silently destroy the stored auth material (username/password/token/headers) and, for a
   // default instance, mirror the de-authenticated blob to the kind key the agent path reads.
+  // The merge is NOT blind (round-3 review):
+  //  - settings keys are stripped from the existing blob whenever the request carries
+  //    `settings` — `{}` genuinely clears and a partial replace leaves no stale sibling;
+  //  - auth material never follows an ENDPOINT HOST change unless creds are re-supplied
+  //    (write-only credentials must not become admin-extractable by pointing the row at a
+  //    new host — the next query would transmit them there);
+  //  - keys outside the EFFECTIVE authType are pruned (basic→none leaves no residue).
   if (endpoint !== undefined || authType !== undefined || creds !== undefined || settings !== undefined) {
-    const existing = await getCredentialById(id);
+    const existing: Record<string, unknown> = { ...((await getCredentialById(id)) ?? {}) };
+    if (settings !== undefined) { delete existing.timeoutS; delete existing.database; }
+    const hostOf = (u: string | null | undefined): string | null => { try { return new URL(u ?? '').host; } catch { return null; } };
+    const hostChanged = endpoint !== undefined && hostOf(endpoint) !== hostOf(ds.endpoint);
+    const AUTH_KEYS = ['username', 'password', 'token', 'headerName', 'headerValue', 'headerName2', 'headerValue2'] as const;
+    if (hostChanged && creds === undefined) for (const k of AUTH_KEYS) delete existing[k];
+    const effAuth = authType ?? ds.authType ?? 'none';
+    const KEEP_BY_AUTH: Record<string, readonly string[]> = {
+      none: [], basic: ['username', 'password'], bearer: ['token'],
+      custom_header: ['headerName', 'headerValue', 'headerName2', 'headerValue2'],
+    };
+    for (const k of AUTH_KEYS) if (!(KEEP_BY_AUTH[effAuth] ?? []).includes(k)) delete existing[k];
     const blob = {
-      ...(existing ?? {}),
+      ...existing,
       endpoint: endpoint ?? ds.endpoint ?? '',
-      authType: authType ?? ds.authType ?? 'none',
+      authType: effAuth,
       ...(creds ?? {}),
       ...(settings ?? ds.settings),
     };
     await setIntegrationCredentialById(id, blob);
-    // A database change re-grounds AI query generation on the new database's tables —
-    // mirror POST's connect-time warm (best-effort; the 6h isSchemaStale refresh remains).
-    if (settings?.database !== undefined && settings.database !== ds.settings?.database) {
+    // A database change (set OR clear) re-grounds AI query generation — mirror POST's
+    // connect-time warm (best-effort; the 6h isSchemaStale refresh remains).
+    if (settings !== undefined && (settings.database ?? null) !== (ds.settings?.database ?? null)) {
       warmSchemaCache(id, ds.kind, blob as ConnConfig);
     }
   }

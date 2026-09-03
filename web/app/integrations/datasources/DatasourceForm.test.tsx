@@ -84,15 +84,15 @@ describe('connection settings (gap L203)', () => {
     expect(body.settings).toEqual({ timeoutS: 30, database: 'metrics_db' });
   });
 
-  it('non-clickhouse kinds hide the Database field and out-of-range timeout is not sent', async () => {
+  it('non-clickhouse kinds hide the Database field; an out-of-range timeout blocks save with an inline error', async () => {
     render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
     expect(screen.queryByPlaceholderText('default')).toBeNull(); // prometheus default kind
     fireEvent.change(screen.getByPlaceholderText(/prod-prometheus/), { target: { value: 'p-1' } });
     fireEvent.change(screen.getByPlaceholderText(/prometheus.internal/), { target: { value: 'http://p:9090' } });
     fireEvent.change(screen.getByPlaceholderText('기본 10'), { target: { value: '999' } });
-    fireEvent.click(screen.getByText('저장'));
-    await waitFor(() => expect(calls.some((c) => c.url.includes('/manage'))).toBe(true));
-    const body = JSON.parse(calls.find((c) => c.url.includes('/manage'))!.body!);
-    expect(body.settings).toEqual({});
+    // a typo must NOT silently clear the stored setting — save is blocked, error shown
+    expect(screen.getByText(/1–60 사이의 정수/)).toBeTruthy();
+    expect((screen.getByText('저장').closest('button') as HTMLButtonElement).disabled).toBe(true);
+    expect(calls.some((c) => c.url.includes('/manage'))).toBe(false);
   });
 });

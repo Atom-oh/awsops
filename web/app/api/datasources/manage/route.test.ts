@@ -128,6 +128,7 @@ describe('PATCH update', () => {
 
   it('a settings-only PATCH MERGES onto the existing credential — stored auth material survives', async () => {
     getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
     const { PATCH } = await import('./route');
     const resp = await PATCH(req({ id: 7, settings: { timeoutS: 15 } }, 'PATCH'));
     expect(resp.status).toBe(200);
@@ -135,6 +136,42 @@ describe('PATCH update', () => {
     expect(blob.username).toBe('u');    // NOT wiped by the settings-only rewrite
     expect(blob.password).toBe('pw');
     expect(blob.timeoutS).toBe(15);
+  });
+
+  it('settings:{} genuinely clears — stale blob settings keys are stripped, auth survives', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw', timeoutS: 30, database: 'metrics' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: { timeoutS: 30, database: 'metrics' } });
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, settings: {} }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.timeoutS).toBeUndefined();
+    expect(blob.database).toBeUndefined();
+    expect(blob.username).toBe('u');
+  });
+
+  it('auth material does NOT follow an endpoint HOST change unless creds are re-supplied', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, endpoint: 'http://evil.internal:9090' }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.username).toBeUndefined(); // write-only creds never transmit to a new host
+    expect(blob.password).toBeUndefined();
+    // same host (port path changes only) keeps them
+    await PATCH(req({ id: 7, endpoint: 'http://old:9090/subpath' }, 'PATCH'));
+    const blob2 = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob2.username).toBe('u');
+  });
+
+  it('an authType downgrade prunes residue auth keys from the blob', async () => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+    const { PATCH } = await import('./route');
+    await PATCH(req({ id: 7, authType: 'none' }, 'PATCH'));
+    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob.username).toBeUndefined();
+    expect(blob.password).toBeUndefined();
+    expect(blob.authType).toBe('none');
   });
 
   it('gap L203: settings pass on PATCH only when present (absent ≠ clear; {} clears)', async () => {

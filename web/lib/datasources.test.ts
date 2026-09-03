@@ -148,6 +148,15 @@ describe('resolveConnConfig', () => {
     expect(cc).not.toHaveProperty('timeoutS');
   });
 
+  it('a stale blob database/timeoutS never leaks through — the ROW settings are authoritative', async () => {
+    getCredentialById.mockResolvedValueOnce({ username: 'u', database: 'stale_db', timeoutS: 55 });
+    const ch = { ...row, kind: 'clickhouse', settings: {} }; // settings were CLEARED on the row
+    const cc = await resolveConnConfig(ch);
+    expect(cc).not.toHaveProperty('database');
+    expect(cc).not.toHaveProperty('timeoutS');
+    expect(cc).toMatchObject({ username: 'u' });
+  });
+
   it('takes auth material from the SM credential but keeps the ROW authoritative for endpoint+authType', async () => {
     // cred carries a DIFFERENT (stale) endpoint + authType — the row must win so a stale secret can't
     // redirect the query; only the auth material (username/password) is taken from the cred.

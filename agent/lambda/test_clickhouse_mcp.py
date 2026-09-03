@@ -174,6 +174,28 @@ class TestTools(unittest.TestCase):
         self.assertIn("max_execution_time=55", captured["url"])
         self.assertEqual(captured["timeout"], 58)
 
+    def test_configured_timeout_is_a_ceiling_not_a_default(self):
+        captured = {}
+
+        def fake_http(method, url, headers=None, body=None, timeout=None):
+            captured.update(url=url)
+            return 200, {"data": []}
+
+        ds = dict(DS, timeoutS=5)
+        # a caller asking for 55s cannot exceed the admin's 5s bound…
+        with mock.patch.object(ch, "load_datasource", return_value=ds), \
+             mock.patch.object(ch, "http_json", side_effect=fake_http):
+            ch.lambda_handler({"tool_name": "clickhouse_query",
+                               "arguments": {"sql": "SELECT 1", "max_execution_time": 55}}, None)
+        self.assertIn("max_execution_time=5", captured["url"])
+        # …but a TIGHTER caller value still wins downward
+        ds = dict(DS, timeoutS=30)
+        with mock.patch.object(ch, "load_datasource", return_value=ds), \
+             mock.patch.object(ch, "http_json", side_effect=fake_http):
+            ch.lambda_handler({"tool_name": "clickhouse_query",
+                               "arguments": {"sql": "SELECT 1", "max_execution_time": 5}}, None)
+        self.assertIn("max_execution_time=5", captured["url"])
+
     def test_database_system_rejected_before_request(self):
         # the read-only guard is lexical — database=system would resolve unqualified FROM
         # tables to system.tables; both spellings must be rejected before any HTTP call
