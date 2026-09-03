@@ -174,13 +174,21 @@ class TestTools(unittest.TestCase):
         self.assertIn("max_execution_time=55", captured["url"])
         self.assertEqual(captured["timeout"], 58)
 
-    def test_settings_clause_rejected_before_request(self):
-        # a query-level SETTINGS could try to relax the per-URL bounds; blocked outright
-        with mock.patch.object(ch, "http_json") as hj:
+    def test_bound_relaxing_settings_rejected_but_benign_settings_pass(self):
+        # bound-relaxing SETTINGS are blocked before any HTTP call…
+        for sql in ("SELECT 1 SETTINGS max_execution_time=0",
+                    "SELECT 1 SETTINGS max_result_rows = 999999",
+                    "SELECT 1 SETTINGS readonly=0"):
+            with mock.patch.object(ch, "http_json") as hj:
+                out = ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": sql}}, None)
+            self.assertEqual(out["statusCode"], 400, sql)
+            hj.assert_not_called()
+        # …but the persisted graph-template shape (SETTINGS max_rows) keeps working (round-7:
+        # the round-6 blanket block silently emptied service graphs built from stored templates)
+        with mock.patch.object(ch, "http_json", return_value=(200, {"data": []})):
             out = ch.lambda_handler({"tool_name": "clickhouse_query",
-                                     "arguments": {"sql": "SELECT 1 SETTINGS max_execution_time=0"}}, None)
-        self.assertEqual(out["statusCode"], 400)
-        hj.assert_not_called()
+                                     "arguments": {"sql": "SELECT a FROM t LIMIT 50 SETTINGS max_rows = 50"}}, None)
+        self.assertEqual(out["statusCode"], 200)
 
     def test_configured_timeout_is_a_ceiling_not_a_default(self):
         captured = {}
@@ -203,6 +211,12 @@ class TestTools(unittest.TestCase):
             ch.lambda_handler({"tool_name": "clickhouse_query",
                                "arguments": {"sql": "SELECT 1", "max_execution_time": 5}}, None)
         self.assertIn("max_execution_time=5", captured["url"])
+        # with NO configured timeoutS the DEFAULT 10s is the ceiling too — a caller cannot
+        # raise the bound to 55s on an unconfigured instance (round-7)
+        with mock.patch.object(ch, "http_json", side_effect=fake_http):
+            ch.lambda_handler({"tool_name": "clickhouse_query",
+                               "arguments": {"sql": "SELECT 1", "max_execution_time": 55}}, None)
+        self.assertIn("max_execution_time=10", captured["url"])
 
     def test_database_system_rejected_before_request(self):
         # the read-only guard is lexical — database=system would resolve unqualified FROM

@@ -53,6 +53,9 @@ describe('isBlockedHost (ADR-011 blocklist)', () => {
 });
 
 describe('assertEgressEndpointAllowed', () => {
+  it('rejects a backslash endpoint (parser-differential, PR #286 round-7)', () => {
+    expect(() => assertEgressEndpointAllowed('https://victim:443\\@attacker.example')).toThrow(/backslash/);
+  });
   it('throws on non-https', () => {
     expect(() => assertEgressEndpointAllowed('http://grafana.example.com')).toThrow(/https/);
   });

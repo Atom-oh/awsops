@@ -43,11 +43,15 @@ _TABLE_FN = re.compile(
     re.IGNORECASE,
 )
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")  # db.table or table
-# Query-level SETTINGS is never legitimate in a generated/agent query and could try to relax
-# per-URL bounds (max_execution_time/max_result_rows). readonly=1 already rejects settings not
-# marked changeable_in_readonly, but that's a server-profile nuance — block the token outright
-# (PR #286 round-6; mirrors signal_catalog_gen's _SETTINGS_CLAUSE).
-_SETTINGS_CLAUSE = re.compile(r"\bSETTINGS\b", re.IGNORECASE)
+# Query-level SETTINGS that relax the per-URL bounds are blocked (round-7 correction of the
+# round-6 blanket \bSETTINGS\b block, which broke PERSISTED service-graph templates —
+# graph_querygen emits e.g. `... LIMIT {cap} SETTINGS max_rows = {cap}`, a pinned supported
+# shape). Only the bound-relaxing settings are dangerous; readonly=1 already rejects settings
+# not marked changeable_in_readonly, this is the belt over that server-profile nuance.
+_SETTINGS_CLAUSE = re.compile(
+    r"\bSETTINGS\b[^;]*\b(max_execution_time|max_result_rows|readonly|timeout_overflow_mode)\b",
+    re.IGNORECASE,
+)
 
 
 def _validate_identifier(name):
@@ -68,7 +72,7 @@ def _assert_read_only(sql):
     # single crafted comment swallow real SQL (incl. a _TABLE_FN call) between two adjacent-looking
     # comments; see sql_readonly_guard.py's module docstring for the traced PoC.
     if _SETTINGS_CLAUSE.search(sql):
-        raise ValueError("read-only: query-level SETTINGS is not allowed")
+        raise ValueError("read-only: overriding execution bounds via query-level SETTINGS is not allowed")
     _shared_assert_read_only(
         sql,
         extra_forbidden_re=_TABLE_FN,
@@ -113,10 +117,12 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     # still wins downward). Absent everything → 10s (the documented default; an unbounded
     # server-side scan is exactly what _clamp_seconds's docstring exists to stop). Capped at
     # 55s so the aligned HTTP timeout below (+3s) stays under the Lambda's 60s wall.
-    configured = _clamp_seconds(ds.get("timeoutS"))
+    # The DEFAULT is the ceiling too (round-7): with no configured timeoutS, a caller-supplied
+    # max_execution_time must not exceed the documented 10s default bound either.
+    configured = _clamp_seconds(ds.get("timeoutS")) or 10
     if max_execution_time is None:
-        max_execution_time = configured or 10
-    elif configured:
+        max_execution_time = configured
+    else:
         max_execution_time = min(int(max_execution_time), configured)
     max_execution_time = min(int(max_execution_time), 55)
     # ClickHouse's default output_format_json_quote_64bit_integers=1 (Int64 as JSON STRINGS) is

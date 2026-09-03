@@ -99,6 +99,9 @@ export function isBlockedHost(hostOrIp: string): boolean {
  *  alone let an opt-in account register the exact loopback/0.0.0.0 endpoints this guard exists to
  *  block — loopback is never a legitimate "private datasource" opt-in target the way RFC1918 is. */
 export function assertEgressEndpointAllowed(urlString: string, opts: { allowPrivate?: boolean } = {}): void {
+  // Same URL-parser-differential guard as the datasource variant (PR #286 round-7): reject
+  // backslashes so the Node-side parse and any RFC-style downstream parser agree on the host.
+  if (urlString.includes('\\')) throw new Error('endpoint must not contain a backslash');
   let url: URL;
   try { url = new URL(urlString); } catch { throw new Error('endpoint must be a valid URL'); }
   if (url.protocol !== 'https:') throw new Error('endpoint must use https');

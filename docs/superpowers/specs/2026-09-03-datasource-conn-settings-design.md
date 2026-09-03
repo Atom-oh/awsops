@@ -166,8 +166,11 @@ Cache TTL / ClickHouse database — v1's Settings section).
   urlparse reads the authority to the `@`: `http://victim:9090\\@attacker:9091` matched the
   stored origin on the Node side yet connected (with retained credentials) to the attacker
   host on the Python side. `assertDatasourceEndpointAllowed` now rejects ANY endpoint
-  containing a backslash (no legitimate endpoint has one) — central, so every datasource
-  endpoint write is covered; regression tests pin the shape on the guard and the PATCH.
+  containing a backslash (no legitimate endpoint has one); regression tests pin the shape on
+  the guard and the PATCH. (Round-7 correction: this covers the datasource manage/test paths —
+  the generic /api/integrations upsert writes endpoints through assertEgressEndpointAllowed,
+  which now carries the same backslash rejection; the pre-existing endpoint-rewrite-without-
+  credential-scrub gap on that path remains the recorded follow-up.)
 - Minors: a non-empty settings object that sanitizes to EMPTY is a 400 (a fully-invalid
   direct-API payload must not read as an explicit clear — the manage tests now use the REAL
   sanitizer logic instead of a pass-through stub); the connector blocks a query-level
@@ -182,3 +185,21 @@ Cache TTL / ClickHouse database — v1's Settings section).
   `resolveConnConfig` (a row-endpoint change via the generic /api/integrations upsert path
   carries stored creds at query time — predates this PR); the deprecated slug query path does
   not load per-instance timeoutS (tighten-only gap, no UI caller).
+
+## Round-7 corrections (review-driven)
+
+- **The SETTINGS guard is scoped to bound-relaxing settings (the gate MAJOR)** — round 6's
+  blanket `\bSETTINGS\b` block broke PERSISTED service-graph templates
+  (`graph_querygen` emits `... LIMIT {cap} SETTINGS max_rows = {cap}`, a pinned supported
+  shape; the graph source converts the connector 400 to `[]`, silently emptying graphs). Only
+  `max_execution_time`/`max_result_rows`/`readonly`/`timeout_overflow_mode` inside a SETTINGS
+  clause are rejected now; a connector test pins both directions (bound-relaxing blocked, the
+  persisted template shape passing).
+- **The DEFAULT is the ceiling too (the gate MAJOR)** — with no configured `timeoutS`, a
+  caller-supplied `max_execution_time=55` bypassed the documented 10s default bound (the
+  `elif configured:` clamp never ran). `configured or 10` is now the ceiling in every case;
+  test pinned.
+- Minors: `assertEgressEndpointAllowed` carries the same backslash rejection (the round-6
+  "central" claim is corrected — the generic /api/integrations upsert writes endpoints through
+  that guard); the pre-existing endpoint-rewrite-without-scrub and query-string/fragment
+  hardening remain recorded follow-ups.
