@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: 数据源
-description: 外部数据源集成管理 (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+description: 外部数据源集成管理 (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -32,6 +32,7 @@ AWSops 数据源功能对外部可观测性平台进行集中管理。注册数�
 | 数据源 | 查询语言 | 默认端口 | 主要功能 |
 |-----------|----------|----------|----------|
 | **Prometheus** | PromQL | 9090 | 指标采集、告警、时序数据 |
+| **Mimir** | PromQL | 9009 | 长期指标存储、多租户（X-Scope-OrgID） |
 | **Loki** | LogQL | 3100 | 日志聚合、基于标签的搜索 |
 | **Tempo** | TraceQL | 3200 | 分布式追踪、Span 搜索 |
 | **ClickHouse** | SQL | 8123 | 列式分析、海量数据处理 |

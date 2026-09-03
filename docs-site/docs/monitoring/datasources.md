@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: 데이터소스
-description: 외부 데이터소스 연동 관리 (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+description: 외부 데이터소스 연동 관리 (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -32,6 +32,7 @@ AWSops 데이터소스 기능은 외부 관측성 플랫폼을 중앙에서 관�
 | 데이터소스 | 쿼리 언어 | 기본 포트 | 주요 기능 |
 |-----------|----------|----------|----------|
 | **Prometheus** | PromQL | 9090 | 메트릭 수집, 알림, 시계열 데이터 |
+| **Mimir** | PromQL | 9009 | 장기 보관 메트릭, 멀티테넌트(X-Scope-OrgID) |
 | **Loki** | LogQL | 3100 | 로그 집계, 레이블 기반 검색 |
 | **Tempo** | TraceQL | 3200 | 분산 트레이싱, 스팬 검색 |
 | **ClickHouse** | SQL | 8123 | 컬럼 기반 분석, 대량 데이터 처리 |

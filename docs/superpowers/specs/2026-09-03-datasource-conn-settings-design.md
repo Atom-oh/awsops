@@ -221,3 +221,22 @@ Cache TTL / ClickHouse database — v1's Settings section).
   resolveConnConfig for the generic /api/integrations endpoint-rewrite path; connector-side
   backslash re-rejection / stored-endpoint scan; query-string/fragment stripping on
   datasource endpoints; row-level locking for concurrent admin PATCHes.
+
+## Round-9 corrections (review-driven)
+
+- **The `#` line comment can no longer bypass the SETTINGS guard (the gate MAJOR)** —
+  ClickHouse treats `#` as a line comment (the shared guard's own hash_comment dialect flag),
+  so `SETTINGS # ;\nmax_execution_time=0` smuggled a ';' past the clause window inside an
+  un-stripped comment. `_SQL_NOISE` now strips `#` comments too, and — per the round-9
+  quoted-identifier convergence — double-quoted text stays VISIBLE to the regex
+  (`"max_execution_time"` is an IDENTIFIER in ClickHouse, not a string; stripping it blinded
+  the check). Tests pin all comment forms (`/* */`, `--`, `#`) and the quoted/backticked
+  setting names; a single-quoted string literal still passes.
+- **Mimir joins the guide's supported-datasources table and frontmatter (the docs item)** —
+  the 7→8 sweep fixed the intro bullets and field tables but left the per-kind table and the
+  frontmatter description without Mimir in all 4 locales (self-contradicting page).
+- Minors (defense in depth, per the panel's suggestions): the kind-mirror merge base is
+  trusted only when its endpoint ORIGIN matches the row's (a theoretically poisoned mirror
+  can't bind a foreign credential to this endpoint — no reachable path was constructed, belt
+  only); the Python connector re-rejects backslash endpoints (`assert_host_allowed`) so a
+  PRE-EXISTING stored endpoint can't exploit the parser differential either.

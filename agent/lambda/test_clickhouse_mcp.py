@@ -183,12 +183,16 @@ class TestTools(unittest.TestCase):
                 out = ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": sql}}, None)
             self.assertEqual(out["statusCode"], 400, sql)
             hj.assert_not_called()
-        # a comment cannot smuggle a ';' past the clause window (round-8)
-        with mock.patch.object(ch, "http_json") as hj:
-            out = ch.lambda_handler({"tool_name": "clickhouse_query",
-                                     "arguments": {"sql": "SELECT 1 SETTINGS /* ; */ max_execution_time=0"}}, None)
-        self.assertEqual(out["statusCode"], 400)
-        hj.assert_not_called()
+        # NO comment form can smuggle a ';' past the clause window (rounds 8–9: block, --, #)
+        for sql in ("SELECT 1 SETTINGS /* ; */ max_execution_time=0",
+                    "SELECT 1 SETTINGS # ;\nmax_execution_time=0",
+                    "SELECT 1 SETTINGS -- ;\nmax_execution_time=0",
+                    'SELECT 1 SETTINGS "max_execution_time" = 0',
+                    "SELECT 1 SETTINGS `max_execution_time` = 0"):
+            with mock.patch.object(ch, "http_json") as hj:
+                out = ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": sql}}, None)
+            self.assertEqual(out["statusCode"], 400, sql)
+            hj.assert_not_called()
         # a STRING LITERAL containing the words is not a false positive (round-8)
         with mock.patch.object(ch, "http_json", return_value=(200, {"data": []})):
             out = ch.lambda_handler({"tool_name": "clickhouse_query",

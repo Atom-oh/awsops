@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: データソース
-description: 外部データソース連携の管理 (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+description: 外部データソース連携の管理 (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -32,6 +32,7 @@ AWSops のデータソース機能は、外部オブザーバビリティプラ�
 | データソース | クエリ言語 | デフォルトポート | 主な機能 |
 |-----------|----------|----------|----------|
 | **Prometheus** | PromQL | 9090 | メトリクス収集、アラート、時系列データ |
+| **Mimir** | PromQL | 9009 | 長期メトリクス保管、マルチテナント（X-Scope-OrgID） |
 | **Loki** | LogQL | 3100 | ログ集約、ラベルベースの検索 |
 | **Tempo** | TraceQL | 3200 | 分散トレーシング、スパン検索 |
 | **ClickHouse** | SQL | 8123 | カラム指向分析、大量データ処理 |

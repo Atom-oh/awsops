@@ -52,10 +52,13 @@ _SETTINGS_CLAUSE = re.compile(
     r"\bSETTINGS\b[^;]*\b(max_execution_time|max_result_rows|readonly|timeout_overflow_mode)\b",
     re.IGNORECASE,
 )
-# Comment/string stripper for the SETTINGS check (round-8): the check must not fire on a
-# string literal containing the words, and a comment must not smuggle a ';' past the [^;]*
-# window (`SETTINGS /* ; */ max_execution_time=0`). ClickHouse block comments do NOT nest.
-_SQL_NOISE = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|/\*.*?\*/|--[^\n]*", re.DOTALL)
+# Comment/string stripper for the SETTINGS check (rounds 8–9): the check must not fire on a
+# SINGLE-QUOTED string literal, and no comment form may smuggle a ';' past the [^;]* window.
+# ClickHouse line comments are BOTH `--` and `#` (the shared guard's hash_comment dialect
+# flag), and block comments do NOT nest. Double-quoted text is an IDENTIFIER in ClickHouse
+# (`SETTINGS "max_execution_time" = 0`), so it is deliberately KEPT VISIBLE to the regex —
+# stripping it would blind the check to a quoted setting name (round-9).
+_SQL_NOISE = re.compile(r"'(?:[^'\\]|\\.)*'|/\*.*?\*/|--[^\n]*|#[^\n]*", re.DOTALL)
 
 
 def _strip_sql_noise(sql):

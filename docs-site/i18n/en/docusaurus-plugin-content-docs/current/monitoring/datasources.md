@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: Datasources
-description: External datasource management (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+description: External datasource management (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -32,6 +32,7 @@ Key features:
 | Datasource | Query Language | Default Port | Key Features |
 |-----------|---------------|-------------|-------------|
 | **Prometheus** | PromQL | 9090 | Metrics collection, alerting, time-series data |
+| **Mimir** | PromQL | 9009 | Long-term metrics storage, multi-tenant (X-Scope-OrgID) |
 | **Loki** | LogQL | 3100 | Log aggregation, label-based search |
 | **Tempo** | TraceQL | 3200 | Distributed tracing, span search |
 | **ClickHouse** | SQL | 8123 | Columnar analytics, large-scale data processing |

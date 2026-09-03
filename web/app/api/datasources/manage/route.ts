@@ -176,6 +176,12 @@ export async function PATCH(request: Request) {
     // ORIGIN compare (scheme+host+port — an https→http downgrade must count as a change, or
     // Basic material would transmit in cleartext); a malformed URL counts as changed.
     const originOf = (u: string | null | undefined): string | null => { try { return new URL(u ?? '').origin; } catch { return null; } };
+    // Defense in depth (round-9): the kind mirror could in principle hold ANOTHER same-kind
+    // instance's blob — trust it as a merge base only when its endpoint origin matches THIS
+    // row's; otherwise drop the auth keys rather than bind foreign creds to this endpoint.
+    if (ds.isDefault && existing.endpoint && originOf(String(existing.endpoint)) !== originOf(ds.endpoint)) {
+      for (const k of CRED_KEYS) delete existing[k];
+    }
     const hostChanged = endpoint !== undefined && originOf(endpoint) !== originOf(ds.endpoint);
     // On a host change, stored auth material is dropped UNCONDITIONALLY (round-5: a partial
     // creds object like {username} must not carry the stored password to the new origin) —
