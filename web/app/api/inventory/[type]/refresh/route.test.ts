@@ -62,6 +62,45 @@ describe('POST refresh', () => {
     const { POST } = await import('./route');
     expect((await POST(req(), ctx)).status).toBe(503);
   });
+  // Gap L79: the dashboard's force-sync dispatches the Lambda's own type=all fan-out.
+  it("type 'all' dispatches one all-types sync for an admin, skipping the per-type gate and row read", async () => {
+    verifyUser.mockResolvedValue({ sub: 'admin-u' });
+    triggerSync.mockResolvedValue({ status: 'queued' });
+    process.env.INV_SYNC_FUNCTION = 'inv-sync-fn';
+    const { POST } = await import('./route');
+    const res = await POST(req(), { params: { type: 'all' } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: 'queued', dispatched: 'all' });
+    expect(triggerSync).toHaveBeenCalledWith('all');
+    expect(assertInventoryTypeAllowed).not.toHaveBeenCalled();
+    expect(readResources).not.toHaveBeenCalled();
+  });
+  it("type 'all' is admin-only (403 without invoking the Lambda)", async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(false);
+    const { POST } = await import('./route');
+    expect((await POST(req(), { params: { type: 'all' } })).status).toBe(403);
+    expect(triggerSync).not.toHaveBeenCalled();
+  });
+  it("type 'all' → 503 unconfigured when INV_SYNC_FUNCTION is unset (steampipe disabled)", async () => {
+    verifyUser.mockResolvedValue({ sub: 'admin-u' });
+    delete process.env.INV_SYNC_FUNCTION;
+    const { POST } = await import('./route');
+    const res = await POST(req(), { params: { type: 'all' } });
+    expect(res.status).toBe(503);
+    expect((await res.json()).status).toBe('unconfigured');
+    expect(triggerSync).not.toHaveBeenCalled();
+  });
+  it("type 'all' → 503 without leaking Lambda exception text when the enqueue fails", async () => {
+    verifyUser.mockResolvedValue({ sub: 'admin-u' });
+    process.env.INV_SYNC_FUNCTION = 'inv-sync-fn';
+    triggerSync.mockRejectedValue(new Error('AccessDenied: arn:aws:sts::999999999999:assumed-role/x'));
+    const { POST } = await import('./route');
+    const res = await POST(req(), { params: { type: 'all' } });
+    expect(res.status).toBe(503);
+    const body = JSON.stringify(await res.json());
+    expect(body).not.toContain('999999999999');
+  });
   // pentest-remediation P2-2: this route previously called only verifyUser() — no admin/type gate —
   // so a non-admin could POST /api/inventory/iam_user/refresh and get the same IAM rows GET 403s.
   it('403 when assertInventoryTypeAllowed rejects (e.g. non-admin on iam_user), without syncing', async () => {
