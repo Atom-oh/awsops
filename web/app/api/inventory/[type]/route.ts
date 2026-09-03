@@ -26,8 +26,14 @@ export async function GET(request: Request, { params }: { params: { type: string
     // gap L102: full-fleet aggregates for capped pages — same gates, same scope params,
     // no rows returned (the page pairs this with its 500-row sample fetch).
     if (url.searchParams.get('view') === 'agg') {
-      const aggs = await readAggregates(params.type, { regions, includeGlobal, accounts });
-      return Response.json(aggs);
+      try {
+        const aggs = await readAggregates(params.type, { regions, includeGlobal, accounts });
+        return Response.json(aggs);
+      } catch {
+        // generic message — a pg error can embed SQL/identifiers; the page falls back to the
+        // sample (with the disclosed qualifier) on any non-OK response
+        return Response.json({ status: 'error', message: 'aggregation failed' }, { status: 503 });
+      }
     }
     const page = await readResources(params.type, { limit, offset, regions, includeGlobal, accounts });
     // MTD real cost isn't in inventory_resources (Steampipe has no CE access) — merge it in here.

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 const query = vi.fn();
 const lambdaSend = vi.fn();
-vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
+const poolMock: { query: (...a: unknown[]) => unknown; connect?: unknown } = { query: (...a: unknown[]) => query(...a) };
+vi.mock('@/lib/db', () => ({ getPool: () => poolMock }));
 vi.mock('@aws-sdk/client-lambda', () => ({
   LambdaClient: class { send = lambdaSend; },
   InvokeCommand: class { constructor(public input: unknown) {} },
@@ -87,42 +88,64 @@ describe('triggerSync', () => {
 });
 
 describe('readAggregates (gap L102 — full-fleet server-side aggregates)', () => {
-  it('runs a total + one GROUP BY per distinct spec key with the SAME scoped WHERE', async () => {
-    const { readAggregates } = await import('./inventory');
-    // total, then GROUP BYs (ec2: stateKey=instance_state, distKey=instance_type,
-    // distKey2=instance_state dedupes with stateKey, + filterKeys)
-    query.mockResolvedValue({ rows: [] });
-    query.mockResolvedValueOnce({ rows: [{ n: 1234 }] });
-    const out = await readAggregates('ec2', { regions: ['ap-northeast-2'], accounts: '__all__' });
-    expect(out.total).toBe(1234);
-    const totalSql = String(query.mock.calls[0][0]);
-    expect(totalSql).toMatch(/count\(\*\)::int/);
-    expect(totalSql).toMatch(/resource_type = \$1/);
-    expect(totalSql).toMatch(/region = ANY/); // scoped like readResources
-    const groupSqls = query.mock.calls.slice(1).map((c) => String(c[0]));
-    expect(groupSqls.length).toBeGreaterThan(0);
-    for (const g of groupSqls) {
-      expect(g).toMatch(/GROUP BY 1 ORDER BY 2 DESC LIMIT 50/);
-      expect(g).toMatch(/COALESCE\(NULLIF\(data->>'/); // ''/NULL → (none)
-    }
-    // distKey2 === stateKey for ec2 → the key set is DEDUPED (no duplicate GROUP BY)
-    const keys = groupSqls.map((g) => g.match(/data->>'([a-z0-9_]+)'/)![1]);
-    expect(new Set(keys).size).toBe(keys.length);
-    expect(keys).toContain('instance_state');
-    expect(keys).toContain('instance_type');
+  const connQuery = vi.fn();
+  const release = vi.fn();
+  beforeEach(() => {
+    connQuery.mockReset(); release.mockReset();
+    poolMock.connect = vi.fn().mockResolvedValue({ query: connQuery, release });
   });
 
-  it('maps state/dist/dist2/facets from the spec keys and tolerates a missing spec key', async () => {
+  it('ONE UNION ALL round-trip inside a SET LOCAL statement_timeout transaction, scoped like readResources', async () => {
     const { readAggregates } = await import('./inventory');
-    query.mockImplementation(async (sql: string) => {
-      if (!/GROUP BY/.test(sql)) return { rows: [{ n: 7 }] }; // the total query (GROUP BYs also contain count(*)::int)
-      const k = sql.match(/data->>'([a-z0-9_]+)'/)![1];
-      return { rows: [{ name: `${k}-a`, value: 5 }] };
-    });
-    const out = await readAggregates('ec2', {});
-    expect(out.state![0].name).toBe('instance_state-a');
-    expect(out.dist![0].name).toBe('instance_type-a');
-    expect(out.dist2![0].name).toBe('instance_state-a'); // shared key resolves both
-    for (const buckets of Object.values(out.facets)) expect(buckets[0].value).toBe(5);
+    connQuery.mockResolvedValue({ rows: [] });
+    connQuery.mockImplementation(async (sql: string) => (/UNION ALL/.test(sql)
+      ? { rows: [{ k: '__total__', name: null, value: 1234 }, { k: 'instance_type', name: 't3.micro', value: 900 }] }
+      : { rows: [] }));
+    const out = await readAggregates('ec2', { regions: ['ap-northeast-2'], accounts: '__all__' });
+    expect(out.total).toBe(1234);
+    expect(out.dist![0]).toEqual({ name: 't3.micro', value: 900 });
+    const sqls = connQuery.mock.calls.map((c) => String(c[0]));
+    expect(sqls[0]).toBe('BEGIN');
+    expect(sqls[1]).toMatch(/SET LOCAL statement_timeout = \d+/);
+    const main = sqls.find((q) => /UNION ALL/.test(q))!;
+    expect(main).toMatch(/'__total__'/);
+    expect(main).toMatch(/region = ANY/);                 // scoped like readResources
+    expect(main).toMatch(/ORDER BY 2 DESC, 1 ASC LIMIT 50/); // deterministic tiebreak + cap
+    expect((main.match(/UNION ALL/g) ?? []).length).toBeGreaterThan(0);
+    expect(sqls.at(-1)).toBe('COMMIT');
+    expect(release).toHaveBeenCalled();
+    // exactly ONE data statement — never a serial 1+N chain on the max:3 pool
+    expect(sqls.filter((q) => /inventory_resources/.test(q)).length).toBe(1);
+  });
+
+  it('EXCLUDES client-derived spec keys (dynamodb billing_h, ecs_task cluster_h/cpu_h/memory_h, lambda runtime/vpc_h, opensearch encryption_status_h, msk kafka_version)', async () => {
+    const { readAggregates } = await import('./inventory');
+    connQuery.mockResolvedValue({ rows: [] });
+    for (const [type, banned] of [
+      ['dynamodb', ['billing_h']],
+      ['ecs_task', ['cluster_h', 'cpu_h', 'memory_h']],
+      ['lambda', ['runtime', 'vpc_h']],
+      ['opensearch', ['encryption_status_h']],
+      ['msk', ['kafka_version']],
+    ] as [string, string[]][]) {
+      connQuery.mockClear();
+      await readAggregates(type, {});
+      const main = connQuery.mock.calls.map((c) => String(c[0])).find((q) => /UNION ALL|__total__/.test(q))!;
+      for (const k of banned) {
+        expect(main.includes(`data->>'${k}'`)).toBe(false);
+      }
+    }
+  });
+
+  it('ROLLBACK + release on failure; unknown type returns an empty shape without touching the pool', async () => {
+    const { readAggregates } = await import('./inventory');
+    connQuery.mockImplementation(async (sql: string) => { if (/UNION ALL|__total__/.test(sql)) throw new Error('boom'); return { rows: [] }; });
+    await expect(readAggregates('ec2', {})).rejects.toThrow('boom');
+    expect(connQuery.mock.calls.map((c) => String(c[0]))).toContain('ROLLBACK');
+    expect(release).toHaveBeenCalled();
+    connQuery.mockClear();
+    const out = await readAggregates('not_a_type', {});
+    expect(out).toEqual({ total: 0, state: null, dist: null, dist2: null, facets: {} });
+    expect(connQuery).not.toHaveBeenCalled();
   });
 });
