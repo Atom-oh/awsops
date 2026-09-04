@@ -376,7 +376,7 @@ def test_sync_success_logs_one_terminal_record_with_row_count(capsys, monkeypatc
 
     monkeypatch.setattr(mod, "_aurora", FakeAurora)
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["log_test_success"] = lambda: (
         [{"id": "r-1", "region": "ap-northeast-2"}],
         "id",
@@ -459,7 +459,7 @@ def test_sync_success_with_unknown_attrs_marks_degraded(capsys, monkeypatch):
     connections = iter([MainAurora(), FinalizerAurora()])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["sdk_unknown_attrs_test"] = lambda: (
         [{"id": "new-good", "region": "ap-northeast-2"}],
         "id",
@@ -516,7 +516,7 @@ def test_sdk_partial_upserts_good_rows_without_pruning_or_advancing_last_success
     connections = iter([MainAurora(), FinalizerAurora()])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["sdk_partial_test"] = lambda: (
         [{"id": "new-good", "region": "ap-northeast-2"}],
         "id",
@@ -603,7 +603,7 @@ def test_sync_partial_marks_throttled_from_structured_failure_label(capsys, monk
     connections = iter([MainAurora(), FinalizerAurora()])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["sdk_partial_throttle_test"] = lambda: (
         [{"id": "new-good", "region": "ap-northeast-2"}],
         "id",
@@ -776,7 +776,7 @@ def test_zero_row_success_is_durable_across_later_failure(capsys, monkeypatch):
     second_finalizer = FinalizerAurora()
     connections = iter([first_main, first_finalizer, second_main, second_finalizer])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     monkeypatch.setattr(mod, "_enabled_target_accounts", lambda adb: ["222222222222"])
     reachable = []
 
@@ -1136,7 +1136,7 @@ def test_sync_cleanup_failure_replaces_success_with_one_safe_terminal_failure(
     connections = iter([MainAurora(), FinalizerAurora()])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["log_test_cleanup_failure"] = (
         lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
     )
@@ -1229,7 +1229,7 @@ def test_main_close_failure_uses_fresh_finalizer_after_connection_becomes_unusab
 
     monkeypatch.setattr(mod, "_aurora", aurora_factory)
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["close_finalizer_test"] = (
         lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
     )
@@ -1299,7 +1299,7 @@ def test_finalizer_write_failure_leaves_running_without_false_success(capsys, mo
     connections = iter([MainAurora(), FinalizerAurora()])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["finalizer_write_failure_test"] = (
         lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
     )
@@ -1350,7 +1350,7 @@ def test_stale_finalizer_cannot_overwrite_newer_run(capsys, monkeypatch):
         mod, "_new_run_token", lambda: next(tokens), raising=False
     )
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
 
     def fetch_inventory():
         nonlocal collection_count
@@ -1494,7 +1494,7 @@ def test_finalizer_close_failure_does_not_downgrade_committed_success(capsys, mo
     connections = iter([MainAurora(), FinalizerAurora()])
     monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
     monkeypatch.setattr(mod, "_rec_account", lambda rec: "self")
-    monkeypatch.setattr(mod, "_self_count", lambda recs: len(recs))
+    monkeypatch.setattr(mod, "_account_counts", lambda recs: {"self": len(recs)})
     mod.SDK_SYNCS["finalizer_close_failure_test"] = (
         lambda: ([{"id": "r-1", "region": "ap-northeast-2"}], "id", "region")
     )
@@ -1562,3 +1562,113 @@ def test_cloudtrail_query_carries_the_l189_delivery_columns():
         "latest_digest_delivery_error", "stop_logging_time",
     ):
         assert col in sql, col
+
+
+def test_snapshot_rows_written_per_account_with_derived_series(capsys, monkeypatch):
+    """Gap L124/L129: the daily inventory_snapshots write is per account over `present`
+    (genuine 0 for a reachable-but-empty account; a DERIVED_SNAPSHOTS base type also writes
+    its derived security series from a COUNT over the just-pruned inventory_resources)."""
+    mod = load_sync_lambda()
+    mod._ACCOUNT_CACHE["id"] = "111111111111"
+    main_calls = []
+
+    class MainAurora:
+        def run(self, sql, **kwargs):
+            main_calls.append((sql, kwargs))
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            if "SELECT COUNT(*) FROM inventory_resources" in sql:
+                return [(2,)]
+            return []
+
+        def close(self):
+            pass
+
+    class FinalizerAurora:
+        def run(self, sql, **kwargs):
+            return [(1,)]
+
+        def close(self):
+            pass
+
+    connections = iter([MainAurora(), FinalizerAurora()])
+    monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
+    mod.SDK_SYNCS["snapshot_multiacct_test"] = lambda: (
+        [
+            {"id": "r-1", "region": "ap-northeast-2", "account_id": "111111111111"},
+            {"id": "r-2", "region": "ap-northeast-2", "account_id": "222222222222"},
+            {"id": "r-3", "region": "ap-northeast-2", "account_id": "222222222222"},
+        ],
+        "id",
+        "region",
+        {"failure_count": 0, "failure_types": []},
+    )
+    mod._ALLOWED.add("snapshot_multiacct_test")
+    monkeypatch.setitem(
+        mod.DERIVED_SNAPSHOTS,
+        "snapshot_multiacct_test",
+        ("derived_test_series", "(data->>'encrypted')='false'"),
+    )
+
+    result = mod.sync("snapshot_multiacct_test")
+    assert result["status"] == "succeeded"
+
+    snap_inserts = [
+        (sql, p) for sql, p in main_calls if "INSERT INTO inventory_snapshots" in sql
+    ]
+    snap_deletes = [
+        (sql, p) for sql, p in main_calls if "DELETE FROM inventory_snapshots" in sql
+    ]
+    by_series = {(p["a"], p["t"]): p["n"] for _, p in snap_inserts}
+    # base series: one row per present account, counts bucketed by _rec_account
+    assert by_series[("self", "snapshot_multiacct_test")] == 1
+    assert by_series[("222222222222", "snapshot_multiacct_test")] == 2
+    # derived series: one row per account from the lockstep COUNT (fake returns 2)
+    assert by_series[("self", "derived_test_series")] == 2
+    assert by_series[("222222222222", "derived_test_series")] == 2
+    # each insert is preceded by a PER-ACCOUNT same-day delete (never a blanket type delete)
+    assert len(snap_deletes) == len(snap_inserts) == 4
+    assert all("account_id=:a" in sql and "CURRENT_DATE" in sql for sql, _ in snap_deletes)
+    count_sqls = [
+        sql for sql, _ in main_calls if "SELECT COUNT(*) FROM inventory_resources" in sql
+    ]
+    assert all(
+        "resource_type=:t" in sql and "account_id=:a" in sql
+        and "(data->>'encrypted')='false'" in sql
+        for sql in count_sqls
+    )
+    assert len(count_sqls) == 2
+
+
+def test_derived_snapshot_predicates_lockstep_with_web_finding_sql():
+    """LOCKSTEP guard (gap L129): DERIVED_SNAPSHOTS predicates must stay verbatim copies of
+    web/lib/security-findings.ts (PUBLIC_S3_WHERE / FINDING_SQL) — the trend series must count
+    exactly what the /security page lists. Token-level: the TS source escapes backslashes
+    (double-backslash-s -> backslash-s), so the file is unescaped before comparing."""
+    mod = load_sync_lambda()
+    ts_path = Path(__file__).resolve().parents[3] / "web" / "lib" / "security-findings.ts"
+    ts = ts_path.read_text(encoding="utf-8").replace("\\\\", "\\")
+    # open_security_groups: the full anchored regex literal
+    assert mod.DERIVED_SNAPSHOTS["security_group"][0] == "open_security_groups"
+    assert (
+        '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"' in ts
+    )
+    assert (
+        '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
+        in mod.DERIVED_SNAPSHOTS["security_group"][1]
+    )
+    # unencrypted_ebs: the exact clause
+    assert mod.DERIVED_SNAPSHOTS["ebs_volume"] == (
+        "unencrypted_ebs", "(data->>'encrypted')='false'",
+    )
+    assert "(data->>'encrypted')='false'" in ts
+    # public_s3_buckets: all three PUBLIC_S3_WHERE clauses
+    pub = mod.DERIVED_SNAPSHOTS["s3_public_access"]
+    assert pub[0] == "public_s3_buckets"
+    for clause in (
+        "(data->>'bucket_policy_is_public')='true'",
+        "(data->>'block_public_acls')='false'",
+        "(data->>'block_public_policy')='false'",
+    ):
+        assert clause in pub[1]
+        assert clause in ts

@@ -30,7 +30,7 @@
 | `/api/inventory/ebs_volume/related` | GET | 볼륨 드릴다운 — 스냅샷 20개 + 연결 EC2 enrichment (Aurora 교차조회, 계정 스코프) | verifyUser |
 | `/api/inventory/security_group/inbound` | GET | SG 인바운드 규칙 체이닝 — 첨부 SG(≤20)의 인바운드 규칙 파싱 (Aurora 교차조회, 계정 스코프) | verifyUser |
 | `/api/inventory/summary` | GET | 타입/카테고리별 카운트 + 보안 분할(ec2 running, 미암호화 EBS 등) — `regions`/`includeGlobal` 스코프 반영(홈 대시보드 카운트 포함) | verifyUser |
-| `/api/inventory/trend` | GET | 일별 리소스 카운트 추세 (`inventory_snapshots`, 기본 14일/최대 90일) | verifyUser |
+| `/api/inventory/trend` | GET | 일별 리소스 카운트 추세 (`inventory_snapshots`, 기본 14일/최대 90일) — `accounts` 스코프(기본 self/`__all__`/CSV, 리전 차원 없음), 파생 보안 시리즈(public_s3_buckets 등)는 total에서 제외 | verifyUser |
 
 ## eks (10)
 | 경로 | 메서드 | 역할 | 인증 |

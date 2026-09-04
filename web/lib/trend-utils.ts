@@ -3,6 +3,17 @@
 
 export interface TrendPointLike { date: string; total?: number | string; [k: string]: unknown }
 
+/** Derived security-count trend series (gap L129), written by the sync lambda's
+ *  DERIVED_SNAPSHOTS (scripts/v2/steampipe/sync_lambda.py — LOCKSTEP: keys must match) from
+ *  the /security predicates in security-findings.ts. Excluded from the trend `total` (the
+ *  underlying resources are already counted by their base series); labels are the v1-parity
+ *  series names (these keys are not inventory types, so INV_LABEL would show raw keys). */
+export const DERIVED_TREND_TYPES: Record<string, string> = {
+  public_s3_buckets: 'Public S3 Buckets',
+  open_security_groups: 'Open Security Groups',
+  unencrypted_ebs: 'Unencrypted EBS Volumes',
+};
+
 /** Nearest snapshot to `daysAgo` within ±2 CALENDAR days (v1 tolerance): the target is
  *  date-normalized so gaps are integral — comparing against a time-of-day-bearing now() made
  *  the window asymmetric and wall-clock-dependent. Shared by the delta table and the KPI bar. */

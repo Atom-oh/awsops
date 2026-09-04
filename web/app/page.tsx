@@ -20,7 +20,7 @@ import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
-import { nearestSnapshot, netChange } from '@/lib/trend-utils';
+import { nearestSnapshot, netChange, DERIVED_TREND_TYPES } from '@/lib/trend-utils';
 import { estimateCostImpact, COST_IMPACT_WEIGHTS } from '@/lib/cost-impact';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -54,7 +54,16 @@ interface FleetCluster {
 interface Fleet { clusters: FleetCluster[] }
 
 const DASH = '—';
-const INV_LABEL = (t: string): string => INVENTORY_TYPES[t]?.label ?? t;
+// Registry label, else a derived trend-series label (gap L129 — not inventory types), else raw.
+const INV_LABEL = (t: string): string => INVENTORY_TYPES[t]?.label ?? DERIVED_TREND_TYPES[t] ?? t;
+
+// Accounts half of the scope for the trend endpoint (gap L124). Regions are deliberately NOT
+// passed — inventory_snapshots carries no region dimension, so the route would silently ignore
+// them; reuses scopeParams' normalization (default 'self' selection omits the param entirely).
+const trendAcctParam = (scope: Parameters<typeof scopeParams>[0]): string => {
+  const a = new URLSearchParams(scopeParams(scope)).get('accounts');
+  return a ? `&accounts=${encodeURIComponent(a)}` : '';
+};
 // Section gateways per ADR-004 (8). Named so the AgentCore tile isn't a bare magic literal.
 const SECTION_GATEWAYS = 8;
 
@@ -104,11 +113,13 @@ export default function Home() {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setCost)
         .catch(() => setCost({ trend: [] })),
-      fetch(`/api/inventory/trend?days=${trendDays}`)
+      // Trend is account-scoped (gap L124; snapshots have no region dimension, so only the
+      // accounts half of the scope is passed — the region-gated KPIs below account for that).
+      fetch(`/api/inventory/trend?days=${trendDays}${trendAcctParam(scope)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setResTrend)
         .catch(() => setResTrend({ trend: [] })),
-      fetch('/api/inventory/trend?days=35')
+      fetch(`/api/inventory/trend?days=35${trendAcctParam(scope)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setImpactTrend)
         .catch(() => setImpactTrend({ trend: [] })),
@@ -266,13 +277,14 @@ export default function Home() {
   const coreTypes = trendTypes.slice(0, 5);
   const otherTypes = trendTypes.slice(5);
   // L127: 7d net change (lib/trend-utils netChange — coverage-parity diff with honest-degrade
-  // branches; see its doc). The trend endpoint is account_id='self'-fixed with no region
-  // dimension (scoping it is a separately tracked open item), so a narrowed scope also renders
-  // '—' — the adjacent 전체 리소스 IS scoped, and one KPI row must not silently mix the two.
-  const scopeIsDefault =
-    Array.isArray(scope.accounts) && scope.accounts.length === 1 && scope.accounts[0] === 'self'
-    && scope.regions === '__all__' && scope.includeGlobal === true;
-  const net7 = scopeIsDefault ? netChange(resTrend?.trend ?? [], 7) : null;
+  // branches; see its doc). The trend data IS account-scoped now (gap L124 — the fetch above
+  // passes the accounts scope), but snapshots still have no REGION dimension — so a narrowed
+  // region scope renders '—' (the adjacent 전체 리소스 IS region-scoped, and one KPI row must
+  // not silently mix the two). A narrowed ACCOUNT scope shows that account's own net change
+  // (history for non-self accounts accrues from the L124 deploy; netChange's missing-baseline
+  // branches degrade honestly until then).
+  const regionScopeIsDefault = scope.regions === '__all__' && scope.includeGlobal === true;
+  const net7 = regionScopeIsDefault ? netChange(resTrend?.trend ?? [], 7) : null;
 
   const deltaRows = (() => {
     const pts = resTrend?.trend ?? [];
@@ -299,10 +311,11 @@ export default function Home() {
   // table's presentation-filtered rows — a type that went to zero >7d ago is precisely the
   // biggest genuine saving). Honest bounds: requires a non-stale latest point (the netChange
   // guard — a sync that died days ago must not be priced as a 30d delta), a 30d baseline
-  // within tolerance, and the default scope (the trend history is host-account-only; a
-  // narrowed scope must not show host-wide dollar impact — the net7 gate).
+  // within tolerance, and the default REGION scope (the 35d fetch is account-scoped per L124,
+  // so a narrowed account scope prices that account's own deltas; snapshots have no region
+  // dimension, so a narrowed region scope would misprice host-wide deltas — the net7 gate).
   const impactRows = (() => {
-    if (!scopeIsDefault) return [];
+    if (!regionScopeIsDefault) return [];
     const pts = [...(impactTrend?.trend ?? [])].sort((a, b) => a.date.localeCompare(b.date));
     if (pts.length < 2) return [];
     const last = pts[pts.length - 1];

@@ -23,6 +23,8 @@ A page for tracking daily changes in AWS resource counts and estimating cost imp
 - Multi-line chart visualizing resource count trends by type
 - Time range toggle: 30 days / 90 days
 - Resource type toggles to select which resources to display
+- Scoped by the account selector at the top (per-account history accrues from when this feature was deployed; there is no region dimension)
+- Derived security series (Public S3 Buckets / Open Security Groups / Unencrypted EBS) are recorded on every sync with the same criteria as the Security page, and are excluded from the overall total to avoid double-counting their underlying resources
 
 ### Core Resources (Displayed by Default)
 - EC2 Instances
@@ -37,7 +39,6 @@ A page for tracking daily changes in AWS resource counts and estimating cost imp
 - IAM Users, IAM Roles
 - ECS Tasks, ECS Services
 - DynamoDB Tables
-- EKS Nodes, K8s Pods, K8s Deployments
 - ElastiCache Clusters
 - CloudFront Distributions
 - WAF Web ACLs

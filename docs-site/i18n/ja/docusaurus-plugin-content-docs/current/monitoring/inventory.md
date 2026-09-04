@@ -23,6 +23,8 @@ AWS リソースの数量変化を日次で追跡し、コスト影響を推定�
 - マルチラインチャートでリソースタイプ別の数量推移を可視化
 - 期間トグル: 30 日 / 90 日
 - リソースタイプのトグルで表示するリソースを選択
+- 上部のアカウント選択に従ってアカウント別にスコープされます（アカウント別の履歴は本機能のデプロイ以降に蓄積、リージョン次元はありません）
+- 派生セキュリティ系列（Public S3 Buckets / Open Security Groups / Unencrypted EBS）はセキュリティページと同じ判定基準で sync ごとに記録され、元リソースとの二重集計を避けるため合計（total）には含まれません
 
 ### Core Resources (デフォルト表示)
 - EC2 Instances
@@ -37,7 +39,6 @@ AWS リソースの数量変化を日次で追跡し、コスト影響を推定�
 - IAM Users, IAM Roles
 - ECS Tasks, ECS Services
 - DynamoDB Tables
-- EKS Nodes, K8s Pods, K8s Deployments
 - ElastiCache Clusters
 - CloudFront Distributions
 - WAF Web ACLs

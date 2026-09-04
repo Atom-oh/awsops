@@ -1,5 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { DERIVED_TREND_TYPES } from '@/lib/trend-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,10 +11,15 @@ interface TrendPoint { date: string; total: number; ec2?: number }
 
 /**
  * Daily resource-count trend (dashboard "리소스 추세" chart) from inventory_snapshots —
- * one row per (day, resource_type), written by sync_lambda's _self_count on every sync.
- * account_id='self' only, matching every other host-facing inventory read. History only
- * exists from whenever the sync Lambda first wrote a snapshot (steampipe_enabled deploys);
- * days before that simply have no row.
+ * one row per (account, day, resource_type), written by sync_lambda per trusted account
+ * (gap L124). `accounts` uses the same vocabulary as /api/inventory/summary: absent →
+ * ['self'] (legacy behavior), '__all__', or a CSV validated to 'self'/12-digit ids.
+ * Snapshots carry NO region dimension — `regions` is not accepted here (the page's
+ * region-gated KPIs account for that). History only exists from whenever the sync Lambda
+ * first wrote a snapshot for that account (non-self rows begin at the L124 deploy);
+ * days before that simply have no row — honest absence, never a fabricated zero.
+ * Derived security series (DERIVED_TREND_TYPES) are excluded from `total`: their
+ * resources are already counted by their base series.
  */
 export async function GET(request: Request) {
   if (!(await verifyUser(request.headers.get('cookie')))) {
@@ -21,14 +27,24 @@ export async function GET(request: Request) {
   }
   const url = new URL(request.url);
   const days = Math.min(MAX_DAYS, Math.max(1, Number(url.searchParams.get('days')) || DEFAULT_DAYS));
+  // Same accounts vocabulary as summary/route.ts's accountCond (invalid ids are dropped;
+  // an all-invalid list falls back to 'self' rather than an unscoped read).
+  const accountsParam = url.searchParams.get('accounts');
+  const accounts: string[] | null = (() => {
+    if (accountsParam === '__all__') return null; // no account filter
+    if (accountsParam === null) return ['self'];
+    const safe = accountsParam.split(',').filter((a) => a === 'self' || /^[0-9]{12}$/.test(a));
+    return safe.length ? safe : ['self'];
+  })();
   try {
     const pool = getPool();
     const r = await pool.query<{ d: string; resource_type: string; n: number }>(
       `SELECT captured_at::date::text AS d, resource_type, SUM(resource_count)::int AS n
        FROM inventory_snapshots
-       WHERE account_id = 'self' AND captured_at >= now() - ($1 || ' days')::interval
+       WHERE ($2::text[] IS NULL OR account_id = ANY($2::text[]))
+         AND captured_at >= now() - ($1 || ' days')::interval
        GROUP BY 1, 2 ORDER BY 1`,
-      [days],
+      [days, accounts],
     );
     const byDate = new Map<string, TrendPoint & Record<string, number | string>>();
     const latestByType = new Map<string, number>();
@@ -37,7 +53,9 @@ export async function GET(request: Request) {
       // indistinguishable from a genuine zero — key ABSENCE is the coverage signal the
       // client's coverage-parity diff and the ranking below both rely on).
       const p = byDate.get(row.d) ?? { date: row.d, total: 0 };
-      p.total += Number(row.n);
+      // Derived security series don't add to the day's total — their resources are already
+      // counted by the base series they were derived from (double-count guard).
+      if (!(row.resource_type in DERIVED_TREND_TYPES)) p.total += Number(row.n);
       // v1 parity: every type is a column on the point (multi-line chart + delta table).
       p[row.resource_type] = Number(row.n);
       byDate.set(row.d, p);

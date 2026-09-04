@@ -64,16 +64,46 @@ describe('GET /api/inventory/trend', () => {
     expect(body.types).toEqual(['lambda', 'ec2']);
   });
 
-  it('clamps days into [1, 90] and defaults to 14', async () => {
+  it('clamps days into [1, 90] and defaults to 14 (accounts default: self)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({ rows: [] });
     const { GET } = await import('./route');
     await GET(req());
-    expect(query.mock.calls[0][1]).toEqual([14]);
+    expect(query.mock.calls[0][1]).toEqual([14, ['self']]);
     await GET(req('/api/inventory/trend?days=9999'));
-    expect(query.mock.calls[1][1]).toEqual([90]);
+    expect(query.mock.calls[1][1]).toEqual([90, ['self']]);
     await GET(req('/api/inventory/trend?days=-5'));
-    expect(query.mock.calls[2][1]).toEqual([1]);
+    expect(query.mock.calls[2][1]).toEqual([1, ['self']]);
+  });
+
+  it('accounts scope (gap L124): CSV is validated, __all__ lifts the filter, all-invalid falls back to self', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    const { GET } = await import('./route');
+    await GET(req('/api/inventory/trend?accounts=self,222233334444'));
+    expect(query.mock.calls[0][1]).toEqual([14, ['self', '222233334444']]);
+    // account_id is parameterized (= ANY), never inlined
+    expect(String(query.mock.calls[0][0])).toContain('account_id = ANY($2::text[])');
+    await GET(req('/api/inventory/trend?accounts=__all__'));
+    expect(query.mock.calls[1][1]).toEqual([14, null]); // NULL param disables the filter
+    // an all-invalid list must scope down to self, never widen to an unscoped read
+    await GET(req("/api/inventory/trend?accounts=bogus,1234'"));
+    expect(query.mock.calls[2][1]).toEqual([14, ['self']]);
+  });
+
+  it('derived security series (gap L129) are chart series but never add to total', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValueOnce({ rows: [
+      { d: '2026-07-01', resource_type: 'ebs_volume', n: 10 },
+      // derived from ebs_volume — counting it into total would double-count the volumes
+      { d: '2026-07-01', resource_type: 'unencrypted_ebs', n: 4 },
+    ] });
+    const { GET } = await import('./route');
+    const body = await (await GET(req())).json();
+    expect(body.trend).toEqual([
+      { date: '2026-07-01', total: 10, ebs_volume: 10, unencrypted_ebs: 4 },
+    ]);
+    expect(body.types).toContain('unencrypted_ebs');
   });
 
   it('500 on db error', async () => {

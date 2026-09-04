@@ -23,6 +23,8 @@ import Screenshot from '@site/src/components/Screenshot';
 - 通过多折线图可视化各资源类型的数量趋势
 - 期间切换：30 天 / 90 天
 - 通过资源类型开关选择要显示的资源
+- 跟随顶部的账户选择进行账户级过滤（各账户历史自该功能部署后开始积累，无区域维度）
+- 派生安全序列（Public S3 Buckets / Open Security Groups / Unencrypted EBS）在每次 sync 时按与安全页面相同的判定标准记录，并且不计入总数（total），以避免与原始资源重复计算
 
 ### Core Resources（默认显示）
 - EC2 Instances
@@ -37,7 +39,6 @@ import Screenshot from '@site/src/components/Screenshot';
 - IAM Users、IAM Roles
 - ECS Tasks、ECS Services
 - DynamoDB Tables
-- EKS Nodes、K8s Pods、K8s Deployments
 - ElastiCache Clusters
 - CloudFront Distributions
 - WAF Web ACLs

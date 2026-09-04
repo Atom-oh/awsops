@@ -23,6 +23,8 @@ AWS 리소스의 수량 변화를 일별로 추적하고 비용 영향을 추정
 - 멀티 라인 차트로 리소스 유형별 수량 추이 시각화
 - 기간 토글: 30일 / 90일
 - 리소스 유형 토글로 표시할 리소스 선택
+- 상단 계정 선택을 따라 계정별로 스코프됩니다(계정별 이력은 해당 기능 배포 이후부터 축적, 리전 차원은 없음)
+- 파생 보안 시리즈(Public S3 Buckets / Open Security Groups / Unencrypted EBS)는 보안 페이지와 동일한 판정 기준으로 매 sync마다 기록되며, 원본 리소스와의 이중 계산을 피하기 위해 전체 합계(total)에는 포함되지 않습니다
 
 ### Core Resources (기본 표시)
 - EC2 Instances
@@ -37,7 +39,6 @@ AWS 리소스의 수량 변화를 일별로 추적하고 비용 영향을 추정
 - IAM Users, IAM Roles
 - ECS Tasks, ECS Services
 - DynamoDB Tables
-- EKS Nodes, K8s Pods, K8s Deployments
 - ElastiCache Clusters
 - CloudFront Distributions
 - WAF Web ACLs

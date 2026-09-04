@@ -1689,7 +1689,9 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
 /** Translate a known Korean UI literal (exact match, then patterns). Unknown → unchanged. */
 export function applyTerms(lang: Lang, s: string): string {
   if (lang === 'ko') return s;
-  const hit = TERMS[s];
+  // own-property guard: a dynamic tt(variable) source equal to an Object.prototype key
+  // ('constructor', 'toString', …) must fall through to RULES, not return prototype junk
+  const hit = Object.prototype.hasOwnProperty.call(TERMS, s) ? TERMS[s] : undefined;
   if (hit) return hit[lang];
   for (const r of RULES) {
     const m = s.match(r.re);
