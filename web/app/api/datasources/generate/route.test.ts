@@ -254,6 +254,25 @@ describe('Prometheus/Mimir live query validation', () => {
     });
   });
 
+  it('self-corrects a conclusive Prometheus HTTP 422 type error', async () => {
+    promFixture();
+    generateQuery.mockResolvedValueOnce('topk(5, 1)').mockResolvedValueOnce('topk(5, up)');
+    invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+      if (tool === 'prometheus_metric_meta') return {};
+      if (args?.query === 'topk(5, 1)') {
+        throw new Error('Prometheus HTTP 422: expected type instant vector in call to function topk');
+      }
+      return { resultType: 'vector', result: [] };
+    });
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '상위 5개 타깃' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).query).toBe('topk(5, up)');
+    expect(generateQuery).toHaveBeenCalledTimes(2);
+  });
+
   it('returns 422 when both generated candidates fail syntax validation', async () => {
     promFixture();
     generateQuery.mockResolvedValueOnce('up(').mockResolvedValueOnce('sum(');

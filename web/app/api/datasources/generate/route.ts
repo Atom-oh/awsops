@@ -34,7 +34,7 @@ const LANG: Record<string, string> = {
 };
 const MAX_NL = 4_000;
 const PROMQL_VALIDATION_ERROR_RE =
-  /\b(?:bad_data|parse error|unexpected (?:end|token)|unknown function|invalid (?:parameter|query)|could not parse)\b/i;
+  /\b(?:bad_data|parse error|unexpected (?:end|token)|unknown function|invalid (?:parameter|query)|could not parse|(?:prometheus|mimir) http (?:400|422))\b/i;
 
 class GeneratedQueryValidationError extends Error {}
 class QueryValidationUnavailableError extends Error {}

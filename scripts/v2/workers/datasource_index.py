@@ -195,18 +195,41 @@ def _graph_schema_version(schema):
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
-def _card_schema_version(schema):
-    """Stable cross-process hash of the FULL schema + card_catalog.CARD_CATALOG_VERSION. No feature
-    flag is mixed in — cards are deterministic-only (no LLM/generation mode to toggle), so only a
-    schema drift or a catalog edit should force a rebuild."""
-    basis = (json.dumps(_canon(schema), sort_keys=True, separators=(",", ":"))
+def _card_schema_version(kind, schema):
+    """Stable hash of only the schema facts the card catalog consumes + its catalog version.
+
+    Prometheus/Mimir schemas commonly drift as unrelated application metrics appear/disappear. Hashing
+    the full metric list made each such drift re-run every ready card against the shared connector
+    Lambda and monitoring backend. Their cards depend only on required-metric presence/probe state and
+    truncation, so keep unrelated metric churn out of the rebuild key. Other kinds retain the full
+    canonical schema because their card matching consumes labels/tables/columns directly.
+    """
+    if kind in ("prometheus", "mimir"):
+        metrics = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
+        probed = {m for m in (schema.get("probed") or []) if isinstance(m, str)}
+        required = {}
+        for metric in _card_cat.required_metrics():
+            if metric in metrics:
+                required[metric] = "present"
+            elif metric in probed:
+                required[metric] = "probed_absent"
+            else:
+                required[metric] = "unprobed_absent"
+        version_input = {
+            "kind": kind,
+            "required_metrics": required,
+            "truncated": bool(schema.get("truncated")),
+        }
+    else:
+        version_input = {"kind": kind, "schema": _canon(schema)}
+    basis = (json.dumps(version_input, sort_keys=True, separators=(",", ":"))
              + "|" + _card_cat.CARD_CATALOG_VERSION)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
 _CARD_QUERY_ERROR_RE = re.compile(
     r"\b(?:bad_data|parse error|unexpected (?:end|token)|unknown function|"
-    r"invalid (?:parameter|query)|could not parse)\b",
+    r"invalid (?:parameter|query)|could not parse|(?:prometheus|mimir) http (?:400|422))\b",
     re.IGNORECASE,
 )
 
@@ -248,7 +271,7 @@ def _validate_dashboard_cards(kind, iid, rows):
 def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema):
     """Third pre-built family (dashboard cards) — mirrors _rebuild_graph_queries: schema-hash skip,
     atomic upsert+sweep. Deterministic only; an empty build writes the version sentinel (db.py)."""
-    version = _card_schema_version(schema)
+    version = _card_schema_version(kind, schema)
     if wdb.read_card_schema_version(conn, iid) == version:
         return {"cards_skipped": True}
     rows = _card_cat.build_cards(kind, schema)

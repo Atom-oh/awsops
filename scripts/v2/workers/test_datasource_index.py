@@ -1787,6 +1787,23 @@ class TestDashboardCards:
         assert "query validation failed" in row["mi"]
         assert out["cards_invalid"] == 1
 
+    def test_http_422_card_query_error_is_conclusive(self, monkeypatch):
+        def invoke(kind, tool, arguments=None):
+            if arguments.get("query") == "sum(up)":
+                raise RuntimeError(
+                    "Prometheus HTTP 422: expected type instant vector in call to function topk"
+                )
+            return {"resultType": "vector", "result": []}
+
+        monkeypatch.setattr(dsi, "_lambda_invoke", invoke)
+        c = FakeConn(kind="prometheus", schema={"metrics": ["up"]})
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+
+        row = next(p for p in c.card_inserts if p["ck"] == "up_targets")
+        assert row["st"] == "unavailable"
+        assert out["cards_invalid"] == 1
+        assert "cards_error" not in out
+
     def test_transient_card_validation_preserves_existing_cards(self, monkeypatch):
         monkeypatch.setattr(
             dsi,
@@ -1799,6 +1816,37 @@ class TestDashboardCards:
         assert out["cards_error"] == "card validation unavailable"
         assert c.card_inserts == []
         assert c.card_deletes == []
+
+    def test_unrelated_prometheus_metric_drift_skips_card_revalidation(self, monkeypatch):
+        calls = []
+
+        def invoke(kind, tool, arguments=None):
+            calls.append((kind, tool, arguments))
+            return {"resultType": "vector", "result": []}
+
+        monkeypatch.setattr(dsi, "_lambda_invoke", invoke)
+        c0 = FakeConn(kind="prometheus", schema={"metrics": ["up"]})
+        first = dsi._rebuild_dashboard_cards(c0, wdb, 7, "prometheus", {"metrics": ["up"]})
+        version = c0.card_inserts[0]["sv"]
+        assert first["cards_validated"] == 2
+
+        calls.clear()
+        c = FakeConn(
+            kind="prometheus",
+            schema={"metrics": ["up", "unrelated_application_metric_total"]},
+            existing_card_version=version,
+        )
+        out = dsi._rebuild_dashboard_cards(
+            c,
+            wdb,
+            7,
+            "prometheus",
+            {"metrics": ["up", "unrelated_application_metric_total"]},
+        )
+
+        assert out["cards_skipped"] is True
+        assert calls == []
+        assert c.card_inserts == []
 
     def test_card_build_skips_when_hash_unchanged(self):
         c0 = FakeConn(kind="tempo", schema={"tags": []})
