@@ -369,3 +369,35 @@ describe('ec2NetworkTrends (gap L139)', () => {
     expect(await ec2NetworkTrends('i-abc12345')).toEqual({ netIn: null, netOut: null });
   });
 });
+
+describe('ec2DiagFleetLive completeBuckets (gap L228 rate honesty)', () => {
+  it('skips the still-filling newest bucket and returns the newest COMPLETE one; default keeps Values[0]', async () => {
+    const now = Date.now();
+    const partial = new Date(now - 10 * 60_000);   // bucket started 10min ago → still filling (Period 3600)
+    const complete = new Date(now - 70 * 60_000);  // ended 10min ago → complete
+    cwSend.mockImplementation(async () => ({
+      MetricDataResults: [
+        { Id: 'netIn_i0', Timestamps: [partial, complete], Values: [1_000, 3_600_000] },
+      ],
+    }));
+    const { ec2DiagFleetLive } = await import('./metrics');
+    const strict = await ec2DiagFleetLive(['i-1'], undefined, 3600, true);
+    expect(strict['i-1'].netIn).toBe(3_600_000); // the complete previous-hour bucket
+    const dflt = await ec2DiagFleetLive(['i-1'], undefined, 3600);
+    expect(dflt['i-1'].netIn).toBe(1_000); // legacy consumers keep the latest (partial) bucket
+    // completeBuckets doubles the window so a complete bucket always exists
+    const strictCall = cwSend.mock.calls[0][0].input as { StartTime: Date };
+    expect(now - strictCall.StartTime.getTime()).toBeGreaterThanOrEqual(2 * 3600_000 - 5_000);
+  });
+
+  it('returns null (not a partial value) when NO complete bucket exists in the window', async () => {
+    cwSend.mockImplementation(async () => ({
+      MetricDataResults: [
+        { Id: 'netIn_i0', Timestamps: [new Date(Date.now() - 5 * 60_000)], Values: [1_000] },
+      ],
+    }));
+    const { ec2DiagFleetLive } = await import('./metrics');
+    const strict = await ec2DiagFleetLive(['i-1'], undefined, 3600, true);
+    expect(strict['i-1'].netIn).toBeNull();
+  });
+});

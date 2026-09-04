@@ -48,7 +48,7 @@ Visually display resource usage for each node:
 ### Node Detail View
 Click a node card to navigate to the detail page:
 - **CPU/Memory/Pod Info cards**: Capacity, Allocatable, Requested, Available
-- **ENI list**: IP allocation per network interface
+- **ENI list**: IP allocation per network interface + instance network traffic tiles (In/Out bytes·packets — cumulative and average rate over the completed previous hour bucket; CloudWatch has no per-ENI dimension, so values are instance-level)
 - **Pods table**: List of Pods running on that node
 
 ### Visualization Charts

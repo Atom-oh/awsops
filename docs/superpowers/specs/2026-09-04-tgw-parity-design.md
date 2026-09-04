@@ -27,9 +27,12 @@ tables with routes).
      next sync (the batch-29 bucket_policy precedent — until then they read blank, never 0).
   2. **Attachment options are invisible** — v1 showed a row-click options JSON. lib/tgw.ts
      additionally describes VPC attachments per region
-     (`DescribeTransitGatewayVpcAttachmentsCommand`, one call per region, read-only) and
-     merges `options` (DnsSupport/Ipv6Support/ApplianceModeSupport) into the attachment rows;
-     the attachments table gains a compact Options column.
+     (`DescribeTransitGatewayVpcAttachmentsCommand`, read-only, NextToken-paginated ≤5 pages
+     — amended in rounds 1–2: originally written as one call) and merges `options`
+     (DnsSupport/Ipv6Support/ApplianceModeSupport) into the attachment rows; the attachments
+     table gains a compact Options column, every incomplete-view path discloses via
+     `optionsDegradedRegions`, and the web task role gains the single read-only IAM action
+     (see Round-1/2 sections).
 - **Disclosed deviations** (recorded in the audit tick):
   - v1's TGW *tab on the vpc page* is a dedicated `/inventory/transit_gateway` page in v2
     (the established structural deviation — same as the L253 waf precedent; the vpc menu
@@ -39,10 +42,12 @@ tables with routes).
   - Routes remain active/blackhole-only with a per-table cap (pre-existing, already disclosed
     in the UI).
 
-## Testing
+## Testing (amended to as-shipped after rounds 1–2)
 - NEW web/lib/tgw.test.ts (the layer had no tests): region-grouped fan-out, VPC-attachment
   options merge (non-VPC rows keep options null), degraded-region honesty, route truncation
-  flag, cache reset seam.
+  flag, options pagination (NextToken follow + page-cap leftover disclosure + page-N failure
+  keeping fetched pages), RAM-shared reconciliation disclosure, and the IAM wiring guard
+  (module-source-derived command list ↔ workload.tf grants).
 - pytest scripts/v2/steampipe: the transit_gateway SELECT remains registered/read-only.
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; audit tick +
   batch-42 note; CHANGELOG EN/KO; docs-site network guide touch only if it names TGW columns.

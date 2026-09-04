@@ -48,7 +48,7 @@ EKS 클러스터의 전체 현황과 노드 리소스, Pod 상태를 한눈에 �
 ### 노드 상세 뷰
 노드 카드를 클릭하면 상세 페이지로 이동:
 - **CPU/Memory/Pod Info 카드**: Capacity, Allocatable, Requested, Available
-- **ENI 목록**: 네트워크 인터페이스별 IP 할당
+- **ENI 목록**: 네트워크 인터페이스별 IP 할당 + 인스턴스 네트워크 트래픽 타일(In/Out 바이트·패킷 — 완결된 직전 1시간 버킷의 누적과 평균 rate; CloudWatch에 ENI별 차원이 없어 인스턴스 레벨로 표시)
 - **Pods 테이블**: 해당 노드에서 실행 중인 Pod 목록
 
 ### 시각화 차트
