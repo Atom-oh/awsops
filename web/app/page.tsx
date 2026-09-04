@@ -20,7 +20,7 @@ import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
-import { nearestSnapshot, netChange, typeCovEqual, DERIVED_TREND_TYPES, type TrendCoverage } from '@/lib/trend-utils';
+import { nearestSnapshot, netChange, covComplete, isDerivedTrendType, DERIVED_TREND_TYPES, type TrendCoverage } from '@/lib/trend-utils';
 import { estimateCostImpact, COST_IMPACT_WEIGHTS } from '@/lib/cost-impact';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -43,7 +43,7 @@ interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; s
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[]; monthly?: { month: string; total: number }[] }
 interface ResourceTrendPoint { date: string; total: number; ec2?: number; [k: string]: unknown }
-interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[]; coverage?: TrendCoverage }
+interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[]; coverage?: TrendCoverage; accounts?: string[] }
 interface FleetCluster {
   name: string;
   reachable: boolean;
@@ -275,6 +275,41 @@ export default function Home() {
   const trendTypes = (resTrend?.types ?? []).slice(0, 8);
   const trendSeries = trendTypes.map((t) => ({ key: t, label: INV_LABEL(t) }));
   const coreTypes = trendTypes.slice(0, 5);
+  // Chart honesty (gap L124): a (day, type) whose account coverage is less than the RESOLVED
+  // scope is DROPPED from that day's point — the summed line would otherwise dip on an
+  // account's silent day, presenting a sync artifact as a fleet change (the same rule the
+  // KPI/delta/impact guards apply). Dropped keys render as line gaps — the pre-scoping
+  // key-absence behavior; the disclosure caption below the chart names the rule.
+  const chartData = (() => {
+    const pts = resTrend?.trend ?? [];
+    const cov = resTrend?.coverage;
+    const resolved = resTrend?.accounts;
+    if (!cov || !resolved) return { pts, gapped: false };
+    let gapped = false;
+    const out = pts.map((p) => {
+      const q: ResourceTrendPoint = { date: p.date, total: 0 };
+      let total = 0;
+      for (const [k, v] of Object.entries(p)) {
+        if (k === 'date' || k === 'total' || typeof v !== 'number') continue;
+        if (!covComplete(cov, p.date, k, resolved)) { gapped = true; continue; }
+        q[k] = v;
+        if (!isDerivedTrendType(k)) total += v;
+      }
+      q.total = total;
+      return q;
+    });
+    return { pts: out, gapped };
+  })();
+  // Scope-narrowing disclosure (the route returns the RESOLVED account list): a CSV selection
+  // whose invalid/dropped ids shrank the resolved set is named rather than silently narrowed.
+  // ('__all__' resolves server-side; a self-only resolution there is indistinguishable from a
+  // genuinely member-less org client-side, so it is covered by the coverage gaps instead.)
+  const selectedValidAccts = Array.isArray(scope.accounts)
+    ? [...new Set(scope.accounts.filter((a) => a === 'self' || /^\d{12}$/.test(a)))]
+    : null;
+  const trendScopeNarrowed = Boolean(
+    resTrend?.accounts && selectedValidAccts && resTrend.accounts.length < selectedValidAccts.length,
+  );
   const otherTypes = trendTypes.slice(5);
   // L127: 7d net change (lib/trend-utils netChange — coverage-parity diff with honest-degrade
   // branches; see its doc). The trend data IS account-scoped now (gap L124 — the fetch above
@@ -284,22 +319,27 @@ export default function Home() {
   // (history for non-self accounts accrues from the L124 deploy; netChange's missing-baseline
   // branches degrade honestly until then).
   const regionScopeIsDefault = scope.regions === '__all__' && scope.includeGlobal === true;
-  // coverage = per-day account sets from the route: netChange additionally requires the two
-  // compared days to cover the SAME accounts (summed points are blind to one account's silence).
-  const net7 = regionScopeIsDefault ? netChange(resTrend?.trend ?? [], 7, resTrend?.coverage) : null;
+  // coverage = per-(day, type) account sets + the RESOLVED scope from the route: netChange
+  // requires every summed type to cover exactly the resolved account set on both compared
+  // days (summed points are blind to one account's silence — even one silent on BOTH days).
+  const net7 = regionScopeIsDefault
+    ? netChange(resTrend?.trend ?? [], 7, resTrend?.coverage, resTrend?.accounts)
+    : null;
 
   const deltaRows = (() => {
     const pts = resTrend?.trend ?? [];
     if (pts.length < 2) return [];
     const last = pts[pts.length - 1];
-    // PER-TYPE account-coverage parity per baseline day (gap L124): points are summed across
-    // the selected accounts, and the sync runs per type with its own trusted-account set — a
-    // baseline (day, type) covering a DIFFERENT account set than the latest day (an account
-    // unreachable for just that type's run, or the deploy boundary where only 'self' rows
-    // exist) would fabricate that type's delta — it renders '—', same as a missing type key.
+    // PER-TYPE account-coverage completeness vs the RESOLVED scope (gap L124): points are
+    // summed across the selected accounts, and the sync runs per type with its own trusted-
+    // account set — a (day, type) covering less than the resolved set (an account unreachable
+    // for just that type's run, on either or BOTH days, or the deploy boundary where only
+    // 'self' rows exist) would fabricate that type's value/delta — it renders '—', same as a
+    // missing type key. Applies to Current too: a partial latest-day sum is not a fleet count.
     const cov = resTrend?.coverage;
+    const resolved = resTrend?.accounts;
     const covOk = (p: { date: string } | null, t: string): boolean =>
-      !cov || (p != null && typeCovEqual(cov, last.date, p.date, t));
+      !cov || !resolved || (p != null && covComplete(cov, p.date, t, resolved));
     const w = nearestSnapshot(pts, 7);
     const m = nearestSnapshot(pts, 30);
     // Key ABSENCE means "no successful sync for that type that day" (the route no longer
@@ -307,7 +347,7 @@ export default function Home() {
     const val = (p: Record<string, unknown> | null, t: string): number | null =>
       p && typeof p[t] === 'number' ? (p[t] as number) : null;
     return (resTrend?.types ?? []).map((t) => {
-      const cur = val(last, t);
+      const cur = covOk(last, t) ? val(last, t) : null;
       const wv = covOk(w, t) ? val(w, t) : null;
       const mv = m && m !== w && covOk(m, t) ? val(m, t) : null;
       const pct = (from: number | null) =>
@@ -336,17 +376,19 @@ export default function Home() {
     // priced and labeled as a 30-day delta.
     const spanDays = (new Date(last.date).getTime() - new Date(base.date).getTime()) / 86_400_000;
     if (Math.abs(spanDays - 30) > 2) return [];
-    // PER-TYPE account-coverage parity (gap L124): a WEIGHTED type present on both endpoint
-    // days whose (day, type) account sets differ (an account silent for just that type's run,
-    // or the deploy boundary's self-only baseline) must not be priced as a 30d fleet delta —
-    // fail safe by hiding the panel, same as the partial-LATEST guard below (silently
+    // PER-TYPE account-coverage completeness vs the RESOLVED scope (gap L124): a WEIGHTED
+    // type present on both endpoint days whose (day, type) coverage is less than the resolved
+    // account set on either day (an account silent for just that type's run — even on BOTH
+    // days — or the deploy boundary's self-only baseline) must not be priced as a 30d fleet
+    // delta — fail safe by hiding the panel, same as the partial-LATEST guard below (silently
     // dropping the type could hide the largest genuine saving instead).
     const cov = impactTrend?.coverage;
-    if (cov) {
+    const covScope = impactTrend?.accounts;
+    if (cov && covScope) {
       const covMismatch = (impactTrend?.types ?? []).some(
         (t) => COST_IMPACT_WEIGHTS[t] != null
           && typeof last[t] === 'number' && typeof base[t] === 'number'
-          && !typeCovEqual(cov, last.date, base.date, t),
+          && !(covComplete(cov, last.date, t, covScope) && covComplete(cov, base.date, t, covScope)),
       );
       if (covMismatch) return [];
     }
@@ -576,26 +618,34 @@ export default function Home() {
         {resTrend && (
           <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-6">
             {resTrend.trend.length >= 2 && trendSeries.length > 0 ? (
-              <MultiLineTrend
-                title={`리소스 추세 (${trendDays}d)`}
-                right={
-                  <SegmentedControl
-                    options={[{ value: '14', label: '14d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }]}
-                    value={String(trendDays)}
-                    onChange={(v) => setTrendDays(Number(v))}
-                  />
-                }
-                data={resTrend.trend}
-                xKey="date"
-                series={trendSeries}
-                key={trendTypes.join(',')} // period toggle re-ranks types → remount resets hidden state
-                interactiveLegend
-                legendGroups={[
-                  { label: tt('Core Resources'), keys: coreTypes },
-                  ...(otherTypes.length ? [{ label: tt('Other Resources'), keys: otherTypes }] : []),
-                ]}
-                defaultHidden={otherTypes}
-              />
+              <div className="min-w-0">
+                <MultiLineTrend
+                  title={`리소스 추세 (${trendDays}d)`}
+                  right={
+                    <SegmentedControl
+                      options={[{ value: '14', label: '14d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }]}
+                      value={String(trendDays)}
+                      onChange={(v) => setTrendDays(Number(v))}
+                    />
+                  }
+                  data={chartData.pts}
+                  xKey="date"
+                  series={trendSeries}
+                  key={trendTypes.join(',')} // period toggle re-ranks types → remount resets hidden state
+                  interactiveLegend
+                  legendGroups={[
+                    { label: tt('Core Resources'), keys: coreTypes },
+                    ...(otherTypes.length ? [{ label: tt('Other Resources'), keys: otherTypes }] : []),
+                  ]}
+                  defaultHidden={otherTypes}
+                />
+                {(chartData.gapped || trendScopeNarrowed) && (
+                  <div className="mt-1 text-[11px] text-ink-400">
+                    {trendScopeNarrowed && <span>{tt('요청한 계정 스코프 중 일부만 집계에 반영되었습니다')} </span>}
+                    {chartData.gapped && <span>{tt('계정 커버리지가 불완전한 시점은 공백/—로 표시됩니다')}</span>}
+                  </div>
+                )}
+              </div>
             ) : (
               <Card title={`리소스 추세 (${trendDays}d)`}>
                 <div className="text-[13px] text-ink-400">{tt('이력 수집 중 — sync 주기마다 축적됩니다')}</div>

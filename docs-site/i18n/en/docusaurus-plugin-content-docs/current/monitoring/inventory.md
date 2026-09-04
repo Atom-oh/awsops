@@ -72,7 +72,7 @@ Estimates monthly cost impact based on resource count changes:
 5. **Cost Impact**: Check the cost estimation section at the bottom
 
 :::tip Snapshot-Based Data
-Snapshots are written per account to Aurora (`inventory_snapshots`) on every successful, non-partial inventory sync run (a partial run preserves the last-good values, so a daily point can be missing) — independent of dashboard loads, and reading them makes no additional AWS API calls.
+Snapshots are written per account to Aurora (`inventory_snapshots`) on every inventory sync run. A run with partial SDK collection writes no snapshots at all, while a run with some accounts unreachable still writes fresh rows for every reachable account and preserves only the unreachable account's prior row — which is why an individual (account, type) daily point can be missing — independent of dashboard loads, and reading them makes no additional AWS API calls.
 :::
 
 ## Usage Tips

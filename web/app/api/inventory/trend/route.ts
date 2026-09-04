@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { DERIVED_TREND_TYPES } from '@/lib/trend-utils';
+import { isDerivedTrendType } from '@/lib/trend-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,8 +85,14 @@ export async function GET(request: Request) {
        ORDER BY 1, 2, 3`,
       [days, accounts],
     );
-    const coverage: Record<string, Record<string, string[]>> = {};
-    for (const row of cov.rows) ((coverage[row.d] ??= {})[row.resource_type] ??= []).push(row.account_id);
+    // null-prototype accumulators: the snake_case charset still admits '__proto__'/
+    // 'constructor' as resource_type values — a plain-object accumulator would walk or
+    // pollute the prototype chain (the applyTerms hasOwnProperty precedent).
+    const coverage: Record<string, Record<string, string[]>> = Object.create(null);
+    for (const row of cov.rows) {
+      const dayCov = (coverage[row.d] ??= Object.create(null));
+      (dayCov[row.resource_type] ??= []).push(row.account_id);
+    }
     const byDate = new Map<string, TrendPoint & Record<string, number | string>>();
     const latestByType = new Map<string, number>();
     for (const row of r.rows) {
@@ -96,7 +102,7 @@ export async function GET(request: Request) {
       const p = byDate.get(row.d) ?? { date: row.d, total: 0 };
       // Derived security series don't add to the day's total — their resources are already
       // counted by the base series they were derived from (double-count guard).
-      if (!(row.resource_type in DERIVED_TREND_TYPES)) p.total += Number(row.n);
+      if (!isDerivedTrendType(row.resource_type)) p.total += Number(row.n);
       // v1 parity: every type is a column on the point (multi-line chart + delta table).
       p[row.resource_type] = Number(row.n);
       byDate.set(row.d, p);
@@ -120,8 +126,8 @@ export async function GET(request: Request) {
     const types = [...latestByType.keys()].sort((a, b) => {
       // Derived security series rank BELOW every real resource type: they must never claim a
       // Core top-5 chip slot from an actual resource (their counts overlap the base series).
-      const da = a in DERIVED_TREND_TYPES ? 1 : 0;
-      const db = b in DERIVED_TREND_TYPES ? 1 : 0;
+      const da = isDerivedTrendType(a) ? 1 : 0;
+      const db = isDerivedTrendType(b) ? 1 : 0;
       if (da !== db) return da - db;
       const ra = recent(a) ? 1 : 0;
       const rb = recent(b) ? 1 : 0;

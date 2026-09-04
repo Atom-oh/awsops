@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { nearestSnapshot, netChange, typeCovEqual } from './trend-utils';
+import { nearestSnapshot, netChange, typeCovEqual, covComplete, isDerivedTrendType } from './trend-utils';
 
 const day = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
 
@@ -119,5 +119,34 @@ describe('netChange derived-series exclusion + account-coverage parity (gap L124
     expect(typeCovEqual(cov, day(7), day(0), 'ec2')).toBe(false);
     // a type key missing coverage entirely on one day fails closed
     expect(typeCovEqual({ [day(7)]: { ec2: ['self'] }, [day(0)]: {} }, day(7), day(0), 'ec2')).toBe(false);
+  });
+});
+
+describe('scope-relative coverage completeness (round 3)', () => {
+  it('an account silent on BOTH endpoint days passes day-to-day parity but fails against the resolved scope', () => {
+    const pts = [
+      { date: day(7), total: 10, ec2: 10 },
+      { date: day(0), total: 6, ec2: 6 },
+    ];
+    // member 2222… never wrote a row in the window: sets are equal day-to-day…
+    const cov = { [day(7)]: { ec2: ['self'] }, [day(0)]: { ec2: ['self'] } };
+    expect(netChange(pts, 7, cov)).toBe(-4); // endpoint-relative (no scope) still passes
+    // …but the resolved scope says two accounts were requested → '—', not a self-only delta
+    expect(netChange(pts, 7, cov, ['self', '222233334444'])).toBeNull();
+    // full coverage against the scope diffs normally
+    const full = {
+      [day(7)]: { ec2: ['self', '222233334444'] },
+      [day(0)]: { ec2: ['222233334444', 'self'] },
+    };
+    expect(netChange(pts, 7, full, ['self', '222233334444'])).toBe(-4);
+    expect(covComplete(full, day(7), 'ec2', ['222233334444', 'self'])).toBe(true);
+    expect(covComplete(cov, day(7), 'ec2', ['self', '222233334444'])).toBe(false);
+  });
+  it('prototype-named type keys are treated as absent coverage, and isDerivedTrendType is own-property only', () => {
+    const cov = { [day(0)]: { ec2: ['self'] } };
+    expect(covComplete(cov, day(0), 'constructor', ['self'])).toBe(false);
+    expect(isDerivedTrendType('unencrypted_ebs')).toBe(true);
+    expect(isDerivedTrendType('constructor')).toBe(false);
+    expect(isDerivedTrendType('__proto__')).toBe(false);
   });
 });

@@ -747,6 +747,8 @@ export const TERMS: Record<string, Pair> = {
   'awsops가 사용한 Bedrock 토큰 비용 (최근 30일, invocation-log 기준)': { en: 'Bedrock token cost incurred by awsops (last 30 days, based on invocation-log)', zh: 'awsops 使用的 Bedrock 令牌费用（最近30天，基于 invocation-log）', ja: 'awsops が使用した Bedrock トークンコスト（過去30日、invocation-log 基準）' },
   'Bedrock 토큰 비용 (30d)': { en: 'Bedrock token cost (30d)', zh: 'Bedrock 令牌费用（30天）', ja: 'Bedrock トークンコスト（30日）' },
   '이력 수집 중 — sync 주기마다 축적됩니다': { en: 'Collecting history — accrues every sync', zh: '正在积累历史 — 每次同步累计', ja: '履歴を収集中 — sync のたびに蓄積されます' },
+  '요청한 계정 스코프 중 일부만 집계에 반영되었습니다': { en: 'Only part of the requested account scope is reflected in the aggregation.', zh: '请求的账户范围仅有一部分被计入汇总。', ja: 'リクエストされたアカウントスコープの一部のみが集計に反映されています。' },
+  '계정 커버리지가 불완전한 시점은 공백/—로 표시됩니다': { en: 'Points with incomplete account coverage render as gaps/—.', zh: '账户覆盖不完整的时间点显示为空白/—。', ja: 'アカウントカバレッジが不完全な時点は空白／—で表示されます。' },
 
   // ---- eks page (cluster list / onboarding) ----
   '클러스터 등록': { en: 'Register Cluster', zh: '注册集群', ja: 'クラスター登録' },

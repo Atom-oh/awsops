@@ -11,10 +11,32 @@ export type TrendCoverage = Record<string, Record<string, string[]>>;
 
 /** SET-equality of one type's account coverage between two days. Fail-closed: a missing or
  *  empty set on either day is a mismatch, never a pass — absence cannot prove parity. */
+// Coverage sets arrive via JSON; a prototype-chain hit for an Object.prototype-named type
+// ('constructor') would be a non-array — treat anything that isn't an own array as absent.
+function covSet(cov: TrendCoverage, d: string, type: string): string {
+  const day = cov[d];
+  const v = day && Object.prototype.hasOwnProperty.call(day, type) ? day[type] : undefined;
+  return Array.isArray(v) ? [...v].sort().join(',') : '';
+}
+
 export function typeCovEqual(cov: TrendCoverage, d1: string, d2: string, type: string): boolean {
-  const key = (d: string) => [...(cov[d]?.[type] ?? [])].sort().join(',');
-  const a = key(d1);
-  return a !== '' && a === key(d2);
+  const a = covSet(cov, d1, type);
+  return a !== '' && a === covSet(cov, d2, type);
+}
+
+/** Whether one (day, type)'s coverage equals the RESOLVED account scope exactly. Stronger
+ *  than endpoint-relative parity: an account silent on BOTH compared days passes typeCovEqual
+ *  but silently narrows the presented scope — scope-relative completeness catches it. */
+export function covComplete(cov: TrendCoverage, d: string, type: string, accounts: string[]): boolean {
+  const have = covSet(cov, d, type);
+  return have !== '' && have === [...accounts].sort().join(',');
+}
+
+/** Own-property check for the derived-series map: resource_type values pass a snake_case
+ *  charset guard, which still admits Object.prototype keys ('constructor') and '__proto__' —
+ *  an `in` lookup would misclassify them (the applyTerms hasOwnProperty precedent). */
+export function isDerivedTrendType(k: string): boolean {
+  return Object.prototype.hasOwnProperty.call(DERIVED_TREND_TYPES, k);
 }
 
 /** Derived security-count trend series (gap L129), written by the sync lambda's
@@ -62,7 +84,10 @@ export function nearestSnapshot<T extends TrendPointLike>(pts: T[], daysAgo: num
  *    growth). Parity is checked PER TYPE, not per day: the sync runs per type with its own
  *    trusted-account set, so an account reachable for lambda but silent for ec2 on the same
  *    day differs only at the (day, type) grain. EVERY summed type must cover the same
- *    account set on both endpoint days, else null ('—').
+ *    account set on both endpoint days, else null ('—'). When the RESOLVED scope
+ *    (`accounts`) is also given, both endpoint days must cover exactly that set — an
+ *    account silent on BOTH days passes day-to-day parity but would silently present a
+ *    narrower fleet than the selector implies.
  *  Derived security series (DERIVED_TREND_TYPES) are excluded from the sum — their resources
  *  are already counted by their base series (the route excludes them from `total` for the
  *  same reason). */
@@ -70,6 +95,7 @@ export function netChange(
   pts: TrendPointLike[],
   daysAgo: number,
   coverage?: TrendCoverage,
+  accounts?: string[],
 ): number | null {
   if (pts.length < 2) return null;
   const sorted = [...pts].sort((a, b) => a.date.localeCompare(b.date)); // input order not assumed
@@ -93,16 +119,20 @@ export function netChange(
   // and including them in the sum double-counts (ebs_volume + unencrypted_ebs move together).
   const typeKeys = (p: TrendPointLike) =>
     Object.keys(p)
-      .filter((k) => k !== 'date' && k !== 'total' && !(k in DERIVED_TREND_TYPES) && typeof p[k] === 'number')
+      .filter((k) => k !== 'date' && k !== 'total' && !isDerivedTrendType(k) && typeof p[k] === 'number')
       .sort();
   const lastKeys = typeKeys(last);
   const baseKeys = typeKeys(base);
   if (!lastKeys.length || lastKeys.join(',') !== baseKeys.join(',')) return null;
   // STRICT per-type account-set parity (see doc above). A provided-but-empty coverage for a
   // summed type on either endpoint day is a mismatch, not a pass — absence can't prove parity.
+  // With the resolved scope, parity upgrades to scope-relative completeness on BOTH days.
   if (coverage) {
     for (const k of lastKeys) {
-      if (!typeCovEqual(coverage, last.date, base.date, k)) return null;
+      const ok = accounts
+        ? covComplete(coverage, last.date, k, accounts) && covComplete(coverage, base.date, k, accounts)
+        : typeCovEqual(coverage, last.date, base.date, k);
+      if (!ok) return null;
     }
   }
   const sumOf = (p: TrendPointLike) => lastKeys.reduce((s, k) => s + Number(p[k] ?? 0), 0);

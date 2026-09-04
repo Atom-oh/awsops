@@ -124,3 +124,35 @@ only raw synced resource_type counts).
   disclosed no-region-dimension deviation; the DERIVED_SNAPSHOTS call-site constant assertion
   is tautological (the fragment is read from the module dict itself) — enforcement stays with
   the invariant comment + the pytest disjointness/verbatim guards.
+
+## Round-3 corrections (review-driven)
+
+- **The chart itself is coverage-gated (the gate MAJOR)** — the KPI/delta/impact guards were
+  honest while the most prominent surface, the multi-line chart, still drew raw partial sums
+  (one account silent for a type's run drew as a real fleet dip). A (day, type) whose coverage
+  is less than the RESOLVED scope is now dropped from that day's point (rendering the pre-
+  scoping key-absence line gap), with a disclosure caption under the chart.
+- **Parity upgraded to scope-relative completeness + the resolved scope is consumed (the gate
+  MAJOR, same cluster)** — day-to-day parity passed an account silent on BOTH compared days
+  (or the __all__→self fallback), silently narrowing the presented scope. `covComplete`
+  requires each summed/rendered type's coverage to equal the route's RESOLVED `accounts` on
+  every compared day (netChange, delta table — including Current, impact panel, chart), and a
+  CSV selection narrowed by dropped ids is disclosed under the chart. ('__all__' resolving to
+  self-only is client-indistinguishable from a member-less org, so it is covered by the
+  coverage gaps rather than the narrowed-scope caption.)
+- **The 4-locale partial-run tip is now accurate (the gate MAJOR)** — it claimed "successful,
+  non-partial runs only / a partial run preserves last-good values"; in fact only SDK-partial
+  runs write nothing, while a reachability-partial run writes fresh rows for every reachable
+  account and preserves only the unreachable account's prior row. All four locales state that.
+- Minors closed: `isDerivedTrendType`/`covSet` are own-property + array-guarded and the
+  coverage accumulator is null-prototype ('__proto__'/'constructor' pass the snake_case
+  charset — the applyTerms precedent); CHANGELOG/api-reference wording aligned (impact panel
+  HIDES, coverage is per (day, type), the resolved `accounts` list is returned).
+- Recorded (review-noted, accepted/out of scope): the trend + coverage queries are two
+  non-transactional reads (transient, self-correcting — the repo's existing multi-query route
+  pattern); the S3 steady-denial → confirmed-public-only series semantics are the disclosed
+  design (lockstep with /security); pytest's `_ALLOWED.add` in tests mutates a per-test fresh
+  module load (load_sync_lambda reimports), so no cross-test leak; MappingProxyType on
+  DERIVED_SNAPSHOTS would break the monkeypatch.setitem test seam — invariants stay enforced
+  by the comment + pytest guards; the shared enabled-accounts-intersecting resolveAccounts
+  stays the endorsed cross-route follow-up.

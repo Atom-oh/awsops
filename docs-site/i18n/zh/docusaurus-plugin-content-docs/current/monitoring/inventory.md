@@ -72,7 +72,7 @@ import Screenshot from '@site/src/components/Screenshot';
 5. **成本影响**: 查看底部的成本估算区域
 
 :::tip 基于快照的数据
-快照在每次成功（非部分失败）的库存 sync 运行时按账户写入 Aurora（`inventory_snapshots`）（部分失败的运行会保留上次的有效值，因此某天的数据点可能缺失）——与仪表板加载无关，读取时也不会产生额外的 AWS API 调用。
+快照在每次库存 sync 运行时按账户写入 Aurora（`inventory_snapshots`）。SDK 采集部分失败的运行完全不写入快照；而部分账户不可达的运行仍会为每个可达账户写入新行，仅保留不可达账户的上一行 — 因此某个（账户, 类型）的当日数据点可能缺失——与仪表板加载无关，读取时也不会产生额外的 AWS API 调用。
 :::
 
 ## 使用技巧
