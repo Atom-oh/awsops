@@ -29,7 +29,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ### チャート (3 種)
 
-- **Cost by Model** (円グラフ): モデル別コストの割合
+- **Cost by Model** (横棒グラフ): モデル別コスト — 呼び出し数チャートと同じ行順で並べて比較できます
 - **Invocations by Model** (棒グラフ): モデル別呼び出し回数の比較
 - **Token Usage Over Time** (折れ線グラフ): 時間帯別トークン使用量の推移
 
