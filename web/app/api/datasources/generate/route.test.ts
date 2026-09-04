@@ -351,7 +351,7 @@ describe('Prometheus/Mimir live query validation', () => {
         if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
         metadataCalls += 1;
         if (metadataCalls === 1) return { up: { exists: true, type: 'gauge', labels: [] } };
-        return { up: { exists: false, type: null, labels: [], error: 'metadata timeout' } };
+        return { up: { exists: true, type: 'gauge', labels: [], error: 'labels timeout' } };
       },
     );
 

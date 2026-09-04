@@ -215,7 +215,7 @@ export function confirmedMetricNamesFromMetadata(meta: unknown): string[] {
 }
 
 const PROMQL_NON_METRIC_WORDS = new Set([
-  'and', 'or', 'unless', 'bool', 'offset',
+  'and', 'or', 'unless', 'bool', 'offset', 'atan2', 'inf', 'nan',
   'sum', 'min', 'max', 'avg', 'group', 'stddev', 'stdvar', 'count', 'count_values',
   'bottomk', 'topk', 'quantile', 'limitk', 'limit_ratio',
 ]);

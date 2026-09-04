@@ -174,6 +174,8 @@ describe('prioritizeSchemaForQuery (Prometheus relevance ordering)', () => {
       ['http_requests_total'],
     )).toBe(true);
     expect(metricReferencesFromPromQuery('sum(up + removed_metric)')).toEqual(['up', 'removed_metric']);
+    expect(metricReferencesFromPromQuery('clamp_max(up, +Inf)')).toEqual(['up']);
+    expect(metricReferencesFromPromQuery('up atan2 other_metric')).toEqual(['up', 'other_metric']);
     expect(queryReferencesGroundedMetric('label_replace(vector(1), "dst", "up", "src", ".*")', ['up']))
       .toBe(false);
   });

@@ -112,11 +112,11 @@ async function validatePromCandidate(
     const raw = entries[metric];
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       const row = raw as { exists?: unknown; error?: unknown };
-      if (row.exists === true) continue;
       if (typeof row.error === 'string' && row.error) {
         unavailable.push(metric);
         continue;
       }
+      if (row.exists === true) continue;
       missing.push(metric);
       continue;
     }
