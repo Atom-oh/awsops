@@ -753,9 +753,11 @@ export default function Home() {
             {/* ---- Charts row 2: resource-distribution donuts (EC2 type · K8s pods) ---- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* batch 46 (owner scope decision): the batch-44 donut→bar swap is HELD — only
-                  the diverging cost-impact chart (①) stays; this card returns to the donut. */}
+                  the diverging cost-impact chart (①) stays; this card returns to the donut. The
+                  top-10 DISCLOSURE is carried over (the summary API caps at LIMIT 10 — a review
+                  MAJOR closed it in batch 44 and the hold must not silently reopen it). */}
               {ec2Types.length > 0 ? (
-                <DonutBreakdown title="EC2 인스턴스 유형" data={ec2Types} nameKey="name" valueKey="count" />
+                <DonutBreakdown title="EC2 인스턴스 유형" subtitle={ec2Types.length === 10 ? tt('상위 10개 유형만 표시') : undefined} data={ec2Types} nameKey="name" valueKey="count" />
               ) : (
                 <Card title="EC2 인스턴스 유형">
                   <div className="text-[13px] text-ink-400">{tt('EC2 데이터 없음')}</div>

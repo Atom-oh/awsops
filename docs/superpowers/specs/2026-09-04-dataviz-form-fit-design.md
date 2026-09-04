@@ -14,6 +14,10 @@ consulted: "a donut for comparing close values", "eight hues when the story is o
 
 ## Changes (job → form corrections)
 
+> **SUPERSEDED (2026-09-04 owner decision — see §Scope reduction):** items 3–4 below and the
+> round-1 bullets about them describe the as-shipped batch-44 state; batch 46 reverted both
+> donut→bar swaps. Only item 1–2 (the DivergingBarList and its wiring) remain live.
+
 1. **NEW `DivergingBarList` primitive** (`web/components/charts/DivergingBarList.tsx`) —
    signed horizontal bars centered on a shared zero axis: WARM pole for positive (cost
    increase — the `negative` STATUS token, deliberately not `brand`: in the default theme
@@ -88,6 +92,22 @@ part-to-whole form for a worse one — this pass changes only mismatches.
   the lg-grid column widths for the Bedrock pair are the page's established layout.
 
 ## Scope reduction (owner decision, 2026-09-04 — batch 46)
+
+### Round-1 corrections on the revert (review-driven)
+
+- **The Bedrock cost donut no longer fabricates $0 (the gate MAJOR)** — DonutBreakdown's three
+  $ sinks (center total, legend, tooltip) used Math.round, so a real sub-dollar spend read $0
+  beside a nonzero slice and disagreed with the page's own 2dp usd() tiles. All three now
+  format with 2 fraction digits (HBarList/usd parity) — this also upgrades the cost-page and
+  eks-cost $ donuts.
+- **The top-10 disclosure is CARRIED OVER, not silently dropped (the gate MAJOR)** —
+  reverting the EC2 card to a donut deleted the '상위 10개 유형만 표시' subtitle that a
+  batch-44 review MAJOR added (the summary API caps at LIMIT 10; the donut's 기타 slice reads
+  as "all remaining" while ranks 11+ were dropped server-side). DonutBreakdown gains a
+  subtitle passthrough and the card keeps the disclosure, gated on length === 10 as before.
+- **The spec no longer contradicts itself (the gate MAJOR)** — §Changes 3–4 and their round-1
+  bullets are marked SUPERSEDED by the scope decision (they were left reading as shipped
+  truth), and this section now records the disclosure/rounding carry-overs explicitly.
 
 The owner kept ONLY change ① (the cost-impact DivergingBarList) and HELD the donut→bar
 swaps: batch 46 reverts the home 'EC2 인스턴스 유형' and Bedrock '모델별 비용' cards to their
