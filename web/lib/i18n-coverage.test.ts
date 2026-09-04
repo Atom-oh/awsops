@@ -58,4 +58,16 @@ describe('i18n coverage on the gap-audit surfaces (L186/L206/L207/L254)', () => 
     expect(scanned).toBeGreaterThan(30);         // and real literals — an empty scan proves nothing
     expect(missing, `unregistered Korean literals:\n${missing.join('\n')}`).toEqual([]);
   });
+
+  it('every dynamic dashboard-card title resolves in en/zh/ja', () => {
+    const src = readFileSync('../scripts/v2/workers/card_catalog.py', 'utf8');
+    const titles = [...src.matchAll(/"title":\s*"([^"]+)"/g)]
+      .map((m) => m[1])
+      .filter((title) => /[가-힣]/.test(title));
+    const missing = titles.filter((title) =>
+      (['en', 'zh', 'ja'] as const).some((lang) => applyTerms(lang, title) === title));
+
+    expect(titles.length).toBeGreaterThan(10);
+    expect(missing, `unregistered dashboard-card titles:\n${missing.join('\n')}`).toEqual([]);
+  });
 });
