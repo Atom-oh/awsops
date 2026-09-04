@@ -1038,11 +1038,52 @@ def _rec_account(rec):
     return "self" if str(aid) == _caller_account() else str(aid)
 
 
-def _self_count(recs):
-    """Count of synced rows that resolve to the host ('self') — used for the daily
-    inventory_snapshots row so the dashboard trend chart matches the account_id='self'
-    scope every other host-facing read (inventory summary, StatTile counts) already uses."""
-    return sum(1 for r in recs if _rec_account(r) == "self")
+def _account_counts(recs):
+    """Synced row count per resolved account (gap L124) — one daily inventory_snapshots row is
+    written per account in `present`, so the dashboard trend chart can be scoped by the same
+    accounts vocabulary every other inventory read uses. An account in `present` with no rows
+    gets a genuine 0 (missing account ⇒ key absence, the chart's no-sync signal)."""
+    counts = {}
+    for r in recs:
+        a = _rec_account(r)
+        counts[a] = counts.get(a, 0) + 1
+    return counts
+
+
+# Derived security-count trend series (gap L129): after upsert+prune, COUNT the just-written
+# inventory_resources per account with the WEB'S OWN finding predicates and write the result
+# as extra inventory_snapshots series. LOCKSTEP: each WHERE below is copied verbatim from
+# web/lib/security-findings.ts (PUBLIC_S3_WHERE / FINDING_SQL) — the trend series must count
+# exactly what the /security page lists; change them together. The web trend route excludes
+# these keys from the chart `total` (web/lib/trend-utils.ts DERIVED_TREND_TYPES — a third
+# lockstep site) since the underlying resources are already counted by their base series.
+# INVARIANTS: the WHERE fragments below are string-concatenated into SQL — they must stay
+# CODE CONSTANTS in this dict, never sourced from the event, env, or DB; and a derived series
+# name must never collide with a real synced resource_type (_ALLOWED) — a collision would make
+# _write_snapshot_row's same-day DELETE silently wipe the base series (pytest-guarded).
+DERIVED_SNAPSHOTS = {
+    "s3_public_access": (
+        "public_s3_buckets",
+        "( (data->>'bucket_policy_is_public')='true'"
+        " OR (data->>'block_public_acls')='false'"
+        " OR (data->>'block_public_policy')='false' )",
+    ),
+    "security_group": (
+        "open_security_groups",
+        "(data->'ip_permissions')::text ~"
+        " '\"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)\"\\s*:\\s*\"(0\\.0\\.0\\.0/0|::/0)\"'",
+    ),
+    "ebs_volume": ("unencrypted_ebs", "(data->>'encrypted')='false'"),
+}
+
+
+def _write_snapshot_row(adb, acct, series_type, count):
+    """Same-day replace of one (account, day, series) snapshot row — per-account DELETE so an
+    account absent from this run (unreachable / out of scope) keeps its earlier same-day row."""
+    adb.run("DELETE FROM inventory_snapshots WHERE account_id=:a AND resource_type=:t "
+            "AND captured_at::date = CURRENT_DATE", a=acct, t=series_type)
+    adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
+            "VALUES (:a, now(), :t, :n)", a=acct, t=series_type, n=count)
 
 
 def _owner_ids_in(adb):
@@ -1483,14 +1524,30 @@ def sync(resource_type):
                     "freshness": "degraded" if sdk_unknown_attrs else "healthy",
                     "age_minutes": 0,
                 }
-            # Daily inventory_snapshots row (dashboard "리소스 추세" chart, self-scoped only —
-            # see _self_count). One row per (account, day, type): delete same-day then insert,
-            # matching backfill-v1.mjs's convention — a resource type can sync more than once a day.
-            if not sdk_partial and 'self' in present:
-                adb.run("DELETE FROM inventory_snapshots WHERE account_id='self' AND resource_type=:t "
-                        "AND captured_at::date = CURRENT_DATE", t=resource_type)
-                adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
-                        "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
+            # Daily inventory_snapshots rows (dashboard "리소스 추세" chart) — one row per
+            # (account, day, type), delete same-day then insert (a type can sync more than once a
+            # day; backfill-v1.mjs convention). Gap L124: written PER ACCOUNT over `present` — the
+            # same trusted set the prune phases use, so a snapshot is never written for an account
+            # this run cannot vouch for, and an unreachable account keeps its earlier same-day row.
+            # Gap L129: for the DERIVED_SNAPSHOTS base types, the just-pruned inventory_resources
+            # is COUNTed with the web's own finding predicate and written as an extra series.
+            if not sdk_partial:
+                counts = _account_counts(recs)
+                derived = DERIVED_SNAPSHOTS.get(resource_type)
+                for acct in sorted(present):
+                    _write_snapshot_row(adb, acct, resource_type, counts.get(acct, 0))
+                    if derived:
+                        derived_type, where = derived
+                        # call-site guard on the concatenated fragment (defense-in-depth atop
+                        # the module-constant invariant): no statement separators/comments.
+                        if ";" in where or "--" in where or "/*" in where:
+                            raise ValueError("derived snapshot predicate is not a vetted constant")
+                        n = adb.run(
+                            "SELECT COUNT(*) FROM inventory_resources "
+                            "WHERE resource_type=:t AND account_id=:a AND " + where,
+                            t=resource_type, a=acct,
+                        )[0][0]
+                        _write_snapshot_row(adb, acct, derived_type, int(n))
     except Exception as e:
         if locked:
             # The sanitization threat model applies to EVERY sink, not just logs: raw

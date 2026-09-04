@@ -17,6 +17,7 @@
 - `ui/StatCard.tsx` — an alias re-export of `StatTile`. New code should import `StatTile` directly.
 
 ## Rules
+- i18n carve-out: table COLUMN headers and `InvType` spec labels (column/facet/section names) deliberately stay English in every locale — they are technical identifiers kept in one canonical form. UI prose, buttons, captions, and titles go through `tt()` (Korean source literal).
 - Components consumed by pages use `export default`. Shared utility modules (`metrics/shared.tsx`, `guides.*.tsx`, `LanguageProvider.tsx`, etc.) use named exports as an established pattern — do not change this arbitrarily.
 - Prefer reusing `ui/` primitives (Badge, StatePill, Card, PageHeader, StatTile, etc.) over adding new ones — don't proliferate primitives.
 - User-facing display strings are Korean literals passed through `tt()` (unregistered strings pass through safely, so this is zero-risk).

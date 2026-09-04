@@ -747,6 +747,8 @@ export const TERMS: Record<string, Pair> = {
   'awsops가 사용한 Bedrock 토큰 비용 (최근 30일, invocation-log 기준)': { en: 'Bedrock token cost incurred by awsops (last 30 days, based on invocation-log)', zh: 'awsops 使用的 Bedrock 令牌费用（最近30天，基于 invocation-log）', ja: 'awsops が使用した Bedrock トークンコスト（過去30日、invocation-log 基準）' },
   'Bedrock 토큰 비용 (30d)': { en: 'Bedrock token cost (30d)', zh: 'Bedrock 令牌费用（30天）', ja: 'Bedrock トークンコスト（30日）' },
   '이력 수집 중 — sync 주기마다 축적됩니다': { en: 'Collecting history — accrues every sync', zh: '正在积累历史 — 每次同步累计', ja: '履歴を収集中 — sync のたびに蓄積されます' },
+  '요청한 계정 스코프 중 일부만 집계에 반영되었습니다': { en: 'Only part of the requested account scope is reflected in the aggregation.', zh: '请求的账户范围仅有一部分被计入汇总。', ja: 'リクエストされたアカウントスコープの一部のみが集計に反映されています。' },
+  '계정 커버리지가 불완전한 시점은 공백/—로 표시됩니다': { en: 'Points with incomplete account coverage render as gaps/—.', zh: '账户覆盖不完整的时间点显示为空白/—。', ja: 'アカウントカバレッジが不完全な時点は空白／—で表示されます。' },
 
   // ---- eks page (cluster list / onboarding) ----
   '클러스터 등록': { en: 'Register Cluster', zh: '注册集群', ja: 'クラスター登録' },
@@ -1574,6 +1576,7 @@ export const TERMS: Record<string, Pair> = {
   // Inventory-home KPI bar + trend legend (L126/L127).
   '리소스 타입': { en: 'Resource types', zh: '资源类型', ja: 'リソースタイプ' },
   'Core Resources': { en: 'Core Resources', zh: '核心资源', ja: 'コアリソース' },
+  '보안 시리즈': { en: 'Security series', zh: '安全序列', ja: 'セキュリティ系列' },
   'Other Resources': { en: 'Other Resources', zh: '其他资源', ja: 'その他のリソース' },
   '전체 리소스': { en: 'Total resources', zh: '资源总数', ja: 'リソース合計' },
   '7일 순증감': { en: '7d net change', zh: '7天净变化', ja: '7日間純増減' },
@@ -1689,7 +1692,9 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
 /** Translate a known Korean UI literal (exact match, then patterns). Unknown → unchanged. */
 export function applyTerms(lang: Lang, s: string): string {
   if (lang === 'ko') return s;
-  const hit = TERMS[s];
+  // own-property guard: a dynamic tt(variable) source equal to an Object.prototype key
+  // ('constructor', 'toString', …) must fall through to RULES, not return prototype junk
+  const hit = Object.prototype.hasOwnProperty.call(TERMS, s) ? TERMS[s] : undefined;
   if (hit) return hit[lang];
   for (const r of RULES) {
     const m = s.match(r.re);

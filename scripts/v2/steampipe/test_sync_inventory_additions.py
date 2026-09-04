@@ -143,22 +143,22 @@ def test_inject_account_noop_without_placeholder():
     assert sync_lambda._inject_account(plain, "bogus") == plain
 
 
-def test_self_count_matches_rec_account_self_only(monkeypatch):
-    """_self_count (dashboard trend-chart snapshot row) must count exactly the rows
-    _rec_account resolves to 'self' — the host's real id and target-account rows are excluded,
-    mirroring the account_id='self' scope every other host-facing read already uses."""
+def test_account_counts_buckets_by_rec_account(monkeypatch):
+    """_account_counts (dashboard trend-chart snapshot rows, gap L124) must bucket rows by
+    _rec_account: the host's real id folds into 'self' (rows without the column too), target
+    accounts keep their own 12-digit key — one snapshot row per account."""
     sync_lambda._ACCOUNT_CACHE["id"] = "111111111111"  # host's real 12-digit id
     recs = [
         {"account_id": "111111111111"},  # host's real id -> 'self'
         {"account_id": "111111111111"},
-        {"account_id": "222222222222"},  # target account -> not counted
+        {"account_id": "222222222222"},  # target account -> its own bucket
         {},  # no account_id column (SDK sync) -> 'self'
     ]
-    assert sync_lambda._self_count(recs) == 3
+    assert sync_lambda._account_counts(recs) == {"self": 3, "222222222222": 1}
 
 
-def test_self_count_empty():
-    assert sync_lambda._self_count([]) == 0
+def test_account_counts_empty():
+    assert sync_lambda._account_counts([]) == {}
 
 
 class _FakeS3PolicyStatus:
