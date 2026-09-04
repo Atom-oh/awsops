@@ -89,12 +89,14 @@ export default function DivergingBarList({
                   )}
                 </span>
               </span>
-              {/* the sub figure hides below sm — the title keeps it reachable on mobile */}
-              <span className="flex w-28 sm:w-40 shrink-0 items-center justify-end gap-2" title={r.sub != null ? `${r.label}: ${fmt(v)} (${r.sub})` : undefined}>
+              {/* below sm the sub figure moves to a VISIBLE second line — a title attribute
+                  never surfaces on touch devices, so it is not a mobile fallback */}
+              <span className="flex w-28 sm:w-40 shrink-0 flex-col items-end sm:flex-row sm:items-center sm:justify-end gap-0 sm:gap-2">
                 {r.sub != null && <span className="tabular hidden sm:inline text-[11px] text-ink-400">{r.sub}</span>}
                 <span className={`tabular font-semibold ${v > 0 ? 'text-negative-text' : v < 0 ? 'text-positive-text' : 'text-ink-400'}`}>
                   {fmt(v)}
                 </span>
+                {r.sub != null && <span className="tabular sm:hidden text-[10px] leading-tight text-ink-400">{r.sub}</span>}
               </span>
             </li>
           );

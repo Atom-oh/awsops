@@ -117,3 +117,16 @@ unmerged. Retained alongside ①: the DivergingBarList non-finite→'—' guard,
 tooltip carrying the sub figure, and the BarDistribution/HBarList subtitle+valuePrefix
 passthroughs (unused-but-harmless plumbing for future opt-ins). The dataviz survey and the
 form-fit rationale in this spec remain valid; the held swaps can be revisited any time.
+
+### Round-2 corrections on the revert (review-driven)
+
+- **The mobile sub figure is VISIBLE, not a title attribute (the gate MAJOR)** — a `title`
+  tooltip never surfaces on touch devices, i.e. exactly below the `sm` breakpoint where the
+  inline figure was hidden; the fallback claimed a behavior that did not exist (and the test
+  only pinned the attribute). Below `sm` the 30d delta now renders as a visible second line
+  under the value; CHANGELOG wording corrected; the test asserts both breakpoint renderings.
+- **The capped donut's center figure is labeled honestly (the gate MAJOR)** — with >10 types
+  the center 합계 (sum of the server-truncated top-10) disagreed with the same screen's
+  fleet-count KPI tile, and the 기타 slice read as "everything remaining" while ranks 11+
+  were dropped server-side. DonutBreakdown gains a `centerLabel` prop; the EC2 card labels
+  the center '상위 10 합계' when the cap can bind — a partial sum is never presented as 합계.

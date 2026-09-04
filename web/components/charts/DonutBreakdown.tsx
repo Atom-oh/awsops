@@ -11,6 +11,10 @@ export interface DonutBreakdownProps {
   title: ReactNode;
   subtitle?: ReactNode;
   right?: ReactNode;
+  /** Center-total label (default '합계'). Pass an honest qualifier when the DATA ITSELF is a
+   *  server-capped subset (e.g. '상위 10 합계') — the center figure is the sum of what was
+   *  given, and labeling a partial sum 합계 fabricates a fleet total. */
+  centerLabel?: string;
   data: Array<Record<string, unknown>>;
   nameKey: string;
   valueKey: string;
@@ -34,6 +38,7 @@ export interface DonutBreakdownProps {
 export default function DonutBreakdown({
   title,
   subtitle,
+  centerLabel,
   right,
   data,
   nameKey,
@@ -105,7 +110,7 @@ export default function DonutBreakdown({
             <div className="tabular text-[20px] font-semibold leading-none text-ink-800">
               {fmtTotal}
             </div>
-            <div className="text-[10px] uppercase tracking-[0.04em] text-ink-400 mt-1">{tt('합계')}</div>
+            <div className="text-[10px] uppercase tracking-[0.04em] text-ink-400 mt-1">{tt(centerLabel ?? '합계')}</div>
           </div>
         </div>
         <ul className="min-w-0 flex-1 space-y-1.5">
