@@ -48,34 +48,45 @@ export async function GET(request: Request) {
           return ['self']; // accounts table unavailable → honest host-only scope
         }
       }
-      const safe = accountsParam.split(',').filter((a) => a === 'self' || /^[0-9]{12}$/.test(a));
+      // trim (the security route's resolveAccounts does — 'self, 2222…' must not silently
+      // drop the member), dedupe, and bound the list (it drives two ANY() queries)
+      const safe = [...new Set(
+        accountsParam.split(',').map((a) => a.trim()).filter((a) => a === 'self' || /^[0-9]{12}$/.test(a)),
+      )].slice(0, 50);
       return safe.length ? safe : ['self'];
     })();
+    // resource_type charset guard: the v1 backfill wrote display-label series ('EC2
+    // Instances', …) under member accounts — those legacy keys would render as split,
+    // untranslatable series and their v1 derived-count labels dodge the DERIVED_TREND_TYPES
+    // total-exclusion. v2 series are snake_case; legacy-label history is simply not read
+    // (consistent with the 'per-account history accrues from this deploy' disclosure).
     const r = await pool.query<{ d: string; resource_type: string; n: number }>(
       `SELECT captured_at::date::text AS d, resource_type, SUM(resource_count)::int AS n
        FROM inventory_snapshots
        WHERE account_id = ANY($2::text[])
+         AND resource_type ~ '^[a-z0-9_]+$'
          AND captured_at >= now() - ($1 || ' days')::interval
        GROUP BY 1, 2 ORDER BY 1`,
       [days, accounts],
     );
-    // Per-day ACCOUNT coverage (which selected accounts have any snapshot row that day).
-    // Summing across accounts destroys the per-account half of the key-absence signal — a
-    // fully unreachable account leaves every type key present via the others, so the client's
-    // type-set parity alone would present that account's silence as a genuine fleet decrease
-    // (and the deploy boundary — baseline days carrying only 'self' rows — as growth). The
-    // client guards (netChange, cost impact, delta table) require SET-equal coverage between
-    // compared days and render '—' otherwise.
-    const cov = await pool.query<{ d: string; account_id: string }>(
-      `SELECT DISTINCT captured_at::date::text AS d, account_id
+    // PER-TYPE per-day ACCOUNT coverage (which selected accounts wrote a row for that
+    // (day, type)). Summing across accounts destroys the per-account half of the key-absence
+    // signal — a fully unreachable account leaves every type key present via the others — and
+    // the sync runs PER TYPE with its own trusted-account set, so a day-level set would still
+    // mask an account that synced lambda but not ec2. The client guards (netChange, cost
+    // impact, delta table) require SET-equal per-type coverage between compared days and
+    // render '—' otherwise.
+    const cov = await pool.query<{ d: string; resource_type: string; account_id: string }>(
+      `SELECT DISTINCT captured_at::date::text AS d, resource_type, account_id
        FROM inventory_snapshots
        WHERE account_id = ANY($2::text[])
+         AND resource_type ~ '^[a-z0-9_]+$'
          AND captured_at >= now() - ($1 || ' days')::interval
-       ORDER BY 1, 2`,
+       ORDER BY 1, 2, 3`,
       [days, accounts],
     );
-    const coverage: Record<string, string[]> = {};
-    for (const row of cov.rows) (coverage[row.d] ??= []).push(row.account_id);
+    const coverage: Record<string, Record<string, string[]>> = {};
+    for (const row of cov.rows) ((coverage[row.d] ??= {})[row.resource_type] ??= []).push(row.account_id);
     const byDate = new Map<string, TrendPoint & Record<string, number | string>>();
     const latestByType = new Map<string, number>();
     for (const row of r.rows) {
@@ -107,6 +118,11 @@ export async function GET(request: Request) {
     const recentPts = trend.filter((pt) => lastMs - new Date(pt.date).getTime() < 2 * 86_400_000);
     const recent = (t: string) => recentPts.some((pt) => typeof (pt as Record<string, unknown>)[t] === 'number');
     const types = [...latestByType.keys()].sort((a, b) => {
+      // Derived security series rank BELOW every real resource type: they must never claim a
+      // Core top-5 chip slot from an actual resource (their counts overlap the base series).
+      const da = a in DERIVED_TREND_TYPES ? 1 : 0;
+      const db = b in DERIVED_TREND_TYPES ? 1 : 0;
+      if (da !== db) return da - db;
       const ra = recent(a) ? 1 : 0;
       const rb = recent(b) ? 1 : 0;
       if (ra !== rb) return rb - ra;
@@ -115,7 +131,9 @@ export async function GET(request: Request) {
       // membership between requests (the chart key= would reset chip state on every churn)
       return d !== 0 ? d : a.localeCompare(b);
     });
-    return Response.json({ trend, types, coverage });
+    // `accounts` = the RESOLVED scope (the /api/security precedent) — the client can disclose
+    // when it is narrower than the selector implied (e.g. the __all__ fallback).
+    return Response.json({ trend, types, coverage, accounts });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

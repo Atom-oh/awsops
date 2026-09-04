@@ -20,7 +20,7 @@ import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
-import { nearestSnapshot, netChange, DERIVED_TREND_TYPES } from '@/lib/trend-utils';
+import { nearestSnapshot, netChange, typeCovEqual, DERIVED_TREND_TYPES, type TrendCoverage } from '@/lib/trend-utils';
 import { estimateCostImpact, COST_IMPACT_WEIGHTS } from '@/lib/cost-impact';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -43,7 +43,7 @@ interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; s
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[]; monthly?: { month: string; total: number }[] }
 interface ResourceTrendPoint { date: string; total: number; ec2?: number; [k: string]: unknown }
-interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[]; coverage?: Record<string, string[]> }
+interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[]; coverage?: TrendCoverage }
 interface FleetCluster {
   name: string;
   reachable: boolean;
@@ -292,26 +292,24 @@ export default function Home() {
     const pts = resTrend?.trend ?? [];
     if (pts.length < 2) return [];
     const last = pts[pts.length - 1];
-    // ACCOUNT-coverage parity per baseline day (gap L124): points are summed across the
-    // selected accounts, so a baseline day covering a DIFFERENT account set (an unreachable
-    // account, or the deploy boundary where only 'self' rows exist) would fabricate per-type
-    // deltas — such a baseline renders '—', same as a missing type key.
+    // PER-TYPE account-coverage parity per baseline day (gap L124): points are summed across
+    // the selected accounts, and the sync runs per type with its own trusted-account set — a
+    // baseline (day, type) covering a DIFFERENT account set than the latest day (an account
+    // unreachable for just that type's run, or the deploy boundary where only 'self' rows
+    // exist) would fabricate that type's delta — it renders '—', same as a missing type key.
     const cov = resTrend?.coverage;
-    const covOf = (d: string) => [...(cov?.[d] ?? [])].sort().join(',');
-    const covOk = (p: { date: string } | null): boolean =>
-      !cov || (p != null && covOf(p.date) !== '' && covOf(p.date) === covOf(last.date));
-    const w0 = nearestSnapshot(pts, 7);
-    const m0 = nearestSnapshot(pts, 30);
-    const w = covOk(w0) ? w0 : null;
-    const m = covOk(m0) ? m0 : null;
+    const covOk = (p: { date: string } | null, t: string): boolean =>
+      !cov || (p != null && typeCovEqual(cov, last.date, p.date, t));
+    const w = nearestSnapshot(pts, 7);
+    const m = nearestSnapshot(pts, 30);
     // Key ABSENCE means "no successful sync for that type that day" (the route no longer
     // pre-seeds zeros) — it must render '—', never a fabricated Current 0 / −100%.
     const val = (p: Record<string, unknown> | null, t: string): number | null =>
       p && typeof p[t] === 'number' ? (p[t] as number) : null;
     return (resTrend?.types ?? []).map((t) => {
       const cur = val(last, t);
-      const wv = val(w, t);
-      const mv = m && m !== w ? val(m, t) : null;
+      const wv = covOk(w, t) ? val(w, t) : null;
+      const mv = m && m !== w && covOk(m, t) ? val(m, t) : null;
       const pct = (from: number | null) =>
         cur == null || from == null || from === 0 ? null : ((cur - from) / from) * 100;
       return { type: t, label: INV_LABEL(t), cur, w: wv, m: mv, wPct: pct(wv), mPct: pct(mv) };
@@ -338,14 +336,19 @@ export default function Home() {
     // priced and labeled as a 30-day delta.
     const spanDays = (new Date(last.date).getTime() - new Date(base.date).getTime()) / 86_400_000;
     if (Math.abs(spanDays - 30) > 2) return [];
-    // ACCOUNT-coverage parity (gap L124): both endpoint days must cover the same account set —
-    // a silent account (or the deploy boundary's self-only baseline) must not be priced as a
-    // 30d fleet delta. Provided-but-empty coverage is a mismatch, not a pass.
+    // PER-TYPE account-coverage parity (gap L124): a WEIGHTED type present on both endpoint
+    // days whose (day, type) account sets differ (an account silent for just that type's run,
+    // or the deploy boundary's self-only baseline) must not be priced as a 30d fleet delta —
+    // fail safe by hiding the panel, same as the partial-LATEST guard below (silently
+    // dropping the type could hide the largest genuine saving instead).
     const cov = impactTrend?.coverage;
     if (cov) {
-      const covOf = (d: string) => [...(cov[d] ?? [])].sort().join(',');
-      const lastCov = covOf(last.date);
-      if (!lastCov || lastCov !== covOf(base.date)) return [];
+      const covMismatch = (impactTrend?.types ?? []).some(
+        (t) => COST_IMPACT_WEIGHTS[t] != null
+          && typeof last[t] === 'number' && typeof base[t] === 'number'
+          && !typeCovEqual(cov, last.date, base.date, t),
+      );
+      if (covMismatch) return [];
     }
     // Partial-LATEST guard, scoped to WEIGHTED types only (review: an equality check over all
     // types self-disabled the panel for ~30 days whenever any type — even an unweighted one —

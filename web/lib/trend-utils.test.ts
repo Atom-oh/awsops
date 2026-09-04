@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { nearestSnapshot, netChange } from './trend-utils';
+import { nearestSnapshot, netChange, typeCovEqual } from './trend-utils';
 
 const day = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
 
@@ -87,20 +87,37 @@ describe('netChange derived-series exclusion + account-coverage parity (gap L124
     ];
     expect(netChange(pts, 7)).toBe(0);
   });
-  it('STRICT account-set parity: differing coverage between endpoint days is null', () => {
+  it('STRICT per-type account-set parity: differing (day, type) coverage between endpoints is null', () => {
     const pts = [
       { date: day(7), total: 10, ec2: 10 },
       { date: day(0), total: 6, ec2: 6 },
     ];
     // an account silent on the latest day: its absence must not read as a fleet decrease
-    expect(netChange(pts, 7, { [day(7)]: ['self', '222233334444'], [day(0)]: ['self'] })).toBeNull();
+    expect(netChange(pts, 7, { [day(7)]: { ec2: ['self', '222233334444'] }, [day(0)]: { ec2: ['self'] } })).toBeNull();
     // deploy boundary: baseline day is self-only, latest covers self+member → null, not growth
-    expect(netChange(pts, 7, { [day(7)]: ['self'], [day(0)]: ['self', '222233334444'] })).toBeNull();
+    expect(netChange(pts, 7, { [day(7)]: { ec2: ['self'] }, [day(0)]: { ec2: ['self', '222233334444'] } })).toBeNull();
     // equal sets (order-insensitive) diff normally
-    expect(netChange(pts, 7, { [day(7)]: ['222233334444', 'self'], [day(0)]: ['self', '222233334444'] })).toBe(-4);
+    expect(netChange(pts, 7, { [day(7)]: { ec2: ['222233334444', 'self'] }, [day(0)]: { ec2: ['self', '222233334444'] } })).toBe(-4);
     // provided-but-empty coverage is a mismatch, not a pass
     expect(netChange(pts, 7, {})).toBeNull();
     // no coverage arg (legacy caller) keeps the previous behavior
     expect(netChange(pts, 7)).toBe(-4);
+  });
+  it('parity is per TYPE: an account synced for lambda but silent for ec2 the same day is null', () => {
+    // both days carry both type keys (via self) and the DAY-level account union is identical —
+    // only the (day, ec2) set differs. A day-level check would pass; the per-type check must not.
+    const pts = [
+      { date: day(7), total: 22, ec2: 10, lambda: 12 },
+      { date: day(0), total: 18, ec2: 6, lambda: 12 },
+    ];
+    const cov = {
+      [day(7)]: { ec2: ['self', '222233334444'], lambda: ['self', '222233334444'] },
+      [day(0)]: { ec2: ['self'], lambda: ['self', '222233334444'] },
+    };
+    expect(netChange(pts, 7, cov)).toBeNull();
+    expect(typeCovEqual(cov, day(7), day(0), 'lambda')).toBe(true);
+    expect(typeCovEqual(cov, day(7), day(0), 'ec2')).toBe(false);
+    // a type key missing coverage entirely on one day fails closed
+    expect(typeCovEqual({ [day(7)]: { ec2: ['self'] }, [day(0)]: {} }, day(7), day(0), 'ec2')).toBe(false);
   });
 });

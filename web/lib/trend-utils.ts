@@ -3,6 +3,20 @@
 
 export interface TrendPointLike { date: string; total?: number | string; [k: string]: unknown }
 
+/** Per-day, PER-TYPE account coverage from the trend route: which selected accounts wrote a
+ *  snapshot row for that (day, resource_type). Keyed per type because the sync runs per type
+ *  with its own trusted-account set — an account can be reachable for one type's run and
+ *  silent for another's on the same day, and a day-level set would mask exactly that gap. */
+export type TrendCoverage = Record<string, Record<string, string[]>>;
+
+/** SET-equality of one type's account coverage between two days. Fail-closed: a missing or
+ *  empty set on either day is a mismatch, never a pass — absence cannot prove parity. */
+export function typeCovEqual(cov: TrendCoverage, d1: string, d2: string, type: string): boolean {
+  const key = (d: string) => [...(cov[d]?.[type] ?? [])].sort().join(',');
+  const a = key(d1);
+  return a !== '' && a === key(d2);
+}
+
 /** Derived security-count trend series (gap L129), written by the sync lambda's
  *  DERIVED_SNAPSHOTS (scripts/v2/steampipe/sync_lambda.py — LOCKSTEP: keys must match) from
  *  the /security predicates in security-findings.ts. Excluded from the trend `total` (the
@@ -41,18 +55,21 @@ export function nearestSnapshot<T extends TrendPointLike>(pts: T[], daysAgo: num
  *    row per type on its own success path, so a mid-fan-out or partially failed day carries a
  *    different type set, and any diff over it (raw OR intersection) is a sync artifact
  *    presented as a fleet change. Parity mismatch → null ('—');
- *  - STRICT ACCOUNT-SET PARITY (`coverage`, gap L124): points are summed ACROSS the selected
- *    accounts, so type-set parity alone is blind to a whole account going silent (its type
- *    keys survive via the other accounts — that silence would read as a genuine fleet
- *    decrease, and the deploy boundary, where baseline days carry only 'self' rows, as
- *    growth). Both endpoint days must cover the SAME account set, else null ('—').
+ *  - STRICT PER-TYPE ACCOUNT-SET PARITY (`coverage`, gap L124): points are summed ACROSS the
+ *    selected accounts, so type-set parity alone is blind to a whole account going silent
+ *    (its type keys survive via the other accounts — that silence would read as a genuine
+ *    fleet decrease, and the deploy boundary, where baseline days carry only 'self' rows, as
+ *    growth). Parity is checked PER TYPE, not per day: the sync runs per type with its own
+ *    trusted-account set, so an account reachable for lambda but silent for ec2 on the same
+ *    day differs only at the (day, type) grain. EVERY summed type must cover the same
+ *    account set on both endpoint days, else null ('—').
  *  Derived security series (DERIVED_TREND_TYPES) are excluded from the sum — their resources
  *  are already counted by their base series (the route excludes them from `total` for the
  *  same reason). */
 export function netChange(
   pts: TrendPointLike[],
   daysAgo: number,
-  coverage?: Record<string, string[]>,
+  coverage?: TrendCoverage,
 ): number | null {
   if (pts.length < 2) return null;
   const sorted = [...pts].sort((a, b) => a.date.localeCompare(b.date)); // input order not assumed
@@ -81,12 +98,12 @@ export function netChange(
   const lastKeys = typeKeys(last);
   const baseKeys = typeKeys(base);
   if (!lastKeys.length || lastKeys.join(',') !== baseKeys.join(',')) return null;
-  // STRICT account-set parity (see doc above). A provided-but-empty coverage for either
-  // endpoint day is a mismatch, not a pass — absence of coverage rows cannot prove parity.
+  // STRICT per-type account-set parity (see doc above). A provided-but-empty coverage for a
+  // summed type on either endpoint day is a mismatch, not a pass — absence can't prove parity.
   if (coverage) {
-    const covOf = (d: string) => [...(coverage[d] ?? [])].sort().join(',');
-    const lastCov = covOf(last.date);
-    if (!lastCov || lastCov !== covOf(base.date)) return null;
+    for (const k of lastKeys) {
+      if (!typeCovEqual(coverage, last.date, base.date, k)) return null;
+    }
   }
   const sumOf = (p: TrendPointLike) => lastKeys.reduce((s, k) => s + Number(p[k] ?? 0), 0);
   return sumOf(last) - sumOf(base);

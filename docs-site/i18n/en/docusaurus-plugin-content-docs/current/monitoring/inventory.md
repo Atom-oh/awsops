@@ -21,9 +21,9 @@ A page for tracking daily changes in AWS resource counts and estimating cost imp
 
 ### Resource Trend Graph
 - Multi-line chart visualizing resource count trends by type
-- Time range toggle: 30 days / 90 days
+- Time range toggle: 14 days (default) / 30 days / 90 days
 - Resource type toggles to select which resources to display
-- Scoped by the account selector at the top (per-account history accrues from when this feature was deployed; there is no region dimension)
+- Scoped by the account selector at the top (per-account history accrues from when this feature was deployed; there is no region dimension). When the two compared days differ in per-type account coverage (an account silent for that type's sync), the net change / delta / cost impact render '—' instead of a fabricated number
 - Derived security series (Public S3 Buckets / Open Security Groups / Unencrypted EBS) are recorded on every sync with the same criteria as the Security page, and are excluded from the overall total to avoid double-counting their underlying resources; the Public S3 Buckets series is host-account-only (the S3 public-access collection is a host SDK sweep — the same scope the Security page reads)
 
 ### Core Resources (Displayed by Default)
@@ -72,7 +72,7 @@ Estimates monthly cost impact based on resource count changes:
 5. **Cost Impact**: Check the cost estimation section at the bottom
 
 :::tip Snapshot-Based Data
-Snapshots are written per account to Aurora (`inventory_snapshots`) on every inventory sync run — independent of dashboard loads, and reading them makes no additional AWS API calls.
+Snapshots are written per account to Aurora (`inventory_snapshots`) on every successful, non-partial inventory sync run (a partial run preserves the last-good values, so a daily point can be missing) — independent of dashboard loads, and reading them makes no additional AWS API calls.
 :::
 
 ## Usage Tips

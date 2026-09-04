@@ -21,9 +21,9 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ### 资源趋势图
 - 通过多折线图可视化各资源类型的数量趋势
-- 期间切换：30 天 / 90 天
+- 期间切换：14 天（默认）/ 30 天 / 90 天
 - 通过资源类型开关选择要显示的资源
-- 跟随顶部的账户选择进行账户级过滤（各账户历史自该功能部署后开始积累，无区域维度）
+- 跟随顶部的账户选择进行账户级过滤（各账户历史自该功能部署后开始积累，无区域维度）。当所比较的两天在某类型的账户覆盖上不一致时（某账户在该类型的 sync 中缺席），净变化 / 变化表 / 成本影响会显示 '—'，而不是编造数字
 - 派生安全序列（Public S3 Buckets / Open Security Groups / Unencrypted EBS）在每次 sync 时按与安全页面相同的判定标准记录，并且不计入总数（total），以避免与原始资源重复计算；Public S3 Buckets 序列仅覆盖主机账户（S3 公开配置采集是主机 SDK 扫描 — 与安全页面的范围一致）
 
 ### Core Resources（默认显示）
@@ -72,7 +72,7 @@ import Screenshot from '@site/src/components/Screenshot';
 5. **成本影响**: 查看底部的成本估算区域
 
 :::tip 基于快照的数据
-快照在每次库存 sync 运行时按账户写入 Aurora（`inventory_snapshots`）——与仪表板加载无关，读取时也不会产生额外的 AWS API 调用。
+快照在每次成功（非部分失败）的库存 sync 运行时按账户写入 Aurora（`inventory_snapshots`）（部分失败的运行会保留上次的有效值，因此某天的数据点可能缺失）——与仪表板加载无关，读取时也不会产生额外的 AWS API 调用。
 :::
 
 ## 使用技巧

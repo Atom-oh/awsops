@@ -94,3 +94,33 @@ only raw synced resource_type counts).
   (EKS Nodes dropped — not historized; ElastiCache $150→$100 per COST_IMPACT_WEIGHTS), and
   discloses that the Public S3 Buckets series is host-account-only (the s3_public_access
   collection is a host SDK sweep — the same scope the /security page reads).
+
+## Round-2 corrections (review-driven)
+
+- **Coverage is per (day, resource_type, account) — the gate MAJOR**: the round-1 coverage was
+  day×account, but the sync runs PER TYPE with its own trusted-account set, so an account
+  reachable for lambda but silent for ec2 the same day passed both parity guards while its
+  missing EC2 count read as a fleet decrease. The route now returns
+  `coverage: {date: {type: [accounts]}}` (shared `TrendCoverage`/`typeCovEqual` in
+  trend-utils, fail-closed on missing/empty sets), and netChange requires per-type parity for
+  EVERY summed type, the delta table nulls a (baseline, type) cell whose set differs from the
+  latest day's, and the cost-impact panel hides when any weighted type present on both
+  endpoint days mismatches (same fail-safe as the partial-LATEST guard). Tests pin the exact
+  scenario: identical day-level union, differing (day, ec2) set → '—'.
+- Minors closed: CSV entries are trimmed (the security-route resolveAccounts behavior the
+  route claims to mirror), deduped, and capped at 50; the response discloses the RESOLVED
+  `accounts` scope (the /api/security precedent — covers the __all__→self fallback narrowing);
+  legacy v1-backfill label series ('EC2 Instances', …, written under member accounts by
+  backfill-v1.mjs) are excluded from both queries via a snake_case charset guard — they would
+  render as split untranslatable series and their v1 derived-count labels dodge the
+  DERIVED_TREND_TYPES total exclusion (consistent with the accrues-from-deploy disclosure);
+  derived series rank below every real resource type (never claim a Core top-5 chip); the
+  4-locale guide says "successful, non-partial sync run", documents the 14d default toggle,
+  and states the per-type coverage '—' behavior.
+- Recorded follow-ups (review-endorsed, out of scope): a shared resolveAccounts for
+  /api/security + trend that intersects explicit CSVs with enabled accounts (the syntax-only
+  12-digit validation is the pre-existing same-tenant pattern behind verifyUser); a
+  region-set-change (account_regions edit) still reads as a count change — adjacent to the
+  disclosed no-region-dimension deviation; the DERIVED_SNAPSHOTS call-site constant assertion
+  is tautological (the fragment is read from the module dict itself) — enforcement stays with
+  the invariant comment + the pytest disjointness/verbatim guards.

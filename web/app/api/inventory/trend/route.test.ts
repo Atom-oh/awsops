@@ -116,19 +116,36 @@ describe('GET /api/inventory/trend', () => {
     expect(query.mock.calls[1][1]).toEqual([14, ['self']]);
   });
 
-  it('returns per-day account coverage alongside the trend (the client parity guards depend on it)', async () => {
+  it('returns PER-TYPE per-day account coverage + the resolved scope (the client parity guards depend on both)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValueOnce({ rows: [
       { d: '2026-07-01', resource_type: 'ec2', n: 5 },
     ] });
+    // the sync runs per type: account B synced lambda but not ec2 that day — the coverage
+    // must expose exactly that (day, type) gap, not a merged day-level set
     query.mockResolvedValueOnce({ rows: [
-      { d: '2026-07-01', account_id: '222233334444' },
-      { d: '2026-07-01', account_id: 'self' },
+      { d: '2026-07-01', resource_type: 'ec2', account_id: 'self' },
+      { d: '2026-07-01', resource_type: 'lambda', account_id: '222233334444' },
+      { d: '2026-07-01', resource_type: 'lambda', account_id: 'self' },
     ] });
-    query.mockResolvedValue({ rows: [] }); // coverage query
     const { GET } = await import('./route');
-    const body = await (await GET(req('/api/inventory/trend?accounts=self,222233334444'))).json();
-    expect(body.coverage).toEqual({ '2026-07-01': ['222233334444', 'self'] });
+    const body = await (await GET(req('/api/inventory/trend?accounts=self,%20222233334444'))).json();
+    expect(body.coverage).toEqual({
+      '2026-07-01': { ec2: ['self'], lambda: ['222233334444', 'self'] },
+    });
+    // resolved scope disclosed (and CSV entries are trimmed — '%20' before the member id)
+    expect(body.accounts).toEqual(['self', '222233334444']);
+  });
+
+  it('legacy v1 backfill label series are excluded from both queries (snake_case charset guard)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    const { GET } = await import('./route');
+    await GET(req());
+    // 'EC2 Instances'-style label keys (v1 backfill under member accounts) would render as
+    // split series and dodge the derived-type total exclusion
+    expect(String(query.mock.calls[0][0])).toContain("resource_type ~ '^[a-z0-9_]+$'");
+    expect(String(query.mock.calls[1][0])).toContain("resource_type ~ '^[a-z0-9_]+$'");
   });
 
   it('derived security series (gap L129) are chart series but never add to total', async () => {
