@@ -63,3 +63,21 @@ Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L186 (cloudfront i18n)
   not covered by the technical-identifier carve-out); the L207/L254/L186 ticks carry the
   English-column-label 부분 편차 marker inline; the CHANGELOG bullet states the precise
   coverage and the ratchet framing.
+
+## Round-2 corrections (review-driven)
+
+- **The card_catalog lockstep is complete (the gate MAJOR)** — the round-1 registration
+  missed BOTH ClickHouse card titles ('최근 1시간 스팬 수', '서비스별 스팬 Top5 (1h)'), so
+  every ClickHouse dashboard card stayed Korean in en/zh/ja — the exact dynamic path this
+  batch claims to close, structurally invisible to the static ratchet. Both are registered.
+- Minors closed: parameterized RULES for the two interpolated FAILURE notes
+  ('지원하지 않는 데이터소스: <kind>', '결과 파싱 실패: <message>' — the notes that explain
+  WHY a result is unusable now translate like the trivial empties); the log-view caption pins
+  `toLocaleString('en-US')` so its RULE matches under any runtime locale; DiagSignalChips
+  wraps its catalog titles in tt() and the 9 diagnosis signal titles are registered (lockstep
+  with signal_catalog.py); the DatasourcesTab row actions (Explore/Edit/Delete) are localized
+  via Korean sources (편집/삭제/탐색 — Edit/Delete/Explore in en).
+- Advisory (untouched-by-diff, recorded): the countBar/flagBar sampled titles still use the
+  pre-translated suffix — English labels + a registered TERM mean nothing renders Korean,
+  only a zh/ja paren-style inconsistency; unify opportunistically next time those lines
+  change.

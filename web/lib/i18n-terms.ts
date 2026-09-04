@@ -191,6 +191,8 @@ export const TERMS: Record<string, Pair> = {
   'Opus: 더 깊은 분석, 비용↑': { en: 'Opus: deeper analysis, higher cost', zh: 'Opus：分析更深入，费用更高', ja: 'Opus: より深い分析、コスト増' },
   '리포트 삭제': { en: 'Delete report', zh: '删除报告', ja: 'レポート削除' },
   '삭제': { en: 'Delete', zh: '删除', ja: '削除' },
+  '편집': { en: 'Edit', zh: '编辑', ja: '編集' },
+  '탐색': { en: 'Explore', zh: '浏览', ja: '探索' },
   '제목': { en: 'Title', zh: '标题', ja: 'タイトル' },
   '저장': { en: 'Save', zh: '保存', ja: '保存' },
   '취소': { en: 'Cancel', zh: '取消', ja: 'キャンセル' },
@@ -675,6 +677,19 @@ export const TERMS: Record<string, Pair> = {
   '에러 트레이스': { en: 'Error traces', zh: '错误跟踪', ja: 'エラートレース' },
   '정상 타깃 수': { en: 'Healthy targets', zh: '正常目标数', ja: '正常ターゲット数' },
   '최근 1시간 파드 재시작': { en: 'Pod restarts (last hour)', zh: '最近 1 小时 Pod 重启', ja: '直近 1 時間の Pod 再起動' },
+  '최근 1시간 스팬 수': { en: 'Spans (last hour)', zh: '最近 1 小时跨度数', ja: '直近 1 時間のスパン数' },
+  '서비스별 스팬 Top5 (1h)': { en: 'Spans by service Top 5 (1h)', zh: '按服务的跨度 Top5（1h）', ja: 'サービス別スパン Top5（1h）' },
+  // diagnosis signal-catalog titles (dynamic tt(s.title) in DiagSignalChips — lockstep with
+  // scripts/v2/workers/diagnosis/signal_catalog.py)
+  '네임스페이스별 로그량': { en: 'Log volume by namespace', zh: '按命名空间的日志量', ja: 'ネームスペース別ログ量' },
+  '네트워크 PPS·드롭': { en: 'Network PPS · drops', zh: '网络 PPS·丢弃', ja: 'ネットワーク PPS・ドロップ' },
+  '노드 CPU 포화': { en: 'Node CPU saturation', zh: '节点 CPU 饱和', ja: 'ノード CPU 飽和' },
+  '노드 디스크 사용률': { en: 'Node disk utilization', zh: '节点磁盘使用率', ja: 'ノードディスク使用率' },
+  '노드 메모리 압박': { en: 'Node memory pressure', zh: '节点内存压力', ja: 'ノードメモリ圧迫' },
+  '느린 요청 상위': { en: 'Slowest requests', zh: '最慢请求排行', ja: '遅いリクエスト上位' },
+  '에러 로그 수(5분)': { en: 'Error log count (5m)', zh: '错误日志数（5 分钟）', ja: 'エラーログ数（5 分）' },
+  '최근 에러 트레이스': { en: 'Recent error traces', zh: '最近的错误跟踪', ja: '直近のエラートレース' },
+  '컨테이너 CPU 스로틀링': { en: 'Container CPU throttling', zh: '容器 CPU 节流', ja: 'コンテナ CPU スロットリング' },
   // datasource-render.ts result notes (dynamic tt(note) — lockstep with lib/datasource-render.ts)
   '시계열 포인트 없음': { en: 'No time-series points', zh: '无时序数据点', ja: '時系列ポイントなし' },
   '로그 없음': { en: 'No logs', zh: '无日志', ja: 'ログなし' },
@@ -1583,6 +1598,8 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^(\d+)건 · (.+)$/, en: (m) => `${m[1]} calls · ${m[2]}`, zh: (m) => `${m[1]} 次 · ${m[2]}`, ja: (m) => `${m[1]} 件 · ${m[2]}` },
   { re: /^총 비용 \((.+)\)$/, en: (m) => `Total cost (${m[1]})`, zh: (m) => `总费用 (${m[1]})`, ja: (m) => `総コスト (${m[1]})` },
   { re: /^상위 (\d+)개 시리즈만 차트에 표시 \(총 (\d+)\)$/, en: (m) => `Only the top ${m[1]} series are charted (of ${m[2]})`, zh: (m) => `图表仅显示前 ${m[1]} 个序列（共 ${m[2]}）`, ja: (m) => `上位 ${m[1]} 系列のみチャート表示（全 ${m[2]}）` },
+  { re: /^지원하지 않는 데이터소스: (.+)$/, en: (m) => `Unsupported datasource: ${m[1]}`, zh: (m) => `不支持的数据源：${m[1]}`, ja: (m) => `未対応のデータソース: ${m[1]}` },
+  { re: /^결과 파싱 실패: (.+)$/, en: (m) => `Failed to parse the result: ${m[1]}`, zh: (m) => `结果解析失败：${m[1]}`, ja: (m) => `結果の解析に失敗: ${m[1]}` },
   { re: /^로그 ([\d,]+)줄 — 최신순, 표시 상한 적용 가능$/, en: (m) => `${m[1]} log lines — newest first, a display cap may apply`, zh: (m) => `${m[1]} 行日志 — 最新在前，可能应用显示上限`, ja: (m) => `ログ ${m[1]} 行 — 新しい順、表示上限が適用される場合あり` },
   // inventory donut titles: '<label> 분포' with the optional sample qualifier (gap L186/L207).
   // ja keeps the pre-existing 'の分布' phrasing (this rule supersedes the older plain
