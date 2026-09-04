@@ -19,6 +19,11 @@ from datasource_http import (
 SLUG = "mimir"
 BASE = "/prometheus/api/v1"
 MAX_SERIES = 50
+# Schema metric-name cap (was 500 — alphabetical truncation dropped every `node_*`/`kube_*` family on
+# real kube-prometheus stacks, so NL→PromQL generation never saw the metrics users asked about).
+# 3000 names ≈ 120KB of JSON — inside the web cache's 256KB row bound with the 200-label list.
+SCHEMA_METRIC_CAP = 3000
+
 MAX_POINTS_PER_SERIES = 500
 MAX_TOTAL_SAMPLES = 5000
 _REL = re.compile(r"^(\d+)([smhdw])$")
@@ -161,8 +166,8 @@ def mimir_schema(args):
     metrics = metrics if metrics_ok else []
     # A failed metric fetch surfaces as truncation: absence is then UNDETERMINED (cards degrade to
     # "unknown"), never a confident "unavailable" derived from an empty list.
-    out = {"version": version, "metrics": metrics[:500], "labels": labels[:200],
-           "truncated": (not metrics_ok) or len(metrics) > 500 or len(labels) > 200}
+    out = {"version": version, "metrics": metrics[:SCHEMA_METRIC_CAP], "labels": labels[:200],
+           "truncated": (not metrics_ok) or len(metrics) > SCHEMA_METRIC_CAP or len(labels) > 200}
     # Same rationale as prometheus_schema: caller-named metrics are decided by local membership in
     # the full un-capped in-memory list — definitive, zero extra network calls. A failed bulk fetch
     # skips this (nothing decided) and `truncated` degrades absence to "unknown".

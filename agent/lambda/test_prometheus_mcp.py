@@ -167,10 +167,10 @@ class TestSchema(_Base):
         self.assertEqual(b["version"],"2.48.0")  # captured for version-aware DSL
 
     def test_schema_probe_metrics_decides_names_past_the_cap(self):
-        # 501 names trip the alphabetical cap; probe_metrics names are decided by LOCAL membership
+        # cap+1 names trip the alphabetical cap; probe_metrics names are decided by LOCAL membership
         # in the full in-memory list (no per-name network calls) — present names past the cap merge
         # into `metrics`, and EVERY requested (valid) name lands in `probed` as definitive.
-        many = [f"m{i:04d}" for i in range(501)] + ["up"]
+        many = [f"m{i:04d}" for i in range(pm.SCHEMA_METRIC_CAP + 1)] + ["up"]
         seq_len = {"n": 0}
 
         def fake(method, url, headers=None, body=None, timeout=None):

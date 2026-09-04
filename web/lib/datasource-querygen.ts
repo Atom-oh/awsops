@@ -48,7 +48,7 @@ export function buildQueryGenSystem(lang: string, schemaBlock: string): string {
     `Output ONLY the query — no explanation, no prose, no commentary, no multiple queries. A single fenced code block is allowed but optional.`,
     `Use ONLY the table, column, metric, and label names that appear in the schema below. Never invent names.`,
     lang === 'PromQL'
-      ? `Prefer RAW metric names over recording-rule names (names containing ':') unless the schema lists the rule. When an arithmetic expression combines two vectors, both sides MUST carry matching labels — aggregate both sides the same way (e.g. sum by (instance)(...) on both), never mix a pre-aggregated rule with a raw per-instance metric.`
+      ? `Use RAW metric names exactly as listed. NEVER write a recording-rule style name (any name containing ':' such as ':node_memory_MemAvailable_bytes:sum') unless that exact name appears in the schema. When an arithmetic expression combines two vectors, both sides MUST carry matching labels — aggregate both sides the same way (e.g. sum by (instance)(...) on both), never mix a pre-aggregated rule with a raw per-instance metric.`
       : '',
     isSql
       ? `The query MUST be read-only: it must START with SELECT, WITH, SHOW, or DESCRIBE. NEVER write INSERT/UPDATE/ALTER/DROP/CREATE/DELETE/TRUNCATE/SET/SYSTEM, and NEVER use table functions (url/file/remote/s3/mysql/postgresql/...). Do not add explanation or a leading comment.`
@@ -199,6 +199,18 @@ export function unknownPromqlNames(query: string, metricNames: ReadonlySet<strin
   return tokens.filter((t) => !metricNames.has(t));
 }
 
+/** Recording-rule core: strip the leading ':' and everything from the next ':' on
+ *  (`:node_memory_MemAvailable_bytes:sum` → `node_memory_MemAvailable_bytes`). */
+export function ruleCore(name: string): string {
+  return name.replace(/^:+/, '').replace(/:.*$/, '');
+}
+
+/** Unknown tokens whose rule-core is EXACTLY a cached metric — a high-confidence correction that
+ *  is safe even on a truncated cache (the target metric is provably present). */
+export function confidentNearMisses(unknown: string[], metricNames: ReadonlySet<string>): string[] {
+  return [...new Set(unknown.map(ruleCore).filter((c) => c && metricNames.has(c)))];
+}
+
 /** Near-miss suggestions for the retry turn: schema names whose ':'-stripped core matches the
  *  unknown token's core (the reported case: `:node_memory_MemAvailable_bytes:sum` →
  *  `node_memory_MemAvailable_bytes`). Bounded. */
@@ -243,9 +255,12 @@ export async function generateQuery(input: GenerateQueryInput): Promise<Generate
     if (unknown.length > 0) {
       // Incomplete vocabulary (connector-truncated / stale cache): a "correction" would steer
       // the model AWAY from real metrics past the cap toward alphabetical-head near-misses and
-      // then return that wrong answer clean — so NO retry: return the draft with the soft
-      // warning (the connector is the runtime authority; the user reviews before running).
-      if (input.vocabularyComplete === false) {
+      // then return that wrong answer clean — so NO retry UNLESS the fix is provable: an unknown
+      // recording-rule name whose raw core IS a cached metric (the reported
+      // `:node_memory_MemAvailable_bytes:sum` → `node_memory_MemAvailable_bytes`) is a
+      // high-confidence correction regardless of truncation. Otherwise return the draft with
+      // the soft warning (the connector is the runtime authority; the user reviews first).
+      if (input.vocabularyComplete === false && confidentNearMisses(unknown, anchor).length === 0) {
         return {
           query,
           warning: `names not found in this datasource's cached schema: ${unknown.join(', ')}`

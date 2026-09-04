@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildQueryGenSystem, extractQuery, looksReadOnlySql, looksLikeProse, stripLeadingSqlComments, generateQuery, unknownPromqlNames, nearMissCandidates, type QueryGenSend } from './datasource-querygen';
+import { buildQueryGenSystem, extractQuery, looksReadOnlySql, looksLikeProse, stripLeadingSqlComments, generateQuery, unknownPromqlNames, nearMissCandidates, ruleCore, confidentNearMisses, type QueryGenSend } from './datasource-querygen';
 
 describe('buildQueryGenSystem', () => {
   it('injects schema as DATA and forbids prose/markdown answers', () => {
@@ -211,5 +211,37 @@ describe('generateQuery PromQL anchoring — ADVISORY semantics (round 2)', () =
     const send: QueryGenSend = async () => 'sum(up{job="x"';
     await expect(generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames: ['up'] }))
       .rejects.toThrow(/unbalanced braces/);
+  });
+});
+
+describe('confident near-miss on an INCOMPLETE vocabulary (owner re-test follow-up)', () => {
+  it('ruleCore / confidentNearMisses', () => {
+    expect(ruleCore(':node_memory_MemAvailable_bytes:sum')).toBe('node_memory_MemAvailable_bytes');
+    expect(ruleCore('node_memory_MemTotal_bytes')).toBe('node_memory_MemTotal_bytes');
+    const names = new Set(['node_memory_MemAvailable_bytes', 'up']);
+    expect(confidentNearMisses([':node_memory_MemAvailable_bytes:sum', ':nope:sum'], names)).toEqual(['node_memory_MemAvailable_bytes']);
+  });
+  it('truncated cache BUT the rule core is a cached metric → the corrective retry DOES run (the reported query gets fixed)', async () => {
+    let n = 0;
+    const send: QueryGenSend = async (_s, user) => {
+      n += 1;
+      if (n === 1) return '(1 - :node_memory_MemAvailable_bytes:sum / node_memory_MemTotal_bytes) * 100';
+      expect(user).toContain('Did you mean: node_memory_MemAvailable_bytes');
+      return 'topk(10, (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100)';
+    };
+    const out = await generateQuery({
+      nl: '메모리 사용률이 높은 인스턴스', lang: 'PromQL', isSql: false, send, schemaBlock: 's',
+      metricNames: ['node_memory_MemAvailable_bytes', 'node_memory_MemTotal_bytes'], vocabularyComplete: false,
+    });
+    expect(n).toBe(2);
+    expect(out.query).toContain('node_memory_MemAvailable_bytes /');
+    expect(out.warning).toBeUndefined();
+  });
+  it('truncated cache and NO provable near-miss → still no retry, soft warning', async () => {
+    let n = 0;
+    const send: QueryGenSend = async () => { n += 1; return ':something_else:sum'; };
+    const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames: ['up'], vocabularyComplete: false });
+    expect(n).toBe(1);
+    expect(out.warning).toContain('truncated or stale');
   });
 });

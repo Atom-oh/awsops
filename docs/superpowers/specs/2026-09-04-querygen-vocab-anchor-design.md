@@ -111,3 +111,23 @@ Explore path never did.
   round-1 sentence ("truncation skips the gate", the `>499` figure) now states the advisory
   truth; Context lists three paths (the §D bullet added); the bolded Decision scopes the
   ready-0/flag/dry-run condition to §B·§C with an explicit §D carve-out.
+
+## Owner re-test follow-up (batch 48) — "아직 개선 안된거 같아"
+
+Re-tested on /integrations/datasources/472 after #296 deployed: the chip still produced the
+recording-rule query. Two stacked root causes the advisory gate could not touch:
+1. **The prompt never contained the right metrics.** `prioritizeSchemaForQuery` tokenized NL
+   with `[^a-z0-9_]+` — a KOREAN request yields ZERO terms, so the alphabetical head of the
+   metric list filled the ~80-name prompt block and the model answered from world knowledge.
+   Fix: `nlSearchTerms` expands a curated Korean ops vocabulary (`KO_METRIC_TERMS`: 메모리→
+   memory/mem, 사용률→usage/utilization/used, 인스턴스→instance/node, …) into the substring
+   terms the ranking already uses; the prompt also forbids ':'-style rule names outright.
+2. **The cache itself lacked `node_*`.** The connectors capped the schema at the first 500
+   alphabetical names; kube-prometheus stacks have thousands, so `node_memory_*` was absent
+   from BOTH the prompt and the anchor — and the round-3 rule (no retry on a truncated cache)
+   then left the wrong draft untouched. Fixes: `SCHEMA_METRIC_CAP = 3000` in prometheus/mimir
+   connectors (≈120KB JSON, inside the 256KB cache row); the generate route background-refreshes a
+   cache that is truncated at ≤500 names (a snapshot from the old cap); and a truncated cache no
+   longer suppresses the retry when the fix is PROVABLE — an unknown rule name whose raw core is a
+   cached metric (`confidentNearMisses`) is corrected with the suggestion regardless of truncation.
+Deploy: agent connector zips (terraform apply) + web.

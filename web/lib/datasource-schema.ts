@@ -90,11 +90,41 @@ export function isSchemaStale(fetchedAt: string | null | undefined, now: number 
  * is stable, so equal-scored names keep their original (alphabetical) order, and a query that matches
  * nothing leaves the order unchanged (same as before). Non-array / non-metric schemas pass through.
  */
+// Korean ops vocabulary → the English substrings metric names actually carry. Without this a
+// Korean NL request ("메모리 사용률이 높은 인스턴스") tokenizes to ZERO terms, the alphabetical
+// head of the metric list fills the prompt, and the model answers from world knowledge (a
+// kube-prometheus recording rule the target never had — the reported '메모리 사용률' bug).
+// Curated, small, and additive: unknown Korean words simply contribute nothing.
+export const KO_METRIC_TERMS: Readonly<Record<string, readonly string[]>> = {
+  메모리: ['memory', 'mem'], 씨피유: ['cpu'], 디스크: ['disk', 'filesystem', 'fs'],
+  네트워크: ['network', 'net'], 트래픽: ['network', 'bytes', 'receive', 'transmit'],
+  사용률: ['usage', 'utilization', 'used'], 사용량: ['usage', 'used', 'bytes'],
+  인스턴스: ['instance', 'node'], 노드: ['node'], 파드: ['pod', 'container'], 포드: ['pod'],
+  컨테이너: ['container'], 서비스: ['service'], 네임스페이스: ['namespace'],
+  에러: ['error', 'errors', 'failed'], 오류: ['error', 'errors', 'failed'], 실패: ['failed', 'failure', 'errors'],
+  요청: ['request', 'requests'], 응답시간: ['duration', 'latency', 'seconds'], 지연: ['latency', 'duration'],
+  재시작: ['restart', 'restarts'], 다운: ['up'], 타깃: ['up', 'scrape'], 타겟: ['up', 'scrape'],
+  로그: ['log', 'logs'], 큐: ['queue'], 연결: ['connection', 'connections'], 스로틀: ['throttl'],
+  디플로이먼트: ['deployment'], 볼륨: ['volume', 'filesystem'], 스토리지: ['storage', 'filesystem'],
+  가용: ['available', 'avail'], 여유: ['free', 'available'], 부하: ['load'], 평균: ['avg', 'average'],
+};
+
+/** NL → lowercase search terms: ASCII identifier tokens (≥3 chars) plus the English expansions of
+ *  any Korean ops words the request contains (substring match on the Korean, so particles like
+ *  '메모리가'/'사용률이' still hit). Exported for tests. */
+export function nlSearchTerms(nl: string): string[] {
+  const lower = (nl || '').toLowerCase();
+  const ascii = lower.split(/[^a-z0-9_]+/).filter((t) => t.length >= 3);
+  const ko: string[] = [];
+  for (const [word, expansions] of Object.entries(KO_METRIC_TERMS)) {
+    if (lower.includes(word)) ko.push(...expansions);
+  }
+  return Array.from(new Set([...ascii, ...ko]));
+}
+
 export function prioritizeSchemaForQuery(schema: unknown, nl: string): unknown {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
-  const terms = Array.from(
-    new Set((nl || '').toLowerCase().split(/[^a-z0-9_]+/).filter((t) => t.length >= 3)),
-  );
+  const terms = nlSearchTerms(nl);
   if (!terms.length) return schema;
   const s = schema as Record<string, unknown>;
   const nameOf = (x: unknown) => (typeof x === 'string' ? x : ((x as { name?: string })?.name ?? '')).toLowerCase();

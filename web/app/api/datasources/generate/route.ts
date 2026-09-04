@@ -89,7 +89,12 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
       const block = render(own.schema, own.kind);
       if (block) {
         // Lazy refresh: cache hit but stale → refresh in the background (next lookup is fresh), serve now.
-        if (hasId && ds && isSchemaStale(own.fetched_at)) refreshInBackground(accountId, ds, id, kind);
+        // ALSO refresh a cache that was truncated under the connectors' former 500-name cap (now
+        // 3000): such a snapshot lacks whole metric families (node_*/kube_*) the prompt needs —
+        // one background re-introspect brings the fuller list on the next request.
+        const names = schemaMetricNames(own.schema);
+        const truncatedUnderOldCap = Boolean((own.schema as { truncated?: unknown })?.truncated) && names.length <= 500;
+        if (hasId && ds && (isSchemaStale(own.fetched_at) || truncatedUnderOldCap)) refreshInBackground(accountId, ds, id, kind);
         // FULL cached metric list (not the ~80-name rendered block) — the querygen anchor;
         // an in-block-only anchor falsely rejected real metrics past the render cap.
         // vocabularyComplete: the connector's OWN truncated flag (never inferred from length)
@@ -97,7 +102,7 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
         const truncated = Boolean((own.schema as { truncated?: unknown })?.truncated);
         return {
           block,
-          metricNames: schemaMetricNames(own.schema),
+          metricNames: names,
           vocabularyComplete: !truncated && !isSchemaStale(own.fetched_at),
         };
       }

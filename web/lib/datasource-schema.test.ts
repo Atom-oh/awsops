@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
-import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale } from './datasource-schema';
+import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, nlSearchTerms } from './datasource-schema';
 
 beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); });
 
@@ -139,5 +139,24 @@ describe('isSchemaStale (lazy-refresh TTL)', () => {
   });
   it('respects a custom TTL', () => {
     expect(isSchemaStale('2026-06-18T11:00:00Z', now, 30 * 60 * 1000)).toBe(true); // 1h old > 30m TTL
+  });
+});
+
+describe('nlSearchTerms / Korean ops vocabulary (the 메모리 사용률 chip)', () => {
+  const metrics = ['ALERTS', 'aggregator_discovery_total', 'apiserver_request_total',
+    'container_memory_working_set_bytes', 'kube_pod_status_phase', 'node_memory_MemAvailable_bytes', 'node_memory_MemTotal_bytes', 'up'];
+  it('a Korean request expands to English metric substrings (particles tolerated)', () => {
+    const terms = nlSearchTerms('메모리 사용률이 높은 인스턴스');
+    expect(terms).toEqual(expect.arrayContaining(['memory', 'mem', 'usage', 'utilization', 'instance', 'node']));
+  });
+  it('floats node_memory_* / container_memory_* to the front for the reported Korean chip', () => {
+    const out = prioritizeSchemaForQuery({ metrics }, '메모리 사용률이 높은 인스턴스') as { metrics: string[] };
+    // node_memory_* match memory+mem+node (3), container_memory_* match memory+mem (2)
+    expect(out.metrics.slice(0, 2).sort()).toEqual(['node_memory_MemAvailable_bytes', 'node_memory_MemTotal_bytes']);
+    expect(out.metrics[2]).toBe('container_memory_working_set_bytes');
+    expect(out.metrics.indexOf('ALERTS')).toBeGreaterThan(2);
+  });
+  it('unmapped Korean still leaves the order unchanged', () => {
+    expect((prioritizeSchemaForQuery({ metrics }, '조회') as { metrics: string[] }).metrics).toEqual(metrics);
   });
 });
