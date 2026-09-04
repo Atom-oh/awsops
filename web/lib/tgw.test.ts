@@ -158,16 +158,23 @@ describe('tgwDetails (gap L168)', () => {
 });
 
 describe('IAM wiring guard (the "new SDK call, forgotten IAM action" class)', () => {
-  it('every EC2 command tgw.ts IMPORTS is granted as an Allow action in workload.tf', async () => {
+  // SCOPE: this is a missing-GRANT guard, not an ADR-005 read-only-invariant guard — a
+  // mutating command would need its own review; the read-only assertion below merely makes a
+  // Modify*/Create*/Delete* import turn the test red so that review actually happens.
+  it('every EC2 command tgw.ts IMPORTS is read-only and granted as an Allow action in workload.tf', async () => {
     const { readFileSync } = await import('node:fs');
     const { join } = await import('node:path');
     // Derive the command list from the module SOURCE (not a hardcoded copy): a 5th SDK
     // command added to tgw.ts without an IAM grant must turn this red.
     const src = readFileSync(join(__dirname, 'tgw.ts'), 'utf8');
     const commands = [...new Set(
-      [...src.matchAll(/\b((?:Describe|Search)[A-Za-z]+)Command\b/g)].map((m) => m[1]),
+      [...src.matchAll(/\b([A-Z][A-Za-z]+)Command\b/g)].map((m) => m[1]),
     )];
     expect(commands.length).toBeGreaterThanOrEqual(4); // sanity: the scan actually found them
+    // read-only verb allowlist: any other verb here is a policy question, not a wiring fix
+    for (const cmd of commands) {
+      expect(cmd, `${cmd} is not a read-only EC2 verb — tgw.ts must stay read-only`).toMatch(/^(Describe|Search|List|Get)/);
+    }
     const tf = readFileSync(
       join(__dirname, '..', '..', 'terraform', 'v2', 'foundation', 'workload.tf'), 'utf8',
     );
