@@ -158,19 +158,90 @@ describe('tgwDetails (gap L168)', () => {
 });
 
 describe('IAM wiring guard (the "new SDK call, forgotten IAM action" class)', () => {
-  it('every TGW describe this module issues is granted in workload.tf', async () => {
+  it('every EC2 command tgw.ts IMPORTS is granted as an Allow action in workload.tf', async () => {
     const { readFileSync } = await import('node:fs');
     const { join } = await import('node:path');
+    // Derive the command list from the module SOURCE (not a hardcoded copy): a 5th SDK
+    // command added to tgw.ts without an IAM grant must turn this red.
+    const src = readFileSync(join(__dirname, 'tgw.ts'), 'utf8');
+    const commands = [...new Set(
+      [...src.matchAll(/\b((?:Describe|Search)[A-Za-z]+)Command\b/g)].map((m) => m[1]),
+    )];
+    expect(commands.length).toBeGreaterThanOrEqual(4); // sanity: the scan actually found them
     const tf = readFileSync(
       join(__dirname, '..', '..', 'terraform', 'v2', 'foundation', 'workload.tf'), 'utf8',
     );
-    for (const action of [
-      'ec2:DescribeTransitGatewayAttachments',
-      'ec2:DescribeTransitGatewayVpcAttachments',
-      'ec2:DescribeTransitGatewayRouteTables',
-      'ec2:SearchTransitGatewayRoutes',
-    ]) {
-      expect(tf, `${action} missing from the web task role`).toContain(`"${action}"`);
+    // Match quoted Allow-list entries only ("ec2:X",) — a mention in a comment or prose
+    // doesn't count. (Statement-level scoping would need real HCL parsing; the task role's
+    // EC2 actions live in a single enumerated statement, and a quoted action string in this
+    // file is an action entry by construction.)
+    for (const cmd of commands) {
+      expect(tf, `ec2:${cmd} missing from workload.tf`).toMatch(new RegExp(`"ec2:${cmd}",`));
     }
+  });
+});
+
+describe('options incomplete-view disclosure (round 2)', () => {
+  it('a leftover NextToken after the page cap is disclosed as incomplete, NOT success', async () => {
+    ec2Send.mockImplementation(async (cmd: unknown) => {
+      const c = cmd as Cmd;
+      switch (c.constructor.name) {
+        case 'DescribeTransitGatewayAttachmentsCommand':
+          return { TransitGatewayAttachments: [] };
+        case 'DescribeTransitGatewayVpcAttachmentsCommand':
+          // ALWAYS returns a NextToken: the 5-page cap exits with a token left over
+          return { TransitGatewayVpcAttachments: [], NextToken: 'more' };
+        case 'DescribeTransitGatewayRouteTablesCommand':
+          return { TransitGatewayRouteTables: [] };
+        default: throw new Error('unexpected');
+      }
+    });
+    const { tgwDetails } = await import('./tgw');
+    const d = await tgwDetails([{ id: 'tgw-1' }]);
+    const pages = ec2Send.mock.calls.filter(([cmd]) => (cmd as Cmd).constructor.name === 'DescribeTransitGatewayVpcAttachmentsCommand').length;
+    expect(pages).toBe(5); // capped
+    expect(d.optionsDegradedRegions).toEqual(['ap-northeast-2']); // truncation disclosed
+  });
+
+  it('a page-N failure KEEPS already-fetched pages and still discloses the region', async () => {
+    let call = 0;
+    ec2Send.mockImplementation(async (cmd: unknown) => {
+      const c = cmd as Cmd;
+      switch (c.constructor.name) {
+        case 'DescribeTransitGatewayAttachmentsCommand':
+          return { TransitGatewayAttachments: [
+            { TransitGatewayAttachmentId: 'att-1', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-1', State: 'available' },
+          ] };
+        case 'DescribeTransitGatewayVpcAttachmentsCommand': {
+          call += 1;
+          if (call === 1) return { TransitGatewayVpcAttachments: [
+            { TransitGatewayAttachmentId: 'att-1', Options: { DnsSupport: 'enable', Ipv6Support: 'disable', ApplianceModeSupport: 'disable' } },
+          ], NextToken: 't2' };
+          throw new Error('Throttling'); // page 2 dies
+        }
+        case 'DescribeTransitGatewayRouteTablesCommand':
+          return { TransitGatewayRouteTables: [] };
+        default: throw new Error('unexpected');
+      }
+    });
+    const { tgwDetails } = await import('./tgw');
+    const d = await tgwDetails([{ id: 'tgw-1' }]);
+    // page-1 options survive the page-2 throttle…
+    expect(d.attachments[0].options).toEqual({ dnsSupport: 'enable', ipv6Support: 'disable', applianceModeSupport: 'disable' });
+    // …and the region is still disclosed incomplete
+    expect(d.optionsDegradedRegions).toEqual(['ap-northeast-2']);
+  });
+
+  it('a VPC-type row the (successful) options response never returned is disclosed (RAM-shared caveat)', async () => {
+    mockRegion({
+      attachments: [
+        { TransitGatewayAttachmentId: 'att-shared', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-x', State: 'available' },
+      ],
+      vpcAttachments: [], // describe succeeded but returned nothing for this VPC row
+    });
+    const { tgwDetails } = await import('./tgw');
+    const d = await tgwDetails([{ id: 'tgw-1' }]);
+    expect(d.attachments[0].options).toBeNull();
+    expect(d.optionsDegradedRegions).toEqual(['ap-northeast-2']); // incomplete, not "non-VPC"
   });
 });

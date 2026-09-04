@@ -46,7 +46,13 @@ export function TgwSection({ rows }: { rows: Row[] }) {
           setDetailErr('');
         }
       })
-      .catch((e) => { if (live) setDetailErr(String(e instanceof Error ? e.message : e)); });
+      .catch((e) => {
+        if (live) {
+          setDetailErr(String(e instanceof Error ? e.message : e));
+          // a stale degraded-region list must not stand next to rows it no longer describes
+          setOptionsDegraded([]);
+        }
+      });
     return () => { live = false; };
   }, [key]);
 
@@ -137,7 +143,7 @@ export function TgwSection({ rows }: { rows: Row[] }) {
 
       <Card
         title={tt('어태치먼트')}
-        subtitle={`${attachments.length} attachments · ${tt('available 아닌 상태는 위험으로 표시')} · ${tt('Options는 VPC 어태치먼트만 제공')}${optionsDegraded.length ? ` · ${tt('일부 리전의 Options 조회 실패 — 해당 리전 값은 누락')} (${optionsDegraded.join(', ')})` : ''}`}
+        subtitle={`${attachments.length} attachments · ${tt('available 아닌 상태는 위험으로 표시')} · ${tt('Options는 VPC 어태치먼트만 제공')}${optionsDegraded.length ? ` · ${tt('일부 리전의 Options 불완전(조회 실패·절단·미반환) — 해당 리전의 — 값은 확정 아님')} (${optionsDegraded.join(', ')})` : ''}`}
         padded={false}
       >
         {detailErr && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('상세 조회 실패')}: {detailErr}</div>}

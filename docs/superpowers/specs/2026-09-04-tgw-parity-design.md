@@ -75,3 +75,25 @@ tables with routes).
   the sync lambda redeploys (CHANGELOG-disclosed transitional state); RAM-shared cross-account
   VPC attachments may not return options via the per-type describe — if observed, they land
   under the same disclosed-null path, not a fabricated value.
+
+## Round-2 corrections (review-driven)
+
+- **The pagination cap can no longer report a truncated view as success (the gate MAJOR)** —
+  the round-1 5-page loop exited with a leftover NextToken and `optionsDegraded=false`,
+  recreating exactly the silent '—' conflation this PR forbids (and contradicting the
+  CHANGELOG's "follows pagination" claim). A leftover token now marks the region's options
+  incomplete; test pins 5 pages + disclosure.
+- Minors closed: a page-N failure KEEPS the already-fetched pages while still disclosing the
+  region (a throttle on page 3 no longer blanks pages 1–2 into the 4-minute TTL); a VPC-type
+  row the successful options response never returned (the RAM-shared cross-account caveat) is
+  reconciled into the same disclosure — the spec's earlier "lands under the disclosed-null
+  path" claim is now actually true; the TgwSection catch clears the stale degraded-region
+  list; the catch logs the error NAME server-side (AccessDenied vs Throttling matters in the
+  merge→apply window; never the raw message); the IAM wiring guard derives the command list
+  from tgw.ts's own source (a 5th SDK command without a grant turns it red) and matches
+  quoted action entries rather than any substring; the subtitle wording covers all three
+  incomplete causes ('조회 실패·절단·미반환').
+- Recorded (accepted, out of scope): region-level disclosure is not row-attributable (no
+  region column on the attachments table — the subtitle bounds the ambiguity); member-account
+  TGWs under-report through this whole layer (pre-existing host-credential pattern across
+  TgwSection, not an options-specific defect — follow-up issue candidate).

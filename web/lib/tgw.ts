@@ -106,26 +106,36 @@ async function tgwRegionDetails(region: string, ids: string[]): Promise<TgwDetai
       // VPC-attachment options (gap L168): read-only describes per region — options are only
       // exposed on the per-type API. NextToken is followed (the general attachment list's
       // MaxResults cap is pre-existing; without pagination HERE a displayed row past page 1
-      // would silently read '—'). A denied/failed call degrades to no options WITHOUT failing
-      // the region — disclosed via optionsDegraded, never conflated with "not a VPC attachment".
+      // would silently read '—'). EVERY incomplete-view path is disclosed as incomplete —
+      // never conflated with "not a VPC attachment": a failed page (already-fetched pages are
+      // KEPT — a throttle on page 3 must not blank pages 1-2), a leftover NextToken after the
+      // page cap, and (reconciled below) a VPC-type row the response never returned.
       (async () => {
         const out: TransitGatewayVpcAttachment[] = [];
         let token: string | undefined;
-        for (let page = 0; page < 5; page += 1) {
-          const r = await ec2(region).send(new DescribeTransitGatewayVpcAttachmentsCommand({
-            Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 200,
-            ...(token ? { NextToken: token } : {}),
-          }));
-          out.push(...(r.TransitGatewayVpcAttachments ?? []));
-          token = r.NextToken;
-          if (!token) break;
+        try {
+          for (let page = 0; page < 5; page += 1) {
+            const r = await ec2(region).send(new DescribeTransitGatewayVpcAttachmentsCommand({
+              Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 200,
+              ...(token ? { NextToken: token } : {}),
+            }));
+            out.push(...(r.TransitGatewayVpcAttachments ?? []));
+            token = r.NextToken;
+            if (!token) break;
+          }
+          // leftover token after the page cap = truncated view, NOT success
+          return { list: out, incomplete: Boolean(token) };
+        } catch (e) {
+          // error NAME only (AccessDenied vs Throttling matters in the merge→apply window;
+          // never the raw message — it can carry payload)
+          console.warn(`[tgw] options describe failed (${region}):`, e instanceof Error ? e.name : 'unknown');
+          return { list: out, incomplete: true };
         }
-        return out;
-      })().catch(() => null), // null = the OPTIONS describe failed (≠ empty list)
+      })(),
     ]);
-    const optionsDegraded = vpcAtt === null;
+    let optionsDegraded = vpcAtt.incomplete;
     const optById = new Map<string, TgwAttachment['options']>();
-    for (const v of vpcAtt ?? []) {
+    for (const v of vpcAtt.list) {
       if (!v.TransitGatewayAttachmentId || !v.Options) continue;
       optById.set(v.TransitGatewayAttachmentId, {
         dnsSupport: v.Options.DnsSupport ?? null,
@@ -165,6 +175,12 @@ async function tgwRegionDetails(region: string, ids: string[]): Promise<TgwDetai
         };
       }),
     );
+    // Reconciliation: a VPC-TYPE attachment the (successful) options response never returned
+    // (e.g. a RAM-shared cross-account attachment) is an INCOMPLETE options view, not a
+    // non-VPC row — disclose it the same way.
+    if (!optionsDegraded && attachments.some((a) => a.resourceType === 'vpc' && a.options === null)) {
+      optionsDegraded = true;
+    }
     return {
       attachments, routeTables,
       ...(optionsDegraded ? { optionsDegradedRegions: [region] } : {}),
