@@ -690,6 +690,14 @@ export const TERMS: Record<string, Pair> = {
   '에러 로그 수(5분)': { en: 'Error log count (5m)', zh: '错误日志数（5 分钟）', ja: 'エラーログ数（5 分）' },
   '최근 에러 트레이스': { en: 'Recent error traces', zh: '最近的错误跟踪', ja: '直近のエラートレース' },
   '컨테이너 CPU 스로틀링': { en: 'Container CPU throttling', zh: '容器 CPU 节流', ja: 'コンテナ CPU スロットリング' },
+  'Pod 라이트사이징': { en: 'Pod right-sizing', zh: 'Pod 规格优化', ja: 'Pod ライトサイジング' },
+  'Pod 재시작': { en: 'Pod restarts', zh: 'Pod 重启', ja: 'Pod 再起動' },
+  'Panic·Fatal 로그': { en: 'Panic · Fatal logs', zh: 'Panic·Fatal 日志', ja: 'Panic・Fatal ログ' },
+  'AI 생성 신호': { en: 'AI-generated signal', zh: 'AI 生成信号', ja: 'AI 生成シグナル' },
+  '● 연결됨': { en: '● connected', zh: '● 已连接', ja: '● 接続済み' },
+  '○ 미설정': { en: '○ unconfigured', zh: '○ 未配置', ja: '○ 未設定' },
+  '기본으로 설정': { en: 'set default', zh: '设为默认', ja: 'デフォルトに設定' },
+  '★ 기본': { en: '★ default', zh: '★ 默认', ja: '★ デフォルト' },
   // datasource-render.ts result notes (dynamic tt(note) — lockstep with lib/datasource-render.ts)
   '시계열 포인트 없음': { en: 'No time-series points', zh: '无时序数据点', ja: '時系列ポイントなし' },
   '로그 없음': { en: 'No logs', zh: '无日志', ja: 'ログなし' },
@@ -1598,8 +1606,8 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^(\d+)건 · (.+)$/, en: (m) => `${m[1]} calls · ${m[2]}`, zh: (m) => `${m[1]} 次 · ${m[2]}`, ja: (m) => `${m[1]} 件 · ${m[2]}` },
   { re: /^총 비용 \((.+)\)$/, en: (m) => `Total cost (${m[1]})`, zh: (m) => `总费用 (${m[1]})`, ja: (m) => `総コスト (${m[1]})` },
   { re: /^상위 (\d+)개 시리즈만 차트에 표시 \(총 (\d+)\)$/, en: (m) => `Only the top ${m[1]} series are charted (of ${m[2]})`, zh: (m) => `图表仅显示前 ${m[1]} 个序列（共 ${m[2]}）`, ja: (m) => `上位 ${m[1]} 系列のみチャート表示（全 ${m[2]}）` },
-  { re: /^지원하지 않는 데이터소스: (.+)$/, en: (m) => `Unsupported datasource: ${m[1]}`, zh: (m) => `不支持的数据源：${m[1]}`, ja: (m) => `未対応のデータソース: ${m[1]}` },
-  { re: /^결과 파싱 실패: (.+)$/, en: (m) => `Failed to parse the result: ${m[1]}`, zh: (m) => `结果解析失败：${m[1]}`, ja: (m) => `結果の解析に失敗: ${m[1]}` },
+  { re: /^지원하지 않는 데이터소스: ([\s\S]+)$/, en: (m) => `Unsupported datasource: ${m[1]}`, zh: (m) => `不支持的数据源：${m[1]}`, ja: (m) => `未対応のデータソース: ${m[1]}` },
+  { re: /^결과 파싱 실패: ([\s\S]+)$/, en: (m) => `Failed to parse the result: ${m[1]}`, zh: (m) => `结果解析失败：${m[1]}`, ja: (m) => `結果の解析に失敗: ${m[1]}` },
   { re: /^로그 ([\d,]+)줄 — 최신순, 표시 상한 적용 가능$/, en: (m) => `${m[1]} log lines — newest first, a display cap may apply`, zh: (m) => `${m[1]} 行日志 — 最新在前，可能应用显示上限`, ja: (m) => `ログ ${m[1]} 行 — 新しい順、表示上限が適用される場合あり` },
   // inventory donut titles: '<label> 분포' with the optional sample qualifier (gap L186/L207).
   // ja keeps the pre-existing 'の分布' phrasing (this rule supersedes the older plain

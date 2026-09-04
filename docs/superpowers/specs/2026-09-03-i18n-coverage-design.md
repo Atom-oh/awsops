@@ -53,7 +53,7 @@ Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L186 (cloudfront i18n)
 - **The guard is an honest ratchet and the residue is closed (the gate MAJOR)** — the scan is
   recursive (readdirSync — no fs.globSync Node/types floor question; `[id]/page.tsx` now
   included) and also matches interpolation-free template literals. The dynamic tt(variable)
-  paths are covered by REGISTERING their finite catalogs (card_catalog.py's 9 titles,
+  paths are covered by REGISTERING their finite catalogs (card_catalog.py's 11 titles (as completed by rounds 2–3),
   datasource-render.ts's 6 notes — lockstep comments point both ways), a RULE covers the
   parameterized series-cap note and the log-view caption, and ExplorePanel's raw
   `result.note` renders are tt()-wrapped. The guard's comment/spec/CHANGELOG now say
@@ -81,3 +81,22 @@ Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L186 (cloudfront i18n)
   pre-translated suffix — English labels + a registered TERM mean nothing renders Korean,
   only a zh/ja paren-style inconsistency; unify opportunistically next time those lines
   change.
+
+## Round-3 corrections (review-driven)
+
+- **The signal-catalog lockstep is complete (the gate MAJOR)** — round 2 registered 9 of the
+  13 diagnosis signal titles; 'Pod 라이트사이징', 'Pod 재시작', 'Panic·Fatal 로그', and the
+  flag-gated 'AI 생성 신호' were missing (the DiagSignalChips tt(s.title) path shipped Korean
+  chips on the most common kinds — the same catalog-miss class round 2 fixed for the
+  ClickHouse cards). All 13 + the generated-signal title are registered, and the two Python
+  catalogs now carry REVERSE lockstep comments pointing at i18n-terms.ts (making the
+  "lockstep comments point both ways" claim true).
+- **The L206 residue is closed (the gate MAJOR)** — the status/default chips
+  ('● connected'/'○ unconfigured'/'set default'/'★ default') are localized via Korean sources;
+  the ko/zh/ja guides that instructed by the OLD English button labels (Add Datasource /
+  Test Connection, the observability guide's Explore link) now name the rendered labels
+  (the en guides already matched).
+- Minors: the two failure-note RULES accept multi-line messages ([\s\S]+); a positive
+  '편집' assertion joins the admin-case test (the read-only negative could pass vacuously);
+  recorded: toLocaleString('en-US') pins the ko caption's grouping too (conscious trade so
+  the RULE always matches); a length guard in applyTerms stays a nice-to-have.

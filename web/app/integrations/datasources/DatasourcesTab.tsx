@@ -128,9 +128,9 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                 )}
                 <td className="px-3 py-2 text-ink-500">{i.authType ?? 'none'}</td>
                 <td className="px-3 py-2">
-                  <span className={i.connected ? 'text-emerald-600' : 'text-amber-600'}>{i.connected ? '● connected' : '○ unconfigured'}</span>
+                  <span className={i.connected ? 'text-emerald-600' : 'text-amber-600'}>{i.connected ? tt('● 연결됨') : tt('○ 미설정')}</span>
                 </td>
-                <td className="px-3 py-2">{i.isDefault ? <span className="text-amber-600">★ default</span> : (canManage && <button className="text-[12px] text-brand-600 hover:underline" onClick={() => onSetDefault(i)} disabled={busyId === i.id}>set default</button>)}</td>
+                <td className="px-3 py-2">{i.isDefault ? <span className="text-amber-600">{tt('★ 기본')}</span> : (canManage && <button className="text-[12px] text-brand-600 hover:underline" onClick={() => onSetDefault(i)} disabled={busyId === i.id}>{tt('기본으로 설정')}</button>)}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
                   {/* The chat gateway path resolves each kind's DEFAULT instance (kind-mirror
                       credential) — a non-default row's diagnosis would confidently describe the

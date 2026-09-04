@@ -21,7 +21,7 @@ describe('DatasourcesTab', () => {
     render(<DatasourcesTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
     expect(screen.getByText('stg-prom')).toBeTruthy();
-    expect(screen.getByText('★ default')).toBeTruthy();
+    expect(screen.getByText('★ 기본')).toBeTruthy();
     const links = screen.getAllByText('탐색 →') as HTMLAnchorElement[];
     expect(links[0].getAttribute('href')).toBe('/integrations/datasources/1');
   });
@@ -39,6 +39,7 @@ describe('DatasourcesTab', () => {
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
     expect(screen.getByText('＋ 데이터소스 추가')).toBeTruthy();
     expect(screen.getAllByText('삭제').length).toBe(2);
+    expect(screen.getAllByText('편집').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByText('＋ 데이터소스 추가'));
     expect(screen.getByText('데이터소스 추가')).toBeTruthy();
   });
