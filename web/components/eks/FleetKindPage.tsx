@@ -459,13 +459,22 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
                     const res = serviceResources(services, pods);
                     const podFailed = clusters.filter((c) => !failed.includes(c) && svcPods[c] == null);
                     const excluded = services.length - res.length;
-                    const caption = [
-                      tt('컨테이너 요청량(request) 기준 — 실사용량 아님, Running Pod만 집계'),
+                    // exclusion/failure notes only — the unconditional basis sentence joins later,
+                    // so the zero-results branch shows a real "no services" message, not just it
+                    const notes = [
                       excluded > 0 ? `${tt('셀렉터 없음/매칭 Running Pod 없음으로 제외')}: ${excluded}` : '',
                       podFailed.length ? `${tt('Pod 조회 실패로 차트에서 제외된 클러스터')}: ${podFailed.join(', ')}` : '',
                     ].filter(Boolean).join(' · ');
+                    const caption = [tt('컨테이너 요청량(request) 기준 — 실사용량 아님, Running Pod만 집계'), notes]
+                      .filter(Boolean).join(' · ');
                     if (res.length === 0) {
-                      return <Card title="Service Resources"><div className="text-[13px] text-ink-400">{caption || tt('표시할 서비스가 없습니다')}</div></Card>;
+                      return (
+                        <Card title="Service Resources">
+                          <div className="text-[13px] text-ink-400">
+                            {tt('표시할 서비스가 없습니다')}{notes ? ` · ${notes}` : ''}
+                          </div>
+                        </Card>
+                      );
                     }
                     const label = (r: { cluster: string; namespace: string; name: string }) =>
                       okClusters.length > 1 ? `${r.cluster}/${r.namespace}/${r.name}` : `${r.namespace}/${r.name}`;

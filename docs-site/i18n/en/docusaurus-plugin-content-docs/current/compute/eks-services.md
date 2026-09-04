@@ -26,7 +26,7 @@ Visualize service type distribution with a pie chart:
 
 ### Service Resources Charts
 Two top-15 bar charts of per-service resource requests:
-- **CPU per Service (millicores)** / **Memory per Service (MiB)** — each Service's selector is joined to **Running pods** in the same (cluster, namespace) and their container requests are summed
+- **CPU per Service (millicores)** / **Memory per Service (MiB)** — each Service's selector is joined to **Running pods** in the same (cluster, namespace) and their scheduler-effective requests (max of app-container sum and init-container max, plus overhead) are summed
 - Values are requests (reservations), not live usage (stated in the caption)
 - Services without a selector (ExternalName / manual Endpoints) or with no matching Running pods are **excluded** rather than charted as 0, and a cluster whose pods fetch failed is excluded from the charts with its name shown in the caption
 

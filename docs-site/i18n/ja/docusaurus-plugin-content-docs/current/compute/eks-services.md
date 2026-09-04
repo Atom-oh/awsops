@@ -26,7 +26,7 @@ Kubernetes Service の一覧とネットワーク設定を確認できるペー�
 
 ### Service Resources チャート
 サービス別リソース要求量の top-15 バーチャート 2 つ:
-- **CPU per Service (millicores)** / **Memory per Service (MiB)** — 各 Service のセレクタを同じ（クラスター, ネームスペース）の **Running Pod** に結合し、コンテナ request を合算
+- **CPU per Service (millicores)** / **Memory per Service (MiB)** — 各 Service のセレクタを同じ（クラスター, ネームスペース）の **Running Pod** に結合し、スケジューラ有効要求量（アプリコンテナ合計と init コンテナ最大値の大きい方 + overhead）を合算
 - 値は要求量（予約）であり実使用量ではありません（キャプションに明記）
 - セレクタのないサービス（ExternalName／手動 Endpoints）や一致する Running Pod のないサービスは 0 として描画せず**除外**され、Pod 取得に失敗したクラスターはチャートから除外されキャプションに名前が表示されます
 

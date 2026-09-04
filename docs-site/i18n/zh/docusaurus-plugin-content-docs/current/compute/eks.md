@@ -48,7 +48,7 @@ import Screenshot from '@site/src/components/Screenshot';
 ### 节点详情视图
 点击节点卡片可跳转到详情页面：
 - **CPU/Memory/Pod Info 卡片**：Capacity、Allocatable、Requested、Available
-- **ENI 列表**：各网络接口的 IP 分配
+- **ENI 列表**：各网络接口的 IP 分配 + 实例网络流量磁贴（In/Out 字节·数据包 — 已完结的上一小时桶的累计与平均速率；CloudWatch 没有按 ENI 的维度，因此为实例级数值）
 - **Pods 表格**：在该节点上运行的 Pod 列表
 
 ### 可视化图表
