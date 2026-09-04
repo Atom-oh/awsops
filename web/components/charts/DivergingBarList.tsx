@@ -48,9 +48,9 @@ export default function DivergingBarList({
     const a = Math.abs(Number(r.value));
     return Number.isFinite(a) && a > m ? a : m;
   }, 0);
-  // one finite-guard for BOTH the scale and the row (maxAbs filters Infinity — a row-side
-  // `|| 0` alone would still render `width: Infinity%` and a +$Infinity label)
-  const num = (v: number) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  // one finite-guard for BOTH the scale and the row (maxAbs filters Infinity). A non-finite
+  // row renders '—' with NO bar — never a confident $0 (the repo's no-fabricated-zero posture).
+  const num = (v: number): number | null => (Number.isFinite(Number(v)) ? Number(v) : null);
   const fmt = (v: number) =>
     `${v > 0 ? '+' : v < 0 ? '-' : ''}${valuePrefix}${Math.abs(v).toLocaleString()}${valueSuffix}`;
   return (
@@ -58,6 +58,15 @@ export default function DivergingBarList({
       <ul className="flex flex-col gap-2">
         {rows.map((r) => {
           const v = num(r.value);
+          if (v == null) {
+            return (
+              <li key={r.label} className="flex items-center gap-2 sm:gap-3 text-[12.5px]">
+                <span className="w-24 sm:w-36 shrink-0 truncate text-ink-600" title={r.label}>{r.label}</span>
+                <span className="h-2.5 flex-1 rounded-full bg-paper-muted" aria-hidden />
+                <span className="tabular w-28 sm:w-40 shrink-0 text-right text-ink-400">—</span>
+              </li>
+            );
+          }
           // 2% visibility floor for NONZERO values only — zero stays an empty track
           const pct = maxAbs > 0 && v !== 0 ? Math.max(2, (Math.abs(v) / maxAbs) * 100) : 0;
           return (
@@ -80,11 +89,14 @@ export default function DivergingBarList({
                   )}
                 </span>
               </span>
-              <span className="flex w-28 sm:w-40 shrink-0 items-center justify-end gap-2">
+              {/* below sm the sub figure moves to a VISIBLE second line — a title attribute
+                  never surfaces on touch devices, so it is not a mobile fallback */}
+              <span className="flex w-28 sm:w-40 shrink-0 flex-col items-end sm:flex-row sm:items-center sm:justify-end gap-0 sm:gap-2">
                 {r.sub != null && <span className="tabular hidden sm:inline text-[11px] text-ink-400">{r.sub}</span>}
                 <span className={`tabular font-semibold ${v > 0 ? 'text-negative-text' : v < 0 ? 'text-positive-text' : 'text-ink-400'}`}>
                   {fmt(v)}
                 </span>
+                {r.sub != null && <span className="tabular sm:hidden text-[10px] leading-tight text-ink-400">{r.sub}</span>}
               </span>
             </li>
           );
