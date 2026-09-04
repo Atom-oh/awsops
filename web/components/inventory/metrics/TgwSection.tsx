@@ -90,6 +90,14 @@ export function TgwSection({ rows }: { rows: Row[] }) {
       danger: (a) => a.state !== 'available',
     },
     { key: 'rtb', label: 'Route Table', mono: true, value: (a) => a.routeTableId },
+    {
+      // gap L168: v1's row-click options JSON, rendered inline. Options exist only on VPC
+      // attachments (per-type API) — other types read '—' (disclosed in the card subtitle).
+      key: 'options', label: 'Options', mono: true,
+      value: (a) => (a.options
+        ? `DNS:${a.options.dnsSupport} IPv6:${a.options.ipv6Support} Appliance:${a.options.applianceModeSupport}`
+        : null),
+    },
   ];
 
   const routeCols: MetricCol<TgwRoute>[] = [
@@ -119,7 +127,7 @@ export function TgwSection({ rows }: { rows: Row[] }) {
 
       <Card
         title={tt('어태치먼트')}
-        subtitle={`${attachments.length} attachments · ${tt('available 아닌 상태는 위험으로 표시')}`}
+        subtitle={`${attachments.length} attachments · ${tt('available 아닌 상태는 위험으로 표시')} · ${tt('Options는 VPC 어태치먼트만 제공')}`}
         padded={false}
       >
         {detailErr && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('상세 조회 실패')}: {detailErr}</div>}

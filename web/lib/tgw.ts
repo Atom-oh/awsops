@@ -2,6 +2,7 @@ import {
   EC2Client,
   DescribeTransitGatewayAttachmentsCommand,
   DescribeTransitGatewayRouteTablesCommand,
+  DescribeTransitGatewayVpcAttachmentsCommand,
   SearchTransitGatewayRoutesCommand,
 } from '@aws-sdk/client-ec2';
 
@@ -40,6 +41,9 @@ export function _resetTgwCacheForTests() { cache.clear(); inflight.clear(); clie
 export interface TgwAttachment {
   id: string; tgwId: string; resourceType: string; resourceId: string;
   state: string; routeTableId: string | null;
+  /** VPC-attachment options (gap L168 — v1's row-click options JSON). The API exposes
+   *  options per attachment TYPE; only `vpc` attachments carry them — others stay null. */
+  options: { dnsSupport: string; ipv6Support: string; applianceModeSupport: string } | null;
 }
 export interface TgwRoute {
   cidr: string; type: string; state: string;
@@ -83,18 +87,34 @@ export async function tgwDetails(tgws: { id: string; region?: string }[]): Promi
 
 async function tgwRegionDetails(region: string, ids: string[]): Promise<TgwDetails> {
   try {
-    const [att, rtb] = await Promise.all([
+    const [att, rtb, vpcAtt] = await Promise.all([
       ec2(region).send(new DescribeTransitGatewayAttachmentsCommand({
         Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 200,
       })),
       ec2(region).send(new DescribeTransitGatewayRouteTablesCommand({
         Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 50,
       })),
+      // VPC-attachment options (gap L168): one extra read-only describe per region — options
+      // are only exposed on the per-type API. A denied/failed call degrades to no options
+      // (null) without failing the whole region (attachments/routes still render).
+      ec2(region).send(new DescribeTransitGatewayVpcAttachmentsCommand({
+        Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 200,
+      })).catch(() => ({ TransitGatewayVpcAttachments: [] })),
     ]);
+    const optById = new Map<string, TgwAttachment['options']>();
+    for (const v of vpcAtt.TransitGatewayVpcAttachments ?? []) {
+      if (!v.TransitGatewayAttachmentId || !v.Options) continue;
+      optById.set(v.TransitGatewayAttachmentId, {
+        dnsSupport: v.Options.DnsSupport ?? '?',
+        ipv6Support: v.Options.Ipv6Support ?? '?',
+        applianceModeSupport: v.Options.ApplianceModeSupport ?? '?',
+      });
+    }
     const attachments: TgwAttachment[] = (att.TransitGatewayAttachments ?? []).map((a) => ({
       id: a.TransitGatewayAttachmentId ?? '', tgwId: a.TransitGatewayId ?? '',
       resourceType: a.ResourceType ?? '?', resourceId: a.ResourceId ?? '',
       state: a.State ?? '?', routeTableId: a.Association?.TransitGatewayRouteTableId ?? null,
+      options: optById.get(a.TransitGatewayAttachmentId ?? '') ?? null,
     }));
     const routeTables: TgwRouteTable[] = await Promise.all(
       (rtb.TransitGatewayRouteTables ?? []).map(async (t) => {

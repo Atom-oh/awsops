@@ -306,8 +306,14 @@ QUERIES = {
         "region",
     ),
     "transit_gateway": (
+        # gap L168 residue: the option columns (v1's list showed ASN/DNS) — all standard
+        # aws_ec2_transit_gateway columns in the pinned plugin; they populate on the next
+        # sync after the lambda redeploy (blank until then, never a fabricated value).
         "SELECT transit_gateway_id, region, account_id, transit_gateway_arn, state, owner_id, "
-        "description, creation_time, amazon_side_asn, tags "
+        "description, creation_time, amazon_side_asn, dns_support, vpn_ecmp_support, "
+        "multicast_support, auto_accept_shared_attachments, default_route_table_association, "
+        "default_route_table_propagation, association_default_route_table_id, "
+        "propagation_default_route_table_id, tags "
         "FROM aws_ec2_transit_gateway ORDER BY transit_gateway_id",
         "transit_gateway_id",
         "region",

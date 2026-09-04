@@ -1080,6 +1080,7 @@ export const TERMS: Record<string, Pair> = {
   'PacketDropCountNoRoute — >0이면 매칭 라우트 없음(라우팅 문제 신호)': { en: 'PacketDropCountNoRoute — >0 means no matching route (routing problem signal)', zh: 'PacketDropCountNoRoute — >0 表示没有匹配的路由（路由问题信号）', ja: 'PacketDropCountNoRoute — >0 ならマッチするルートなし（ルーティング問題の兆候）' },
   '어태치먼트': { en: 'Attachments', zh: '挂载', ja: 'アタッチメント' },
   'available 아닌 상태는 위험으로 표시': { en: 'States other than available are flagged as risk', zh: '非 available 状态标记为风险', ja: 'available 以外の状態は危険として表示' },
+  'Options는 VPC 어태치먼트만 제공': { en: 'Options are available for VPC attachments only', zh: 'Options 仅 VPC 附件提供', ja: 'Options は VPC アタッチメントのみ提供' },
   '상세 조회 실패': { en: 'Detail fetch failed', zh: '详情查询失败', ja: '詳細照会失敗' },
   '라우팅 테이블': { en: 'Route tables', zh: '路由表', ja: 'ルートテーブル' },
   '라우트는 active/blackhole만, 테이블당 상한 있음': { en: 'Routes limited to active/blackhole, capped per table', zh: '仅显示 active/blackhole 路由，每个表有上限', ja: 'ルートは active/blackhole のみ、テーブルごとに上限あり' },
