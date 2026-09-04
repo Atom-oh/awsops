@@ -2,7 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
-import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale } from './datasource-schema';
+import {
+  upsertSchema,
+  getSchema,
+  listConfiguredSchemas,
+  renderSchemaForPrompt,
+  prioritizeSchemaForQuery,
+  metricCandidatesForQuery,
+  renderMetricMetadataForPrompt,
+  isSchemaStale,
+} from './datasource-schema';
 
 beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); });
 
@@ -115,7 +124,40 @@ describe('prioritizeSchemaForQuery (Prometheus relevance ordering)', () => {
     expect(out.metrics[0]).toBe('container_memory_working_set_bytes');
   });
 
-  it('leaves order unchanged when nothing matches or no usable terms (Korean-only / short)', () => {
+  it('maps Korean memory/instance concepts to node-memory metrics', () => {
+    const schema = {
+      metrics: [
+        'ALERTS',
+        'container_memory_working_set_bytes',
+        'node_memory_MemAvailable_bytes',
+        'node_memory_MemTotal_bytes',
+      ],
+    };
+    const out = prioritizeSchemaForQuery(schema, '메모리 사용률이 높은 인스턴스') as { metrics: string[] };
+    expect(out.metrics.slice(0, 2)).toEqual([
+      'node_memory_MemAvailable_bytes',
+      'node_memory_MemTotal_bytes',
+    ]);
+  });
+
+  it('provides known metric candidates even when a truncated cache omitted them', () => {
+    expect(metricCandidatesForQuery({ metrics: ['ALERTS'], truncated: true }, '메모리 사용률이 높은 인스턴스'))
+      .toEqual(expect.arrayContaining([
+        'node_memory_MemAvailable_bytes',
+        'node_memory_MemTotal_bytes',
+      ]));
+  });
+
+  it('renders bounded per-metric type and label metadata for the query prompt', () => {
+    const block = renderMetricMetadataForPrompt({
+      node_memory_MemAvailable_bytes: { type: 'gauge', labels: ['instance', 'job'] },
+      'bad metric': { type: 'counter', labels: ['x'] },
+    });
+    expect(block).toContain('node_memory_MemAvailable_bytes (gauge; labels: instance, job)');
+    expect(block).not.toContain('bad metric');
+  });
+
+  it('leaves order unchanged when nothing matches or no usable terms', () => {
     expect((prioritizeSchemaForQuery({ metrics }, '조회') as { metrics: string[] }).metrics).toEqual(metrics);
     expect((prioritizeSchemaForQuery({ metrics }, 'xyz123notamatch') as { metrics: string[] }).metrics).toEqual(metrics);
   });

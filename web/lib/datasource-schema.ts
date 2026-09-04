@@ -81,6 +81,63 @@ export function isSchemaStale(fetchedAt: string | null | undefined, now: number 
 }
 
 // --- Query-relevance prioritization ----------------------------------------
+const PROM_NAME_RE = /^[a-zA-Z_:][a-zA-Z0-9_:]*$/;
+
+const QUERY_CONCEPTS: ReadonlyArray<{
+  patterns: readonly RegExp[];
+  terms: readonly string[];
+  metricHints: readonly string[];
+}> = [
+  {
+    patterns: [/메모리/i, /\bram\b/i],
+    terms: ['memory', 'mem'],
+    metricHints: [
+      'node_memory_MemAvailable_bytes',
+      'node_memory_MemTotal_bytes',
+      'container_memory_working_set_bytes',
+    ],
+  },
+  {
+    patterns: [/인스턴스/i, /노드/i, /호스트/i],
+    terms: ['instance', 'node', 'host'],
+    metricHints: [],
+  },
+  {
+    patterns: [/cpu/i, /프로세서/i],
+    terms: ['cpu'],
+    metricHints: ['node_cpu_seconds_total', 'container_cpu_usage_seconds_total'],
+  },
+  {
+    patterns: [/디스크/i, /파일시스템/i, /저장\s*공간/i],
+    terms: ['disk', 'filesystem', 'storage'],
+    metricHints: ['node_filesystem_avail_bytes', 'node_filesystem_size_bytes'],
+  },
+  {
+    patterns: [/네트워크/i, /수신/i, /송신/i, /트래픽/i],
+    terms: ['network', 'receive', 'transmit', 'bytes'],
+    metricHints: ['node_network_receive_bytes_total', 'node_network_transmit_bytes_total'],
+  },
+  {
+    patterns: [/재시작/i, /restart/i],
+    terms: ['restart'],
+    metricHints: ['kube_pod_container_status_restarts_total'],
+  },
+];
+
+function queryTerms(nl: string): string[] {
+  const lower = (nl || '').toLowerCase();
+  const terms = lower.split(/[^a-z0-9_]+/).filter((t) => t.length >= 3);
+  for (const c of QUERY_CONCEPTS) {
+    if (c.patterns.some((p) => p.test(lower))) terms.push(...c.terms);
+  }
+  return Array.from(new Set(terms));
+}
+
+function scoreName(name: string, terms: readonly string[]): number {
+  const lower = name.toLowerCase();
+  return terms.reduce((n, t) => n + (lower.includes(t) ? 1 : 0), 0);
+}
+
 /**
  * Reorder a schema's metric / label / tag name lists so entries RELEVANT to the natural-language query
  * come FIRST — so they survive `renderSchemaForPrompt`'s per-key cap. Prometheus/Mimir return hundreds
@@ -92,15 +149,13 @@ export function isSchemaStale(fetchedAt: string | null | undefined, now: number 
  */
 export function prioritizeSchemaForQuery(schema: unknown, nl: string): unknown {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
-  const terms = Array.from(
-    new Set((nl || '').toLowerCase().split(/[^a-z0-9_]+/).filter((t) => t.length >= 3)),
-  );
+  const terms = queryTerms(nl);
   if (!terms.length) return schema;
   const s = schema as Record<string, unknown>;
   const nameOf = (x: unknown) => (typeof x === 'string' ? x : ((x as { name?: string })?.name ?? '')).toLowerCase();
   const reorder = (arr: unknown[]) =>
     arr
-      .map((x, i) => ({ x, i, sc: terms.reduce((n, t) => n + (nameOf(x).includes(t) ? 1 : 0), 0) }))
+      .map((x, i) => ({ x, i, sc: scoreName(nameOf(x), terms) }))
       .sort((a, b) => b.sc - a.sc || a.i - b.i) // score desc, stable on ties
       .map((e) => e.x);
   const out: Record<string, unknown> = { ...s };
@@ -108,6 +163,46 @@ export function prioritizeSchemaForQuery(schema: unknown, nl: string): unknown {
     if (Array.isArray(s[k]) && (s[k] as unknown[]).length) out[k] = reorder(s[k] as unknown[]);
   }
   return out;
+}
+
+/** Bounded Prometheus/Mimir metric names worth introspecting for one natural-language request.
+ *  Includes schema matches plus known standard metric hints so a truncated cache cannot hide the
+ *  exact pair needed for common Korean asks such as node memory utilization. */
+export function metricCandidatesForQuery(schema: unknown, nl: string, max = 8): string[] {
+  const terms = queryTerms(nl);
+  const s = (schema && typeof schema === 'object' && !Array.isArray(schema))
+    ? schema as Record<string, unknown>
+    : {};
+  const metrics = (Array.isArray(s.metrics) ? s.metrics : [])
+    .filter((m): m is string => typeof m === 'string' && PROM_NAME_RE.test(m))
+    .map((m, i) => ({ name: m, i, score: scoreName(m, terms) }))
+    .filter((m) => m.score > 0)
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .map((m) => m.name);
+  const hints = QUERY_CONCEPTS
+    .filter((c) => c.patterns.some((p) => p.test(nl || '')))
+    .flatMap((c) => c.metricHints)
+    .filter((m) => PROM_NAME_RE.test(m));
+  return Array.from(new Set([...metrics, ...hints])).slice(0, Math.max(1, Math.min(12, max)));
+}
+
+/** Render connector-returned per-metric metadata into a compact prompt block. Names and labels use
+ *  Prometheus identifier grammar; malformed datasource-controlled values are dropped. */
+export function renderMetricMetadataForPrompt(meta: unknown, max = 8): string {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return '';
+  const lines: string[] = [];
+  for (const [metric, raw] of Object.entries(meta as Record<string, unknown>)) {
+    if (!PROM_NAME_RE.test(metric) || !raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const r = raw as { type?: unknown; labels?: unknown };
+    const type = typeof r.type === 'string' && /^[a-zA-Z_]+$/.test(r.type) ? r.type : '';
+    const labels = (Array.isArray(r.labels) ? r.labels : [])
+      .filter((l): l is string => typeof l === 'string' && PROM_NAME_RE.test(l))
+      .slice(0, 24);
+    if (!type && labels.length === 0) continue;
+    lines.push(`${metric}${type ? ` (${type}` : ' ('}${labels.length ? `${type ? '; ' : ''}labels: ${labels.join(', ')}` : ''})`);
+    if (lines.length >= Math.max(1, Math.min(12, max))) break;
+  }
+  return lines.length ? `metric metadata:\n${lines.join('\n')}` : '';
 }
 
 // --- Prompt rendering -------------------------------------------------------

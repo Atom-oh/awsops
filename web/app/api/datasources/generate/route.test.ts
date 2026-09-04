@@ -152,6 +152,47 @@ describe('Prometheus metric relevance', () => {
     expect(schemaArg.metrics[0]).toBe('kube_pod_container_resource_requests');
     expect(lastGen()).toMatchObject({ lang: 'PromQL', isSql: false });
   });
+
+  it('grounds a Korean memory prompt with metric-specific labels', async () => {
+    getDatasource.mockResolvedValue({ id: 1, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{
+      integrationId: 1,
+      kind: 'prometheus',
+      schema: {
+        metrics: [
+          'ALERTS',
+          'node_memory_MemAvailable_bytes',
+          'node_memory_MemTotal_bytes',
+        ],
+      },
+      fetched_at: new Date().toISOString(),
+    }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockResolvedValue({
+      node_memory_MemAvailable_bytes: { type: 'gauge', labels: ['instance', 'job'] },
+      node_memory_MemTotal_bytes: { type: 'gauge', labels: ['instance', 'job'] },
+    });
+    generateQuery.mockResolvedValue(
+      'topk(5, 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))',
+    );
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '메모리 사용률이 높은 인스턴스' }));
+
+    expect(res.status).toBe(200);
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'prometheus',
+      tool: 'prometheus_metric_meta',
+      args: { metrics: expect.arrayContaining([
+        'node_memory_MemAvailable_bytes',
+        'node_memory_MemTotal_bytes',
+      ]) },
+      connConfig: { endpoint: 'http://prom', authType: 'none' },
+    }));
+    expect(lastGen().schemaBlock).toContain(
+      'node_memory_MemAvailable_bytes (gauge; labels: instance, job)',
+    );
+  });
 });
 
 describe('lazy refresh (TTL) [P2]', () => {
