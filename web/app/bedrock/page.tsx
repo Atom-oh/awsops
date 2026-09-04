@@ -12,7 +12,6 @@ import DataTable from '@/components/ui/DataTable';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AreaTrend from '@/components/charts/AreaTrend';
 import BarDistribution from '@/components/charts/BarDistribution';
-import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
 import ChatOpsStatsCard from '@/components/chat/ChatOpsStatsCard';
 import { useI18n } from '@/components/shell/LanguageProvider';
@@ -202,7 +201,9 @@ export default function BedrockPage() {
 
               <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-6">
                 <BarDistribution title="모델별 호출 수" data={invRows} xKey="label" yKey="invocations" />
-                <DonutBreakdown title="모델별 비용" data={costRows} nameKey="label" valueKey="cost" valuePrefix="$" />
+                {/* dataviz form-fit (batch 44): same close-magnitude comparison job as the sibling
+                    호출 수 bars — one comparable block instead of two encodings of one identity set */}
+                <BarDistribution title="모델별 비용" data={costRows} xKey="label" yKey="cost" valuePrefix="$" />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

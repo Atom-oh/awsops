@@ -15,6 +15,7 @@ import Card from '@/components/ui/Card';
 import InsightCard from '@/components/insights/InsightCard';
 import BarDistribution from '@/components/charts/BarDistribution';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import DivergingBarList from '@/components/charts/DivergingBarList';
 import AreaTrend from '@/components/charts/AreaTrend';
 import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
@@ -724,26 +725,20 @@ export default function Home() {
 
         {/* ---- Cost Impact Estimation (gap L225): 30d delta x static monthly weight ---- */}
         {impactRows.length > 0 && (
-          <Card
+          /* dataviz form-fit (batch 44): signed $ impact is a POLARITY job — a diverging bar
+             (shared zero axis, warm=increase / positive=decrease) replaces the plain ± list;
+             ordering (|impact| desc) and every honesty gate upstream are unchanged. */
+          <DivergingBarList
             title="월 비용 영향 추정"
             subtitle="30일 수량 변화 × 타입별 정적 단가 근사 — 실제 청구액이 아닙니다 (실측은 Cost 페이지)"
-          >
-            <ul className="flex flex-col gap-1.5">
-              {impactRows.map((r) => (
-                <li key={r.type} className="flex items-center justify-between gap-3 text-[13px]">
-                  <span className="min-w-0 truncate text-ink-700">{INV_LABEL(r.type)}</span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <span className="tabular text-[11.5px] text-ink-400">
-                      {r.delta > 0 ? '+' : ''}{r.delta.toLocaleString()}
-                    </span>
-                    <span className={'tabular font-semibold ' + (r.monthly > 0 ? 'text-brand-700' : 'text-positive-text')}>
-                      {r.monthly > 0 ? '+' : '-'}${Math.abs(r.monthly).toLocaleString()}/mo est.
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Card>
+            rows={impactRows.map((r) => ({
+              label: INV_LABEL(r.type),
+              value: r.monthly,
+              sub: `${r.delta > 0 ? '+' : ''}${r.delta.toLocaleString()}`,
+            }))}
+            valuePrefix="$"
+            valueSuffix="/mo est."
+          />
         )}
 
         {/* ---- Charts row 1: distribution bar (full-width) ---- */}
@@ -757,8 +752,11 @@ export default function Home() {
 
             {/* ---- Charts row 2: resource-distribution donuts (EC2 type · K8s pods) ---- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* dataviz form-fit (batch 44): instance types are NOMINAL categories compared by
+                  MAGNITUDE across many close values — the "donut for comparing close values"
+                  anti-pattern; count-desc bars read exact ranking with no slice ceiling. */}
               {ec2Types.length > 0 ? (
-                <DonutBreakdown title="EC2 인스턴스 유형" data={ec2Types} nameKey="name" valueKey="count" />
+                <BarDistribution title="EC2 인스턴스 유형" data={ec2Types} xKey="name" yKey="count" />
               ) : (
                 <Card title="EC2 인스턴스 유형">
                   <div className="text-[13px] text-ink-400">{tt('EC2 데이터 없음')}</div>
