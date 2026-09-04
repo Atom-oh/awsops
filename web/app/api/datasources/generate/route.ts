@@ -8,7 +8,7 @@
 // a strict translate-to-query prompt + the schema (real table/COLUMN names) injected as data.
 import { verifyUser } from '@/lib/auth';
 import { generateQuery } from '@/lib/datasource-querygen';
-import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema, schemaMetricNames, trimSchemaForCache, isLegacyCapSnapshot, REFRESH_COOLDOWN_MS } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema, schemaMetricNames, isLegacyCapSnapshot, REFRESH_COOLDOWN_MS } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
 import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
 import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
@@ -31,13 +31,11 @@ function json(obj: unknown, status: number) {
 }
 
 
-/** Cache the introspected schema; on a size-limit failure, persist a trimmed copy so subsequent requests
- *  hit the cache instead of re-running the full (100+ DESCRIBE) introspect. All best-effort. */
+/** Cache the introspected schema (best-effort — the read path never depends on the write). */
 async function cacheSchemaBestEffort(accountId: string, id: number, kind: string, schema: unknown): Promise<void> {
-  try { await upsertSchema(accountId, id, kind, schema); return; }
-  catch { /* likely over the size limit — fall through to a bounded write */ }
-  try { await upsertSchema(accountId, id, kind, trimSchemaForCache(schema)); }
-  catch { /* give up; manual Refresh remains */ }
+  // upsertSchema itself stores a bounded (trimmed, `truncated`) copy when the schema is over the
+  // size limit — the same fallback every other writer gets. Best-effort: manual Refresh remains.
+  try { await upsertSchema(accountId, id, kind, schema); } catch { /* give up */ }
 }
 
 /** Resolve a prompt-ready schema block. When an instance id is given, use ONLY that instance's cached

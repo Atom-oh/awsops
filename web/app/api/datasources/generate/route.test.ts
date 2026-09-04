@@ -113,18 +113,17 @@ describe('SQL generation (the ClickHouse fix)', () => {
     expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'clickhouse_schema' }));
   });
 
-  it('background cache-warm falls back to a trimmed write when the schema exceeds the size limit [4]', async () => {
+  it('background cache-warm is best-effort — a failed write (size limit) never fails the request [4]', async () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch', authType: 'none' });
     invokeMcpLambdaTool.mockResolvedValue({ __block: 'X(c String)', tables: [{ name: 'X', columns: [] }] });
-    upsertSchema.mockRejectedValueOnce(new Error('introspected schema exceeds size limit')); // full write fails
-    upsertSchema.mockResolvedValueOnce(undefined); // trimmed write succeeds
+    upsertSchema.mockRejectedValueOnce(new Error('introspected schema exceeds size limit')); // untrimmable
     const { POST } = await import('./route');
     const res = await POST(req({ id: 7, nl: 'tables' }));
     expect(res.status).toBe(200);
     await flush();
-    expect(upsertSchema).toHaveBeenCalledTimes(2); // full (failed) → trimmed fallback
+    expect(upsertSchema).toHaveBeenCalledTimes(1); // the bounded-copy fallback lives INSIDE upsertSchema (shared by all writers)
   });
 
   it('502 when the generator throws (e.g. prose-not-SQL guard or Bedrock failure)', async () => {
@@ -233,7 +232,8 @@ describe('legacy-cap snapshot refresh + metric-schema size fallback (owner re-te
     expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThanOrEqual(256_000);
     expect(out.metrics.length).toBeGreaterThan(0);
     expect(out.metrics.length).toBeLessThan(3000);
-    expect(out.metrics[0]).toBe(big.metrics[0]); // prefix kept (connector order)
+    expect(out.metrics[0]).toBe(big.metrics[0]);
+    expect(out.metrics[out.metrics.length - 1]).toBe(big.metrics[big.metrics.length - 1 - ((big.metrics.length - 1) % (big.metrics.length / out.metrics.length))]); // interleaved: the tail survives
     expect(out.labels.length).toBe(100);
     expect(out.truncated).toBe(true);
     // unchanged when it already fits; table schemas keep the table branch

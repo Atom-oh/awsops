@@ -1458,15 +1458,26 @@ class TestGraphSchemaVersionMixesInQuerygenFlag:
 
 # ── MINOR fix regression: 256KB write-back cap must not sink the whole job ──────────────────────────
 class TestSchemaWriteBackSizeCap:
-    def test_oversized_fresh_schema_is_used_for_this_run_but_not_persisted(self, monkeypatch):
+    def test_oversized_metric_schema_is_persisted_as_a_bounded_truncated_copy(self, monkeypatch):
+        # The shared writer trims an over-limit METRIC schema (interleaved, `truncated`) instead of
+        # leaving the stale row — same fallback the BFF's upsertSchema gives every other writer.
         huge = {"metrics": [f"metric_{i}" for i in range(50_000)]}  # comfortably over 256KB serialized
         assert len(json.dumps(huge).encode("utf-8")) > 256_000
         monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: huge)
         c = FakeConn(existing_version="STALE")
         out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert "schema_cache_skipped" not in out
+        assert len(c.schema_writes) == 1
+        assert out.get("built") == 8           # rebuilt from the FULL fresh schema (the trim is cache-only)
+        assert not out.get("error")
+
+    def test_oversized_untrimmable_schema_is_used_for_this_run_but_not_persisted(self, monkeypatch):
+        huge = {"blob": "x" * 300_000}
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: huge)
+        c = FakeConn(existing_version="STALE")
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
         assert out.get("schema_cache_skipped") == "oversized"
         assert c.schema_writes == []          # never persisted
-        assert out.get("built") == 8           # still rebuilt from the fresh (just-not-cached) schema
         assert not out.get("error")
 
 

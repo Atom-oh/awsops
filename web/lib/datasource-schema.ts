@@ -38,10 +38,15 @@ function mapRow(r: Record<string, unknown>): CachedSchema {
   };
 }
 
+/** Cache write shared by EVERY writer (generate-route warm, connect-time warm, admin manual refresh;
+ *  the python worker mirrors it in scripts/v2/workers/db.py). An over-limit schema is trimmed to a
+ *  bounded copy (`trimSchemaForCache`, marked `truncated`) instead of leaving NO row — the throw
+ *  remains only for shapes that cannot be trimmed. */
 export async function upsertSchema(accountId: string, integrationId: number, kind: string | null, schema: unknown): Promise<void> {
-  const json = JSON.stringify(schema ?? {});
+  let json = JSON.stringify(schema ?? {});
   if (Buffer.byteLength(json, 'utf8') > MAX_SCHEMA_BYTES) {
-    throw new Error('introspected schema exceeds size limit');
+    json = JSON.stringify(trimSchemaForCache(schema) ?? {});
+    if (Buffer.byteLength(json, 'utf8') > MAX_SCHEMA_BYTES) throw new Error('introspected schema exceeds size limit');
   }
   await getPool().query(
     `INSERT INTO datasource_schemas (account_id, integration_id, kind, schema, fetched_at)
@@ -311,12 +316,15 @@ export function trimSchemaForCache(schema: unknown): unknown {
   // trimmed first), keeping the connector's `truncated` semantics honest.
   if (Array.isArray(s.metrics)) {
     if (Buffer.byteLength(JSON.stringify(s), 'utf8') <= MAX_SCHEMA_BYTES) return schema; // already fits
-    let metrics = s.metrics as unknown[];
+    // Interleaved (every k-th name) rather than the alphabetical prefix, so the late node_*/kube_*
+    // families this cap raise set out to recover survive the trim. Mirrored in scripts/v2/workers/db.py.
+    const all = s.metrics as unknown[];
+    let stride = 1;
     let out: Record<string, unknown> = { ...s, truncated: true };
     if (Array.isArray(s.labels)) out.labels = (s.labels as unknown[]).slice(0, 100);
-    while (metrics.length > 1 && Buffer.byteLength(JSON.stringify(out), 'utf8') > MAX_SCHEMA_BYTES) {
-      metrics = metrics.slice(0, Math.floor(metrics.length / 2));
-      out = { ...out, metrics };
+    while (Buffer.byteLength(JSON.stringify(out), 'utf8') > MAX_SCHEMA_BYTES && stride < all.length) {
+      stride *= 2;
+      out = { ...out, metrics: all.filter((_, i) => i % stride === 0) };
     }
     return out;
   }

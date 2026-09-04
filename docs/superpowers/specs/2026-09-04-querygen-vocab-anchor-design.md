@@ -127,7 +127,7 @@ recording-rule query. Two stacked root causes the advisory gate could not touch:
    from BOTH the prompt and the anchor — and the round-3 rule (no retry on a truncated cache)
    then left the wrong draft untouched. Fixes: `SCHEMA_METRIC_CAP = 3000` in prometheus/mimir
    connectors (≈120KB JSON, inside the 256KB cache row); the generate route background-refreshes a
-   cache that is truncated at ≤500 names (a snapshot from the old cap); and a truncated cache no
+   cache that is truncated at exactly 500 names (a PromQL snapshot from the old cap — see Round-2); and a truncated cache no
    longer suppresses the retry when the fix is PROVABLE — an unknown rule name whose raw core is a
    cached metric (`confidentNearMisses`) is corrected with the suggestion regardless of truncation.
 Deploy: agent connector zips (terraform apply) + web.
@@ -151,3 +151,14 @@ Deploy: agent connector zips (terraform apply) + web.
   chars ('up', 'fs') match only whole `_`/`:` segments so 'up' never hits 'group'/'setup'.
 - **ADR-018 amended** (Status + §D + §Negative cap-agnostic) to record the provable-correction
   exception, the size fallback and the legacy-cap refresh; BASELINE row unchanged (still accurate).
+
+### Round-3 corrections (review-driven)
+- **Bounded-store fallback moved into the shared writers.** Only the generate route trimmed; the
+  connect-time warm (`/api/datasources/manage`), the admin manual refresh (`/api/integrations/schema`)
+  and the worker write-back (`scripts/v2/workers/db.py`) still hard-failed on a >256KB schema. Now
+  `upsertSchema` (web) and `upsert_datasource_schema` (worker, mirrored `_trim_schema_for_cache`)
+  trim internally and throw only for untrimmable shapes; the route's second-write fallback is gone.
+- **Interleaved trim.** The metric trim keeps every k-th name (k doubling until it fits) instead of
+  the alphabetical prefix, so the late `node_*`/`kube_*` families survive.
+- `ruleCore` documents the presence≠absence asymmetry; BASELINE §2 row names the provable-correction
+  carve-out; the batch-48 narrative now says "exactly 500".

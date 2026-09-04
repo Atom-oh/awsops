@@ -14,10 +14,21 @@ describe('datasource-schema (keyed by integration_id)', () => {
     expect(params[0]).toBe('acct'); expect(params[1]).toBe(7); expect(params[2]).toBe('prometheus');
     expect(JSON.parse(params[3])).toEqual({ metrics: ['up'] });
   });
-  it('rejects an oversized schema with NO query', async () => {
+  it('rejects an oversized UNTRIMMABLE schema with NO query', async () => {
     const huge = { blob: 'x'.repeat(300_000) };
     await expect(upsertSchema('a', 1, 'clickhouse', huge)).rejects.toThrow(/size|limit|large/i);
     expect(query).not.toHaveBeenCalled();
+  });
+  it('stores an oversized METRIC schema as a bounded, truncated copy (every writer gets the fallback)', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    const big = { metrics: Array.from({ length: 3000 }, (_, i) => `very_long_metric_name_${'x'.repeat(80)}_${i}`), truncated: false };
+    await upsertSchema('a', 1, 'prometheus', big);
+    const params = query.mock.calls[0][1] as unknown[];
+    const stored = JSON.parse(params[3] as string) as { metrics: string[]; truncated: boolean };
+    expect(Buffer.byteLength(params[3] as string, 'utf8')).toBeLessThanOrEqual(256_000);
+    expect(stored.truncated).toBe(true);
+    expect(stored.metrics.length).toBeGreaterThan(0);
+    expect(stored.metrics).toContain(big.metrics[0]);
   });
   it('getSchema returns the row (by integration_id) or null', async () => {
     query.mockResolvedValueOnce({ rows: [{ integration_id: 9, kind: 'loki', schema: { labels: ['app'] }, fetched_at: 't' }] });

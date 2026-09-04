@@ -201,6 +201,10 @@ export function unknownPromqlNames(query: string, metricNames: ReadonlySet<strin
 
 /** Recording-rule core: strip the leading ':' and everything from the next ':' on
  *  (`:node_memory_MemAvailable_bytes:sum` → `node_memory_MemAvailable_bytes`). */
+// NOTE the asymmetry: a cached core proves the RAW metric exists, not that the rule name is
+// absent (a real-but-uncached `http_requests_total:rate5m` gets rewritten to the raw metric —
+// different aggregation semantics). Accepted draft-only residual (ADR-018 §Negative); the hedged
+// warning stays on the result so the user reviews the rewrite.
 export function ruleCore(name: string): string {
   return name.replace(/^:+/, '').replace(/:.*$/, '');
 }
