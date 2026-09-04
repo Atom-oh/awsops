@@ -46,7 +46,7 @@ beforeEach(() => {
     if (Array.isArray(o.tables) && o.tables.length) return 'T';
     return '';
   });
-  generateQuery.mockResolvedValue('SELECT 1');
+  generateQuery.mockResolvedValue({ query: 'SELECT 1' });
 });
 
 describe('auth + validation', () => {
@@ -71,7 +71,7 @@ describe('SQL generation (the ClickHouse fix)', () => {
   it('uses the cached schema block and read-only SQL lang for a clickhouse instance', async () => {
     getDatasource.mockResolvedValue({ id: 2, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 2, kind: 'clickhouse', schema: { __block: 'otel_traces(ServiceName String)' }, fetched_at: new Date().toISOString() }]);
-    generateQuery.mockResolvedValue('SELECT ServiceName FROM otel_traces');
+    generateQuery.mockResolvedValue({ query: 'SELECT ServiceName FROM otel_traces' });
     const { POST } = await import('./route');
     const res = await POST(req({ id: 2, nl: 'api gateway가 보내는 서비스는' }));
     expect(res.status).toBe(200);
@@ -143,7 +143,7 @@ describe('Prometheus metric relevance', () => {
     // relevant metric is LAST (alphabetical), would be dropped by the render cap without prioritization
     const metrics = ['ALERTS', 'aggregator_total', 'alertmanager_alerts', 'kube_pod_container_resource_requests'];
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { metrics }, fetched_at: 't' }]);
-    generateQuery.mockResolvedValue('kube_pod_container_resource_requests');
+    generateQuery.mockResolvedValue({ query: 'kube_pod_container_resource_requests' });
     const { POST } = await import('./route');
     const res = await POST(req({ id: 1, nl: 'pod resource조회' }));
     expect(res.status).toBe(200);
@@ -162,7 +162,7 @@ describe('lazy refresh (TTL) [P2]', () => {
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 11, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: '2020-01-01T00:00:00Z' }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
     invokeMcpLambdaTool.mockResolvedValue({ __block: 'FRESH', metrics: ['up'] });
-    generateQuery.mockResolvedValue('up');
+    generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     const res = await POST(req({ id: 11, nl: 'is it up' }));
     expect(res.status).toBe(200);
@@ -174,7 +174,7 @@ describe('lazy refresh (TTL) [P2]', () => {
   it('does NOT refresh on a FRESH cache hit', async () => {
     getDatasource.mockResolvedValue({ id: 12, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 12, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: new Date().toISOString() }]);
-    generateQuery.mockResolvedValue('up');
+    generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     await POST(req({ id: 12, nl: 'is it up' }));
     await flush();
@@ -185,7 +185,7 @@ describe('lazy refresh (TTL) [P2]', () => {
 describe('non-SQL datasources', () => {
   it('marks PromQL as non-SQL (no read-verb guard) for a slug/kind request', async () => {
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { __block: 'metrics: up' }, fetched_at: 't' }]);
-    generateQuery.mockResolvedValue('up');
+    generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     const res = await POST(req({ slug: 'prometheus', kind: 'prometheus', nl: 'is it up' }));
     expect(res.status).toBe(200);

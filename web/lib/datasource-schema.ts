@@ -110,6 +110,18 @@ export function prioritizeSchemaForQuery(schema: unknown, nl: string): unknown {
   return out;
 }
 
+/** FULL metric-name list from a cached schema (PromQL kinds) — the querygen vocabulary anchor.
+ *  Entries may be strings or {name}; non-conforming shapes yield []. Unlike the RENDERED prompt
+ *  block (capped at ~80 names), this is the whole cached list. */
+export function schemaMetricNames(schema: unknown): string[] {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return [];
+  const m = (schema as { metrics?: unknown }).metrics;
+  if (!Array.isArray(m)) return [];
+  return m
+    .map((x) => (typeof x === 'string' ? x : (x as { name?: unknown })?.name))
+    .filter((n): n is string => typeof n === 'string' && n.length > 0);
+}
+
 // --- Prompt rendering -------------------------------------------------------
 // Bounds so a rich introspected schema (ClickHouse allows up to 100 tables × 200 cols, OpenSearch many
 // indices) never blows the model prompt. The per-line/column caps matter because a column TYPE can be a
