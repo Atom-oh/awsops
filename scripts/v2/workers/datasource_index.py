@@ -41,6 +41,12 @@ except ImportError:
     import signal_catalog_gen as _signal_gen  # flattened in the worker_src lambda bundle
 
 
+class ConnectorInvokeError(RuntimeError):
+    def __init__(self, kind, tool, status, detail):
+        self.kind, self.tool, self.status = kind, tool, status
+        super().__init__(f"{kind}-mcp {tool} returned statusCode {status}: {str(detail)[:300]}")
+
+
 def _read_cached_schema(conn, integration_id):
     """(kind, schema_dict) from the most-recent cached row, preferring this account then 'self'.
     Returns (None, None) when no cache row exists (connector never succeeded / not refreshed yet)."""
@@ -87,11 +93,12 @@ def _lambda_invoke(kind, tool, arguments=None):
     raw = resp["Payload"].read()
     out = json.loads(raw) if raw else {}
     status = out.get("statusCode")
-    if isinstance(status, int) and status >= 400:
-        raise RuntimeError(f"{kind}-mcp {tool} returned statusCode {status}")
     body = out.get("body")
     if isinstance(body, str):
         body = json.loads(body)
+    if isinstance(status, int) and status >= 400:
+        detail = body.get("error") if isinstance(body, dict) else "connector error"
+        raise ConnectorInvokeError(kind, tool, status, detail)
     return body
 
 
@@ -197,6 +204,47 @@ def _card_schema_version(schema):
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
+_CARD_QUERY_ERROR_RE = re.compile(
+    r"\b(?:bad_data|parse error|unexpected (?:end|token)|unknown function|"
+    r"invalid (?:parameter|query)|could not parse)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_dashboard_cards(kind, iid, rows):
+    """Live-validate ready Prometheus/Mimir card queries before they become registered rows.
+
+    Conclusive PromQL errors make only that card unavailable. A connector/network failure aborts
+    the whole card rebuild before BEGIN, preserving the prior card set and schema version.
+    Empty successful results are valid — this is syntax/execution validation, not a data-presence gate.
+    """
+    if kind not in ("prometheus", "mimir"):
+        return list(rows), 0, 0
+    out, validated, invalid = [], 0, 0
+    for row in rows:
+        card = dict(row)
+        query = card.get("query") if card.get("status") == "ready" else None
+        if not isinstance(query, dict) or not query.get("expr"):
+            out.append(card)
+            continue
+        validated += 1
+        try:
+            _lambda_invoke(kind, query["tool"], {
+                "instance_id": iid,
+                "query": query["expr"],
+                "timeout": "5s",
+            })
+        except Exception as e:  # noqa: BLE001 — classify conclusive query errors vs transient connector failures
+            if not _CARD_QUERY_ERROR_RE.search(str(e)):
+                raise RuntimeError("card validation unavailable") from e
+            invalid += 1
+            card["status"] = "unavailable"
+            card["query"] = None
+            card["missing"] = list(card.get("missing") or []) + ["query validation failed"]
+        out.append(card)
+    return out, validated, invalid
+
+
 def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema):
     """Third pre-built family (dashboard cards) — mirrors _rebuild_graph_queries: schema-hash skip,
     atomic upsert+sweep. Deterministic only; an empty build writes the version sentinel (db.py)."""
@@ -204,6 +252,7 @@ def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema):
     if wdb.read_card_schema_version(conn, iid) == version:
         return {"cards_skipped": True}
     rows = _card_cat.build_cards(kind, schema)
+    rows, validated, invalid = _validate_dashboard_cards(kind, iid, rows)
     conn.run("BEGIN")
     try:
         written = wdb.upsert_dashboard_cards(conn, iid, rows, version)
@@ -212,7 +261,12 @@ def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema):
     except Exception:
         conn.run("ROLLBACK")
         raise
-    return {"cards_built": len(rows), "cards_ready": sum(1 for r in rows if r["status"] == "ready")}
+    return {
+        "cards_built": len(rows),
+        "cards_ready": sum(1 for r in rows if r["status"] == "ready"),
+        "cards_validated": validated,
+        "cards_invalid": invalid,
+    }
 
 
 _MAX_GENERATION_ATTEMPTS = 3   # TOTAL tries per schema_version PER ISO WEEK, retries included

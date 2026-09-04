@@ -1740,15 +1740,65 @@ class TestCarriedGeneratedRowIsLiveVerified:
 
 # ── Dashboard cards (2026-08-28): third pre-built-content family — deterministic only ──────────────
 class TestDashboardCards:
+    @pytest.fixture(autouse=True)
+    def _card_validation_success(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_lambda_invoke", lambda kind, tool, arguments=None: {})
+
     def test_prometheus_builds_cards_alongside_signals_and_graph(self):
         c = FakeConn(kind="prometheus", schema={"metrics": ["up", "node_cpu_seconds_total"]})
         out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
-        assert out.get("cards_built") == 5
-        assert out.get("cards_ready") == 2  # up_targets + cpu_usage
+        assert out.get("cards_built") == 13
+        assert out.get("cards_ready") == 4  # up/down targets + aggregate CPU + node CPU Top5
         keys = {p["ck"] for p in c.card_inserts}
         assert {"up_targets", "cpu_usage", "memory_available"} <= keys
         # sweep against exactly the written keys
         assert c.card_deletes and set(c.card_deletes[0]["keep"]) == keys
+
+    def test_ready_prometheus_cards_are_live_validated_before_upsert(self, monkeypatch):
+        calls = []
+
+        def invoke(kind, tool, arguments=None):
+            calls.append((kind, tool, arguments))
+            return {"resultType": "vector", "result": []}
+
+        monkeypatch.setattr(dsi, "_lambda_invoke", invoke)
+        c = FakeConn(kind="prometheus", schema={"metrics": ["up"]})
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+
+        assert out["cards_validated"] == 2
+        assert calls
+        assert all(kind == "prometheus" and tool == "prometheus_query" for kind, tool, _ in calls)
+        assert all(args["instance_id"] == 7 and args["timeout"] == "5s" for _, _, args in calls)
+        assert c.card_inserts  # registration happens after every ready query validates
+
+    def test_conclusive_card_query_error_registers_the_card_unavailable(self, monkeypatch):
+        def invoke(kind, tool, arguments=None):
+            if arguments.get("query") == "sum(up)":
+                raise RuntimeError("Prometheus query failed (bad_data): parse error")
+            return {"resultType": "vector", "result": []}
+
+        monkeypatch.setattr(dsi, "_lambda_invoke", invoke)
+        c = FakeConn(kind="prometheus", schema={"metrics": ["up"]})
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+
+        row = next(p for p in c.card_inserts if p["ck"] == "up_targets")
+        assert row["st"] == "unavailable"
+        assert row["q"] is None
+        assert "query validation failed" in row["mi"]
+        assert out["cards_invalid"] == 1
+
+    def test_transient_card_validation_preserves_existing_cards(self, monkeypatch):
+        monkeypatch.setattr(
+            dsi,
+            "_lambda_invoke",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("Prometheus HTTP 503: unavailable")),
+        )
+        c = FakeConn(kind="prometheus", schema={"metrics": ["up"]}, existing_card_version="old")
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+
+        assert out["cards_error"] == "card validation unavailable"
+        assert c.card_inserts == []
+        assert c.card_deletes == []
 
     def test_card_build_skips_when_hash_unchanged(self):
         c0 = FakeConn(kind="tempo", schema={"tags": []})
