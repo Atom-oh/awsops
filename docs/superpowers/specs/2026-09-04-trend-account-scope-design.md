@@ -156,3 +156,33 @@ only raw synced resource_type counts).
   DERIVED_SNAPSHOTS would break the monkeypatch.setitem test seam — invariants stay enforced
   by the comment + pytest guards; the shared enabled-accounts-intersecting resolveAccounts
   stays the endorsed cross-route follow-up.
+
+## Round-4 corrections (review-driven)
+
+- **Host-only types no longer permanently fail coverage (the gate MAJOR)** — the SDK-synced
+  types (SDK_SYNCS: s3, s3_public_access, opensearch_serverless, cloudfront_vpc_origin,
+  alb_listener_rule — plus the derived public_s3_buckets riding s3_public_access) can only
+  ever snapshot with `present ⊆ {'self'}`, so scope-relative completeness against a
+  multi-account scope marked them incomplete FOREVER (blanking the KPI/chart/impact in
+  exactly the multi-account scenario L124 targets). `HOST_ONLY_TREND_TYPES` +
+  `expectedAccounts(type, resolved)` (trend-utils, used by every guard via
+  `covCompleteForScope`) check host-only types against `resolved ∩ {'self'}` — a NEW pytest
+  lockstep guard pins the TS set against sync_lambda's SDK_SYNCS keys verbatim.
+- **The `__all__` resolution uses the writer's scan-scope predicate (the gate MAJOR, same
+  family)** — bare `enabled AND NOT is_host` included an enabled account with zero enabled
+  regions, which is never scanned and never snapshots (the writer's round-6 phantom-account
+  rule), making coverage fail for every steampipe type indefinitely. The route's `__all__`
+  query now mirrors the writer's in-scope condition (all_regions OR ≥1 enabled region).
+- **The derived series are actually chartable (the gate MAJOR)** — they were ranked below all
+  ~39 real types while the chart sliced the top 8, so the "chart series" claim in the
+  CHANGELOG/guides/audit tick was unreachable. The page now appends them after the top-8 real
+  types as their own default-hidden '보안 시리즈' legend group (palette indices past 8 wrap —
+  a disclosed trade, they're default-hidden); the 4-locale guide lists them as their own
+  group instead of under Other Resources.
+- Minors closed: the `__all__`→self fallback is disclosed via a `degraded: true` response
+  flag consumed by the page's narrowed-scope caption (the round-3 comment claiming coverage
+  gaps covered it was wrong — coverage is computed against the fallen-back scope — and is
+  corrected); `loadAll` gained a request-generation token (a slow previous-scope response can
+  no longer overwrite a newer scope's state); a call-site guard rejects statement separators/
+  comments in the derived WHERE fragment (defense-in-depth atop the module-constant
+  invariant, with a pytest assertion); the guide's usage step names the 14d default toggle.

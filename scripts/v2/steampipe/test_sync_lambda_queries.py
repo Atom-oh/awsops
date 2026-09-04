@@ -1688,3 +1688,26 @@ def test_derived_snapshot_predicates_lockstep_with_web_finding_sql():
     assert not (derived_names & mod._ALLOWED)
     # and every derived base type must itself be a real synced type
     assert set(mod.DERIVED_SNAPSHOTS) <= mod._ALLOWED
+    # no predicate may carry statement separators/comments (the call-site guard's contract)
+    for _, where in mod.DERIVED_SNAPSHOTS.values():
+        assert ";" not in where and "--" not in where and "/*" not in where
+
+
+def test_host_only_trend_types_lockstep_with_sdk_syncs():
+    """LOCKSTEP guard (gap L124 round 4): web/lib/trend-utils.ts HOST_ONLY_TREND_TYPES must be
+    exactly SDK_SYNCS' keys (host-only collectors — their snapshot coverage is always ⊆
+    {'self'}) plus 'public_s3_buckets' (the derived series riding the s3_public_access SDK
+    sync). Drift in either direction breaks the client's coverage-completeness exemption:
+    a missing entry permanently blanks that type's KPIs under a multi-account scope; an extra
+    entry exempts a genuinely multi-account type from the honesty guard."""
+    import re
+
+    mod = load_sync_lambda()
+    ts_path = Path(__file__).resolve().parents[3] / "web" / "lib" / "trend-utils.ts"
+    ts = ts_path.read_text(encoding="utf-8")
+    m = re.search(
+        r"HOST_ONLY_TREND_TYPES[^=]*=\s*new Set\(\[(.*?)\]\)", ts, re.DOTALL
+    )
+    assert m, "HOST_ONLY_TREND_TYPES Set literal not found in trend-utils.ts"
+    ts_set = set(re.findall(r"'([a-z0-9_]+)'", m.group(1)))
+    assert ts_set == set(mod.SDK_SYNCS) | {"public_s3_buckets"}

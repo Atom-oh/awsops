@@ -97,7 +97,10 @@ describe('GET /api/inventory/trend', () => {
     query.mockResolvedValueOnce({ rows: [{ account_id: '222233334444' }] }); // accounts table
     query.mockResolvedValue({ rows: [] });
     await GET(req('/api/inventory/trend?accounts=__all__'));
-    expect(String(query.mock.calls[0][0])).toContain('FROM accounts WHERE enabled AND NOT is_host');
+    // scan-scope predicate, not bare enabled — an enabled account with zero enabled regions
+    // never snapshots (sync_lambda's phantom-account rule) and must not enter the scope
+    expect(String(query.mock.calls[0][0])).toContain('a.enabled AND NOT a.is_host');
+    expect(String(query.mock.calls[0][0])).toContain('a.all_regions OR EXISTS');
     expect(query.mock.calls[1][1]).toEqual([14, ['self', '222233334444']]);
     query.mockReset();
     // an all-invalid list must scope down to self, never widen to an unscoped read
@@ -106,7 +109,7 @@ describe('GET /api/inventory/trend', () => {
     expect(query.mock.calls[0][1]).toEqual([14, ['self']]);
   });
 
-  it('__all__ falls back to self-only when the accounts table is unavailable', async () => {
+  it('__all__ falls back to self-only when the accounts table is unavailable — with degraded disclosed', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockRejectedValueOnce(new Error('no accounts table'));
     query.mockResolvedValue({ rows: [] });
@@ -114,6 +117,9 @@ describe('GET /api/inventory/trend', () => {
     const res = await GET(req('/api/inventory/trend?accounts=__all__'));
     expect(res.status).toBe(200);
     expect(query.mock.calls[1][1]).toEqual([14, ['self']]);
+    // this narrowing is invisible to coverage (computed against the fallen-back scope) —
+    // the response must say so
+    expect((await res.json()).degraded).toBe(true);
   });
 
   it('returns PER-TYPE per-day account coverage + the resolved scope (the client parity guards depend on both)', async () => {

@@ -1538,6 +1538,10 @@ def sync(resource_type):
                     _write_snapshot_row(adb, acct, resource_type, counts.get(acct, 0))
                     if derived:
                         derived_type, where = derived
+                        # call-site guard on the concatenated fragment (defense-in-depth atop
+                        # the module-constant invariant): no statement separators/comments.
+                        if ";" in where or "--" in where or "/*" in where:
+                            raise ValueError("derived snapshot predicate is not a vetted constant")
                         n = adb.run(
                             "SELECT COUNT(*) FROM inventory_resources "
                             "WHERE resource_type=:t AND account_id=:a AND " + where,

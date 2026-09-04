@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
   Shield, ShieldCheck, DollarSign, TrendingUp, Bell, FileSearch, Cpu, Container,
@@ -20,7 +20,7 @@ import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
-import { nearestSnapshot, netChange, covComplete, isDerivedTrendType, DERIVED_TREND_TYPES, type TrendCoverage } from '@/lib/trend-utils';
+import { nearestSnapshot, netChange, covCompleteForScope, isDerivedTrendType, DERIVED_TREND_TYPES, type TrendCoverage } from '@/lib/trend-utils';
 import { estimateCostImpact, COST_IMPACT_WEIGHTS } from '@/lib/cost-impact';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -43,7 +43,7 @@ interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; s
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[]; monthly?: { month: string; total: number }[] }
 interface ResourceTrendPoint { date: string; total: number; ec2?: number; [k: string]: unknown }
-interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[]; coverage?: TrendCoverage; accounts?: string[] }
+interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[]; coverage?: TrendCoverage; accounts?: string[]; degraded?: boolean }
 interface FleetCluster {
   name: string;
   reachable: boolean;
@@ -96,35 +96,41 @@ export default function Home() {
   const [scope] = useActiveScope();
   const [trendDays, setTrendDays] = useState(14);
 
+  // Request generation token: loadAll re-runs on scope/period change, and a SLOW response
+  // from the previous scope must not overwrite a newer scope's state (the trend fetches are
+  // scope-keyed now, so a stale overwrite would silently present the wrong account scope).
+  const loadGen = useRef(0);
   const loadAll = useCallback(async () => {
+    const gen = ++loadGen.current;
+    const fresh = <T,>(set: (v: T) => void) => (v: T) => { if (loadGen.current === gen) set(v); };
     setBusy(true);
     // Core summaries (Aurora-backed, fast) gate the refresh spinner. Each degrades on its
     // own (allSettled) so one failure never blanks the others.
     await Promise.allSettled([
       fetch(`/api/overview?account=${encodeURIComponent(scope.accounts === '__all__' ? '__all__' : scope.accounts[0] ?? 'self')}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((d) => { setOv(d); setOvErr(''); })
-        .catch((e) => setOvErr(String(e))),
+        .then(fresh((d: Overview) => { setOv(d); setOvErr(''); }))
+        .catch((e) => fresh(setOvErr)(String(e))),
       fetch(`/api/inventory/summary?${scopeParams(scope)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((d) => { setSum(d); setSumErr(''); })
-        .catch((e) => setSumErr(String(e))),
+        .then(fresh((d: Summary) => { setSum(d); setSumErr(''); }))
+        .catch((e) => fresh(setSumErr)(String(e))),
       fetch('/api/cost')
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then(setCost)
-        .catch(() => setCost({ trend: [] })),
+        .then(fresh(setCost))
+        .catch(() => fresh(setCost)({ trend: [] })),
       // Trend is account-scoped (gap L124; snapshots have no region dimension, so only the
       // accounts half of the scope is passed — the region-gated KPIs below account for that).
       fetch(`/api/inventory/trend?days=${trendDays}${trendAcctParam(scope)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then(setResTrend)
-        .catch(() => setResTrend({ trend: [] })),
+        .then(fresh(setResTrend))
+        .catch(() => fresh(setResTrend)({ trend: [] })),
       fetch(`/api/inventory/trend?days=35${trendAcctParam(scope)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then(setImpactTrend)
-        .catch(() => setImpactTrend({ trend: [] })),
+        .then(fresh(setImpactTrend))
+        .catch(() => fresh(setImpactTrend)({ trend: [] })),
     ]);
-    setBusy(false);
+    if (loadGen.current === gen) setBusy(false);
 
     // EKS fleet is a LIVE K8s read (nodes/pods/events per cluster). Kept OUT of the
     // busy-gated set so it never blocks the spinner, and bounded on BOTH ends: the client
@@ -268,11 +274,16 @@ export default function Home() {
     hasFleet && recentEvents.length > 0 && { key: 'k8s', dot: 'var(--warning)', text: `K8s Warning 이벤트 ${recentEvents.length}건`, href: '/eks' },
   ].filter((w): w is { key: string; dot: string; text: string; href: string } => Boolean(w));
 
-  // Multi-line trend series + Current/7d/30d delta rows (v1 parity). L126: top 8 types as
-  // toggle chips (the chart palette has exactly 8 hues — more would duplicate colors) — Core
-  // (top 5) visible by default, Other default-hidden; colors stay pinned to each series'
-  // original index inside MultiLineTrend.
-  const trendTypes = (resTrend?.types ?? []).slice(0, 8);
+  // Multi-line trend series + Current/7d/30d delta rows (v1 parity). L126: top 8 REAL types
+  // as toggle chips — Core (top 5) visible by default, Other default-hidden. L129: the derived
+  // security series are APPENDED after the top-8 (their own default-hidden legend group) —
+  // ranked ~40th among all synced types, a plain top-8 slice would make them unreachable in
+  // the chart entirely. The palette has 8 hues; indices past 8 wrap (colorFor is modulo), a
+  // conscious trade — derived series are default-hidden, so duplicated hues only co-occur
+  // when a user opts a security series in. Colors stay pinned to each series' index.
+  const realTrendTypes = (resTrend?.types ?? []).filter((t) => !isDerivedTrendType(t));
+  const derivedTrendTypes = (resTrend?.types ?? []).filter((t) => isDerivedTrendType(t));
+  const trendTypes = [...realTrendTypes.slice(0, 8), ...derivedTrendTypes];
   const trendSeries = trendTypes.map((t) => ({ key: t, label: INV_LABEL(t) }));
   const coreTypes = trendTypes.slice(0, 5);
   // Chart honesty (gap L124): a (day, type) whose account coverage is less than the RESOLVED
@@ -291,7 +302,7 @@ export default function Home() {
       let total = 0;
       for (const [k, v] of Object.entries(p)) {
         if (k === 'date' || k === 'total' || typeof v !== 'number') continue;
-        if (!covComplete(cov, p.date, k, resolved)) { gapped = true; continue; }
+        if (!covCompleteForScope(cov, p.date, k, resolved)) { gapped = true; continue; }
         q[k] = v;
         if (!isDerivedTrendType(k)) total += v;
       }
@@ -302,15 +313,16 @@ export default function Home() {
   })();
   // Scope-narrowing disclosure (the route returns the RESOLVED account list): a CSV selection
   // whose invalid/dropped ids shrank the resolved set is named rather than silently narrowed.
-  // ('__all__' resolves server-side; a self-only resolution there is indistinguishable from a
-  // genuinely member-less org client-side, so it is covered by the coverage gaps instead.)
+  // The '__all__'→self fallback (accounts table unavailable) is disclosed by the route's own
+  // `degraded` flag — coverage is computed against the already-fallen-back scope, so no
+  // coverage gap would ever surface that narrowing by itself.
   const selectedValidAccts = Array.isArray(scope.accounts)
     ? [...new Set(scope.accounts.filter((a) => a === 'self' || /^\d{12}$/.test(a)))]
     : null;
-  const trendScopeNarrowed = Boolean(
+  const trendScopeNarrowed = Boolean(resTrend?.degraded) || Boolean(
     resTrend?.accounts && selectedValidAccts && resTrend.accounts.length < selectedValidAccts.length,
   );
-  const otherTypes = trendTypes.slice(5);
+  const otherTypes = trendTypes.slice(5).filter((t) => !isDerivedTrendType(t));
   // L127: 7d net change (lib/trend-utils netChange — coverage-parity diff with honest-degrade
   // branches; see its doc). The trend data IS account-scoped now (gap L124 — the fetch above
   // passes the accounts scope), but snapshots still have no REGION dimension — so a narrowed
@@ -339,7 +351,7 @@ export default function Home() {
     const cov = resTrend?.coverage;
     const resolved = resTrend?.accounts;
     const covOk = (p: { date: string } | null, t: string): boolean =>
-      !cov || !resolved || (p != null && covComplete(cov, p.date, t, resolved));
+      !cov || !resolved || (p != null && covCompleteForScope(cov, p.date, t, resolved));
     const w = nearestSnapshot(pts, 7);
     const m = nearestSnapshot(pts, 30);
     // Key ABSENCE means "no successful sync for that type that day" (the route no longer
@@ -388,7 +400,7 @@ export default function Home() {
       const covMismatch = (impactTrend?.types ?? []).some(
         (t) => COST_IMPACT_WEIGHTS[t] != null
           && typeof last[t] === 'number' && typeof base[t] === 'number'
-          && !(covComplete(cov, last.date, t, covScope) && covComplete(cov, base.date, t, covScope)),
+          && !(covCompleteForScope(cov, last.date, t, covScope) && covCompleteForScope(cov, base.date, t, covScope)),
       );
       if (covMismatch) return [];
     }
@@ -636,8 +648,9 @@ export default function Home() {
                   legendGroups={[
                     { label: tt('Core Resources'), keys: coreTypes },
                     ...(otherTypes.length ? [{ label: tt('Other Resources'), keys: otherTypes }] : []),
+                    ...(derivedTrendTypes.length ? [{ label: tt('보안 시리즈'), keys: derivedTrendTypes }] : []),
                   ]}
-                  defaultHidden={otherTypes}
+                  defaultHidden={[...otherTypes, ...derivedTrendTypes]}
                 />
                 {(chartData.gapped || trendScopeNarrowed) && (
                   <div className="mt-1 text-[11px] text-ink-400">

@@ -43,7 +43,9 @@ import Screenshot from '@site/src/components/Screenshot';
 - CloudFront Distributions
 - WAF Web ACLs
 - ECR Repositories
-- Public S3 Buckets、Open Security Groups、Unencrypted EBS
+
+### 安全序列（默认隐藏，独立开关组）
+- Public S3 Buckets、Open Security Groups、Unencrypted EBS — 采用安全页面判定标准的派生计数，不计入总数
 
 ### 资源表格
 | 列 | 说明 |
@@ -66,7 +68,7 @@ import Screenshot from '@site/src/components/Screenshot';
 ## 使用方法
 
 1. **查看趋势**: 在图表中查看资源数量的变化模式
-2. **更改期间**: 使用 30d/90d 开关调整分析期间
+2. **更改期间**: 使用 14d（默认）/30d/90d 开关调整分析期间
 3. **选择资源**: 使用切换按钮只显示关注的资源
 4. **表格分析**: 查看详细数值及变化率
 5. **成本影响**: 查看底部的成本估算区域

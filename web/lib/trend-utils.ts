@@ -32,6 +32,36 @@ export function covComplete(cov: TrendCoverage, d: string, type: string, account
   return have !== '' && have === [...accounts].sort().join(',');
 }
 
+/** Types whose snapshots are HOST-ONLY BY DESIGN: the sync lambda's SDK collectors run
+ *  against the host account only (their `present` set is always ⊆ {'self'}), so their
+ *  coverage can never include a member account. LOCKSTEP with sync_lambda.py's SDK_SYNCS
+ *  keys (+ `public_s3_buckets`, the derived series riding the s3_public_access SDK sync) —
+ *  pytest (test_sync_lambda_queries.py) pins this set against the Python dict. Without this
+ *  exemption, covComplete against a multi-account scope would mark these types incomplete
+ *  FOREVER (permanently blanking the KPI/chart/impact in exactly the multi-account scenario
+ *  the scoping exists for) — the guard couldn't tell "silent this run" from "host-only". */
+export const HOST_ONLY_TREND_TYPES: ReadonlySet<string> = new Set([
+  's3',
+  's3_public_access',
+  'opensearch_serverless',
+  'cloudfront_vpc_origin',
+  'alb_listener_rule',
+  'public_s3_buckets',
+]);
+
+/** The account set a type's snapshot coverage can EVER reach under the resolved scope:
+ *  host-only types are checked against `resolved ∩ {'self'}`; everything else against the
+ *  full resolved scope. An empty result fails covComplete (fail-closed) — such a type
+ *  shouldn't have rows under that scope at all. */
+export function expectedAccounts(type: string, resolved: string[]): string[] {
+  return HOST_ONLY_TREND_TYPES.has(type) ? resolved.filter((a) => a === 'self') : resolved;
+}
+
+/** covComplete against the type's EXPECTED scope (see expectedAccounts). */
+export function covCompleteForScope(cov: TrendCoverage, d: string, type: string, resolved: string[]): boolean {
+  return covComplete(cov, d, type, expectedAccounts(type, resolved));
+}
+
 /** Own-property check for the derived-series map: resource_type values pass a snake_case
  *  charset guard, which still admits Object.prototype keys ('constructor') and '__proto__' —
  *  an `in` lookup would misclassify them (the applyTerms hasOwnProperty precedent). */
@@ -130,7 +160,8 @@ export function netChange(
   if (coverage) {
     for (const k of lastKeys) {
       const ok = accounts
-        ? covComplete(coverage, last.date, k, accounts) && covComplete(coverage, base.date, k, accounts)
+        ? covCompleteForScope(coverage, last.date, k, accounts)
+          && covCompleteForScope(coverage, base.date, k, accounts)
         : typeCovEqual(coverage, last.date, base.date, k);
       if (!ok) return null;
     }

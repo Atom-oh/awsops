@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { nearestSnapshot, netChange, typeCovEqual, covComplete, isDerivedTrendType } from './trend-utils';
+import { nearestSnapshot, netChange, typeCovEqual, covComplete, covCompleteForScope, expectedAccounts, isDerivedTrendType } from './trend-utils';
 
 const day = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
 
@@ -148,5 +148,32 @@ describe('scope-relative coverage completeness (round 3)', () => {
     expect(isDerivedTrendType('unencrypted_ebs')).toBe(true);
     expect(isDerivedTrendType('constructor')).toBe(false);
     expect(isDerivedTrendType('__proto__')).toBe(false);
+  });
+});
+
+describe('host-only type exemption (round 4)', () => {
+  it('host-only SDK types check coverage against resolved ∩ {self}, not the full scope', () => {
+    const scope = ['self', '222233334444'];
+    // s3 snapshots can only ever be written by the host — {'self'} coverage IS complete
+    const cov = { [day(0)]: { s3: ['self'], ec2: ['self', '222233334444'] } };
+    expect(covCompleteForScope(cov, day(0), 's3', scope)).toBe(true);
+    expect(covCompleteForScope(cov, day(0), 'ec2', scope)).toBe(true);
+    // a genuinely multi-account type with self-only coverage still fails
+    expect(covCompleteForScope(cov, day(0), 'lambda', scope)).toBe(false);
+    expect(expectedAccounts('s3_public_access', scope)).toEqual(['self']);
+    expect(expectedAccounts('public_s3_buckets', scope)).toEqual(['self']);
+    expect(expectedAccounts('ec2', scope)).toEqual(scope);
+  });
+  it('netChange with a multi-account scope does not permanently null on host-only types', () => {
+    const scope = ['self', '222233334444'];
+    const pts = [
+      { date: day(7), total: 15, ec2: 10, s3: 5 },
+      { date: day(0), total: 17, ec2: 12, s3: 5 },
+    ];
+    const cov = {
+      [day(7)]: { ec2: ['222233334444', 'self'], s3: ['self'] },
+      [day(0)]: { ec2: ['self', '222233334444'], s3: ['self'] },
+    };
+    expect(netChange(pts, 7, cov, scope)).toBe(2);
   });
 });

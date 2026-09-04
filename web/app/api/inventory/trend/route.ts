@@ -36,15 +36,26 @@ export async function GET(request: Request) {
     // sum the v1 backfill's cross-account 'aggregate' rows (double-counting backfilled days)
     // and offboarded accounts' history forever. Invalid CSV ids are dropped; an all-invalid
     // list falls back to 'self' rather than an unscoped read.
+    let scopeDegraded = false;
     const accounts: string[] = await (async () => {
       if (accountsParam === null) return ['self'];
       if (accountsParam === '__all__') {
         try {
+          // The IN-SCAN-SCOPE predicate, not bare `enabled`: mirrors the sync writer's own
+          // scope condition (sync_lambda.py PHASE1/round-6 "phantom account" rule — an enabled
+          // account with all_regions=false and zero enabled regions is never scanned, never
+          // snapshots, and would make coverage-completeness fail for every steampipe type
+          // forever). The resolved scope must be the writer's coverage universe.
           const r = await pool.query<{ account_id: string }>(
-            'SELECT account_id FROM accounts WHERE enabled AND NOT is_host',
+            `SELECT account_id FROM accounts a
+             WHERE a.enabled AND NOT a.is_host
+               AND (a.all_regions OR EXISTS (
+                 SELECT 1 FROM account_regions r WHERE r.account_id = a.account_id AND r.enabled
+               ))`,
           );
           return ['self', ...r.rows.map((x) => x.account_id)];
         } catch {
+          scopeDegraded = true; // disclosed to the client — this narrowing is otherwise silent
           return ['self']; // accounts table unavailable → honest host-only scope
         }
       }
@@ -138,8 +149,10 @@ export async function GET(request: Request) {
       return d !== 0 ? d : a.localeCompare(b);
     });
     // `accounts` = the RESOLVED scope (the /api/security precedent) — the client can disclose
-    // when it is narrower than the selector implied (e.g. the __all__ fallback).
-    return Response.json({ trend, types, coverage, accounts });
+    // when it is narrower than the selector implied. `degraded` marks the __all__→self
+    // fallback specifically: coverage is computed against the already-fallen-back scope, so
+    // no coverage gap would ever disclose that narrowing on its own.
+    return Response.json({ trend, types, coverage, accounts, ...(scopeDegraded ? { degraded: true } : {}) });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

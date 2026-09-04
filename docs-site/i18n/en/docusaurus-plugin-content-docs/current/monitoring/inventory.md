@@ -43,7 +43,9 @@ A page for tracking daily changes in AWS resource counts and estimating cost imp
 - CloudFront Distributions
 - WAF Web ACLs
 - ECR Repositories
-- Public S3 Buckets, Open Security Groups, Unencrypted EBS
+
+### Security Series (hidden by default, own toggle group)
+- Public S3 Buckets, Open Security Groups, Unencrypted EBS — derived counts using the Security page's criteria, excluded from the overall total
 
 ### Resource Table
 | Column | Description |
@@ -66,7 +68,7 @@ Estimates monthly cost impact based on resource count changes:
 ## How to Use
 
 1. **Check Trends**: Review resource count change patterns in the graph
-2. **Change Time Range**: Toggle between 30d/90d for analysis period
+2. **Change Time Range**: Toggle between 14d (default)/30d/90d for the analysis period
 3. **Select Resources**: Use toggle buttons to show only resources of interest
 4. **Analyze Table**: Review detailed numbers and change rates
 5. **Cost Impact**: Check the cost estimation section at the bottom

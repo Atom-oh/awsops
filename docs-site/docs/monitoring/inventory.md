@@ -43,7 +43,9 @@ AWS 리소스의 수량 변화를 일별로 추적하고 비용 영향을 추정
 - CloudFront Distributions
 - WAF Web ACLs
 - ECR Repositories
-- Public S3 Buckets, Open Security Groups, Unencrypted EBS
+
+### 보안 시리즈 (기본 숨김, 별도 토글 그룹)
+- Public S3 Buckets, Open Security Groups, Unencrypted EBS — 보안 페이지와 동일 판정 기준의 파생 카운트, 전체 합계(total) 미포함
 
 ### 리소스 테이블
 | 컬럼 | 설명 |
@@ -66,7 +68,7 @@ AWS 리소스의 수량 변화를 일별로 추적하고 비용 영향을 추정
 ## 사용 방법
 
 1. **추이 확인**: 그래프에서 리소스 수량 변화 패턴 확인
-2. **기간 변경**: 30d/90d 토글로 분석 기간 조정
+2. **기간 변경**: 14d(기본)/30d/90d 토글로 분석 기간 조정
 3. **리소스 선택**: 토글 버튼으로 관심 리소스만 표시
 4. **테이블 분석**: 상세 수치 및 변화율 확인
 5. **비용 영향**: 하단의 비용 추정 섹션 확인

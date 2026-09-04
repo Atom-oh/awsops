@@ -1576,6 +1576,7 @@ export const TERMS: Record<string, Pair> = {
   // Inventory-home KPI bar + trend legend (L126/L127).
   '리소스 타입': { en: 'Resource types', zh: '资源类型', ja: 'リソースタイプ' },
   'Core Resources': { en: 'Core Resources', zh: '核心资源', ja: 'コアリソース' },
+  '보안 시리즈': { en: 'Security series', zh: '安全序列', ja: 'セキュリティ系列' },
   'Other Resources': { en: 'Other Resources', zh: '其他资源', ja: 'その他のリソース' },
   '전체 리소스': { en: 'Total resources', zh: '资源总数', ja: 'リソース合計' },
   '7일 순증감': { en: '7d net change', zh: '7天净变化', ja: '7日間純増減' },
