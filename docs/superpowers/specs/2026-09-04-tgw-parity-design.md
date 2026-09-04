@@ -46,3 +46,32 @@ tables with routes).
 - pytest scripts/v2/steampipe: the transit_gateway SELECT remains registered/read-only.
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; audit tick +
   batch-42 note; CHANGELOG EN/KO; docs-site network guide touch only if it names TGW columns.
+
+## Round-1 corrections (review-driven)
+
+- **The IAM grant ships in this PR (the gate MAJOR)** — the web task role's EC2 actions are an
+  explicit enumeration lacking `ec2:DescribeTransitGatewayVpcAttachments`, so every options
+  describe would AccessDenied, the catch would swallow it, and the 4-minute TTL would memoize
+  the empty result: the headline column permanently '—' in production while the docs claimed
+  it delivered. workload.tf gains the single read-only action next to its three TGW siblings
+  (least-privilege preserved); requires `terraform apply` (deploy debt). A new test pins every
+  TGW SDK command this module issues to its workload.tf grant (closing the "new SDK call,
+  forgotten IAM action" class for this layer).
+- **Options denial is disclosed, never conflated with "not a VPC attachment" (the gate
+  MAJOR)** — the silent `.catch(→[])` violated this file's own honest-degrade contract
+  (degradedRegions = "MISSING, not empty"). The options describe now returns null on failure
+  (≠ empty list), surfaces `optionsDegradedRegions` through /api/tgw, and the card subtitle
+  names the degraded regions; the test that pinned the silent behavior now pins the
+  disclosure.
+- Minors closed: the VPC-attachment describe follows NextToken (≤5 pages — the general
+  attachment list's cap is pre-existing, but the asymmetry would have made a DISPLAYED row
+  past page 1 read '—' silently); missing individual option fields render '—' per the table's
+  null convention (was '?'); the CHANGELOG's blank-until-next-sync caveat is scoped to the
+  DNS/option columns (ASN was already synced and shows immediately, EN/KO amended in place);
+  the audit tick's retained original sentence gains a "(감사 당시 서술)" qualifier;
+  web/lib/CLAUDE.md's tgw.ts trap line records the third describe + the options-degrade
+  contract + the IAM-wiring guard; api-reference names optionsDegradedRegions.
+- Recorded (accepted/noted): the pre-redeploy dns_support facet offers only '(none)' until
+  the sync lambda redeploys (CHANGELOG-disclosed transitional state); RAM-shared cross-account
+  VPC attachments may not return options via the per-type describe — if observed, they land
+  under the same disclosed-null path, not a fabricated value.

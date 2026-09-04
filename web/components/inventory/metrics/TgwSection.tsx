@@ -30,6 +30,7 @@ export function TgwSection({ rows }: { rows: Row[] }) {
 
   const [attachments, setAttachments] = useState<TgwAttachment[]>([]);
   const [routeTables, setRouteTables] = useState<TgwRouteTable[]>([]);
+  const [optionsDegraded, setOptionsDegraded] = useState<string[]>([]);
   const [detailErr, setDetailErr] = useState('');
   const key = ids.join(',');
   useEffect(() => {
@@ -37,7 +38,14 @@ export function TgwSection({ rows }: { rows: Row[] }) {
     let live = true;
     fetch(`/api/tgw?ids=${encodeURIComponent(key)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => { if (live) { setAttachments(d.attachments ?? []); setRouteTables(d.routeTables ?? []); setDetailErr(''); } })
+      .then((d) => {
+        if (live) {
+          setAttachments(d.attachments ?? []);
+          setRouteTables(d.routeTables ?? []);
+          setOptionsDegraded(d.optionsDegradedRegions ?? []);
+          setDetailErr('');
+        }
+      })
       .catch((e) => { if (live) setDetailErr(String(e instanceof Error ? e.message : e)); });
     return () => { live = false; };
   }, [key]);
@@ -92,10 +100,12 @@ export function TgwSection({ rows }: { rows: Row[] }) {
     { key: 'rtb', label: 'Route Table', mono: true, value: (a) => a.routeTableId },
     {
       // gap L168: v1's row-click options JSON, rendered inline. Options exist only on VPC
-      // attachments (per-type API) — other types read '—' (disclosed in the card subtitle).
+      // attachments (per-type API) — other types read '—'; a DENIED options describe is
+      // disclosed via the subtitle (optionsDegraded), never presented as "not a VPC
+      // attachment". Missing individual fields render '—' (the table's null convention).
       key: 'options', label: 'Options', mono: true,
       value: (a) => (a.options
-        ? `DNS:${a.options.dnsSupport} IPv6:${a.options.ipv6Support} Appliance:${a.options.applianceModeSupport}`
+        ? `DNS:${a.options.dnsSupport ?? '—'} IPv6:${a.options.ipv6Support ?? '—'} Appliance:${a.options.applianceModeSupport ?? '—'}`
         : null),
     },
   ];
@@ -127,7 +137,7 @@ export function TgwSection({ rows }: { rows: Row[] }) {
 
       <Card
         title={tt('어태치먼트')}
-        subtitle={`${attachments.length} attachments · ${tt('available 아닌 상태는 위험으로 표시')} · ${tt('Options는 VPC 어태치먼트만 제공')}`}
+        subtitle={`${attachments.length} attachments · ${tt('available 아닌 상태는 위험으로 표시')} · ${tt('Options는 VPC 어태치먼트만 제공')}${optionsDegraded.length ? ` · ${tt('일부 리전의 Options 조회 실패 — 해당 리전 값은 누락')} (${optionsDegraded.join(', ')})` : ''}`}
         padded={false}
       >
         {detailErr && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('상세 조회 실패')}: {detailErr}</div>}

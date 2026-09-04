@@ -4,6 +4,7 @@ import {
   DescribeTransitGatewayRouteTablesCommand,
   DescribeTransitGatewayVpcAttachmentsCommand,
   SearchTransitGatewayRoutesCommand,
+  type TransitGatewayVpcAttachment,
 } from '@aws-sdk/client-ec2';
 
 // Transit Gateway 상세 (inventory transit_gateway 페이지 하단 테이블): 어태치먼트 +
@@ -42,8 +43,11 @@ export interface TgwAttachment {
   id: string; tgwId: string; resourceType: string; resourceId: string;
   state: string; routeTableId: string | null;
   /** VPC-attachment options (gap L168 — v1's row-click options JSON). The API exposes
-   *  options per attachment TYPE; only `vpc` attachments carry them — others stay null. */
-  options: { dnsSupport: string; ipv6Support: string; applianceModeSupport: string } | null;
+   *  options per attachment TYPE; only `vpc` attachments carry them — others stay null.
+   *  A null on a VPC attachment can also mean the options describe was denied/failed for
+   *  its region — that state is disclosed via TgwDetails.optionsDegradedRegions, never
+   *  silently conflated with "not a VPC attachment". Missing individual fields are null. */
+  options: { dnsSupport: string | null; ipv6Support: string | null; applianceModeSupport: string | null } | null;
 }
 export interface TgwRoute {
   cidr: string; type: string; state: string;
@@ -61,6 +65,10 @@ export interface TgwDetails {
   routeTables: TgwRouteTable[];
   // regions whose describe failed — their attachments/routeTables are MISSING, not empty (honest-degrade)
   degradedRegions?: string[];
+  // regions whose VPC-attachment OPTIONS describe failed (denied/throttled) while the main
+  // describes succeeded — their VPC attachments render without options, and the UI must not
+  // present that as "not a VPC attachment" (same honest-degrade contract as degradedRegions).
+  optionsDegradedRegions?: string[];
 }
 
 const ROUTE_CAP = 100;
@@ -81,6 +89,7 @@ export async function tgwDetails(tgws: { id: string; region?: string }[]): Promi
       attachments: parts.flatMap((p) => p.attachments),
       routeTables: parts.flatMap((p) => p.routeTables),
       degradedRegions: parts.flatMap((p) => p.degradedRegions ?? []),
+      optionsDegradedRegions: parts.flatMap((p) => p.optionsDegradedRegions ?? []),
     };
   });
 }
@@ -94,20 +103,34 @@ async function tgwRegionDetails(region: string, ids: string[]): Promise<TgwDetai
       ec2(region).send(new DescribeTransitGatewayRouteTablesCommand({
         Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 50,
       })),
-      // VPC-attachment options (gap L168): one extra read-only describe per region — options
-      // are only exposed on the per-type API. A denied/failed call degrades to no options
-      // (null) without failing the whole region (attachments/routes still render).
-      ec2(region).send(new DescribeTransitGatewayVpcAttachmentsCommand({
-        Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 200,
-      })).catch(() => ({ TransitGatewayVpcAttachments: [] })),
+      // VPC-attachment options (gap L168): read-only describes per region — options are only
+      // exposed on the per-type API. NextToken is followed (the general attachment list's
+      // MaxResults cap is pre-existing; without pagination HERE a displayed row past page 1
+      // would silently read '—'). A denied/failed call degrades to no options WITHOUT failing
+      // the region — disclosed via optionsDegraded, never conflated with "not a VPC attachment".
+      (async () => {
+        const out: TransitGatewayVpcAttachment[] = [];
+        let token: string | undefined;
+        for (let page = 0; page < 5; page += 1) {
+          const r = await ec2(region).send(new DescribeTransitGatewayVpcAttachmentsCommand({
+            Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 200,
+            ...(token ? { NextToken: token } : {}),
+          }));
+          out.push(...(r.TransitGatewayVpcAttachments ?? []));
+          token = r.NextToken;
+          if (!token) break;
+        }
+        return out;
+      })().catch(() => null), // null = the OPTIONS describe failed (≠ empty list)
     ]);
+    const optionsDegraded = vpcAtt === null;
     const optById = new Map<string, TgwAttachment['options']>();
-    for (const v of vpcAtt.TransitGatewayVpcAttachments ?? []) {
+    for (const v of vpcAtt ?? []) {
       if (!v.TransitGatewayAttachmentId || !v.Options) continue;
       optById.set(v.TransitGatewayAttachmentId, {
-        dnsSupport: v.Options.DnsSupport ?? '?',
-        ipv6Support: v.Options.Ipv6Support ?? '?',
-        applianceModeSupport: v.Options.ApplianceModeSupport ?? '?',
+        dnsSupport: v.Options.DnsSupport ?? null,
+        ipv6Support: v.Options.Ipv6Support ?? null,
+        applianceModeSupport: v.Options.ApplianceModeSupport ?? null,
       });
     }
     const attachments: TgwAttachment[] = (att.TransitGatewayAttachments ?? []).map((a) => ({
@@ -142,7 +165,10 @@ async function tgwRegionDetails(region: string, ids: string[]): Promise<TgwDetai
         };
       }),
     );
-    return { attachments, routeTables };
+    return {
+      attachments, routeTables,
+      ...(optionsDegraded ? { optionsDegradedRegions: [region] } : {}),
+    };
   } catch {
     return { attachments: [], routeTables: [], degradedRegions: [region] }; // per-region degrade
   }

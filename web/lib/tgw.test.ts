@@ -70,7 +70,7 @@ describe('tgwDetails (gap L168)', () => {
     expect(vpn?.options).toBeNull(); // the API exposes options per attachment TYPE
   });
 
-  it('a failed VPC-attachment describe degrades to null options WITHOUT failing the region', async () => {
+  it('a failed VPC-attachment describe degrades to null options WITHOUT failing the region — and DISCLOSES it', async () => {
     mockRegion({
       attachments: [
         { TransitGatewayAttachmentId: 'tgw-attach-vpc', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-1', State: 'available' },
@@ -82,6 +82,50 @@ describe('tgwDetails (gap L168)', () => {
     expect(d.attachments).toHaveLength(1); // attachments/routes still render
     expect(d.attachments[0].options).toBeNull();
     expect(d.degradedRegions ?? []).toEqual([]); // options degrade is NOT a region degrade
+    // …but it IS disclosed: a denied options describe must never be conflated with
+    // "not a VPC attachment" (the honest-degrade contract this file established)
+    expect(d.optionsDegradedRegions).toEqual(['ap-northeast-2']);
+  });
+
+  it('a successful options describe reports NO options degradation', async () => {
+    mockRegion({ attachments: [], vpcAttachments: [] });
+    const { tgwDetails } = await import('./tgw');
+    const d = await tgwDetails([{ id: 'tgw-1' }]);
+    expect(d.optionsDegradedRegions ?? []).toEqual([]);
+  });
+
+  it('follows NextToken on the VPC-attachment describe (a row past page 1 must not read —)', async () => {
+    let call = 0;
+    ec2Send.mockImplementation(async (cmd: unknown) => {
+      const c = cmd as Cmd;
+      switch (c.constructor.name) {
+        case 'DescribeTransitGatewayAttachmentsCommand':
+          return { TransitGatewayAttachments: [
+            { TransitGatewayAttachmentId: 'att-2', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-2', State: 'available' },
+          ] };
+        case 'DescribeTransitGatewayVpcAttachmentsCommand': {
+          call += 1;
+          if (call === 1) {
+            expect((c.input as { NextToken?: string }).NextToken).toBeUndefined();
+            return { TransitGatewayVpcAttachments: [
+              { TransitGatewayAttachmentId: 'att-1', Options: { DnsSupport: 'enable', Ipv6Support: 'disable', ApplianceModeSupport: 'disable' } },
+            ], NextToken: 't2' };
+          }
+          expect((c.input as { NextToken?: string }).NextToken).toBe('t2');
+          return { TransitGatewayVpcAttachments: [
+            { TransitGatewayAttachmentId: 'att-2', Options: { DnsSupport: 'disable', Ipv6Support: 'disable', ApplianceModeSupport: 'enable' } },
+          ] };
+        }
+        case 'DescribeTransitGatewayRouteTablesCommand':
+          return { TransitGatewayRouteTables: [] };
+        default:
+          throw new Error('unexpected');
+      }
+    });
+    const { tgwDetails } = await import('./tgw');
+    const d = await tgwDetails([{ id: 'tgw-1' }]);
+    expect(call).toBe(2);
+    expect(d.attachments[0].options).toEqual({ dnsSupport: 'disable', ipv6Support: 'disable', applianceModeSupport: 'enable' });
   });
 
   it('groups by owning region (a TGW in another region is queried with that region client)', async () => {
@@ -110,5 +154,23 @@ describe('tgwDetails (gap L168)', () => {
     const d = await tgwDetails([{ id: 'tgw-1' }]);
     expect(d.routeTables[0].truncated).toBe(true);
     expect(d.routeTables[0].routes[0]).toEqual({ cidr: '10.0.0.0/8', type: 'propagated', state: 'active', resourceId: 'vpc-1', resourceType: 'vpc' });
+  });
+});
+
+describe('IAM wiring guard (the "new SDK call, forgotten IAM action" class)', () => {
+  it('every TGW describe this module issues is granted in workload.tf', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const tf = readFileSync(
+      join(__dirname, '..', '..', 'terraform', 'v2', 'foundation', 'workload.tf'), 'utf8',
+    );
+    for (const action of [
+      'ec2:DescribeTransitGatewayAttachments',
+      'ec2:DescribeTransitGatewayVpcAttachments',
+      'ec2:DescribeTransitGatewayRouteTables',
+      'ec2:SearchTransitGatewayRoutes',
+    ]) {
+      expect(tf, `${action} missing from the web task role`).toContain(`"${action}"`);
+    }
   });
 });

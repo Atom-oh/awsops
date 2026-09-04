@@ -1081,6 +1081,7 @@ export const TERMS: Record<string, Pair> = {
   '어태치먼트': { en: 'Attachments', zh: '挂载', ja: 'アタッチメント' },
   'available 아닌 상태는 위험으로 표시': { en: 'States other than available are flagged as risk', zh: '非 available 状态标记为风险', ja: 'available 以外の状態は危険として表示' },
   'Options는 VPC 어태치먼트만 제공': { en: 'Options are available for VPC attachments only', zh: 'Options 仅 VPC 附件提供', ja: 'Options は VPC アタッチメントのみ提供' },
+  '일부 리전의 Options 조회 실패 — 해당 리전 값은 누락': { en: 'Options lookup failed in some regions — values there are missing', zh: '部分区域的 Options 查询失败 — 相应区域的值缺失', ja: '一部リージョンの Options 取得に失敗 — 該当リージョンの値は欠落' },
   '상세 조회 실패': { en: 'Detail fetch failed', zh: '详情查询失败', ja: '詳細照会失敗' },
   '라우팅 테이블': { en: 'Route tables', zh: '路由表', ja: 'ルートテーブル' },
   '라우트는 active/blackhole만, 테이블당 상한 있음': { en: 'Routes limited to active/blackhole, capped per table', zh: '仅显示 active/blackhole 路由，每个表有上限', ja: 'ルートは active/blackhole のみ、テーブルごとに上限あり' },

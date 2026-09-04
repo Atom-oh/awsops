@@ -81,7 +81,7 @@
 ## tgw (1)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
-| `/api/tgw` | GET | Transit Gateway 상세 — 어태치먼트(+VPC 어태치먼트 options: DNS/IPv6/Appliance — VPC 타입만, 조회 실패 시 options만 누락) + 라우트 테이블(+라우트). `ids`는 `tgw-` 접두사만 통과, 인벤토리로 TGW별 소속 리전 해석 | verifyUser |
+| `/api/tgw` | GET | Transit Gateway 상세 — 어태치먼트(+VPC 어태치먼트 options: DNS/IPv6/Appliance — VPC 타입만, 조회 실패 시 options만 누락, optionsDegradedRegions로 공개) + 라우트 테이블(+라우트). `ids`는 `tgw-` 접두사만 통과, 인벤토리로 TGW별 소속 리전 해석 | verifyUser |
 
 ## vpce (1)
 | 경로 | 메서드 | 역할 | 인증 |
