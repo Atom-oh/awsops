@@ -47,6 +47,9 @@ export function buildQueryGenSystem(lang: string, schemaBlock: string): string {
     `You translate a natural-language request into a SINGLE ${lang} query for a data-exploration console.`,
     `Output ONLY the query — no explanation, no prose, no commentary, no multiple queries. A single fenced code block is allowed but optional.`,
     `Use ONLY the table, column, metric, and label names that appear in the schema below. Never invent names.`,
+    lang === 'PromQL'
+      ? `Prefer RAW metric names over recording-rule names (names containing ':') unless the schema lists the rule. When an arithmetic expression combines two vectors, both sides MUST carry matching labels — aggregate both sides the same way (e.g. sum by (instance)(...) on both), never mix a pre-aggregated rule with a raw per-instance metric.`
+      : '',
     isSql
       ? `The query MUST be read-only: it must START with SELECT, WITH, SHOW, or DESCRIBE. NEVER write INSERT/UPDATE/ALTER/DROP/CREATE/DELETE/TRUNCATE/SET/SYSTEM, and NEVER use table functions (url/file/remote/s3/mysql/postgresql/...). Do not add explanation or a leading comment.`
       : '',
@@ -118,18 +121,85 @@ export interface GenerateQueryInput {
   send?: QueryGenSend;
 }
 
+// ── PromQL vocabulary anchoring (the '메모리 사용률' NL-chip bug) ─────────────────────────────
+// The model is TOLD to use only schema names, but nothing verified it: it emitted
+// `:node_memory_MemAvailable_bytes:sum` (a recording rule absent from the target) mixed with a raw
+// metric — a query that parses, returns empty, and reads as "쿼리가 안 맞음". Mirror of the Python
+// diag-signal `_mentions_schema_vocabulary` gate: every metric-name token in the generated PromQL
+// must appear in the schema block the model was shown; unknown names trigger ONE corrective retry,
+// then an honest error naming them (this route never executes queries, so a dry run is not an option).
+
+// PromQL builtins that legally appear as bare identifiers OUTSIDE braces (aggregators, functions,
+// keywords, literals). A name not in this set and not in the schema is an invented metric.
+const PROMQL_BUILTINS = new Set([
+  'sum', 'min', 'max', 'avg', 'group', 'stddev', 'stdvar', 'count', 'count_values', 'bottomk', 'topk',
+  'quantile', 'limitk', 'limit_ratio',
+  'by', 'without', 'on', 'ignoring', 'group_left', 'group_right', 'offset', 'bool', 'and', 'or', 'unless', 'atan2',
+  'abs', 'absent', 'absent_over_time', 'acos', 'acosh', 'asin', 'asinh', 'atan', 'atanh', 'ceil', 'changes',
+  'clamp', 'clamp_max', 'clamp_min', 'cos', 'cosh', 'day_of_month', 'day_of_week', 'day_of_year',
+  'days_in_month', 'deg', 'delta', 'deriv', 'exp', 'floor', 'histogram_avg', 'histogram_count',
+  'histogram_fraction', 'histogram_quantile', 'histogram_stddev', 'histogram_stdvar', 'histogram_sum',
+  'holt_winters', 'double_exponential_smoothing', 'hour', 'idelta', 'increase', 'info', 'irate',
+  'label_join', 'label_replace', 'ln', 'log10', 'log2', 'minute', 'month', 'pi', 'predict_linear', 'rad',
+  'rate', 'resets', 'round', 'scalar', 'sgn', 'sin', 'sinh', 'sort', 'sort_by_label', 'sort_by_label_desc',
+  'sort_desc', 'sqrt', 'tan', 'tanh', 'time', 'timestamp', 'vector', 'year',
+  'avg_over_time', 'count_over_time', 'last_over_time', 'mad_over_time', 'max_over_time', 'min_over_time',
+  'present_over_time', 'quantile_over_time', 'stddev_over_time', 'stdvar_over_time', 'sum_over_time',
+  'nan', 'inf',
+]);
+
+/** Metric-name tokens the query references but the schema block never mentions. Strings, label-matcher
+ *  bodies ({...} — label names/values are not metric names), and range/offset durations are stripped
+ *  first; remaining bare identifiers minus PromQL builtins must each appear in the schema block as a
+ *  whole token. Empty schema block → no check (the model was told there is no schema). */
+export function unknownPromqlNames(query: string, schemaBlock: string): string[] {
+  if (!schemaBlock) return [];
+  const stripped = query
+    .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`/g, ' ')
+    .replace(/\{[^}]*\}/g, ' ')
+    // grouping/matching clauses carry LABEL names, not metrics: by (instance), on(job), group_left(...)
+    .replace(/\b(by|without|on|ignoring|group_left|group_right)\s*\(\s*(?:[a-zA-Z_][a-zA-Z0-9_]*\s*(?:,\s*[a-zA-Z_][a-zA-Z0-9_]*\s*)*)?\)/gi, ' ')
+    .replace(/\[[0-9smhdwy:]+\]/gi, ' ');
+  const tokens = [...new Set(
+    [...stripped.matchAll(/[a-zA-Z_:][a-zA-Z0-9_:]*/g)].map((m) => m[0]),
+  )].filter((t) => !PROMQL_BUILTINS.has(t.toLowerCase()));
+  // whole-token presence in the schema block (word chars + ':' are name chars; '.' is a boundary)
+  return tokens.filter((t) => {
+    const esc = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return !new RegExp(`(^|[^a-zA-Z0-9_:])${esc}([^a-zA-Z0-9_:]|$)`).test(schemaBlock);
+  });
+}
+
 /** Generate a single query string. Throws on Bedrock failure (route → 502), on a prose answer (ALL
  *  kinds — not just SQL), and on a non-read-only SQL result — so a prose answer is never returned as the
  *  query (the failure this redesign fixes), for every datasource kind. */
 export async function generateQuery(input: GenerateQueryInput): Promise<string> {
   const send = input.send ?? bedrockSend;
   const system = buildQueryGenSystem(input.lang, input.schemaBlock);
+  const validate = (query: string): void => {
+    if (!query) throw new Error('empty query generated');
+    if (looksLikeProse(query, input.isSql)) throw new Error('model returned a prose answer, not a query');
+    if (input.isSql && !looksReadOnlySql(query)) {
+      throw new Error('could not generate a valid read-only query');
+    }
+  };
   const user = `<request>\n${input.nl}\n</request>`;
-  const query = extractQuery(String((await send(system, user, MODEL_ID)) ?? ''));
-  if (!query) throw new Error('empty query generated');
-  if (looksLikeProse(query, input.isSql)) throw new Error('model returned a prose answer, not a query');
-  if (input.isSql && !looksReadOnlySql(query)) {
-    throw new Error('could not generate a valid read-only query');
+  let query = extractQuery(String((await send(system, user, MODEL_ID)) ?? ''));
+  validate(query);
+  if (input.lang === 'PromQL') {
+    let unknown = unknownPromqlNames(query, input.schemaBlock);
+    if (unknown.length > 0) {
+      // ONE corrective retry with the violation named — the diag-signal REJECTED-path analogue
+      // (this route never executes queries, so anchoring is the strongest available check).
+      const retryUser = `${user}\n\nYour previous answer used names that are NOT in the schema: `
+        + `${unknown.join(', ')}. Rewrite the query using ONLY metric names listed in the schema.`;
+      query = extractQuery(String((await send(system, retryUser, MODEL_ID)) ?? ''));
+      validate(query);
+      unknown = unknownPromqlNames(query, input.schemaBlock);
+      if (unknown.length > 0) {
+        throw new Error(`generated query uses names not in this datasource's schema: ${unknown.join(', ')}`);
+      }
+    }
   }
   return query;
 }

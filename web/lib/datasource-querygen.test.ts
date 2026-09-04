@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildQueryGenSystem, extractQuery, looksReadOnlySql, looksLikeProse, stripLeadingSqlComments, generateQuery } from './datasource-querygen';
+import { buildQueryGenSystem, extractQuery, looksReadOnlySql, looksLikeProse, stripLeadingSqlComments, generateQuery, unknownPromqlNames, type QueryGenSend } from './datasource-querygen';
 
 describe('buildQueryGenSystem', () => {
   it('injects schema as DATA and forbids prose/markdown answers', () => {
@@ -94,5 +94,65 @@ describe('generateQuery', () => {
   it('propagates Bedrock failures (route maps to 502)', async () => {
     const send = vi.fn().mockRejectedValue(new Error('bedrock down'));
     await expect(generateQuery({ nl: 'x', lang: 'PromQL', schemaBlock: '', isSql: false, send })).rejects.toThrow(/bedrock down/);
+  });
+});
+
+describe('unknownPromqlNames (schema vocabulary anchoring — the 메모리 사용률 NL-chip bug)', () => {
+  const schema = 'metrics: node_memory_MemTotal_bytes node_memory_MemAvailable_bytes node_cpu_seconds_total up';
+  it('flags a recording-rule name the schema never lists (the reported query)', () => {
+    const q = '(1 - :node_memory_MemAvailable_bytes:sum / node_memory_MemTotal_bytes) * 100';
+    expect(unknownPromqlNames(q, schema)).toEqual([':node_memory_MemAvailable_bytes:sum']);
+  });
+  it('accepts a query built only from schema names + PromQL builtins', () => {
+    const q = 'topk(5, (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100)';
+    expect(unknownPromqlNames(q, schema)).toEqual([]);
+  });
+  it('label names inside {}, string literals and range durations are NOT metric names', () => {
+    const q = 'rate(node_cpu_seconds_total{mode="idle", weird_label="ghost_metric"}[5m])';
+    expect(unknownPromqlNames(q, schema)).toEqual([]);
+  });
+  it('a partial-name match does not count (whole-token anchoring)', () => {
+    // schema has node_memory_MemTotal_bytes — the substring must not satisfy a longer name
+    expect(unknownPromqlNames('node_memory_MemTotal_bytes_extra', schema)).toEqual(['node_memory_MemTotal_bytes_extra']);
+  });
+  it('no schema block → no check (the model was told there is no schema)', () => {
+    expect(unknownPromqlNames('anything_at_all', '')).toEqual([]);
+  });
+});
+
+describe('generateQuery PromQL anchoring retry', () => {
+  it('retries ONCE with the unknown names named, and throws honestly when the retry still invents', async () => {
+    const calls: string[] = [];
+    const send: QueryGenSend = async (_s, user) => {
+      calls.push(user);
+      return ':invented:sum / node_memory_MemTotal_bytes';
+    };
+    await expect(generateQuery({
+      nl: '메모리 사용률이 높은 인스턴스', lang: 'PromQL', isSql: false, send,
+      schemaBlock: 'node_memory_MemTotal_bytes node_memory_MemAvailable_bytes',
+    })).rejects.toThrow(/:invented:sum/);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('NOT in the schema: :invented:sum');
+  });
+  it('a corrected retry answer is returned', async () => {
+    let n = 0;
+    const send: QueryGenSend = async () => {
+      n += 1;
+      return n === 1
+        ? ':invented:sum'
+        : '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100';
+    };
+    const q = await generateQuery({
+      nl: 'x', lang: 'PromQL', isSql: false, send,
+      schemaBlock: 'node_memory_MemTotal_bytes node_memory_MemAvailable_bytes',
+    });
+    expect(q).toContain('node_memory_MemAvailable_bytes');
+    expect(n).toBe(2);
+  });
+  it('a first answer inside the vocabulary generates exactly one call', async () => {
+    let n = 0;
+    const send: QueryGenSend = async () => { n += 1; return 'sum by (instance)(up)'; };
+    await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 'up' });
+    expect(n).toBe(1);
   });
 });
