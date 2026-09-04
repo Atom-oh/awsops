@@ -167,8 +167,13 @@ describe('IAM wiring guard (the "new SDK call, forgotten IAM action" class)', ()
     // Derive the command list from the module SOURCE (not a hardcoded copy): a 5th SDK
     // command added to tgw.ts without an IAM grant must turn this red.
     const src = readFileSync(join(__dirname, 'tgw.ts'), 'utf8');
+    // Scope the scan to the @aws-sdk/client-ec2 import block: a future non-EC2 client's
+    // commands must not be asserted as ec2:<Name> (message accuracy — the guard itself is
+    // per-client by construction).
+    const importBlock = src.match(/import \{([\s\S]*?)\} from '@aws-sdk\/client-ec2';/)?.[1] ?? '';
+    expect(importBlock).not.toBe('');
     const commands = [...new Set(
-      [...src.matchAll(/\b([A-Z][A-Za-z]+)Command\b/g)].map((m) => m[1]),
+      [...importBlock.matchAll(/\b([A-Z][A-Za-z]+)Command\b/g)].map((m) => m[1]),
     )];
     expect(commands.length).toBeGreaterThanOrEqual(4); // sanity: the scan actually found them
     // read-only verb allowlist: any other verb here is a policy question, not a wiring fix

@@ -15,9 +15,10 @@ interface NodeEni {
 
 const mb = (v: number | null | undefined) => (v == null ? '—' : `${(v / 1024 / 1024).toFixed(1)} MB`);
 const cnt = (v: number | null | undefined) => (v == null ? '—' : Math.round(v).toLocaleString());
-// v1-parity rate view (gap L228): the tiles carried only the 1h cumulative sum; v1 showed
-// avg bytes + packet-rate. Derived as sum ÷ 3600 (labeled the 1h average) — same data, both
-// readings. null in → null out (no fabricated 0/s).
+// v1-parity rate view (gap L228): the tiles carried only the cumulative sum; v1 showed
+// avg bytes + packet-rate. Derived as sum ÷ 3600 over the newest COMPLETE hour bucket (the
+// route requests completeBuckets — a partial current-hour Sum ÷ 3600 understates ~12× just
+// past the hour; metrics.ts perSecond precedent). null in → null out (no fabricated 0/s).
 const rateBytes = (v: number | null | undefined) => {
   if (v == null) return null;
   const r = v / 3600;
@@ -57,7 +58,7 @@ export default function NodeEniSection({ nodeName }: { nodeName: string }) {
             <span> · ENI {d.eniCount}{d.maxEnis ? ` / max ${d.maxEnis}` : ''} · {tt(`IP ${d.totalIps}개`)}</span>
           </p>
           {d.traffic && (
-            <div className="mb-2 grid grid-cols-4 gap-2" title="인스턴스 트래픽 (1h 누적 + 1h 평균 rate) — CloudWatch에 ENI별 메트릭은 없어 인스턴스 레벨로 표시">
+            <div className="mb-2 grid grid-cols-4 gap-2" title="인스턴스 트래픽 — 완결된 직전 1시간 버킷의 누적 + 평균 rate (진행 중 부분 버킷 아님); CloudWatch에 ENI별 메트릭은 없어 인스턴스 레벨로 표시">
               {([
                 ['In', mb(d.traffic.netIn), rateBytes(d.traffic.netIn)],
                 ['Out', mb(d.traffic.netOut), rateBytes(d.traffic.netOut)],

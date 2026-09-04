@@ -460,7 +460,7 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
                     const podFailed = clusters.filter((c) => !failed.includes(c) && svcPods[c] == null);
                     const excluded = services.length - res.length;
                     const caption = [
-                      tt('컨테이너 요청량(request) 기준 — 실사용량 아님'),
+                      tt('컨테이너 요청량(request) 기준 — 실사용량 아님, Running Pod만 집계'),
                       excluded > 0 ? `${tt('셀렉터 없음/매칭 Running Pod 없음으로 제외')}: ${excluded}` : '',
                       podFailed.length ? `${tt('Pod 조회 실패로 차트에서 제외된 클러스터')}: ${podFailed.join(', ')}` : '',
                     ].filter(Boolean).join(' · ');

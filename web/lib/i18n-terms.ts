@@ -1080,7 +1080,7 @@ export const TERMS: Record<string, Pair> = {
   'PacketDropCountNoRoute — >0이면 매칭 라우트 없음(라우팅 문제 신호)': { en: 'PacketDropCountNoRoute — >0 means no matching route (routing problem signal)', zh: 'PacketDropCountNoRoute — >0 表示没有匹配的路由（路由问题信号）', ja: 'PacketDropCountNoRoute — >0 ならマッチするルートなし（ルーティング問題の兆候）' },
   '어태치먼트': { en: 'Attachments', zh: '挂载', ja: 'アタッチメント' },
   'available 아닌 상태는 위험으로 표시': { en: 'States other than available are flagged as risk', zh: '非 available 状态标记为风险', ja: 'available 以外の状態は危険として表示' },
-  '컨테이너 요청량(request) 기준 — 실사용량 아님': { en: 'Based on container requests — not live usage', zh: '基于容器 request — 非实际用量', ja: 'コンテナ request 基準 — 実使用量ではありません' },
+  '컨테이너 요청량(request) 기준 — 실사용량 아님, Running Pod만 집계': { en: 'Based on container requests — not live usage; Running pods only', zh: '基于容器 request — 非实际用量，仅统计 Running Pod', ja: 'コンテナ request 基準 — 実使用量ではなく、Running Pod のみ集計' },
   '셀렉터 없음/매칭 Running Pod 없음으로 제외': { en: 'Excluded (no selector / no matching Running pods)', zh: '已排除（无选择器/无匹配的 Running Pod）', ja: '除外（セレクタなし／一致する Running Pod なし）' },
   'Pod 조회 실패로 차트에서 제외된 클러스터': { en: 'Clusters excluded from the charts (pods fetch failed)', zh: '因 Pod 查询失败而从图表中排除的集群', ja: 'Pod 取得失敗によりチャートから除外されたクラスター' },
   '표시할 서비스가 없습니다': { en: 'No services to display', zh: '没有可显示的服务', ja: '表示するサービスがありません' },

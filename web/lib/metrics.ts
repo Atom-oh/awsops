@@ -704,6 +704,11 @@ async function fleetLatest(
   region?: string,
   windowMs = 3600_000,
   periodSec = 300,
+  // Sum metrics only: skip the still-filling newest bucket and take the newest COMPLETE one
+  // (ts + Period <= now) — dividing a partial Sum by the full period systematically
+  // understates a rate (the same trap the perSecond path above documents). Callers that opt
+  // in must widen windowMs so a complete bucket exists (2× the period).
+  completeBucketsOnly = false,
 ): Promise<Record<string, Record<string, number | null>>> {
   const out: Record<string, Record<string, number | null>> = {};
   if (!entities.length) return out;
@@ -727,7 +732,17 @@ async function fleetLatest(
         const mm = (res.Id ?? '').match(/^(\w+?)_i(\d+)$/);
         if (!mm) continue;
         const id = chunk[Number(mm[2])];
-        const v = res.Values?.[0];
+        let v = res.Values?.[0];
+        if (completeBucketsOnly) {
+          v = undefined;
+          const periodMs = (metrics.find((m) => m.key === mm[1])?.period ?? periodSec) * 1000;
+          const ts = res.Timestamps ?? [];
+          const vals = res.Values ?? [];
+          for (let k = 0; k < ts.length; k++) {
+            const t = ts[k] instanceof Date ? (ts[k] as Date) : new Date(String(ts[k]));
+            if (t.getTime() + periodMs <= Date.now()) { v = vals[k]; break; }
+          }
+        }
         if (id && typeof v === 'number') out[id][mm[1]] = v;
       }
     }
@@ -1128,8 +1143,14 @@ const EC2_DIAG_METRICS = [
   { key: 'ioBalance', name: 'EBSIOBalance%', stat: 'Average' },
   { key: 'byteBalance', name: 'EBSByteBalance%', stat: 'Average' },
 ] as const;
-export function ec2DiagFleetLive(instanceIds: string[], region?: string, rangeSec = 3600) {
-  return fleetLatest('AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_DIAG_METRICS, region, rangeSec * 1000, rangeSec);
+export function ec2DiagFleetLive(instanceIds: string[], region?: string, rangeSec = 3600, completeBuckets = false) {
+  // completeBuckets (gap L228 rate fix): the node-ENI tiles derive per-second rates from these
+  // Sums — a partial current-hour bucket ÷ 3600 understates ~12× at :05. The 2× window makes
+  // a complete bucket always available; other consumers keep the latest (partial) bucket.
+  return fleetLatest(
+    'AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_DIAG_METRICS,
+    region, rangeSec * 1000 * (completeBuckets ? 2 : 1), rangeSec, completeBuckets,
+  );
 }
 
 // Lambda per-function diagnostics (owner 가이드: 호출·에러(율)·스로틀·Duration p50/p99·동시성·
