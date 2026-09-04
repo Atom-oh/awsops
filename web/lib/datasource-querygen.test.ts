@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildQueryGenSystem, extractQuery, looksReadOnlySql, looksLikeProse, stripLeadingSqlComments, generateQuery, unknownPromqlNames, promqlAnchorSet, type QueryGenSend } from './datasource-querygen';
+import { buildQueryGenSystem, extractQuery, looksReadOnlySql, looksLikeProse, stripLeadingSqlComments, generateQuery, unknownPromqlNames, nearMissCandidates, type QueryGenSend } from './datasource-querygen';
 
 describe('buildQueryGenSystem', () => {
   it('injects schema as DATA and forbids prose/markdown answers', () => {
@@ -63,7 +63,7 @@ describe('looksLikeProse [1]', () => {
 describe('generateQuery', () => {
   it('returns the model query for a SQL datasource when it is read-only', async () => {
     const send = vi.fn().mockResolvedValue('```sql\nSELECT ServiceName FROM otel_traces LIMIT 10\n```');
-    const q = await generateQuery({ nl: 'services', lang: 'read-only SQL', schemaBlock: 'otel_traces(ServiceName String)', isSql: true, send });
+    const { query: q } = await generateQuery({ nl: 'services', lang: 'read-only SQL', schemaBlock: 'otel_traces(ServiceName String)', isSql: true, send });
     expect(q).toBe('SELECT ServiceName FROM otel_traces LIMIT 10');
     // the schema and the NL request both reached the model
     const [system, user] = send.mock.calls[0];
@@ -87,7 +87,7 @@ describe('generateQuery', () => {
 
   it('accepts a real single-line PromQL query (no false positive)', async () => {
     const send = vi.fn().mockResolvedValue('rate(node_cpu_seconds_total[5m])');
-    const q = await generateQuery({ nl: 'cpu', lang: 'PromQL', schemaBlock: '', isSql: false, send });
+    const { query: q } = await generateQuery({ nl: 'cpu', lang: 'PromQL', schemaBlock: '', isSql: false, send });
     expect(q).toBe('rate(node_cpu_seconds_total[5m])');
   });
 
@@ -110,72 +110,83 @@ describe('unknownPromqlNames (schema vocabulary anchoring — the 메모리 사�
   it('labels in {} / grouping clauses / strings / comments are NOT metric names', () => {
     expect(unknownPromqlNames('rate(node_cpu_seconds_total{mode="idle", weird="ghost"}[5m])', names)).toEqual([]);
     expect(unknownPromqlNames('sum by (instance)(up) # top talkers', names)).toEqual([]);
-    expect(unknownPromqlNames('sum without(cpu, mode)(node_cpu_seconds_total)', names)).toEqual([]);
+    // a # INSIDE a label value must not corrupt the strip (strings are removed first)
+    expect(unknownPromqlNames('up{job="a#b"}', names)).toEqual([]);
   });
-  it('duration/number literals never leak tokens (offset 5m, 1e9, epoch @) — the round-1 false positives', () => {
+  it('duration/number literals never leak tokens — incl. subqueries, compound durations, hex (round-2)', () => {
     expect(unknownPromqlNames('up offset 5m', names)).toEqual([]);
     expect(unknownPromqlNames('node_memory_MemTotal_bytes > 1e9', names)).toEqual([]);
-    expect(unknownPromqlNames('up @ 1609746000', names)).toEqual([]);
+    expect(unknownPromqlNames('max_over_time(rate(node_cpu_seconds_total[5m])[30m:1m])', names)).toEqual([]);
+    expect(unknownPromqlNames('avg_over_time(up[1h30m:])', names)).toEqual([]);
+    expect(unknownPromqlNames('up offset 1h30m', names)).toEqual([]);
+    expect(unknownPromqlNames('up > 0x1f', names)).toEqual([]);
     expect(unknownPromqlNames('up @ start() or up @ end()', names)).toEqual([]);
+    expect(unknownPromqlNames('up != inf and up != nan', names)).toEqual([]); // case-insensitive number literals
   });
   it('builtins are case-SENSITIVE: Rate is not a function and must be flagged', () => {
     expect(unknownPromqlNames('Rate(up[5m])', names)).toEqual(['Rate']);
   });
-  it('a partial-name match does not count (exact set membership)', () => {
-    expect(unknownPromqlNames('node_memory_MemTotal_bytes_extra', names)).toEqual(['node_memory_MemTotal_bytes_extra']);
+});
+
+describe('nearMissCandidates', () => {
+  it("suggests the raw metric for the reported recording-rule miss", () => {
+    const names = new Set(['node_memory_MemAvailable_bytes', 'up']);
+    expect(nearMissCandidates([':node_memory_MemAvailable_bytes:sum'], names)).toEqual(['node_memory_MemAvailable_bytes']);
   });
 });
 
-describe('promqlAnchorSet (when the gate may run)', () => {
-  it('no names / empty → null (schema-less generation is a supported route path)', () => {
-    expect(promqlAnchorSet(undefined)).toBeNull();
-    expect(promqlAnchorSet([])).toBeNull();
-  });
-  it('a connector-truncated list (>499) → null — anchoring to a partial vocabulary rejects real metrics', () => {
-    expect(promqlAnchorSet(Array.from({ length: 500 }, (_, i) => `m${i}`))).toBeNull();
-    expect(promqlAnchorSet(['up'])?.has('up')).toBe(true);
-  });
-});
-
-describe('generateQuery PromQL anchoring retry', () => {
+describe('generateQuery PromQL anchoring — ADVISORY semantics (round 2)', () => {
   const metricNames = ['node_memory_MemTotal_bytes', 'node_memory_MemAvailable_bytes', 'up'];
-  it('retries ONCE showing the previous answer, then throws honestly when the retry still invents', async () => {
+  it('retries ONCE (previous answer echoed, near-misses suggested); a persistent violation returns the draft WITH a warning — never throws', async () => {
     const calls: string[] = [];
     const send: QueryGenSend = async (_s, user) => {
       calls.push(user);
       return ':invented:sum / node_memory_MemTotal_bytes';
     };
-    await expect(generateQuery({
+    const out = await generateQuery({
       nl: '메모리 사용률이 높은 인스턴스', lang: 'PromQL', isSql: false, send,
-      schemaBlock: 'node_memory_MemTotal_bytes …', metricNames,
-    })).rejects.toThrow(/:invented:sum/);
+      schemaBlock: 's', metricNames, vocabularyComplete: true,
+    });
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toContain('Your previous answer was'); // the model sees what to rewrite
+    expect(calls[1]).toContain('<previous_answer>');
     expect(calls[1]).toContain('NOT in the schema: :invented:sum');
+    expect(out.query).toContain(':invented:sum'); // the draft is still delivered for review
+    expect(out.warning).toContain(':invented:sum');
+    expect(out.warning).not.toContain('truncated or stale'); // complete vocabulary → assertive wording
   });
-  it('a corrected retry answer is returned', async () => {
+  it('an incomplete/stale vocabulary softens the warning wording', async () => {
+    const send: QueryGenSend = async () => ':invented:sum';
+    const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames, vocabularyComplete: false });
+    expect(out.warning).toContain('truncated or stale');
+  });
+  it('a corrected retry answer is returned clean (no warning)', async () => {
     let n = 0;
     const send: QueryGenSend = async () => {
       n += 1;
       return n === 1 ? ':invented:sum' : '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100';
     };
-    const q = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames });
-    expect(q).toContain('node_memory_MemAvailable_bytes');
+    const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames });
+    expect(out.query).toContain('node_memory_MemAvailable_bytes');
+    expect(out.warning).toBeUndefined();
     expect(n).toBe(2);
   });
-  it('in-vocabulary first answer = one call; truncated vocabulary = gate skipped entirely', async () => {
+  it('in-vocabulary first answer = one call, no warning; empty vocabulary = gate skipped', async () => {
     let n = 0;
     const send: QueryGenSend = async () => { n += 1; return 'sum by (instance)(up)'; };
-    await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames: ['up'] });
+    const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames: ['up'] });
     expect(n).toBe(1);
-    n = 0;
-    const sendInv: QueryGenSend = async () => { n += 1; return ':anything:sum'; };
-    const big = Array.from({ length: 500 }, (_, i) => `m${i}`);
-    const q = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send: sendInv, schemaBlock: 's', metricNames: big });
-    expect(q).toBe(':anything:sum'); // knowably-incomplete vocabulary → no hard gate
-    expect(n).toBe(1);
+    expect(out).toEqual({ query: 'sum by (instance)(up)' });
+    const out2 = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send: async () => ':anything:sum', schemaBlock: 's', metricNames: [] });
+    expect(out2).toEqual({ query: ':anything:sum' }); // schema-less generation stays supported
   });
-  it('unbalanced braces from a truncated completion throw instead of defeating the strip', async () => {
+  it('keeps whichever answer violates LESS when both violate', async () => {
+    let n = 0;
+    const send: QueryGenSend = async () => (n += 1) === 1 ? ':a:sum / :b:sum' : ':a:sum / up';
+    const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames: ['up'] });
+    expect(out.query).toBe(':a:sum / up');
+    expect(out.warning).toContain(':a:sum');
+  });
+  it('unbalanced braces from a truncated completion throw (cannot run anyway)', async () => {
     const send: QueryGenSend = async () => 'sum(up{job="x"';
     await expect(generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames: ['up'] }))
       .rejects.toThrow(/unbalanced braces/);

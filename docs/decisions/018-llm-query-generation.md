@@ -1,8 +1,8 @@
 # ADR-018: LLM 쿼리 생성 (읽기 전용) / LLM Query Generation (read-only)
 
 ## Status / 상태
-**Accepted — 두 경로 모두 GATED, 기본 false: `graph_querygen_enabled`, `diag_signal_querygen_enabled`.**
-**Amended 2026-09-04:** 제3의 LLM 쿼리 생성 경로를 이 ADR의 기록 범위에 편입 — **Explore NL→쿼리
+**Accepted — 워커 두 경로는 GATED, 기본 false: `graph_querygen_enabled`, `diag_signal_querygen_enabled`. Explore NL→쿼리 초안 경로(2026-09-04 편입)는 LIVE·무플래그·초안 전용(§D).**
+**Amended 2026-09-04 (§D 신설):** 제3의 LLM 쿼리 생성 경로를 이 ADR의 기록 범위에 편입 — **Explore NL→쿼리
 초안 생성**(`POST /api/datasources/generate`, `web/lib/datasource-querygen.ts`). 이 경로는 이 ADR 본문의
 두 경로와 **계약이 다르다**: 라이브(플래그 없음 — 항상 켜진 사용자 개시 요청), 캐시 없음, **dry-run
 없음**(라우트 계약이 "절대 실행하지 않음" — 생성물은 사용자가 검토 후 실행하는 초안), 요청당 Haiku ≤2콜
@@ -42,7 +42,7 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 읽히면 리뷰어가 없는 방어를 있다고 믿게 되므로(리뷰 MAJOR, 2회), 공통 절에는 두 경로에 **실제로 모두** 있는
 것만 둔다.
 
-### A. 두 경로 공통 — 이것이 "동의"의 내용
+### A. 워커 두 경로(§B·§C) 공통 — 이것이 "동의"의 내용 (§D Explore 경로에는 적용되지 않음 — 자체 계약은 §D)
 
 1. **스키마 식별자가 Bedrock으로 나간다.** 테이블/컬럼/메트릭/라벨 **이름**만 나가고 데이터 행·자격증명은
    나가지 않는다.
@@ -116,12 +116,29 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 - 게이트가 층으로 쌓여 있어(정적 → 관련성 → dry-run) 어느 층이 무엇을 막는지 리뷰 가능하다.
 - 비용 상한이 코드에 있고 테스트로 고정되어, "LLM이 매일 도는" 형태로 조용히 번지지 않는다.
 
+### D. Explore NL→쿼리 초안 경로 (2026-09-04 편입) — 자체 계약
+
+`POST /api/datasources/generate` (`web/lib/datasource-querygen.ts`). §A와 다르다:
+- **LIVE·무플래그** — 사용자가 버튼을 눌러 자기 데이터소스의 스키마 이름을 모델에 보내는 명시적
+  요청(동의 모델이 플래그가 아니라 사용자 행위).
+- **dry-run 없음, 캐시 없음** — 라우트 계약이 "절대 실행하지 않음": 생성물은 사용자가 검토 후 실행하는
+  초안이고, 실행 시 커넥터의 read-only/SSRF 가드가 최종 방어다.
+- **정적·ADVISORY 어휘 앵커링(PromQL)** — 생성 쿼리의 메트릭 토큰을 전체 캐시 메트릭 목록과 대조,
+  위반 시 직전 답을 보여주는 교정 재시도 1회(요청당 Haiku ≤2콜) 후에도 남으면 **경고와 함께 초안 반환**
+  (하드 거부 아님 — 정적 토크나이저와 캐시 어휘 둘 다 틀릴 수 있고, 런타임 권위는 커넥터).
+  캐시가 커넥터 `truncated` 플래그이거나 오래되면(isSchemaStale) 경고 문구가 오탐 가능성을 명시.
+- SQL 은 §A와 무관하게 기존 read-only 1st-verb 게이트 + 커넥터 런타임 가드.
+
 ### Negative / 부정 (수용된 잔여 리스크)
 - Loki/Tempo dry-run에는 서버측 실행시간 상한이 없다(§B-3).
 - diag-signal 경로의 관련성 게이트는 정규식 기반이며 SQL/PromQL 파서가 아니다 — 우회 가능성이 남고, 실제로 리뷰에서 여러
   차례 우회 사례가 발견되어 그때마다 좁혔다. 이 게이트는 "정확성 판정"이 아니라 "명백한 무관/상수 차단"이며,
   다음 우회가 나오면 개별 패턴을 덧대기보다 커넥터 파서(예: ClickHouse `EXPLAIN AST`)로 옮기는 것이 옳다.
 - 생성 칩의 품질은 보장되지 않는다 — 사용자가 읽고 판단하는 표면이라는 전제(§B-6)가 이 리스크의 상한이다.
+- §D(Explore 초안) 수용 잔여: 어휘 게이트는 ADVISORY 다 — `{__name__="…"}` 셀렉터는 브레이스 스트립으로
+  게이트를 우회하고, 상수식(`vector(1)`)은 통과하며(§B의 `_is_constant_expr` 쌍은 미이식), 캐시
+  절단(커넥터 500개 캡)·스테일 캐시에서는 실존 메트릭이 경고로 오탐될 수 있다(그래서 경고이지 거부가
+  아님). 요청당 Bedrock 비용 상한은 2콜(인증 사용자 라우트, 별도 rate limit 없음).
 
 ## 6 Pillars
 - **Operational Excellence** — 폴백은 결정론 카탈로그를 대체하지 않고 보완한다. 실패는 항상 카탈로그 결과로
@@ -137,6 +154,6 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
   재검증 실패로 삭제되지 않는다. graph 경로: schema_version 캐시가 재생성 시점을 정한다.
 - **Performance** — diag-signal dry-run은 커넥터가 지원하는 최소 상한으로 실행된다(§B-3). graph dry-run은
   ClickHouse `LIMIT 1`이다.
-- **Cost** — Haiku 1콜. diag-signal 경로는 인스턴스당 주 3회 상한이 있고 꺼진 기간은 무과금이며, graph 경로는
+- **Cost** — 워커 두 경로는 Haiku 1콜(§D Explore 경로는 요청당 ≤2콜 — 교정 재시도 1회). diag-signal 경로는 인스턴스당 주 3회 상한이 있고 꺼진 기간은 무과금이며, graph 경로는
   주간 상한 없이 schema_version 드리프트에만 의존한다(§C-3).
-- **Sustainability** — 두 경로 모두 생성물을 캐시하여 스키마가 바뀔 때만 재생성한다(불필요한 반복 추론 없음).
+- **Sustainability** — 워커 두 경로는 생성물을 캐시하여 스키마가 바뀔 때만 재생성한다(불필요한 반복 추론 없음). §D는 사용자 개시 1회성 초안이라 캐시하지 않는다.

@@ -77,7 +77,7 @@ function refreshInBackground(accountId: string, ds: DatasourceRow, id: number, k
   void introspectAndCache(accountId, ds, id, kind).catch(() => {}).finally(() => refreshing.delete(id));
 }
 
-async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string, nl: string): Promise<{ block: string; metricNames: string[] }> {
+async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string, nl: string): Promise<{ block: string; metricNames: string[]; vocabularyComplete: boolean }> {
   const accountId = currentAccountId();
   // Float NL-relevant metric/label names to the front so they survive the render cap (Prometheus/Mimir
   // return hundreds of metrics alphabetically; the relevant ones would otherwise be dropped).
@@ -92,7 +92,14 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
         if (hasId && ds && isSchemaStale(own.fetched_at)) refreshInBackground(accountId, ds, id, kind);
         // FULL cached metric list (not the ~80-name rendered block) — the querygen anchor;
         // an in-block-only anchor falsely rejected real metrics past the render cap.
-        return { block, metricNames: schemaMetricNames(own.schema) };
+        // vocabularyComplete: the connector's OWN truncated flag (never inferred from length)
+        // AND cache freshness — an incomplete/stale vocabulary softens the advisory warning.
+        const truncated = Boolean((own.schema as { truncated?: unknown })?.truncated);
+        return {
+          block,
+          metricNames: schemaMetricNames(own.schema),
+          vocabularyComplete: !truncated && !isSchemaStale(own.fetched_at),
+        };
       }
     }
   } catch { /* cache is optional */ }
@@ -102,7 +109,7 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
   // Warm the cache in the BACKGROUND so the NEXT lookup is grounded; serve schema-less now (the model
   // writes a best-effort query and the connector's read-only guard backstops it on run).
   if (hasId && ds) refreshInBackground(accountId, ds, id, kind);
-  return { block: '', metricNames: [] };
+  return { block: '', metricNames: [], vocabularyComplete: false };
 }
 
 export async function POST(request: Request) {
@@ -135,11 +142,13 @@ export async function POST(request: Request) {
   const nl = typeof body.nl === 'string' ? body.nl.trim().slice(0, MAX_NL) : '';
   if (!nl) return json({ error: 'nl (natural-language request) required' }, 400);
 
-  const { block: schemaBlock, metricNames } = await resolveSchemaBlock(ds, id, hasId, kind, nl);
+  const { block: schemaBlock, metricNames, vocabularyComplete } = await resolveSchemaBlock(ds, id, hasId, kind, nl);
 
   try {
-    const query = await generateQuery({ nl, lang, schemaBlock, isSql, metricNames });
-    return json({ query, lang }, 200);
+    // ADVISORY contract: a vocabulary violation surviving the corrective retry returns the
+    // draft WITH `warning` (the user reviews before running) — never a 502.
+    const { query, warning } = await generateQuery({ nl, lang, schemaBlock, isSql, metricNames, vocabularyComplete });
+    return json({ query, lang, ...(warning ? { warning } : {}) }, 200);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : 'generation failed' }, 502);
   }

@@ -118,10 +118,23 @@ export interface GenerateQueryInput {
   lang: string;
   schemaBlock: string;
   isSql: boolean;
-  /** FULL cached metric-name list (PromQL kinds) — the vocabulary anchor. Omitted/empty or
-   *  connector-truncated (>499) → the anchoring gate is skipped (see promqlAnchorSet). */
+  /** FULL cached metric-name list (PromQL kinds) — the vocabulary anchor. Empty/omitted → no
+   *  check (schema-less generation is a supported route path). */
   metricNames?: string[];
+  /** False when the vocabulary is KNOWABLY incomplete — the connector's own `truncated` flag,
+   *  or a stale cache (isSchemaStale). Softens the warning wording; never changes the
+   *  advisory (return-with-warning) semantics. */
+  vocabularyComplete?: boolean;
   send?: QueryGenSend;
+}
+
+export interface GeneratedQuery {
+  query: string;
+  /** Set when the corrective retry still references names outside the cached vocabulary —
+   *  ADVISORY: the draft is returned for the user to review/edit, never blocked (a static
+   *  tokenizer and a cached vocabulary can both be wrong; the connector is the runtime
+   *  authority). */
+  warning?: string;
 }
 
 // ── PromQL vocabulary anchoring (the '메모리 사용률' NL-chip bug) ─────────────────────────────
@@ -129,20 +142,19 @@ export interface GenerateQueryInput {
 // `:node_memory_MemAvailable_bytes:sum` (a recording rule absent from the target) mixed with a raw
 // metric — a query that parses, returns empty, and reads as "쿼리가 안 맞음". The same failure class
 // was closed for the flag-gated worker paths by ADR-018 §B's vocabulary gate; this live Explore path
-// (a distinct contract — ADR-018 amendment 2026-09-04) gets the strongest STATIC check available,
-// because this route never executes queries (no dry run).
+// (a distinct contract — ADR-018 amendment 2026-09-04) gets a STATIC, ADVISORY check: the route never
+// executes queries (no dry run), and a static PromQL tokenizer can never be exhaustively right, so a
+// persistent vocabulary violation triggers ONE corrective retry and then returns the draft WITH A
+// WARNING naming the tokens — never a hard 502 (round-2: a hard reject punished subqueries the
+// tokenizer misread, metrics past the connector's 500-name truncation, and metrics newer than the
+// 6h-stale cache — all real queries).
 //
-// Anchor = the FULL cached metric-name array, NOT the rendered prompt block: the block caps at ~80
-// names, so a correct name past the cap (exactly the reported metric on a kube-prometheus target)
-// would be falsely rejected. The gate is skipped when the vocabulary is KNOWABLY INCOMPLETE — no
-// cached schema (schema-less generation is a supported path here, unlike the worker gate which
-// rejects on empty vocabulary: there, no anchor means no way to establish relevance; here, the
-// route explicitly serves schema-less requests) or a connector-truncated list (the Prometheus
-// connector caps at 500 names) — anchoring to a partial vocabulary would reject real metrics.
+// Anchor = the FULL cached metric-name array, NOT the rendered prompt block (the block caps at ~80
+// names — the reported metric itself sits past that cap on a kube-prometheus target).
 
 // PromQL builtins that legally appear as bare identifiers OUTSIDE braces (aggregators, functions,
-// keywords, @-modifier anchors, literals). Case-SENSITIVE — PromQL identifiers are; `Rate(...)`
-// is not a function call and must not silently pass as one.
+// keywords, @-modifier anchors, literals). Case-SENSITIVE except the number literals inf/nan
+// (PromQL numbers are case-insensitive — filtered separately below).
 const PROMQL_BUILTINS = new Set([
   'sum', 'min', 'max', 'avg', 'group', 'stddev', 'stdvar', 'count', 'count_values', 'bottomk', 'topk',
   'quantile', 'limitk', 'limit_ratio',
@@ -155,44 +167,53 @@ const PROMQL_BUILTINS = new Set([
   'label_join', 'label_replace', 'ln', 'log10', 'log2', 'minute', 'month', 'pi', 'predict_linear', 'rad',
   'rate', 'resets', 'round', 'scalar', 'sgn', 'sin', 'sinh', 'sort', 'sort_by_label', 'sort_by_label_desc',
   'sort_desc', 'sqrt', 'tan', 'tanh', 'time', 'timestamp', 'vector', 'year',
-  'avg_over_time', 'count_over_time', 'last_over_time', 'mad_over_time', 'max_over_time', 'min_over_time',
-  'present_over_time', 'quantile_over_time', 'stddev_over_time', 'stdvar_over_time', 'sum_over_time',
+  'avg_over_time', 'count_over_time', 'last_over_time', 'first_over_time', 'mad_over_time',
+  'max_over_time', 'min_over_time', 'present_over_time', 'quantile_over_time', 'stddev_over_time',
+  'stdvar_over_time', 'sum_over_time', 'ts_of_min_over_time', 'ts_of_max_over_time', 'ts_of_last_over_time',
   'start', 'end', // @-modifier anchors: `up @ start()`
-  'NaN', 'Inf',
 ]);
 
 /** Metric-name tokens the query references that are not in `metricNames`. Stripped before
- *  tokenizing: `#` comments, strings, label-matcher bodies `{…}` (label names/values are not metric
- *  names), grouping/matching label lists, and NUMBER/DURATION literals (`5m`, `1e9`, `0.5`,
- *  `1609746000` — without this the scan starts mid-literal and yields nonsense tokens like `m`/`e9`).
- *  Remaining bare identifiers minus PromQL builtins must each be an exact member of metricNames. */
+ *  tokenizing (ORDER MATTERS — strings before comments, or a `#` inside a label value corrupts the
+ *  strip): strings, `#` comments, bracket ranges/subqueries `[1h30m:5m]`, label-matcher bodies
+ *  `{…}`, grouping/matching label lists, compound duration literals (`1h30m`, `offset 5m`), hex and
+ *  decimal/exponent numbers (`0x1f`, `1e9`). Leftover pure-`:` tokens (subquery residue) and the
+ *  case-insensitive number literals inf/nan are filtered. Remaining bare identifiers minus PromQL
+ *  builtins must each be an exact member of metricNames. */
 export function unknownPromqlNames(query: string, metricNames: ReadonlySet<string>): string[] {
   const stripped = query
-    .replace(/#[^\n]*/g, ' ')
     .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`/g, ' ')
+    .replace(/#[^\n]*/g, ' ')
+    .replace(/\[[0-9smhdwy:\s]*\]/gi, ' ')
     .replace(/\{[^}]*\}/g, ' ')
     // grouping/matching clauses carry LABEL names, not metrics: by (instance), on(job), group_left(...)
     .replace(/\b(by|without|on|ignoring|group_left|group_right)\s*\(\s*(?:[a-zA-Z_][a-zA-Z0-9_]*\s*(?:,\s*[a-zA-Z_][a-zA-Z0-9_]*\s*)*)?\)/g, ' ')
-    // number + duration literals (also covers `[5m]`, `offset 5m`, `@ 1609746000`, `> 1e9`)
-    .replace(/\b\d+(?:\.\d+)?(?:e[+-]?\d+)?(?:ms|s|m|h|d|w|y)?\b/gi, ' ');
+    // compound durations (`1h30m`, `offset 5m`), then hex / decimal / exponent numbers
+    .replace(/\b(?:\d+(?:ms|s|m|h|d|w|y))+\b/gi, ' ')
+    .replace(/\b0x[0-9a-fA-F]+\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi, ' ');
   const tokens = [...new Set(
     [...stripped.matchAll(/[a-zA-Z_:][a-zA-Z0-9_:]*/g)].map((m) => m[0]),
-  )].filter((t) => !PROMQL_BUILTINS.has(t));
+  )].filter((t) => !PROMQL_BUILTINS.has(t) && !/^:+$/.test(t) && !/^(inf|nan)$/i.test(t));
   return tokens.filter((t) => !metricNames.has(t));
 }
 
-// The Prometheus/Mimir connectors cap the schema metric list at 500 names — at that size the
-// vocabulary is knowably incomplete and anchoring to it would reject real metrics.
-const METRIC_LIST_COMPLETE_MAX = 499;
-
-/** The anchor set, or null when the gate must not run (no vocabulary / knowably incomplete). */
-export function promqlAnchorSet(metricNames: string[] | undefined): ReadonlySet<string> | null {
-  if (!metricNames || metricNames.length === 0) return null;
-  if (metricNames.length > METRIC_LIST_COMPLETE_MAX) return null;
-  return new Set(metricNames);
+/** Near-miss suggestions for the retry turn: schema names whose ':'-stripped core matches the
+ *  unknown token's core (the reported case: `:node_memory_MemAvailable_bytes:sum` →
+ *  `node_memory_MemAvailable_bytes`). Bounded. */
+export function nearMissCandidates(unknown: string[], metricNames: ReadonlySet<string>): string[] {
+  const core = (n: string) => n.replace(/^:+|:.*$/g, '').replace(/^:|:$/g, '');
+  const out = new Set<string>();
+  for (const u of unknown) {
+    const uc = core(u);
+    if (!uc) continue;
+    for (const m of metricNames) {
+      if (m === uc || m.includes(uc) || uc.includes(m)) { out.add(m); if (out.size >= 5) return [...out]; }
+    }
+  }
+  return [...out];
 }
 
-export async function generateQuery(input: GenerateQueryInput): Promise<string> {
+export async function generateQuery(input: GenerateQueryInput): Promise<GeneratedQuery> {
   const send = input.send ?? bedrockSend;
   const system = buildQueryGenSystem(input.lang, input.schemaBlock);
   const validate = (query: string): void => {
@@ -201,7 +222,7 @@ export async function generateQuery(input: GenerateQueryInput): Promise<string> 
     if (input.isSql && !looksReadOnlySql(query)) {
       throw new Error('could not generate a valid read-only query');
     }
-    // a truncated completion with an unclosed { defeats the brace strip AND cannot run anyway
+    // a truncated completion with an unclosed { cannot run anyway
     if (input.lang === 'PromQL' && (query.split('{').length !== query.split('}').length)) {
       throw new Error('generated query has unbalanced braces');
     }
@@ -209,21 +230,32 @@ export async function generateQuery(input: GenerateQueryInput): Promise<string> 
   const user = `<request>\n${input.nl}\n</request>`;
   let query = extractQuery(String((await send(system, user, MODEL_ID)) ?? ''));
   validate(query);
-  const anchor = input.lang === 'PromQL' ? promqlAnchorSet(input.metricNames) : null;
+  const anchor = input.lang === 'PromQL' && input.metricNames?.length
+    ? new Set(input.metricNames) : null;
   if (anchor) {
     let unknown = unknownPromqlNames(query, anchor);
     if (unknown.length > 0) {
-      // ONE corrective retry with the previous answer AND the violations named (the model
-      // cannot rewrite what it cannot see) — then an honest error, not a can't-match query.
-      const retryUser = `${user}\n\nYour previous answer was:\n${query}\n\nIt uses names that are `
-        + `NOT in the schema: ${unknown.join(', ')}. Rewrite the query using ONLY metric names listed in the schema.`;
-      query = extractQuery(String((await send(system, retryUser, MODEL_ID)) ?? ''));
-      validate(query);
-      unknown = unknownPromqlNames(query, anchor);
-      if (unknown.length > 0) {
-        throw new Error(`generated query uses names not in this datasource's schema: ${unknown.join(', ')}`);
-      }
+      // ONE corrective retry with the previous answer echoed (tag-wrapped like the schema)
+      // and near-miss schema names suggested — then the draft is returned WITH a warning.
+      const near = nearMissCandidates(unknown, anchor);
+      const retryUser = `${user}\n\n<previous_answer>\n${query}\n</previous_answer>\n`
+        + `The previous answer uses names that are NOT in the schema: ${unknown.join(', ')}.`
+        + (near.length ? ` Did you mean: ${near.join(', ')}?` : '')
+        + ` Rewrite the query using ONLY metric names listed in the schema.`;
+      const retried = extractQuery(String((await send(system, retryUser, MODEL_ID)) ?? ''));
+      validate(retried);
+      const retriedUnknown = unknownPromqlNames(retried, anchor);
+      if (retriedUnknown.length === 0) return { query: retried };
+      // keep whichever answer violates less; ADVISORY warning, never a block
+      const best = retriedUnknown.length <= unknown.length ? { q: retried, u: retriedUnknown } : { q: query, u: unknown };
+      const caveat = input.vocabularyComplete === false
+        ? ' (the cached schema is truncated or stale — these may be false alarms)'
+        : '';
+      return {
+        query: best.q,
+        warning: `names not found in this datasource's cached schema: ${best.u.join(', ')}${caveat} — review before running`,
+      };
     }
   }
-  return query;
+  return { query };
 }

@@ -73,3 +73,26 @@ Explore path never did.
   them; the prompt steers away from that form); constant expressions (`vector(1)`) pass —
   the worker gate pairs vocabulary with `_is_constant_expr`, a parity follow-up; worst-case
   Bedrock cost per request doubles on an authed route (bounded at 2 calls).
+
+## Round-2 corrections (review-driven)
+
+- **The gate is ADVISORY, never a 502 (resolves three gate MAJORs at the root)** — a static
+  PromQL tokenizer can never be exhaustively right (round 2 found subquery `[30m:1m]` residue,
+  compound `1h30m` durations, hex, `#`-in-label-value corruption), the connector caps the
+  vocabulary at 500 names (so the hard gate silently skipped the exact kube-prometheus class
+  the bug report came from), and the 6h-stale cache would hard-reject metrics newer than it.
+  A violation surviving the one corrective retry now returns the DRAFT with a `warning`
+  naming the tokens (softened wording when the cache is truncated — the connector's own
+  `truncated` flag, never a length inference — or stale); the UI shows the warning beside the
+  filled query box. The runtime authority stays the connector.
+- Tokenizer holes closed: strings stripped BEFORE comments; bracket strip covers subqueries
+  (`[1h30m:5m]`, `[1h:]`); compound durations and hex literals stripped; leftover pure-`:`
+  tokens and case-insensitive `inf`/`nan` filtered; `first_over_time`/`ts_of_*` join the
+  builtins; the retry echoes the previous answer tag-wrapped and suggests near-miss schema
+  names (the reported case maps `:node_memory_MemAvailable_bytes:sum` →
+  `node_memory_MemAvailable_bytes`).
+- **ADR-018/BASELINE reconciled (the gate MAJOR)** — ADR-018 gains a §D for this path (LIVE·
+  no-flag·no-dry-run·advisory·≤2 calls), the Status headline/§A scope/§6 Cost·Sustainability
+  no longer read as universal claims, the accepted residuals moved into ADR-018's Negative
+  section (durable record, not just this working doc), and BASELINE's §2 row + §3 index row
+  match.
