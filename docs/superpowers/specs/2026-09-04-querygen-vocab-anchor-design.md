@@ -21,8 +21,13 @@ Explore path never did.
   group_left/group_right (…)` — label names are not metrics; caught by our own test), and
   range/offset durations; the remaining bare identifiers minus a PromQL builtin allowlist must
   each appear in the schema block AS A WHOLE TOKEN (`:`/`_` are name chars, `.` a boundary).
-  Empty schema block → no check (the model was told there is no schema; anchoring to nothing
-  is the Python gate's own rule).
+  Empty vocabulary → no check, justified on THIS route's own terms (round-1 correction: the
+  earlier draft claimed this mirrors the Python gate — INVERTED; the worker gate REJECTS on
+  empty vocabulary because without an anchor it cannot establish relevance, while this route
+  explicitly supports schema-less generation per resolveSchemaBlock). A connector-truncated
+  list (>499 names) also skips the gate — anchoring to a knowably partial vocabulary would
+  reject real metrics (the reported metric itself sits past the 80-name RENDER cap, which is
+  why the anchor is the FULL cached list, never the rendered block).
 - **One corrective retry, then an honest error**: unknown names trigger a single retry with
   the violations named in the user turn; a second failure throws with the names — the route
   502s and the UI shows why, instead of handing the user a query that can never match. The
@@ -43,3 +48,28 @@ Explore path never did.
   in-vocabulary first answer = one model call; persistent violation throws naming the tokens.
 - Full `npm test` + `tsc` non-test + build + `pytest scripts/v2/{workers,steampipe}`;
   CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **Tokenizer false positives eliminated (the gate MAJOR)** — `offset 5m` leaked an `m` token,
+  `> 1e9` leaked `e9`, `@ start()/end()` flagged the anchors, and `#` comments weren't
+  stripped (all three L2 models converged). Number/duration literals and comments are now
+  stripped before tokenizing; `start`/`end` join the builtins; builtin matching is
+  case-SENSITIVE (PromQL is — `Rate(...)` must flag, not silently pass); an unbalanced `{`
+  from a truncated completion throws instead of defeating the brace strip.
+- **The anchor is the FULL cached metric list, not the rendered block (the gate MAJORs ×2)** —
+  block-text matching both admitted label names/prose as "metrics" (false negatives) and,
+  worse, rejected real metrics past the ~80-name render cap — regressing the exact reported
+  chip on a kube-prometheus target where zero Korean NL terms match and the block holds the
+  alphabetical head (`ALERTS`, …). `schemaMetricNames(schema)` extracts the whole cached list;
+  membership is exact Set lookup; a connector-truncated list (>499) skips the gate.
+- **ADR-018 amended + BASELINE registered (the gate MAJOR)** — this live path was a third,
+  unrecorded LLM query-generation path; a dated ADR-018 Status amendment and a BASELINE
+  register row now record its distinct contract (live/no-flag/no-dry-run/≤2 Haiku calls), and
+  the spec's inverted claim about the Python gate's empty-vocabulary rule is corrected above.
+- Minors closed: the corrective retry includes the model's PREVIOUS answer (it cannot rewrite
+  what it cannot see); CHANGELOG entry moved under Fixed (it repairs a reported defect).
+- Recorded (accepted): `{__name__="…"}` selectors bypass the gate (the brace strip removes
+  them; the prompt steers away from that form); constant expressions (`vector(1)`) pass —
+  the worker gate pairs vocabulary with `_is_constant_expr`, a parity follow-up; worst-case
+  Bedrock cost per request doubles on an authed route (bounded at 2 calls).

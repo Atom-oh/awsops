@@ -8,7 +8,7 @@
 // a strict translate-to-query prompt + the schema (real table/COLUMN names) injected as data.
 import { verifyUser } from '@/lib/auth';
 import { generateQuery } from '@/lib/datasource-querygen';
-import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema, schemaMetricNames } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
 import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
 import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
@@ -77,7 +77,7 @@ function refreshInBackground(accountId: string, ds: DatasourceRow, id: number, k
   void introspectAndCache(accountId, ds, id, kind).catch(() => {}).finally(() => refreshing.delete(id));
 }
 
-async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string, nl: string): Promise<string> {
+async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string, nl: string): Promise<{ block: string; metricNames: string[] }> {
   const accountId = currentAccountId();
   // Float NL-relevant metric/label names to the front so they survive the render cap (Prometheus/Mimir
   // return hundreds of metrics alphabetically; the relevant ones would otherwise be dropped).
@@ -90,7 +90,9 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
       if (block) {
         // Lazy refresh: cache hit but stale → refresh in the background (next lookup is fresh), serve now.
         if (hasId && ds && isSchemaStale(own.fetched_at)) refreshInBackground(accountId, ds, id, kind);
-        return block;
+        // FULL cached metric list (not the ~80-name rendered block) — the querygen anchor;
+        // an in-block-only anchor falsely rejected real metrics past the render cap.
+        return { block, metricNames: schemaMetricNames(own.schema) };
       }
     }
   } catch { /* cache is optional */ }
@@ -100,7 +102,7 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
   // Warm the cache in the BACKGROUND so the NEXT lookup is grounded; serve schema-less now (the model
   // writes a best-effort query and the connector's read-only guard backstops it on run).
   if (hasId && ds) refreshInBackground(accountId, ds, id, kind);
-  return '';
+  return { block: '', metricNames: [] };
 }
 
 export async function POST(request: Request) {
@@ -133,10 +135,10 @@ export async function POST(request: Request) {
   const nl = typeof body.nl === 'string' ? body.nl.trim().slice(0, MAX_NL) : '';
   if (!nl) return json({ error: 'nl (natural-language request) required' }, 400);
 
-  const schemaBlock = await resolveSchemaBlock(ds, id, hasId, kind, nl);
+  const { block: schemaBlock, metricNames } = await resolveSchemaBlock(ds, id, hasId, kind, nl);
 
   try {
-    const query = await generateQuery({ nl, lang, schemaBlock, isSql });
+    const query = await generateQuery({ nl, lang, schemaBlock, isSql, metricNames });
     return json({ query, lang }, 200);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : 'generation failed' }, 502);
