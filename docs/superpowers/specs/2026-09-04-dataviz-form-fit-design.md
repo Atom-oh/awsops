@@ -86,3 +86,14 @@ part-to-whole form for a worse one — this pass changes only mismatches.
   (pre-existing; impact values are integral today); the two cost primitives' $ formatting
   differs (toLocaleString vs forced 2 digits) — unify if a fractional-impact source appears;
   the lg-grid column widths for the Bedrock pair are the page's established layout.
+
+## Scope reduction (owner decision, 2026-09-04 — batch 46)
+
+The owner kept ONLY change ① (the cost-impact DivergingBarList) and HELD the donut→bar
+swaps: batch 46 reverts the home 'EC2 인스턴스 유형' and Bedrock '모델별 비용' cards to their
+donuts (guides restored verbatim from the pre-batch-44 revision), and the batch-45 pass-2 PR
+(#294 — /eks Instance Types, /eks/cost namespaces, /dns-query query types) was closed
+unmerged. Retained alongside ①: the DivergingBarList non-finite→'—' guard, the mobile
+tooltip carrying the sub figure, and the BarDistribution/HBarList subtitle+valuePrefix
+passthroughs (unused-but-harmless plumbing for future opt-ins). The dataviz survey and the
+form-fit rationale in this spec remain valid; the held swaps can be revisited any time.

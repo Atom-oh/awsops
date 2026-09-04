@@ -752,13 +752,10 @@ export default function Home() {
 
             {/* ---- Charts row 2: resource-distribution donuts (EC2 type · K8s pods) ---- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* dataviz form-fit (batch 44): instance types are NOMINAL categories compared by
-                  MAGNITUDE across many close values — the "donut for comparing close values"
-                  anti-pattern; count-desc bars read exact ranking. The summary API caps this
-                  at the TOP 10 types (LIMIT 10) — disclosed in the subtitle (the donut's 기타
-                  rollup used to hint at partiality; bars must say it explicitly). */}
+              {/* batch 46 (owner scope decision): the batch-44 donut→bar swap is HELD — only
+                  the diverging cost-impact chart (①) stays; this card returns to the donut. */}
               {ec2Types.length > 0 ? (
-                <BarDistribution title="EC2 인스턴스 유형" subtitle={tt('상위 10개 유형만 표시')} data={ec2Types} xKey="name" yKey="count" />
+                <DonutBreakdown title="EC2 인스턴스 유형" data={ec2Types} nameKey="name" valueKey="count" />
               ) : (
                 <Card title="EC2 인스턴스 유형">
                   <div className="text-[13px] text-ink-400">{tt('EC2 데이터 없음')}</div>
