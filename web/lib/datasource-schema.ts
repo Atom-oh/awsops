@@ -216,6 +216,7 @@ export function confirmedMetricNamesFromMetadata(meta: unknown): string[] {
 
 const PROMQL_NON_METRIC_WORDS = new Set([
   'and', 'or', 'unless', 'bool', 'offset', 'atan2', 'inf', 'nan',
+  'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
   'sum', 'min', 'max', 'avg', 'group', 'stddev', 'stdvar', 'count', 'count_values',
   'bottomk', 'topk', 'quantile', 'limitk', 'limit_ratio',
 ]);
@@ -229,6 +230,7 @@ export function metricReferencesFromPromQuery(query: string): string[] {
     .replace(/\{[^{}]*\}/g, ' ')
     .replace(/\[[^\]]*\]/g, ' ')
     .replace(/\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)/gi, ' ')
+    .replace(/\b(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+\b/g, ' ')
     .replace(/\b\d+(?:ms|s|m|h|d|w|y)\b/gi, ' ');
   const refs: string[] = [];
   for (const match of code.matchAll(/[a-zA-Z_:][a-zA-Z0-9_:]*/g)) {

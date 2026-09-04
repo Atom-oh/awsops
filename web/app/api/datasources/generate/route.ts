@@ -79,8 +79,6 @@ async function validatePromCandidate(
 ): Promise<void> {
   const metrics = metricReferencesFromPromQuery(query);
   if (!metrics.length) {
-    // Let Prometheus surface a more useful parse/type error first for malformed or scalar-only output.
-    await validatePromQuery(kind, query, connConfig);
     throw new GeneratedQueryValidationError(
       'generated query does not reference an exact-instance metric',
     );

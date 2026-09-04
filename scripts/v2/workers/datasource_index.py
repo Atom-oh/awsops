@@ -281,10 +281,14 @@ def _validate_dashboard_cards(kind, iid, rows):
     return out, validated, invalid
 
 
-def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema):
+def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema, schema_fresh=True):
     """Third pre-built family (dashboard cards) — mirrors _rebuild_graph_queries: schema-hash skip,
     atomic upsert+sweep. Deterministic only; an empty build writes the version sentinel (db.py)."""
     existing_version = wdb.read_card_schema_version(conn, iid)
+    if kind in ("prometheus", "mimir") and not schema_fresh and existing_version is not None:
+        # A failed live introspection makes cached metric presence stale by definition. PromQL returns
+        # an empty success for removed metrics, so query validation cannot prove the cache is current.
+        return {"cards_skipped": True, "cards_skip_reason": "introspection_failed"}
     if existing_version is not None and _card_schema_indeterminate(kind, schema):
         # A transient/partial bulk-name failure must not replace a previously validated card set
         # with all-unknown rows. Keep the last-good version until requirements are definitive again.
@@ -843,7 +847,8 @@ def run(payload, conn):
         out.update(_rebuild_graph_queries(conn, wdb, iid, kind, schema))
         try:
             # Cards are the newest family — isolate their failure so signals/graph results still land.
-            out.update(_rebuild_dashboard_cards(conn, wdb, iid, kind, schema))
+            out.update(_rebuild_dashboard_cards(
+                conn, wdb, iid, kind, schema, schema_fresh=fresh is not None))
         except Exception as e:  # noqa: BLE001 — surfaced on the job result, never sinks the run
             logging.warning("[datasource_index] integration %s card build failed: %s", iid, e)
             out["cards_error"] = str(e)[:200]

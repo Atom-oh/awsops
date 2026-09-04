@@ -307,6 +307,23 @@ describe('Prometheus/Mimir live query validation', () => {
     }));
   });
 
+  it('does not execute a metric-less __name__ matcher before correction', async () => {
+    promFixture();
+    generateQuery.mockResolvedValueOnce('{__name__=~".+"}').mockResolvedValueOnce('up');
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '모든 타깃' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).query).toBe('up');
+    expect(generateQuery).toHaveBeenCalledTimes(2);
+    expect(lastGen().validationError).toMatch(/does not reference an exact-instance metric/i);
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(expect.objectContaining({
+      tool: 'prometheus_query',
+      args: expect.objectContaining({ query: '{__name__=~".+"}' }),
+    }));
+  });
+
   it('live-confirms every metric referenced by generated PromQL instead of trusting the cache', async () => {
     promFixture();
     generateQuery
@@ -365,14 +382,14 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('self-corrects once after a conclusive PromQL parse error', async () => {
     promFixture();
-    generateQuery.mockResolvedValueOnce('up(').mockResolvedValueOnce('up');
+    generateQuery.mockResolvedValueOnce('sum(up').mockResolvedValueOnce('up');
     invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
       if (tool === 'prometheus_metric_meta') {
         return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
           metric, { exists: true, type: 'gauge', labels: [] },
         ]));
       }
-      if (args?.query === 'up(') throw new Error('Prometheus query failed (bad_data): parse error');
+      if (args?.query === 'sum(up') throw new Error('Prometheus query failed (bad_data): parse error');
       return { resultType: 'vector', result: [] };
     });
 
@@ -383,21 +400,21 @@ describe('Prometheus/Mimir live query validation', () => {
     expect((await res.json()).query).toBe('up');
     expect(generateQuery).toHaveBeenCalledTimes(2);
     expect(lastGen()).toMatchObject({
-      previousQuery: 'up(',
+      previousQuery: 'sum(up',
       validationError: expect.stringMatching(/parse error/i),
     });
   });
 
   it('self-corrects a conclusive Prometheus HTTP 422 type error', async () => {
     promFixture();
-    generateQuery.mockResolvedValueOnce('topk(5, 1)').mockResolvedValueOnce('topk(5, up)');
+    generateQuery.mockResolvedValueOnce('rate(up)').mockResolvedValueOnce('topk(5, up)');
     invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
       if (tool === 'prometheus_metric_meta') {
         return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
           metric, { exists: true, type: 'gauge', labels: [] },
         ]));
       }
-      if (args?.query === 'topk(5, 1)') {
+      if (args?.query === 'rate(up)') {
         throw new Error('Prometheus HTTP 422: expected type instant vector in call to function topk');
       }
       return { resultType: 'vector', result: [] };

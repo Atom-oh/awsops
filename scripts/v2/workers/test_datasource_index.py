@@ -1805,6 +1805,7 @@ class TestDashboardCards:
         assert "cards_error" not in out
 
     def test_transient_card_validation_preserves_existing_cards(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: {"metrics": ["up"]})
         monkeypatch.setattr(
             dsi,
             "_lambda_invoke",
@@ -1814,6 +1815,22 @@ class TestDashboardCards:
         out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
 
         assert out["cards_error"] == "card validation unavailable"
+        assert c.card_inserts == []
+        assert c.card_deletes == []
+
+    def test_failed_live_introspection_preserves_existing_prometheus_cards(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: None)
+        c = FakeConn(
+            kind="prometheus",
+            schema={"metrics": ["up"], "truncated": False},
+            existing_card_version="last-good",
+        )
+
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+
+        assert out["introspect_error"] == "introspect_failed"
+        assert out["cards_skipped"] is True
+        assert out["cards_skip_reason"] == "introspection_failed"
         assert c.card_inserts == []
         assert c.card_deletes == []
 
