@@ -16,8 +16,8 @@ describe('DivergingBarList (dataviz polarity form)', () => {
     expect(screen.getByText('+$240/mo est.')).toBeTruthy();
     expect(screen.getByText('-$45/mo est.')).toBeTruthy();
     expect(screen.getByText('$0/mo est.')).toBeTruthy(); // zero: unsigned, no direction
-    expect(screen.getByText('+3')).toBeTruthy();
-    expect(screen.getByText('-1')).toBeTruthy();
+    expect(screen.getAllByText('+3').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('-1').length).toBeGreaterThan(0);
   });
 
   it('scales symmetrically on max|value| and places bars on the correct pole', () => {
@@ -50,5 +50,27 @@ describe('DivergingBarList (dataviz polarity form)', () => {
     );
     const fills = [...container.querySelectorAll('.bg-negative')] as HTMLElement[];
     expect(fills.map((f) => f.style.width)).toEqual(['100%', '2%']);
+  });
+});
+
+describe('scope-hold follow-ups (batch 46)', () => {
+  it('a NON-FINITE value renders — with no bar on either pole (never a confident $0)', () => {
+    const { container } = render(
+      <DivergingBarList title="t" rows={[{ label: 'broken', value: Number.POSITIVE_INFINITY }, { label: 'ok', value: 10 }]} valuePrefix="$" />,
+    );
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(container.querySelectorAll('.bg-negative')).toHaveLength(1); // only the finite row draws
+    expect(screen.getByText('+$10')).toBeTruthy(); // scale unpolluted by the Infinity row
+  });
+
+  it('the sub figure renders in BOTH breakpoints: inline ≥sm and as a visible second line below sm', () => {
+    const { container } = render(
+      <DivergingBarList title="t" rows={[{ label: 'EC2', value: 240, sub: '+3' }]} valuePrefix="$" />,
+    );
+    const subs = [...container.querySelectorAll('span')].filter((el) => el.textContent === '+3');
+    expect(subs).toHaveLength(2);
+    // one is the ≥sm inline figure, the other the <sm visible line (title attrs don't surface on touch)
+    expect(subs.some((el) => el.className.includes('hidden sm:inline'))).toBe(true);
+    expect(subs.some((el) => el.className.includes('sm:hidden'))).toBe(true);
   });
 });

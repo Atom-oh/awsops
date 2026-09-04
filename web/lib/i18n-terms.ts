@@ -1083,6 +1083,7 @@ export const TERMS: Record<string, Pair> = {
   '컨테이너 요청량(request) 기준 — 실사용량 아님, Running Pod만 집계': { en: 'Based on container requests — not live usage; Running pods only', zh: '基于容器 request — 非实际用量，仅统计 Running Pod', ja: 'コンテナ request 基準 — 実使用量ではなく、Running Pod のみ集計' },
   '셀렉터 없음/매칭 Running Pod 없음으로 제외': { en: 'Excluded (no selector / no matching Running pods)', zh: '已排除（无选择器/无匹配的 Running Pod）', ja: '除外（セレクタなし／一致する Running Pod なし）' },
   'Pod 조회 실패로 차트에서 제외된 클러스터': { en: 'Clusters excluded from the charts (pods fetch failed)', zh: '因 Pod 查询失败而从图表中排除的集群', ja: 'Pod 取得失敗によりチャートから除外されたクラスター' },
+  '상위 10 합계': { en: 'Top-10 sum', zh: '前 10 合计', ja: '上位 10 合計' },
   '상위 10개 유형만 표시': { en: 'Top 10 types only', zh: '仅显示前 10 种类型', ja: '上位 10 タイプのみ表示' },
   '표시할 서비스가 없습니다': { en: 'No services to display', zh: '没有可显示的服务', ja: '表示するサービスがありません' },
   'Options는 VPC 어태치먼트만 제공': { en: 'Options are available for VPC attachments only', zh: 'Options 仅 VPC 附件提供', ja: 'Options は VPC アタッチメントのみ提供' },

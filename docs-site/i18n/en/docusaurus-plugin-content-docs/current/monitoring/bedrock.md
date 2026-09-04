@@ -29,7 +29,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ### Charts (3)
 
-- **Cost by Model** (horizontal bars): cost per model — same row order as the invocations chart for side-by-side comparison
+- **Cost by Model** (Pie chart): Cost distribution across models
 - **Invocations by Model** (Bar chart): Invocation count comparison per model
 - **Token Usage Over Time** (Line chart): Token consumption trend over time
 
