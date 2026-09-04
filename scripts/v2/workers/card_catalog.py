@@ -16,6 +16,10 @@ requirements become status "unknown", never a confident "missing" (honest-degrad
 """
 import re
 
+# NOTE (i18n lockstep): the Korean `title` strings below are REGISTERED in
+# web/lib/i18n-terms.ts (the web UI renders them through tt()). Adding or renaming a title
+# here requires the matching TERMS entry there, or the chip/card stays Korean in en/zh/ja.
+
 # v4: trace discriminator requires a trace-ONLY column (Duration/ParentSpanId/SpanKind) — the
 # standard otel_logs table carries SpanId too, so SpanId must not qualify a table as traces.
 # v3: sum(up) (count(up==1) is an EMPTY vector during a total outage — must render 0, not "값 없음"),

@@ -39,7 +39,7 @@ describe('DatasourceForm', () => {
   it('Test connection posts the unsaved form and shows a success banner', async () => {
     render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
     fireEvent.change(screen.getByPlaceholderText(/prometheus.internal/), { target: { value: 'http://p:9090' } });
-    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }));
+    fireEvent.click(screen.getByRole('button', { name: /연결 테스트/ }));
     await waitFor(() => expect(screen.getByText(/연결 성공/)).toBeTruthy());
     const t = calls.find((c) => c.url === '/api/datasources/test');
     expect(JSON.parse(t!.body!)).toMatchObject({ kind: 'prometheus', endpoint: 'http://p:9090', authType: 'none' });

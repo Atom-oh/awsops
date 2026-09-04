@@ -335,7 +335,10 @@ export default function InventoryTypePage() {
   // Donuts are full-fleet only when THEIR dimension's aggregate landed (client-derived keys
   // are server-excluded and stay sample-based) — each donut discloses its own fallback
   // (previously a capped donut was silently sample-based with no label).
-  const sampleTag = (has: boolean) => (isTruncated && !has ? ` (${tt('표본 기준')})` : '');
+  // The composed title stays FULLY KOREAN here: Card applies ONE tt() to the whole string
+  // and the '<label> 분포( (표본 기준))?' RULE translates it — pre-translating the suffix
+  // produced a mixed string no rule could match (PR #288 round-1).
+  const sampleTag = (has: boolean) => (isTruncated && !has ? ' (표본 기준)' : '');
   const donut = spec.distKey && distData.length > 0
     ? <DonutBreakdown title={`${distLabel} 분포${sampleTag(Boolean(aggs?.dist))}`} data={distData} nameKey="name" valueKey="value" />
     : null;
@@ -346,7 +349,7 @@ export default function InventoryTypePage() {
   const hist = spec.histKey && histData.length > 0
     ? (
       <BarDistribution
-        title={isTruncated ? `${spec.histKey.label} (${tt('표본 기준')})` : spec.histKey.label}
+        title={isTruncated ? `${spec.histKey.label} (표본 기준)` : spec.histKey.label}
         data={histData}
         xKey="label"
         yKey="value"
