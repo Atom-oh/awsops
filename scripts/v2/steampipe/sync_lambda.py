@@ -1057,6 +1057,10 @@ def _account_counts(recs):
 # exactly what the /security page lists; change them together. The web trend route excludes
 # these keys from the chart `total` (web/lib/trend-utils.ts DERIVED_TREND_TYPES — a third
 # lockstep site) since the underlying resources are already counted by their base series.
+# INVARIANTS: the WHERE fragments below are string-concatenated into SQL — they must stay
+# CODE CONSTANTS in this dict, never sourced from the event, env, or DB; and a derived series
+# name must never collide with a real synced resource_type (_ALLOWED) — a collision would make
+# _write_snapshot_row's same-day DELETE silently wipe the base series (pytest-guarded).
 DERIVED_SNAPSHOTS = {
     "s3_public_access": (
         "public_s3_buckets",

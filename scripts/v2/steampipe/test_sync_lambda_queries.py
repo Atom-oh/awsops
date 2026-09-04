@@ -1647,28 +1647,44 @@ def test_derived_snapshot_predicates_lockstep_with_web_finding_sql():
     (double-backslash-s -> backslash-s), so the file is unescaped before comparing."""
     mod = load_sync_lambda()
     ts_path = Path(__file__).resolve().parents[3] / "web" / "lib" / "security-findings.ts"
-    ts = ts_path.read_text(encoding="utf-8").replace("\\\\", "\\")
-    # open_security_groups: the full anchored regex literal
+    ts_raw = ts_path.read_text(encoding="utf-8").replace("\\\\", "\\")
+    # whitespace-collapse both sides so multi-line TS template literals compare as one line
+    ts = " ".join(ts_raw.split())
+
+    def norm(s):
+        return " ".join(s.split())
+
+    # open_security_groups: the FULL predicate (column expr + anchored regex) must appear in
+    # the TS FINDING_SQL verbatim — not just a fragment, so a boolean-structure change drifts
+    # the test red.
     assert mod.DERIVED_SNAPSHOTS["security_group"][0] == "open_security_groups"
-    assert (
-        '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"' in ts
-    )
-    assert (
-        '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
-        in mod.DERIVED_SNAPSHOTS["security_group"][1]
-    )
-    # unencrypted_ebs: the exact clause
+    assert norm(mod.DERIVED_SNAPSHOTS["security_group"][1]) in ts
+    # unencrypted_ebs: exact full predicate, pinned on the Python side and present in TS
     assert mod.DERIVED_SNAPSHOTS["ebs_volume"] == (
         "unencrypted_ebs", "(data->>'encrypted')='false'",
     )
     assert "(data->>'encrypted')='false'" in ts
-    # public_s3_buckets: all three PUBLIC_S3_WHERE clauses
+    # public_s3_buckets: PUBLIC_S3_WHERE is a JS string concatenation in the TS source, so a
+    # raw full-text containment can't work — instead the Python side is pinned EXACTLY (full
+    # boolean structure: 3 clauses OR-joined, parenthesized) and each clause must appear in TS
+    # in the same order (index-ordered), so both a clause change and a reorder drift red.
     pub = mod.DERIVED_SNAPSHOTS["s3_public_access"]
     assert pub[0] == "public_s3_buckets"
-    for clause in (
+    assert norm(pub[1]) == (
+        "( (data->>'bucket_policy_is_public')='true'"
+        " OR (data->>'block_public_acls')='false'"
+        " OR (data->>'block_public_policy')='false' )"
+    )
+    clauses = (
         "(data->>'bucket_policy_is_public')='true'",
         "(data->>'block_public_acls')='false'",
         "(data->>'block_public_policy')='false'",
-    ):
-        assert clause in pub[1]
-        assert clause in ts
+    )
+    idxs = [ts.index(c) for c in clauses]  # raises if any clause left the TS source
+    assert idxs == sorted(idxs)
+    # disjointness: a derived series name colliding with a real synced resource_type would let
+    # _write_snapshot_row's same-day DELETE silently wipe the base series
+    derived_names = {v[0] for v in mod.DERIVED_SNAPSHOTS.values()}
+    assert not (derived_names & mod._ALLOWED)
+    # and every derived base type must itself be a real synced type
+    assert set(mod.DERIVED_SNAPSHOTS) <= mod._ALLOWED

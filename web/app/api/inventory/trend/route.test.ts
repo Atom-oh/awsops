@@ -23,6 +23,7 @@ describe('GET /api/inventory/trend', () => {
       { d: '2026-07-02', resource_type: 'lambda', n: 12 },
       { d: '2026-07-02', resource_type: 's3', n: 3 },
     ] });
+    query.mockResolvedValue({ rows: [] }); // coverage query
     const { GET } = await import('./route');
     const res = await GET(req());
     expect(res.status).toBe(200);
@@ -44,6 +45,7 @@ describe('GET /api/inventory/trend', () => {
       // 07-02: the ec2 slice failed — no snapshot row was written
       { d: '2026-07-02', resource_type: 'lambda', n: 12 },
     ] });
+    query.mockResolvedValue({ rows: [] }); // coverage query
     const { GET } = await import('./route');
     const body = await (await GET(req())).json();
     // ec2 key absent (coverage signal for the client's parity check), not 0
@@ -59,11 +61,14 @@ describe('GET /api/inventory/trend', () => {
       { d: '2026-07-02', resource_type: 'lambda', n: 12 },
       { d: '2026-07-03', resource_type: 'lambda', n: 12 },
     ] });
+    query.mockResolvedValue({ rows: [] }); // coverage query
     const { GET } = await import('./route');
     const body = await (await GET(req())).json();
     expect(body.types).toEqual(['lambda', 'ec2']);
   });
 
+  // every request issues 2 data queries (trend GROUP BY + per-day account coverage);
+  // '__all__' prepends the accounts-table resolution query
   it('clamps days into [1, 90] and defaults to 14 (accounts default: self)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({ rows: [] });
@@ -71,24 +76,59 @@ describe('GET /api/inventory/trend', () => {
     await GET(req());
     expect(query.mock.calls[0][1]).toEqual([14, ['self']]);
     await GET(req('/api/inventory/trend?days=9999'));
-    expect(query.mock.calls[1][1]).toEqual([90, ['self']]);
+    expect(query.mock.calls[2][1]).toEqual([90, ['self']]);
     await GET(req('/api/inventory/trend?days=-5'));
-    expect(query.mock.calls[2][1]).toEqual([1, ['self']]);
+    expect(query.mock.calls[4][1]).toEqual([1, ['self']]);
   });
 
-  it('accounts scope (gap L124): CSV is validated, __all__ lifts the filter, all-invalid falls back to self', async () => {
+  it('accounts scope (gap L124): CSV validated, __all__ resolves to self+enabled members (never an unfiltered read), all-invalid falls back to self', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({ rows: [] });
     const { GET } = await import('./route');
     await GET(req('/api/inventory/trend?accounts=self,222233334444'));
     expect(query.mock.calls[0][1]).toEqual([14, ['self', '222233334444']]);
-    // account_id is parameterized (= ANY), never inlined
+    // account_id is parameterized (= ANY), never inlined — on the trend AND coverage queries
     expect(String(query.mock.calls[0][0])).toContain('account_id = ANY($2::text[])');
+    expect(String(query.mock.calls[1][0])).toContain('account_id = ANY($2::text[])');
+    query.mockReset();
+    // __all__ resolves SERVER-SIDE to self + enabled member accounts — the filter is never
+    // lifted (an unfiltered read would sum the v1 backfill's 'aggregate' rows and offboarded
+    // accounts' history; inventory_snapshots has no prune)
+    query.mockResolvedValueOnce({ rows: [{ account_id: '222233334444' }] }); // accounts table
+    query.mockResolvedValue({ rows: [] });
     await GET(req('/api/inventory/trend?accounts=__all__'));
-    expect(query.mock.calls[1][1]).toEqual([14, null]); // NULL param disables the filter
+    expect(String(query.mock.calls[0][0])).toContain('FROM accounts WHERE enabled AND NOT is_host');
+    expect(query.mock.calls[1][1]).toEqual([14, ['self', '222233334444']]);
+    query.mockReset();
     // an all-invalid list must scope down to self, never widen to an unscoped read
+    query.mockResolvedValue({ rows: [] });
     await GET(req("/api/inventory/trend?accounts=bogus,1234'"));
-    expect(query.mock.calls[2][1]).toEqual([14, ['self']]);
+    expect(query.mock.calls[0][1]).toEqual([14, ['self']]);
+  });
+
+  it('__all__ falls back to self-only when the accounts table is unavailable', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockRejectedValueOnce(new Error('no accounts table'));
+    query.mockResolvedValue({ rows: [] });
+    const { GET } = await import('./route');
+    const res = await GET(req('/api/inventory/trend?accounts=__all__'));
+    expect(res.status).toBe(200);
+    expect(query.mock.calls[1][1]).toEqual([14, ['self']]);
+  });
+
+  it('returns per-day account coverage alongside the trend (the client parity guards depend on it)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValueOnce({ rows: [
+      { d: '2026-07-01', resource_type: 'ec2', n: 5 },
+    ] });
+    query.mockResolvedValueOnce({ rows: [
+      { d: '2026-07-01', account_id: '222233334444' },
+      { d: '2026-07-01', account_id: 'self' },
+    ] });
+    query.mockResolvedValue({ rows: [] }); // coverage query
+    const { GET } = await import('./route');
+    const body = await (await GET(req('/api/inventory/trend?accounts=self,222233334444'))).json();
+    expect(body.coverage).toEqual({ '2026-07-01': ['222233334444', 'self'] });
   });
 
   it('derived security series (gap L129) are chart series but never add to total', async () => {
@@ -98,6 +138,7 @@ describe('GET /api/inventory/trend', () => {
       // derived from ebs_volume — counting it into total would double-count the volumes
       { d: '2026-07-01', resource_type: 'unencrypted_ebs', n: 4 },
     ] });
+    query.mockResolvedValue({ rows: [] }); // coverage query
     const { GET } = await import('./route');
     const body = await (await GET(req())).json();
     expect(body.trend).toEqual([

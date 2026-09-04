@@ -24,7 +24,7 @@ AWS 리소스의 수량 변화를 일별로 추적하고 비용 영향을 추정
 - 기간 토글: 30일 / 90일
 - 리소스 유형 토글로 표시할 리소스 선택
 - 상단 계정 선택을 따라 계정별로 스코프됩니다(계정별 이력은 해당 기능 배포 이후부터 축적, 리전 차원은 없음)
-- 파생 보안 시리즈(Public S3 Buckets / Open Security Groups / Unencrypted EBS)는 보안 페이지와 동일한 판정 기준으로 매 sync마다 기록되며, 원본 리소스와의 이중 계산을 피하기 위해 전체 합계(total)에는 포함되지 않습니다
+- 파생 보안 시리즈(Public S3 Buckets / Open Security Groups / Unencrypted EBS)는 보안 페이지와 동일한 판정 기준으로 매 sync마다 기록되며, 원본 리소스와의 이중 계산을 피하기 위해 전체 합계(total)에는 포함되지 않습니다. Public S3 Buckets 시리즈는 호스트 계정 전용입니다(S3 공개 설정 수집이 호스트 SDK 수집이기 때문 — 보안 페이지와 동일한 범위)
 
 ### Core Resources (기본 표시)
 - EC2 Instances
@@ -58,8 +58,7 @@ AWS 리소스의 수량 변화를 일별로 추적하고 비용 영향을 추정
 ### 비용 영향 추정
 리소스 수량 변화에 따른 월간 비용 영향을 추정합니다:
 - RDS Instances: $200/월 (추정)
-- ElastiCache Clusters: $150/월
-- EKS Nodes: $100/월
+- ElastiCache Clusters: $100/월
 - NAT Gateways: $45/월
 - EC2 Instances: $80/월
 - 기타 리소스별 가중치 적용
@@ -73,7 +72,7 @@ AWS 리소스의 수량 변화를 일별로 추적하고 비용 영향을 추정
 5. **비용 영향**: 하단의 비용 추정 섹션 확인
 
 :::tip 스냅샷 기반 데이터
-Resource Inventory는 대시보드 로드 시 자동으로 스냅샷을 저장합니다. 추가 API 쿼리 없이 히스토리 데이터를 축적하므로 성능 영향이 없습니다.
+스냅샷은 인벤토리 sync가 돌 때마다 계정별로 Aurora(`inventory_snapshots`)에 기록됩니다 — 대시보드 로드와는 무관하며, 조회 시 추가 AWS API 호출이 없습니다.
 :::
 
 ## 사용 팁
@@ -95,7 +94,7 @@ Cost Impact Estimation 섹션에서:
 실제 비용은 인스턴스 유형, 사용량 등에 따라 다를 수 있습니다.
 
 :::info 데이터 보관
-스냅샷 데이터는 `data/inventory/` 디렉토리에 저장됩니다. 90일 이상 된 데이터는 분석에서 제외되지만 파일은 유지됩니다.
+스냅샷 데이터는 Aurora `inventory_snapshots` 테이블에 저장됩니다. 추이 조회는 최근 90일까지만 읽습니다(그보다 오래된 행은 조회 대상에서 제외).
 :::
 
 ## AI 분석 팁

@@ -27,25 +27,55 @@ export async function GET(request: Request) {
   }
   const url = new URL(request.url);
   const days = Math.min(MAX_DAYS, Math.max(1, Number(url.searchParams.get('days')) || DEFAULT_DAYS));
-  // Same accounts vocabulary as summary/route.ts's accountCond (invalid ids are dropped;
-  // an all-invalid list falls back to 'self' rather than an unscoped read).
   const accountsParam = url.searchParams.get('accounts');
-  const accounts: string[] | null = (() => {
-    if (accountsParam === '__all__') return null; // no account filter
-    if (accountsParam === null) return ['self'];
-    const safe = accountsParam.split(',').filter((a) => a === 'self' || /^[0-9]{12}$/.test(a));
-    return safe.length ? safe : ['self'];
-  })();
   try {
     const pool = getPool();
+    // Same accounts vocabulary as the security route's resolveAccounts: '__all__' resolves
+    // SERVER-SIDE to 'self' + the currently enabled member accounts — never a lifted filter.
+    // inventory_snapshots is append-only (no phase-1 prune), so an unfiltered read would also
+    // sum the v1 backfill's cross-account 'aggregate' rows (double-counting backfilled days)
+    // and offboarded accounts' history forever. Invalid CSV ids are dropped; an all-invalid
+    // list falls back to 'self' rather than an unscoped read.
+    const accounts: string[] = await (async () => {
+      if (accountsParam === null) return ['self'];
+      if (accountsParam === '__all__') {
+        try {
+          const r = await pool.query<{ account_id: string }>(
+            'SELECT account_id FROM accounts WHERE enabled AND NOT is_host',
+          );
+          return ['self', ...r.rows.map((x) => x.account_id)];
+        } catch {
+          return ['self']; // accounts table unavailable → honest host-only scope
+        }
+      }
+      const safe = accountsParam.split(',').filter((a) => a === 'self' || /^[0-9]{12}$/.test(a));
+      return safe.length ? safe : ['self'];
+    })();
     const r = await pool.query<{ d: string; resource_type: string; n: number }>(
       `SELECT captured_at::date::text AS d, resource_type, SUM(resource_count)::int AS n
        FROM inventory_snapshots
-       WHERE ($2::text[] IS NULL OR account_id = ANY($2::text[]))
+       WHERE account_id = ANY($2::text[])
          AND captured_at >= now() - ($1 || ' days')::interval
        GROUP BY 1, 2 ORDER BY 1`,
       [days, accounts],
     );
+    // Per-day ACCOUNT coverage (which selected accounts have any snapshot row that day).
+    // Summing across accounts destroys the per-account half of the key-absence signal — a
+    // fully unreachable account leaves every type key present via the others, so the client's
+    // type-set parity alone would present that account's silence as a genuine fleet decrease
+    // (and the deploy boundary — baseline days carrying only 'self' rows — as growth). The
+    // client guards (netChange, cost impact, delta table) require SET-equal coverage between
+    // compared days and render '—' otherwise.
+    const cov = await pool.query<{ d: string; account_id: string }>(
+      `SELECT DISTINCT captured_at::date::text AS d, account_id
+       FROM inventory_snapshots
+       WHERE account_id = ANY($2::text[])
+         AND captured_at >= now() - ($1 || ' days')::interval
+       ORDER BY 1, 2`,
+      [days, accounts],
+    );
+    const coverage: Record<string, string[]> = {};
+    for (const row of cov.rows) (coverage[row.d] ??= []).push(row.account_id);
     const byDate = new Map<string, TrendPoint & Record<string, number | string>>();
     const latestByType = new Map<string, number>();
     for (const row of r.rows) {
@@ -85,7 +115,7 @@ export async function GET(request: Request) {
       // membership between requests (the chart key= would reset chip state on every churn)
       return d !== 0 ? d : a.localeCompare(b);
     });
-    return Response.json({ trend, types });
+    return Response.json({ trend, types, coverage });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

@@ -24,7 +24,7 @@ import Screenshot from '@site/src/components/Screenshot';
 - 期间切换：30 天 / 90 天
 - 通过资源类型开关选择要显示的资源
 - 跟随顶部的账户选择进行账户级过滤（各账户历史自该功能部署后开始积累，无区域维度）
-- 派生安全序列（Public S3 Buckets / Open Security Groups / Unencrypted EBS）在每次 sync 时按与安全页面相同的判定标准记录，并且不计入总数（total），以避免与原始资源重复计算
+- 派生安全序列（Public S3 Buckets / Open Security Groups / Unencrypted EBS）在每次 sync 时按与安全页面相同的判定标准记录，并且不计入总数（total），以避免与原始资源重复计算；Public S3 Buckets 序列仅覆盖主机账户（S3 公开配置采集是主机 SDK 扫描 — 与安全页面的范围一致）
 
 ### Core Resources（默认显示）
 - EC2 Instances
@@ -58,8 +58,7 @@ import Screenshot from '@site/src/components/Screenshot';
 ### 成本影响估算
 根据资源数量变化估算每月成本影响：
 - RDS Instances: $200/月（估算）
-- ElastiCache Clusters: $150/月
-- EKS Nodes: $100/月
+- ElastiCache Clusters: $100/月
 - NAT Gateways: $45/月
 - EC2 Instances: $80/月
 - 其他资源按各自权重计算
@@ -73,7 +72,7 @@ import Screenshot from '@site/src/components/Screenshot';
 5. **成本影响**: 查看底部的成本估算区域
 
 :::tip 基于快照的数据
-Resource Inventory 会在仪表板加载时自动保存快照。无需额外的 API 查询即可积累历史数据，因此不会影响性能。
+快照在每次库存 sync 运行时按账户写入 Aurora（`inventory_snapshots`）——与仪表板加载无关，读取时也不会产生额外的 AWS API 调用。
 :::
 
 ## 使用技巧
@@ -95,7 +94,7 @@ Resource Inventory 会在仪表板加载时自动保存快照。无需额外的 
 实际成本可能因实例类型、使用量等因素而有所不同。
 
 :::info 数据保留
-快照数据保存在 `data/inventory/` 目录中。超过 90 天的数据会被排除在分析之外，但文件会保留。
+快照数据保存在 Aurora 的 `inventory_snapshots` 表中。趋势查询最多读取最近 90 天（更早的行不在查询范围内）。
 :::
 
 ## AI 分析技巧

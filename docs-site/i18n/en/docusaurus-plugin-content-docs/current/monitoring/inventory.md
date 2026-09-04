@@ -24,7 +24,7 @@ A page for tracking daily changes in AWS resource counts and estimating cost imp
 - Time range toggle: 30 days / 90 days
 - Resource type toggles to select which resources to display
 - Scoped by the account selector at the top (per-account history accrues from when this feature was deployed; there is no region dimension)
-- Derived security series (Public S3 Buckets / Open Security Groups / Unencrypted EBS) are recorded on every sync with the same criteria as the Security page, and are excluded from the overall total to avoid double-counting their underlying resources
+- Derived security series (Public S3 Buckets / Open Security Groups / Unencrypted EBS) are recorded on every sync with the same criteria as the Security page, and are excluded from the overall total to avoid double-counting their underlying resources; the Public S3 Buckets series is host-account-only (the S3 public-access collection is a host SDK sweep — the same scope the Security page reads)
 
 ### Core Resources (Displayed by Default)
 - EC2 Instances
@@ -58,8 +58,7 @@ A page for tracking daily changes in AWS resource counts and estimating cost imp
 ### Cost Impact Estimation
 Estimates monthly cost impact based on resource count changes:
 - RDS Instances: $200/month (estimated)
-- ElastiCache Clusters: $150/month
-- EKS Nodes: $100/month
+- ElastiCache Clusters: $100/month
 - NAT Gateways: $45/month
 - EC2 Instances: $80/month
 - Weight factors applied for other resources
@@ -73,7 +72,7 @@ Estimates monthly cost impact based on resource count changes:
 5. **Cost Impact**: Check the cost estimation section at the bottom
 
 :::tip Snapshot-Based Data
-Resource Inventory automatically saves snapshots when the dashboard loads. History data accumulates without additional API queries, so there is no performance impact.
+Snapshots are written per account to Aurora (`inventory_snapshots`) on every inventory sync run — independent of dashboard loads, and reading them makes no additional AWS API calls.
 :::
 
 ## Usage Tips
@@ -95,7 +94,7 @@ In the Cost Impact Estimation section:
 Actual costs may vary depending on instance types, usage, etc.
 
 :::info Data Retention
-Snapshot data is stored in the `data/inventory/` directory. Data older than 90 days is excluded from analysis but files are retained.
+Snapshot data is stored in the Aurora `inventory_snapshots` table. The trend query reads at most the last 90 days (older rows are simply not queried).
 :::
 
 ## AI Analysis Tips

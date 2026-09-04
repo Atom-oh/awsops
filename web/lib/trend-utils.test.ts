@@ -64,3 +64,43 @@ describe('netChange honest-degrade branches (gap L127)', () => {
     expect(netChange([{ date: day(7), s3: 1 }, { date: day(0), ec2: 2 }], 7)).toBeNull(); // disjoint types
   });
 });
+
+describe('netChange derived-series exclusion + account-coverage parity (gap L124/L129)', () => {
+  it('derived security series never add to the net change (double-count guard)', () => {
+    // +1 EBS volume that is also unencrypted: derived key moves in lockstep with the base key
+    const pts = [
+      { date: day(7), total: 10, ebs_volume: 10, unencrypted_ebs: 3 },
+      { date: day(0), total: 11, ebs_volume: 11, unencrypted_ebs: 4 },
+    ];
+    expect(netChange(pts, 7)).toBe(1); // not 2
+    // a bucket merely flipping to public is not a fleet change
+    const flip = [
+      { date: day(7), total: 5, s3: 5, public_s3_buckets: 0 },
+      { date: day(0), total: 5, s3: 5, public_s3_buckets: 1 },
+    ];
+    expect(netChange(flip, 7)).toBe(0);
+  });
+  it('a derived-only fan-out difference does not fail type-set parity', () => {
+    const pts = [
+      { date: day(7), total: 10, ec2: 10 }, // pre-deploy day: no derived keys yet
+      { date: day(0), total: 10, ec2: 10, unencrypted_ebs: 2 },
+    ];
+    expect(netChange(pts, 7)).toBe(0);
+  });
+  it('STRICT account-set parity: differing coverage between endpoint days is null', () => {
+    const pts = [
+      { date: day(7), total: 10, ec2: 10 },
+      { date: day(0), total: 6, ec2: 6 },
+    ];
+    // an account silent on the latest day: its absence must not read as a fleet decrease
+    expect(netChange(pts, 7, { [day(7)]: ['self', '222233334444'], [day(0)]: ['self'] })).toBeNull();
+    // deploy boundary: baseline day is self-only, latest covers self+member → null, not growth
+    expect(netChange(pts, 7, { [day(7)]: ['self'], [day(0)]: ['self', '222233334444'] })).toBeNull();
+    // equal sets (order-insensitive) diff normally
+    expect(netChange(pts, 7, { [day(7)]: ['222233334444', 'self'], [day(0)]: ['self', '222233334444'] })).toBe(-4);
+    // provided-but-empty coverage is a mismatch, not a pass
+    expect(netChange(pts, 7, {})).toBeNull();
+    // no coverage arg (legacy caller) keeps the previous behavior
+    expect(netChange(pts, 7)).toBe(-4);
+  });
+});

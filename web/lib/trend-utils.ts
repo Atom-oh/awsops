@@ -40,8 +40,20 @@ export function nearestSnapshot<T extends TrendPointLike>(pts: T[], daysAgo: num
  *  - STRICT TYPE-SET PARITY: both days must snapshot the SAME type set — the writer emits one
  *    row per type on its own success path, so a mid-fan-out or partially failed day carries a
  *    different type set, and any diff over it (raw OR intersection) is a sync artifact
- *    presented as a fleet change. Parity mismatch → null ('—'). */
-export function netChange(pts: TrendPointLike[], daysAgo: number): number | null {
+ *    presented as a fleet change. Parity mismatch → null ('—');
+ *  - STRICT ACCOUNT-SET PARITY (`coverage`, gap L124): points are summed ACROSS the selected
+ *    accounts, so type-set parity alone is blind to a whole account going silent (its type
+ *    keys survive via the other accounts — that silence would read as a genuine fleet
+ *    decrease, and the deploy boundary, where baseline days carry only 'self' rows, as
+ *    growth). Both endpoint days must cover the SAME account set, else null ('—').
+ *  Derived security series (DERIVED_TREND_TYPES) are excluded from the sum — their resources
+ *  are already counted by their base series (the route excludes them from `total` for the
+ *  same reason). */
+export function netChange(
+  pts: TrendPointLike[],
+  daysAgo: number,
+  coverage?: Record<string, string[]>,
+): number | null {
   if (pts.length < 2) return null;
   const sorted = [...pts].sort((a, b) => a.date.localeCompare(b.date)); // input order not assumed
   const last = sorted[sorted.length - 1];
@@ -59,11 +71,23 @@ export function netChange(pts: TrendPointLike[], daysAgo: number): number | null
   // An intersection diff was still a confident partial number for a mid-fan-out day (the
   // latest day builds progressively — one snapshot row per type on its own success path);
   // parity also nulls the window where a genuinely new type has no 7d-old baseline yet.
+  // Derived series are excluded from BOTH the parity set and the sum: excluding them from the
+  // sum alone would let a derived-only fan-out difference null a perfectly comparable pair,
+  // and including them in the sum double-counts (ebs_volume + unencrypted_ebs move together).
   const typeKeys = (p: TrendPointLike) =>
-    Object.keys(p).filter((k) => k !== 'date' && k !== 'total' && typeof p[k] === 'number').sort();
+    Object.keys(p)
+      .filter((k) => k !== 'date' && k !== 'total' && !(k in DERIVED_TREND_TYPES) && typeof p[k] === 'number')
+      .sort();
   const lastKeys = typeKeys(last);
   const baseKeys = typeKeys(base);
   if (!lastKeys.length || lastKeys.join(',') !== baseKeys.join(',')) return null;
+  // STRICT account-set parity (see doc above). A provided-but-empty coverage for either
+  // endpoint day is a mismatch, not a pass — absence of coverage rows cannot prove parity.
+  if (coverage) {
+    const covOf = (d: string) => [...(coverage[d] ?? [])].sort().join(',');
+    const lastCov = covOf(last.date);
+    if (!lastCov || lastCov !== covOf(base.date)) return null;
+  }
   const sumOf = (p: TrendPointLike) => lastKeys.reduce((s, k) => s + Number(p[k] ?? 0), 0);
   return sumOf(last) - sumOf(base);
 }

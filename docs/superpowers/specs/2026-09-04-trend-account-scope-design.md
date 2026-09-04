@@ -64,3 +64,33 @@ only raw synced resource_type counts).
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; audit ticks +
   batch-41 note; CHANGELOG EN/KO; api-reference row; docs-site home-dashboard guide note
   (4 locales) where behavior is user-visible.
+
+## Round-1 corrections (review-driven)
+
+- **`netChange` no longer double-counts the derived series (the gate MAJOR)** — the helper
+  summed every numeric type key, so in steady state an added unencrypted volume counted +2
+  and a bucket merely flipping public moved the 7d KPI. Derived keys are excluded from BOTH
+  the sum and the type-set parity set (excluding them from the sum alone would let a
+  derived-only fan-out difference null a comparable pair); vitest pins the +1/flip-0 cases.
+- **Account-coverage parity restores per-account honesty (the gate MAJOR)** — summing across
+  accounts destroyed the key-absence coverage signal (a silent account read as a fleet
+  decrease; the deploy boundary's self-only baselines as growth). The route now returns
+  per-day account coverage (`coverage: {date: [account,…]}` — which selected accounts have
+  ANY row that day), and `netChange`, the cost-impact block, and the delta table all require
+  SET-equal coverage between compared days (provided-but-empty coverage is a mismatch, not a
+  pass), rendering '—'/hidden otherwise.
+- **`__all__` resolves server-side, never lifts the filter (the gate MAJOR)** — an unfiltered
+  read summed the v1 backfill's cross-account `account_id='aggregate'` rows on top of the
+  per-account rows (double-counting backfilled days) and offboarded accounts' history forever
+  (inventory_snapshots has no prune). Mirrors /api/security's resolveAccounts:
+  'self' + enabled non-host accounts, honest self-only fallback when the accounts table is
+  unavailable.
+- Minors closed: DERIVED_SNAPSHOTS carries the "code constants only, never event/DB-sourced"
+  and name-collision invariants in its comment; the pytest lockstep guard now compares FULL
+  normalized predicates (open_sg/ebs containment, public_s3 exact Python-side structure +
+  index-ordered TS clauses) and asserts derived-name/_ALLOWED disjointness; the 4-locale
+  guide drops the v1-era "saved on dashboard load / data/inventory/" claims (Aurora
+  `inventory_snapshots`, written per sync run, 90-day read window), fixes the cost example
+  (EKS Nodes dropped — not historized; ElastiCache $150→$100 per COST_IMPACT_WEIGHTS), and
+  discloses that the Public S3 Buckets series is host-account-only (the s3_public_access
+  collection is a host SDK sweep — the same scope the /security page reads).
