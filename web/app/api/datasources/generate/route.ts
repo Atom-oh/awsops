@@ -1,5 +1,6 @@
 // POST /api/datasources/generate — natural-language → datasource query (Explore "AI로 생성").
-// Authenticated. Drafts a query string for the user to REVIEW then run — it NEVER executes anything.
+// Authenticated. Drafts a query string for the user to REVIEW; Prometheus/Mimir candidates are executed
+// once with a 5s read-only bound solely for exact-instance validation before they are returned.
 //
 // Bedrock-DIRECT (web/lib/datasource-querygen) — NOT the AgentCore monitoring gateway. Routing this
 // through the section agent appended the 24-tool list + COMMON_FOOTER ("respond in markdown") after the
@@ -13,6 +14,9 @@ import {
   renderSchemaForPrompt,
   prioritizeSchemaForQuery,
   metricCandidatesForQuery,
+  metricNamesFromSchema,
+  confirmedMetricNamesFromMetadata,
+  queryReferencesGroundedMetric,
   renderMetricMetadataForPrompt,
   isSchemaStale,
   upsertSchema,
@@ -170,6 +174,9 @@ export async function POST(request: Request) {
     kind = typeof body.kind === 'string' && body.kind ? body.kind : (typeof body.slug === 'string' ? body.slug : '');
   }
   if (!isDatasourceKind(kind)) return json({ error: 'unknown datasource' }, 400);
+  if (!hasId && (kind === 'prometheus' || kind === 'mimir')) {
+    return json({ error: 'exact datasource instance id required for PromQL generation' }, 400);
+  }
 
   const lang = LANG[kind] || 'query';
   const isSql = /SQL/i.test(lang);
@@ -179,6 +186,7 @@ export async function POST(request: Request) {
   const schema = await resolveSchemaContext(ds, id, hasId, kind, nl);
   let schemaBlock = schema.block;
   let promConnConfig: ConnConfig | undefined;
+  let groundedMetrics: string[] = [];
   if (hasId && ds && (kind === 'prometheus' || kind === 'mimir')) {
     try {
       promConnConfig = await resolveConnConfig(ds);
@@ -188,7 +196,8 @@ export async function POST(request: Request) {
       return json({ error: /blocked|https|required|host/i.test(message) ? message : 'query validation unavailable' },
         /blocked|https|required|host/i.test(message) ? 400 : 503);
     }
-    const metrics = metricCandidatesForQuery(schema.schema, nl);
+    groundedMetrics = metricNamesFromSchema(schema.schema);
+    const metrics = metricCandidatesForQuery(schema.schema, nl, 2);
     if (metrics.length) {
       try {
         const meta = await invokeMcpLambdaTool({
@@ -197,11 +206,18 @@ export async function POST(request: Request) {
           args: { metrics },
           connConfig: promConnConfig,
         });
+        groundedMetrics = Array.from(new Set([
+          ...groundedMetrics,
+          ...confirmedMetricNamesFromMetadata(meta),
+        ]));
         const metaBlock = renderMetricMetadataForPrompt(meta);
         if (metaBlock) schemaBlock = [schemaBlock, metaBlock].filter(Boolean).join('\n');
       } catch {
-        // Best-effort grounding: cached schema still provides a bounded generation context.
+        return json({ error: 'exact-instance metric grounding unavailable' }, 503);
       }
+    }
+    if (!groundedMetrics.length) {
+      return json({ error: 'exact-instance metric grounding unavailable' }, 503);
     }
   }
 
@@ -210,6 +226,11 @@ export async function POST(request: Request) {
     if (promConnConfig && (kind === 'prometheus' || kind === 'mimir')) {
       try {
         await validatePromQuery(kind, query, promConnConfig);
+        if (!queryReferencesGroundedMetric(query, groundedMetrics)) {
+          throw new GeneratedQueryValidationError(
+            'generated query does not reference an exact-instance grounded metric',
+          );
+        }
       } catch (e) {
         if (e instanceof QueryValidationUnavailableError) throw e;
         if (!(e instanceof GeneratedQueryValidationError)) throw e;
@@ -225,6 +246,11 @@ export async function POST(request: Request) {
         });
         try {
           await validatePromQuery(kind, query, promConnConfig);
+          if (!queryReferencesGroundedMetric(query, groundedMetrics)) {
+            throw new GeneratedQueryValidationError(
+              'generated query does not reference an exact-instance grounded metric',
+            );
+          }
         } catch (second) {
           if (second instanceof QueryValidationUnavailableError) throw second;
           throw new GeneratedQueryValidationError('generated query failed live validation');

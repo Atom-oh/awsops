@@ -153,18 +153,32 @@ class TestMetricMeta(_Base):
         self.assertEqual(len(cap), 6) # per-metric: 3 metrics × (metadata?metric= + labels)
 
         self.assertIn("up", b)
+        self.assertTrue(b["up"]["exists"])
         self.assertEqual(b["up"]["type"], "gauge")
         self.assertEqual(b["up"]["labels"], ["instance", "job"])
 
         # failed label fetch surfaces an error entry (not silently dropped); type still resolved
         self.assertIn("http_requests", b)
+        self.assertTrue(b["http_requests"]["exists"])
         self.assertEqual(b["http_requests"]["type"], "counter")
         self.assertEqual(b["http_requests"]["labels"], [])
         self.assertIn("error", b["http_requests"])
 
         self.assertIn("unknown", b)
+        self.assertFalse(b["unknown"]["exists"])
         self.assertIsNone(b["unknown"]["type"])
         self.assertEqual(b["unknown"]["labels"], [])
+
+    def test_metric_meta_uses_short_http_deadlines(self):
+        timeouts = []
+        def fake(method, url, headers=None, body=None, timeout=None):
+            timeouts.append(timeout)
+            if "metadata" in url:
+                return 200, {"status": "success", "data": {"up": [{"type": "gauge"}]}}
+            return 200, {"status": "success", "data": ["__name__", "instance"]}
+        with mock.patch.object(mm, "http_json", side_effect=fake):
+            mm.lambda_handler({"tool_name": "mimir_metric_meta", "arguments": {"metrics": ["up"]}}, None)
+        self.assertEqual(timeouts, [3, 3])
 
     def test_empty_metrics(self):
         out = mm.lambda_handler({"tool_name": "mimir_metric_meta", "arguments": {"metrics": []}}, None)

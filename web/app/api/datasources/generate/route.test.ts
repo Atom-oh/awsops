@@ -72,6 +72,13 @@ describe('auth + validation', () => {
     const { POST } = await import('./route');
     expect((await POST(req({ id: 999, nl: 'x' }))).status).toBe(400);
   });
+  it('requires an exact instance id for Prometheus/Mimir generation', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(req({ kind: 'prometheus', nl: 'up targets' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/instance id/i);
+    expect(generateQuery).not.toHaveBeenCalled();
+  });
 });
 
 describe('SQL generation (the ClickHouse fix)', () => {
@@ -196,6 +203,8 @@ describe('Prometheus metric relevance', () => {
       ]) },
       connConfig: { endpoint: 'http://prom', authType: 'none' },
     }));
+    expect((invokeMcpLambdaTool.mock.calls[0][0] as { args: { metrics: string[] } }).args.metrics)
+      .toHaveLength(2);
     expect(lastGen().schemaBlock).toContain(
       'node_memory_MemAvailable_bytes (gauge; labels: instance, job)',
     );
@@ -230,6 +239,56 @@ describe('Prometheus/Mimir live query validation', () => {
       kind: 'prometheus',
       tool: 'prometheus_query',
       args: { query: 'up', timeout: '5s' },
+    }));
+  });
+
+  it('fails closed when no exact-instance metric grounding is available', async () => {
+    getDatasource.mockResolvedValue({ id: 1, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{
+      integrationId: 1,
+      kind: 'prometheus',
+      schema: { labels: ['job'] },
+      fetched_at: new Date().toISOString(),
+    }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '조회' }));
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/grounding unavailable/i);
+    expect(generateQuery).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when requested metric metadata cannot be read', async () => {
+    promFixture();
+    invokeMcpLambdaTool.mockRejectedValue(new Error('Prometheus HTTP 503: unavailable'));
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/grounding unavailable/i);
+    expect(generateQuery).not.toHaveBeenCalled();
+  });
+
+  it('self-corrects a query that references no exact-instance grounded metric', async () => {
+    promFixture();
+    generateQuery.mockResolvedValueOnce('sum(hallucinated_metric)').mockResolvedValueOnce('sum(up)');
+    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => (
+      tool === 'prometheus_metric_meta' ? {} : { resultType: 'vector', result: [] }
+    ));
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '정상 타깃 수' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).query).toBe('sum(up)');
+    expect(generateQuery).toHaveBeenCalledTimes(2);
+    expect(lastGen().validationError).toMatch(/grounded metric/i);
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
+      tool: 'prometheus_query',
+      args: expect.objectContaining({ query: 'sum(hallucinated_metric)' }),
     }));
   });
 
@@ -335,13 +394,13 @@ describe('lazy refresh (TTL) [P2]', () => {
 });
 
 describe('non-SQL datasources', () => {
-  it('marks PromQL as non-SQL (no read-verb guard) for a slug/kind request', async () => {
-    listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { __block: 'metrics: up' }, fetched_at: 't' }]);
-    generateQuery.mockResolvedValue('up');
+  it('keeps the deprecated slug path for non-PromQL DSLs', async () => {
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'loki', schema: { __block: 'labels: job' }, fetched_at: 't' }]);
+    generateQuery.mockResolvedValue('{job=~".+"}');
     const { POST } = await import('./route');
-    const res = await POST(req({ slug: 'prometheus', kind: 'prometheus', nl: 'is it up' }));
+    const res = await POST(req({ slug: 'loki', kind: 'loki', nl: 'recent logs' }));
     expect(res.status).toBe(200);
-    expect(lastGen()).toMatchObject({ lang: 'PromQL', isSql: false, schemaBlock: 'metrics: up' });
+    expect(lastGen()).toMatchObject({ lang: 'LogQL', isSql: false, schemaBlock: 'labels: job' });
     expect(getDatasource).not.toHaveBeenCalled(); // slug path → no instance fetch / introspect
   });
 });

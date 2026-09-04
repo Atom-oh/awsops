@@ -1848,6 +1848,35 @@ class TestDashboardCards:
         assert calls == []
         assert c.card_inserts == []
 
+    def test_indeterminate_truncated_schema_preserves_existing_cards(self, monkeypatch):
+        monkeypatch.setattr(
+            dsi,
+            "_lambda_invoke",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not validate unknown cards")),
+        )
+        c = FakeConn(
+            kind="prometheus",
+            schema={"metrics": [], "probed": [], "truncated": True},
+            existing_card_version="last-good",
+        )
+
+        out = dsi._rebuild_dashboard_cards(
+            c,
+            wdb,
+            7,
+            "prometheus",
+            {"metrics": [], "probed": [], "truncated": True},
+        )
+
+        assert out == {"cards_skipped": True, "cards_skip_reason": "schema_indeterminate"}
+        assert c.card_inserts == []
+        assert c.card_deletes == []
+
+    def test_prometheus_backend_version_changes_card_validation_hash(self):
+        before = dsi._card_schema_version("prometheus", {"metrics": ["up"], "version": "2.48.0"})
+        after = dsi._card_schema_version("prometheus", {"metrics": ["up"], "version": "2.49.0"})
+        assert before != after
+
     def test_card_build_skips_when_hash_unchanged(self):
         c0 = FakeConn(kind="tempo", schema={"tags": []})
         dsi.run({"integration_id": 7, "kind": "tempo"}, c0)

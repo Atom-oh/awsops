@@ -58,9 +58,12 @@ def _ds():
     return creds
 
 
-def _get(creds, path, params):
+def _get(creds, path, params, http_timeout=None):
     url = creds["endpoint"].rstrip("/") + path + ("?" + urlencode(params, doseq=True) if params else "")
-    status, data = http_json("GET", url, headers=auth_headers(creds))
+    kwargs = {"headers": auth_headers(creds)}
+    if http_timeout is not None:
+        kwargs["timeout"] = http_timeout
+    status, data = http_json("GET", url, **kwargs)
     if status >= 400:
         raise _ApiError(f"Prometheus HTTP {status}: {str(data.get('raw') or data.get('error') or data)[:300]}")
     if isinstance(data, dict) and data.get("status") and data.get("status") != "success":
@@ -215,13 +218,17 @@ def prometheus_metric_meta(args):
     out = {}
     for m in metrics:
         # Per-metric scope (metadata?metric=<m>) — never download the server-wide metadata map.
-        entry = {"type": None, "labels": []}
+        entry = {"exists": False, "type": None, "labels": []}
         try:
-            meta_resp = _get(creds, f"{base}/metadata", {"metric": m})
+            meta_resp = _get(creds, f"{base}/metadata", {"metric": m}, http_timeout=3)
             meta = meta_resp if isinstance(meta_resp, dict) else {}
             v = meta.get(m)
+            entry["exists"] = isinstance(v, list) and bool(v)
             entry["type"] = v[0].get("type") if isinstance(v, list) and v and isinstance(v[0], dict) else None
-            labels_data = _get(creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'})
+            labels_data = _get(
+                creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'}, http_timeout=3)
+            if isinstance(labels_data, list) and "__name__" in labels_data:
+                entry["exists"] = True
             labels = [lb for lb in (labels_data if isinstance(labels_data, list) else []) if lb != "__name__"]
             if len(labels) > 200:  # bound high-cardinality label sets (mirrors *_labels [:N] convention)
                 entry["labels"], entry["labels_truncated"] = labels[:200], True

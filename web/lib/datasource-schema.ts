@@ -122,6 +122,11 @@ const QUERY_CONCEPTS: ReadonlyArray<{
     terms: ['restart'],
     metricHints: ['kube_pod_container_status_restarts_total'],
   },
+  {
+    patterns: [/타깃/i, /정상/i, /다운/i, /\btarget\b/i],
+    terms: ['up', 'target'],
+    metricHints: ['up'],
+  },
 ];
 
 function queryTerms(nl: string): string[] {
@@ -184,6 +189,63 @@ export function metricCandidatesForQuery(schema: unknown, nl: string, max = 8): 
     .flatMap((c) => c.metricHints)
     .filter((m) => PROM_NAME_RE.test(m));
   return Array.from(new Set([...metrics, ...hints])).slice(0, Math.max(1, Math.min(12, max)));
+}
+
+/** Valid metric names carried by one exact-instance cached schema. */
+export function metricNamesFromSchema(schema: unknown): string[] {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return [];
+  const metrics = (schema as Record<string, unknown>).metrics;
+  return Array.from(new Set(
+    (Array.isArray(metrics) ? metrics : [])
+      .filter((m): m is string => typeof m === 'string' && PROM_NAME_RE.test(m)),
+  ));
+}
+
+/** Metric names whose connector metadata lookup proved they exist on the exact instance. */
+export function confirmedMetricNamesFromMetadata(meta: unknown): string[] {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return [];
+  return Object.entries(meta as Record<string, unknown>)
+    .filter(([metric, raw]) =>
+      PROM_NAME_RE.test(metric)
+      && !!raw
+      && typeof raw === 'object'
+      && !Array.isArray(raw)
+      && (raw as { exists?: unknown }).exists === true)
+    .map(([metric]) => metric);
+}
+
+const PROMQL_NON_METRIC_WORDS = new Set([
+  'and', 'or', 'unless', 'bool', 'offset',
+  'sum', 'min', 'max', 'avg', 'group', 'stddev', 'stdvar', 'count', 'count_values',
+  'bottomk', 'topk', 'quantile', 'limitk', 'limit_ratio',
+]);
+
+/** Extract metric-like identifiers after removing strings, matchers, range selectors, and label lists.
+ *  This is deliberately a small lexical guard, not a PromQL parser; live Prometheus validation remains
+ *  authoritative for syntax and types. */
+function metricReferencesFromPromQuery(query: string): string[] {
+  const code = query
+    .replace(/"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, ' ')
+    .replace(/\{[^{}]*\}/g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)/gi, ' ')
+    .replace(/\b\d+(?:ms|s|m|h|d|w|y)\b/gi, ' ');
+  const refs: string[] = [];
+  for (const match of code.matchAll(/[a-zA-Z_:][a-zA-Z0-9_:]*/g)) {
+    const token = match[0];
+    const tail = code.slice((match.index ?? 0) + token.length).trimStart();
+    if (tail.startsWith('(') || PROMQL_NON_METRIC_WORDS.has(token.toLowerCase())) continue;
+    refs.push(token);
+  }
+  return Array.from(new Set(refs));
+}
+
+/** Require every generated PromQL metric reference to be grounded by the exact instance.
+ *  A metric-less scalar expression is also rejected because it cannot answer a datasource question. */
+export function queryReferencesGroundedMetric(query: string, metrics: readonly string[]): boolean {
+  const grounded = new Set(metrics.filter((metric) => PROM_NAME_RE.test(metric)));
+  const refs = metricReferencesFromPromQuery(query);
+  return refs.length > 0 && refs.every((metric) => grounded.has(metric));
 }
 
 /** Render connector-returned per-metric metadata into a compact prompt block. Names and labels use

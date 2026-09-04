@@ -58,8 +58,9 @@ _PROM_CARDS = [
     {"card_key": "node_disk_usage_top5", "title": "디스크 사용률 높은 노드 Top5",
      "viz": "timeseries", "unit": "%",
      "requires": ["node_filesystem_avail_bytes", "node_filesystem_size_bytes"],
-     "expr": 'topk(5, 100 * (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/run.*"} '
-             '/ node_filesystem_size_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/run.*"})))',
+     "expr": 'topk(5, max by (instance) (100 * (1 - '
+             '(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/run.*"} '
+             '/ node_filesystem_size_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/run.*"}))))',
      "range": _RANGE_1H},
     {"card_key": "node_load1_top5", "title": "로드 애버리지 높은 노드 Top5",
      "viz": "timeseries", "unit": "",

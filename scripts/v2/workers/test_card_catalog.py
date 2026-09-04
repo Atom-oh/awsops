@@ -49,6 +49,7 @@ def test_prometheus_operational_catalog_covers_resource_pressure_and_network():
         "topk(5, 100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)))"
     )
     assert by["down_targets"]["query"]["expr"] == "sum(up == bool 0)"
+    assert "max by (instance)" in by["node_disk_usage_top5"]["query"]["expr"]
     assert by["node_disk_usage_top5"]["query"]["range"] == {"window": 3600, "step": 60}
 
 

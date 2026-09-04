@@ -9,6 +9,8 @@ import {
   renderSchemaForPrompt,
   prioritizeSchemaForQuery,
   metricCandidatesForQuery,
+  confirmedMetricNamesFromMetadata,
+  queryReferencesGroundedMetric,
   renderMetricMetadataForPrompt,
   isSchemaStale,
 } from './datasource-schema';
@@ -155,6 +157,23 @@ describe('prioritizeSchemaForQuery (Prometheus relevance ordering)', () => {
     });
     expect(block).toContain('node_memory_MemAvailable_bytes (gauge; labels: instance, job)');
     expect(block).not.toContain('bad metric');
+  });
+
+  it('accepts only connector-confirmed metadata names and detects their use in PromQL', () => {
+    const meta = {
+      up: { exists: true, type: 'gauge', labels: ['instance'] },
+      hallucinated_metric: { exists: false, type: null, labels: [] },
+    };
+    expect(confirmedMetricNamesFromMetadata(meta)).toEqual(['up']);
+    expect(queryReferencesGroundedMetric('sum(up)', ['up'])).toBe(true);
+    expect(queryReferencesGroundedMetric('sum(hallucinated_metric)', ['up'])).toBe(false);
+    expect(queryReferencesGroundedMetric('sum(up + hallucinated_metric)', ['up'])).toBe(false);
+    expect(queryReferencesGroundedMetric(
+      'topk(5, max by (instance) (rate(http_requests_total{job="api"}[5m])))',
+      ['http_requests_total'],
+    )).toBe(true);
+    expect(queryReferencesGroundedMetric('label_replace(vector(1), "dst", "up", "src", ".*")', ['up']))
+      .toBe(false);
   });
 
   it('leaves order unchanged when nothing matches or no usable terms', () => {

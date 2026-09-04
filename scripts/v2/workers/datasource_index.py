@@ -219,12 +219,25 @@ def _card_schema_version(kind, schema):
             "kind": kind,
             "required_metrics": required,
             "truncated": bool(schema.get("truncated")),
+            "version": schema.get("version") if isinstance(schema.get("version"), str) else None,
         }
     else:
         version_input = {"kind": kind, "schema": _canon(schema)}
     basis = (json.dumps(version_input, sort_keys=True, separators=(",", ":"))
              + "|" + _card_cat.CARD_CATALOG_VERSION)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def _card_schema_indeterminate(kind, schema):
+    """True when a truncated Prometheus/Mimir schema cannot decide at least one card requirement."""
+    if kind not in ("prometheus", "mimir") or not schema.get("truncated"):
+        return False
+    decided = {
+        m for m in (schema.get("metrics") or []) if isinstance(m, str)
+    } | {
+        m for m in (schema.get("probed") or []) if isinstance(m, str)
+    }
+    return any(metric not in decided for metric in _card_cat.required_metrics())
 
 
 _CARD_QUERY_ERROR_RE = re.compile(
@@ -271,8 +284,13 @@ def _validate_dashboard_cards(kind, iid, rows):
 def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema):
     """Third pre-built family (dashboard cards) — mirrors _rebuild_graph_queries: schema-hash skip,
     atomic upsert+sweep. Deterministic only; an empty build writes the version sentinel (db.py)."""
+    existing_version = wdb.read_card_schema_version(conn, iid)
+    if existing_version is not None and _card_schema_indeterminate(kind, schema):
+        # A transient/partial bulk-name failure must not replace a previously validated card set
+        # with all-unknown rows. Keep the last-good version until requirements are definitive again.
+        return {"cards_skipped": True, "cards_skip_reason": "schema_indeterminate"}
     version = _card_schema_version(kind, schema)
-    if wdb.read_card_schema_version(conn, iid) == version:
+    if existing_version == version:
         return {"cards_skipped": True}
     rows = _card_cat.build_cards(kind, schema)
     rows, validated, invalid = _validate_dashboard_cards(kind, iid, rows)
