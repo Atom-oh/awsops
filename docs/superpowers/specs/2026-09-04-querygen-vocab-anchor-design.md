@@ -131,3 +131,23 @@ recording-rule query. Two stacked root causes the advisory gate could not touch:
    longer suppresses the retry when the fix is PROVABLE — an unknown rule name whose raw core is a
    cached metric (`confidentNearMisses`) is corrected with the suggestion regardless of truncation.
 Deploy: agent connector zips (terraform apply) + web.
+
+### Round-2 corrections (review-driven)
+- **Refresh trigger narrowed + cooldown.** `truncated && names.length <= 500` also matched ClickHouse
+  trims, failed metric fetches (0 names) and label-only truncation — none of which converge, so every
+  request fired a fresh introspect. Now `isLegacyCapSnapshot`: PromQL kind AND `truncated` AND EXACTLY
+  500 names; `refreshInBackground` has a 10-minute per-instance cooldown regardless of trigger.
+  Route tests cover the positive case, the three non-firing cases and the cooldown.
+- **Size fallback for metric schemas.** `trimSchemaForCache` only trimmed `tables`; at the 6× cap a
+  long-name environment could exceed the 256KB row and end up with NO cache row. Metric branch: labels
+  → 100, metrics halved until the JSON fits, `truncated: true`. `MAX_SCHEMA_BYTES` exported.
+- **Retry gate tightened.** One provable near-miss no longer unlocks the retry for the whole unknown
+  set — EVERY unknown token's rule-core must be a cached metric; otherwise no retry (the retry prompt
+  condemns the whole set, steering the model away from a possibly-real metric past the cap). On an
+  incomplete vocabulary the hedged warning is kept on every branch, including a token-clean rewrite.
+  `nearMissCandidates` seeds with `confidentNearMisses` (cap can't crowd out the provable fix) and
+  reuses `ruleCore`; suggested names are charset-filtered before entering the prompt.
+- **Korean expansions.** Scoring is per concept (memory+mem count once); expansions shorter than 3
+  chars ('up', 'fs') match only whole `_`/`:` segments so 'up' never hits 'group'/'setup'.
+- **ADR-018 amended** (Status + §D + §Negative cap-agnostic) to record the provable-correction
+  exception, the size fallback and the legacy-cap refresh; BASELINE row unchanged (still accurate).

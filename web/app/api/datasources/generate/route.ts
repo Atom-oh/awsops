@@ -8,7 +8,7 @@
 // a strict translate-to-query prompt + the schema (real table/COLUMN names) injected as data.
 import { verifyUser } from '@/lib/auth';
 import { generateQuery } from '@/lib/datasource-querygen';
-import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema, schemaMetricNames } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema, schemaMetricNames, trimSchemaForCache, isLegacyCapSnapshot, REFRESH_COOLDOWN_MS } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
 import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
 import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
@@ -30,19 +30,6 @@ function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 }
 
-/** Trim an introspected schema so it fits under the cache size limit — used as a fallback so a large
- *  warehouse (>256KB schema) is still cached (bounded), instead of re-introspecting on EVERY request. */
-function trimSchemaForCache(schema: unknown): unknown {
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
-  const s = schema as Record<string, unknown>;
-  if (!Array.isArray(s.tables)) return schema;
-  const tables = (s.tables as unknown[]).slice(0, 50).map((t) =>
-    t && typeof t === 'object' && Array.isArray((t as { columns?: unknown }).columns)
-      ? { ...(t as object), columns: ((t as { columns: unknown[] }).columns).slice(0, 80) }
-      : t,
-  );
-  return { ...s, tables, truncated: true };
-}
 
 /** Cache the introspected schema; on a size-limit failure, persist a trimmed copy so subsequent requests
  *  hit the cache instead of re-running the full (100+ DESCRIBE) introspect. All best-effort. */
@@ -71,8 +58,15 @@ async function introspectAndCache(accountId: string, ds: DatasourceRow, id: numb
 // Dedupe concurrent background refreshes per instance (the web tier is long-lived Fargate, so a
 // fire-and-forget refresh completes after the response).
 const refreshing = new Set<number>();
+// Per-instance cooldown: a trigger whose condition survives the refresh (e.g. a schema that is
+// truncated for reasons a re-introspect cannot change) must not fire a fresh introspect on EVERY
+// request — one attempt per cooldown window per instance, regardless of trigger.
+const lastRefreshAt = new Map<number, number>();
 function refreshInBackground(accountId: string, ds: DatasourceRow, id: number, kind: string): void {
   if (refreshing.has(id)) return;
+  const now = Date.now();
+  if (now - (lastRefreshAt.get(id) ?? 0) < REFRESH_COOLDOWN_MS) return;
+  lastRefreshAt.set(id, now);
   refreshing.add(id);
   void introspectAndCache(accountId, ds, id, kind).catch(() => {}).finally(() => refreshing.delete(id));
 }
@@ -89,12 +83,12 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
       const block = render(own.schema, own.kind);
       if (block) {
         // Lazy refresh: cache hit but stale → refresh in the background (next lookup is fresh), serve now.
-        // ALSO refresh a cache that was truncated under the connectors' former 500-name cap (now
-        // 3000): such a snapshot lacks whole metric families (node_*/kube_*) the prompt needs —
-        // one background re-introspect brings the fuller list on the next request.
+        // ALSO refresh a PromQL cache that is provably a snapshot under the connectors' former
+        // 500-name cap (now 3000): it lacks whole metric families (node_*/kube_*) the prompt
+        // needs — one background re-introspect (cooldown-guarded) brings the fuller list.
         const names = schemaMetricNames(own.schema);
-        const truncatedUnderOldCap = Boolean((own.schema as { truncated?: unknown })?.truncated) && names.length <= 500;
-        if (hasId && ds && (isSchemaStale(own.fetched_at) || truncatedUnderOldCap)) refreshInBackground(accountId, ds, id, kind);
+        const legacySnapshot = isLegacyCapSnapshot(own.kind, own.schema, names);
+        if (hasId && ds && (isSchemaStale(own.fetched_at) || legacySnapshot)) refreshInBackground(accountId, ds, id, kind);
         // FULL cached metric list (not the ~80-name rendered block) — the querygen anchor;
         // an in-block-only anchor falsely rejected real metrics past the render cap.
         // vocabularyComplete: the connector's OWN truncated flag (never inferred from length)

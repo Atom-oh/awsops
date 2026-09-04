@@ -235,7 +235,26 @@ describe('confident near-miss on an INCOMPLETE vocabulary (owner re-test follow-
     });
     expect(n).toBe(2);
     expect(out.query).toContain('node_memory_MemAvailable_bytes /');
-    expect(out.warning).toBeUndefined();
+    // an incomplete vocabulary cannot vouch even for a clean rewrite — soft note stays
+    expect(out.warning).toContain('truncated or stale');
+  });
+  it('truncated cache with ONE provable and ONE unprovable unknown → NO retry (the prompt would condemn a possibly-real metric)', async () => {
+    let n = 0;
+    const send: QueryGenSend = async () => { n += 1; return ':node_memory_MemAvailable_bytes:sum / istio_requests_total'; };
+    const out = await generateQuery({
+      nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's',
+      metricNames: ['node_memory_MemAvailable_bytes'], vocabularyComplete: false,
+    });
+    expect(n).toBe(1);
+    expect(out.query).toBe(':node_memory_MemAvailable_bytes:sum / istio_requests_total');
+    expect(out.warning).toContain('istio_requests_total');
+    expect(out.warning).toContain('truncated or stale');
+  });
+  it('the provable correction is seeded FIRST in the Did-you-mean list (never crowded out by the 5-hit cap)', () => {
+    const names = new Set(['node_memory_MemAvailable_bytes', ...Array.from({ length: 8 }, (_, i) => `node_memory_x${i}`)]);
+    const near = nearMissCandidates([':node_memory_MemAvailable_bytes:sum'], names);
+    expect(near[0]).toBe('node_memory_MemAvailable_bytes');
+    expect(near.length).toBeLessThanOrEqual(5);
   });
   it('truncated cache and NO provable near-miss → still no retry, soft warning', async () => {
     let n = 0;

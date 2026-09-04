@@ -6,7 +6,7 @@
 // share a cache row (the PK was swapped from (account_id, slug) by the datasource-instances migration).
 import { getPool } from '@/lib/db';
 
-const MAX_SCHEMA_BYTES = 256_000; // bound a single cached schema (Aurora row + later prompt injection)
+export const MAX_SCHEMA_BYTES = 256_000; // bound a single cached schema (Aurora row + later prompt injection)
 
 export interface CachedSchema {
   integrationId: number;
@@ -113,24 +113,46 @@ export const KO_METRIC_TERMS: Readonly<Record<string, readonly string[]>> = {
  *  any Korean ops words the request contains (substring match on the Korean, so particles like
  *  '메모리가'/'사용률이' still hit). Exported for tests. */
 export function nlSearchTerms(nl: string): string[] {
+  return nlSearchConcepts(nl).flat();
+}
+
+/** Same as nlSearchTerms but grouped per CONCEPT: each ASCII token is its own concept; each Korean
+ *  word contributes ONE concept holding all its expansions (so 'memory'+'mem' score a name once,
+ *  not twice). Exported for tests. */
+export function nlSearchConcepts(nl: string): string[][] {
   const lower = (nl || '').toLowerCase();
-  const ascii = lower.split(/[^a-z0-9_]+/).filter((t) => t.length >= 3);
-  const ko: string[] = [];
+  const seen = new Set<string>();
+  const out: string[][] = [];
+  const push = (terms: string[]) => {
+    const fresh = terms.filter((t) => !seen.has(t));
+    if (!fresh.length) return;
+    fresh.forEach((t) => seen.add(t));
+    out.push(fresh);
+  };
+  for (const t of lower.split(/[^a-z0-9_]+/)) if (t.length >= 3) push([t]);
   for (const [word, expansions] of Object.entries(KO_METRIC_TERMS)) {
-    if (lower.includes(word)) ko.push(...expansions);
+    if (lower.includes(word)) push([...expansions]);
   }
-  return Array.from(new Set([...ascii, ...ko]));
+  return out;
+}
+
+/** Substring match for terms ≥3 chars; SHORT terms ('up', 'fs') must match a whole '_'-separated
+ *  segment (or the whole name) — otherwise they hit inside unrelated names ('group', 'setup'). */
+export function termMatches(lowerName: string, term: string): boolean {
+  if (term.length >= 3) return lowerName.includes(term);
+  return lowerName === term || lowerName.split(/[_:]/).includes(term);
 }
 
 export function prioritizeSchemaForQuery(schema: unknown, nl: string): unknown {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
-  const terms = nlSearchTerms(nl);
-  if (!terms.length) return schema;
+  const concepts = nlSearchConcepts(nl);
+  if (!concepts.length) return schema;
   const s = schema as Record<string, unknown>;
   const nameOf = (x: unknown) => (typeof x === 'string' ? x : ((x as { name?: string })?.name ?? '')).toLowerCase();
+  const score = (name: string) => concepts.reduce((n, c) => n + (c.some((t) => termMatches(name, t)) ? 1 : 0), 0);
   const reorder = (arr: unknown[]) =>
     arr
-      .map((x, i) => ({ x, i, sc: terms.reduce((n, t) => n + (nameOf(x).includes(t) ? 1 : 0), 0) }))
+      .map((x, i) => ({ x, i, sc: score(nameOf(x)) }))
       .sort((a, b) => b.sc - a.sc || a.i - b.i) // score desc, stable on ties
       .map((e) => e.x);
   const out: Record<string, unknown> = { ...s };
@@ -265,4 +287,50 @@ export function renderSchemaForPrompt(schema: unknown, _kind?: string | null, ma
   }
 
   return lines.join('\n');
+}
+
+// --- Cache-shape helpers for the generate route (kept here: Next.js route files may only export handlers) ---
+/** Per-instance background-refresh cooldown (see the generate route). */
+export const REFRESH_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Trim an introspected schema so it fits under the cache size limit — used as a fallback so a large
+ *  warehouse (>256KB schema) is still cached (bounded), instead of re-introspecting on EVERY request. */
+export function trimSchemaForCache(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+  const s = schema as Record<string, unknown>;
+  if (Array.isArray(s.tables)) {
+    const tables = (s.tables as unknown[]).slice(0, 50).map((t) =>
+      t && typeof t === 'object' && Array.isArray((t as { columns?: unknown }).columns)
+        ? { ...(t as object), columns: ((t as { columns: unknown[] }).columns).slice(0, 80) }
+        : t,
+    );
+    return { ...s, tables, truncated: true };
+  }
+  // Metric schemas (Prometheus/Mimir): the connector cap is a COUNT (3000 names), so long-name
+  // environments can still exceed the byte limit — halve the metric list until it fits (labels
+  // trimmed first), keeping the connector's `truncated` semantics honest.
+  if (Array.isArray(s.metrics)) {
+    if (Buffer.byteLength(JSON.stringify(s), 'utf8') <= MAX_SCHEMA_BYTES) return schema; // already fits
+    let metrics = s.metrics as unknown[];
+    let out: Record<string, unknown> = { ...s, truncated: true };
+    if (Array.isArray(s.labels)) out.labels = (s.labels as unknown[]).slice(0, 100);
+    while (metrics.length > 1 && Buffer.byteLength(JSON.stringify(out), 'utf8') > MAX_SCHEMA_BYTES) {
+      metrics = metrics.slice(0, Math.floor(metrics.length / 2));
+      out = { ...out, metrics };
+    }
+    return out;
+  }
+  return schema;
+}
+
+/** The connectors' FORMER metric cap — a cached metric schema truncated at EXACTLY this many
+ *  names is a snapshot taken under the old cap (the new cap is 3000). Exported for tests. */
+export const LEGACY_METRIC_CAP = 500;
+/** True only for a PromQL-kind cache that is provably an old-cap snapshot: connector `truncated`
+ *  AND exactly LEGACY_METRIC_CAP names. Never fires for ClickHouse trims, failed metric fetches
+ *  (0 names) or label-only truncation — those re-produce the same row on refresh (no convergence). */
+export function isLegacyCapSnapshot(kind: string | null, schema: unknown, names: string[]): boolean {
+  return (kind === 'prometheus' || kind === 'mimir')
+    && Boolean((schema as { truncated?: unknown })?.truncated)
+    && names.length === LEGACY_METRIC_CAP;
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
-import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, nlSearchTerms } from './datasource-schema';
+import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, nlSearchTerms, nlSearchConcepts, termMatches } from './datasource-schema';
 
 beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); });
 
@@ -155,6 +155,21 @@ describe('nlSearchTerms / Korean ops vocabulary (the 메모리 사용률 chip)',
     expect(out.metrics.slice(0, 2).sort()).toEqual(['node_memory_MemAvailable_bytes', 'node_memory_MemTotal_bytes']);
     expect(out.metrics[2]).toBe('container_memory_working_set_bytes');
     expect(out.metrics.indexOf('ALERTS')).toBeGreaterThan(2);
+  });
+  it('scores per CONCEPT, not per expansion term (memory+mem count once)', () => {
+    // '메모리' alone → one concept; a name matching both 'memory' and 'mem' must not outrank one
+    // that matches a different concept as well.
+    const out = prioritizeSchemaForQuery({ metrics: ['container_memory_working_set_bytes', 'node_memory_MemTotal_bytes'] }, '노드 메모리') as { metrics: string[] };
+    expect(out.metrics[0]).toBe('node_memory_MemTotal_bytes'); // memory(1) + node(1) = 2 vs memory(1)
+    expect(nlSearchConcepts('메모리').length).toBe(1);
+  });
+  it('short expansions (<3 chars) match only whole name segments — "up" never hits "group"/"setup"', () => {
+    expect(termMatches('up', 'up')).toBe(true);
+    expect(termMatches('probe_up_total', 'up')).toBe(true);
+    expect(termMatches('kube_pod_group_total', 'up')).toBe(false);
+    expect(termMatches('node_setup_seconds', 'up')).toBe(false);
+    const out = prioritizeSchemaForQuery({ metrics: ['kube_pod_group_total', 'up'] }, '다운된 타깃') as { metrics: string[] };
+    expect(out.metrics[0]).toBe('up');
   });
   it('unmapped Korean still leaves the order unchanged', () => {
     expect((prioritizeSchemaForQuery({ metrics }, '조회') as { metrics: string[] }).metrics).toEqual(metrics);
