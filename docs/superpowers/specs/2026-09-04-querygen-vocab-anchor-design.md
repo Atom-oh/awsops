@@ -96,3 +96,18 @@ Explore path never did.
   no longer read as universal claims, the accepted residuals moved into ADR-018's Negative
   section (durable record, not just this working doc), and BASELINE's §2 row + §3 index row
   match.
+
+## Round-3 corrections (review-driven)
+
+- **No hard failure path is left behind the advisory contract (3 gate MAJORs)** — the
+  brace-balance check now runs on the STRING-STRIPPED text (`up{payload="{"}` is balanced
+  PromQL); an incomplete vocabulary (connector `truncated` flag / stale cache) SKIPS the
+  corrective retry — on a real kube-prometheus target the "correction" steered the model away
+  from a real metric past the alphabetical 500-name cap toward head near-misses and returned
+  that wrong answer CLEAN — and returns the first draft with the soft warning instead; any
+  retry failure (Bedrock error, prose, unbalanced) falls back to the valid first draft +
+  warning, never a 502.
+- **ADR-018 is internally consistent (2 gate MAJORs)** — the Status paragraph's leftover
+  round-1 sentence ("truncation skips the gate", the `>499` figure) now states the advisory
+  truth; Context lists three paths (the §D bullet added); the bolded Decision scopes the
+  ready-0/flag/dry-run condition to §B·§C with an explicit §D carve-out.

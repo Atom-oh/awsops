@@ -154,10 +154,31 @@ describe('generateQuery PromQL anchoring — ADVISORY semantics (round 2)', () =
     expect(out.warning).toContain(':invented:sum');
     expect(out.warning).not.toContain('truncated or stale'); // complete vocabulary → assertive wording
   });
-  it('an incomplete/stale vocabulary softens the warning wording', async () => {
-    const send: QueryGenSend = async () => ':invented:sum';
+  it('an incomplete/stale vocabulary skips the corrective retry (no steering toward alphabetical near-misses) and softens the warning', async () => {
+    let n = 0;
+    const send: QueryGenSend = async () => { n += 1; return ':invented:sum'; };
     const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames, vocabularyComplete: false });
+    expect(n).toBe(1); // NO second Bedrock call on a truncated/stale cache
+    expect(out.query).toBe(':invented:sum');
     expect(out.warning).toContain('truncated or stale');
+  });
+  it('a FAILED retry (Bedrock error / prose) falls back to the valid first draft + warning — never a 502', async () => {
+    let n = 0;
+    const sendThrow: QueryGenSend = async () => { n += 1; if (n === 2) throw new Error('bedrock down'); return ':invented:sum / up'; };
+    const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send: sendThrow, schemaBlock: 's', metricNames, vocabularyComplete: true });
+    expect(out.query).toBe(':invented:sum / up');
+    expect(out.warning).toContain(':invented:sum');
+    n = 0;
+    const sendProse: QueryGenSend = async () => { n += 1; return n === 2 ? 'I cannot do that.\n\nSorry.' : ':invented:sum / up'; };
+    const out2 = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send: sendProse, schemaBlock: 's', metricNames, vocabularyComplete: true });
+    expect(out2.query).toBe(':invented:sum / up');
+    expect(out2.warning).toBeTruthy();
+  });
+  it('a brace inside a string literal is balanced PromQL — no false unbalanced-braces error', async () => {
+    const send: QueryGenSend = async () => 'up{payload="{"}';
+    const out = await generateQuery({ nl: 'x', lang: 'PromQL', isSql: false, send, schemaBlock: 's', metricNames: ['up'] });
+    expect(out.query).toBe('up{payload="{"}');
+    expect(out.warning).toBeUndefined();
   });
   it('a corrected retry answer is returned clean (no warning)', async () => {
     let n = 0;

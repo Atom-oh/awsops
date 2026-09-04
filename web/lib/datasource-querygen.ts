@@ -122,8 +122,10 @@ export interface GenerateQueryInput {
    *  check (schema-less generation is a supported route path). */
   metricNames?: string[];
   /** False when the vocabulary is KNOWABLY incomplete — the connector's own `truncated` flag,
-   *  or a stale cache (isSchemaStale). Softens the warning wording; never changes the
-   *  advisory (return-with-warning) semantics. */
+   *  or a stale cache (isSchemaStale). An incomplete vocabulary SKIPS the corrective retry
+   *  (a "correction" toward alphabetical-head near-misses would steer the model away from real
+   *  metrics past the cap and return that wrong answer clean) and softens the warning wording;
+   *  the advisory (return-with-warning) semantics never change. */
   vocabularyComplete?: boolean;
   send?: QueryGenSend;
 }
@@ -222,9 +224,13 @@ export async function generateQuery(input: GenerateQueryInput): Promise<Generate
     if (input.isSql && !looksReadOnlySql(query)) {
       throw new Error('could not generate a valid read-only query');
     }
-    // a truncated completion with an unclosed { cannot run anyway
-    if (input.lang === 'PromQL' && (query.split('{').length !== query.split('}').length)) {
-      throw new Error('generated query has unbalanced braces');
+    // a truncated completion with an unclosed { cannot run anyway — counted on the
+    // STRING-STRIPPED text (a literal brace inside a label value is balanced PromQL)
+    if (input.lang === 'PromQL') {
+      const bare = query.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`/g, '');
+      if (bare.split('{').length !== bare.split('}').length) {
+        throw new Error('generated query has unbalanced braces');
+      }
     }
   };
   const user = `<request>\n${input.nl}\n</request>`;
@@ -233,28 +239,45 @@ export async function generateQuery(input: GenerateQueryInput): Promise<Generate
   const anchor = input.lang === 'PromQL' && input.metricNames?.length
     ? new Set(input.metricNames) : null;
   if (anchor) {
-    let unknown = unknownPromqlNames(query, anchor);
+    const unknown = unknownPromqlNames(query, anchor);
     if (unknown.length > 0) {
-      // ONE corrective retry with the previous answer echoed (tag-wrapped like the schema)
-      // and near-miss schema names suggested — then the draft is returned WITH a warning.
+      // Incomplete vocabulary (connector-truncated / stale cache): a "correction" would steer
+      // the model AWAY from real metrics past the cap toward alphabetical-head near-misses and
+      // then return that wrong answer clean — so NO retry: return the draft with the soft
+      // warning (the connector is the runtime authority; the user reviews before running).
+      if (input.vocabularyComplete === false) {
+        return {
+          query,
+          warning: `names not found in this datasource's cached schema: ${unknown.join(', ')}`
+            + ' (the cached schema is truncated or stale — these may be false alarms) — review before running',
+        };
+      }
+      // Complete vocabulary: ONE corrective retry with the previous answer echoed
+      // (tag-wrapped like the schema) and near-miss schema names suggested. ANY retry failure
+      // (Bedrock error, prose, unbalanced) falls back to the valid first draft + warning —
+      // the advisory contract must never turn a usable draft into a 502.
       const near = nearMissCandidates(unknown, anchor);
-      const retryUser = `${user}\n\n<previous_answer>\n${query}\n</previous_answer>\n`
-        + `The previous answer uses names that are NOT in the schema: ${unknown.join(', ')}.`
-        + (near.length ? ` Did you mean: ${near.join(', ')}?` : '')
-        + ` Rewrite the query using ONLY metric names listed in the schema.`;
-      const retried = extractQuery(String((await send(system, retryUser, MODEL_ID)) ?? ''));
-      validate(retried);
-      const retriedUnknown = unknownPromqlNames(retried, anchor);
-      if (retriedUnknown.length === 0) return { query: retried };
-      // keep whichever answer violates less; ADVISORY warning, never a block
-      const best = retriedUnknown.length <= unknown.length ? { q: retried, u: retriedUnknown } : { q: query, u: unknown };
-      const caveat = input.vocabularyComplete === false
-        ? ' (the cached schema is truncated or stale — these may be false alarms)'
-        : '';
-      return {
-        query: best.q,
-        warning: `names not found in this datasource's cached schema: ${best.u.join(', ')}${caveat} — review before running`,
+      const fallback: GeneratedQuery = {
+        query,
+        warning: `names not found in this datasource's cached schema: ${unknown.join(', ')} — review before running`,
       };
+      try {
+        const retryUser = `${user}\n\n<previous_answer>\n${query}\n</previous_answer>\n`
+          + `The previous answer uses names that are NOT in the schema: ${unknown.join(', ')}.`
+          + (near.length ? ` Did you mean: ${near.join(', ')}?` : '')
+          + ` Rewrite the query using ONLY metric names listed in the schema.`;
+        const retried = extractQuery(String((await send(system, retryUser, MODEL_ID)) ?? ''));
+        validate(retried);
+        const retriedUnknown = unknownPromqlNames(retried, anchor);
+        if (retriedUnknown.length === 0) return { query: retried };
+        // both violate: keep whichever violates less, still warned
+        if (retriedUnknown.length < unknown.length) {
+          return { query: retried, warning: `names not found in this datasource's cached schema: ${retriedUnknown.join(', ')} — review before running` };
+        }
+        return fallback;
+      } catch {
+        return fallback;
+      }
     }
   }
   return { query };
