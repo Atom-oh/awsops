@@ -20,7 +20,7 @@ import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
-import { nearestSnapshot, netChange, covCompleteForScope, isDerivedTrendType, DERIVED_TREND_TYPES, type TrendCoverage } from '@/lib/trend-utils';
+import { nearestSnapshot, netChange, covCompleteForScope, isDerivedTrendType, sameAccountSet, DERIVED_TREND_TYPES, type TrendCoverage } from '@/lib/trend-utils';
 import { estimateCostImpact, COST_IMPACT_WEIGHTS } from '@/lib/cost-impact';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -285,7 +285,7 @@ export default function Home() {
   const derivedTrendTypes = (resTrend?.types ?? []).filter((t) => isDerivedTrendType(t));
   const trendTypes = [...realTrendTypes.slice(0, 8), ...derivedTrendTypes];
   const trendSeries = trendTypes.map((t) => ({ key: t, label: INV_LABEL(t) }));
-  const coreTypes = trendTypes.slice(0, 5);
+  const coreTypes = realTrendTypes.slice(0, 5); // never a derived series, even on a tiny fleet
   // Chart honesty (gap L124): a (day, type) whose account coverage is less than the RESOLVED
   // scope is DROPPED from that day's point — the summed line would otherwise dip on an
   // account's silent day, presenting a sync artifact as a fleet change (the same rule the
@@ -378,6 +378,12 @@ export default function Home() {
   // dimension, so a narrowed region scope would misprice host-wide deltas — the net7 gate).
   const impactRows = (() => {
     if (!regionScopeIsDefault) return [];
+    // The impact panel's OWN 35d fetch resolves __all__ independently of the chart's: if only
+    // this fetch hit the accounts-registry fallback (degraded), or the two fetches resolved
+    // different scopes, pricing would silently present host-only deltas as fleet-wide — hide.
+    if (impactTrend?.degraded) return [];
+    if (resTrend?.accounts && impactTrend?.accounts
+      && !sameAccountSet(resTrend.accounts, impactTrend.accounts)) return [];
     const pts = [...(impactTrend?.trend ?? [])].sort((a, b) => a.date.localeCompare(b.date));
     if (pts.length < 2) return [];
     const last = pts[pts.length - 1];

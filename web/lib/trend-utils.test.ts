@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { nearestSnapshot, netChange, typeCovEqual, covComplete, covCompleteForScope, expectedAccounts, isDerivedTrendType } from './trend-utils';
+import { nearestSnapshot, netChange, typeCovEqual, covComplete, covCompleteForScope, expectedAccounts, isDerivedTrendType, sameAccountSet } from './trend-utils';
 
 const day = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
 
@@ -175,5 +175,14 @@ describe('host-only type exemption (round 4)', () => {
       [day(0)]: { ec2: ['self', '222233334444'], s3: ['self'] },
     };
     expect(netChange(pts, 7, cov, scope)).toBe(2);
+  });
+});
+
+describe('sameAccountSet (round 5 — cross-fetch scope consistency)', () => {
+  it('order-insensitive equality; a degraded self-only resolution differs from the full scope', () => {
+    expect(sameAccountSet(['self', '222233334444'], ['222233334444', 'self'])).toBe(true);
+    // the impact fetch fell back to self while the chart resolved the full scope → NOT same
+    expect(sameAccountSet(['self'], ['self', '222233334444'])).toBe(false);
+    expect(sameAccountSet([], [])).toBe(true);
   });
 });

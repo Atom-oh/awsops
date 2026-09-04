@@ -62,6 +62,13 @@ export function covCompleteForScope(cov: TrendCoverage, d: string, type: string,
   return covComplete(cov, d, type, expectedAccounts(type, resolved));
 }
 
+/** Order-insensitive account-set equality — for cross-checking two fetches' RESOLVED scopes
+ *  (e.g. the chart's and the cost-impact's independent trend responses): each request resolves
+ *  `__all__` on its own, so one can fall back to self while the other doesn't. */
+export function sameAccountSet(a: string[], b: string[]): boolean {
+  return [...a].sort().join(',') === [...b].sort().join(',');
+}
+
 /** Own-property check for the derived-series map: resource_type values pass a snake_case
  *  charset guard, which still admits Object.prototype keys ('constructor') and '__proto__' —
  *  an `in` lookup would misclassify them (the applyTerms hasOwnProperty precedent). */

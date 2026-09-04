@@ -23,27 +23,14 @@ AWS リソースの数量変化を日次で追跡し、コスト影響を推定�
 - マルチラインチャートでリソースタイプ別の数量推移を可視化
 - 期間トグル: 14 日（デフォルト）/ 30 日 / 90 日
 - リソースタイプのトグルで表示するリソースを選択
-- 上部のアカウント選択に従ってアカウント別にスコープされます（アカウント別の履歴は本機能のデプロイ以降に蓄積、リージョン次元はありません）。比較する 2 日間でタイプ別のアカウントカバレッジが異なる場合（あるアカウントがそのタイプの sync で沈黙）、純変化・変化テーブル・コスト影響は数値を作らず '—' を表示します
+- 上部のアカウント選択に従ってアカウント別にスコープされます（アカウント別の履歴は本機能のデプロイ以降に蓄積、リージョン次元はありません）。比較する 2 日間でタイプ別のアカウントカバレッジが異なる場合（あるアカウントがそのタイプの sync で沈黙）、純変化・変化テーブル・コスト影響は数値を作らず '—' を表示します。リージョンスコープを絞ると（スナップショットにリージョン次元がないため）純変化 KPI は '—'、コスト影響パネルは非表示になります
 - 派生セキュリティ系列（Public S3 Buckets / Open Security Groups / Unencrypted EBS）はセキュリティページと同じ判定基準で sync ごとに記録され、元リソースとの二重集計を避けるため合計（total）には含まれません。Public S3 Buckets 系列はホストアカウントのみです（S3 公開設定の収集はホスト SDK スイープのため — セキュリティページと同じ範囲）
 
-### Core Resources (デフォルト表示)
-- EC2 Instances
-- RDS Instances
-- S3 Buckets
-- EBS Volumes
-- Lambda Functions
-
-### Other Resources
-- VPCs, Subnets, NAT Gateways
-- ALBs, NLBs, Route Tables
-- IAM Users, IAM Roles
-- ECS Tasks, ECS Services
-- DynamoDB Tables
-- ElastiCache Clusters
-- CloudFront Distributions
-- WAF Web ACLs
-- ECR Repositories
-
+### 系列トグルグループ
+チャート系列は固定リストではなく、最新スナップショット数量で動的にランク付けされます:
+- **Core Resources**: 数量上位 5 つの実リソースタイプ — デフォルト表示
+- **Other Resources**: 続く最大 3 タイプ — デフォルト非表示（チップをクリックで表示）
+- 残りのタイプはチャートには表示されませんが、下の数量変化テーブルにはすべて表示されます
 ### セキュリティ系列（デフォルト非表示、独立トグルグループ）
 - Public S3 Buckets, Open Security Groups, Unencrypted EBS — セキュリティページと同じ判定基準の派生カウント、合計（total）には含まれません
 

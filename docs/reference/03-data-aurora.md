@@ -76,7 +76,7 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 | Table | Replaces (v1) | Notes |
 |-------|---------------|-------|
 | `schema_migrations` | — | applied-version tracker; seeded with version 1 |
-| `inventory_snapshots` | `data/inventory/<account>/*.json` | `(account_id, captured_at)` indexes; JSONB `payload` |
+| `inventory_snapshots` | `data/inventory/<account>/*.json` | `(account_id, captured_at)` indexes; JSONB `payload`. Since 2026-09-04 the sync writes one daily row per (trusted account, resource_type) — plus derived security series (`public_s3_buckets`/`open_security_groups`/`unencrypted_ebs`, lockstep with `web/lib/security-findings.ts`); host-only SDK types stay `self`-scoped. No prune — the trend route filters by resolved account scope + a snake_case type charset (legacy v1 backfill label rows excluded) |
 | `cost_snapshots` | `data/cost/<account>/*.json` | UPSERT on `(account, period, granularity)` |
 | `agentcore_memory` | `data/memory/<user>/*.json` | per-user, 365-day TTL via `expires_at` (ADR-004) |
 | `agentcore_stats` | `data/agentcore-stats.json` | append-only event log; token columns |

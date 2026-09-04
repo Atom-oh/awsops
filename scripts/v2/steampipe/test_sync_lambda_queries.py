@@ -1711,3 +1711,54 @@ def test_host_only_trend_types_lockstep_with_sdk_syncs():
     assert m, "HOST_ONLY_TREND_TYPES Set literal not found in trend-utils.ts"
     ts_set = set(re.findall(r"'([a-z0-9_]+)'", m.group(1)))
     assert ts_set == set(mod.SDK_SYNCS) | {"public_s3_buckets"}
+    # and the TS DERIVED_TREND_TYPES keys must be exactly the Python derived series names
+    # (comment-only lockstep until now — a drifted key would silently re-include a derived
+    # series in the chart total or mislabel it)
+    m2 = re.search(r"DERIVED_TREND_TYPES[^=]*=\s*\{(.*?)\n\};", ts, re.DOTALL)
+    assert m2, "DERIVED_TREND_TYPES literal not found in trend-utils.ts"
+    ts_derived = set(re.findall(r"^\s*([a-z0-9_]+):", m2.group(1), re.MULTILINE))
+    assert ts_derived == {v[0] for v in mod.DERIVED_SNAPSHOTS.values()}
+
+
+def test_sdk_sync_writes_zero_count_self_row_when_only_member_rows_returned(capsys, monkeypatch):
+    """A reachable account with ZERO rows gets a genuine 0 snapshot row (not key absence):
+    an SDK sync returning only member-account rows still writes self's 0 — the trend chart
+    distinguishes 'synced, none exist' from 'no successful sync that day'."""
+    mod = load_sync_lambda()
+    mod._ACCOUNT_CACHE["id"] = "111111111111"
+    main_calls = []
+
+    class MainAurora:
+        def run(self, sql, **kwargs):
+            main_calls.append((sql, kwargs))
+            if "pg_try_advisory_lock" in sql:
+                return [(True,)]
+            return []
+
+        def close(self):
+            pass
+
+    class FinalizerAurora:
+        def run(self, sql, **kwargs):
+            return [(1,)]
+
+        def close(self):
+            pass
+
+    connections = iter([MainAurora(), FinalizerAurora()])
+    monkeypatch.setattr(mod, "_aurora", lambda: next(connections))
+    mod.SDK_SYNCS["zero_self_test"] = lambda: (
+        [{"id": "r-1", "region": "ap-northeast-2", "account_id": "222233334444"}],
+        "id",
+        "region",
+        {"failure_count": 0, "failure_types": []},
+    )
+    mod._ALLOWED.add("zero_self_test")
+
+    assert mod.sync("zero_self_test")["status"] == "succeeded"
+    by_series = {
+        (p["a"], p["t"]): p["n"]
+        for sql, p in main_calls if "INSERT INTO inventory_snapshots" in sql
+    }
+    assert by_series[("self", "zero_self_test")] == 0  # genuine zero, not absence
+    assert by_series[("222233334444", "zero_self_test")] == 1

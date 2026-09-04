@@ -54,13 +54,17 @@ only raw synced resource_type counts).
     a Block-Public-Access guard off); unknown (denied-attribute None) buckets don't count —
     the count is "confirmed public", consistent with the /security page.
 
-## Testing
-- pytest (steampipe): per-account rows over `present` (zero-count row included; absent
-  account's same-day row untouched); derived-count SQL runs the lockstep predicate and writes
-  rows; sdk_partial writes no snapshot rows (existing assertion holds); `_account_counts`.
-- vitest: trend route `accounts` parsing (default self / `__all__` / CSV validation /
-  parameterization) and derived-type exclusion from `total`; trend-utils map; account-scope
-  param helper.
+## Testing (as-shipped — corrected in round 5; earlier drafts overclaimed)
+- pytest (steampipe): per-account rows over `present` incl. a genuine-zero self row when only
+  member rows return; per-account same-day delete; derived-count SQL runs the lockstep
+  predicate; sdk_partial writes no snapshot rows; `_account_counts`; three TS↔Python lockstep
+  guards (predicates ↔ security-findings.ts, HOST_ONLY ↔ SDK_SYNCS, DERIVED_TREND_TYPES keys
+  ↔ derived series names).
+- vitest: trend route (accounts parsing/parameterization, __all__ scan-scope resolution +
+  degraded fallback, per-type coverage payload, legacy-label exclusion, derived total
+  exclusion); trend-utils (netChange derived exclusion + per-type and scope-relative parity,
+  covComplete/expectedAccounts/isDerivedTrendType/sameAccountSet). `trendAcctParam` and the
+  page wiring are exercised only through the build/typecheck (no page test harness exists).
 - Full `npm test` + `tsc` + build + `pytest scripts/v2/{workers,steampipe}`; audit ticks +
   batch-41 note; CHANGELOG EN/KO; api-reference row; docs-site home-dashboard guide note
   (4 locales) where behavior is user-visible.
@@ -186,3 +190,29 @@ only raw synced resource_type counts).
   no longer overwrite a newer scope's state); a call-site guard rejects statement separators/
   comments in the derived WHERE fragment (defense-in-depth atop the module-constant
   invariant, with a pytest assertion); the guide's usage step names the 14d default toggle.
+
+## Round-5 corrections (review-driven)
+
+- **The cost-impact panel honors its OWN fetch's honesty signals (the gate MAJOR)** — the
+  35-day impact fetch resolves `__all__` independently of the chart's fetch; if only it hit
+  the accounts-registry fallback, server-side coverage (computed against the fallen-back
+  scope) passed and host-only dollar deltas rendered under an all-accounts selector with no
+  disclosure. The panel now hides when `impactTrend.degraded` is set OR when the two fetches
+  resolved different account sets (`sameAccountSet`, trend-utils, vitest-pinned).
+- Minors closed: Core chips slice from `realTrendTypes` (a tiny fleet can no longer leak a
+  derived series into the Core group); the TS `DERIVED_TREND_TYPES` keys are pytest-pinned
+  against the Python derived series names (was comment-only) and the new lockstep trio is
+  registered in web/lib/CLAUDE.md; a pytest pins the genuine-zero self row (SDK sync
+  returning only member rows); the spec's Testing section is corrected to what actually
+  exists (no page-level test harness — trendAcctParam/page wiring covered by build+tsc
+  only); api-reference documents `degraded` and the scan-scope `__all__` predicate; the
+  4-locale guide's fixed Core/Other lists are replaced with the dynamic top-5/next-3 ranking
+  reality and the region-narrowing '—'/hidden behavior is stated; the gap-audit batch-41
+  note is reordered after batch 40 (ascending batch order); docs/reference/03-data-aurora.md
+  notes the per-account + derived-series snapshot semantics.
+- Recorded follow-ups (chair-endorsed, out of scope): shared enabled-intersecting
+  resolveAccounts for /api/security + trend; a dated ADR-010/011 note on per-account snapshot
+  history (chair verified no recorded decision is contradicted); member region-set changes
+  still read as count changes (disclosed round-2); the near-vacuous CSV-narrowing caption
+  (both sides apply the same syntax filter — the caption's real trigger is the 50-id cap and
+  the `degraded` flag).

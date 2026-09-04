@@ -23,27 +23,14 @@ import Screenshot from '@site/src/components/Screenshot';
 - 通过多折线图可视化各资源类型的数量趋势
 - 期间切换：14 天（默认）/ 30 天 / 90 天
 - 通过资源类型开关选择要显示的资源
-- 跟随顶部的账户选择进行账户级过滤（各账户历史自该功能部署后开始积累，无区域维度）。当所比较的两天在某类型的账户覆盖上不一致时（某账户在该类型的 sync 中缺席），净变化 / 变化表 / 成本影响会显示 '—'，而不是编造数字
+- 跟随顶部的账户选择进行账户级过滤（各账户历史自该功能部署后开始积累，无区域维度）。当所比较的两天在某类型的账户覆盖上不一致时（某账户在该类型的 sync 中缺席），净变化 / 变化表 / 成本影响会显示 '—'，而不是编造数字。收窄区域范围时（快照没有区域维度），净变化 KPI 显示 '—'，成本影响面板隐藏
 - 派生安全序列（Public S3 Buckets / Open Security Groups / Unencrypted EBS）在每次 sync 时按与安全页面相同的判定标准记录，并且不计入总数（total），以避免与原始资源重复计算；Public S3 Buckets 序列仅覆盖主机账户（S3 公开配置采集是主机 SDK 扫描 — 与安全页面的范围一致）
 
-### Core Resources（默认显示）
-- EC2 Instances
-- RDS Instances
-- S3 Buckets
-- EBS Volumes
-- Lambda Functions
-
-### Other Resources
-- VPCs、Subnets、NAT Gateways
-- ALBs、NLBs、Route Tables
-- IAM Users、IAM Roles
-- ECS Tasks、ECS Services
-- DynamoDB Tables
-- ElastiCache Clusters
-- CloudFront Distributions
-- WAF Web ACLs
-- ECR Repositories
-
+### 序列开关组
+图表序列按最新快照数量动态排序，而不是固定列表：
+- **Core Resources**: 数量前 5 的实际资源类型 — 默认显示
+- **Other Resources**: 其后的最多 3 个类型 — 默认隐藏（点击标签显示）
+- 其余类型不出现在图表中，但全部列在下方的数量变化表中
 ### 安全序列（默认隐藏，独立开关组）
 - Public S3 Buckets、Open Security Groups、Unencrypted EBS — 采用安全页面判定标准的派生计数，不计入总数
 
