@@ -754,9 +754,11 @@ export default function Home() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* dataviz form-fit (batch 44): instance types are NOMINAL categories compared by
                   MAGNITUDE across many close values — the "donut for comparing close values"
-                  anti-pattern; count-desc bars read exact ranking with no slice ceiling. */}
+                  anti-pattern; count-desc bars read exact ranking. The summary API caps this
+                  at the TOP 10 types (LIMIT 10) — disclosed in the subtitle (the donut's 기타
+                  rollup used to hint at partiality; bars must say it explicitly). */}
               {ec2Types.length > 0 ? (
-                <BarDistribution title="EC2 인스턴스 유형" data={ec2Types} xKey="name" yKey="count" />
+                <BarDistribution title="EC2 인스턴스 유형" subtitle={tt('상위 10개 유형만 표시')} data={ec2Types} xKey="name" yKey="count" />
               ) : (
                 <Card title="EC2 인스턴스 유형">
                   <div className="text-[13px] text-ink-400">{tt('EC2 데이터 없음')}</div>

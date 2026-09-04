@@ -144,8 +144,12 @@ export default function BedrockPage() {
       })()
     : null;
 
-  const costRows = models.map((m) => ({ label: m.label, cost: m.cost.total }));
-  const invRows = models.map((m) => ({ label: m.label, invocations: m.invocations }));
+  // ONE shared row order for the side-by-side pair (invocations desc, label tiebreak) so a
+  // model sits on the same row in both charts; sub-cent idle models keep their row — the $
+  // column reading $0.00 next to real invocations IS the honest signal (cheap-but-chatty).
+  const pairRows = [...models]
+    .sort((a, b) => (b.invocations - a.invocations) || a.label.localeCompare(b.label))
+    .map((m) => ({ label: m.label, invocations: m.invocations, cost: m.cost.total }));
   const tableRows = models.map((m) => ({
     modelId: m.modelId, // row key for selection (labels collide across regional id variants)
     model: m.label,
@@ -200,10 +204,12 @@ export default function BedrockPage() {
               )}
 
               <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-6">
-                <BarDistribution title="모델별 호출 수" data={invRows} xKey="label" yKey="invocations" />
+                {/* the PAIR shares ONE row order (invocations desc) so models line up across both
+                    charts — independently re-sorted bars defeated the side-by-side comparison */}
+                <BarDistribution preserveOrder title="모델별 호출 수" data={pairRows} xKey="label" yKey="invocations" />
                 {/* dataviz form-fit (batch 44): same close-magnitude comparison job as the sibling
-                    호출 수 bars — one comparable block instead of two encodings of one identity set */}
-                <BarDistribution title="모델별 비용" data={costRows} xKey="label" yKey="cost" valuePrefix="$" />
+                    호출 수 bars — one comparable block (SAME row order) instead of two encodings */}
+                <BarDistribution preserveOrder title="모델별 비용" data={pairRows} xKey="label" yKey="cost" valuePrefix="$" />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

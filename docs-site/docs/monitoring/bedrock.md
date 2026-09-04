@@ -29,7 +29,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ### 차트 (3개)
 
-- **Cost by Model** (파이 차트): 모델별 비용 비중
+- **Cost by Model** (가로 바 차트): 모델별 비용 — 호출 수 차트와 동일한 행 순서로 나란히 비교
 - **Invocations by Model** (바 차트): 모델별 호출 횟수 비교
 - **Token Usage Over Time** (라인 차트): 시간대별 토큰 사용 추이
 

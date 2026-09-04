@@ -5,6 +5,7 @@ import Card from '@/components/ui/Card';
 
 export interface HBarListProps {
   title: ReactNode;
+  subtitle?: ReactNode;
   right?: ReactNode;
   data: Array<Record<string, unknown>>;
   labelKey: string;
@@ -26,6 +27,7 @@ export interface HBarListProps {
  */
 export default function HBarList({
   title,
+  subtitle,
   right,
   data,
   labelKey,
@@ -52,7 +54,7 @@ export default function HBarList({
   };
 
   return (
-    <Card title={title} right={right} className={className}>
+    <Card title={title} subtitle={subtitle} right={right} className={className}>
       <ul className="space-y-2.5">
         {data.map((d, i) => {
           const n = Number(d[valueKey]) || 0;

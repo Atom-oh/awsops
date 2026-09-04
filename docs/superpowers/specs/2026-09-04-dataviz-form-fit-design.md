@@ -37,7 +37,9 @@ consulted: "a donut for comparing close values", "eight hues when the story is o
 3. **Home 'EC2 인스턴스 유형'**: donut → `BarDistribution` (horizontal bars). Instance types
    are NOMINAL categories whose job is magnitude comparison across many close values — the
    "donut for comparing close values" anti-pattern; the count-desc bar list reads exact
-   ranking at a glance and has no slice-count ceiling.
+   ranking at a glance. The summary API caps this dataset at the TOP 10 types (LIMIT 10) —
+   disclosed in the card subtitle (round-1 correction: the donut's 기타 rollup used to hint
+   at partiality, so the bars must state it; the original "no slice ceiling" claim was wrong).
 4. **Bedrock '모델별 비용'**: donut → `BarDistribution` with `$` values. Same
    close-magnitude job as its sibling '모델별 호출 수' (already a bar) — the pair now reads
    as one comparable block instead of two encodings of the same identity set.
@@ -57,3 +59,30 @@ part-to-whole form for a worse one — this pass changes only mismatches.
 - Updated page tests if any pin the swapped chart components.
 - Full `npm test` + `tsc` non-test + build + `pytest scripts/v2/{workers,steampipe}`;
   CHANGELOG EN/KO.
+
+## Round-1 corrections (review-driven)
+
+- **The EC2 top-10 cap is disclosed and the false claim is corrected (the gate MAJOR)** — the
+  summary API caps instance types at LIMIT 10; the donut's 기타 rollup used to hint at
+  partiality, and the swap removed that cue while the CHANGELOG/spec claimed "no slice
+  ceiling". The card now carries a '상위 10개 유형만 표시' subtitle (BarDistribution/HBarList
+  gain a subtitle passthrough) and the claim is corrected everywhere.
+- **DivergingBarList is mobile-safe (the gate MAJOR)** — the fixed w-36 + w-40 columns left
+  the flex-1 track ~0px and clipped the signed label (the claimed secondary encoding) inside
+  Card's overflow-hidden at ~310px content width. Columns are now responsive
+  (w-24/sm:w-36 label, w-28/sm:w-40 value, sub hidden below sm), keys are stable (label, not
+  index), and one finite-guard covers both the scale and the row (an Infinity row can no
+  longer render width:Infinity%).
+- **CHANGELOG amend-in-place restored (the gate MAJOR)** — the existing [Unreleased]
+  cost-impact bullet (EN/KO) is amended to describe the diverging-bar form; the batch-44
+  bullet keeps only the surfaces with no prior covering entry (the two donut→bar swaps),
+  cross-referencing the amended entry for the palette validation.
+- Minors closed: the Bedrock pair shares ONE row order (invocations desc + label tiebreak,
+  preserveOrder on both) so a model sits on the same row in both charts — sub-cent idle
+  models keep their row ($0.00 next to real invocations IS the cheap-but-chatty signal,
+  chosen over filtering); the 2×4-locale Bedrock guides (cost + monitoring) now describe
+  bars sharing a row order instead of a donut/pie share.
+- Recorded (accepted): HBarList forces 2 fraction digits for $ regardless of `decimals`
+  (pre-existing; impact values are integral today); the two cost primitives' $ formatting
+  differs (toLocaleString vs forced 2 digits) — unify if a fractional-impact source appears;
+  the lg-grid column widths for the Bedrock pair are the page's established layout.
