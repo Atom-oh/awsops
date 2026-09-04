@@ -13,6 +13,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import BarDistribution from '@/components/charts/BarDistribution';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import PodTransferSection from '@/components/eks/PodTransferSection';
 
@@ -286,12 +287,14 @@ export default function EksFleetCostPage() {
                       />
                     </div>
 
+                    {/* dataviz form-fit (batch 45): namespaces are nominal identities ranked
+                        by cost — the donut folded 9+ into 기타 and made close $ incomparable */}
                     {merged.namespaces.length > 0 && (
-                      <DonutBreakdown
+                      <BarDistribution
                         title="Namespace별 비용 (일간)"
                         data={merged.namespaces}
-                        nameKey="name"
-                        valueKey="value"
+                        xKey="name"
+                        yKey="value"
                         valuePrefix="$"
                       />
                     )}

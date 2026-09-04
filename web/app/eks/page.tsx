@@ -645,7 +645,9 @@ export default function EksPage() {
       {connected > 0 && totalPods > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <DonutBreakdown title="Pod Status" data={podStatusData} nameKey="name" valueKey="value" />
-          <DonutBreakdown title="Instance Types" data={instanceTypeData} nameKey="name" valueKey="value" />
+          {/* dataviz form-fit (batch 45): nominal types ranked by count — the same close-magnitude
+              job the home EC2-types card fixed in batch 44 (client-side aggregation, no cap) */}
+          <BarDistribution title="Instance Types" data={instanceTypeData} xKey="name" yKey="value" />
           <BarDistribution title="Pods per Namespace" data={nsData} xKey="namespace" yKey="count" />
         </div>
       )}

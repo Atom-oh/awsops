@@ -9,6 +9,7 @@ import MetricTable, { type MetricCol } from '@/components/inventory/metrics/Metr
 import { RangePicker } from '@/components/inventory/metrics/shared';
 import AreaTrend from '@/components/charts/AreaTrend';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import BarDistribution from '@/components/charts/BarDistribution';
 import HBarList from '@/components/charts/HBarList';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { CoreDnsAnalytics, CoreDnsGroup, DnsAnalytics, DnsLogConfig } from '@/lib/dns-logs';
@@ -396,7 +397,9 @@ export default function DnsQueryPage() {
                 <AreaTrend title="쿼리 타임라인" data={timelineData} xKey="t" yKey="value" />
                 <div className="grid gap-6 lg:grid-cols-2">
                   <DonutBreakdown title="RCODE 분포" data={a.rcode} nameKey="name" valueKey="value" colors={RCODE_COLORS} />
-                  <DonutBreakdown title="쿼리 타입 분포" data={a.qtype} nameKey="name" valueKey="value" />
+                  {/* dataviz form-fit (batch 45): record types are NOMINAL with a magnitude job → ranked
+                      bars; RCODE keeps the donut (status share with fixed semantic colors) */}
+                  <BarDistribution title="쿼리 타입 분포" data={a.qtype} xKey="name" yKey="value" />
                 </div>
                 <HBarList title="Top 도메인" data={a.topDomains.slice(0, 12)} labelKey="name" valueKey="value" highlightMax />
 

@@ -52,3 +52,22 @@ describe('DivergingBarList (dataviz polarity form)', () => {
     expect(fills.map((f) => f.style.width)).toEqual(['100%', '2%']);
   });
 });
+
+describe('round-2 follow-ups', () => {
+  it('a NON-FINITE value renders — with no bar on either pole (never a confident $0)', () => {
+    const { container } = render(
+      <DivergingBarList title="t" rows={[{ label: 'broken', value: Number.POSITIVE_INFINITY }, { label: 'ok', value: 10 }]} valuePrefix="$" />,
+    );
+    expect(screen.getByText('—')).toBeTruthy();
+    // only the finite row draws a bar
+    expect(container.querySelectorAll('.bg-negative')).toHaveLength(1);
+    expect(screen.getByText('+$10')).toBeTruthy(); // scale unpolluted by the Infinity row
+  });
+
+  it('the value cell carries a title tooltip including the sub figure (mobile fallback)', () => {
+    const { container } = render(
+      <DivergingBarList title="t" rows={[{ label: 'EC2', value: 240, sub: '+3' }]} valuePrefix="$" />,
+    );
+    expect(container.querySelector('[title="EC2: +$240 (+3)"]')).toBeTruthy();
+  });
+});

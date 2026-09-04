@@ -147,9 +147,17 @@ export default function BedrockPage() {
   // ONE shared row order for the side-by-side pair (invocations desc, label tiebreak) so a
   // model sits on the same row in both charts; sub-cent idle models keep their row — the $
   // column reading $0.00 next to real invocations IS the honest signal (cheap-but-chatty).
-  const pairRows = [...models]
-    .sort((a, b) => (b.invocations - a.invocations) || a.label.localeCompare(b.label))
-    .map((m) => ({ label: m.label, invocations: m.invocations, cost: m.cost.total }));
+  // AGGREGATE BY LABEL first: regional id variants share a display label (see the collision
+  // note below) — un-merged they double-list the model and collide as React keys.
+  const pairRows = [...models
+    .reduce((acc, m) => {
+      const cur = acc.get(m.label) ?? { label: m.label, invocations: 0, cost: 0 };
+      cur.invocations += m.invocations;
+      cur.cost += m.cost.total;
+      return acc.set(m.label, cur);
+    }, new Map<string, { label: string; invocations: number; cost: number }>())
+    .values()]
+    .sort((a, b) => (b.invocations - a.invocations) || a.label.localeCompare(b.label));
   const tableRows = models.map((m) => ({
     modelId: m.modelId, // row key for selection (labels collide across regional id variants)
     model: m.label,

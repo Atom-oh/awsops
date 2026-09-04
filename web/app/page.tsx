@@ -758,7 +758,7 @@ export default function Home() {
                   at the TOP 10 types (LIMIT 10) — disclosed in the subtitle (the donut's 기타
                   rollup used to hint at partiality; bars must say it explicitly). */}
               {ec2Types.length > 0 ? (
-                <BarDistribution title="EC2 인스턴스 유형" subtitle={tt('상위 10개 유형만 표시')} data={ec2Types} xKey="name" yKey="count" />
+                <BarDistribution title="EC2 인스턴스 유형" subtitle={ec2Types.length === 10 ? tt('상위 10개 유형만 표시') : undefined} data={ec2Types} xKey="name" yKey="count" />
               ) : (
                 <Card title="EC2 인스턴스 유형">
                   <div className="text-[13px] text-ink-400">{tt('EC2 데이터 없음')}</div>
