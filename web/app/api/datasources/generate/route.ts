@@ -16,7 +16,7 @@ import {
   metricCandidatesForQuery,
   metricNamesFromSchema,
   confirmedMetricNamesFromMetadata,
-  queryReferencesGroundedMetric,
+  metricReferencesFromPromQuery,
   renderMetricMetadataForPrompt,
   isSchemaStale,
   upsertSchema,
@@ -37,6 +37,7 @@ const LANG: Record<string, string> = {
   dynatrace: 'Dynatrace metricSelector (Metrics API v2)', datadog: 'Datadog metrics query',
 };
 const MAX_NL = 4_000;
+const MAX_VALIDATED_QUERY_METRICS = 2;
 const PROMQL_VALIDATION_ERROR_RE =
   /\b(?:bad_data|parse error|unexpected (?:end|token)|unknown function|invalid (?:parameter|query)|could not parse|(?:prometheus|mimir) http (?:400|422))\b/i;
 
@@ -69,6 +70,67 @@ async function validatePromQuery(
     if (PROMQL_VALIDATION_ERROR_RE.test(message)) throw new GeneratedQueryValidationError(message);
     throw new QueryValidationUnavailableError('query validation unavailable');
   }
+}
+
+async function validatePromCandidate(
+  kind: 'prometheus' | 'mimir',
+  query: string,
+  connConfig: ConnConfig,
+): Promise<void> {
+  const metrics = metricReferencesFromPromQuery(query);
+  if (!metrics.length) {
+    // Let Prometheus surface a more useful parse/type error first for malformed or scalar-only output.
+    await validatePromQuery(kind, query, connConfig);
+    throw new GeneratedQueryValidationError(
+      'generated query does not reference an exact-instance metric',
+    );
+  }
+  if (metrics.length > MAX_VALIDATED_QUERY_METRICS) {
+    throw new GeneratedQueryValidationError(
+      `generated query references too many metrics (${metrics.length}; max ${MAX_VALIDATED_QUERY_METRICS})`,
+    );
+  }
+
+  let meta: unknown;
+  try {
+    meta = await invokeMcpLambdaTool({
+      kind,
+      tool: `${kind}_metric_meta`,
+      args: { metrics },
+      connConfig,
+    });
+  } catch {
+    throw new QueryValidationUnavailableError('metric validation unavailable');
+  }
+
+  const entries = meta && typeof meta === 'object' && !Array.isArray(meta)
+    ? meta as Record<string, unknown>
+    : {};
+  const unavailable: string[] = [];
+  const missing: string[] = [];
+  for (const metric of metrics) {
+    const raw = entries[metric];
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const row = raw as { exists?: unknown; error?: unknown };
+      if (row.exists === true) continue;
+      if (typeof row.error === 'string' && row.error) {
+        unavailable.push(metric);
+        continue;
+      }
+      missing.push(metric);
+      continue;
+    }
+    unavailable.push(metric);
+  }
+  if (unavailable.length) {
+    throw new QueryValidationUnavailableError('metric validation unavailable');
+  }
+  if (missing.length) {
+    throw new GeneratedQueryValidationError(
+      `generated query references unavailable metric: ${missing.join(', ')}`,
+    );
+  }
+  await validatePromQuery(kind, query, connConfig);
 }
 
 /** Trim an introspected schema so it fits under the cache size limit — used as a fallback so a large
@@ -225,12 +287,7 @@ export async function POST(request: Request) {
     let query = await generateQuery({ nl, lang, schemaBlock, isSql });
     if (promConnConfig && (kind === 'prometheus' || kind === 'mimir')) {
       try {
-        await validatePromQuery(kind, query, promConnConfig);
-        if (!queryReferencesGroundedMetric(query, groundedMetrics)) {
-          throw new GeneratedQueryValidationError(
-            'generated query does not reference an exact-instance grounded metric',
-          );
-        }
+        await validatePromCandidate(kind, query, promConnConfig);
       } catch (e) {
         if (e instanceof QueryValidationUnavailableError) throw e;
         if (!(e instanceof GeneratedQueryValidationError)) throw e;
@@ -245,12 +302,7 @@ export async function POST(request: Request) {
           validationError,
         });
         try {
-          await validatePromQuery(kind, query, promConnConfig);
-          if (!queryReferencesGroundedMetric(query, groundedMetrics)) {
-            throw new GeneratedQueryValidationError(
-              'generated query does not reference an exact-instance grounded metric',
-            );
-          }
+          await validatePromCandidate(kind, query, promConnConfig);
         } catch (second) {
           if (second instanceof QueryValidationUnavailableError) throw second;
           throw new GeneratedQueryValidationError('generated query failed live validation');

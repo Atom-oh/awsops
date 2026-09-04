@@ -223,7 +223,7 @@ const PROMQL_NON_METRIC_WORDS = new Set([
 /** Extract metric-like identifiers after removing strings, matchers, range selectors, and label lists.
  *  This is deliberately a small lexical guard, not a PromQL parser; live Prometheus validation remains
  *  authoritative for syntax and types. */
-function metricReferencesFromPromQuery(query: string): string[] {
+export function metricReferencesFromPromQuery(query: string): string[] {
   const code = query
     .replace(/"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, ' ')
     .replace(/\{[^{}]*\}/g, ' ')

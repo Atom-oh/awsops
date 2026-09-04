@@ -10,6 +10,7 @@ import {
   prioritizeSchemaForQuery,
   metricCandidatesForQuery,
   confirmedMetricNamesFromMetadata,
+  metricReferencesFromPromQuery,
   queryReferencesGroundedMetric,
   renderMetricMetadataForPrompt,
   isSchemaStale,
@@ -172,6 +173,7 @@ describe('prioritizeSchemaForQuery (Prometheus relevance ordering)', () => {
       'topk(5, max by (instance) (rate(http_requests_total{job="api"}[5m])))',
       ['http_requests_total'],
     )).toBe(true);
+    expect(metricReferencesFromPromQuery('sum(up + removed_metric)')).toEqual(['up', 'removed_metric']);
     expect(queryReferencesGroundedMetric('label_replace(vector(1), "dst", "up", "src", ".*")', ['up']))
       .toBe(false);
   });

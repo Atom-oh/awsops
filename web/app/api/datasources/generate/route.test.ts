@@ -183,8 +183,8 @@ describe('Prometheus metric relevance', () => {
     }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
     invokeMcpLambdaTool.mockResolvedValue({
-      node_memory_MemAvailable_bytes: { type: 'gauge', labels: ['instance', 'job'] },
-      node_memory_MemTotal_bytes: { type: 'gauge', labels: ['instance', 'job'] },
+      node_memory_MemAvailable_bytes: { exists: true, type: 'gauge', labels: ['instance', 'job'] },
+      node_memory_MemTotal_bytes: { exists: true, type: 'gauge', labels: ['instance', 'job'] },
     });
     generateQuery.mockResolvedValue(
       'topk(5, 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))',
@@ -221,14 +221,23 @@ describe('Prometheus/Mimir live query validation', () => {
       fetched_at: new Date().toISOString(),
     }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        if (tool === 'prometheus_metric_meta') {
+          return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+            metric,
+            { exists: true, type: 'gauge', labels: [] },
+          ]));
+        }
+        return {};
+      },
+    );
   }
 
   it('returns a candidate only after a bounded live validation succeeds', async () => {
     promFixture();
     generateQuery.mockResolvedValue('up');
-    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => (
-      tool === 'prometheus_metric_meta' ? {} : { resultType: 'vector', result: [] }
-    ));
 
     const { POST } = await import('./route');
     const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
@@ -275,9 +284,15 @@ describe('Prometheus/Mimir live query validation', () => {
   it('self-corrects a query that references no exact-instance grounded metric', async () => {
     promFixture();
     generateQuery.mockResolvedValueOnce('sum(hallucinated_metric)').mockResolvedValueOnce('sum(up)');
-    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => (
-      tool === 'prometheus_metric_meta' ? {} : { resultType: 'vector', result: [] }
-    ));
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric,
+          { exists: metric === 'up', type: metric === 'up' ? 'gauge' : null, labels: [] },
+        ]));
+      },
+    );
 
     const { POST } = await import('./route');
     const res = await POST(req({ id: 1, nl: '정상 타깃 수' }));
@@ -285,18 +300,78 @@ describe('Prometheus/Mimir live query validation', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).query).toBe('sum(up)');
     expect(generateQuery).toHaveBeenCalledTimes(2);
-    expect(lastGen().validationError).toMatch(/grounded metric/i);
-    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
+    expect(lastGen().validationError).toMatch(/unavailable metric/i);
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(expect.objectContaining({
       tool: 'prometheus_query',
       args: expect.objectContaining({ query: 'sum(hallucinated_metric)' }),
     }));
+  });
+
+  it('live-confirms every metric referenced by generated PromQL instead of trusting the cache', async () => {
+    promFixture();
+    generateQuery
+      .mockResolvedValueOnce('sum(up + removed_metric)')
+      .mockResolvedValueOnce('sum(up)');
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        if (tool === 'prometheus_metric_meta') {
+          return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+            metric,
+            { exists: metric === 'up', type: metric === 'up' ? 'gauge' : null, labels: [] },
+          ]));
+        }
+        return {};
+      },
+    );
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '정상 타깃 수' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).query).toBe('sum(up)');
+    expect(generateQuery).toHaveBeenCalledTimes(2);
+    expect(lastGen().validationError).toMatch(/removed_metric/);
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
+      tool: 'prometheus_metric_meta',
+      args: { metrics: ['up', 'removed_metric'] },
+    }));
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(expect.objectContaining({
+      tool: 'prometheus_query',
+      args: expect.objectContaining({ query: 'sum(up + removed_metric)' }),
+    }));
+  });
+
+  it('returns 503 without correction when live metric confirmation is unavailable', async () => {
+    promFixture();
+    generateQuery.mockResolvedValue('sum(up)');
+    let metadataCalls = 0;
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool }: { tool: string }) => {
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        metadataCalls += 1;
+        if (metadataCalls === 1) return { up: { exists: true, type: 'gauge', labels: [] } };
+        return { up: { exists: false, type: null, labels: [], error: 'metadata timeout' } };
+      },
+    );
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '정상 타깃 수' }));
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/metric validation unavailable/i);
+    expect(generateQuery).toHaveBeenCalledTimes(1);
   });
 
   it('self-corrects once after a conclusive PromQL parse error', async () => {
     promFixture();
     generateQuery.mockResolvedValueOnce('up(').mockResolvedValueOnce('up');
     invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-      if (tool === 'prometheus_metric_meta') return {};
+      if (tool === 'prometheus_metric_meta') {
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      }
       if (args?.query === 'up(') throw new Error('Prometheus query failed (bad_data): parse error');
       return { resultType: 'vector', result: [] };
     });
@@ -317,7 +392,11 @@ describe('Prometheus/Mimir live query validation', () => {
     promFixture();
     generateQuery.mockResolvedValueOnce('topk(5, 1)').mockResolvedValueOnce('topk(5, up)');
     invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-      if (tool === 'prometheus_metric_meta') return {};
+      if (tool === 'prometheus_metric_meta') {
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      }
       if (args?.query === 'topk(5, 1)') {
         throw new Error('Prometheus HTTP 422: expected type instant vector in call to function topk');
       }
@@ -351,8 +430,12 @@ describe('Prometheus/Mimir live query validation', () => {
   it('returns 503 without spending a correction attempt on a transient connector failure', async () => {
     promFixture();
     generateQuery.mockResolvedValue('up');
-    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => {
-      if (tool === 'prometheus_metric_meta') return {};
+    invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+      if (tool === 'prometheus_metric_meta') {
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      }
       throw new Error('Prometheus HTTP 503: unavailable');
     });
 
@@ -372,7 +455,15 @@ describe('lazy refresh (TTL) [P2]', () => {
     getDatasource.mockResolvedValue({ id: 11, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 11, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: '2020-01-01T00:00:00Z' }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockResolvedValue({ __block: 'FRESH', metrics: ['up'] });
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_schema') return { __block: 'FRESH', metrics: ['up'] };
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      },
+    );
     generateQuery.mockResolvedValue('up');
     const { POST } = await import('./route');
     const res = await POST(req({ id: 11, nl: 'is it up' }));
@@ -385,11 +476,22 @@ describe('lazy refresh (TTL) [P2]', () => {
   it('does NOT refresh on a FRESH cache hit', async () => {
     getDatasource.mockResolvedValue({ id: 12, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 12, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: new Date().toISOString() }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      },
+    );
     generateQuery.mockResolvedValue('up');
     const { POST } = await import('./route');
     await POST(req({ id: 12, nl: 'is it up' }));
     await flush();
-    expect(invokeMcpLambdaTool).not.toHaveBeenCalled(); // fresh → no introspect
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'prometheus_schema' }),
+    ); // fresh → no introspect; metadata/query validation calls still occur
   });
 });
 
