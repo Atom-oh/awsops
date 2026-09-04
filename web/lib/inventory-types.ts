@@ -279,14 +279,17 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ],
     filterKeys: ['region'] },
   transit_gateway: { label: 'Transit Gateways', group: 'Network', stateKey: 'state', distKey: 'state', columns: [
-    { key: 'state', label: 'State' }, { key: 'owner_id', label: 'Owner' },
+    { key: 'state', label: 'State' }, { key: 'amazon_side_asn', label: 'ASN' },
+    // dns_support/option columns populate after the L168 sync-lambda redeploy + next sync
+    // (blank until then — the bucket_policy precedent)
+    { key: 'dns_support', label: 'DNS' }, { key: 'owner_id', label: 'Owner' },
     { key: 'description', label: 'Description' }, { key: 'creation_time', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'transit_gateway_arn', 'creation_time', 'description'] },
-      { label: 'Config', keys: ['state', 'owner_id', 'amazon_side_asn'] },
+      { label: 'Config', keys: ['state', 'owner_id', 'amazon_side_asn', 'dns_support', 'vpn_ecmp_support', 'multicast_support', 'auto_accept_shared_attachments', 'default_route_table_association', 'default_route_table_propagation', 'association_default_route_table_id', 'propagation_default_route_table_id'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['region', 'amazon_side_asn'] },
+    filterKeys: ['region', 'amazon_side_asn', 'dns_support'] },
 
   iam_role: { label: 'IAM Roles', group: 'Security', distKey: 'path', columns: [
     { key: 'description', label: 'Description' }, { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
