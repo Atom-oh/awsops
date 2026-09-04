@@ -115,6 +115,8 @@ export interface GenerateQueryInput {
   lang: string;
   schemaBlock: string;
   isSql: boolean;
+  previousQuery?: string;
+  validationError?: string;
   send?: QueryGenSend;
 }
 
@@ -123,8 +125,19 @@ export interface GenerateQueryInput {
  *  query (the failure this redesign fixes), for every datasource kind. */
 export async function generateQuery(input: GenerateQueryInput): Promise<string> {
   const send = input.send ?? bedrockSend;
-  const system = buildQueryGenSystem(input.lang, input.schemaBlock);
-  const user = `<request>\n${input.nl}\n</request>`;
+  const correcting = !!(input.previousQuery && input.validationError);
+  const system = [
+    buildQueryGenSystem(input.lang, input.schemaBlock),
+    correcting
+      ? 'A previous candidate failed live validation. Correct that candidate using the validation error, while obeying every original constraint.'
+      : '',
+  ].filter(Boolean).join('\n');
+  const clean = (s: string) => s.replace(/<\/?(?:request|previous_query|validation_error)>/gi, '');
+  const user = [
+    `<request>\n${clean(input.nl)}\n</request>`,
+    correcting ? `<previous_query>\n${clean(input.previousQuery!)}\n</previous_query>` : '',
+    correcting ? `<validation_error>\n${clean(input.validationError!)}\n</validation_error>` : '',
+  ].filter(Boolean).join('\n');
   const query = extractQuery(String((await send(system, user, MODEL_ID)) ?? ''));
   if (!query) throw new Error('empty query generated');
   if (looksLikeProse(query, input.isSql)) throw new Error('model returned a prose answer, not a query');

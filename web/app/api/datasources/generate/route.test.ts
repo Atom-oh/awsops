@@ -32,7 +32,14 @@ function req(body: unknown, cookie = 'awsops_token=t') {
     method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body),
   });
 }
-const lastGen = () => generateQuery.mock.calls.at(-1)![0] as { nl: string; lang: string; schemaBlock: string; isSql: boolean };
+const lastGen = () => generateQuery.mock.calls.at(-1)![0] as {
+  nl: string;
+  lang: string;
+  schemaBlock: string;
+  isSql: boolean;
+  previousQuery?: string;
+  validationError?: string;
+};
 
 beforeEach(() => {
   for (const m of [verifyUser, generateQuery, listConfiguredSchemas, upsertSchema, renderSchemaForPrompt, getDatasource, resolveConnConfig, invokeMcpLambdaTool, assertDatasourceEndpointAllowed]) m.mockReset();
@@ -192,6 +199,91 @@ describe('Prometheus metric relevance', () => {
     expect(lastGen().schemaBlock).toContain(
       'node_memory_MemAvailable_bytes (gauge; labels: instance, job)',
     );
+  });
+});
+
+describe('Prometheus/Mimir live query validation', () => {
+  function promFixture() {
+    getDatasource.mockResolvedValue({ id: 1, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{
+      integrationId: 1,
+      kind: 'prometheus',
+      schema: { metrics: ['up'] },
+      fetched_at: new Date().toISOString(),
+    }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+  }
+
+  it('returns a candidate only after a bounded live validation succeeds', async () => {
+    promFixture();
+    generateQuery.mockResolvedValue('up');
+    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => (
+      tool === 'prometheus_metric_meta' ? {} : { resultType: 'vector', result: [] }
+    ));
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ query: 'up', lang: 'PromQL' });
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'prometheus',
+      tool: 'prometheus_query',
+      args: { query: 'up', timeout: '5s' },
+    }));
+  });
+
+  it('self-corrects once after a conclusive PromQL parse error', async () => {
+    promFixture();
+    generateQuery.mockResolvedValueOnce('up(').mockResolvedValueOnce('up');
+    invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+      if (tool === 'prometheus_metric_meta') return {};
+      if (args?.query === 'up(') throw new Error('Prometheus query failed (bad_data): parse error');
+      return { resultType: 'vector', result: [] };
+    });
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).query).toBe('up');
+    expect(generateQuery).toHaveBeenCalledTimes(2);
+    expect(lastGen()).toMatchObject({
+      previousQuery: 'up(',
+      validationError: expect.stringMatching(/parse error/i),
+    });
+  });
+
+  it('returns 422 when both generated candidates fail syntax validation', async () => {
+    promFixture();
+    generateQuery.mockResolvedValueOnce('up(').mockResolvedValueOnce('sum(');
+    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => {
+      if (tool === 'prometheus_metric_meta') return {};
+      throw new Error('Prometheus query failed (bad_data): parse error');
+    });
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/validation/i);
+    expect(generateQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns 503 without spending a correction attempt on a transient connector failure', async () => {
+    promFixture();
+    generateQuery.mockResolvedValue('up');
+    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => {
+      if (tool === 'prometheus_metric_meta') return {};
+      throw new Error('Prometheus HTTP 503: unavailable');
+    });
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/validation unavailable/i);
+    expect(generateQuery).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -91,6 +91,23 @@ describe('generateQuery', () => {
     expect(q).toBe('rate(node_cpu_seconds_total[5m])');
   });
 
+  it('passes a failed candidate and validation error as tagged data for one correction attempt', async () => {
+    const send = vi.fn().mockResolvedValue('up');
+    await generateQuery({
+      nl: '다운된 타깃',
+      lang: 'PromQL',
+      schemaBlock: 'metrics: up',
+      isSql: false,
+      previousQuery: 'up(',
+      validationError: 'parse error: unexpected end of input',
+      send,
+    });
+    const [system, user] = send.mock.calls[0];
+    expect(system).toContain('failed live validation');
+    expect(user).toContain('<previous_query>\nup(\n</previous_query>');
+    expect(user).toContain('<validation_error>\nparse error: unexpected end of input\n</validation_error>');
+  });
+
   it('propagates Bedrock failures (route maps to 502)', async () => {
     const send = vi.fn().mockRejectedValue(new Error('bedrock down'));
     await expect(generateQuery({ nl: 'x', lang: 'PromQL', schemaBlock: '', isSql: false, send })).rejects.toThrow(/bedrock down/);

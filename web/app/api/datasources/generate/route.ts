@@ -19,7 +19,7 @@ import {
 } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
 import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
-import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
+import { invokeMcpLambdaTool, type ConnConfig } from '@/lib/mcp-lambda-invoke';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
@@ -33,9 +33,38 @@ const LANG: Record<string, string> = {
   dynatrace: 'Dynatrace metricSelector (Metrics API v2)', datadog: 'Datadog metrics query',
 };
 const MAX_NL = 4_000;
+const PROMQL_VALIDATION_ERROR_RE =
+  /\b(?:bad_data|parse error|unexpected (?:end|token)|unknown function|invalid (?:parameter|query)|could not parse)\b/i;
+
+class GeneratedQueryValidationError extends Error {}
+class QueryValidationUnavailableError extends Error {}
 
 function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+}
+
+function validationErrorMessage(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.replace(/<\/?(?:request|previous_query|validation_error)>/gi, '').slice(0, 500);
+}
+
+async function validatePromQuery(
+  kind: 'prometheus' | 'mimir',
+  query: string,
+  connConfig: ConnConfig,
+): Promise<void> {
+  try {
+    await invokeMcpLambdaTool({
+      kind,
+      tool: `${kind}_query`,
+      args: { query, timeout: '5s' },
+      connConfig,
+    });
+  } catch (e) {
+    const message = validationErrorMessage(e);
+    if (PROMQL_VALIDATION_ERROR_RE.test(message)) throw new GeneratedQueryValidationError(message);
+    throw new QueryValidationUnavailableError('query validation unavailable');
+  }
 }
 
 /** Trim an introspected schema so it fits under the cache size limit — used as a fallback so a large
@@ -149,17 +178,24 @@ export async function POST(request: Request) {
 
   const schema = await resolveSchemaContext(ds, id, hasId, kind, nl);
   let schemaBlock = schema.block;
+  let promConnConfig: ConnConfig | undefined;
   if (hasId && ds && (kind === 'prometheus' || kind === 'mimir')) {
+    try {
+      promConnConfig = await resolveConnConfig(ds);
+      if (promConnConfig?.endpoint) assertDatasourceEndpointAllowed(promConnConfig.endpoint);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'query validation unavailable';
+      return json({ error: /blocked|https|required|host/i.test(message) ? message : 'query validation unavailable' },
+        /blocked|https|required|host/i.test(message) ? 400 : 503);
+    }
     const metrics = metricCandidatesForQuery(schema.schema, nl);
     if (metrics.length) {
       try {
-        const connConfig = await resolveConnConfig(ds);
-        if (connConfig?.endpoint) assertDatasourceEndpointAllowed(connConfig.endpoint);
         const meta = await invokeMcpLambdaTool({
           kind,
           tool: `${kind}_metric_meta`,
           args: { metrics },
-          connConfig,
+          connConfig: promConnConfig,
         });
         const metaBlock = renderMetricMetadataForPrompt(meta);
         if (metaBlock) schemaBlock = [schemaBlock, metaBlock].filter(Boolean).join('\n');
@@ -170,9 +206,35 @@ export async function POST(request: Request) {
   }
 
   try {
-    const query = await generateQuery({ nl, lang, schemaBlock, isSql });
+    let query = await generateQuery({ nl, lang, schemaBlock, isSql });
+    if (promConnConfig && (kind === 'prometheus' || kind === 'mimir')) {
+      try {
+        await validatePromQuery(kind, query, promConnConfig);
+      } catch (e) {
+        if (e instanceof QueryValidationUnavailableError) throw e;
+        if (!(e instanceof GeneratedQueryValidationError)) throw e;
+        const validationError = e.message;
+        const previousQuery = query;
+        query = await generateQuery({
+          nl,
+          lang,
+          schemaBlock,
+          isSql,
+          previousQuery,
+          validationError,
+        });
+        try {
+          await validatePromQuery(kind, query, promConnConfig);
+        } catch (second) {
+          if (second instanceof QueryValidationUnavailableError) throw second;
+          throw new GeneratedQueryValidationError('generated query failed live validation');
+        }
+      }
+    }
     return json({ query, lang }, 200);
   } catch (e) {
+    if (e instanceof GeneratedQueryValidationError) return json({ error: e.message }, 422);
+    if (e instanceof QueryValidationUnavailableError) return json({ error: e.message }, 503);
     return json({ error: e instanceof Error ? e.message : 'generation failed' }, 502);
   }
 }
