@@ -198,7 +198,15 @@ def mimir_metric_meta(args):
     creds = _ds()
     base = BASE
     out = {}
+    # Operation-wide budget (mirrors prometheus_mcp): 12 × 2 × 3s = 72s worst case would exceed the
+    # connector Lambda's 60s timeout and lose every partial result — stop probing when spent.
+    _budget_start = time.monotonic()
+    _META_BUDGET_SEC = 40
     for m in metrics:
+        if time.monotonic() - _budget_start > _META_BUDGET_SEC:
+            out[m] = {"exists": None, "type": None, "labels": [],
+                      "error": "metadata time budget exhausted — retry with fewer metrics"}
+            continue
         # Per-metric scope (metadata?metric=<m>) — never download the server-wide metadata map.
         entry = {"exists": False, "type": None, "labels": []}
         try:

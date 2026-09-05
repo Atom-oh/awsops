@@ -221,7 +221,16 @@ def prometheus_metric_meta(args):
     creds = _ds()
     base = "/api/v1"
     out = {}
+    # Operation-wide budget: 12 metrics × 2 sequential calls × 3s = a 72s worst case, past the
+    # connector Lambda's 60s timeout — which would kill the WHOLE call and lose every partial
+    # result. Stop probing when the budget is spent; remaining metrics are honest unknowns.
+    _budget_start = time.monotonic()
+    _META_BUDGET_SEC = 40
     for m in metrics:
+        if time.monotonic() - _budget_start > _META_BUDGET_SEC:
+            out[m] = {"exists": None, "type": None, "labels": [],
+                      "error": "metadata time budget exhausted — retry with fewer metrics"}
+            continue
         # Per-metric scope (metadata?metric=<m>) — never download the server-wide metadata map.
         entry = {"exists": False, "type": None, "labels": []}
         try:

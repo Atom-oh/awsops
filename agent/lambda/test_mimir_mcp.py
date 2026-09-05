@@ -258,3 +258,28 @@ def test_metric_meta_api_error_on_one_metric_is_unknown_not_absent(monkeypatch):
     assert "HTTP 503" in flaky["error"]
     assert flaky["exists"] is None  # unknown — never a definitive absence
     assert up["exists"] is True and up["type"] == "gauge"
+
+
+def test_metric_meta_operation_budget_keeps_partial_results(monkeypatch):
+    """12 metrics x 2 calls x 3s = 72s would exceed the connector Lambda's 60s timeout and lose
+    EVERYTHING — the operation-wide budget must stop probing and mark the rest unknown instead."""
+    clock = {"t": 0.0}
+    monkeypatch.setattr(mm.time, "monotonic", lambda: clock["t"])
+
+    def fake_get(creds, path, params, http_timeout=None):
+        clock["t"] += 25.0  # each call burns 25 "seconds" — budget (40s) spends after metric 1
+        if path.endswith("/metadata"):
+            return {params["metric"]: [{"type": "gauge"}]}
+        return ["__name__"]
+
+    monkeypatch.setattr(mm, "_get", fake_get)
+    monkeypatch.setattr(mm, "_ds", lambda: {"endpoint": "http://x"})
+    out = mm.mimir_metric_meta({"metrics": ["m1", "m2", "m3"]})
+    body = out["body"] if isinstance(out, dict) and "body" in out else out
+    import json as _json
+    data = _json.loads(body) if isinstance(body, str) else body
+    entries = data.get("result") or data
+    assert entries["m1"]["exists"] is True          # probed before the budget spent
+    assert entries["m2"]["error"].startswith("metadata time budget exhausted")
+    assert entries["m2"]["exists"] is None and entries["m3"]["exists"] is None
+    assert set(entries) == {"m1", "m2", "m3"}      # nothing dropped
