@@ -1798,11 +1798,28 @@ class TestDashboardCards:
         assert "query validation failed" in row["mi"]
         assert out["cards_invalid"] == 1
 
-    def test_http_422_card_query_error_is_conclusive(self, monkeypatch):
+    def test_http_422_without_conclusive_body_text_is_transient_not_conclusive(self, monkeypatch):
+        # Prometheus/Mimir return 422 for execution-LIMIT errors (too many samples,
+        # max-fetched-series) — load-dependent, NOT a property of the expression. A bare 422 with
+        # no conclusive body phrase must abort the rebuild (prior cards preserved), never disable.
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: {"metrics": ["up"]})
+        monkeypatch.setattr(
+            dsi,
+            "_lambda_invoke",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError(
+                "Prometheus HTTP 422: query processing would load too many samples into memory"
+            )),
+        )
+        c = FakeConn(kind="prometheus", schema={"metrics": ["up"]}, existing_card_version="old")
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert c.card_inserts == []
+        assert "cards_error" in out
+
+    def test_conclusive_body_text_on_a_422_is_still_conclusive(self, monkeypatch):
         def invoke(kind, tool, arguments=None):
             if arguments.get("query") == "sum(up)":
                 raise RuntimeError(
-                    "Prometheus HTTP 422: expected type instant vector in call to function topk"
+                    "Prometheus HTTP 422: invalid parameter \"query\": 1:5: parse error: unexpected token"
                 )
             return {"resultType": "vector", "result": []}
 
@@ -1814,6 +1831,43 @@ class TestDashboardCards:
         assert row["st"] == "unavailable"
         assert out["cards_invalid"] == 1
         assert "cards_error" not in out
+
+    def test_range_cards_are_validated_through_the_range_tool_the_ui_executes(self, monkeypatch):
+        calls = []
+
+        def invoke(kind, tool, arguments=None):
+            calls.append((tool, dict(arguments or {})))
+            return {"resultType": "matrix", "result": []}
+
+        monkeypatch.setattr(dsi, "_lambda_invoke", invoke)
+        c = FakeConn(kind="prometheus", schema={
+            "metrics": ["up", "node_cpu_seconds_total", "node_memory_MemAvailable_bytes"]})
+        dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        by_tool = {}
+        for tool, args in calls:
+            by_tool.setdefault(tool, []).append(args)
+        # instant cards (range: None) validate via the instant tool; range cards via query_range
+        assert "prometheus_query" in by_tool and "prometheus_query_range" in by_tool
+        rng = by_tool["prometheus_query_range"][0]
+        assert {"start", "end", "step"} <= set(rng)
+        assert int(rng["end"]) - int(rng["start"]) == 3600 and rng["step"] == "60"
+        assert all("start" not in a for a in by_tool["prometheus_query"] if a.get("query") == "sum(up)")
+
+    def test_validation_failed_cards_are_revalidated_next_run_via_vfail_hash_marker(self, monkeypatch):
+        def invoke(kind, tool, arguments=None):
+            if arguments.get("query") == "sum(up == bool 0)":
+                raise RuntimeError("Prometheus query failed (bad_data): parse error")
+            return {"resultType": "vector", "result": []}
+
+        monkeypatch.setattr(dsi, "_lambda_invoke", invoke)
+        c = FakeConn(kind="prometheus", schema={"metrics": ["up"]})
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert out["cards_invalid"] == 1
+        stored = c.card_inserts[0]["sv"]
+        assert stored.endswith(":vfail1")
+        # identical schema next run: the stored vfail-marked version can never equal the computed
+        # hash, so the rebuild runs again and the card gets revalidated (self-healing).
+        assert dsi._card_schema_version("prometheus", {"metrics": ["up"]}) != stored
 
     def test_transient_card_validation_preserves_existing_cards(self, monkeypatch):
         monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: {"metrics": ["up"]})

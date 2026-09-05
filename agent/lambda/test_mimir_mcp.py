@@ -195,3 +195,28 @@ class TestMetricMeta(_Base):
 
 
 if __name__=="__main__": unittest.main()
+
+
+def test_metric_meta_transport_timeout_on_one_metric_is_that_metrics_error(monkeypatch):
+    import socket
+    calls = []
+
+    def fake_get(creds, path, params, http_timeout=None):
+        calls.append(path)
+        if params.get("metric") == "slow_metric" or params.get("match[]") == '{__name__="slow_metric"}':
+            raise socket.timeout("timed out")
+        if path.endswith("/metadata"):
+            return {params["metric"]: [{"type": "gauge"}]}
+        return ["__name__", "instance"]
+
+    monkeypatch.setattr(mm, "_get", fake_get)
+    monkeypatch.setattr(mm, "_ds", lambda: {"endpoint": "http://x"})
+    out = mm.mimir_metric_meta({"metrics": ["slow_metric", "up"]})
+    body = out["body"] if isinstance(out, dict) and "body" in out else out
+    import json as _json
+    data = _json.loads(body) if isinstance(body, str) else body
+    entries = data.get("result") or data
+    slow, up = entries["slow_metric"], entries["up"]
+    assert slow["error"].startswith("upstream unreachable")
+    assert slow["exists"] is None  # unknown — never a definitive absence
+    assert up["exists"] is True and up["type"] == "gauge"  # the other metric still resolved

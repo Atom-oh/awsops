@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import time
 
 import boto3
 
@@ -240,9 +241,13 @@ def _card_schema_indeterminate(kind, schema):
     return any(metric not in decided for metric in _card_cat.required_metrics())
 
 
+# Conclusive = the BODY-derived error text Prometheus/Mimir attach to expression-level failures
+# (the connector's _ApiError embeds data["error"]). Deliberately NO blanket HTTP 400/422 match:
+# both backends return 422 for execution-LIMIT errors (too many samples, max-fetched-series),
+# which depend on load/cardinality, not the expression — those must stay transient.
 _CARD_QUERY_ERROR_RE = re.compile(
     r"\b(?:bad_data|parse error|unexpected (?:end|token)|unknown function|"
-    r"invalid (?:parameter|query)|could not parse|(?:prometheus|mimir) http (?:400|422))\b",
+    r"invalid (?:parameter|query)|could not parse)\b",
     re.IGNORECASE,
 )
 
@@ -264,12 +269,17 @@ def _validate_dashboard_cards(kind, iid, rows):
             out.append(card)
             continue
         validated += 1
+        # Validate through the SAME tool the UI executes (web api/datasources/query switches to the
+        # range tool whenever the stored card carries a `range`): a range-only failure must not
+        # register the card ready. Tool derived from kind (never from row data — no tool selector).
+        rng = query.get("range") if isinstance(query.get("range"), dict) else None
+        args = {"instance_id": iid, "query": query["expr"], "timeout": "5s"}
+        if rng:
+            now = int(time.time())
+            window = int(rng.get("window") or 3600)
+            args.update(start=str(now - window), end=str(now), step=str(rng.get("step") or 60))
         try:
-            _lambda_invoke(kind, query["tool"], {
-                "instance_id": iid,
-                "query": query["expr"],
-                "timeout": "5s",
-            })
+            _lambda_invoke(kind, f"{kind}_query_range" if rng else f"{kind}_query", args)
         except Exception as e:  # noqa: BLE001 — classify conclusive query errors vs transient connector failures
             if not _CARD_QUERY_ERROR_RE.search(str(e)):
                 raise RuntimeError("card validation unavailable") from e
@@ -298,6 +308,11 @@ def _rebuild_dashboard_cards(conn, wdb, iid, kind, schema, schema_fresh=True):
         return {"cards_skipped": True}
     rows = _card_cat.build_cards(kind, schema)
     rows, validated, invalid = _validate_dashboard_cards(kind, iid, rows)
+    if invalid:
+        # Self-healing: a validation-disabled card must not be permanent. Storing the version with a
+        # `:vfail` marker guarantees the NEXT run's computed hash differs → rebuild + revalidate daily
+        # until every card validates clean (a misclassified limit-class error heals on its own).
+        version = f"{version}:vfail{invalid}"
     conn.run("BEGIN")
     try:
         written = wdb.upsert_dashboard_cards(conn, iid, rows, version)

@@ -178,3 +178,15 @@ New client component `web/components/datasources/CardDashboard.tsx` rendered abo
 - jaeger/dynatrace/datadog (not wired into the index pipeline).
 - Pre-executed/cached card RESULTS (owner chose live execution on view).
 - User-editable/custom card definitions.
+
+## Amendment (2026-09-05, PR-review-driven)
+The shipped card pipeline has since evolved past this design in three ways:
+- **Catalog v5**: prometheus/mimir cards expanded 5 → 13 (targets, CPU, memory, disk, load,
+  network, containers, restarts); loki/tempo/clickhouse unchanged.
+- **Selective rebuild hash** for prometheus/mimir: only required-metric presence/probe state +
+  truncation + backend version (unrelated metric churn no longer re-runs every card).
+- **Build-time live validation** of ready prometheus/mimir cards inside the index worker (read-only,
+  5s bound, via the same instant/range connector tool the page executes): a conclusive body-derived
+  PromQL error disables only that card (revalidated next run via a `:vfail` hash marker); a transient
+  connector failure aborts before BEGIN and preserves the last-good card set. This adds bounded
+  connector egress to the build step this design originally described as egress-free.

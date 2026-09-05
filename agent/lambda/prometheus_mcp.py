@@ -241,6 +241,9 @@ def prometheus_metric_meta(args):
                 entry["labels"] = labels
         except _ApiError as e:
             entry["error"] = str(e)[:200]
+        except OSError as e:  # socket.timeout/URLError from the 3s deadline — this metric's error, not the whole call's
+            entry["error"] = f"upstream unreachable: {str(e)[:150]}"
+            entry["exists"] = None  # unknown, not "absent"
         out[m] = entry
 
     return ok(out)
