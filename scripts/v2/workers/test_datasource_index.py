@@ -1417,6 +1417,16 @@ class TestLambdaInvokeEnvelopeValidation:
         self._stub_boto3(monkeypatch, {"Payload": io.BytesIO(body)})
         assert dsi._lambda_invoke("prometheus", "prometheus_schema") == {"metrics": ["up"]}
 
+    def test_error_statuscode_with_plain_text_body_raises_connector_error(self, monkeypatch):
+        """A >=400 envelope whose body is NOT JSON must still surface as ConnectorInvokeError (so the
+        card classifier can see the text), never as a ValueError from the body parse (review MINOR)."""
+        import io
+        body = json.dumps({"statusCode": 502, "body": "upstream gateway timed out"}).encode()
+        self._stub_boto3(monkeypatch, {"Payload": io.BytesIO(body)})
+        with pytest.raises(dsi.ConnectorInvokeError) as ei:
+            dsi._lambda_invoke("prometheus", "prometheus_query")
+        assert "upstream gateway timed out" in str(ei.value)
+
 
 # ── M2 regression: flipping GRAPH_QUERYGEN_ENABLED must force a graph-query rebuild ─────────────────
 class TestGraphSchemaVersionMixesInQuerygenFlag:

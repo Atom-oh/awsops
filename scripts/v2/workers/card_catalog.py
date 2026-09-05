@@ -20,8 +20,9 @@ import re
 # web/lib/i18n-terms.ts (the web UI renders them through tt()). Adding or renaming a title
 # here requires the matching TERMS entry there, or the chip/card stays Korean in en/zh/ja.
 
-# v5: expand Prometheus/Mimir operational cards (node pressure/network/container memory) and
-# require the datasource-index worker to rebuild + live-validate the new stored queries.
+# v5: expand Prometheus/Mimir operational cards 5 → 13 (targets, CPU, memory, disk, load, network,
+# containers, restarts), selective rebuild hash (required-metric presence/probe + truncation only),
+# and build-time live validation of the stored queries via the same instant/range tool the UI runs.
 # v4: trace discriminator requires a trace-ONLY column (Duration/ParentSpanId/SpanKind) — the
 # standard otel_logs table carries SpanId too, so SpanId must not qualify a table as traces.
 # v3: sum(up) (count(up==1) is an EMPTY vector during a total outage — must render 0, not "값 없음"),

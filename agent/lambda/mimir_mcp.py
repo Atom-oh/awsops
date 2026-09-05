@@ -218,10 +218,12 @@ def mimir_metric_meta(args):
                 entry["labels"] = labels
         except _ApiError as e:  # HTTP 429/5xx or a non-success API status — the backend, not the metric
             entry["error"] = str(e)[:200]
-            entry["exists"] = None  # unknown, not "absent"
+            if entry["exists"] is not True:  # metadata may already have proven existence (labels failed)
+                entry["exists"] = None  # unknown, not "absent"
         except OSError as e:  # socket.timeout/URLError from the 3s deadline — this metric's error, not the whole call's
             entry["error"] = f"upstream unreachable: {str(e)[:150]}"
-            entry["exists"] = None  # unknown, not "absent"
+            if entry["exists"] is not True:
+                entry["exists"] = None  # unknown, not "absent"
         out[m] = entry
 
     return ok(out)

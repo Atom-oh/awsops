@@ -190,3 +190,11 @@ The shipped card pipeline has since evolved past this design in three ways:
   PromQL error disables only that card (revalidated next run via a `:vfail` hash marker); a transient
   connector failure aborts before BEGIN and preserves the last-good card set. This adds bounded
   connector egress to the build step this design originally described as egress-free.
+  - The `:vfail<N>` suffix rides inside the content rows' `schema_version` rather than a dedicated
+    bookkeeping row — a deliberate, scoped exemption from ADR-018 §4's sibling-family convention:
+    it is a rebuild trigger for the NEXT run, not bookkeeping state anyone reads, so a sibling row
+    would only add a second write to keep in lockstep.
+  - Two skip reasons were added alongside the transient abort: `introspection_failed` (a failed
+    introspection never rebuilds cards) and `schema_indeterminate` (a truncated schema whose
+    required-metric presence cannot be decided keeps the existing card set) — both preserve the
+    last-good cards, same as the transient path.

@@ -235,3 +235,26 @@ def test_metric_meta_api_error_yields_exists_unknown_not_false(monkeypatch):
     entry = (data.get("result") or data)["up"]
     assert entry["exists"] is None  # backend outage is UNKNOWN, never a definitive absence
     assert "error" in entry
+
+
+def test_metric_meta_api_error_on_one_metric_is_unknown_not_absent(monkeypatch):
+    """HTTP 429/5xx or a non-success API status is the backend's error, not proof the metric is
+    absent — `exists` must be None (unknown), never a confident False (review MAJOR)."""
+    def fake_get(creds, path, params, http_timeout=None):
+        if params.get("metric") == "flaky_metric" or params.get("match[]") == '{__name__="flaky_metric"}':
+            raise mm._ApiError("HTTP 503: upstream busy")
+        if path.endswith("/metadata"):
+            return {params["metric"]: [{"type": "gauge"}]}
+        return ["__name__", "instance"]
+
+    monkeypatch.setattr(mm, "_get", fake_get)
+    monkeypatch.setattr(mm, "_ds", lambda: {"endpoint": "http://x"})
+    out = mm.mimir_metric_meta({"metrics": ["flaky_metric", "up"]})
+    body = out["body"] if isinstance(out, dict) and "body" in out else out
+    import json as _json
+    data = _json.loads(body) if isinstance(body, str) else body
+    entries = data.get("result") or data
+    flaky, up = entries["flaky_metric"], entries["up"]
+    assert "HTTP 503" in flaky["error"]
+    assert flaky["exists"] is None  # unknown — never a definitive absence
+    assert up["exists"] is True and up["type"] == "gauge"
