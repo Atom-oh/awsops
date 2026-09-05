@@ -30,6 +30,22 @@ describe('datasource-schema (keyed by integration_id)', () => {
     expect(stored.metrics.length).toBeGreaterThan(0);
     expect(stored.metrics).toContain(big.metrics[0]);
   });
+  it('the metric trim keeps probed∩metrics names (definitive-absence contract) and marks `trimmed`', async () => {
+    const { trimSchemaForCache, isLegacyCapSnapshot } = await import('./datasource-schema');
+    const metrics = Array.from({ length: 3000 }, (_, i) => `very_long_metric_name_${'x'.repeat(80)}_${i}`);
+    const probed = [metrics[1], metrics[1501], 'absent_metric'];
+    const out = trimSchemaForCache({ metrics, probed, truncated: false }) as { metrics: string[]; probed: string[]; trimmed: boolean; truncated: boolean };
+    expect(out.trimmed).toBe(true);
+    expect(out.metrics).toContain(metrics[1]);
+    expect(out.metrics).toContain(metrics[1501]);
+    expect(out.metrics).not.toContain('absent_metric');
+    expect(out.probed).toEqual(probed);
+    // a size-trimmed row is never mistaken for an old-cap snapshot, even at exactly 500 names
+    expect(isLegacyCapSnapshot('prometheus', { truncated: true, trimmed: true }, Array.from({ length: 500 }, (_, i) => `m${i}`))).toBe(false);
+    // probe-enriched old-cap snapshots (500 + ≤24 probed names) DO qualify
+    expect(isLegacyCapSnapshot('prometheus', { truncated: true }, Array.from({ length: 512 }, (_, i) => `m${i}`))).toBe(true);
+    expect(isLegacyCapSnapshot('prometheus', { truncated: true }, Array.from({ length: 525 }, (_, i) => `m${i}`))).toBe(false);
+  });
   it('getSchema returns the row (by integration_id) or null', async () => {
     query.mockResolvedValueOnce({ rows: [{ integration_id: 9, kind: 'loki', schema: { labels: ['app'] }, fetched_at: 't' }] });
     expect((await getSchema('a', 9))!.integrationId).toBe(9);

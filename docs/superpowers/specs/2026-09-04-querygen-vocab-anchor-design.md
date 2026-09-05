@@ -162,3 +162,17 @@ Deploy: agent connector zips (terraform apply) + web.
   the alphabetical prefix, so the late `node_*`/`kube_*` families survive.
 - `ruleCore` documents the presence≠absence asymmetry; BASELINE §2 row names the provable-correction
   carve-out; the batch-48 narrative now says "exactly 500".
+
+### Round-4 corrections (review-driven)
+- **Trim preserves the `probed` contract.** The interleaved stride dropped names still listed in
+  `probed`, which `card_catalog` reads as a DEFINITIVE absence → present metrics would have flipped
+  cards to "unavailable". Both trims (TS + worker mirror) now always retain `probed ∩ metrics` and
+  mark the row `trimmed: true`.
+- **Legacy-snapshot detection** excludes `trimmed` rows (a size trim can land on exactly 500) and
+  accepts 500..524 names (old connectors appended ≤24 individually-probed names past the cap, so
+  worker-written snapshots were never exactly 500). Doc wording softened from "never/once" to the
+  cooldown-bounded accepted false positive.
+- **`<previous_answer>` echo** neutralizes literal boundary tags, mirroring the schema block.
+- **ADR-018 §D** now attributes the size fallback to the shared writers, records the interleave
+  rationale and the `probed` retention, qualifies "캐시 없음" as the generated-query cache, and
+  §Negative gains the presence≠absence residual the `ruleCore` comment cites.

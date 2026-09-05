@@ -279,7 +279,9 @@ export async function generateQuery(input: GenerateQueryInput): Promise<Generate
       const near = nearMissCandidates(unknown, anchor).filter((m) => /^[A-Za-z_:][A-Za-z0-9_:]*$/.test(m));
       const fallback: GeneratedQuery = { query, warning: warn(unknown) };
       try {
-        const retryUser = `${user}\n\n<previous_answer>\n${query}\n</previous_answer>\n`
+        // the echoed draft is model output — neutralize any literal boundary tag, same as the schema block
+        const echoed = query.replace(/<\/?(?:previous_answer|schema|request)>/gi, '');
+        const retryUser = `${user}\n\n<previous_answer>\n${echoed}\n</previous_answer>\n`
           + `The previous answer uses names that are NOT in the schema: ${unknown.join(', ')}.`
           + (near.length ? ` Did you mean: ${near.join(', ')}?` : '')
           + ` Rewrite the query using ONLY metric names listed in the schema.`;

@@ -568,13 +568,17 @@ def _trim_schema_for_cache(schema):
         return {**schema, "tables": tables, "truncated": True}
     if isinstance(schema.get("metrics"), list):
         allm = schema["metrics"]
-        out = {**schema, "truncated": True}
+        # `probed` names present in the original list MUST survive the stride — card_catalog reads
+        # "probed but absent from metrics" as a DEFINITIVE absence. `trimmed` marks a size trim.
+        present = set(allm)
+        keep = {p for p in schema.get("probed", []) if p in present} if isinstance(schema.get("probed"), list) else set()
+        out = {**schema, "truncated": True, "trimmed": True}
         if isinstance(schema.get("labels"), list):
             out["labels"] = schema["labels"][:100]
         stride = 1
         while len(json.dumps(out).encode("utf-8")) > _MAX_SCHEMA_BYTES and stride < len(allm):
             stride *= 2
-            out["metrics"] = allm[::stride]
+            out["metrics"] = [m for i, m in enumerate(allm) if i % stride == 0 or m in keep]
         return out
     return schema
 

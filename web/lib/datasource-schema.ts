@@ -318,13 +318,18 @@ export function trimSchemaForCache(schema: unknown): unknown {
     if (Buffer.byteLength(JSON.stringify(s), 'utf8') <= MAX_SCHEMA_BYTES) return schema; // already fits
     // Interleaved (every k-th name) rather than the alphabetical prefix, so the late node_*/kube_*
     // families this cap raise set out to recover survive the trim. Mirrored in scripts/v2/workers/db.py.
+    // `probed` names (individually checked by the connector — definitive presence/absence even on a
+    // truncated list) that ARE in the original metrics must survive the stride, or a consumer reading
+    // "probed but absent from metrics" would conclude a present metric is definitively missing.
+    // `trimmed: true` marks the row as a size trim (not a connector count cap) for isLegacyCapSnapshot.
     const all = s.metrics as unknown[];
+    const keep = new Set<unknown>(Array.isArray(s.probed) ? (s.probed as unknown[]).filter((p) => all.includes(p)) : []);
     let stride = 1;
-    let out: Record<string, unknown> = { ...s, truncated: true };
+    let out: Record<string, unknown> = { ...s, truncated: true, trimmed: true };
     if (Array.isArray(s.labels)) out.labels = (s.labels as unknown[]).slice(0, 100);
     while (Buffer.byteLength(JSON.stringify(out), 'utf8') > MAX_SCHEMA_BYTES && stride < all.length) {
       stride *= 2;
-      out = { ...out, metrics: all.filter((_, i) => i % stride === 0) };
+      out = { ...out, metrics: all.filter((m, i) => i % stride === 0 || keep.has(m)) };
     }
     return out;
   }
@@ -334,11 +339,18 @@ export function trimSchemaForCache(schema: unknown): unknown {
 /** The connectors' FORMER metric cap — a cached metric schema truncated at EXACTLY this many
  *  names is a snapshot taken under the old cap (the new cap is 3000). Exported for tests. */
 export const LEGACY_METRIC_CAP = 500;
-/** True only for a PromQL-kind cache that is provably an old-cap snapshot: connector `truncated`
- *  AND exactly LEGACY_METRIC_CAP names. Never fires for ClickHouse trims, failed metric fetches
- *  (0 names) or label-only truncation — those re-produce the same row on refresh (no convergence). */
+/** Old connectors appended up to this many individually-probed names PAST the cap (worker
+ *  `probe_metrics`), so an old-cap snapshot holds LEGACY_METRIC_CAP..+LEGACY_PROBE_MAX names. */
+export const LEGACY_PROBE_MAX = 24;
+/** True only for a PromQL-kind cache that is (near-)provably an old-cap snapshot: connector
+ *  `truncated`, NOT a size trim (`trimmed`), and LEGACY_METRIC_CAP..LEGACY_METRIC_CAP+LEGACY_PROBE_MAX
+ *  names. Does not fire for ClickHouse trims, failed metric fetches (0 names) or sub-cap label-only
+ *  truncation — those re-produce the same row on refresh (no convergence); a target with exactly
+ *  500..524 real metrics and >200 labels is the accepted false positive (one cooldown-bounded
+ *  background introspect per instance per 10 min). */
 export function isLegacyCapSnapshot(kind: string | null, schema: unknown, names: string[]): boolean {
+  const s = schema as { truncated?: unknown; trimmed?: unknown } | null;
   return (kind === 'prometheus' || kind === 'mimir')
-    && Boolean((schema as { truncated?: unknown })?.truncated)
-    && names.length === LEGACY_METRIC_CAP;
+    && Boolean(s?.truncated) && !s?.trimmed
+    && names.length >= LEGACY_METRIC_CAP && names.length <= LEGACY_METRIC_CAP + LEGACY_PROBE_MAX;
 }

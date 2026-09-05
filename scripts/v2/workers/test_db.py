@@ -362,6 +362,15 @@ class TestUpsertDatasourceSchema:
         assert stored["truncated"] is True and 0 < len(stored["metrics"]) < 3000
         assert stored["metrics"][0] == big["metrics"][0]
 
+    def test_metric_trim_keeps_probed_present_names_and_marks_trimmed(self):
+        metrics = [f"very_long_metric_name_{'x' * 80}_{i}" for i in range(3000)]
+        out = db._trim_schema_for_cache({"metrics": metrics, "probed": [metrics[1], metrics[1501], "absent"], "truncated": False})
+        assert out["trimmed"] is True and out["truncated"] is True
+        assert metrics[1] in out["metrics"] and metrics[1501] in out["metrics"]
+        assert "absent" not in out["metrics"]
+        assert out["probed"] == [metrics[1], metrics[1501], "absent"]
+        assert len(json.dumps(out).encode("utf-8")) <= db._MAX_SCHEMA_BYTES
+
     def test_oversized_untrimmable_schema_still_raises(self):
         c = FakeConn()
         try:
