@@ -113,18 +113,17 @@ describe('SQL generation (the ClickHouse fix)', () => {
     expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'clickhouse_schema' }));
   });
 
-  it('background cache-warm falls back to a trimmed write when the schema exceeds the size limit [4]', async () => {
+  it('background cache-warm is best-effort — a failed write (size limit) never fails the request [4]', async () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch', authType: 'none' });
     invokeMcpLambdaTool.mockResolvedValue({ __block: 'X(c String)', tables: [{ name: 'X', columns: [] }] });
-    upsertSchema.mockRejectedValueOnce(new Error('introspected schema exceeds size limit')); // full write fails
-    upsertSchema.mockResolvedValueOnce(undefined); // trimmed write succeeds
+    upsertSchema.mockRejectedValueOnce(new Error('introspected schema exceeds size limit')); // untrimmable
     const { POST } = await import('./route');
     const res = await POST(req({ id: 7, nl: 'tables' }));
     expect(res.status).toBe(200);
     await flush();
-    expect(upsertSchema).toHaveBeenCalledTimes(2); // full (failed) → trimmed fallback
+    expect(upsertSchema).toHaveBeenCalledTimes(1); // the bounded-copy fallback lives INSIDE upsertSchema (shared by all writers)
   });
 
   it('502 when the generator throws (e.g. prose-not-SQL guard or Bedrock failure)', async () => {
@@ -179,6 +178,67 @@ describe('lazy refresh (TTL) [P2]', () => {
     await POST(req({ id: 12, nl: 'is it up' }));
     await flush();
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled(); // fresh → no introspect
+  });
+});
+
+describe('legacy-cap snapshot refresh + metric-schema size fallback (owner re-test follow-up)', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 25));
+  const fresh = () => new Date().toISOString();
+  const names = (n: number) => Array.from({ length: n }, (_, i) => `m${i}`);
+
+  it('a FRESH prometheus cache truncated at EXACTLY 500 names (old cap) is re-introspected in the background', async () => {
+    getDatasource.mockResolvedValue({ id: 31, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 31, kind: 'prometheus', schema: { metrics: names(500), truncated: true }, fetched_at: fresh() }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockResolvedValue({ metrics: names(2500), truncated: false });
+    generateQuery.mockResolvedValue({ query: 'up' });
+    const { POST } = await import('./route');
+    expect((await POST(req({ id: 31, nl: 'is it up' }))).status).toBe(200);
+    await flush();
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'prometheus_schema' }));
+  });
+  it('does NOT refresh for non-old-cap truncation: 0 names (failed fetch), <500 names (label-only cap), clickhouse trims', async () => {
+    const { POST } = await import('./route');
+    const { isLegacyCapSnapshot } = await import('@/lib/datasource-schema');
+    expect(isLegacyCapSnapshot('prometheus', { metrics: [], truncated: true }, [])).toBe(false);
+    expect(isLegacyCapSnapshot('prometheus', { metrics: names(120), truncated: true }, names(120))).toBe(false);
+    expect(isLegacyCapSnapshot('clickhouse', { tables: [], truncated: true }, [])).toBe(false);
+    expect(isLegacyCapSnapshot('prometheus', { metrics: names(500), truncated: false }, names(500))).toBe(false);
+    expect(isLegacyCapSnapshot('mimir', { metrics: names(500), truncated: true }, names(500))).toBe(true);
+    getDatasource.mockResolvedValue({ id: 32, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 32, kind: 'prometheus', schema: { metrics: names(120), truncated: true }, fetched_at: fresh() }]);
+    generateQuery.mockResolvedValue({ query: 'up' });
+    await POST(req({ id: 32, nl: 'is it up' }));
+    await flush();
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+  });
+  it('background refresh is cooldown-guarded per instance — a non-converging trigger cannot fire per request', async () => {
+    getDatasource.mockResolvedValue({ id: 33, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 33, kind: 'prometheus', schema: { metrics: ['up'] }, fetched_at: '2020-01-01T00:00:00Z' }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockResolvedValue({ metrics: ['up'] });
+    generateQuery.mockResolvedValue({ query: 'up' });
+    const { POST } = await import('./route');
+    await POST(req({ id: 33, nl: 'a' })); await flush();
+    await POST(req({ id: 33, nl: 'b' })); await flush();
+    await POST(req({ id: 33, nl: 'c' })); await flush();
+    expect(invokeMcpLambdaTool).toHaveBeenCalledTimes(1);
+  });
+  it('trimSchemaForCache bounds an over-limit METRIC schema (halves the list, trims labels, marks truncated)', async () => {
+    const { trimSchemaForCache } = await import('@/lib/datasource-schema');
+    const big = { metrics: Array.from({ length: 3000 }, (_, i) => `istio_request_duration_milliseconds_bucket_very_long_metric_name_${'x'.repeat(60)}_${i}`), labels: Array.from({ length: 200 }, (_, i) => `l${i}`), truncated: false };
+    expect(Buffer.byteLength(JSON.stringify(big), 'utf8')).toBeGreaterThan(256_000);
+    const out = trimSchemaForCache(big) as { metrics: string[]; labels: string[]; truncated: boolean };
+    expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThanOrEqual(256_000);
+    expect(out.metrics.length).toBeGreaterThan(0);
+    expect(out.metrics.length).toBeLessThan(3000);
+    expect(out.metrics[0]).toBe(big.metrics[0]);
+    expect(out.metrics[out.metrics.length - 1]).toBe(big.metrics[big.metrics.length - 1 - ((big.metrics.length - 1) % (big.metrics.length / out.metrics.length))]); // interleaved: the tail survives
+    expect(out.labels.length).toBe(100);
+    expect(out.truncated).toBe(true);
+    // unchanged when it already fits; table schemas keep the table branch
+    const small = { metrics: ['up'], truncated: false };
+    expect(trimSchemaForCache(small)).toEqual(small);
   });
 });
 

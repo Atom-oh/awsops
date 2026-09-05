@@ -82,6 +82,7 @@ Initial deterministic catalog (per kind, matched against the cached schema shape
   `card_catalog.required_metrics()`), and each named metric is decided by LOCAL membership in
   the full un-capped in-memory name list — zero extra network calls, and definitive regardless
   of the alphabetical 500-name response cap (every kube-prometheus stack exceeds it).
+  _(Historical: the connector cap was raised to 3000 names on 2026-09-04 — see the querygen-vocab-anchor spec.)_
   Locally-present names past the cap merge into `metrics`; every requested (valid) name lands in
   `schema.probed`, which the catalog treats as DEFINITIVE — a probed-and-absent requirement is a
   confident `unavailable` even under truncation (only unprobed misses stay `unknown`). A FAILED

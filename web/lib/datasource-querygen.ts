@@ -48,7 +48,7 @@ export function buildQueryGenSystem(lang: string, schemaBlock: string): string {
     `Output ONLY the query — no explanation, no prose, no commentary, no multiple queries. A single fenced code block is allowed but optional.`,
     `Use ONLY the table, column, metric, and label names that appear in the schema below. Never invent names.`,
     lang === 'PromQL'
-      ? `Prefer RAW metric names over recording-rule names (names containing ':') unless the schema lists the rule. When an arithmetic expression combines two vectors, both sides MUST carry matching labels — aggregate both sides the same way (e.g. sum by (instance)(...) on both), never mix a pre-aggregated rule with a raw per-instance metric.`
+      ? `Use RAW metric names exactly as listed. NEVER write a recording-rule style name (any name containing ':' such as ':node_memory_MemAvailable_bytes:sum') unless that exact name appears in the schema. When an arithmetic expression combines two vectors, both sides MUST carry matching labels — aggregate both sides the same way (e.g. sum by (instance)(...) on both), never mix a pre-aggregated rule with a raw per-instance metric.`
       : '',
     isSql
       ? `The query MUST be read-only: it must START with SELECT, WITH, SHOW, or DESCRIBE. NEVER write INSERT/UPDATE/ALTER/DROP/CREATE/DELETE/TRUNCATE/SET/SYSTEM, and NEVER use table functions (url/file/remote/s3/mysql/postgresql/...). Do not add explanation or a leading comment.`
@@ -199,14 +199,30 @@ export function unknownPromqlNames(query: string, metricNames: ReadonlySet<strin
   return tokens.filter((t) => !metricNames.has(t));
 }
 
+/** Recording-rule core: strip the leading ':' and everything from the next ':' on
+ *  (`:node_memory_MemAvailable_bytes:sum` → `node_memory_MemAvailable_bytes`). */
+// NOTE the asymmetry: a cached core proves the RAW metric exists, not that the rule name is
+// absent (a real-but-uncached `http_requests_total:rate5m` gets rewritten to the raw metric —
+// different aggregation semantics). Accepted draft-only residual (ADR-018 §Negative); the hedged
+// warning stays on the result so the user reviews the rewrite.
+export function ruleCore(name: string): string {
+  return name.replace(/^:+/, '').replace(/:.*$/, '');
+}
+
+/** Unknown tokens whose rule-core is EXACTLY a cached metric — a high-confidence correction that
+ *  is safe even on a truncated cache (the target metric is provably present). */
+export function confidentNearMisses(unknown: string[], metricNames: ReadonlySet<string>): string[] {
+  return [...new Set(unknown.map(ruleCore).filter((c) => c && metricNames.has(c)))];
+}
+
 /** Near-miss suggestions for the retry turn: schema names whose ':'-stripped core matches the
  *  unknown token's core (the reported case: `:node_memory_MemAvailable_bytes:sum` →
  *  `node_memory_MemAvailable_bytes`). Bounded. */
 export function nearMissCandidates(unknown: string[], metricNames: ReadonlySet<string>): string[] {
-  const core = (n: string) => n.replace(/^:+|:.*$/g, '').replace(/^:|:$/g, '');
-  const out = new Set<string>();
+  // seed with the PROVABLE corrections so the 5-hit cap can never crowd them out
+  const out = new Set<string>(confidentNearMisses(unknown, metricNames));
   for (const u of unknown) {
-    const uc = core(u);
+    const uc = ruleCore(u);
     if (!uc) continue;
     for (const m of metricNames) {
       if (m === uc || m.includes(uc) || uc.includes(m)) { out.add(m); if (out.size >= 5) return [...out]; }
@@ -243,37 +259,43 @@ export async function generateQuery(input: GenerateQueryInput): Promise<Generate
     if (unknown.length > 0) {
       // Incomplete vocabulary (connector-truncated / stale cache): a "correction" would steer
       // the model AWAY from real metrics past the cap toward alphabetical-head near-misses and
-      // then return that wrong answer clean — so NO retry: return the draft with the soft
-      // warning (the connector is the runtime authority; the user reviews before running).
-      if (input.vocabularyComplete === false) {
-        return {
-          query,
-          warning: `names not found in this datasource's cached schema: ${unknown.join(', ')}`
-            + ' (the cached schema is truncated or stale — these may be false alarms) — review before running',
-        };
-      }
-      // Complete vocabulary: ONE corrective retry with the previous answer echoed
-      // (tag-wrapped like the schema) and near-miss schema names suggested. ANY retry failure
-      // (Bedrock error, prose, unbalanced) falls back to the valid first draft + warning —
-      // the advisory contract must never turn a usable draft into a 502.
-      const near = nearMissCandidates(unknown, anchor);
-      const fallback: GeneratedQuery = {
-        query,
-        warning: `names not found in this datasource's cached schema: ${unknown.join(', ')} — review before running`,
-      };
+      // then return that wrong answer clean — so NO retry UNLESS the fix is provable for EVERY
+      // unknown token: each is a recording-rule style name whose raw core IS a cached metric
+      // (the reported `:node_memory_MemAvailable_bytes:sum` → `node_memory_MemAvailable_bytes`).
+      // One unprovable token (possibly a real metric past the cap) → no retry at all, since the
+      // retry prompt condemns the whole set. Even a token-clean rewrite on an incomplete
+      // vocabulary keeps the hedged warning (the connector is the runtime authority).
+      const incomplete = input.vocabularyComplete === false;
+      const hedge = incomplete ? ' (the cached schema is truncated or stale — these may be false alarms)' : '';
+      const warn = (names: string[]) =>
+        `names not found in this datasource's cached schema: ${names.join(', ')}${hedge} — review before running`;
+      const allProvable = unknown.every((u) => anchor.has(ruleCore(u)));
+      if (incomplete && !allProvable) return { query, warning: warn(unknown) };
+      // ONE corrective retry with the previous answer echoed (tag-wrapped like the schema) and
+      // near-miss schema names suggested. ANY retry failure (Bedrock error, prose, unbalanced)
+      // falls back to the valid first draft + warning — the advisory contract must never turn a
+      // usable draft into a 502. Suggested names are charset-filtered: they come from the
+      // connector and sit OUTSIDE the <schema> data boundary.
+      const near = nearMissCandidates(unknown, anchor).filter((m) => /^[A-Za-z_:][A-Za-z0-9_:]*$/.test(m));
+      const fallback: GeneratedQuery = { query, warning: warn(unknown) };
       try {
-        const retryUser = `${user}\n\n<previous_answer>\n${query}\n</previous_answer>\n`
+        // the echoed draft is model output — neutralize any literal boundary tag, same as the schema block
+        const echoed = query.replace(/<\/?(?:previous_answer|schema|request)>/gi, '');
+        const retryUser = `${user}\n\n<previous_answer>\n${echoed}\n</previous_answer>\n`
           + `The previous answer uses names that are NOT in the schema: ${unknown.join(', ')}.`
           + (near.length ? ` Did you mean: ${near.join(', ')}?` : '')
           + ` Rewrite the query using ONLY metric names listed in the schema.`;
         const retried = extractQuery(String((await send(system, retryUser, MODEL_ID)) ?? ''));
         validate(retried);
         const retriedUnknown = unknownPromqlNames(retried, anchor);
-        if (retriedUnknown.length === 0) return { query: retried };
-        // both violate: keep whichever violates less, still warned
-        if (retriedUnknown.length < unknown.length) {
-          return { query: retried, warning: `names not found in this datasource's cached schema: ${retriedUnknown.join(', ')} — review before running` };
+        if (retriedUnknown.length === 0) {
+          // an incomplete vocabulary cannot vouch for a clean rewrite — keep a soft note
+          return incomplete
+            ? { query: retried, warning: 'rewritten against a truncated or stale cached schema — review before running' }
+            : { query: retried };
         }
+        // both violate: keep whichever violates less, still warned
+        if (retriedUnknown.length < unknown.length) return { query: retried, warning: warn(retriedUnknown) };
         return fallback;
       } catch {
         return fallback;

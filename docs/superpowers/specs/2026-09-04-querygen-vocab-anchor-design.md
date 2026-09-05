@@ -111,3 +111,68 @@ Explore path never did.
   round-1 sentence ("truncation skips the gate", the `>499` figure) now states the advisory
   truth; Context lists three paths (the §D bullet added); the bolded Decision scopes the
   ready-0/flag/dry-run condition to §B·§C with an explicit §D carve-out.
+
+## Owner re-test follow-up (batch 48) — "아직 개선 안된거 같아"
+
+Re-tested on /integrations/datasources/472 after #296 deployed: the chip still produced the
+recording-rule query. Two stacked root causes the advisory gate could not touch:
+1. **The prompt never contained the right metrics.** `prioritizeSchemaForQuery` tokenized NL
+   with `[^a-z0-9_]+` — a KOREAN request yields ZERO terms, so the alphabetical head of the
+   metric list filled the ~80-name prompt block and the model answered from world knowledge.
+   Fix: `nlSearchTerms` expands a curated Korean ops vocabulary (`KO_METRIC_TERMS`: 메모리→
+   memory/mem, 사용률→usage/utilization/used, 인스턴스→instance/node, …) into the substring
+   terms the ranking already uses; the prompt also forbids ':'-style rule names outright.
+2. **The cache itself lacked `node_*`.** The connectors capped the schema at the first 500
+   alphabetical names; kube-prometheus stacks have thousands, so `node_memory_*` was absent
+   from BOTH the prompt and the anchor — and the round-3 rule (no retry on a truncated cache)
+   then left the wrong draft untouched. Fixes: `SCHEMA_METRIC_CAP = 3000` in prometheus/mimir
+   connectors (≈120KB JSON, inside the 256KB cache row); the generate route background-refreshes a
+   cache that is truncated at exactly 500 names (a PromQL snapshot from the old cap — see Round-2); and a truncated cache no
+   longer suppresses the retry when the fix is PROVABLE — an unknown rule name whose raw core is a
+   cached metric (`confidentNearMisses`) is corrected with the suggestion regardless of truncation.
+Deploy: agent connector zips (terraform apply) + web.
+
+### Round-2 corrections (review-driven)
+- **Refresh trigger narrowed + cooldown.** `truncated && names.length <= 500` also matched ClickHouse
+  trims, failed metric fetches (0 names) and label-only truncation — none of which converge, so every
+  request fired a fresh introspect. Now `isLegacyCapSnapshot`: PromQL kind AND `truncated` AND EXACTLY
+  500 names; `refreshInBackground` has a 10-minute per-instance cooldown regardless of trigger.
+  Route tests cover the positive case, the three non-firing cases and the cooldown.
+- **Size fallback for metric schemas.** `trimSchemaForCache` only trimmed `tables`; at the 6× cap a
+  long-name environment could exceed the 256KB row and end up with NO cache row. Metric branch: labels
+  → 100, metrics halved until the JSON fits, `truncated: true`. `MAX_SCHEMA_BYTES` exported.
+- **Retry gate tightened.** One provable near-miss no longer unlocks the retry for the whole unknown
+  set — EVERY unknown token's rule-core must be a cached metric; otherwise no retry (the retry prompt
+  condemns the whole set, steering the model away from a possibly-real metric past the cap). On an
+  incomplete vocabulary the hedged warning is kept on every branch, including a token-clean rewrite.
+  `nearMissCandidates` seeds with `confidentNearMisses` (cap can't crowd out the provable fix) and
+  reuses `ruleCore`; suggested names are charset-filtered before entering the prompt.
+- **Korean expansions.** Scoring is per concept (memory+mem count once); expansions shorter than 3
+  chars ('up', 'fs') match only whole `_`/`:` segments so 'up' never hits 'group'/'setup'.
+- **ADR-018 amended** (Status + §D + §Negative cap-agnostic) to record the provable-correction
+  exception, the size fallback and the legacy-cap refresh; BASELINE row unchanged (still accurate).
+
+### Round-3 corrections (review-driven)
+- **Bounded-store fallback moved into the shared writers.** Only the generate route trimmed; the
+  connect-time warm (`/api/datasources/manage`), the admin manual refresh (`/api/integrations/schema`)
+  and the worker write-back (`scripts/v2/workers/db.py`) still hard-failed on a >256KB schema. Now
+  `upsertSchema` (web) and `upsert_datasource_schema` (worker, mirrored `_trim_schema_for_cache`)
+  trim internally and throw only for untrimmable shapes; the route's second-write fallback is gone.
+- **Interleaved trim.** The metric trim keeps every k-th name (k doubling until it fits) instead of
+  the alphabetical prefix, so the late `node_*`/`kube_*` families survive.
+- `ruleCore` documents the presence≠absence asymmetry; BASELINE §2 row names the provable-correction
+  carve-out; the batch-48 narrative now says "exactly 500".
+
+### Round-4 corrections (review-driven)
+- **Trim preserves the `probed` contract.** The interleaved stride dropped names still listed in
+  `probed`, which `card_catalog` reads as a DEFINITIVE absence → present metrics would have flipped
+  cards to "unavailable". Both trims (TS + worker mirror) now always retain `probed ∩ metrics` and
+  mark the row `trimmed: true`.
+- **Legacy-snapshot detection** excludes `trimmed` rows (a size trim can land on exactly 500) and
+  accepts 500..524 names (old connectors appended ≤24 individually-probed names past the cap, so
+  worker-written snapshots were never exactly 500). Doc wording softened from "never/once" to the
+  cooldown-bounded accepted false positive.
+- **`<previous_answer>` echo** neutralizes literal boundary tags, mirroring the schema block.
+- **ADR-018 §D** now attributes the size fallback to the shared writers, records the interleave
+  rationale and the `probed` retention, qualifies "캐시 없음" as the generated-query cache, and
+  §Negative gains the presence≠absence residual the `ruleCore` comment cites.
