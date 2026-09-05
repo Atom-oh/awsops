@@ -4,11 +4,11 @@
 // unregistered string passes through silently — so this lockstep test extracts the STATIC
 // Korean tt() literals (single-quoted AND interpolation-free template literals, recursively
 // under the surface directories) and asserts each resolves in en/zh/ja (TERMS or a RULE).
-// SCOPE (round-1 correction — this is a RATCHET, not a completeness proof): dynamic
-// tt(variable) strings are covered by registering their finite catalogs
-// (card_catalog.py titles, datasource-render.ts notes — see the lockstep comments in
-// i18n-terms.ts), not by this static scan; Korean composed at runtime with interpolation
-// relies on RULES. Column/spec labels are deliberately English (repo convention).
+// SCOPE (round-1 correction — this is a RATCHET, not a completeness proof): most dynamic
+// tt(variable) strings are covered by registering their finite catalogs (see the lockstep
+// comments in i18n-terms.ts) — with ONE enforced exception: card_catalog.py titles are
+// checked by the dedicated dashboard-card test below, which reads the Python catalog
+// directly. Korean composed at runtime with interpolation relies on RULES. Column/spec labels are deliberately English (repo convention).
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,6 +40,15 @@ function koreanTtLiterals(file: string): string[] {
   return out;
 }
 
+function dashboardCardTitles(src: string): string[] {
+  return [
+    // dict-style: {"title": "..."} / {'title': '...'}
+    ...[...src.matchAll(/["']title["']:\s*(["'])(.*?)\1/g)].map((m) => m[2]),
+    // positional _row(card_key, title, ...) — the ClickHouse cards build rows directly
+    ...[...src.matchAll(/_row\(\s*"[^"]*",\s*"([^"]*)"/g)].map((m) => m[1]),
+  ];
+}
+
 describe('i18n coverage on the gap-audit surfaces (L186/L206/L207/L254)', () => {
   it('every Korean tt() literal on the inventory [type] page and datasources UI resolves in en/zh/ja', () => {
     const missing: string[] = [];
@@ -57,5 +66,19 @@ describe('i18n coverage on the gap-audit surfaces (L186/L206/L207/L254)', () => 
     expect(SURFACES.length).toBeGreaterThan(3); // the glob must actually find the surfaces
     expect(scanned).toBeGreaterThan(30);         // and real literals — an empty scan proves nothing
     expect(missing, `unregistered Korean literals:\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  it('every dynamic dashboard-card title resolves in en/zh/ja', () => {
+    const src = readFileSync('../scripts/v2/workers/card_catalog.py', 'utf8');
+    const titles = dashboardCardTitles(src).filter((title) => /[가-힣]/.test(title));
+    const missing = titles.filter((title) =>
+      (['en', 'zh', 'ja'] as const).some((lang) => applyTerms(lang, title) === title));
+
+    expect(titles.length).toBeGreaterThan(10);
+    expect(missing, `unregistered dashboard-card titles:\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  it('extracts both Python quote styles for the dynamic-title lockstep', () => {
+    expect(dashboardCardTitles(`{"title": "더블"}, {'title': '싱글'}`)).toEqual(['더블', '싱글']);
   });
 });

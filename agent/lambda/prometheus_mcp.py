@@ -63,9 +63,12 @@ def _ds():
     return creds
 
 
-def _get(creds, path, params):
+def _get(creds, path, params, http_timeout=None):
     url = creds["endpoint"].rstrip("/") + path + ("?" + urlencode(params, doseq=True) if params else "")
-    status, data = http_json("GET", url, headers=auth_headers(creds))
+    kwargs = {"headers": auth_headers(creds)}
+    if http_timeout is not None:
+        kwargs["timeout"] = http_timeout
+    status, data = http_json("GET", url, **kwargs)
     if status >= 400:
         raise _ApiError(f"Prometheus HTTP {status}: {str(data.get('raw') or data.get('error') or data)[:300]}")
     if isinstance(data, dict) and data.get("status") and data.get("status") != "success":
@@ -218,22 +221,46 @@ def prometheus_metric_meta(args):
     creds = _ds()
     base = "/api/v1"
     out = {}
+    # Operation-wide budget: 12 metrics × 2 sequential calls × 3s = a 72s worst case, past the
+    # connector Lambda's 60s timeout — which would kill the WHOLE call and lose every partial
+    # result. Stop probing when the budget is spent; remaining metrics are honest unknowns.
+    _budget_start = time.monotonic()
+    _META_BUDGET_SEC = 40
     for m in metrics:
+        if time.monotonic() - _budget_start > _META_BUDGET_SEC:
+            out[m] = {"exists": None, "type": None, "labels": [],
+                      "error": "metadata time budget exhausted — retry with fewer metrics"}
+            continue
         # Per-metric scope (metadata?metric=<m>) — never download the server-wide metadata map.
-        entry = {"type": None, "labels": []}
+        entry = {"exists": False, "type": None, "labels": []}
         try:
-            meta_resp = _get(creds, f"{base}/metadata", {"metric": m})
-            meta = meta_resp if isinstance(meta_resp, dict) else {}
-            v = meta.get(m)
+            meta_resp = _get(creds, f"{base}/metadata", {"metric": m}, http_timeout=3)
+            # A 200 whose body isn't the API shape (a proxy splash page, etc.) proves nothing —
+            # conclude absence only from a shape-valid dict response; otherwise stay unknown.
+            if isinstance(meta_resp, dict):
+                v = meta_resp.get(m)
+                entry["exists"] = isinstance(v, list) and bool(v)
+            else:
+                v = None
+                entry["exists"] = None
             entry["type"] = v[0].get("type") if isinstance(v, list) and v and isinstance(v[0], dict) else None
-            labels_data = _get(creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'})
+            labels_data = _get(
+                creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'}, http_timeout=3)
+            if isinstance(labels_data, list) and "__name__" in labels_data:
+                entry["exists"] = True
             labels = [lb for lb in (labels_data if isinstance(labels_data, list) else []) if lb != "__name__"]
             if len(labels) > 200:  # bound high-cardinality label sets (mirrors *_labels [:N] convention)
                 entry["labels"], entry["labels_truncated"] = labels[:200], True
             else:
                 entry["labels"] = labels
-        except _ApiError as e:
+        except _ApiError as e:  # HTTP 429/5xx or a non-success API status — the backend, not the metric
             entry["error"] = str(e)[:200]
+            if entry["exists"] is not True:  # metadata may already have proven existence (labels failed)
+                entry["exists"] = None  # unknown, not "absent"
+        except OSError as e:  # socket.timeout/URLError from the 3s deadline — this metric's error, not the whole call's
+            entry["error"] = f"upstream unreachable: {str(e)[:150]}"
+            if entry["exists"] is not True:
+                entry["exists"] = None  # unknown, not "absent"
         out[m] = entry
 
     return ok(out)

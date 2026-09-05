@@ -53,7 +53,7 @@ Closes gap-audit items (docs/v1-gap-audit-2026-07-19.md): L186 (cloudfront i18n)
 - **The guard is an honest ratchet and the residue is closed (the gate MAJOR)** — the scan is
   recursive (readdirSync — no fs.globSync Node/types floor question; `[id]/page.tsx` now
   included) and also matches interpolation-free template literals. The dynamic tt(variable)
-  paths are covered by REGISTERING their finite catalogs (card_catalog.py's 11 titles (as completed by rounds 2–3),
+  paths are covered by REGISTERING their finite catalogs (card_catalog.py's titles — 11 at the time, 19 as of 2026-09-05 (as completed by rounds 2–3),
   datasource-render.ts's 6 notes — lockstep comments point both ways), a RULE covers the
   parameterized series-cap note and the log-view caption, and ExplorePanel's raw
   `result.note` renders are tt()-wrapped. The guard's comment/spec/CHANGELOG now say
