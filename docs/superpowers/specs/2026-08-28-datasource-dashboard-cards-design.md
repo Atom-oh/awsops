@@ -1,4 +1,7 @@
 # Datasource dashboard cards — schema-driven pre-built card set with stored queries
+
+> **2026-09-05**: the card catalog (5 → 13 prom/mimir cards), the rebuild hash, and the
+> egress-free build described below have evolved — see the dated Amendment at the end.
 # 데이터소스 대시보드 카드 — 스키마 기반 예상 카드 사전 생성 + 쿼리 사전 저장
 
 **Status:** Approved 2026-08-28 (live-execution-on-view variant chosen by owner).
@@ -190,10 +193,14 @@ The shipped card pipeline has since evolved past this design in three ways:
   PromQL error disables only that card (revalidated next run via a `:vfail` hash marker); a transient
   connector failure aborts before BEGIN and preserves the last-good card set. This adds bounded
   connector egress to the build step this design originally described as egress-free.
-  - The `:vfail<N>` suffix rides inside the content rows' `schema_version` rather than a dedicated
-    bookkeeping row — a deliberate, scoped exemption from ADR-018 §4's sibling-family convention:
-    it is a rebuild trigger for the NEXT run, not bookkeeping state anyone reads, so a sibling row
-    would only add a second write to keep in lockstep.
+  - The `:vfail<N>` suffix rides inside the content rows' `schema_version`. This does not touch
+    ADR-018 §B-4's sibling-bookkeeping-row convention, which is scoped to the diag-signal LLM
+    budget marker: `:vfail` is a rebuild trigger for the NEXT run, not bookkeeping state anyone
+    reads back. §B-4's rollback rationale (content rows must carry the true schema version so a
+    rolled-back schema can't false-pass the match check) does not arise here — a `:vfail`-marked
+    version can never equal any computed hash, so the worst case is one extra rebuild, never a
+    stale card set served as current. If that convention is later generalised to every pre-built
+    family, the marker moves to a sibling row (a follow-up, not a divergence).
   - Two skip reasons were added alongside the transient abort: `introspection_failed` (a failed
     introspection never rebuilds cards) and `schema_indeterminate` (a truncated schema whose
     required-metric presence cannot be decided keeps the existing card set) — both preserve the

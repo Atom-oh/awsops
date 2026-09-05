@@ -4,11 +4,11 @@
 // unregistered string passes through silently — so this lockstep test extracts the STATIC
 // Korean tt() literals (single-quoted AND interpolation-free template literals, recursively
 // under the surface directories) and asserts each resolves in en/zh/ja (TERMS or a RULE).
-// SCOPE (round-1 correction — this is a RATCHET, not a completeness proof): dynamic
-// tt(variable) strings are covered by registering their finite catalogs
-// (card_catalog.py titles, datasource-render.ts notes — see the lockstep comments in
-// i18n-terms.ts), not by this static scan; Korean composed at runtime with interpolation
-// relies on RULES. Column/spec labels are deliberately English (repo convention).
+// SCOPE (round-1 correction — this is a RATCHET, not a completeness proof): most dynamic
+// tt(variable) strings are covered by registering their finite catalogs (see the lockstep
+// comments in i18n-terms.ts) — with ONE enforced exception: card_catalog.py titles are
+// checked by the dedicated dashboard-card test below, which reads the Python catalog
+// directly. Korean composed at runtime with interpolation relies on RULES. Column/spec labels are deliberately English (repo convention).
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -41,7 +41,12 @@ function koreanTtLiterals(file: string): string[] {
 }
 
 function dashboardCardTitles(src: string): string[] {
-  return [...src.matchAll(/["']title["']:\s*(["'])(.*?)\1/g)].map((m) => m[2]);
+  return [
+    // dict-style: {"title": "..."} / {'title': '...'}
+    ...[...src.matchAll(/["']title["']:\s*(["'])(.*?)\1/g)].map((m) => m[2]),
+    // positional _row(card_key, title, ...) — the ClickHouse cards build rows directly
+    ...[...src.matchAll(/_row\(\s*"[^"]*",\s*"([^"]*)"/g)].map((m) => m[1]),
+  ];
 }
 
 describe('i18n coverage on the gap-audit surfaces (L186/L206/L207/L254)', () => {

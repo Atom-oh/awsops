@@ -226,9 +226,14 @@ def prometheus_metric_meta(args):
         entry = {"exists": False, "type": None, "labels": []}
         try:
             meta_resp = _get(creds, f"{base}/metadata", {"metric": m}, http_timeout=3)
-            meta = meta_resp if isinstance(meta_resp, dict) else {}
-            v = meta.get(m)
-            entry["exists"] = isinstance(v, list) and bool(v)
+            # A 200 whose body isn't the API shape (a proxy splash page, etc.) proves nothing —
+            # conclude absence only from a shape-valid dict response; otherwise stay unknown.
+            if isinstance(meta_resp, dict):
+                v = meta_resp.get(m)
+                entry["exists"] = isinstance(v, list) and bool(v)
+            else:
+                v = None
+                entry["exists"] = None
             entry["type"] = v[0].get("type") if isinstance(v, list) and v and isinstance(v[0], dict) else None
             labels_data = _get(
                 creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'}, http_timeout=3)

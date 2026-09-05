@@ -105,7 +105,8 @@ def _lambda_invoke(kind, tool, arguments=None):
                 raise ConnectorInvokeError(kind, tool, status, body[:300])
             raise
     if isinstance(status, int) and status >= 400:
-        detail = body.get("error") if isinstance(body, dict) else "connector error"
+        detail = (body.get("error") if isinstance(body, dict) else None) or (
+            body if isinstance(body, str) and body else "connector error")
         raise ConnectorInvokeError(kind, tool, status, detail)
     return body
 
@@ -248,6 +249,8 @@ def _card_schema_indeterminate(kind, schema):
     return any(metric not in decided for metric in _card_cat.required_metrics())
 
 
+# NOTE: this classifies on UPSTREAM-controlled error text — a hostile backend can steer a card
+# to disable-or-preserve, but the impact is availability-only and self-heals via the :vfail marker.
 # Conclusive = the BODY-derived error text Prometheus/Mimir attach to expression-level failures
 # (the connector's _ApiError embeds data["error"]). Deliberately NO blanket HTTP 400/422 match:
 # both backends return 422 for execution-LIMIT errors (too many samples, max-fetched-series),

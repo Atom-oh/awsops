@@ -1787,9 +1787,12 @@ class TestDashboardCards:
         out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
 
         assert out["cards_validated"] == 2
-        assert calls
-        assert all(kind == "prometheus" and tool == "prometheus_query" for kind, tool, _ in calls)
-        assert all(args["instance_id"] == 7 and args["timeout"] == "5s" for _, _, args in calls)
+        # filter to the QUERY tools — run() may also invoke prometheus_schema (re-introspection)
+        # through the same mock depending on gating; that call is not part of card validation.
+        qcalls = [(k, t, a) for k, t, a in calls if t in ("prometheus_query", "prometheus_query_range")]
+        assert len(qcalls) == 2
+        assert all(kind == "prometheus" for kind, _, _ in qcalls)
+        assert all(args["instance_id"] == 7 and args["timeout"] == "5s" for _, _, args in qcalls)
         assert c.card_inserts  # registration happens after every ready query validates
 
     def test_conclusive_card_query_error_registers_the_card_unavailable(self, monkeypatch):
