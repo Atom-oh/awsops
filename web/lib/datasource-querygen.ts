@@ -118,10 +118,6 @@ export interface GenerateQueryInput {
   lang: string;
   schemaBlock: string;
   isSql: boolean;
-  previousQuery?: string;
-  validationError?: string;
-  /** Route-level orchestration can reserve the second model call for live validation correction. */
-  maxAttempts?: 1 | 2;
   /** FULL cached metric-name list (PromQL kinds) — the vocabulary anchor. Empty/omitted → no
    *  check (schema-less generation is a supported route path). */
   metricNames?: string[];
@@ -237,19 +233,7 @@ export function nearMissCandidates(unknown: string[], metricNames: ReadonlySet<s
 
 export async function generateQuery(input: GenerateQueryInput): Promise<GeneratedQuery> {
   const send = input.send ?? bedrockSend;
-  const correcting = !!(input.previousQuery && input.validationError);
-  const system = [
-    buildQueryGenSystem(input.lang, input.schemaBlock),
-    correcting
-      ? 'A previous candidate failed live validation. Correct that candidate using the validation error, while obeying every original constraint.'
-      : '',
-  ].filter(Boolean).join('\n');
-  const clean = (s: string) => s.replace(/<\/?(?:request|previous_query|validation_error)>/gi, '');
-  const user = [
-    `<request>\n${clean(input.nl)}\n</request>`,
-    correcting ? `<previous_query>\n${clean(input.previousQuery!)}\n</previous_query>` : '',
-    correcting ? `<validation_error>\n${clean(input.validationError!)}\n</validation_error>` : '',
-  ].filter(Boolean).join('\n');
+  const system = buildQueryGenSystem(input.lang, input.schemaBlock);
   const validate = (query: string): void => {
     if (!query) throw new Error('empty query generated');
     if (looksLikeProse(query, input.isSql)) throw new Error('model returned a prose answer, not a query');
@@ -265,6 +249,7 @@ export async function generateQuery(input: GenerateQueryInput): Promise<Generate
       }
     }
   };
+  const user = `<request>\n${input.nl}\n</request>`;
   let query = extractQuery(String((await send(system, user, MODEL_ID)) ?? ''));
   validate(query);
   const anchor = input.lang === 'PromQL' && input.metricNames?.length
@@ -286,7 +271,6 @@ export async function generateQuery(input: GenerateQueryInput): Promise<Generate
         `names not found in this datasource's cached schema: ${names.join(', ')}${hedge} — review before running`;
       const allProvable = unknown.every((u) => anchor.has(ruleCore(u)));
       if (incomplete && !allProvable) return { query, warning: warn(unknown) };
-      if (input.maxAttempts === 1) return { query, warning: warn(unknown) };
       // ONE corrective retry with the previous answer echoed (tag-wrapped like the schema) and
       // near-miss schema names suggested. ANY retry failure (Bedrock error, prose, unbalanced)
       // falls back to the valid first draft + warning — the advisory contract must never turn a

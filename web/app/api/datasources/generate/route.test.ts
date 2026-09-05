@@ -32,14 +32,7 @@ function req(body: unknown, cookie = 'awsops_token=t') {
     method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body),
   });
 }
-const lastGen = () => generateQuery.mock.calls.at(-1)![0] as {
-  nl: string;
-  lang: string;
-  schemaBlock: string;
-  isSql: boolean;
-  previousQuery?: string;
-  validationError?: string;
-};
+const lastGen = () => generateQuery.mock.calls.at(-1)![0] as { nl: string; lang: string; schemaBlock: string; isSql: boolean };
 
 beforeEach(() => {
   for (const m of [verifyUser, generateQuery, listConfiguredSchemas, upsertSchema, renderSchemaForPrompt, getDatasource, resolveConnConfig, invokeMcpLambdaTool, assertDatasourceEndpointAllowed]) m.mockReset();
@@ -71,13 +64,6 @@ describe('auth + validation', () => {
     getDatasource.mockResolvedValue(null);
     const { POST } = await import('./route');
     expect((await POST(req({ id: 999, nl: 'x' }))).status).toBe(400);
-  });
-  it('requires an exact instance id for Prometheus/Mimir generation', async () => {
-    const { POST } = await import('./route');
-    const res = await POST(req({ kind: 'prometheus', nl: 'up targets' }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/instance id/i);
-    expect(generateQuery).not.toHaveBeenCalled();
   });
 });
 
@@ -165,313 +151,6 @@ describe('Prometheus metric relevance', () => {
     expect(schemaArg.metrics[0]).toBe('kube_pod_container_resource_requests');
     expect(lastGen()).toMatchObject({ lang: 'PromQL', isSql: false });
   });
-
-  it('grounds a Korean memory prompt with metric-specific labels', async () => {
-    getDatasource.mockResolvedValue({ id: 1, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
-    listConfiguredSchemas.mockResolvedValue([{
-      integrationId: 1,
-      kind: 'prometheus',
-      schema: {
-        metrics: [
-          'ALERTS',
-          'node_memory_MemAvailable_bytes',
-          'node_memory_MemTotal_bytes',
-        ],
-      },
-      fetched_at: new Date().toISOString(),
-    }]);
-    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockResolvedValue({
-      node_memory_MemAvailable_bytes: { exists: true, type: 'gauge', labels: ['instance', 'job'] },
-      node_memory_MemTotal_bytes: { exists: true, type: 'gauge', labels: ['instance', 'job'] },
-    });
-    generateQuery.mockResolvedValue({
-      query: 'topk(5, 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))',
-    });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '메모리 사용률이 높은 인스턴스' }));
-
-    expect(res.status).toBe(200);
-    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'prometheus',
-      tool: 'prometheus_metric_meta',
-      args: { metrics: expect.arrayContaining([
-        'node_memory_MemAvailable_bytes',
-        'node_memory_MemTotal_bytes',
-      ]) },
-      connConfig: { endpoint: 'http://prom', authType: 'none' },
-    }));
-    expect((invokeMcpLambdaTool.mock.calls[0][0] as { args: { metrics: string[] } }).args.metrics)
-      .toHaveLength(2);
-    expect(lastGen().schemaBlock).toContain(
-      'node_memory_MemAvailable_bytes (gauge; labels: instance, job)',
-    );
-  });
-});
-
-describe('Prometheus/Mimir live query validation', () => {
-  function promFixture() {
-    getDatasource.mockResolvedValue({ id: 1, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
-    listConfiguredSchemas.mockResolvedValue([{
-      integrationId: 1,
-      kind: 'prometheus',
-      schema: { metrics: ['up'] },
-      fetched_at: new Date().toISOString(),
-    }]);
-    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        if (tool === 'prometheus_metric_meta') {
-          return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-            metric,
-            { exists: true, type: 'gauge', labels: [] },
-          ]));
-        }
-        return {};
-      },
-    );
-  }
-
-  it('returns a candidate only after a bounded live validation succeeds', async () => {
-    promFixture();
-    generateQuery.mockResolvedValue({ query: 'up' });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ query: 'up', lang: 'PromQL' });
-    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'prometheus',
-      tool: 'prometheus_query',
-      args: { query: 'up', timeout: '5s' },
-    }));
-  });
-
-  it('fails closed when no exact-instance metric grounding is available', async () => {
-    getDatasource.mockResolvedValue({ id: 1, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
-    listConfiguredSchemas.mockResolvedValue([{
-      integrationId: 1,
-      kind: 'prometheus',
-      schema: { labels: ['job'] },
-      fetched_at: new Date().toISOString(),
-    }]);
-    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '조회' }));
-
-    expect(res.status).toBe(503);
-    expect((await res.json()).error).toMatch(/grounding unavailable/i);
-    expect(generateQuery).not.toHaveBeenCalled();
-  });
-
-  it('fails closed when requested metric metadata cannot be read', async () => {
-    promFixture();
-    invokeMcpLambdaTool.mockRejectedValue(new Error('Prometheus HTTP 503: unavailable'));
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
-
-    expect(res.status).toBe(503);
-    expect((await res.json()).error).toMatch(/grounding unavailable/i);
-    expect(generateQuery).not.toHaveBeenCalled();
-  });
-
-  it('self-corrects a query that references no exact-instance grounded metric', async () => {
-    promFixture();
-    generateQuery
-      .mockResolvedValueOnce({ query: 'sum(hallucinated_metric)' })
-      .mockResolvedValueOnce({ query: 'sum(up)' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric,
-          { exists: metric === 'up', type: metric === 'up' ? 'gauge' : null, labels: [] },
-        ]));
-      },
-    );
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '정상 타깃 수' }));
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).query).toBe('sum(up)');
-    expect(generateQuery).toHaveBeenCalledTimes(2);
-    expect(lastGen().validationError).toMatch(/unavailable metric/i);
-    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(expect.objectContaining({
-      tool: 'prometheus_query',
-      args: expect.objectContaining({ query: 'sum(hallucinated_metric)' }),
-    }));
-  });
-
-  it('does not execute a metric-less __name__ matcher before correction', async () => {
-    promFixture();
-    generateQuery
-      .mockResolvedValueOnce({ query: '{__name__=~".+"}' })
-      .mockResolvedValueOnce({ query: 'up' });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '모든 타깃' }));
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).query).toBe('up');
-    expect(generateQuery).toHaveBeenCalledTimes(2);
-    expect(lastGen().validationError).toMatch(/does not reference an exact-instance metric/i);
-    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(expect.objectContaining({
-      tool: 'prometheus_query',
-      args: expect.objectContaining({ query: '{__name__=~".+"}' }),
-    }));
-  });
-
-  it('live-confirms every metric referenced by generated PromQL instead of trusting the cache', async () => {
-    promFixture();
-    generateQuery
-      .mockResolvedValueOnce({ query: 'sum(up + removed_metric)' })
-      .mockResolvedValueOnce({ query: 'sum(up)' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        if (tool === 'prometheus_metric_meta') {
-          return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-            metric,
-            { exists: metric === 'up', type: metric === 'up' ? 'gauge' : null, labels: [] },
-          ]));
-        }
-        return {};
-      },
-    );
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '정상 타깃 수' }));
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).query).toBe('sum(up)');
-    expect(generateQuery).toHaveBeenCalledTimes(2);
-    expect(lastGen().validationError).toMatch(/removed_metric/);
-    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({
-      tool: 'prometheus_metric_meta',
-      args: { metrics: ['up', 'removed_metric'] },
-    }));
-    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(expect.objectContaining({
-      tool: 'prometheus_query',
-      args: expect.objectContaining({ query: 'sum(up + removed_metric)' }),
-    }));
-  });
-
-  it('returns 503 without correction when live metric confirmation is unavailable', async () => {
-    promFixture();
-    generateQuery.mockResolvedValue({ query: 'sum(up)' });
-    let metadataCalls = 0;
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool }: { tool: string }) => {
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        metadataCalls += 1;
-        if (metadataCalls === 1) return { up: { exists: true, type: 'gauge', labels: [] } };
-        return { up: { exists: true, type: 'gauge', labels: [], error: 'labels timeout' } };
-      },
-    );
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '정상 타깃 수' }));
-
-    expect(res.status).toBe(503);
-    expect((await res.json()).error).toMatch(/metric validation unavailable/i);
-    expect(generateQuery).toHaveBeenCalledTimes(1);
-  });
-
-  it('self-corrects once after a conclusive PromQL parse error', async () => {
-    promFixture();
-    generateQuery
-      .mockResolvedValueOnce({ query: 'sum(up' })
-      .mockResolvedValueOnce({ query: 'up' });
-    invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-      if (tool === 'prometheus_metric_meta') {
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      }
-      if (args?.query === 'sum(up') throw new Error('Prometheus query failed (bad_data): parse error');
-      return { resultType: 'vector', result: [] };
-    });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).query).toBe('up');
-    expect(generateQuery).toHaveBeenCalledTimes(2);
-    expect(lastGen()).toMatchObject({
-      previousQuery: 'sum(up',
-      validationError: expect.stringMatching(/parse error/i),
-    });
-  });
-
-  it('self-corrects a conclusive Prometheus HTTP 422 type error', async () => {
-    promFixture();
-    generateQuery
-      .mockResolvedValueOnce({ query: 'rate(up)' })
-      .mockResolvedValueOnce({ query: 'topk(5, up)' });
-    invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-      if (tool === 'prometheus_metric_meta') {
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      }
-      if (args?.query === 'rate(up)') {
-        throw new Error('Prometheus HTTP 422: expected type instant vector in call to function topk');
-      }
-      return { resultType: 'vector', result: [] };
-    });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '상위 5개 타깃' }));
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).query).toBe('topk(5, up)');
-    expect(generateQuery).toHaveBeenCalledTimes(2);
-  });
-
-  it('returns 422 when both generated candidates fail syntax validation', async () => {
-    promFixture();
-    generateQuery
-      .mockResolvedValueOnce({ query: 'up(' })
-      .mockResolvedValueOnce({ query: 'sum(' });
-    invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => {
-      if (tool === 'prometheus_metric_meta') return {};
-      throw new Error('Prometheus query failed (bad_data): parse error');
-    });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
-
-    expect(res.status).toBe(422);
-    expect((await res.json()).error).toMatch(/validation/i);
-    expect(generateQuery).toHaveBeenCalledTimes(2);
-  });
-
-  it('returns 503 without spending a correction attempt on a transient connector failure', async () => {
-    promFixture();
-    generateQuery.mockResolvedValue({ query: 'up' });
-    invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-      if (tool === 'prometheus_metric_meta') {
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      }
-      throw new Error('Prometheus HTTP 503: unavailable');
-    });
-
-    const { POST } = await import('./route');
-    const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
-
-    expect(res.status).toBe(503);
-    expect((await res.json()).error).toMatch(/validation unavailable/i);
-    expect(generateQuery).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('lazy refresh (TTL) [P2]', () => {
@@ -481,15 +160,7 @@ describe('lazy refresh (TTL) [P2]', () => {
     getDatasource.mockResolvedValue({ id: 11, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 11, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: '2020-01-01T00:00:00Z' }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_schema') return { __block: 'FRESH', metrics: ['up'] };
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      },
-    );
+    invokeMcpLambdaTool.mockResolvedValue({ __block: 'FRESH', metrics: ['up'] });
     generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     const res = await POST(req({ id: 11, nl: 'is it up' }));
@@ -502,22 +173,11 @@ describe('lazy refresh (TTL) [P2]', () => {
   it('does NOT refresh on a FRESH cache hit', async () => {
     getDatasource.mockResolvedValue({ id: 12, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 12, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: new Date().toISOString() }]);
-    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      },
-    );
     generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     await POST(req({ id: 12, nl: 'is it up' }));
     await flush();
-    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(
-      expect.objectContaining({ tool: 'prometheus_schema' }),
-    ); // fresh → no introspect; metadata/query validation calls still occur
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled(); // fresh → no introspect
   });
 });
 
@@ -530,15 +190,7 @@ describe('legacy-cap snapshot refresh + metric-schema size fallback (owner re-te
     getDatasource.mockResolvedValue({ id: 31, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 31, kind: 'prometheus', schema: { metrics: names(500), truncated: true }, fetched_at: fresh() }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_schema') return { metrics: names(2500), truncated: false };
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      },
-    );
+    invokeMcpLambdaTool.mockResolvedValue({ metrics: names(2500), truncated: false });
     generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     expect((await POST(req({ id: 31, nl: 'is it up' }))).status).toBe(200);
@@ -555,43 +207,22 @@ describe('legacy-cap snapshot refresh + metric-schema size fallback (owner re-te
     expect(isLegacyCapSnapshot('mimir', { metrics: names(500), truncated: true }, names(500))).toBe(true);
     getDatasource.mockResolvedValue({ id: 32, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 32, kind: 'prometheus', schema: { metrics: names(120), truncated: true }, fetched_at: fresh() }]);
-    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      },
-    );
     generateQuery.mockResolvedValue({ query: 'up' });
     await POST(req({ id: 32, nl: 'is it up' }));
     await flush();
-    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(
-      expect.objectContaining({ tool: 'prometheus_schema' }),
-    );
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
   });
   it('background refresh is cooldown-guarded per instance — a non-converging trigger cannot fire per request', async () => {
     getDatasource.mockResolvedValue({ id: 33, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 33, kind: 'prometheus', schema: { metrics: ['up'] }, fetched_at: '2020-01-01T00:00:00Z' }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
-    invokeMcpLambdaTool.mockImplementation(
-      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
-        if (tool === 'prometheus_schema') return { metrics: ['up'] };
-        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
-        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
-          metric, { exists: true, type: 'gauge', labels: [] },
-        ]));
-      },
-    );
+    invokeMcpLambdaTool.mockResolvedValue({ metrics: ['up'] });
     generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     await POST(req({ id: 33, nl: 'a' })); await flush();
     await POST(req({ id: 33, nl: 'b' })); await flush();
     await POST(req({ id: 33, nl: 'c' })); await flush();
-    expect(invokeMcpLambdaTool.mock.calls.filter(
-      ([call]) => (call as { tool?: string }).tool === 'prometheus_schema',
-    )).toHaveLength(1);
+    expect(invokeMcpLambdaTool).toHaveBeenCalledTimes(1);
   });
   it('trimSchemaForCache bounds an over-limit METRIC schema (halves the list, trims labels, marks truncated)', async () => {
     const { trimSchemaForCache } = await import('@/lib/datasource-schema');
@@ -612,13 +243,13 @@ describe('legacy-cap snapshot refresh + metric-schema size fallback (owner re-te
 });
 
 describe('non-SQL datasources', () => {
-  it('keeps the deprecated slug path for non-PromQL DSLs', async () => {
-    listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'loki', schema: { __block: 'labels: job' }, fetched_at: 't' }]);
-    generateQuery.mockResolvedValue({ query: '{job=~".+"}' });
+  it('marks PromQL as non-SQL (no read-verb guard) for a slug/kind request', async () => {
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { __block: 'metrics: up' }, fetched_at: 't' }]);
+    generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
-    const res = await POST(req({ slug: 'loki', kind: 'loki', nl: 'recent logs' }));
+    const res = await POST(req({ slug: 'prometheus', kind: 'prometheus', nl: 'is it up' }));
     expect(res.status).toBe(200);
-    expect(lastGen()).toMatchObject({ lang: 'LogQL', isSql: false, schemaBlock: 'labels: job' });
+    expect(lastGen()).toMatchObject({ lang: 'PromQL', isSql: false, schemaBlock: 'metrics: up' });
     expect(getDatasource).not.toHaveBeenCalled(); // slug path → no instance fetch / introspect
   });
 });

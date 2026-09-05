@@ -2,22 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
-import {
-  upsertSchema,
-  getSchema,
-  listConfiguredSchemas,
-  renderSchemaForPrompt,
-  prioritizeSchemaForQuery,
-  metricCandidatesForQuery,
-  confirmedMetricNamesFromMetadata,
-  metricReferencesFromPromQuery,
-  queryReferencesGroundedMetric,
-  renderMetricMetadataForPrompt,
-  isSchemaStale,
-  nlSearchTerms,
-  nlSearchConcepts,
-  termMatches,
-} from './datasource-schema';
+import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, nlSearchTerms, nlSearchConcepts, termMatches } from './datasource-schema';
 
 beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); });
 
@@ -157,63 +142,7 @@ describe('prioritizeSchemaForQuery (Prometheus relevance ordering)', () => {
     expect(out.metrics[0]).toBe('container_memory_working_set_bytes');
   });
 
-  it('maps Korean memory/instance concepts to node-memory metrics', () => {
-    const schema = {
-      metrics: [
-        'ALERTS',
-        'container_memory_working_set_bytes',
-        'node_memory_MemAvailable_bytes',
-        'node_memory_MemTotal_bytes',
-      ],
-    };
-    const out = prioritizeSchemaForQuery(schema, '메모리 사용률이 높은 인스턴스') as { metrics: string[] };
-    expect(out.metrics.slice(0, 2)).toEqual([
-      'node_memory_MemAvailable_bytes',
-      'node_memory_MemTotal_bytes',
-    ]);
-  });
-
-  it('provides known metric candidates even when a truncated cache omitted them', () => {
-    expect(metricCandidatesForQuery({ metrics: ['ALERTS'], truncated: true }, '메모리 사용률이 높은 인스턴스'))
-      .toEqual(expect.arrayContaining([
-        'node_memory_MemAvailable_bytes',
-        'node_memory_MemTotal_bytes',
-      ]));
-  });
-
-  it('renders bounded per-metric type and label metadata for the query prompt', () => {
-    const block = renderMetricMetadataForPrompt({
-      node_memory_MemAvailable_bytes: { type: 'gauge', labels: ['instance', 'job'] },
-      'bad metric': { type: 'counter', labels: ['x'] },
-    });
-    expect(block).toContain('node_memory_MemAvailable_bytes (gauge; labels: instance, job)');
-    expect(block).not.toContain('bad metric');
-  });
-
-  it('accepts only connector-confirmed metadata names and detects their use in PromQL', () => {
-    const meta = {
-      up: { exists: true, type: 'gauge', labels: ['instance'] },
-      hallucinated_metric: { exists: false, type: null, labels: [] },
-    };
-    expect(confirmedMetricNamesFromMetadata(meta)).toEqual(['up']);
-    expect(queryReferencesGroundedMetric('sum(up)', ['up'])).toBe(true);
-    expect(queryReferencesGroundedMetric('sum(hallucinated_metric)', ['up'])).toBe(false);
-    expect(queryReferencesGroundedMetric('sum(up + hallucinated_metric)', ['up'])).toBe(false);
-    expect(queryReferencesGroundedMetric(
-      'topk(5, max by (instance) (rate(http_requests_total{job="api"}[5m])))',
-      ['http_requests_total'],
-    )).toBe(true);
-    expect(metricReferencesFromPromQuery('sum(up + removed_metric)')).toEqual(['up', 'removed_metric']);
-    expect(metricReferencesFromPromQuery('clamp_max(up, +Inf)')).toEqual(['up']);
-    expect(metricReferencesFromPromQuery('up atan2 other_metric')).toEqual(['up', 'other_metric']);
-    expect(metricReferencesFromPromQuery('up * on(instance) group_left other_metric'))
-      .toEqual(['up', 'other_metric']);
-    expect(metricReferencesFromPromQuery('up > 1e3')).toEqual(['up']);
-    expect(queryReferencesGroundedMetric('label_replace(vector(1), "dst", "up", "src", ".*")', ['up']))
-      .toBe(false);
-  });
-
-  it('leaves order unchanged when nothing matches or no usable terms', () => {
+  it('leaves order unchanged when nothing matches or no usable terms (Korean-only / short)', () => {
     expect((prioritizeSchemaForQuery({ metrics }, '조회') as { metrics: string[] }).metrics).toEqual(metrics);
     expect((prioritizeSchemaForQuery({ metrics }, 'xyz123notamatch') as { metrics: string[] }).metrics).toEqual(metrics);
   });
