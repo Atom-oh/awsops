@@ -338,3 +338,18 @@ def test_metric_meta_transport_timeout_on_one_metric_is_that_metrics_error(monke
     assert slow["error"].startswith("upstream unreachable")
     assert slow["exists"] is None  # unknown — never a definitive absence
     assert up["exists"] is True and up["type"] == "gauge"  # the other metric still resolved
+
+
+def test_metric_meta_api_error_yields_exists_unknown_not_false(monkeypatch):
+    def fake_get(creds, path, params, http_timeout=None):
+        raise pm._ApiError("Prometheus HTTP 503: upstream overloaded")
+
+    monkeypatch.setattr(pm, "_get", fake_get)
+    monkeypatch.setattr(pm, "_ds", lambda: {"endpoint": "http://x"})
+    out = pm.prometheus_metric_meta({"metrics": ["up"]})
+    body = out["body"] if isinstance(out, dict) and "body" in out else out
+    import json as _json
+    data = _json.loads(body) if isinstance(body, str) else body
+    entry = (data.get("result") or data)["up"]
+    assert entry["exists"] is None  # backend outage is UNKNOWN, never a definitive absence
+    assert "error" in entry

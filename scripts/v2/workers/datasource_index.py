@@ -96,7 +96,14 @@ def _lambda_invoke(kind, tool, arguments=None):
     status = out.get("statusCode")
     body = out.get("body")
     if isinstance(body, str):
-        body = json.loads(body)
+        try:
+            body = json.loads(body)
+        except ValueError:
+            # A >=400 envelope may carry a plain-text body — that must still surface as a
+            # ConnectorInvokeError (so the caller's classifier sees it), not a ValueError.
+            if isinstance(status, int) and status >= 400:
+                raise ConnectorInvokeError(kind, tool, status, body[:300])
+            raise
     if isinstance(status, int) and status >= 400:
         detail = body.get("error") if isinstance(body, dict) else "connector error"
         raise ConnectorInvokeError(kind, tool, status, detail)
