@@ -20,6 +20,9 @@ import {
   renderMetricMetadataForPrompt,
   isSchemaStale,
   upsertSchema,
+  schemaMetricNames,
+  isLegacyCapSnapshot,
+  REFRESH_COOLDOWN_MS,
 } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
 import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
@@ -131,27 +134,11 @@ async function validatePromCandidate(
   await validatePromQuery(kind, query, connConfig);
 }
 
-/** Trim an introspected schema so it fits under the cache size limit — used as a fallback so a large
- *  warehouse (>256KB schema) is still cached (bounded), instead of re-introspecting on EVERY request. */
-function trimSchemaForCache(schema: unknown): unknown {
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
-  const s = schema as Record<string, unknown>;
-  if (!Array.isArray(s.tables)) return schema;
-  const tables = (s.tables as unknown[]).slice(0, 50).map((t) =>
-    t && typeof t === 'object' && Array.isArray((t as { columns?: unknown }).columns)
-      ? { ...(t as object), columns: ((t as { columns: unknown[] }).columns).slice(0, 80) }
-      : t,
-  );
-  return { ...s, tables, truncated: true };
-}
-
-/** Cache the introspected schema; on a size-limit failure, persist a trimmed copy so subsequent requests
- *  hit the cache instead of re-running the full (100+ DESCRIBE) introspect. All best-effort. */
+/** Cache the introspected schema (best-effort — the read path never depends on the write). */
 async function cacheSchemaBestEffort(accountId: string, id: number, kind: string, schema: unknown): Promise<void> {
-  try { await upsertSchema(accountId, id, kind, schema); return; }
-  catch { /* likely over the size limit — fall through to a bounded write */ }
-  try { await upsertSchema(accountId, id, kind, trimSchemaForCache(schema)); }
-  catch { /* give up; manual Refresh remains */ }
+  // upsertSchema itself stores a bounded (trimmed, `truncated`) copy when the schema is over the
+  // size limit — the same fallback every other writer gets. Best-effort: manual Refresh remains.
+  try { await upsertSchema(accountId, id, kind, schema); } catch { /* give up */ }
 }
 
 /** Resolve a prompt-ready schema block. When an instance id is given, use ONLY that instance's cached
@@ -172,8 +159,15 @@ async function introspectAndCache(accountId: string, ds: DatasourceRow, id: numb
 // Dedupe concurrent background refreshes per instance (the web tier is long-lived Fargate, so a
 // fire-and-forget refresh completes after the response).
 const refreshing = new Set<number>();
+// Per-instance cooldown: a trigger whose condition survives the refresh (e.g. a schema that is
+// truncated for reasons a re-introspect cannot change) must not fire a fresh introspect on EVERY
+// request — one attempt per cooldown window per instance, regardless of trigger.
+const lastRefreshAt = new Map<number, number>();
 function refreshInBackground(accountId: string, ds: DatasourceRow, id: number, kind: string): void {
   if (refreshing.has(id)) return;
+  const now = Date.now();
+  if (now - (lastRefreshAt.get(id) ?? 0) < REFRESH_COOLDOWN_MS) return;
+  lastRefreshAt.set(id, now);
   refreshing.add(id);
   void introspectAndCache(accountId, ds, id, kind).catch(() => {}).finally(() => refreshing.delete(id));
 }
@@ -184,7 +178,7 @@ async function resolveSchemaContext(
   hasId: boolean,
   kind: string,
   nl: string,
-): Promise<{ block: string; schema: unknown }> {
+): Promise<{ block: string; schema: unknown; metricNames: string[]; vocabularyComplete: boolean }> {
   const accountId = currentAccountId();
   // Float NL-relevant metric/label names to the front so they survive the render cap (Prometheus/Mimir
   // return hundreds of metrics alphabetically; the relevant ones would otherwise be dropped).
@@ -196,8 +190,23 @@ async function resolveSchemaContext(
       const block = render(own.schema, own.kind);
       if (block) {
         // Lazy refresh: cache hit but stale → refresh in the background (next lookup is fresh), serve now.
-        if (hasId && ds && isSchemaStale(own.fetched_at)) refreshInBackground(accountId, ds, id, kind);
-        return { block, schema: own.schema };
+        // ALSO refresh a PromQL cache that is provably a snapshot under the connectors' former
+        // 500-name cap (now 3000): it lacks whole metric families (node_*/kube_*) the prompt
+        // needs — one background re-introspect (cooldown-guarded) brings the fuller list.
+        const names = schemaMetricNames(own.schema);
+        const legacySnapshot = isLegacyCapSnapshot(own.kind, own.schema, names);
+        if (hasId && ds && (isSchemaStale(own.fetched_at) || legacySnapshot)) refreshInBackground(accountId, ds, id, kind);
+        // FULL cached metric list (not the ~80-name rendered block) — the querygen anchor;
+        // an in-block-only anchor falsely rejected real metrics past the render cap.
+        // vocabularyComplete: the connector's OWN truncated flag (never inferred from length)
+        // AND cache freshness — an incomplete/stale vocabulary softens the advisory warning.
+        const truncated = Boolean((own.schema as { truncated?: unknown })?.truncated);
+        return {
+          block,
+          schema: own.schema,
+          metricNames: names,
+          vocabularyComplete: !truncated && !isSchemaStale(own.fetched_at),
+        };
       }
     }
   } catch { /* cache is optional */ }
@@ -207,7 +216,7 @@ async function resolveSchemaContext(
   // Warm the cache in the BACKGROUND so the NEXT lookup is grounded; serve schema-less now (the model
   // writes a best-effort query and the connector's read-only guard backstops it on run).
   if (hasId && ds) refreshInBackground(accountId, ds, id, kind);
-  return { block: '', schema: null };
+  return { block: '', schema: null, metricNames: [], vocabularyComplete: false };
 }
 
 export async function POST(request: Request) {
@@ -250,11 +259,15 @@ export async function POST(request: Request) {
   if (hasId && ds && (kind === 'prometheus' || kind === 'mimir')) {
     try {
       promConnConfig = await resolveConnConfig(ds);
+    } catch {
+      return json({ error: 'query validation unavailable' }, 503);
+    }
+    try {
       if (promConnConfig?.endpoint) assertDatasourceEndpointAllowed(promConnConfig.endpoint);
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'query validation unavailable';
-      return json({ error: /blocked|https|required|host/i.test(message) ? message : 'query validation unavailable' },
-        /blocked|https|required|host/i.test(message) ? 400 : 503);
+      return json({
+        error: e instanceof Error ? e.message : 'datasource endpoint is blocked',
+      }, 400);
     }
     groundedMetrics = metricNamesFromSchema(schema.schema);
     const metrics = metricCandidatesForQuery(schema.schema, nl, 2);
@@ -282,23 +295,39 @@ export async function POST(request: Request) {
   }
 
   try {
-    let query = await generateQuery({ nl, lang, schemaBlock, isSql });
+    let generated = await generateQuery({
+      nl,
+      lang,
+      schemaBlock,
+      isSql,
+      metricNames: schema.metricNames,
+      vocabularyComplete: schema.vocabularyComplete,
+      maxAttempts: promConnConfig ? 1 : 2,
+    });
+    let { query, warning } = generated;
     if (promConnConfig && (kind === 'prometheus' || kind === 'mimir')) {
+      let retryReason = warning;
       try {
         await validatePromCandidate(kind, query, promConnConfig);
       } catch (e) {
         if (e instanceof QueryValidationUnavailableError) throw e;
         if (!(e instanceof GeneratedQueryValidationError)) throw e;
-        const validationError = e.message;
-        const previousQuery = query;
-        query = await generateQuery({
+        retryReason = e.message;
+      }
+      if (retryReason) {
+        generated = await generateQuery({
           nl,
           lang,
           schemaBlock,
           isSql,
-          previousQuery,
-          validationError,
+          metricNames: schema.metricNames,
+          vocabularyComplete: schema.vocabularyComplete,
+          previousQuery: query,
+          validationError: retryReason,
+          maxAttempts: 1,
         });
+        query = generated.query;
+        warning = generated.warning;
         try {
           await validatePromCandidate(kind, query, promConnConfig);
         } catch (second) {
@@ -307,7 +336,7 @@ export async function POST(request: Request) {
         }
       }
     }
-    return json({ query, lang }, 200);
+    return json({ query, lang, ...(warning ? { warning } : {}) }, 200);
   } catch (e) {
     if (e instanceof GeneratedQueryValidationError) return json({ error: e.message }, 422);
     if (e instanceof QueryValidationUnavailableError) return json({ error: e.message }, 503);

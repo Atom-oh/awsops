@@ -53,7 +53,7 @@ beforeEach(() => {
     if (Array.isArray(o.tables) && o.tables.length) return 'T';
     return '';
   });
-  generateQuery.mockResolvedValue('SELECT 1');
+  generateQuery.mockResolvedValue({ query: 'SELECT 1' });
 });
 
 describe('auth + validation', () => {
@@ -85,7 +85,7 @@ describe('SQL generation (the ClickHouse fix)', () => {
   it('uses the cached schema block and read-only SQL lang for a clickhouse instance', async () => {
     getDatasource.mockResolvedValue({ id: 2, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 2, kind: 'clickhouse', schema: { __block: 'otel_traces(ServiceName String)' }, fetched_at: new Date().toISOString() }]);
-    generateQuery.mockResolvedValue('SELECT ServiceName FROM otel_traces');
+    generateQuery.mockResolvedValue({ query: 'SELECT ServiceName FROM otel_traces' });
     const { POST } = await import('./route');
     const res = await POST(req({ id: 2, nl: 'api gateway가 보내는 서비스는' }));
     expect(res.status).toBe(200);
@@ -127,18 +127,17 @@ describe('SQL generation (the ClickHouse fix)', () => {
     expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'clickhouse_schema' }));
   });
 
-  it('background cache-warm falls back to a trimmed write when the schema exceeds the size limit [4]', async () => {
+  it('background cache-warm is best-effort — a failed write (size limit) never fails the request [4]', async () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch', authType: 'none' });
     invokeMcpLambdaTool.mockResolvedValue({ __block: 'X(c String)', tables: [{ name: 'X', columns: [] }] });
-    upsertSchema.mockRejectedValueOnce(new Error('introspected schema exceeds size limit')); // full write fails
-    upsertSchema.mockResolvedValueOnce(undefined); // trimmed write succeeds
+    upsertSchema.mockRejectedValueOnce(new Error('introspected schema exceeds size limit')); // untrimmable
     const { POST } = await import('./route');
     const res = await POST(req({ id: 7, nl: 'tables' }));
     expect(res.status).toBe(200);
     await flush();
-    expect(upsertSchema).toHaveBeenCalledTimes(2); // full (failed) → trimmed fallback
+    expect(upsertSchema).toHaveBeenCalledTimes(1); // the bounded-copy fallback lives INSIDE upsertSchema (shared by all writers)
   });
 
   it('502 when the generator throws (e.g. prose-not-SQL guard or Bedrock failure)', async () => {
@@ -157,7 +156,7 @@ describe('Prometheus metric relevance', () => {
     // relevant metric is LAST (alphabetical), would be dropped by the render cap without prioritization
     const metrics = ['ALERTS', 'aggregator_total', 'alertmanager_alerts', 'kube_pod_container_resource_requests'];
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { metrics }, fetched_at: 't' }]);
-    generateQuery.mockResolvedValue('kube_pod_container_resource_requests');
+    generateQuery.mockResolvedValue({ query: 'kube_pod_container_resource_requests' });
     const { POST } = await import('./route');
     const res = await POST(req({ id: 1, nl: 'pod resource조회' }));
     expect(res.status).toBe(200);
@@ -186,9 +185,9 @@ describe('Prometheus metric relevance', () => {
       node_memory_MemAvailable_bytes: { exists: true, type: 'gauge', labels: ['instance', 'job'] },
       node_memory_MemTotal_bytes: { exists: true, type: 'gauge', labels: ['instance', 'job'] },
     });
-    generateQuery.mockResolvedValue(
-      'topk(5, 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))',
-    );
+    generateQuery.mockResolvedValue({
+      query: 'topk(5, 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))',
+    });
 
     const { POST } = await import('./route');
     const res = await POST(req({ id: 1, nl: '메모리 사용률이 높은 인스턴스' }));
@@ -237,7 +236,7 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('returns a candidate only after a bounded live validation succeeds', async () => {
     promFixture();
-    generateQuery.mockResolvedValue('up');
+    generateQuery.mockResolvedValue({ query: 'up' });
 
     const { POST } = await import('./route');
     const res = await POST(req({ id: 1, nl: '다운된 타깃 찾기' }));
@@ -283,7 +282,9 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('self-corrects a query that references no exact-instance grounded metric', async () => {
     promFixture();
-    generateQuery.mockResolvedValueOnce('sum(hallucinated_metric)').mockResolvedValueOnce('sum(up)');
+    generateQuery
+      .mockResolvedValueOnce({ query: 'sum(hallucinated_metric)' })
+      .mockResolvedValueOnce({ query: 'sum(up)' });
     invokeMcpLambdaTool.mockImplementation(
       async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
         if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
@@ -309,7 +310,9 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('does not execute a metric-less __name__ matcher before correction', async () => {
     promFixture();
-    generateQuery.mockResolvedValueOnce('{__name__=~".+"}').mockResolvedValueOnce('up');
+    generateQuery
+      .mockResolvedValueOnce({ query: '{__name__=~".+"}' })
+      .mockResolvedValueOnce({ query: 'up' });
 
     const { POST } = await import('./route');
     const res = await POST(req({ id: 1, nl: '모든 타깃' }));
@@ -327,8 +330,8 @@ describe('Prometheus/Mimir live query validation', () => {
   it('live-confirms every metric referenced by generated PromQL instead of trusting the cache', async () => {
     promFixture();
     generateQuery
-      .mockResolvedValueOnce('sum(up + removed_metric)')
-      .mockResolvedValueOnce('sum(up)');
+      .mockResolvedValueOnce({ query: 'sum(up + removed_metric)' })
+      .mockResolvedValueOnce({ query: 'sum(up)' });
     invokeMcpLambdaTool.mockImplementation(
       async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
         if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
@@ -361,7 +364,7 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('returns 503 without correction when live metric confirmation is unavailable', async () => {
     promFixture();
-    generateQuery.mockResolvedValue('sum(up)');
+    generateQuery.mockResolvedValue({ query: 'sum(up)' });
     let metadataCalls = 0;
     invokeMcpLambdaTool.mockImplementation(
       async ({ tool }: { tool: string }) => {
@@ -382,7 +385,9 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('self-corrects once after a conclusive PromQL parse error', async () => {
     promFixture();
-    generateQuery.mockResolvedValueOnce('sum(up').mockResolvedValueOnce('up');
+    generateQuery
+      .mockResolvedValueOnce({ query: 'sum(up' })
+      .mockResolvedValueOnce({ query: 'up' });
     invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
       if (tool === 'prometheus_metric_meta') {
         return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
@@ -407,7 +412,9 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('self-corrects a conclusive Prometheus HTTP 422 type error', async () => {
     promFixture();
-    generateQuery.mockResolvedValueOnce('rate(up)').mockResolvedValueOnce('topk(5, up)');
+    generateQuery
+      .mockResolvedValueOnce({ query: 'rate(up)' })
+      .mockResolvedValueOnce({ query: 'topk(5, up)' });
     invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
       if (tool === 'prometheus_metric_meta') {
         return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
@@ -430,7 +437,9 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('returns 422 when both generated candidates fail syntax validation', async () => {
     promFixture();
-    generateQuery.mockResolvedValueOnce('up(').mockResolvedValueOnce('sum(');
+    generateQuery
+      .mockResolvedValueOnce({ query: 'up(' })
+      .mockResolvedValueOnce({ query: 'sum(' });
     invokeMcpLambdaTool.mockImplementation(async ({ tool }: { tool: string }) => {
       if (tool === 'prometheus_metric_meta') return {};
       throw new Error('Prometheus query failed (bad_data): parse error');
@@ -446,7 +455,7 @@ describe('Prometheus/Mimir live query validation', () => {
 
   it('returns 503 without spending a correction attempt on a transient connector failure', async () => {
     promFixture();
-    generateQuery.mockResolvedValue('up');
+    generateQuery.mockResolvedValue({ query: 'up' });
     invokeMcpLambdaTool.mockImplementation(async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
       if (tool === 'prometheus_metric_meta') {
         return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
@@ -481,7 +490,7 @@ describe('lazy refresh (TTL) [P2]', () => {
         ]));
       },
     );
-    generateQuery.mockResolvedValue('up');
+    generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     const res = await POST(req({ id: 11, nl: 'is it up' }));
     expect(res.status).toBe(200);
@@ -502,7 +511,7 @@ describe('lazy refresh (TTL) [P2]', () => {
         ]));
       },
     );
-    generateQuery.mockResolvedValue('up');
+    generateQuery.mockResolvedValue({ query: 'up' });
     const { POST } = await import('./route');
     await POST(req({ id: 12, nl: 'is it up' }));
     await flush();
@@ -512,10 +521,100 @@ describe('lazy refresh (TTL) [P2]', () => {
   });
 });
 
+describe('legacy-cap snapshot refresh + metric-schema size fallback (owner re-test follow-up)', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 25));
+  const fresh = () => new Date().toISOString();
+  const names = (n: number) => Array.from({ length: n }, (_, i) => `m${i}`);
+
+  it('a FRESH prometheus cache truncated at EXACTLY 500 names (old cap) is re-introspected in the background', async () => {
+    getDatasource.mockResolvedValue({ id: 31, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 31, kind: 'prometheus', schema: { metrics: names(500), truncated: true }, fetched_at: fresh() }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_schema') return { metrics: names(2500), truncated: false };
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      },
+    );
+    generateQuery.mockResolvedValue({ query: 'up' });
+    const { POST } = await import('./route');
+    expect((await POST(req({ id: 31, nl: 'is it up' }))).status).toBe(200);
+    await flush();
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'prometheus_schema' }));
+  });
+  it('does NOT refresh for non-old-cap truncation: 0 names (failed fetch), <500 names (label-only cap), clickhouse trims', async () => {
+    const { POST } = await import('./route');
+    const { isLegacyCapSnapshot } = await import('@/lib/datasource-schema');
+    expect(isLegacyCapSnapshot('prometheus', { metrics: [], truncated: true }, [])).toBe(false);
+    expect(isLegacyCapSnapshot('prometheus', { metrics: names(120), truncated: true }, names(120))).toBe(false);
+    expect(isLegacyCapSnapshot('clickhouse', { tables: [], truncated: true }, [])).toBe(false);
+    expect(isLegacyCapSnapshot('prometheus', { metrics: names(500), truncated: false }, names(500))).toBe(false);
+    expect(isLegacyCapSnapshot('mimir', { metrics: names(500), truncated: true }, names(500))).toBe(true);
+    getDatasource.mockResolvedValue({ id: 32, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 32, kind: 'prometheus', schema: { metrics: names(120), truncated: true }, fetched_at: fresh() }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      },
+    );
+    generateQuery.mockResolvedValue({ query: 'up' });
+    await POST(req({ id: 32, nl: 'is it up' }));
+    await flush();
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'prometheus_schema' }),
+    );
+  });
+  it('background refresh is cooldown-guarded per instance — a non-converging trigger cannot fire per request', async () => {
+    getDatasource.mockResolvedValue({ id: 33, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 33, kind: 'prometheus', schema: { metrics: ['up'] }, fetched_at: '2020-01-01T00:00:00Z' }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args?: Record<string, unknown> }) => {
+        if (tool === 'prometheus_schema') return { metrics: ['up'] };
+        if (tool === 'prometheus_query') return { resultType: 'vector', result: [] };
+        return Object.fromEntries(((args?.metrics as string[]) || []).map((metric) => [
+          metric, { exists: true, type: 'gauge', labels: [] },
+        ]));
+      },
+    );
+    generateQuery.mockResolvedValue({ query: 'up' });
+    const { POST } = await import('./route');
+    await POST(req({ id: 33, nl: 'a' })); await flush();
+    await POST(req({ id: 33, nl: 'b' })); await flush();
+    await POST(req({ id: 33, nl: 'c' })); await flush();
+    expect(invokeMcpLambdaTool.mock.calls.filter(
+      ([call]) => (call as { tool?: string }).tool === 'prometheus_schema',
+    )).toHaveLength(1);
+  });
+  it('trimSchemaForCache bounds an over-limit METRIC schema (halves the list, trims labels, marks truncated)', async () => {
+    const { trimSchemaForCache } = await import('@/lib/datasource-schema');
+    const big = { metrics: Array.from({ length: 3000 }, (_, i) => `istio_request_duration_milliseconds_bucket_very_long_metric_name_${'x'.repeat(60)}_${i}`), labels: Array.from({ length: 200 }, (_, i) => `l${i}`), truncated: false };
+    expect(Buffer.byteLength(JSON.stringify(big), 'utf8')).toBeGreaterThan(256_000);
+    const out = trimSchemaForCache(big) as { metrics: string[]; labels: string[]; truncated: boolean };
+    expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThanOrEqual(256_000);
+    expect(out.metrics.length).toBeGreaterThan(0);
+    expect(out.metrics.length).toBeLessThan(3000);
+    expect(out.metrics[0]).toBe(big.metrics[0]);
+    expect(out.metrics[out.metrics.length - 1]).toBe(big.metrics[big.metrics.length - 1 - ((big.metrics.length - 1) % (big.metrics.length / out.metrics.length))]); // interleaved: the tail survives
+    expect(out.labels.length).toBe(100);
+    expect(out.truncated).toBe(true);
+    // unchanged when it already fits; table schemas keep the table branch
+    const small = { metrics: ['up'], truncated: false };
+    expect(trimSchemaForCache(small)).toEqual(small);
+  });
+});
+
 describe('non-SQL datasources', () => {
   it('keeps the deprecated slug path for non-PromQL DSLs', async () => {
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'loki', schema: { __block: 'labels: job' }, fetched_at: 't' }]);
-    generateQuery.mockResolvedValue('{job=~".+"}');
+    generateQuery.mockResolvedValue({ query: '{job=~".+"}' });
     const { POST } = await import('./route');
     const res = await POST(req({ slug: 'loki', kind: 'loki', nl: 'recent logs' }));
     expect(res.status).toBe(200);

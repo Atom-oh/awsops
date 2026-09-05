@@ -98,7 +98,7 @@ class TestSchema(_Base):
     def test_schema_probe_metrics_decides_names_past_the_cap(self):
         # Mirrors test_prometheus_mcp: probe names are decided by LOCAL membership in the full
         # in-memory list (no per-name network calls); every valid requested name lands in `probed`.
-        many = [f"m{i:04d}" for i in range(501)] + ["up"]
+        many = [f"m{i:04d}" for i in range(mm.SCHEMA_METRIC_CAP + 1)] + ["up"]
         calls = {"n": 0}
 
         def fake(method, url, headers=None, body=None, timeout=None):

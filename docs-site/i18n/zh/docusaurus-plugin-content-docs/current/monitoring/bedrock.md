@@ -29,7 +29,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ### 图表（3 个）
 
-- **Cost by Model**（水平条形图）: 各模型成本 — 与调用次数图表共享相同的行顺序，便于并排比较
+- **Cost by Model**（饼图）: 各模型成本占比
 - **Invocations by Model**（柱状图）: 各模型调用次数对比
 - **Token Usage Over Time**（折线图）: 按时间段的令牌使用趋势
 

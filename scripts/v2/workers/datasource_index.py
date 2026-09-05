@@ -832,8 +832,9 @@ def run(payload, conn):
                 try:
                     wdb.upsert_datasource_schema(conn, acct, iid, kind, fresh)
                 except ValueError:
-                    # oversized schema (256KB cap, mirrors the BFF) — still USE it for this run's
-                    # rebuild below, just don't persist it; the cache keeps the last-good schema.
+                    # oversized AND untrimmable schema (256KB cap, mirrors the BFF; trimmable
+                    # tables/metrics shapes are stored bounded by the writer itself) — still USE it
+                    # for this run's rebuild below, just don't persist it; the cache keeps last-good.
                     out["schema_cache_skipped"] = "oversized"
             schema = fresh
         else:
