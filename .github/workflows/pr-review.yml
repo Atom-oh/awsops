@@ -1,7 +1,7 @@
 name: AI Code Review
 
 # Each PR is reviewed by a lens×model matrix panel (Codex + Kiro x2, each of L2-L5 an
-# independent agent per lens), then a Claude Fable 5 chair (falling back to Opus 5 on
+# independent agent per lens), then a Claude Fable 5.1 chair (falling back to Opus 5 on
 # degradation) synthesizes per-lens and posts a comment (fail-closed VERDICT). Uses the
 # shared actions-runner-claude image. (Ports oh-my-cloud-skills' lens×model matrix design —
 # this repo has no manifest-validation target, so the deterministic L1 gate is not included.)
@@ -11,9 +11,9 @@ name: AI Code Review
 #   - pull_request_target base-ref checkout (M1): PR head code never executes, diff is data only
 #   - matrix fan-out: scripts/pr-review/run-panel.sh (3 models x 4 lenses = 12 cells) -> synthesize.sh
 #   - auth: EKS Pod Identity (ci-runner) SigV4 + ai-panel-keys (KIRO)
-#   - region: us-east-1 (Claude fable-5 needs the on-demand US geo inference profile;
-#     codex's own model, global.openai.gpt-6-astra via amazon-bedrock-runtime, is global
-#     and no longer needs region pinning, but this job-level var still applies harmlessly)
+#   - region: no pin (Claude Fable 5.1 is now a global inference profile, like codex's own
+#     model, global.openai.gpt-6-astra via amazon-bedrock-runtime; ANTHROPIC_BEDROCK_BASE_URL
+#     just names the nearest real bedrock-runtime endpoint)
 
 # NOTE: upstream (whchoi98/awsops) lacks the fork's self-hosted runner
 # 'awsops-claude-arm', so a bring-up commit (20abf6cd) dropped this to
@@ -45,14 +45,14 @@ jobs:
       pull-requests: write
       contents: read
     env:
-      # Must stay us-east-1: claude-fable-5 needs the on-demand US geo inference profile —
-      # endpoint and AWS_REGION must match or SigV4 signing fails. Codex's own model
-      # (global.openai.gpt-6-astra via amazon-bedrock-runtime, config.toml) is global and no
-      # longer needs region pinning, but this job-level var still applies to it harmlessly.
-      ANTHROPIC_MODEL: us.anthropic.claude-fable-5
+      # claude-fable-5-1 is a global inference profile (like codex's own
+      # global.openai.gpt-6-astra via amazon-bedrock-runtime) — no AWS_REGION pinning
+      # needed anymore. ANTHROPIC_BEDROCK_BASE_URL still names a real regional
+      # bedrock-runtime endpoint as the entry point; repoint it at the nearest region
+      # (ap-northeast-2/Seoul) instead of us-east-1.
+      ANTHROPIC_MODEL: global.anthropic.claude-fable-5-1
       CLAUDE_CODE_USE_BEDROCK: 1
-      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
-      AWS_REGION: us-east-1
+      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
     steps:
       # Security (M1): pull_request_target runs in a secrets/write-permission context ->
       # checkout base (trusted). Explicitly checking out the base.ref tip lets the
