@@ -11,9 +11,10 @@ name: AI Code Review
 #   - pull_request_target base-ref checkout (M1): PR head code never executes, diff is data only
 #   - matrix fan-out: scripts/pr-review/run-panel.sh (3 models x 4 lenses = 12 cells) -> synthesize.sh
 #   - auth: EKS Pod Identity (ci-runner) SigV4 + ai-panel-keys (KIRO)
-#   - region: no pin (Claude Fable 5.1 is now a global inference profile, like codex's own
-#     model, global.openai.gpt-6-astra via amazon-bedrock-runtime; ANTHROPIC_BEDROCK_BASE_URL
-#     just names the nearest real bedrock-runtime endpoint)
+#   - region: Claude Fable 5.1 is a global inference profile, but the "global." prefix only
+#     affects Bedrock's post-landing routing, not the SigV4 signing region — AWS_REGION must
+#     still match ANTHROPIC_BEDROCK_BASE_URL's endpoint (unlike codex's own
+#     amazon-bedrock-runtime provider, which genuinely has no such constraint)
 
 # NOTE: upstream (whchoi98/awsops) lacks the fork's self-hosted runner
 # 'awsops-claude-arm', so a bring-up commit (20abf6cd) dropped this to
@@ -45,14 +46,18 @@ jobs:
       pull-requests: write
       contents: read
     env:
-      # claude-fable-5-1 is a global inference profile (like codex's own
-      # global.openai.gpt-6-astra via amazon-bedrock-runtime) — no AWS_REGION pinning
-      # needed anymore. ANTHROPIC_BEDROCK_BASE_URL still names a real regional
-      # bedrock-runtime endpoint as the entry point; repoint it at the nearest region
-      # (ap-northeast-2/Seoul) instead of us-east-1.
+      # claude-fable-5-1 is a global inference profile. Its "global." prefix only affects
+      # Bedrock's internal routing after the request lands, NOT the SigV4 signing region:
+      # AWS_REGION must still match ANTHROPIC_BEDROCK_BASE_URL's endpoint or signing fails
+      # (unlike codex's own amazon-bedrock-runtime provider, which genuinely doesn't need
+      # one). A prior commit removed AWS_REGION entirely on the incorrect assumption that
+      # the global profile made it unnecessary; caught by the AI review panel on
+      # cc-on-bedrock #114 (L4 MAJOR) before it merged anywhere. Moved as a matched pair to
+      # the nearest region (ap-northeast-2/Seoul) instead of us-east-1.
       ANTHROPIC_MODEL: global.anthropic.claude-fable-5-1
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
+      AWS_REGION: ap-northeast-2
     steps:
       # Security (M1): pull_request_target runs in a secrets/write-permission context ->
       # checkout base (trusted). Explicitly checking out the base.ref tip lets the
