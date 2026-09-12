@@ -1,6 +1,6 @@
 import { scopedTargetIp, type FlowInput } from './flow-topology';
 import type { EndpointRow } from './eks-incluster';
-import type { PodRow } from './eks-resources';
+import { isTerminalPodPhase, type PodRow } from './eks-resources';
 
 type Resolution = NonNullable<FlowInput['ipResolved']>[string];
 type Cluster = { name: string; access?: string; region?: string; vpcId?: string };
@@ -26,6 +26,7 @@ export async function fetchEksIpMap(): Promise<NonNullable<FlowInput['ipResolved
       const [endpoints, pods]: [EndpointRow[], PodRow[]] = await Promise.all([get('endpoints'), get('pods')]);
       const podsByIp = new Map<string, PodRow[]>();
       for (const pod of pods) {
+        if (isTerminalPodPhase(pod.status)) continue;
         if (pod.podIP) podsByIp.set(pod.podIP, [...(podsByIp.get(pod.podIP) ?? []), pod]);
       }
       const servicesByIp = new Map<string, EndpointRow[]>();

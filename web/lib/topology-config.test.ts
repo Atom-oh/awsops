@@ -62,6 +62,18 @@ async function graphs() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('EKS inventory producer → configuration → service/network graph', () => {
+  it.each(['Succeeded', 'Failed'])('ignores %s pods whose released IP is reused by a running pod', async status => {
+    serve([{ ...pod, status: 'Running' }, { ...pod, name: 'completed-job', status }]);
+    const result = await graphs();
+    expect(result.ipResolved[scopedTargetIp(region, vpcId, ip)]?.meta?.pod).toBe('orders-a');
+    expect(result.target.meta?.resolved).toBe('eks');
+  });
+
+  it.each(['Succeeded', 'Failed'])('does not attribute an IP to an exclusively %s pod', async status => {
+    serve([{ ...pod, status }]);
+    expect(await fetchEksIpMap()).toEqual({});
+  });
+
   it.each([
     { name: 'empty pod inventory', pods: [] },
     { name: 'failed pod HTTP request', pods: [pod], failure: 'http' as const },
