@@ -11,6 +11,7 @@ import DetailPanel from '@/components/ui/DetailPanel';
 import { INVENTORY_TYPES } from '@/lib/inventory-types';
 import { buildFlowGraph, filterFromEntry, type FlowInput, type FlowKind, type FlowNode } from '@/lib/flow-topology';
 import { layoutFlow } from '@/lib/flow-layout';
+import { fetchEksIpMap } from '@/lib/topology-config';
 import { useTheme } from '@/lib/use-theme';
 import { useActiveAccount } from '@/lib/account-context';
 import { useI18n } from '@/components/shell/LanguageProvider';
@@ -143,52 +144,6 @@ async function fetchType(t: InvType, account: string): Promise<{ rows: Row[]; fi
   };
 }
 
-// Resolve ALB/NLB ip targets to EKS workloads: for each connected cluster, map pod IP →
-// "namespace/workload" (Deployment). Best-effort — failures per cluster are skipped.
-async function fetchEksIpMap(): Promise<NonNullable<FlowInput['ipResolved']>> {
-  const map: NonNullable<FlowInput['ipResolved']> = {};
-  try {
-    const list = await fetch('/api/eks').then((r) => (r.ok ? r.json() : null));
-    // NOTE: /api/eks returns { clusters: [...] } (matches the EKS page + fleet). Reading `rows` here
-    // silently yielded [] → EKS pod resolution never ran (every EKS ip-target showed as a raw IP).
-    const clusters: string[] = (list?.clusters ?? [])
-      .filter((c: { access?: string }) => c.access === 'connected')
-      .map((c: { name?: string }) => c.name)
-      .filter(Boolean);
-    await Promise.all(clusters.map(async (name) => {
-      try {
-        const get = (kind: string) => fetch(`/api/eks/${name}/incluster?kind=${kind}`).then((x) => (x.ok ? x.json() : null));
-        const [eps, pods] = await Promise.all([get('endpoints'), get('pods')]);
-        // pod IP → owning workload (fallback when an IP isn't fronted by a Service)
-        const podByIp = new Map<string, { podIP?: string; namespace?: string; name?: string; workload?: string }>();
-        for (const p of (pods?.rows ?? []) as { podIP?: string; namespace?: string; name?: string; workload?: string }[]) {
-          if (p.podIP) podByIp.set(p.podIP, p);
-        }
-        // Service mapping (preferred): an Endpoints object's name == the Service name; its addresses
-        // are the backing pod IPs. More stable than the pod/workload — a TG ip-target fronts a Service.
-        for (const e of (eps?.rows ?? []) as { name?: string; namespace?: string; ips?: string[] }[]) {
-          for (const ip of e.ips ?? []) {
-            const pod = podByIp.get(ip);
-            map[ip] = {
-              label: `${e.namespace ?? ''}/${e.name ?? ''}`,
-              resolved: 'eks',
-              meta: { cluster: name, namespace: e.namespace, service: e.name, pod: pod?.name, workload: pod?.workload },
-            };
-          }
-        }
-        for (const [ip, p] of podByIp) {
-          if (!map[ip]) map[ip] = {
-            label: `${p.namespace ?? ''}/${p.workload || p.name || ''}`,
-            resolved: 'eks',
-            meta: { cluster: name, namespace: p.namespace, workload: p.workload, pod: p.name },
-          };
-        }
-      } catch { /* skip this cluster */ }
-    }));
-  } catch { /* no EKS resolution */ }
-  return map;
-}
-
 // ---- VPC / subnet / security-group id → name resolution (for the detail panel) ----
 type NetMaps = { vpc: Map<string, string>; subnet: Map<string, string>; sg: Map<string, string> };
 const emptyNetMaps = (): NetMaps => ({ vpc: new Map(), subnet: new Map(), sg: new Map() });
@@ -226,9 +181,8 @@ function networkNames(row: Record<string, unknown>, nm: NetMaps): Record<string,
   return out;
 }
 
-export default function TopologyPage() {
+function TopologyPageContent({ activeAccount }: { activeAccount: string }) {
   const { tt } = useI18n();
-  const [activeAccount] = useActiveAccount();
   const [data, setData] = useState<FlowInput | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [err, setErr] = useState('');
@@ -248,16 +202,19 @@ export default function TopologyPage() {
       const NET = ['vpc', 'subnet', 'security_group'] as const;
       const [res, ipResolved, net] = await Promise.all([
         Promise.all(TYPES.map((t) => fetchType(t, account))),
-        fetchEksIpMap(),
+        account === 'self' ? fetchEksIpMap() : Promise.resolve({}),
         // VPC/subnet/SG inventory → id→name maps for the detail panel (lookup only, not graph nodes)
         Promise.all(NET.map((t) => fetch(`/api/inventory/${t}?limit=500&accounts=${encodeURIComponent(account)}`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })))),
       ]);
       const mk = (rows: { resource_id?: unknown; data?: Record<string, unknown> }[]) =>
         new Map((rows ?? []).map((r) => [String(r.resource_id), invName(r)]));
       setNetMaps({ vpc: mk(net[0]?.rows), subnet: mk(net[1]?.rows), sg: mk(net[2]?.rows) });
-      const out: FlowInput = { ipResolved };
+      const subnet = (net[1]?.rows ?? []).map((row: { resource_id: unknown; region: unknown; data?: object }) => ({
+        resource_id: row.resource_id, region: row.region, ...(row.data ?? {}),
+      }));
+      const out: FlowInput = { ipResolved, subnet };
       let newest: string | null = null;
-      const capped: string[] = [];
+      const capped: string[] = subnet.length >= ROW_CAP ? ['subnet'] : [];
       TYPES.forEach((t, i) => {
         out[FLOW_KEY[t]] = res[i].rows;
         const f = res[i].finishedAt;
@@ -637,4 +594,13 @@ export default function TopologyPage() {
       )}
     </div>
   );
+}
+
+// Restore the selected account before mounting the host-only EKS reader. Remounting
+// also prevents a late response from the previous account replacing the new graph.
+export default function TopologyPage() {
+  const [activeAccount] = useActiveAccount();
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
+  return ready ? <TopologyPageContent key={activeAccount} activeAccount={activeAccount} /> : null;
 }
