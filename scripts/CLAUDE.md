@@ -23,8 +23,29 @@ secrets-manager) — installed by `make deps`.
 - `v2/*.itest.mjs` — migration integration tests against a disposable PostgreSQL 17 container.
 - `v2/upgrade.sh` — `make upgrade`: RDS snapshot → migrate → deploy. Previews unless
   `CONFIRM=go`.
-- `pr-review/` — lens×model review panel: `run-panel.sh` (parallel fan-out, one `*.txt` prompt
-  per lens), `synthesize.sh` (chair synthesis), `lib.sh` (slot/credential scrubbing).
+- `pr-review/` — lens×model review panel: `run-panel.sh` requires exactly the named prompts
+  `L2.txt`–`L5.txt` (other files ignored). All 12 model/lens reports must complete.
+  `run-panel.sh` creates a fresh 32-hex nonce per cell/run and requires a final physical line
+  `REVIEW_COMPLETE: <lens> <nonce> {"report":"JSON-escaped Markdown"}`. The stdlib
+  `report_frame.py` counts only frames carrying this cell's expected nonce, then
+  validates exactly one final frame, its lens and a nonblank report string. Earlier
+  other-nonce frames are opaque chatter and receive no credit; an other-nonce frame
+  after the current frame still makes it nonfinal. Duplicate expected-nonce frames,
+  same-nonce wrong lenses, duplicate keys and malformed output fail closed.
+  Kiro's assistant prefix and one numeric usage/time footer are cosmetic only.
+  No tool-header, Markdown-fence or static-marker inference establishes completion.
+  `lib.sh` revalidates the original frame before accepting only the decoded report,
+  then strips controls and scrubs credentials, including escaped controls/session tokens.
+  Rejected previews retain bounded scrubbed chatter and hide encoded frame payloads.
+  Nonzero/timed-out CLI output is discarded; bounded retries and hard-kill backstops remain.
+  `synthesize.sh` requires a successful chair CLI and both scrubbers, with a report body
+  and a unique final verdict. The workflow ceiling is 90 minutes.
+  - `preflight-aws-session.py` runs before panel and chair using the installed AWS CLI:
+    `configure list` must select `container-role`, then signed `sts get-caller-identity`
+    must succeed. It checks the existing EKS Pod Identity without changing SDK/provider,
+    profile or signing settings. Each model CLI retains ambient SDK refresh.
+  - Offline regressions: `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v`.
+    Also run by `bash tests/run-all.sh` and a dedicated `merge-verify.yml` step.
   - **The chair call MUST pass `--strict-mcp-config`.** A user-scope MCP server (e.g. github)
     loads at session init; if its auth is broken, `claude -p` waits silently for the tool until
     `CHAIR_TIMEOUT` (currently 900s) with no error — killing both primary and fallback chairs

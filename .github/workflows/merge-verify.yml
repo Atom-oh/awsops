@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Offline AI review reliability regressions
+        run: python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+
       - name: Install web dependencies
         run: cd web && npm ci
 

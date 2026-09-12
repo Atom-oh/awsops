@@ -34,9 +34,9 @@ jobs:
     runs-on: awsops-claude-arm
     # Hang backstop: GitHub's default is 360 minutes (6h), so a hang in a section the
     # in-script timeouts don't cover (gh pr diff, npm fallback, panel wait, etc.) would pin
-    # the runner pod for 6 hours. Longer attempts keep the existing models/retries;
-    # the parallel panel (40min)
-    # plus both chair attempts (~34min) fits with setup/cleanup inside 90min.
+    # the runner pod for 6 hours. Panel: 2*(1200+10)=40m20s; chair primary/fallback:
+    # 2*(120+900+10)=34m20s. This leaves 15m20s for setup, publication, and cleanup.
+    # Preflight the ambient Pod Identity provider before EACH phase; SDK refresh stays active.
     timeout-minutes: 90
     concurrency:
       group: pr-review-${{ github.event.pull_request.number }}
@@ -57,6 +57,12 @@ jobs:
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
       AWS_REGION: ap-northeast-2
+      PANEL_TIMEOUT: "1200"
+      KIRO_PANEL_TIMEOUT: "1200"
+      PANEL_RETRIES: "2"
+      PANEL_KILL_AFTER: "10s"
+      CHAIR_TIMEOUT: "900"
+      CHAIR_KILL_AFTER: "10s"
     steps:
       # Security (M1): pull_request_target runs in a secrets/write-permission context ->
       # checkout base (trusted). Explicitly checking out the base.ref tip lets the
@@ -374,17 +380,26 @@ jobs:
             echo "panel_truncated=1" >> "$GITHUB_ENV"
           fi
 
-      - name: Run panel + synthesize (lens×model matrix -> Claude chair)
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PANEL_TIMEOUT: "1200"
+      - name: Preflight existing runner Pod Identity before panel
+        run: python3 scripts/pr-review/preflight-aws-session.py
+
+      - name: Run panel (12 required model/lens reports)
         run: |
           set -euo pipefail
           bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
+          echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
+
+      - name: Preflight existing runner Pod Identity before chair
+        run: python3 scripts/pr-review/preflight-aws-session.py
+
+      - name: Synthesize (Claude chair)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
           bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
             "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
-          echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
       - name: Check for blocking issues
         id: gate
@@ -420,6 +435,8 @@ jobs:
             # the code has a CRITICAL/MAJOR, so the message says so distinctly
             # (synthesize.sh's chair-failed.flag -> chair_failed).
             STATUS_BADGE="**Status: BLOCKED** — review generation failed (model timeout/error) — not a code problem, re-run the workflow"
+          elif [ "$GATE_RESULT" = "fail" ] && [ "${panel_incomplete:-0}" = "1" ]; then
+            STATUS_BADGE="**Status: BLOCKED** — incomplete AI review coverage; all 12 model/lens reports must complete"
           elif [ "$GATE_RESULT" = "fail" ]; then
             STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
           else

@@ -10,23 +10,49 @@ ensure_slots() {
   rm -rf "$1/slot"; mkdir -p "$1/slot"
 }
 
-# 한 패널 실행 결과를 평가해 responded 에 기록.
-#   $1 슬롯 파일 경로, $2 패널 라벨, $3 responded 파일
-# non-empty 체크만으로는 "응답함"이 실제 리뷰인지 보일러플레이트/거부 응답인지 구분이 안 되고,
-# 그 원문은 어디에도 로깅되지 않아 사후 조사가 불가능했다(2026-07 감사: 샘플 18개 PR 중 17개에서
-# CHAIR 가 "일부 패널이 diff 를 못 받았다"고 사후 진단했지만 원인 텍스트는 로그에 없었음).
-# 성공/실패 무관하게 앞부분을 항상 찍어 다음번엔 CI 로그만으로 실제 내용을 바로 확인할 수 있게 한다.
-# 프리뷰도 scrub_secrets 를 거친다 — 이 CI 로그를 볼 수 있는 사람 범위가 셀 출력을 볼 수 있는
-# 사람 범위보다 넓을 수 있으므로, 원시 200B 를 그대로 찍으면 별도의 스크럽 없는 유출구가 된다.
+# Shared with the chair: normalize terminal output before validation or secret scrubbing.
+strip_controls() {
+  sed -E -e 's#(\x1B\][^\x07\x1B]*(\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][0-9A-Z])##g' \
+         -e 's#(\xC2[\x80-\x9F]|[\x00-\x08\x0B-\x1F\x7F])##g'
+}
+
+panel_report_decode() {
+  [ -s "$1" ] || return 1
+  local args=("$1" "$2" "${3:-}")
+  case "${1##*/}" in kiro-*) args+=(--kiro) ;; esac
+  [ "${4:-}" = "--check" ] && args+=(--check)
+  python3 "$(dirname "${BASH_SOURCE[0]}")/report_frame.py" "${args[@]}"
+}
+
+panel_report_valid() {
+  # Check the original transcript without replacing or otherwise editing it.
+  panel_report_decode "$1" "$2" "${3:-}" --check
+}
+
+# A rejected JSON payload can encode controls inside a credential. Do not log its
+# transport spelling; keep only bounded, scrubbed chatter and a frame placeholder.
+# This is diagnostic masking only and never decides whether a report completed.
+panel_rejected_preview() {
+  strip_controls < "$1" |
+    sed -E 's/^[[:space:]]*(> )?REVIEW_COMPLETE:.*$/[rejected completion frame]/' |
+    scrub_secrets | head -c 200 | tr '\n' ' '
+}
+
+# Validate the original frame again, then accept only its decoded, scrubbed report.
+# $1=slot, $2=model/lens, $3=responded file, $4=trusted per-cell nonce.
+# Pipeline failure leaves an empty slot. No tool chatter or JSON envelope reaches the chair.
 record_result() {
-  local slot="$1" label="$2" responded="$3"
-  echo "[preview] $label: $(scrub_secrets < "$slot" | head -c 200 | tr '\n' ' ')" >&2
-  if [ -s "$slot" ]; then
+  local slot="$1" label="$2" responded="$3" nonce="${4:-}" accepted="$1.accepted"
+  if panel_report_decode "$slot" "${label##*/}" "$nonce" | strip_controls | scrub_secrets > "$accepted"; then
+    mv "$accepted" "$slot" || { : > "$slot"; return 1; }
+    echo "[preview] $label: $(head -c 200 "$slot" | tr '\n' ' ')" >&2
     echo "$label" >> "$responded"
   else
+    echo "[preview] $label: $(panel_rejected_preview "$slot")" >&2
     echo "[skip] $label" >&2
     : > "$slot"  # 빈 슬롯 보장
   fi
+  rm -f "$accepted"
 }
 
 # 자격증명 패턴 스크럽 — 마지막 방어선(last line of defense), 예방이 아님. Kiro 는 이 repo에서
@@ -55,6 +81,6 @@ scrub_secrets() {
     -e 's/AIza[0-9A-Za-z_-]{30,}/[REDACTED-GOOGLE-KEY]/g' \
     -e 's/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/[REDACTED-JWT]/g' \
     -e 's/(AUTHORIZATION:[[:space:]]*(basic|bearer)[[:space:]]+)[A-Za-z0-9+\/=_.~-]{20,}/\1[REDACTED-GIT-CRED-HEADER]/gI' \
-    -e 's/((api[_-]?key|aws_secret_access_key|aws_access_key_id|access[_-]?token|client[_-]?secret|secret|passwd|password|token)['"'"'"]?[[:space:]]*[:=][[:space:]]*['"'"'"])[^'"'"'"]{8,}(['"'"'"])/\1[REDACTED]\3/gI' \
-    -e 's/((^|[^A-Za-z0-9_])(api[_-]?key|aws_secret_access_key|aws_access_key_id|access[_-]?token|client[_-]?secret|secret|passwd|password|token)[[:space:]]*[:=][[:space:]]*)[A-Za-z0-9/+_-]{16,}/\1[REDACTED]/gI'
+    -e 's/((api[_-]?key|aws_secret_access_key|aws_access_key_id|aws[_-]?(session|security)[_-]?token|session[_-]?token|access[_-]?token|client[_-]?secret|secret|passwd|password|token)['"'"'"]?[[:space:]]*[:=][[:space:]]*['"'"'"])[^'"'"'"]{8,}(['"'"'"])/\1[REDACTED]\4/gI' \
+    -e 's/((^|[^A-Za-z0-9_])(api[_-]?key|aws_secret_access_key|aws_access_key_id|aws[_-]?(session|security)[_-]?token|session[_-]?token|access[_-]?token|client[_-]?secret|secret|passwd|password|token)[[:space:]]*[:=][[:space:]]*)[A-Za-z0-9/+=_-]{16,}/\1[REDACTED]/gI'
 }

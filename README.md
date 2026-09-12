@@ -161,9 +161,16 @@ awsops/
 
 ```bash
 bash scripts/v2/merge-verify.sh   # Python pytest (scripts/v2 + agent) + web vitest + terraform validate
-bash tests/run-all.sh             # repo-wide hook/structure tests + agent Python unittests
+bash tests/run-all.sh             # hooks/structure + offline PR-review tests + agent unittests
+python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v  # offline PR-review only
 cd web && npx vitest run          # web unit tests only
 ```
+
+PR-review fixtures cover all 12 nonce-bound JSON report frames, decoded reports without
+tool chatter, literal tool/marker examples, strict CLI exits, retries, hard kills, and
+Pod Identity preflight without live AWS/AI calls. The CI preflight validates
+the existing provider before panel and chair; it does not export credentials or force a
+lease refresh, so model CLIs retain ambient SDK refresh.
 
 ## API Documentation
 
@@ -334,9 +341,16 @@ awsops/
 
 ```bash
 bash scripts/v2/merge-verify.sh   # Python pytest(scripts/v2 + agent) + web vitest + terraform validate
-bash tests/run-all.sh             # repo 전반 hook/structure 테스트 + agent Python unittest
+bash tests/run-all.sh             # hook/structure + 오프라인 PR 리뷰 + agent unittest
+python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v  # 오프라인 PR 리뷰만
 cd web && npx vitest run          # web 유닛 테스트만
 ```
+
+PR 리뷰 fixture는 실제 AWS/AI 호출 없이 12개 셀의 nonce 결합 JSON 보고서 프레임,
+도구 출력 없이 디코딩된 보고서, 도구·마커 예문, CLI 종료 상태, 재시도, 하드킬과
+Pod Identity preflight를 검증한다. CI preflight는 panel/chair 전에
+기존 provider의 유효성만 확인하며, 자격 증명을 export하거나 lease 갱신을 강제하지 않아
+모델 CLI의 기존 SDK 자동 갱신 경로를 유지한다.
 
 ## API 문서
 
