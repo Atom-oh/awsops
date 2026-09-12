@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFlowGraph } from './flow-topology';
+import { buildFlowGraph, scopedTargetIp } from './flow-topology';
 import type { FlowGraph, FlowNode } from './flow-topology';
 import type { E2eGraph, E2eInput, NetworkObservation, ServiceSnapshot } from './e2e-topology-types';
 import type { NfmEndpoint, NfmFlowRow } from './nfm';
@@ -443,6 +443,22 @@ describe('buildE2eGraph — workload identity', () => {
 });
 
 describe('selectE2eGraph — filtering before bounds', () => {
+  it('keeps every visible endpoint attached to a visible connection with 300 flows sharing a workload', () => {
+    const graph = buildE2eGraph(input({
+      services: services(), network: [observation(Array.from({ length: 300 }, () => flow({
+        local: endpoint({ podName: 'web-1', podNamespace: 'shop' }),
+      })))],
+    }));
+    const view = selectE2eGraph(graph, {});
+    const connections = new Set(view.nodes.filter(n => n.kind === 'connection').map(n => n.id));
+    const endpoints = view.nodes.filter(n => n.kind === 'endpoint');
+    expect(endpoints.length).toBeGreaterThan(0);
+    for (const node of endpoints) {
+      expect(view.edges.some(e => e.evidence === 'network' && (
+        e.source === node.id && connections.has(e.target) || e.target === node.id && connections.has(e.source)
+      ))).toBe(true);
+    }
+  });
   it('keeps observed connections, services and their identity neighborhood ahead of unrelated inventory', () => {
     const config = configured();
     config.nodes.unshift(...Array.from({ length: 500 }, (_, i): FlowNode => ({
@@ -588,5 +604,42 @@ describe('selectE2eGraph — filtering before bounds', () => {
     expect(selectE2eGraph(graph, { maxNodes: 0 })).toMatchObject({
       nodes: [], edges: [], omittedNodes: 40, omittedEdges: 750,
     });
+  });
+});
+
+describe('corroborated pod identities', () => {
+  it.each([{ pod: 'different-pod', namespace: 'shop' }, { pod: 'web-1', namespace: 'different-namespace' }])(
+    'rejects a scoped target contradicting the observed pod: %j', identity => {
+      const graph = buildE2eGraph(input({
+        configured: configured([target({ resolved: 'eks', cluster: 'app', ...identity })]),
+        services: services(),
+        network: [observation([flow({ local: endpoint({ podName: 'web-1', podNamespace: 'shop' }) })])],
+      }));
+      expect(identityEdges(graph)).toEqual([]);
+      expect(graph.summary.ambiguousEndpoints).toBe(1);
+    },
+  );
+
+  it.each([
+    { addresses: ['10.0.1.10', '10.0.1.11'], podName: 'web-2', expected: 2 },
+    { addresses: ['10.0.1.10', '10.0.1.11'], podName: 'web-1', expected: 0 },
+    { addresses: ['2001:db8::1', '2001:db8::2'], podName: 'web-2', expected: 2 },
+  ])('uses the matching member identity in a grouped target: %j', ({ addresses, podName, expected }) => {
+    const config = buildFlowGraph({
+      tg: [{ resource_id: 'group', region: REGION, vpc_id: VPC, target_type: 'ip',
+        target_health_descriptions: addresses.map(Id => ({ Target: { Id, Port: 443 } })) }],
+      ipResolved: Object.fromEntries(addresses.map((address, index) => [
+        scopedTargetIp(REGION, VPC, address),
+        { label: 'shop/web', resolved: 'eks', meta: {
+          cluster: 'app', namespace: 'shop', pod: `web-${index + 1}`, region: REGION, vpcId: VPC,
+        } },
+      ])),
+    });
+    const graph = buildE2eGraph(input({
+      configured: config, services: services(),
+      network: [observation([flow({ local: endpoint({ ip: addresses[1], podName, podNamespace: 'shop' }) })])],
+    }));
+    expect(identityEdges(graph)).toHaveLength(expected);
+    expect(graph.summary.ambiguousEndpoints).toBe(expected ? 0 : 1);
   });
 });

@@ -21,6 +21,9 @@ interface TargetIdentity {
   value: string;
   region: string;
   vpcId: string;
+  pod: string;
+  namespace: string;
+  conflictingIdentity: boolean;
 }
 
 /** Grouped targets expose only a capped list, not all members in the TG's inventory row. */
@@ -62,7 +65,16 @@ function targetIndex(nodes: E2eNode[], edges: E2eEdge[]): Map<string, TargetIden
     for (const value of targetValues(node.meta)) {
       const k = key(region, vpcId, type, value);
       const entries = index.get(k) ?? [];
-      entries.push({ node, type, value, region, vpcId });
+      // Group metadata describes its representative member. Use the matching IP's
+      // identity, never that representative pod, when the target contains replicas.
+      const identities = Array.isArray(node.meta.members)
+        ? list(node.meta.memberIdentities).map(record).filter(member => text(member.id) === value)
+        : [node.meta];
+      const distinct = new Map(identities.map(identity => [key(text(identity.pod), text(identity.namespace)), identity]));
+      const identity = [...distinct.values()][0];
+      entries.push({ node, type, value, region, vpcId,
+        pod: text(identity?.pod), namespace: text(identity?.namespace) || text(node.meta.namespace),
+        conflictingIdentity: distinct.size > 1 });
       index.set(k, entries);
     }
   }
@@ -172,7 +184,9 @@ export function buildE2eGraph(input: E2eInput): E2eGraph {
       ? [...(workloads.get(key(cluster, namespace, pod)) ?? [])] : [];
     // Do not choose a winner among conflicting scopes, target records, or workload memberships.
     const conflictingClusters = localCluster && targetCluster && localCluster !== targetCluster;
-    if (candidates.size > 1 || matches.length > 1 || conflictingClusters) {
+    const conflictingPod = target && ((target.pod && pod && target.pod !== pod)
+      || (target.namespace && namespace && target.namespace !== namespace) || target.conflictingIdentity);
+    if (candidates.size > 1 || matches.length > 1 || conflictingClusters || conflictingPod) {
       endpoint.meta.correlation = 'ambiguous';
       summary.ambiguousEndpoints++;
       return;
@@ -382,7 +396,10 @@ export function selectE2eGraph(graph: E2eGraph, selection: E2eSelection): E2eVie
       }
       if (services[i]) {
         const id = services[i].id;
-        for (const node of [id, ...neighbors([id], ['service', 'identity'])]) ordered.add(node);
+        // Endpoint nodes enter with their connection above. Expanding every identity
+        // of a hot workload here would exhaust the cap with disconnected endpoints.
+        for (const node of [id, ...neighbors([id], ['service', 'identity'])
+          .filter(next => byId.get(next)?.layer !== 'network')]) ordered.add(node);
       }
     }
     for (const id of selected) ordered.add(id);
