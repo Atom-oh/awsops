@@ -32,6 +32,17 @@ The producer adapters and real collector-to-verdict validation remain pending.
 운영 입력의 지원을 증명하지 않는다. 이 상태의 빈 회귀·개선 목록은 정상 판정이 아니다.
 생성기 어댑터 연결과 실제 수집기부터 판정까지의 검증은 남은 작업이다.
 
+Generated reports record `summary.invariant_coverage` (total, assessed, passed, failed,
+unassessed) and `summary.unassessed` verdicts. Intended vs Actual renders those results
+without an LLM, so missing evidence remains visible in the Markdown and its exports.
+The UI displays the same counts/reasons and labels legacy reports without valid coverage
+as assessment unavailable. No active invariants is distinct from an evaluated pass.
+
+생성된 보고서는 평가 건수와 미평가 판정을 구조화해 저장한다. Intended vs Actual은
+LLM 없이 해당 결과를 렌더링하므로 Markdown·내보내기에도 미평가 근거가 남는다.
+화면은 같은 건수·사유를 표시하며 과거 보고서의 평가 기록이 없으면 평가 정보 없음으로
+표시한다. 활성 불변식이 없는 상태와 실제로 평가해 통과한 상태도 구분한다.
+
 ## Offline use / 오프라인 실행
 
 Run from the repository root. Offline scoring uses only Python's standard library;

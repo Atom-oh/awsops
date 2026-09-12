@@ -50,6 +50,11 @@ connectors. No new telemetry backend or AWS-mutating tool.
    - **생성기 연결 미완료:** 현재 X-Ray의 `to_ref`는 `to`로 해석되지 않고 암호화 집계도
      없으므로 운영 불변식 6종은 모두 `unknown`이다. 정규화된 단위 테스트가 운영 지원을
      의미하지 않으며, 빈 회귀·개선 목록을 정상으로 해석하지 않는다.
+   - Persist assessed/unassessed counts and unknown reasons independently of the model.
+     Render Intended vs Actual deterministically in the report/export, and expose the same
+     coverage in the UI; legacy reports without coverage must remain visibly unassessed.
+   - 미평가 건수·사유를 모델과 별개로 저장하고 본문·내보내기·화면에 표시한다.
+     평가 기록이 없는 과거 보고서를 정상이나 개선으로 해석하지 않는다.
    - Treat missing confidence conservatively; keep the incident feature gate unchanged.
    - Port upstream PDF request isolation into the v2 worker.
    - Regressions: degraded/empty/partial observations and externally referenced report content.

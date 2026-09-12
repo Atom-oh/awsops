@@ -1,6 +1,6 @@
 """Deterministic intended-vs-actual evaluator. PURE — no LLM, no AWS. The LLM never calls this;
 it evaluates admin-promoted invariants against an expected normalized evidence contract. A verdict
-(passed True/False/None + observed string + severity) is the ONLY thing handed to the report LLM.
+(passed True/False/None + observed string + severity) feeds the deterministic report section.
 
 Expected normalized `actual` shape (used by unit fixtures and direct callers):
   {"service_map": {"edges": [{"from","to","calls","error_rate"}, ...]},
