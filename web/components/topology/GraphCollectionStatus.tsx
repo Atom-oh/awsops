@@ -1,0 +1,70 @@
+'use client';
+
+import { useI18n } from '@/components/shell/LanguageProvider';
+
+// Defensive compatibility with producers that supply collection metadata.
+// The current private /api/graph returns only a snapshot, so absent metadata is
+// neutral unknown, not evidence of a collector failure.
+const COPY = {
+  ko: {
+    ok: '최근 수집 성공', empty: '조회한 시간 범위에 관측값 없음', partial: '부분 수집 — 전체 상태를 확정할 수 없음',
+    unavailable: '데이터소스 미연결 또는 미가용', error: '수집 실패', unknown: '수집 상태 미확인',
+    stale: '오래된 데이터', retained: '이전 그래프를 표시합니다. 현재 트래픽 상태를 의미하지 않습니다.',
+    attempted: '최근 수집 시도', captured: '저장된 그래프 시각',
+  },
+  en: {
+    ok: 'Latest collection succeeded', empty: 'No observations in this window', partial: 'Partial collection — coverage is incomplete',
+    unavailable: 'Datasource unavailable or not configured', error: 'Collection failed', unknown: 'Collection state unknown',
+    stale: 'Stale data', retained: 'Showing the previous graph; it does not establish current traffic state.',
+    attempted: 'Latest collection attempt', captured: 'Saved graph time',
+  },
+  ja: {
+    ok: '最新の収集に成功', empty: '対象期間に観測値なし', partial: '部分収集 — 全体の状態は未確認',
+    unavailable: 'データソース未設定または利用不可', error: '収集失敗', unknown: '収集状態不明',
+    stale: '古いデータ', retained: '以前のグラフを表示しています。現在の通信状態を示すものではありません。',
+    attempted: '最新の収集試行', captured: '保存されたグラフの時刻',
+  },
+  zh: {
+    ok: '最近一次采集成功', empty: '查询时间范围内无观测值', partial: '部分采集 — 覆盖范围不完整',
+    unavailable: '数据源不可用或未配置', error: '采集失败', unknown: '采集状态未知',
+    stale: '数据已过期', retained: '正在显示上一次的图，不能据此判断当前流量状态。',
+    attempted: '最近一次采集尝试', captured: '已保存图的时间',
+  },
+};
+const record = (value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const STATUSES = ['ok', 'empty', 'partial', 'unavailable', 'error', 'unknown'] as const;
+const statusOf = (value: unknown) => STATUSES.find(status => status === value) ?? 'unknown';
+
+export default function GraphCollectionStatus({ collection }: { collection?: unknown }) {
+  const { lang } = useI18n();
+  const copy = COPY[lang];
+  const data = record(collection);
+  const status = statusOf(data.status);
+  const retained = data.retainedPrevious === true;
+  const warning = data.stale === true || retained || ['partial', 'unavailable', 'error'].includes(status);
+  const sources = Array.isArray(data.sources) ? data.sources.map(record) : [];
+  return (
+    <div role={warning ? 'alert' : 'status'}
+      className={`my-2 rounded-md border px-3 py-2 text-xs ${warning
+        ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-ink-200 bg-card text-ink-600'}`}>
+      <p className="font-medium">{copy[status]}{data.stale === true ? ` · ${copy.stale}` : ''}</p>
+      {retained && <p className="mt-1">{copy.retained}</p>}
+      {(['attempted_at', 'captured_at'] as const).map(key => {
+        const value = data[key];
+        return typeof value === 'string' && Number.isFinite(Date.parse(value))
+          ? <p key={key}>{key === 'attempted_at' ? copy.attempted : copy.captured} · <time dateTime={value}>{new Date(value).toLocaleString()}</time></p>
+          : null;
+      })}
+      {sources.length > 0 && <ul className="mt-1 space-y-1">
+        {sources.map((source, i) => {
+          const reasons = Array.isArray(source.reasons) ? source.reasons.filter(reason => typeof reason === 'string') : [];
+          return <li key={i} className="break-words">
+            <span className="font-mono">{typeof source.sourceId === 'string' ? source.sourceId : '—'}</span>: {copy[statusOf(source.status)]}
+            {reasons.length > 0 && <span> · {reasons.join(', ')}</span>}
+          </li>;
+        })}
+      </ul>}
+    </div>
+  );
+}
