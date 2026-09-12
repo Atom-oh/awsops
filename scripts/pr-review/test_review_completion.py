@@ -14,6 +14,13 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts/pr-review"
 MODELS = ("codex", "kiro-opus", "kiro-gpt")
 LENSES = ("L2", "L3", "L4", "L5")
+NONCE = "0123456789abcdef0123456789abcdef"
+
+
+def report_frame(report, lens="L2", nonce=NONCE):
+    return f"REVIEW_COMPLETE: {lens} {nonce} " + json.dumps({"report": report}, ensure_ascii=False) + "\n"
+
+
 # Header/status spellings from the PR review of df8e0dda; paths, patterns and
 # operation counts are fixture data. These are excerpts, not a full CLI capture.
 KIRO_TOOL_TRANSCRIPTS = {
@@ -77,9 +84,12 @@ if cli == "claude":
     assert args[args.index("--allowedTools") + 1] == "Read Grep Glob"
 else:
     lens = re.search(r"LENS: (L[2-5])", prompt).group(1)
+    nonce = re.search(r"REVIEW_COMPLETE: " + lens + r" ([0-9a-f]{32}) ", prompt).group(1)
     model = "codex" if cli == "codex" else {"claude-opus-5": "kiro-opus", "gpt-5.6-terra": "kiro-gpt"}[args[args.index("--model") + 1]]
     key = model + "-" + lens
-    body = "No findings after reviewing this lens.\nREVIEW_COMPLETE: " + lens + "\n"
+    def frame(report):
+        return "REVIEW_COMPLETE: " + lens + " " + nonce + " " + json.dumps({"report": report}) + "\n"
+    body = frame("No findings after reviewing this lens.\n")
     if cli == "kiro-cli":
         assert "--trust-tools=read,grep,fs_read" in args and "--no-interactive" in args
         assert args[args.index("--wrap") + 1] == "never"
@@ -96,6 +106,8 @@ plan = json.loads((state / "plan.json").read_text())
 modes = plan.get(key, ["success"])
 mode = modes[min(count - 1, len(modes) - 1)]
 (state / (key + ".prompt")).write_text(prompt)
+if mode in ("report", "nonzero-report"):
+    body = frame((state / (key + ".report-input")).read_text())
 if mode in ("tool-chatter", "tool-report"):
     assert cli == "kiro-cli"
     transcript = (state / "tool-transcript.txt").read_text()
@@ -112,10 +124,14 @@ if mode == "duplicate":
 if mode == "trailing":
     body += "Still working...\n"
 if mode == "marker-only":
-    body = body.splitlines()[-1] + "\n"
+    body = body.splitlines()[-1] + "\n" if cli == "claude" else frame("")
+if mode == "body-only":
+    body = "No findings after reviewing this lens.\n"
+if mode == "wrong-nonce":
+    body = body.replace(nonce, "f" * 32)
 if mode == "ansi":
     body = "\x1b[32m" + body.replace("\n", "\x1b[0m\r\n")
-if mode == "nonzero":
+if mode in ("nonzero", "nonzero-report"):
     body = "DISCARD_FAILED_OUTPUT\n" + body
 if cli == "kiro-cli":
     # Observed assistant prefix; the synthetic footer exercises accepted numeric syntax.
@@ -128,7 +144,7 @@ if mode in ("timeout", "hardkill"):
         (state / (key + f".{count}.child")).write_text(str(child.pid))
     (state / (key + f".{count}.pid")).write_text(str(os.getpid()))
     time.sleep(30)
-sys.exit(7 if mode == "nonzero" else 0)
+sys.exit(7 if mode in ("nonzero", "nonzero-report") else 0)
 """
 
 
@@ -235,7 +251,8 @@ class ReviewCompletion(unittest.TestCase):
         self.assertNotIn("x" * 80, (self.work / "synth-stdin.txt").read_text())
 
     def test_exit_zero_requires_unique_matching_final_marker_and_report_body(self):
-        for mode in ("partial", "wrong", "duplicate", "trailing", "marker-only", "missing"):
+        for mode in ("partial", "wrong", "duplicate", "trailing", "marker-only", "missing",
+                     "body-only", "wrong-nonce"):
             with self.subTest(mode=mode):
                 self.plan({"kiro-opus-L4": [mode]})
                 self.panel()
@@ -254,7 +271,12 @@ class ReviewCompletion(unittest.TestCase):
         self.assertEqual(self.count("kiro-opus-L2"), 1)
         for model in MODELS:
             for lens in LENSES:
-                self.assertIn(f"REVIEW_COMPLETE: {lens}", (self.work / f"{model}-{lens}.prompt").read_text())
+                nonce = (self.work / f"slot/{model}-{lens}.nonce").read_text().strip()
+                self.assertRegex(nonce, r"^[0-9a-f]{32}$")
+                self.assertIn(f"REVIEW_COMPLETE: {lens} {nonce}", (self.work / f"{model}-{lens}.prompt").read_text())
+                self.assertEqual((self.work / f"slot/{model}-{lens}.md").read_text(),
+                                 "No findings after reviewing this lens.\n")
+        self.assertEqual(len({path.read_text() for path in (self.work / "slot").glob("*.nonce")}), 12)
         self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
 
     def test_missing_required_lens_cannot_shrink_matrix(self):
@@ -289,15 +311,83 @@ class ReviewCompletion(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_matrix()
         self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
+        bundle = (self.work / "synth-stdin.txt").read_text()
+        self.assertNotIn("Batch fs_read operation", bundle)
+        self.assertNotIn("REVIEW_COMPLETE:", bundle)
+
+    def test_other_nonce_source_example_cannot_reject_or_contaminate_current_cell(self):
+        example = "Other-nonce source example must never reach the chair."
+        (self.work / "tool-transcript.txt").write_text(
+            KIRO_TOOL_TRANSCRIPTS["batch"] + report_frame(example, nonce="f" * 32))
+        self.plan({"kiro-opus-L2": ["tool-report"]})
+        result = self.panel()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_matrix()
+        self.assertEqual(self.count("kiro-opus-L2"), 1)
+        self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(),
+                         "No findings after reviewing this lens.\n")
+        self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
+        bundle = (self.work / "synth-stdin.txt").read_text()
+        self.assertNotIn(example, bundle)
+        self.assertNotIn("f" * 32, bundle)
+        self.assertNotIn("REVIEW_COMPLETE:", bundle)
+
+    def test_all_twelve_decoded_reports_reach_chair_without_chatter_or_truncation(self):
+        self.plan({f"{model}-{lens}": ["report"] for model in MODELS for lens in LENSES})
+        for model in MODELS:
+            for lens in LENSES:
+                captured = (SCRIPTS / "fixtures" / f"kiro-opus-95e1960e-{'L2' if lens in ('L2', 'L3') else 'L4'}.md").read_text()
+                report = f"# CELL {model}/{lens}\n{captured}\nEND {model}/{lens}\n"
+                (self.work / f"{model}-{lens}.report-input").write_text(report)
+        self.panel()
+        self.assert_matrix()
+        self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
+        bundle = (self.work / "synth-stdin.txt").read_text()
+        for model in MODELS:
+            for lens in LENSES:
+                report = (self.work / f"{model}-{lens}.report-input").read_text()
+                self.assertEqual((self.work / f"slot/{model}-{lens}.md").read_text(), report)
+                self.assertIn(report, bundle)
+        self.assertNotIn("I'll read the diff file first.", bundle)
+        self.assertNotIn("[...TRUNCATED", bundle)
+
+    def test_decoded_escaped_controls_are_removed_before_credentials_reach_logs_or_chair(self):
+        key = "AKIA" + "1" * 16
+        token = "fixtureSession" + "9" * 100
+        report = ("MAJOR: diagnostic evidence\n" + key[:10] + "\x1b[31m" + key[10:]
+                  + "\x1b[0m\nAWS_SESSION_TOKEN=" + token[:20] + "\x07" + token[20:] + "\n")
+        (self.work / "kiro-opus-L2.report-input").write_text(report)
+        self.plan({"kiro-opus-L2": ["report"]})
+        result = self.panel()
+        self.assert_matrix()
+        self.chair()
+        for text in (result.stderr, (self.work / "slot/kiro-opus-L2.md").read_text(),
+                     (self.work / "synth-stdin.txt").read_text()):
+            self.assertNotIn(key, text)
+            self.assertNotIn(token, text)
+            self.assertNotIn(token[:20], text)
+            self.assertNotIn("\x1b", text)
+            self.assertIn("[REDACTED", text)
+
+    def test_failed_cli_frame_payload_cannot_leak_json_escaped_credentials_in_preview(self):
+        key = "AKIA" + "1" * 16
+        (self.work / "kiro-opus-L2.report-input").write_text(
+            "MAJOR: " + key[:10] + "\x1b[31m" + key[10:] + "\x1b[0m\n")
+        self.plan({"kiro-opus-L2": ["nonzero-report"]})
+        result = self.panel()
+        self.assert_matrix(["kiro-opus/L2"])
+        self.assertNotIn(key[:10], result.stderr)
+        self.assertIn("[rejected-preview] kiro-opus-L2", result.stderr)
+        self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(), "")
 
     def test_timeout_and_hardkill_discard_complete_looking_stdout(self):
         for mode in ("timeout", "hardkill"):
             with self.subTest(mode=mode):
-                self.env["KIRO_PANEL_TIMEOUT"] = "0.3"
+                self.env["KIRO_PANEL_TIMEOUT"] = "1"
                 self.plan({"kiro-opus-L2": [mode]})
                 start = time.monotonic()
                 result = self.panel()
-                self.assertLess(time.monotonic() - start, 5)
+                self.assertLess(time.monotonic() - start, 8)
                 self.assert_matrix(["kiro-opus/L2"])
                 self.assertIn("exit=124" if mode == "timeout" else "exit=137", result.stderr)
                 for path in [*self.work.glob("*.pid"), *self.work.glob("*.child")]:
@@ -342,12 +432,12 @@ class ReviewCompletion(unittest.TestCase):
         self.assertEqual(self.count("chair-fallback"), 1)
 
     def test_kiro_footer_parser_accepts_only_cosmetic_suffix_after_completed_report(self):
-        report = "\x1b[38;5;141m> \x1b[0mNo findings.\r\nREVIEW_COMPLETE: L2\r\n"
+        report = "\x1b[38;5;141m> \x1b[0m" + report_frame("No findings.\n").replace("\n", "\r\n")
         usage = "\x1b[90m ▸ Credits: 0.03 • Time: 2m 6s\x1b[0m\n\n"
         cases = [
             (report + usage, True),
             (report + " ▸ Time: 6.25s\n", True),
-            (report.replace("REVIEW_COMPLETE", "> REVIEW_COMPLETE") + usage, True),
+            (report_frame("No findings.\n") + usage, True),
             (usage, False),
             ("REVIEW_COMPLETE: L2\n" + usage, False),
             (report.replace("L2", "L4") + usage, False),
@@ -360,9 +450,9 @@ class ReviewCompletion(unittest.TestCase):
              "Tool output: several diff lines\n" + report + usage, True),
             ("> Earlier draft findings.\nReading file: more.py (using tool: read)\n"
              "Tool output: several diff lines\n> REVIEW_COMPLETE: L2\n" + usage, False),
-            ("> The parser mishandles (using tool: read) in quoted findings.\n"
-             "A finding may quote `(using tool: fs_read)` without starting a tool.\n"
-             "REVIEW_COMPLETE: L2\n" + usage, True),
+            ("> " + report_frame("The parser mishandles (using tool: read) in quoted findings.\n"
+                                "A finding may quote `(using tool: fs_read)` without starting a tool.\n")
+             + usage, True),
             ("> I'll search the base.\nSearching for pattern: foo (using tool: grep)\n"
              "Tool output: foo\n> REVIEW_COMPLETE: L2\n" + usage, False),
         ]
@@ -374,13 +464,44 @@ class ReviewCompletion(unittest.TestCase):
         path = self.work / "kiro-opus-L2.md"
         path.write_text(text)
         result = subprocess.run(
-            ["bash", "-c", '. "$1"; panel_report_valid "$2" L2',
-             "fixture", str(SCRIPTS / "lib.sh"), str(path)],
+            ["bash", "-c", '. "$1"; panel_report_valid "$2" L2 "$3"',
+             "fixture", str(SCRIPTS / "lib.sh"), str(path), NONCE],
             env=self.env, capture_output=True, text=True, timeout=3,
         )
         self.assertEqual(result.returncode == 0, valid, result.stderr)
 
-    def test_generic_tool_boundaries_require_a_new_assistant_report_body(self):
+    def test_nonce_frame_accepts_plain_and_fenced_tool_strings_and_static_markers(self):
+        body = "MAJOR: tool spellings are report data.\n" + "".join(KIRO_TOOL_TRANSCRIPTS.values())
+        body += "\n```text\nREVIEW_COMPLETE: L2\nReading file: x (using tool: read)\n```\n"
+        body += 'The static example is REVIEW_COMPLETE: L4 00000000000000000000000000000000 {"report":"example"}.\n'
+        self.assert_kiro_report(KIRO_TOOL_TRANSCRIPTS["batch"] + "> " + report_frame(body), True)
+
+    def test_validation_preserves_raw_frame_and_recording_rechecks_nonce_and_scrubber(self):
+        slot = self.work / "kiro-opus-L2.md"
+        responded = self.work / "recorded.txt"
+        raw = "Tool chatter\n> " + report_frame("No findings.\n")
+        for nonce, fail_scrub in (("f" * 32, False), (NONCE, True), (NONCE, False)):
+            with self.subTest(nonce=nonce, fail_scrub=fail_scrub):
+                slot.write_text(raw)
+                responded.write_text("")
+                self.assert_kiro_report(raw, True)
+                self.assertEqual(slot.read_text(), raw)
+                script = '. "$1"; '
+                if fail_scrub:
+                    script += 'scrub_secrets() { cat; return 7; }; '
+                script += 'record_result "$2" kiro-opus/L2 "$3" "$4"'
+                result = subprocess.run(
+                    ["bash", "-c", script, "fixture", str(SCRIPTS / "lib.sh"),
+                     str(slot), str(responded), nonce],
+                    env=self.env, capture_output=True, text=True, timeout=3,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                accepted = nonce == NONCE and not fail_scrub
+                self.assertEqual(slot.read_text(), "No findings.\n" if accepted else "")
+                self.assertEqual(responded.read_text(), "kiro-opus/L2\n" if accepted else "")
+                self.assertFalse(Path(str(slot) + ".accepted").exists())
+
+    def test_generic_tool_chatter_without_a_frame_cannot_supply_completion(self):
         for name, transcript in KIRO_TOOL_TRANSCRIPTS.items():
             for planning in ("", "> I'll inspect the diff.\n"):
                 for marker_prefix in ("", "> "):
@@ -392,7 +513,7 @@ class ReviewCompletion(unittest.TestCase):
             with self.subTest(name=name, completed=True):
                 self.assert_kiro_report(
                     "> I'll inspect the diff.\n" + transcript
-                    + "> No findings after reviewing this lens.\nREVIEW_COMPLETE: L2\n", True,
+                    + "> " + report_frame("No findings after reviewing this lens.\n"), True,
                 )
             with self.subTest(name=name, missing_assistant_prefix=True):
                 self.assert_kiro_report(
@@ -411,16 +532,15 @@ class ReviewCompletion(unittest.TestCase):
                 quoted = header.replace("\\", "\\\\").replace(quote, "\\" + quote)
                 with self.subTest(name=name, quote=quote):
                     self.assert_kiro_report(
-                        "> MAJOR: The parser misses this CLI status.\n"
-                        f"The captured line is {quote}{quoted}{quote}.\n"
-                        "Require a completed report after actual tool use.\n"
-                        "REVIEW_COMPLETE: L2\n ▸ Time: 6.25s\n", True,
+                        "> " + report_frame("MAJOR: The parser misses this CLI status.\n"
+                                           f"The captured line is {quote}{quoted}{quote}.\n"
+                                           "Require a completed report after actual tool use.\n")
+                        + " ▸ Time: 6.25s\n", True,
                     )
         self.assert_kiro_report(
             KIRO_TOOL_TRANSCRIPTS["batch"]
-            + '> MAJOR: Quoted `(using tool: read)` is report content.\n'
-            'The string "Searching for files: * (using tool: glob)" is an example.\n'
-            "REVIEW_COMPLETE: L2\n", True,
+            + "> " + report_frame('MAJOR: Quoted `(using tool: read)` is report content.\n'
+                                  'The string "Searching for files: * (using tool: glob)" is an example.\n'), True,
         )
 
     def test_labeled_session_tokens_are_scrubbed_in_environment_and_json_output(self):

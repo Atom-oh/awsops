@@ -1,0 +1,24 @@
+{
+  "review_head": "95e1960ea4ca53890aa0641e577aada01a8781c2",
+  "purpose": "Historical captured body bytes for new-envelope roundtrips; these captures do not approve the new parser or prove old completion. The L4 capture ends mid-sentence and is preserved as received.",
+  "reports": [
+    {
+      "file": "kiro-opus-95e1960e-L2.md",
+      "source": "monitor-95e1960e/run-34708814567/live/slot/kiro-opus-L2.md",
+      "source_sha256": "1f39ca0a3b359fbc1f85e65c9c5e54ebbb99cc2815123d0d9db872ee4c81a7e1",
+      "source_start_line": 110,
+      "transformation": "Select the captured report body from this line through EOF; remove only the first assistant prefix (> ).",
+      "body_sha256": "d2e166148ed9a65886d82e52566e13a352480e52e0004e42f9050f9e309cd9d0",
+      "body_bytes": 5920
+    },
+    {
+      "file": "kiro-opus-95e1960e-L4.md",
+      "source": "monitor-95e1960e/run-34708814567/live/slot/kiro-opus-L4.md",
+      "source_sha256": "1c68a8c30b8ac710f533cc7e15199f4aa9dacb63a598a47e2705f3544c8ba8b0",
+      "source_start_line": 35,
+      "transformation": "Select the captured report body from this line through EOF; remove only the first assistant prefix (> ).",
+      "body_sha256": "fe934614e2223f8b7ba2cef1ebddd8644bcd2a8e06f83d0133fc144757cb3e37",
+      "body_bytes": 6873
+    }
+  ]
+}

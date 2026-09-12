@@ -37,23 +37,9 @@ FAIR_CAP=$(( CHAIR_PANEL_TOTAL_CAP / CELL_COUNT ))
 PANEL=""
 SCRUB_TMP="$WORK/scrub-cell.tmp"
 
-# ANSI/control-char stripping MUST come before scrub: a control char spliced into the middle of a
-# credential splits the scrub regex, breaking the match, and if the control char is removed
-# afterward instead, the plaintext credential is reassembled.
-# Covers CSI/OSC(+ST)/charset-select/CR (Kiro's `--wrap never` only turns off line-wrap, not color
-# codes — observed: `kiro-cli chat` output full of `\x1b[38;5;141m...`-style sequences). The panel
-# cell path and the chair stderr excerpt must share this function so a fix to one side can't be
-# forgotten on the other (this repo has actually seen the stderr side alone miss it in review).
-#
-# Why two stages: stage 1 strips whole escape *sequences* first, stage 2 removes remaining
-# **lone control bytes**. With stage 1 alone, `\x07` (BEL) is only removed when it's an OSC
-# terminator, and only `\r` is removed on its own — a lone BEL/backspace spliced into a credential
-# (e.g. `AKIA12345678\x07 90ABCDEF`) survives untouched. That splits the scrub regex the same way,
-# but a viewer/terminal still renders the intact key — i.e. it leaks as-is.
-# UTF-8 caveat: stripping C1 (\x80-\x9F) as raw bytes would corrupt multibyte characters (this
-# log is mostly non-ASCII text), so only the UTF-8-encoded form `\xC2[\x80-\x9F]` is removed.
-# \x09 (TAB) / \x0A (LF) are preserved.
-# strip_controls is shared with panel completion validation in lib.sh.
+# Accepted slots already contain decoded/scrubbed reports, never raw CLI transcripts.
+# Reapply lib.sh's control stripping before secret scrubbing at the chair boundary:
+# removing controls after redaction could reconstruct a split credential in plaintext.
 
 # run_chair scrubs its stderr file in place once the call returns — but that call is the chair
 # model, bounded at CHAIR_TIMEOUT, which makes it by far the likeliest moment for the job to

@@ -25,10 +25,18 @@ secrets-manager) — installed by `make deps`.
   `CONFIRM=go`.
 - `pr-review/` — lens×model review panel: `run-panel.sh` requires exactly the named prompts
   `L2.txt`–`L5.txt` (other files ignored). All 12 model/lens reports must complete.
-  `lib.sh` checks the report body plus a unique final `REVIEW_COMPLETE: <lens>` marker,
-  excluding Kiro tool output (including batch/concatenated headers), preserving quoted
-  findings, and allowing a numeric usage/time footer;
-  it also strips controls and scrubs credentials, including labeled AWS session tokens.
+  `run-panel.sh` creates a fresh 32-hex nonce per cell/run and requires a final physical line
+  `REVIEW_COMPLETE: <lens> <nonce> {"report":"JSON-escaped Markdown"}`. The stdlib
+  `report_frame.py` counts only frames carrying this cell's expected nonce, then
+  validates exactly one final frame, its lens and a nonblank report string. Earlier
+  other-nonce frames are opaque chatter and receive no credit; an other-nonce frame
+  after the current frame still makes it nonfinal. Duplicate expected-nonce frames,
+  same-nonce wrong lenses, duplicate keys and malformed output fail closed.
+  Kiro's assistant prefix and one numeric usage/time footer are cosmetic only.
+  No tool-header, Markdown-fence or static-marker inference establishes completion.
+  `lib.sh` revalidates the original frame before accepting only the decoded report,
+  then strips controls and scrubs credentials, including escaped controls/session tokens.
+  Rejected previews retain bounded scrubbed chatter and hide encoded frame payloads.
   Nonzero/timed-out CLI output is discarded; bounded retries and hard-kill backstops remain.
   `synthesize.sh` requires a successful chair CLI and both scrubbers, with a report body
   and a unique final verdict. The workflow ceiling is 90 minutes.
