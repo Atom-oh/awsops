@@ -25,6 +25,18 @@ secrets-manager) — installed by `make deps`.
   `CONFIRM=go`.
 - `pr-review/` — lens×model review panel: `run-panel.sh` (parallel fan-out, one `*.txt` prompt
   per lens), `synthesize.sh` (chair synthesis), `lib.sh` (slot/credential scrubbing).
+  `review_scope.py` is the trusted controller: `select` pins current-base or verified
+  merge-parent scope, `bind` records the diff hash, `gate` requires complete content and
+  all model findings, and `verify` rechecks scope before publication. `failure-context`
+  permits an explicit blocked report without replacing a newer HEAD's review.
+  `REVIEW_SCOPE_FILE`, `REVIEW_CONTROL` and `REVIEW_HELPER` stay outside the reviewed
+  checkout; control code comes from the workflow SHA, never PR head. The unit suite
+  `test_review_scope.py` runs through `merge-verify.sh`.
+  To audit a previously merged PR, dispatch `pr-review.yml` from `main` with
+  `pr_number`. The PR must be a same-repository `main` merge with exactly two parents;
+  the second parent and merged tree must match its recorded HEAD. Other merge forms
+  fail closed. A moved scope publishes BLOCKED and requires a re-run; a newer HEAD
+  keeps its canonical review, with the old run reported separately.
   - **The chair call MUST pass `--strict-mcp-config`.** A user-scope MCP server (e.g. github)
     loads at session init; if its auth is broken, `claude -p` waits silently for the tool until
     `CHAIR_TIMEOUT` (currently 900s) with no error — killing both primary and fallback chairs

@@ -10,7 +10,7 @@ web_failed=0
 if [[ -n "${MERGE_VERIFY_PY_ROOT:-}" ]]; then
   py_roots=("$MERGE_VERIFY_PY_ROOT")
 else
-  py_roots=("scripts/v2" "agent")
+  py_roots=("scripts/v2" "agent" "scripts/pr-review")
 fi
 
 echo "== Stage 1: isolated pytest files =="

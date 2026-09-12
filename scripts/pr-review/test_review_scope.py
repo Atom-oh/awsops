@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from review_scope import decision, select_scope, verify_scope
+from review_scope import decision, select_scope, verify_scope, failure_context
 
 OLD, BASE, HEAD, MERGE = (letter * 40 for letter in "abcd")
 CELLS = "codex/L2 codex/L3 codex/L4 codex/L5 kiro-opus/L2 kiro-opus/L3 kiro-opus/L4 kiro-opus/L5 kiro-gpt/L2 kiro-gpt/L3 kiro-gpt/L4 kiro-gpt/L5"
@@ -54,6 +54,15 @@ class ReviewScopeTests(unittest.TestCase):
         self.responses[f"repos/owner/repo/compare/{OLD}...{HEAD}"] = dict(base_commit=dict(sha=OLD), merge_base_commit=dict(sha=OLD))
         with self.assertRaisesRegex(ValueError, "stale"):
             verify_scope(saved, self.env, self.event, self.api)
+        self.assertTrue(failure_context(saved, self.env, self.api))
+
+    def test_failure_reporting_does_not_replace_a_new_head_review(self):
+        saved = select_scope(self.env, self.event, self.api)
+        self.pr["head"]["sha"] = OLD
+        self.assertFalse(failure_context(saved, self.env, self.api))
+        self.pr["base"]["repo"]["full_name"] = "other/repo"
+        with self.assertRaises(ValueError):
+            failure_context(saved, self.env, self.api)
 
     def merged(self):
         self.env["GITHUB_EVENT_NAME"] = "workflow_dispatch"

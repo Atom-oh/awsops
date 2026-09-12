@@ -52,6 +52,7 @@ cat > "$BIN/claude" <<'EOF'
 #!/usr/bin/env bash
 wc -c < /dev/stdin > "$STDIN_SIZE_FILE"
 echo "Summary: ok"
+echo "COVERAGE: COMPLETE"
 echo "VERDICT: PASS"
 EOF
 chmod +x "$BIN/claude"
@@ -250,6 +251,7 @@ cat > "$BIN/claude" <<'EOF'
 #!/usr/bin/env bash
 cat
 printf 'chair also emitted %s on its own\n' "$CHAIR_OWN_SECRET"
+echo "COVERAGE: COMPLETE"
 echo "VERDICT: PASS"
 EOF
 chmod +x "$BIN/claude"

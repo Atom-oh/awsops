@@ -41,6 +41,11 @@ jobs:
       - name: Run merge verification
         run: bash scripts/v2/merge-verify.sh
 
+      - name: Review pipeline structure checks
+        run: |
+          bash tests/structure/test-pr-review-chair-input-caps.sh
+          bash tests/structure/test-pr-review-large-diff.sh
+
   # Pre-merge mirror of deploy-guide.yml's deck gates, so a sensitive-content
   # leak or generator drift in the committed pptx is caught BEFORE the binary
   # enters public git history (deploy-guide runs post-merge and can only block

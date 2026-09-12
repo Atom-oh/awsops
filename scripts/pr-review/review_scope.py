@@ -62,6 +62,16 @@ def verify_scope(saved, env, event, api):
     require(all(saved[key] == current[key] for key in current if key != "title"), "Review scope became stale")
 
 
+def failure_context(saved, env, api):
+    """Report failure without overwriting a newer HEAD's canonical verdict."""
+    require(saved["repo"] == env["GITHUB_REPOSITORY"] and saved["number"] == env["PR_NUMBER"], "Wrong saved review identity")
+    head = sha(saved["head"])
+    current = api(f"repos/{saved['repo']}/pulls/{saved['number']}")
+    require(current["number"] == int(saved["number"]) and current["base"]["ref"] == "main", "Wrong current PR")
+    require(current["base"]["repo"]["full_name"] == saved["repo"] and current["head"]["repo"]["full_name"] == saved["repo"], "Wrong current repository")
+    return sha(current["head"]["sha"]) == head
+
+
 def decision(review, full, panel, responded, *, partial=False, omitted=False, failed=False):
     if partial or len(full.splitlines()) > MAX_LINES or panel != full or omitted:
         return "fail", "Incomplete diff coverage (truncated, changed or omitted content)"
@@ -98,6 +108,12 @@ def main():
                 output.write(f"{key}={scope[key]}\n")
         return
     scope = json.loads(scope_file.read_text())
+    if command == "failure-context":
+        canonical = failure_context(scope, env, api)
+        with open(env["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"canonical={'true' if canonical else 'false'}\n")
+        print(f"_Review verification failed for head `{sha(scope['head'])}`; scope or integrity changed. Re-run required._")
+        return
     full = Path("/tmp/pr-diff.txt").read_bytes()
     digest = hashlib.sha256(full).hexdigest()
     if command == "bind":
