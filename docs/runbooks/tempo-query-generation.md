@@ -95,6 +95,10 @@ make agentcore
 
 `make deploy` ships the web app. **`make agentcore` is required for this change** because it also updates Tempo tool descriptions in `scripts/v2/agentcore/catalog.py`. The provisioner fingerprints tool names, descriptions, and input schemas and reconciles the descriptions on existing gateway targets. Neither command replaces Terraform's connector Lambda code deployment. Existing permissions and feature flags do not need changing.
 
+Tempo 카탈로그 해시 변경은 `datasource_index` 작업에도 적용된다. 이 작업의 실행 경로는 Lambda이며, `workers.tf`의 공유 `workers_src` ZIP에 포함된다. 위 Terraform 계획에서 워커 Lambda 코드 갱신도 확인한다. 같은 ZIP을 사용하는 다른 Lambda의 코드 해시도 함께 갱신될 수 있다. 이 변경에는 Fargate 워커 이미지 배포(`make workers`)가 필요하지 않다.
+
+The Tempo catalog-hash change also affects the `datasource_index` job. It runs on Lambda and is included in the shared `workers_src` ZIP in `workers.tf`. Verify that the Terraform plan also updates the worker Lambda code; other Lambda functions sharing that ZIP may receive the same code-hash update. This change does not require deploying the Fargate worker image with `make workers`.
+
 배포 후 AWSops에 **관리자로 로그인한 탭**에서 개발자 도구의 Console을 열고 아래 블록 전체를 실행한다. 같은 출처의 세션 쿠키로만 요청하며 토큰·도메인을 붙여 넣지 않는다. 명령은 구성된 Tempo 인스턴스와 기존 캐시 요약을 먼저 출력한다. 프롬프트에 대상 인스턴스의 양의 정수 ID를 입력하면 `POST /api/integrations/schema`에 **`{ id }`**를 보내고, GET으로 다시 읽어 요약·`fetched_at`을 비교한다. 취소하면 POST하지 않는다.
 
 After deployment, open DevTools Console in an AWSops tab **signed in as an admin** and run this entire block. It uses the same-origin session cookie; no pasted token or domain is needed. It first lists configured Tempo instances and existing cache summaries. Enter the target instance's positive integer ID at the prompt to send **`{ id }`** to `POST /api/integrations/schema`, then read GET again to compare summaries and `fetched_at`. Canceling sends no POST.
@@ -210,3 +214,7 @@ If the recent window remains empty, repeated refreshes cannot recover historical
 관련 결정: **ADR-005는 AWS 리소스 변경과 자율 실행을 동결**한다. **ADR-007은 거버넌스를 따르는 외부 데이터 읽기·쓰기를 허용**하며, 이 절차의 Tempo 접근은 읽기 전용이다. 컨트롤러의 승인된 릴리스 배포는 제품의 자율 복구 기능을 활성화하지 않는다. 결정 원문은 [ADR-005](../decisions/005-aws-mutation-autonomy-frozen.md)와 [ADR-007](../decisions/007-external-data-integration-governance.md)을 참고한다.
 
 Related decisions: **ADR-005 freezes AWS-resource mutation and autonomy**. **ADR-007 permits external data reads and governed external writes**; this procedure reads Tempo data only. The controller's approved release deployment does not enable autonomous product remediation. See the local [ADR-005](../decisions/005-aws-mutation-autonomy-frozen.md) and [ADR-007](../decisions/007-external-data-integration-governance.md) decision records.
+
+현재 운영 상태는 [BASELINE](../decisions/BASELINE.md)을 기준으로 확인한다.
+
+Consult [BASELINE](../decisions/BASELINE.md) for the current operating posture.
