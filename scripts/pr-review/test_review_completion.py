@@ -419,6 +419,8 @@ class WorkflowContract(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/pr-review.yml").read_text()
         def value(key):
             return re.search(rf"^\s+{key}: [\"']?([^\s\"']+)", workflow, re.M).group(1)
+        self.assertEqual(int(value("PANEL_TIMEOUT")), 1200)
+        self.assertEqual(int(value("KIRO_PANEL_TIMEOUT")), 1200)
         panel = int(value("PANEL_RETRIES")) * (max(int(value("PANEL_TIMEOUT")), int(value("KIRO_PANEL_TIMEOUT"))) + 10)
         chair = 2 * (120 + int(value("CHAIR_TIMEOUT")) + 10)
         self.assertEqual(int(value("timeout-minutes")), 90)

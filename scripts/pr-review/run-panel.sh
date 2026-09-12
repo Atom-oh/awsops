@@ -25,7 +25,7 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 # responded.txt/degraded-models.txt 처럼 매 실행 시작 시 리셋.
 rm -f "$WORK/coverage-severe.flag"
 : > "$WORK/missing-cells.txt"
-T="${PANEL_TIMEOUT:-300}"
+T="${PANEL_TIMEOUT:-1200}"
 KIRO_TIMEOUT="${KIRO_PANEL_TIMEOUT:-1200}"
 KILL_AFTER="${PANEL_KILL_AFTER:-10s}"
 RETRIES="${PANEL_RETRIES:-2}"

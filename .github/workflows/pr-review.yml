@@ -36,8 +36,7 @@ jobs:
     # in-script timeouts don't cover (gh pr diff, npm fallback, panel wait, etc.) would pin
     # the runner pod for 6 hours. Panel: 2*(1200+10)=40m20s; chair primary/fallback:
     # 2*(120+900+10)=34m20s. This leaves 15m20s for setup, publication, and cleanup.
-    # Preflight the ambient Pod Identity provider before EACH phase. Leave SDK refresh
-    # active; no credential export, forced lease renewal, or phase-long TTL assumption.
+    # Preflight the ambient Pod Identity provider before EACH phase; SDK refresh stays active.
     timeout-minutes: 90
     concurrency:
       group: pr-review-${{ github.event.pull_request.number }}
@@ -58,7 +57,7 @@ jobs:
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
       AWS_REGION: ap-northeast-2
-      PANEL_TIMEOUT: "300"
+      PANEL_TIMEOUT: "1200"
       KIRO_PANEL_TIMEOUT: "1200"
       PANEL_RETRIES: "2"
       PANEL_KILL_AFTER: "10s"
