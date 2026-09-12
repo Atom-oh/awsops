@@ -84,7 +84,9 @@ if cli == "claude":
     assert args[args.index("--allowedTools") + 1] == "Read Grep Glob"
 else:
     lens = re.search(r"LENS: (L[2-5])", prompt).group(1)
-    nonce = re.search(r"REVIEW_COMPLETE: " + lens + r" ([0-9a-f]{32}) ", prompt).group(1)
+    nonce_match = (re.search(r"^Cell nonce: ([0-9a-f]{32})$", prompt, re.M)
+                   or re.search(r"REVIEW_COMPLETE: " + lens + r" ([0-9a-f]{32}) ", prompt))
+    nonce = nonce_match.group(1)
     model = "codex" if cli == "codex" else {"claude-opus-5": "kiro-opus", "gpt-5.6-terra": "kiro-gpt"}[args[args.index("--model") + 1]]
     key = model + "-" + lens
     def frame(report):
@@ -106,6 +108,11 @@ plan = json.loads((state / "plan.json").read_text())
 modes = plan.get(key, ["success"])
 mode = modes[min(count - 1, len(modes) - 1)]
 (state / (key + ".prompt")).write_text(prompt)
+if mode in ("echo-template", "echo-filled-template", "quote-template"):
+    template = re.search(r"^REVIEW_COMPLETE: .+$", prompt, re.M).group(0) + "\n"
+    if mode == "echo-filled-template":
+        template = template.replace("<lens>", lens).replace("<nonce>", nonce)
+    body = template + body if mode == "quote-template" else template
 if mode in ("report", "nonzero-report"):
     body = frame((state / (key + ".report-input")).read_text())
 if mode in ("tool-chatter", "tool-report"):
@@ -227,6 +234,25 @@ class ReviewCompletion(unittest.TestCase):
         self.assertIn("VERDICT: FAIL", self.chair())
         self.assertNotIn("DISCARD_FAILED_OUTPUT", (self.work / "synth-stdin.txt").read_text())
 
+    def test_parroted_prompt_example_cannot_supply_a_review(self):
+        for mode in ("echo-template", "echo-filled-template"):
+            with self.subTest(mode=mode):
+                self.plan({"kiro-opus-L2": [mode]})
+                result = self.panel()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_matrix(["kiro-opus/L2"])
+                self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(), "")
+                self.assertIn("VERDICT: FAIL", self.chair())
+
+    def test_quoted_prompt_example_does_not_displace_a_genuine_report(self):
+        self.plan({"kiro-opus-L2": ["quote-template"]})
+        result = self.panel()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_matrix()
+        self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(),
+                         "No findings after reviewing this lens.\n")
+        self.assertIn("VERDICT: PASS", self.chair())
+
     def test_rejected_preview_is_bounded_scrubbed_and_never_review_input(self):
         secret = "fixtureSession" + "9" * 100
         (self.work / "tool-transcript.txt").write_text(
@@ -273,7 +299,11 @@ class ReviewCompletion(unittest.TestCase):
             for lens in LENSES:
                 nonce = (self.work / f"slot/{model}-{lens}.nonce").read_text().strip()
                 self.assertRegex(nonce, r"^[0-9a-f]{32}$")
-                self.assertIn(f"REVIEW_COMPLETE: {lens} {nonce}", (self.work / f"{model}-{lens}.prompt").read_text())
+                prompt = (self.work / f"{model}-{lens}.prompt").read_text()
+                self.assertIn(f"Review lens: {lens}", prompt)
+                self.assertIn(f"Cell nonce: {nonce}", prompt)
+                self.assertIn('REVIEW_COMPLETE: <lens> <nonce> {"report":null}', prompt)
+                self.assertNotIn(f"REVIEW_COMPLETE: {lens} {nonce}", prompt)
                 self.assertEqual((self.work / f"slot/{model}-{lens}.md").read_text(),
                                  "No findings after reviewing this lens.\n")
         self.assertEqual(len({path.read_text() for path in (self.work / "slot").glob("*.nonce")}), 12)

@@ -91,8 +91,13 @@ cell_prompt() {
   local base="$1" lens="$2" nonce="$3"
   printf '%s\n\n' "$base"
   cat <<EOF
-After reading the diff and completing this lens, output exactly one final physical line:
-REVIEW_COMPLETE: $lens $nonce {"report":"your complete Markdown findings or explicit no-findings report"}
+After reading the diff and completing this lens, return one final physical line using this cell identity:
+Review lens: $lens
+Cell nonce: $nonce
+Use this format, replacing the placeholders with the values above:
+REVIEW_COMPLETE: <lens> <nonce> {"report":null}
+Replace null with a JSON string containing your complete Markdown findings or explicit no-findings report.
+The format example is deliberately invalid as a completed report; never return it unchanged.
 Encode all report text in that JSON string, escaping newlines as \\n and quotes as \\".
 Do not pretty-print or fence the envelope. Put no text after it.
 Do not emit an envelope during tool use, planning, or an incomplete/failed review.
