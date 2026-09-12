@@ -186,7 +186,8 @@ export function buildE2eGraph(input: E2eInput): E2eGraph {
     const conflictingClusters = localCluster && targetCluster && localCluster !== targetCluster;
     const conflictingPod = target && ((target.pod && pod && target.pod !== pod)
       || (target.namespace && namespace && target.namespace !== namespace) || target.conflictingIdentity);
-    if (candidates.size > 1 || matches.length > 1 || conflictingClusters || conflictingPod) {
+    const conflictingRuntime = target?.node.meta.resolved === 'ecs' && matches.length > 0;
+    if (candidates.size > 1 || matches.length > 1 || conflictingClusters || conflictingPod || conflictingRuntime) {
       endpoint.meta.correlation = 'ambiguous';
       summary.ambiguousEndpoints++;
       return;

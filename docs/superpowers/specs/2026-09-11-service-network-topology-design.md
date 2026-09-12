@@ -44,7 +44,9 @@ Do not infer idle resources from missing observations. Show each source's captur
 
 모니터 변경·계정 변경·조회 조건 변경 시 이전 응답이 새 범위에 표시되지 않게 취소/세대 검사를 적용한다. 계정 전환 직후에도 이전 계정의 구성 그래프를 결합하지 않는다.
 
-서비스 수집 메타데이터가 있으면 partial/stale/retainedPrevious와 소스별 이유를 그대로 안내한다. 이 메타데이터가 없는 배포에서는 수집 상태 미확인으로 표시하며 저장 시각으로 성공을 추정하지 않는다. / Preserve service collection metadata, including partial/stale/retainedPrevious and source reasons. Deployments without this contract show unknown collection health rather than inferring success from a timestamp.
+The current private `/api/graph?class=trace` returns only the saved snapshot (`class`, `account`, `nodes`, `edges`, `captured_at`); it has no collection-status producer. Missing metadata is neutral `role="status"` unknown in the integrated view, and the existing service map does not mount a collection-status component without metadata. A snapshot timestamp is not proof of successful collection or coverage. Partial/stale/retainedPrevious and source-reason rendering is defensive compatibility with producers that actually supply those fields, not a live private API feature. No producer or backend feature is added here.
+
+Inventory HTTP success is separate from sync success. Preserve failed/partial/running status, errors and per-type `last_success_at` for `self`; the current API's host run must not describe member/all/multiple-account scopes. Configuration timing uses the oldest-to-newest `captured_at` range of returned rows, with explicit unknowns for missing row timestamps. Never use the newest `finished_at` as whole-graph freshness. Retained rows remain usable, with a coverage warning, and browser fetch time is labelled separately.
 
 Guard response races and account transitions. A changed filter is applied only on explicit query; labels derive from the applied result, not unsubmitted controls.
 

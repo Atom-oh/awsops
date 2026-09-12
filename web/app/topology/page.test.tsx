@@ -18,7 +18,9 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const json = (body: unknown) => new Response(JSON.stringify(body));
 const region = 'us-east-1';
-function serve(failedTypes: string[] | 'all' = []) {
+const captured = '2026-09-11T11:00:00Z';
+type InventoryResponse = { rows: Record<string, unknown>[]; run: Record<string, unknown> | null };
+function serve(failedTypes: string[] | 'all' = [], inventory: Record<string, Partial<InventoryResponse>> = {}) {
   const requests: URL[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
     const url = new URL(input, 'http://localhost');
@@ -47,7 +49,11 @@ function serve(failedTypes: string[] | 'all' = []) {
         },
       });
       if (url.pathname.endsWith('/subnet')) rows.push({ resource_id: 'subnet-a', region, data: { vpc_id: 'vpc-a' } });
-      return json({ rows, run: { finished_at: '2026-09-11T12:00:00Z' } });
+      return json({
+        rows: rows.map(row => ({ ...row, captured_at: captured })),
+        run: { status: 'succeeded', finished_at: '2026-09-11T12:00:00Z', last_success_at: '2026-09-11T12:00:00Z' },
+        ...inventory[url.pathname.split('/').pop()!],
+      });
     }
     throw new Error(`Unexpected request: ${url}`);
   }));
@@ -94,6 +100,96 @@ async function e2eReady() {
 }
 
 describe('topology page URL and restored scope', () => {
+  it.each([
+    ['failed', '수집 실패'],
+    ['partial', '부분 수집'],
+    ['running', '수집 중'],
+  ])('keeps retained rows usable for an HTTP 200 %s run and preserves the older successful collection', async (status, label) => {
+    const lastSuccess = '2026-09-08T08:00:00Z';
+    const failedCompletion = '2026-09-12T12:00:00Z';
+    serve([], { target_group: { run: {
+      status, finished_at: failedCompletion, last_success_at: lastSuccess, error: 'target discovery incomplete',
+    } } });
+    mount();
+    await flowReady();
+    const warning = screen.getAllByRole('alert').find(el => el.textContent?.includes('target_group'));
+    expect(warning?.textContent).toContain(label);
+    expect(warning?.textContent).toContain('저장된 구성');
+    expect(warning?.textContent).toContain('target discovery incomplete');
+    expect(warning?.textContent).not.toContain('조회 실패');
+    expect(document.querySelector(`time[datetime="${lastSuccess}"]`)).not.toBeNull();
+    expect(document.querySelector(`time[datetime="${failedCompletion}"]`)).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('리소스 이름 검색…'), { target: { value: 'tg-orders' } });
+    expect(screen.getByRole('button', { name: /^tg-orders\s*tg$/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '서비스 + 네트워크' }));
+    await e2eReady();
+    const source = screen.getByRole('region', { name: '구성 소스' });
+    expect(within(source).getByRole('alert').textContent).toContain(label);
+    expect(source.querySelector(`time[datetime="${lastSuccess}"]`)).not.toBeNull();
+    expect(source.querySelector(`time[datetime="${failedCompletion}"]`)).toBeNull();
+  });
+
+  it('uses the returned row capture range, not the newest type completion, for configuration timing', async () => {
+    const oldest = '2026-09-02T01:00:00Z', newestRun = '2026-09-12T12:00:00Z';
+    serve([], {
+      target_group: { rows: [
+        { resource_id: 'tg-old', region, captured_at: oldest, data: { target_type: 'instance' } },
+        { resource_id: 'tg-new', region, captured_at: captured, data: { target_type: 'instance' } },
+      ] },
+      cloudfront: { run: { status: 'succeeded', finished_at: newestRun, last_success_at: newestRun } },
+    });
+    mount('/topology?view=e2e');
+    const source = await screen.findByRole('region', { name: '구성 소스' });
+    const range = await within(source).findByText('표시된 행 수집 범위', { exact: false });
+    expect(range.querySelector(`time[datetime="${oldest}"]`)).not.toBeNull();
+    expect(range.querySelector(`time[datetime="${captured}"]`)).not.toBeNull();
+    expect(range.querySelector(`time[datetime="${newestRun}"]`)).toBeNull();
+    expect(within(source).queryByText('구성 수집 시각', { exact: false })).toBeNull();
+  });
+
+  it.each([{ accounts: ['123456789012'] }, { accounts: '__all__' as const }, { accounts: ['self', '123456789012'] }])(
+    'does not use the host run status or successful timestamp for scope %j', async ({ accounts }) => {
+      window.localStorage.setItem('awsops:scope', JSON.stringify({ ...DEFAULT_SCOPE, accounts }));
+      const hostSuccess = '2026-09-09T09:00:00Z';
+      serve([], { target_group: { run: {
+        status: 'failed', finished_at: '2026-09-12T12:00:00Z', last_success_at: hostSuccess, error: 'host-only failure',
+      } } });
+      mount('/topology?view=e2e');
+      const source = await screen.findByRole('region', { name: '구성 소스' });
+      await waitFor(() => expect(within(source).queryByText('구성을 불러오는 중…')).toBeNull());
+      expect(within(source).queryByRole('alert')).toBeNull();
+      expect(within(source).getByRole('status').textContent).toMatch(/수집 상태 미확인.*18/);
+      expect(within(source).getByRole('status').textContent).not.toContain('target_group');
+      expect(source.textContent).not.toContain('host-only failure');
+      expect(source.querySelector(`time[datetime="${hostSuccess}"]`)).toBeNull();
+      expect(source.querySelector(`time[datetime="${captured}"]`)).not.toBeNull();
+    },
+  );
+
+  it('keeps an empty unknown-scope result inconclusive without an amber collection alert', async () => {
+    window.localStorage.setItem('awsops:scope', JSON.stringify({ ...DEFAULT_SCOPE, accounts: '__all__' }));
+    serve([], { target_group: { rows: [] }, ecs_task: { rows: [] }, subnet: { rows: [] } });
+    mount();
+    await flowReady();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('수집 상태 미확인');
+    expect(screen.getByText('수집 상태 미확인으로 리소스 부재를 판단할 수 없습니다.')).toBeTruthy();
+    expect(screen.queryByText(/그래프로 그릴 리소스가 없습니다/)).toBeNull();
+  });
+
+  it('does not infer successful collection or row capture time from an untyped run completion', async () => {
+    serve([], { target_group: {
+      rows: [{ resource_id: 'tg-unknown', region, data: { target_type: 'instance' } }],
+      run: { finished_at: '2026-09-12T12:00:00Z' },
+    } });
+    mount('/topology?view=e2e');
+    const source = await screen.findByRole('region', { name: '구성 소스' });
+    await waitFor(() => expect(within(source).queryByText('구성을 불러오는 중…')).toBeNull());
+    expect(source.textContent).toMatch(/target_group.*수집 상태 미확인/);
+    expect(source.textContent).toMatch(/행 수집 시각 미확인:.*target_group/);
+    expect(source.querySelector('time[datetime="2026-09-12T12:00:00Z"]')).toBeNull();
+  });
+
   it('reports a total inventory failure without claiming the environment has no resources', async () => {
     serve('all');
     mount();

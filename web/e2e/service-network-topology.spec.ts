@@ -49,6 +49,7 @@ const services = {
 
 async function fixtures(page: Page, opts: {
   partial?: boolean; unavailable?: boolean; podsUnavailable?: 'empty' | 'failed'; foreignEcs?: boolean;
+  inventoryStatus?: 'failed' | 'partial';
 } = {}) {
   const calls: string[] = [];
   const data: typeof inventory = opts.foreignEcs ? {
@@ -72,7 +73,15 @@ async function fixtures(page: Page, opts: {
         const regions = url.searchParams.get('regions');
         return !regions || regions === '__all__' || regions.split(',').includes(row.region);
       });
-      return json({ rows, run: { finished_at: END } });
+      const retained = type === 'target_group' && opts.inventoryStatus;
+      return json({
+        rows: rows.map(row => ({ ...row, captured_at: retained ? START : END })),
+        run: {
+          status: retained || 'succeeded', finished_at: END,
+          last_success_at: retained ? START : END,
+          error: retained ? 'target discovery incomplete' : null,
+        },
+      });
     }
     if (url.pathname === '/api/eks') return json({ clusters: opts.foreignEcs ? [] : [{ name: 'demo', access: 'connected', region: 'us-east-1', vpcId: 'vpc-demo' }] });
     if (url.pathname === '/api/eks/demo/incluster') {
@@ -139,6 +148,9 @@ test('desktop: combine traffic evidence, inspect a flow and change the applied m
   await expect(page).toHaveTitle(/AWSops/i);
   await expect(page.getByRole('heading', { name: '서비스 + 네트워크', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '네트워크 조회', exact: true })).toBeEnabled();
+  const serviceSource = page.getByRole('region', { name: '서비스 소스' });
+  await expect(serviceSource.getByRole('status')).toHaveText('수집 상태 미확인');
+  await expect(serviceSource.getByRole('alert')).toHaveCount(0);
   expect(calls.filter((u) => u.startsWith('/api/nfm/query'))).toHaveLength(0);
   await page.getByRole('button', { name: '네트워크 조회', exact: true }).click();
   await expect(page.getByRole('region', { name: '적용된 네트워크 조회' })).toContainText('성공한 분류 7');
@@ -169,6 +181,24 @@ test('desktop: combine traffic evidence, inspect a flow and change the applied m
   expect(consoleIssues).toEqual([]);
 });
 
+for (const status of ['failed', 'partial'] as const) {
+  test(`HTTP 200 ${status} inventory keeps retained configuration with its older successful time`, async ({ page }) => {
+    await fixtures(page, { inventoryStatus: status });
+    await page.goto('/topology?view=e2e');
+    const source = page.getByRole('region', { name: '구성 소스' });
+    await expect(source.getByRole('alert')).toContainText(status === 'failed' ? '수집 실패' : '부분 수집');
+    await expect(source.getByRole('alert')).toContainText('저장된 구성');
+    await expect(source.getByRole('alert')).toContainText('target discovery incomplete');
+    await expect(source.getByRole('alert')).not.toContainText('조회 실패');
+    const range = source.getByText('표시된 행 수집 범위', { exact: false });
+    await expect(range.locator(`time[datetime="${START}"]`)).toBeVisible();
+    await source.getByText('타입별 마지막 성공 수집', { exact: true }).click();
+    await expect(source.locator('li').filter({ hasText: 'target_group' }).locator(`time[datetime="${START}"]`)).toBeVisible();
+    await expect(page.locator('[data-e2e-kind="tg"]').filter({ hasText: 'frontend' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '네트워크 조회', exact: true })).toBeEnabled();
+  });
+}
+
 test('mobile: graph and controls remain readable when one destination category fails', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await fixtures(page, { partial: true });
@@ -188,6 +218,9 @@ test('member account: never fetch host observations into a selected member topol
   const calls = await fixtures(page);
   await page.goto('/topology?view=e2e');
   await expect(page.getByText(/서비스·NFM 통합 관측은 호스트 계정/)).toBeVisible();
+  const configurationSource = page.getByRole('region', { name: '구성 소스' });
+  await expect(configurationSource.getByRole('status')).toContainText('수집 상태 미확인');
+  await expect(configurationSource.getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '네트워크 조회', exact: true })).toHaveCount(0);
   expect(calls.filter((u) => u === '/api/nfm' || u.startsWith('/api/nfm/query') || u.startsWith('/api/graph'))).toEqual([]);
 });

@@ -15,7 +15,8 @@ const configured: FlowGraph = {
   nodes: [{ id: 'front-door', kind: 'alb', label: 'configured-front-door' }], edges: [],
 };
 const configuration: ConfigurationStatus = {
-  loading: false, capturedAt: '2026-09-11T12:00:00Z', error: '', cappedTypes: [], failedTypes: [],
+  loading: false, capturedAt: '2026-09-11T12:00:00Z', capturedThrough: '2026-09-11T12:00:00Z',
+  unknownCaptureTypes: [], collections: [], error: '', cappedTypes: [], failedTypes: [],
 };
 const props = { configured, configuration, account: 'self', onBack: () => {} };
 const status = {
@@ -82,6 +83,17 @@ function search(value: string) {
 }
 
 describe('ServiceNetworkTopology', () => {
+  it('still alerts on an actual inventory error even when the collection status is unknown', () => {
+    serve();
+    render(<ServiceNetworkTopology {...props} account="123456789012" configuration={{
+      ...configuration,
+      collections: [{ type: 'ec2', status: 'unknown', lastSuccessAt: null, error: 'collector error' }],
+    }} />);
+    const source = screen.getByRole('region', { name: '구성 소스' });
+    expect(within(source).getByRole('alert').textContent).toContain('collector error');
+    expect(within(source).queryByRole('status')).toBeNull();
+  });
+
   it('preserves partial, stale and retained snapshot status with per-source reasons', async () => {
     serve({ service: () => json({ ...snapshot, collection: {
       status: 'partial', stale: true, retainedPrevious: true,
@@ -103,7 +115,9 @@ describe('ServiceNetworkTopology', () => {
   it('discloses missing collection metadata as unknown rather than successful collection', async () => {
     serve();
     render(<ServiceNetworkTopology {...props} />);
-    expect(await within(screen.getByRole('region', { name: '서비스 소스' })).findByText('수집 상태 미확인')).toBeTruthy();
+    const source = screen.getByRole('region', { name: '서비스 소스' });
+    expect(await within(source).findByRole('status')).toHaveProperty('textContent', '수집 상태 미확인');
+    expect(within(source).queryByRole('alert')).toBeNull();
   });
 
   it.each(['class', 'account'])('rejects a snapshot missing its %s scope', async field => {

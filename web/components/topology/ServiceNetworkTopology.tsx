@@ -15,11 +15,22 @@ import Button from '@/components/ui/Button';
 import E2eGraphCanvas from './E2eGraphCanvas';
 import GraphCollectionStatus from './GraphCollectionStatus';
 
+export interface ConfigurationCollection {
+  type: string;
+  status: 'succeeded' | 'failed' | 'partial' | 'running' | 'unknown';
+  lastSuccessAt: string | null;
+  error: string | null;
+}
 export interface ConfigurationStatus {
   loading: boolean;
+  // Range of returned inventory rows, never the newest type's run completion.
   capturedAt: string | null;
+  capturedThrough: string | null;
+  unknownCaptureTypes: string[];
+  collections: ConfigurationCollection[];
   error: string;
   cappedTypes: string[];
+  // Fetch/response failures only; background sync failures are in collections.
   failedTypes: string[];
 }
 interface Props {
@@ -46,6 +57,9 @@ const METRIC_LABELS: Record<NfmMetric, string> = {
   DATA_TRANSFERRED: '전송량', ROUND_TRIP_TIME: 'RTT', RETRANSMISSIONS: '재전송', TIMEOUTS: '타임아웃',
 };
 const RANGE_LABELS: Record<number, string> = { 900: '15분', 1800: '30분', 3600: '1시간' };
+const COLLECTION_LABELS: Record<ConfigurationCollection['status'], string> = {
+  succeeded: '수집 성공', failed: '수집 실패', partial: '부분 수집', running: '수집 중', unknown: '수집 상태 미확인',
+};
 const SELECT_STYLE = 'h-9 w-full min-w-0 rounded-md border border-ink-100 bg-card px-2 text-[12px] text-ink-800 disabled:opacity-50';
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -217,6 +231,8 @@ function ScopedServiceNetworkTopology({ configured, account, configuration, onBa
   const time = (value: string | null | undefined) => validTime(value)
     ? <time dateTime={value}>{new Date(value).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time> : tt('시각 알 수 없음');
   const controlsDisabled = network.loading || monitors.loading || !selectedMonitor;
+  const collectionWarnings = configuration.collections.filter(run => ['failed', 'partial', 'running'].includes(run.status) || run.error);
+  const unknownCollections = configuration.collections.filter(run => run.status === 'unknown' && !run.error);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
@@ -233,9 +249,27 @@ function ScopedServiceNetworkTopology({ configured, account, configuration, onBa
           <section aria-label={tt('구성 소스')} className="min-w-0 flex-1 basis-56 space-y-1 break-words">
             <h2 className="font-semibold text-ink-800">{tt('구성')}</h2>
             <p>{configuration.loading ? tt('구성을 불러오는 중…') : `${tt('노드')} ${configured.nodes.length} · ${tt('관계')} ${configured.edges.length}`}</p>
-            <p>{tt('구성 수집 시각')} · {time(configuration.capturedAt)}</p>
+            <p>{tt('표시된 행 수집 범위')} · {time(configuration.capturedAt)} → {time(configuration.capturedThrough)}</p>
+            {configuration.unknownCaptureTypes.length > 0 && <p>
+              {tt('행 수집 시각 미확인:')} {configuration.unknownCaptureTypes.join(', ')}
+            </p>}
             {configuration.error && <p role="alert" className="text-negative">{tt(configuration.error)}</p>}
-            {configuration.failedTypes.length > 0 && <p role="alert" className="text-negative">{tt('구성 수집 실패:')} {configuration.failedTypes.join(', ')}</p>}
+            {configuration.failedTypes.length > 0 && <p role="alert" className="text-negative">{tt('구성 조회 실패:')} {configuration.failedTypes.join(', ')}</p>}
+            {collectionWarnings.length > 0 && <div role="alert" className="space-y-1 text-warning">
+              <p>{tt('저장된 구성을 표시합니다. 최신 전체 수집을 보장하지 않습니다.')}</p>
+              <ul>{collectionWarnings.map(run => <li key={run.type}>
+                {run.type} · {tt(COLLECTION_LABELS[run.status])}{run.error ? ` · ${run.error}` : ''}
+              </li>)}</ul>
+            </div>}
+            {unknownCollections.length > 0 && <p role="status">
+              {tt('수집 상태 미확인')} · {unknownCollections.length}{tt('개 타입')}
+            </p>}
+            {configuration.collections.length > 0 && <details>
+              <summary className="cursor-pointer">{tt('타입별 마지막 성공 수집')}</summary>
+              <ul>{configuration.collections.map(run => <li key={run.type}>
+                {run.type} · {tt(COLLECTION_LABELS[run.status])} · {time(run.lastSuccessAt)}
+              </li>)}</ul>
+            </details>}
             {configuration.cappedTypes.length > 0 && <p>{tt('구성 수집 상한:')} {configuration.cappedTypes.join(', ')}</p>}
           </section>
           <section aria-label={tt('서비스 소스')} className="min-w-0 flex-1 basis-56 space-y-1 break-words">

@@ -2,8 +2,9 @@
 
 import { useI18n } from '@/components/shell/LanguageProvider';
 
-// Compatible with /api/graph.collection from readGraphState. Older deployments omit it:
-// a snapshot timestamp alone cannot establish collection health or coverage.
+// Defensive compatibility with producers that supply collection metadata.
+// The current private /api/graph returns only a snapshot, so absent metadata is
+// neutral unknown, not evidence of a collector failure.
 const COPY = {
   ko: {
     ok: '최근 수집 성공', empty: '조회한 시간 범위에 관측값 없음', partial: '부분 수집 — 전체 상태를 확정할 수 없음',
@@ -39,9 +40,9 @@ export default function GraphCollectionStatus({ collection }: { collection?: unk
   const { lang } = useI18n();
   const copy = COPY[lang];
   const data = record(collection);
-  const status = typeof data.stale === 'boolean' ? statusOf(data.status) : 'unknown';
+  const status = statusOf(data.status);
   const retained = data.retainedPrevious === true;
-  const warning = data.stale !== false || retained || !['ok', 'empty'].includes(status);
+  const warning = data.stale === true || retained || ['partial', 'unavailable', 'error'].includes(status);
   const sources = Array.isArray(data.sources) ? data.sources.map(record) : [];
   return (
     <div role={warning ? 'alert' : 'status'}

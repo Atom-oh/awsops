@@ -7,7 +7,8 @@ import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHo
 import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
-import RefreshButton from '@/components/ui/RefreshButton';
+import Button from '@/components/ui/Button';
+import type { ConfigurationCollection, ConfigurationStatus } from '@/components/topology/ServiceNetworkTopology';
 import DetailPanel from '@/components/ui/DetailPanel';
 import { INVENTORY_TYPES } from '@/lib/inventory-types';
 import { buildFlowGraph, filterFromEntry, type FlowInput, type FlowKind, type FlowNode } from '@/lib/flow-topology';
@@ -133,22 +134,45 @@ function nodeLabel(n: FlowNode): ReactNode {
 }
 
 const ROW_CAP = 500; // /api/inventory caps limit at 500
+const COLLECTION_LABELS: Record<ConfigurationCollection['status'], string> = {
+  succeeded: '수집 성공', failed: '수집 실패', partial: '부분 수집', running: '수집 중', unknown: '수집 상태 미확인',
+};
+type CollectionEvidence = Pick<ConfigurationStatus, 'capturedAt' | 'capturedThrough' | 'unknownCaptureTypes' | 'collections'>;
+const EMPTY_COLLECTION: CollectionEvidence = { capturedAt: null, capturedThrough: null, unknownCaptureTypes: [], collections: [] };
+const validTime = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value));
 
-async function fetchType(t: InvType | 'vpc' | 'subnet' | 'security_group', scopeQuery: string): Promise<{ rows: Row[]; finishedAt: string | null; capped: boolean; failed: boolean }> {
+async function fetchType(t: InvType | 'vpc' | 'subnet' | 'security_group', scopeQuery: string, host: boolean): Promise<{
+  rows: Row[]; capturedAt: string | null; capturedThrough: string | null; unknownCapture: boolean;
+  collection: ConfigurationCollection | null; capped: boolean; failed: boolean;
+}> {
   try {
     const r = await fetch(`/api/inventory/${t}?limit=${ROW_CAP}&${scopeQuery}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
-    if (d.error || !Array.isArray(d.rows)) throw new Error('Invalid inventory response');
-    const rows = d.rows as { resource_id: unknown; region: unknown; data?: object }[];
+    if (d.status === 'error' || d.error || !Array.isArray(d.rows)) throw new Error('Invalid inventory response');
+    const rows = d.rows as { resource_id: unknown; region: unknown; captured_at?: unknown; data?: object }[];
+    let oldest: string | null = null, newest: string | null = null;
+    let unknownCapture = false;
+    for (const row of rows) {
+      if (!validTime(row.captured_at)) { unknownCapture = true; continue; }
+      if (!oldest || Date.parse(row.captured_at) < Date.parse(oldest)) oldest = row.captured_at;
+      if (!newest || Date.parse(row.captured_at) > Date.parse(newest)) newest = row.captured_at;
+    }
+    // readResources currently returns the host's run even for member/all scopes.
+    // Row timestamps are scoped; run health and last_success_at are not.
+    const run = host ? d.run : null;
+    const status: ConfigurationCollection['status'] = ['succeeded', 'failed', 'partial', 'running'].includes(run?.status)
+      ? run.status : 'unknown';
     return {
       rows: rows.map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data ?? {}) })),
-      finishedAt: d.run?.finished_at ?? null,
+      capturedAt: oldest, capturedThrough: newest, unknownCapture,
+      collection: { type: t, status, lastSuccessAt: validTime(run?.last_success_at) ? run.last_success_at : null,
+        error: typeof run?.error === 'string' && run.error ? run.error : null },
       capped: rows.length >= ROW_CAP,
       failed: false,
     };
   } catch {
-    return { rows: [], finishedAt: null, capped: false, failed: true };
+    return { rows: [], capturedAt: null, capturedThrough: null, unknownCapture: false, collection: null, capped: false, failed: true };
   }
 }
 
@@ -199,10 +223,10 @@ function TopologyPageContent({ activeScope }: { activeScope: ScopeSelection }) {
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const loadGeneration = useRef(0);
   const [data, setData] = useState<FlowInput | null>(null);
-  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [collection, setCollection] = useState<CollectionEvidence>(EMPTY_COLLECTION);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
-  const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const [cappedTypes, setCappedTypes] = useState<string[]>([]);
   const [failedTypes, setFailedTypes] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>('');
@@ -217,31 +241,41 @@ function TopologyPageContent({ activeScope }: { activeScope: ScopeSelection }) {
     try {
       const NET = ['vpc', 'subnet', 'security_group'] as const;
       const [res, ipResolved, net] = await Promise.all([
-        Promise.all(TYPES.map((t) => fetchType(t, inventoryScope))),
+        Promise.all(TYPES.map((t) => fetchType(t, inventoryScope, activeAccount === 'self'))),
         activeAccount === 'self' ? fetchEksIpMap() : Promise.resolve({}),
         // Reuse the existing network inventory for names AND ECS attachment scope proof.
-        Promise.all(NET.map((t) => fetchType(t, inventoryScope))),
+        Promise.all(NET.map((t) => fetchType(t, inventoryScope, activeAccount === 'self'))),
       ]);
       if (generation !== loadGeneration.current) return;
       const mk = (rows: Row[]) =>
         new Map((rows ?? []).map((r) => [String(r.resource_id), invName(r)]));
       setNetMaps({ vpc: mk(net[0]?.rows), subnet: mk(net[1]?.rows), sg: mk(net[2]?.rows) });
       const out: FlowInput = { ipResolved, subnet: net[1].rows };
-      let newest: string | null = net[1].finishedAt;
       const capped: string[] = net[1].capped ? ['subnet'] : [];
       TYPES.forEach((t, i) => {
         out[FLOW_KEY[t]] = res[i].rows;
-        const f = res[i].finishedAt;
-        if (f && (!newest || f > newest)) newest = f;
         if (res[i].capped) capped.push(t);
       });
+      const evidence: CollectionEvidence = { ...EMPTY_COLLECTION, unknownCaptureTypes: [], collections: [] };
+      for (const source of [...res, ...net]) {
+        if (source.capturedAt && (!evidence.capturedAt || Date.parse(source.capturedAt) < Date.parse(evidence.capturedAt))) {
+          evidence.capturedAt = source.capturedAt;
+        }
+        if (source.capturedThrough && (!evidence.capturedThrough || Date.parse(source.capturedThrough) > Date.parse(evidence.capturedThrough))) {
+          evidence.capturedThrough = source.capturedThrough;
+        }
+        if (source.collection) {
+          evidence.collections.push(source.collection);
+          if (source.unknownCapture) evidence.unknownCaptureTypes.push(source.collection.type);
+        }
+      }
       setData(out);
       setLoadedScope(inventoryScope);
-      setSyncedAt(newest);
+      setCollection(evidence);
       setCappedTypes(capped);
       setFailedTypes([...TYPES.filter((_, i) => res[i].failed), ...NET.filter((_, i) => net[i].failed)]);
       setErr('');
-      setCapturedAt(new Date().toISOString());
+      setCheckedAt(new Date().toISOString());
     } catch (e) {
       if (generation === loadGeneration.current) setErr(String(e));
     } finally {
@@ -268,6 +302,10 @@ function TopologyPageContent({ activeScope }: { activeScope: ScopeSelection }) {
   }, [view, clusterFilter]);
 
   const dark = useTheme() === 'dark';
+  const collectionWarnings = collection.collections.filter(run => ['failed', 'partial', 'running'].includes(run.status) || run.error);
+  const unknownCollections = collection.collections.filter(run => run.status === 'unknown' && !run.error);
+  const time = (value: string | null) => value
+    ? <time dateTime={value}>{new Date(value).toLocaleString()}</time> : tt('시각 알 수 없음');
 
   const full = useMemo(() => (data ? buildFlowGraph(data) : { nodes: [], edges: [] }), [data]);
 
@@ -505,7 +543,7 @@ function TopologyPageContent({ activeScope }: { activeScope: ScopeSelection }) {
     return (
       <ServiceNetworkTopology key={inventoryScope} configured={current ? full : EMPTY_FLOW} account={activeAccount}
         configuration={{
-          loading: busy || !current, capturedAt: current ? syncedAt : null, error: err,
+          ...(current ? collection : EMPTY_COLLECTION), loading: busy || !current, error: err,
           cappedTypes: current ? cappedTypes : [], failedTypes: current ? failedTypes : [],
         }}
         onBack={() => chooseView('flow')} onRefresh={load} />
@@ -567,7 +605,8 @@ function TopologyPageContent({ activeScope }: { activeScope: ScopeSelection }) {
                 <option key={c.key} value={c.key}>{c.resolved ? `${c.resolved.toUpperCase()} · ${c.cluster}` : c.cluster}</option>
               ))}
             </select>
-            <RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />
+            <Button variant="secondary" size="sm" disabled={busy} onClick={load}>{busy ? tt('조회 중…') : 'Refresh'}</Button>
+            {checkedAt && <span className="text-[11px] text-ink-400">{tt('조회 시각')} · {time(checkedAt)}</span>}
             <Link href="/topology/infra" className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600 hover:bg-ink-50">
               {tt('인프라 배치 →')}
             </Link>
@@ -582,19 +621,45 @@ function TopologyPageContent({ activeScope }: { activeScope: ScopeSelection }) {
         {loadedScope === inventoryScope && failedTypes.length > 0 && (
           <div role="alert" className="text-[13px] text-warning">{tt('조회 실패:')} {failedTypes.join(', ')}</div>
         )}
+        {loadedScope === inventoryScope && collectionWarnings.length > 0 && (
+          <div role="alert" className="text-[13px] text-warning">
+            <p>{tt('저장된 구성을 표시합니다. 최신 전체 수집을 보장하지 않습니다.')}</p>
+            <ul>{collectionWarnings.map(run => <li key={run.type}>
+              {run.type} · {tt(COLLECTION_LABELS[run.status])}{run.error ? ` · ${run.error}` : ''}
+            </li>)}</ul>
+          </div>
+        )}
+        {loadedScope === inventoryScope && unknownCollections.length > 0 && (
+          <p role="status" className="text-[12px] text-ink-500">
+            {tt('수집 상태 미확인')} · {unknownCollections.length}{tt('개 타입')}
+          </p>
+        )}
+        {loadedScope === inventoryScope && collection.collections.length > 0 && (
+          <details className="text-[12px] text-ink-500">
+            <summary className="cursor-pointer">{tt('타입별 마지막 성공 수집')}</summary>
+            <ul>{collection.collections.map(run => <li key={run.type}>
+              {run.type} · {tt(COLLECTION_LABELS[run.status])} · {time(run.lastSuccessAt)}
+            </li>)}</ul>
+          </details>
+        )}
         {(!data || loadedScope !== inventoryScope) && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
         {data && loadedScope === inventoryScope && !err && (
           full.nodes.length === 0 ? (
             <div className="rounded-md border border-ink-100 bg-ink-50 px-3 py-3 text-[13px] text-ink-400">
               {failedTypes.length > 0
                 ? tt('인벤토리 조회가 불완전하여 표시할 구성을 확인할 수 없습니다.')
-                : tt('그래프로 그릴 리소스가 없습니다. (cloudfront/alb/nlb/target_group sync 확인 — target_group은 steampipe 동기화 후 채워집니다.)')}
+                : collectionWarnings.length > 0 ? tt('수집 상태가 불완전하여 리소스 부재를 확인할 수 없습니다.')
+                  : unknownCollections.length > 0 ? tt('수집 상태 미확인으로 리소스 부재를 판단할 수 없습니다.')
+                    : tt('그래프로 그릴 리소스가 없습니다. (cloudfront/alb/nlb/target_group sync 확인 — target_group은 steampipe 동기화 후 채워집니다.)')}
             </div>
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-400">
                 <span>{tt(`노드 ${nodes.length} · 엣지 ${edges.length}`)}</span>
-                {syncedAt && <span>{tt('인벤토리 동기화:')} {new Date(syncedAt).toLocaleString()}</span>}
+                <span>{tt('표시된 행 수집 범위')} · {time(collection.capturedAt)} → {time(collection.capturedThrough)}</span>
+                {collection.unknownCaptureTypes.length > 0 && <span>
+                  {tt('행 수집 시각 미확인:')} {collection.unknownCaptureTypes.join(', ')}
+                </span>}
                 {cappedTypes.length > 0 && (
                   <span className="text-warning">{tt(`⚠ ${cappedTypes.join(', ')} ${ROW_CAP}개 초과 — 일부만 표시`)}</span>
                 )}

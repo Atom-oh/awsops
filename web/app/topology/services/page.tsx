@@ -124,10 +124,10 @@ export default function ServiceMapPage() {
         {err && <span className="text-red-600">{tt('조회 실패:')} {err}</span>}
         {graph?.captured_at && <span>{tt('그래프 시점:')} {new Date(graph.captured_at).toLocaleString()}</span>}
         {graph && graph.nodes.length === 0 && !busy && (
-          <span>{tt('저장된 서비스 관측이 없습니다. 데이터소스 연결과 그래프 갱신을 확인하세요.')} {tt('trace 데이터 없음 — ClickHouse 데이터소스 등록 여부와 최근 60분 내 span 존재 여부를 확인하세요.')}</span>
+          <span>{tt('저장된 서비스 관측이 없습니다. 데이터소스 연결과 그래프 갱신을 확인하세요.')}</span>
         )}
       </div>
-      {graph && !busy && !err && <div className="px-4"><GraphCollectionStatus collection={graph.collection} /></div>}
+      {graph?.collection != null && !busy && !err && <div className="px-4"><GraphCollectionStatus collection={graph.collection} /></div>}
       <div className="min-h-0 flex-1">
         <ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
           <Background />

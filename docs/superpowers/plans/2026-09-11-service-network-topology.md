@@ -74,7 +74,8 @@ expect(result.observations).toHaveLength(6);
 
 - [ ] Test empty, evidence filtering, search/focus and selected-node detail behavior.
 - [ ] Dynamically load the new view only on opt-in. Reuse the existing topology inventory data; guard its account/request generations before passing it into correlation.
-- [ ] Fetch NFM status and service snapshot independently for `self`. Provide explicit query controls and applied-result captions. Show unavailable/error/partial states independently.
+- [ ] Fetch NFM status and service snapshot independently for `self`. Provide explicit query controls and applied-result captions. Keep fetch errors and NFM partial results independent. The current private graph API supplies snapshots only: absent collection metadata is neutral unknown in the integrated view and omitted from the existing service map. Preserve actual supplied partial/stale/retained warnings as defensive compatibility; do not add or advertise a new collection-status producer.
+- [ ] Preserve inventory failed/partial/running status and per-type `last_success_at`, separate from HTTP failures. Ignore the host run outside `self`. Show returned-row capture ranges and missing timestamps, never the newest type completion as whole-graph freshness; retain usable rows.
 - [ ] Render network flow values on connection nodes; show traversed constructs as contextual relations. Use glyphs and legends, not color alone. Support light/dark and responsive layout.
 - [ ] Provide existing-page links to `/topology?view=e2e`, preserving monitor/metric/range when linking from Network Flow.
 - [ ] Generalize Dagre's input type to node IDs and edge endpoints only if required; preserve layout behavior and tests.

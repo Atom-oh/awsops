@@ -608,6 +608,16 @@ describe('selectE2eGraph — filtering before bounds', () => {
 });
 
 describe('corroborated pod identities', () => {
+  it('does not identify one endpoint as both an ECS task and an EKS workload', () => {
+    const graph = buildE2eGraph(input({
+      configured: configured([target({ resolved: 'ecs', cluster: 'ecs-app' })]),
+      services: services(),
+      network: [observation([flow({ local: endpoint({ podName: 'web-1', podNamespace: 'shop' }) })])],
+    }));
+    expect(identityEdges(graph)).toEqual([]);
+    expect(graph.summary.ambiguousEndpoints).toBe(1);
+  });
+
   it.each([{ pod: 'different-pod', namespace: 'shop' }, { pod: 'web-1', namespace: 'different-namespace' }])(
     'rejects a scoped target contradicting the observed pod: %j', identity => {
       const graph = buildE2eGraph(input({
