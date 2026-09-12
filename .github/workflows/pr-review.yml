@@ -34,11 +34,10 @@ jobs:
     runs-on: awsops-claude-arm
     # Hang backstop: GitHub's default is 360 minutes (6h), so a hang in a section the
     # in-script timeouts don't cover (gh pr diff, npm fallback, panel wait, etc.) would pin
-    # the runner pod for 6 hours. Normal ceiling (after adding CHAIR_TIMEOUT 900s + fast-fail
-    # retry, per PR #208 review L2 arithmetic): panel ~10-15min + chair worst case
-    # (fast-fail 120s + retry 900s) x2 ~= 34min -> total can legitimately reach ~49min.
-    # 60 minutes only cuts a hang, never a normal run.
-    timeout-minutes: 60
+    # the runner pod for 6 hours. Longer attempts keep the existing models/retries;
+    # the parallel panel (40min)
+    # plus both chair attempts (~34min) fits with setup/cleanup inside 90min.
+    timeout-minutes: 90
     concurrency:
       group: pr-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -379,7 +378,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          PANEL_TIMEOUT: "300"
+          PANEL_TIMEOUT: "1200"
         run: |
           set -euo pipefail
           bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
