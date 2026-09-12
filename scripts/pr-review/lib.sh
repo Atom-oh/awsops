@@ -30,9 +30,14 @@ panel_report_valid() {
       assistant = sub(/^> /, "")
       # Tool status/output and an earlier planning response are not the final
       # assistant report. Resume body counting only at its next response prefix.
-      # Match standalone CLI status lines, not mentions quoted inside findings.
+      # Headers can be concatenated and tool names/prefixes vary. Mask inline
+      # code and quoted strings only for status detection, so findings can quote
+      # those headers without becoming tool output (\047 is a single quote).
+      status = $0
+      gsub(/`[^`]*`|"([^"\\]|\\.)*"|\047([^\047\\]|\\.)*\047/, "", status)
       if (assistant) in_tool = 0
-      if (!assistant && $0 ~ /^(Reading file:|Searching for |Searching:).*\(using tool: (read|grep|fs_read)\)$/) {
+      if (!assistant && (status ~ /\(using tool: [^()]+\)/ ||
+                         status ~ /✓ Successfully |Summary: [0-9]+ operations processed/)) {
         lines = 0; in_tool = 1
       }
       # Kiro emits this numeric usage/time footer AFTER the assistant response.

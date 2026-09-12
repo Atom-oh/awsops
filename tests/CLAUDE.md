@@ -15,8 +15,12 @@ Bash-based structure/hook test suite. Separate from the v2 app's own tests — `
 `tests/run-all.sh` also drives `agent/`'s Python unittest (dark-path loop, account logic, etc.)
 alongside the hook/structure tests above.
 The PR-review tests verify that preflight preserves the ambient provider/signing settings,
-requires a valid Pod Identity session, and never exports credentials or writes `GITHUB_ENV`.
+requires a valid Pod Identity session, and leaves `GITHUB_ENV` untouched.
 Fixtures record only selected non-secret settings, never the full subprocess environment.
+Completion fixtures cover batch/concatenated Kiro tool headers, a required post-tool
+assistant body, quoted header text in findings, and numeric usage footers. Chair CLI
+failures and token redaction are tested behaviorally; scrubber PID capture/wait is
+checked structurally, with no injected scrubber-failure fixture.
 
 ## Running
 ```bash

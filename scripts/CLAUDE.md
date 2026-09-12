@@ -26,7 +26,8 @@ secrets-manager) — installed by `make deps`.
 - `pr-review/` — lens×model review panel: `run-panel.sh` requires exactly the named prompts
   `L2.txt`–`L5.txt` (other files ignored). All 12 model/lens reports must complete.
   `lib.sh` checks the report body plus a unique final `REVIEW_COMPLETE: <lens>` marker,
-  excluding Kiro tool output and allowing its recorded numeric usage/time footer;
+  excluding Kiro tool output (including batch/concatenated headers), preserving quoted
+  findings, and allowing a numeric usage/time footer;
   it also strips controls and scrubs credentials, including labeled AWS session tokens.
   Nonzero/timed-out CLI output is discarded; bounded retries and hard-kill backstops remain.
   `synthesize.sh` requires a successful chair CLI and both scrubbers, with a report body
@@ -34,8 +35,7 @@ secrets-manager) — installed by `make deps`.
   - `preflight-aws-session.py` runs before panel and chair using the installed AWS CLI:
     `configure list` must select `container-role`, then signed `sts get-caller-identity`
     must succeed. It checks the existing EKS Pod Identity without changing SDK/provider,
-    profile or signing settings. No credential exports, credential files, forced renewal
-    or minimum cached-lease TTL; each model CLI retains ambient SDK refresh.
+    profile or signing settings. Each model CLI retains ambient SDK refresh.
   - Offline regressions: `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v`.
     Also run by `bash tests/run-all.sh` and a dedicated `merge-verify.yml` step.
   - **The chair call MUST pass `--strict-mcp-config`.** A user-scope MCP server (e.g. github)

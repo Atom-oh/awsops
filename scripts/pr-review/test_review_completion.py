@@ -14,6 +14,54 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts/pr-review"
 MODELS = ("codex", "kiro-opus", "kiro-gpt")
 LENSES = ("L2", "L3", "L4", "L5")
+# Header/status spellings from the PR review of df8e0dda; paths, patterns and
+# operation counts are fixture data. These are excerpts, not a full CLI capture.
+KIRO_TOOL_TRANSCRIPTS = {
+    "batch": (
+        "Batch fs_read operation with 2 operations (using tool: read)\n"
+        "Purpose: Read the review helpers.\n"
+        "↱ Operation 1: Reading scripts/pr-review/lib.sh\n"
+        "✓ Successfully read scripts/pr-review/lib.sh from line 1 to line 97\n"
+        "↱ Operation 2: Reading scripts/pr-review/synthesize.sh\n"
+        "✓ Successfully read scripts/pr-review/synthesize.sh from line 400 to line 470\n"
+        "Summary: 2 operations processed\n"
+    ),
+    "batch_fs_read": (
+        "Batch fs_read operation with 1 operations (using tool: batch_fs_read)\n"
+        "Purpose: Read the review helpers.\n"
+        "↱ Operation 1: Reading scripts/pr-review/lib.sh\n"
+    ),
+    "glob": (
+        "Searching for files: scripts/pr-review/* (using tool: glob)\n"
+        "scripts/pr-review/lib.sh\n"
+    ),
+    "code": (
+        "Searching for symbols matching: panel_report_valid (using tool: code)\n"
+        "scripts/pr-review/lib.sh:19:panel_report_valid() {\n"
+    ),
+    "shell": (
+        "I will run the following command: sed -n '1,97p' scripts/pr-review/lib.sh (using tool: shell)\n"
+        "Purpose: Inspect completion validation.\n"
+        "set -uo pipefail\n"
+    ),
+    "concatenated": (
+        "...to line 470Searching for: panel_report_valid (using tool: grep)"
+        "I will run the following command: cat scripts/pr-review/lib.sh (using tool: shell)\n"
+        "Purpose: Inspect completion validation.\n"
+    ),
+    "success": (
+        "✓ Successfully read scripts/pr-review/synthesize.sh from line 400 to line 470\n"
+        "Purpose: Inspect completion validation.\n"
+    ),
+    "summary": (
+        "Summary: 2 operations processed\n"
+        "↱ Operation 1: Reading scripts/pr-review/lib.sh\n"
+    ),
+    "quoted_argument_then_tool": (
+        'Searching for: "(using tool: read)" (using tool: future_tool)Search results follow\n'
+        "scripts/pr-review/lib.sh:35\n"
+    ),
+}
 FAKE_CLI = r"""#!/usr/bin/env python3
 import json, os, pathlib, re, signal, subprocess, sys, time
 state = pathlib.Path(os.environ["FAKE_STATE"])
@@ -48,6 +96,11 @@ plan = json.loads((state / "plan.json").read_text())
 modes = plan.get(key, ["success"])
 mode = modes[min(count - 1, len(modes) - 1)]
 (state / (key + ".prompt")).write_text(prompt)
+if mode in ("tool-chatter", "tool-report"):
+    assert cli == "kiro-cli"
+    transcript = (state / "tool-transcript.txt").read_text()
+    final = body if mode == "tool-report" else "REVIEW_COMPLETE: " + lens + "\n"
+    body = "I'll inspect the diff.\n" + transcript + "> " + final
 if mode == "missing":
     sys.exit(0)
 if mode == "partial":
@@ -65,7 +118,7 @@ if mode == "ansi":
 if mode == "nonzero":
     body = "DISCARD_FAILED_OUTPUT\n" + body
 if cli == "kiro-cli":
-    # Recorded previews show the ANSI > prefix; the CLI emits usage/time after the response.
+    # Observed assistant prefix; the synthetic footer exercises accepted numeric syntax.
     body = "\x1b[38;5;141m> \x1b[0m" + body + "\n\x1b[90m ▸ Credits: 0.03 • Time: 6s\x1b[0m\n"
 print(body, end="", flush=True)
 if mode in ("timeout", "hardkill"):
@@ -166,10 +219,12 @@ class ReviewCompletion(unittest.TestCase):
 
     def test_success_matrix_and_transient_retry_clear_stale_coverage(self):
         (self.work / "coverage-severe.flag").touch()
+        (self.work / "missing-cells.txt").write_text("kiro-opus/L2\n")
         self.plan({"codex-L3": ["nonzero", "success"], "kiro-gpt-L5": ["ansi"]})
         result = self.panel()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_matrix()
+        self.assertEqual((self.work / "missing-cells.txt").read_text(), "")
         self.assertEqual(self.count("codex-L3"), 2)
         self.assertEqual(self.count("kiro-opus-L2"), 1)
         for model in MODELS:
@@ -178,11 +233,37 @@ class ReviewCompletion(unittest.TestCase):
         self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
 
     def test_missing_required_lens_cannot_shrink_matrix(self):
+        (self.work / "missing-cells.txt").write_text("kiro-opus/L2\n")
         (self.lenses / "L5.txt").unlink()
         result = self.panel()
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue((self.work / "coverage-severe.flag").exists())
+        self.assertEqual((self.work / "missing-cells.txt").read_text(), "")
         self.assertFalse(list(self.work.glob("*.count")))
+
+    def test_realistic_tool_chatter_cannot_supply_a_required_cell(self):
+        (self.work / "tool-transcript.txt").write_text(
+            KIRO_TOOL_TRANSCRIPTS["batch"] + KIRO_TOOL_TRANSCRIPTS["concatenated"]
+        )
+        self.plan({"kiro-opus-L2": ["tool-chatter"]})
+        result = self.panel()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_matrix(["kiro-opus/L2"])
+        self.assertEqual(self.count("kiro-opus-L2"), 2)
+        self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(), "")
+        self.assertEqual((self.work / "missing-cells.txt").read_text(), "kiro-opus/L2\n")
+        self.assertTrue(self.chair().rstrip().endswith("VERDICT: FAIL"))
+
+    def test_report_after_realistic_tool_chatter_completes_all_cells(self):
+        (self.work / "tool-transcript.txt").write_text("".join(KIRO_TOOL_TRANSCRIPTS.values()))
+        self.plan({
+            f"{model}-{lens}": ["tool-report"]
+            for model in ("kiro-opus", "kiro-gpt") for lens in LENSES
+        })
+        result = self.panel()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_matrix()
+        self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
 
     def test_timeout_and_hardkill_discard_complete_looking_stdout(self):
         for mode in ("timeout", "hardkill"):
@@ -262,14 +343,60 @@ class ReviewCompletion(unittest.TestCase):
         ]
         for text, valid in cases:
             with self.subTest(text=text):
-                path = self.work / "kiro-opus-L2.md"
-                path.write_text(text)
-                result = subprocess.run(
-                    ["bash", "-c", '. "$1"; panel_report_valid "$2" L2',
-                     "fixture", str(SCRIPTS / "lib.sh"), str(path)],
-                    env=self.env, capture_output=True, text=True, timeout=3,
+                self.assert_kiro_report(text, valid)
+
+    def assert_kiro_report(self, text, valid):
+        path = self.work / "kiro-opus-L2.md"
+        path.write_text(text)
+        result = subprocess.run(
+            ["bash", "-c", '. "$1"; panel_report_valid "$2" L2',
+             "fixture", str(SCRIPTS / "lib.sh"), str(path)],
+            env=self.env, capture_output=True, text=True, timeout=3,
+        )
+        self.assertEqual(result.returncode == 0, valid, result.stderr)
+
+    def test_generic_tool_boundaries_require_a_new_assistant_report_body(self):
+        for name, transcript in KIRO_TOOL_TRANSCRIPTS.items():
+            for planning in ("", "> I'll inspect the diff.\n"):
+                for marker_prefix in ("", "> "):
+                    with self.subTest(name=name, planning=planning, marker_prefix=marker_prefix):
+                        self.assert_kiro_report(
+                            planning + transcript + marker_prefix + "REVIEW_COMPLETE: L2\n"
+                            " ▸ Credits: 0.03 • Time: 6s\n", False,
+                        )
+            with self.subTest(name=name, completed=True):
+                self.assert_kiro_report(
+                    "> I'll inspect the diff.\n" + transcript
+                    + "> No findings after reviewing this lens.\nREVIEW_COMPLETE: L2\n", True,
                 )
-                self.assertEqual(result.returncode == 0, valid, result.stderr)
+            with self.subTest(name=name, missing_assistant_prefix=True):
+                self.assert_kiro_report(
+                    transcript + "No findings.\nREVIEW_COMPLETE: L2\n", False,
+                )
+            with self.subTest(name=name, tool_after_report=True):
+                self.assert_kiro_report(
+                    "> No findings.\nREVIEW_COMPLETE: L2\n" + transcript, False,
+                )
+
+    def test_completed_findings_can_quote_tool_headers_and_statuses(self):
+        for name, transcript in KIRO_TOOL_TRANSCRIPTS.items():
+            header = transcript.splitlines()[0]
+            # A continuation line does not carry Kiro's assistant prefix.
+            for quote in ("`", '"', "'"):
+                quoted = header.replace("\\", "\\\\").replace(quote, "\\" + quote)
+                with self.subTest(name=name, quote=quote):
+                    self.assert_kiro_report(
+                        "> MAJOR: The parser misses this CLI status.\n"
+                        f"The captured line is {quote}{quoted}{quote}.\n"
+                        "Require a completed report after actual tool use.\n"
+                        "REVIEW_COMPLETE: L2\n ▸ Time: 6.25s\n", True,
+                    )
+        self.assert_kiro_report(
+            KIRO_TOOL_TRANSCRIPTS["batch"]
+            + '> MAJOR: Quoted `(using tool: read)` is report content.\n'
+            'The string "Searching for files: * (using tool: glob)" is an example.\n'
+            "REVIEW_COMPLETE: L2\n", True,
+        )
 
     def test_labeled_session_tokens_are_scrubbed_in_environment_and_json_output(self):
         token = "IQoJ" + "t" * 80 + "/+=="

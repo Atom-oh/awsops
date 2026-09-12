@@ -24,6 +24,7 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 # 살아남아, 이번엔 모든 모델이 정상 응답해도 synthesize.sh 가 강제 FAIL 하게 된다 —
 # responded.txt/degraded-models.txt 처럼 매 실행 시작 시 리셋.
 rm -f "$WORK/coverage-severe.flag"
+: > "$WORK/missing-cells.txt"
 T="${PANEL_TIMEOUT:-300}"
 KIRO_TIMEOUT="${KIRO_PANEL_TIMEOUT:-1200}"
 KILL_AFTER="${PANEL_KILL_AFTER:-10s}"
@@ -158,7 +159,6 @@ fi
 # All 12 cells are required: a single missing model/lens forces FAIL, even if every
 # vendor responded elsewhere. Keep the model-collapse diagnostics above for operators.
 : > "$WORK/degraded-lenses.txt"
-: > "$WORK/missing-cells.txt"
 for lens_file in "${LENS_FILES[@]}"; do
   lens="$(basename "$lens_file" .txt)"
   lens_count="$(grep -c "/${lens}$" "$RESP" 2>/dev/null)"
