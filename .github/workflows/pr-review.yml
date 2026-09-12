@@ -36,7 +36,8 @@ jobs:
     # in-script timeouts don't cover (gh pr diff, npm fallback, panel wait, etc.) would pin
     # the runner pod for 6 hours. Panel: 2*(1200+10)=40m20s; chair primary/fallback:
     # 2*(120+900+10)=34m20s. This leaves 15m20s for setup, publication, and cleanup.
-    # Refresh the existing runner AWS session before EACH phase, with >=45min remaining.
+    # Preflight the ambient Pod Identity provider before EACH phase. Leave SDK refresh
+    # active; no credential export, forced lease renewal, or phase-long TTL assumption.
     timeout-minutes: 90
     concurrency:
       group: pr-review-${{ github.event.pull_request.number }}
@@ -63,7 +64,6 @@ jobs:
       PANEL_KILL_AFTER: "10s"
       CHAIR_TIMEOUT: "900"
       CHAIR_KILL_AFTER: "10s"
-      AWS_SESSION_MIN_TTL: "2700"
     steps:
       # Security (M1): pull_request_target runs in a secrets/write-permission context ->
       # checkout base (trusted). Explicitly checking out the base.ref tip lets the
@@ -381,8 +381,8 @@ jobs:
             echo "panel_truncated=1" >> "$GITHUB_ENV"
           fi
 
-      - name: Refresh existing runner AWS session before panel
-        run: python3 scripts/pr-review/refresh-aws-session.py
+      - name: Preflight existing runner Pod Identity before panel
+        run: python3 scripts/pr-review/preflight-aws-session.py
 
       - name: Run panel (12 required model/lens reports)
         run: |
@@ -390,8 +390,8 @@ jobs:
           bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
-      - name: Refresh existing runner AWS session before chair
-        run: python3 scripts/pr-review/refresh-aws-session.py
+      - name: Preflight existing runner Pod Identity before chair
+        run: python3 scripts/pr-review/preflight-aws-session.py
 
       - name: Synthesize (Claude chair)
         env:

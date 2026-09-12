@@ -26,12 +26,20 @@ panel_report_valid() {
       footer = "^▸ (Credits: " number " • )?Time: ([0-9]+m )?" number "s$"
     }
     kiro {
-      sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); sub(/^> /, "")
+      sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "")
+      assistant = sub(/^> /, "")
+      # Tool status/output and an earlier planning response are not the final
+      # assistant report. Resume body counting only at its next response prefix.
+      # Match standalone CLI status lines, not mentions quoted inside findings.
+      if (assistant) in_tool = 0
+      if (!assistant && $0 ~ /^(Reading file:|Searching for |Searching:).*\(using tool: (read|grep|fs_read)\)$/) {
+        lines = 0; in_tool = 1
+      }
       # Kiro emits this numeric usage/time footer AFTER the assistant response.
       # It never proves completion; ignore at most one after the report marker.
       if ($0 ~ footer) { if (markers) footers++; next }
     }
-    NF { last = $0; lines++ }
+    NF { last = $0; if (!in_tool) lines++ }
     /^REVIEW_COMPLETE:/ { markers++ }
     END { exit !(markers == 1 && last == marker && lines > 1 && footers <= 1) }
   '
@@ -82,6 +90,6 @@ scrub_secrets() {
     -e 's/AIza[0-9A-Za-z_-]{30,}/[REDACTED-GOOGLE-KEY]/g' \
     -e 's/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/[REDACTED-JWT]/g' \
     -e 's/(AUTHORIZATION:[[:space:]]*(basic|bearer)[[:space:]]+)[A-Za-z0-9+\/=_.~-]{20,}/\1[REDACTED-GIT-CRED-HEADER]/gI' \
-    -e 's/((api[_-]?key|aws_secret_access_key|aws_access_key_id|access[_-]?token|client[_-]?secret|secret|passwd|password|token)['"'"'"]?[[:space:]]*[:=][[:space:]]*['"'"'"])[^'"'"'"]{8,}(['"'"'"])/\1[REDACTED]\3/gI' \
-    -e 's/((^|[^A-Za-z0-9_])(api[_-]?key|aws_secret_access_key|aws_access_key_id|access[_-]?token|client[_-]?secret|secret|passwd|password|token)[[:space:]]*[:=][[:space:]]*)[A-Za-z0-9/+_-]{16,}/\1[REDACTED]/gI'
+    -e 's/((api[_-]?key|aws_secret_access_key|aws_access_key_id|aws[_-]?(session|security)[_-]?token|session[_-]?token|access[_-]?token|client[_-]?secret|secret|passwd|password|token)['"'"'"]?[[:space:]]*[:=][[:space:]]*['"'"'"])[^'"'"'"]{8,}(['"'"'"])/\1[REDACTED]\4/gI' \
+    -e 's/((^|[^A-Za-z0-9_])(api[_-]?key|aws_secret_access_key|aws_access_key_id|aws[_-]?(session|security)[_-]?token|session[_-]?token|access[_-]?token|client[_-]?secret|secret|passwd|password|token)[[:space:]]*[:=][[:space:]]*)[A-Za-z0-9/+=_-]{16,}/\1[REDACTED]/gI'
 }

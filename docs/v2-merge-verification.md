@@ -75,6 +75,36 @@ aggregate-run false failures.
 `.github/workflows/merge-verify.yml` runs on pull requests targeting `main`. It checks out the PR,
 sets up Node.js 20 and Python 3.12, installs web dependencies with `cd web && npm ci`, installs
 `pytest` plus the v2 Python subsystem requirements, and executes `bash scripts/v2/merge-verify.sh`.
+It also runs the offline PR-review regressions in a separate step:
+
+```bash
+python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+bash tests/run-all.sh  # full hook/structure + offline PR-review + agent suite
+```
+
+These fixtures cover all 12 required model/lens reports, matching final completion markers,
+Kiro tool-output/body separation and its numeric footer, discarded nonzero/timed-out output,
+chair/scrubber exit status, retries, hard kills, and labeled session-token redaction.
+No fixture calls live AWS or AI services or dumps the full environment.
+
+The AI-review workflow has a 90-minute ceiling and runs `preflight-aws-session.py` before
+both panel and chair. Using the existing AWS CLI, preflight requires the ambient
+`container-role` provider and a successful signed `sts get-caller-identity` call, so
+invalid/expired credentials fail closed. It preserves EKS Pod Identity, profiles and signing
+settings; it neither exports credentials to `GITHUB_ENV`/files nor forces renewal or a
+45-minute cached-lease floor. Subsequent model CLIs retain their SDK refresh path.
+
+`merge-verify.yml`은 위 오프라인 PR 리뷰 테스트도 별도 단계로 실행하며,
+`bash tests/run-all.sh`에는 hook/structure·PR 리뷰·agent 테스트가 모두 포함된다.
+Fixture는 12개 필수 보고서와 완료 마커, Kiro 도구 출력/본문 구분과 숫자 footer,
+비정상 종료·타임아웃 출력 폐기, chair/scrubber 종료 상태, 재시도·하드킬,
+세션 토큰 마스킹을 검증한다. 실제 AWS/AI 호출이나 전체 환경 덤프는 없다.
+
+AI 리뷰 워크플로의 상한은 90분이며 panel/chair 전에 `preflight-aws-session.py`를 실행한다.
+기존 AWS CLI가 선택한 `container-role` provider와 서명된 `sts get-caller-identity` 성공을
+확인해 무효·만료 세션을 차단한다. EKS Pod Identity·프로필·서명 설정을 유지하며,
+자격 증명을 `GITHUB_ENV`나 파일로 내보내거나 갱신·45분 잔여 시간을 강제하지 않는다.
+후속 모델 CLI는 기존 SDK 자동 갱신 경로를 유지한다.
 
 ## Manual Gates Outside CI
 

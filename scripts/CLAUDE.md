@@ -23,8 +23,21 @@ secrets-manager) — installed by `make deps`.
 - `v2/*.itest.mjs` — migration integration tests against a disposable PostgreSQL 17 container.
 - `v2/upgrade.sh` — `make upgrade`: RDS snapshot → migrate → deploy. Previews unless
   `CONFIRM=go`.
-- `pr-review/` — lens×model review panel: `run-panel.sh` (parallel fan-out, one `*.txt` prompt
-  per lens), `synthesize.sh` (chair synthesis), `lib.sh` (slot/credential scrubbing).
+- `pr-review/` — lens×model review panel: `run-panel.sh` requires exactly the named prompts
+  `L2.txt`–`L5.txt` (other files ignored). All 12 model/lens reports must complete.
+  `lib.sh` checks the report body plus a unique final `REVIEW_COMPLETE: <lens>` marker,
+  excluding Kiro tool output and allowing its recorded numeric usage/time footer;
+  it also strips controls and scrubs credentials, including labeled AWS session tokens.
+  Nonzero/timed-out CLI output is discarded; bounded retries and hard-kill backstops remain.
+  `synthesize.sh` requires a successful chair CLI and both scrubbers, with a report body
+  and a unique final verdict. The workflow ceiling is 90 minutes.
+  - `preflight-aws-session.py` runs before panel and chair using the installed AWS CLI:
+    `configure list` must select `container-role`, then signed `sts get-caller-identity`
+    must succeed. It checks the existing EKS Pod Identity without changing SDK/provider,
+    profile or signing settings. No credential exports, credential files, forced renewal
+    or minimum cached-lease TTL; each model CLI retains ambient SDK refresh.
+  - Offline regressions: `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v`.
+    Also run by `bash tests/run-all.sh` and a dedicated `merge-verify.yml` step.
   - **The chair call MUST pass `--strict-mcp-config`.** A user-scope MCP server (e.g. github)
     loads at session init; if its auth is broken, `claude -p` waits silently for the tool until
     `CHAIR_TIMEOUT` (currently 900s) with no error — killing both primary and fallback chairs

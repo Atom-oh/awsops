@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # lens×모델 매트릭스 병렬 fan-out. 인자: <diff> <lenses_dir> <workdir>
-# lenses_dir 안의 각 *.txt 가 lens 하나(파일명 stem = lens 태그, 예: L2/L3/L4/L5) — 그 lens
-# 전용 리뷰 프롬프트(자체 완결형: "이 lens만 봐"). 각 lens × 각 모델이 독립 에이전트 셀 하나
+# lenses_dir 의 L2.txt/L3.txt/L4.txt/L5.txt 는 모두 필수이며 다른 파일은 무시한다.
+# 각 파일은 해당 lens 전용 리뷰 프롬프트(자체 완결형: "이 lens만 봐").
+# 각 lens × 각 모델이 독립 에이전트 셀 하나이며 12개 셀 모두 완료해야 한다
 # (oh-my-cloud-skills 의 lens×model 매트릭스 설계 포팅).
 #
 # diff 전달은 CLI 별로 다름 — codex 는 stdin(`< "$DIFF"`, 파일이라 TTY 아님 → no-hang)을 그대로 읽지만,
 # kiro-cli 는 stdin 을 안 읽고 큰 diff 를 argv 에 직접 넣으면 커널 MAX_ARG_STRLEN(128KiB)에 걸려
 # "Argument list too long"로 죽는다(아래 KIRO_INSTRUCTION 코멘트 참조) → kiro 에게는 diff 파일
 # 경로만 주고 자기 신뢰 도구(read/fs_read)로 읽게 한다. timeout 백스톱 + 비대화형 플래그로 멈춤
-# 방지. 슬롯이 비면 최대 PANEL_RETRIES 회 재시도(codex의 gpt-5.6-sol/bedrock-mantle 등 transient 흡수).
+# 방지. CLI 성공 종료 + 본문 + 유일한 마지막 REVIEW_COMPLETE: <lens> 가 필수이며,
+# 실패/타임아웃/불완전 출력은 버리고 최대 PANEL_RETRIES 회 시도한다.
+# (codex의 gpt-5.6-sol/bedrock-mantle 등 transient 흡수 정책은 유지.)
+# Kiro는 별도 KIRO_PANEL_TIMEOUT, 모든 셀은 PANEL_KILL_AFTER 하드킬 백스톱을 쓴다.
 # 매 시도마다 $DIFF 를 다시 연다. 모든 셀(모델 수 × lens 수)이 병렬(&+wait) — 벽시계 ≈ 최슬로우
 # 셀 하나, 순차합 아님.
 set -uo pipefail
@@ -143,9 +147,8 @@ for model_tag in codex "${KIRO_MODELS[@]##*:}"; do
   fi
 done
 
-# 심각도 상향 — degraded 모델이 (전체-1)개 이상이면 살아남은 벤더가 최대 1개뿐이라, "매트릭스
-# 자체가 lens당 교차확인"이라는 warn-only 의 전제가 성립하지 않는다. 이 경우만 severe 로
-# 승격해 synthesize.sh 가 VERDICT 를 강제 FAIL 하도록 신호를 남긴다.
+# 모델 붕괴 진단 — 살아남은 벤더가 최대 1개면 별도 원인을 남긴다.
+# 아래 셀 단위 검사도 하나라도 빠지면 severe 로 처리해 VERDICT 를 강제 FAIL 한다.
 DEGRADED_COUNT=$(wc -l < "$WORK/degraded-models.txt")
 if [ "$DEGRADED_COUNT" -ge "$((TOTAL_MODELS - 1))" ]; then
   echo "::error::coverage collapsed to ≤1 vendor ($DEGRADED_COUNT/$TOTAL_MODELS models degraded) — forcing VERDICT: FAIL, no cross-model check remains for any lens" >&2

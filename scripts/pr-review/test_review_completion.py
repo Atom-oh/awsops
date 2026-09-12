@@ -1,6 +1,5 @@
 """Offline CLI-boundary regressions: python3 -m unittest discover -s scripts/pr-review -v."""
 import json
-from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import re
@@ -21,10 +20,7 @@ state = pathlib.Path(os.environ["FAKE_STATE"])
 cli = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 if cli == "aws":
-    assert args == ["configure", "export-credentials", "--format", "process"]
-    (state / "aws-env.json").write_text(json.dumps(dict(os.environ)))
-    print((state / "credentials.json").read_text())
-    sys.exit(int(os.environ.get("FAKE_AWS_EXIT", "0")))
+    sys.exit("AWS calls are forbidden in panel/chair fixtures")
 prompt = args[args.index("-p") + 1] if cli == "claude" else args[1] if cli == "kiro-cli" else args[-1]
 if cli == "claude":
     key = "chair-primary" if "fable" in os.environ["ANTHROPIC_MODEL"] else "chair-fallback"
@@ -239,52 +235,6 @@ class ReviewCompletion(unittest.TestCase):
         self.assertEqual(self.count("chair-primary"), 1)
         self.assertEqual(self.count("chair-fallback"), 1)
 
-    def credentials(self, ttl=3600):
-        credentials = {
-            "Version": 1, "AccessKeyId": "ASIA" + "X" * 16,
-            "SecretAccessKey": "s" * 40, "SessionToken": "t" * 80,
-            "Expiration": (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat(),
-        }
-        (self.work / "credentials.json").write_text(json.dumps(credentials))
-        self.env.update(
-            AWS_ACCESS_KEY_ID="stale", AWS_SECRET_ACCESS_KEY="stale",
-            AWS_SESSION_TOKEN="stale", AWS_PROFILE="stale",
-            AWS_CONTAINER_CREDENTIALS_FULL_URI="http://169.254.170.23/v1/credentials",
-            AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE="/runner/existing-token",
-            AWS_REGION="ap-northeast-2",
-        )
-        return credentials
-
-    def test_refresh_ignores_stale_exports_and_retains_existing_pod_identity_and_region(self):
-        credentials = self.credentials()
-        result = self.run_script("refresh-aws-session.py")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        env = json.loads((self.work / "aws-env.json").read_text())
-        for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
-            self.assertNotIn(key, env)
-        self.assertEqual(env["AWS_REGION"], "ap-northeast-2")
-        self.assertEqual(env["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"], "/runner/existing-token")
-        self.assertEqual(env["AWS_CONFIG_FILE"], "/dev/null")
-        exported = (self.work / "github-env").read_text()
-        self.assertIn(f"AWS_SESSION_TOKEN={credentials['SessionToken']}", exported)
-        for key in ("AccessKeyId", "SecretAccessKey", "SessionToken"):
-            self.assertIn(f"::add-mask::{credentials[key]}", result.stdout)
-
-    def test_refresh_rejects_short_lived_malformed_and_failed_credentials(self):
-        for failure in ("short", "malformed", "nonzero", "no-provider"):
-            with self.subTest(failure=failure):
-                credentials = self.credentials(ttl=60 if failure == "short" else 3600)
-                self.env["FAKE_AWS_EXIT"] = "7" if failure == "nonzero" else "0"
-                if failure == "malformed":
-                    credentials["SessionToken"] += "\nINJECTED=value"
-                    (self.work / "credentials.json").write_text(json.dumps(credentials))
-                if failure == "no-provider":
-                    del self.env["AWS_CONTAINER_CREDENTIALS_FULL_URI"]
-                result = self.run_script("refresh-aws-session.py")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse((self.work / "github-env").exists())
-                self.assertNotIn(credentials["SecretAccessKey"], result.stdout + result.stderr)
-
     def test_kiro_footer_parser_accepts_only_cosmetic_suffix_after_completed_report(self):
         report = "\x1b[38;5;141m> \x1b[0mNo findings.\r\nREVIEW_COMPLETE: L2\r\n"
         usage = "\x1b[90m ▸ Credits: 0.03 • Time: 2m 6s\x1b[0m\n\n"
@@ -298,6 +248,17 @@ class ReviewCompletion(unittest.TestCase):
             (report + usage + "Reading file: more.py (using tool: read)\n", False),
             (report + " ▸ Credits: 0.03 • Time: still reviewing\n", False),
             (report + usage + usage, False),
+            ("> I'll read the diff.\nReading file: diff (using tool: read)\n"
+             "Tool output: several diff lines\n> REVIEW_COMPLETE: L2\n" + usage, False),
+            ("> I'll read the diff.\nReading file: diff (using tool: fs_read)\n"
+             "Tool output: several diff lines\n" + report + usage, True),
+            ("> Earlier draft findings.\nReading file: more.py (using tool: read)\n"
+             "Tool output: several diff lines\n> REVIEW_COMPLETE: L2\n" + usage, False),
+            ("> The parser mishandles (using tool: read) in quoted findings.\n"
+             "A finding may quote `(using tool: fs_read)` without starting a tool.\n"
+             "REVIEW_COMPLETE: L2\n" + usage, True),
+            ("> I'll search the base.\nSearching for pattern: foo (using tool: grep)\n"
+             "Tool output: foo\n> REVIEW_COMPLETE: L2\n" + usage, False),
         ]
         for text, valid in cases:
             with self.subTest(text=text):
@@ -310,9 +271,24 @@ class ReviewCompletion(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode == 0, valid, result.stderr)
 
+    def test_labeled_session_tokens_are_scrubbed_in_environment_and_json_output(self):
+        token = "IQoJ" + "t" * 80 + "/+=="
+        for label in ("AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN", "SessionToken", "session_token"):
+            for text in (f"{label}={token}\n", f'{{"{label}": "{token}"}}\n'):
+                with self.subTest(label=label, quoted=text.startswith("{")):
+                    result = subprocess.run(
+                        ["bash", "-c", '. "$1"; strip_controls | scrub_secrets',
+                         "fixture", str(SCRIPTS / "lib.sh")],
+                        input=text, env=self.env, capture_output=True, text=True, timeout=3,
+                    )
+                    self.assertEqual(result.returncode, 0)
+                    self.assertFalse(token in result.stdout, "session token leaked")
+                    self.assertIn("[REDACTED]", result.stdout)
+                    self.assertNotIn("/+==", result.stdout)
+
 
 class WorkflowContract(unittest.TestCase):
-    def test_budgets_freshness_signing_and_trusted_execution(self):
+    def test_budgets_preflight_signing_and_trusted_execution(self):
         workflow = (ROOT / ".github/workflows/pr-review.yml").read_text()
         def value(key):
             return re.search(rf"^\s+{key}: [\"']?([^\s\"']+)", workflow, re.M).group(1)
@@ -320,12 +296,12 @@ class WorkflowContract(unittest.TestCase):
         chair = 2 * (120 + int(value("CHAIR_TIMEOUT")) + 10)
         self.assertEqual(int(value("timeout-minutes")), 90)
         self.assertLess(panel + chair + 10 * 60, 90 * 60)
-        self.assertGreater(int(value("AWS_SESSION_MIN_TTL")), max(panel, chair))
-        refreshes = [m.start() for m in re.finditer("python3 scripts/pr-review/refresh-aws-session.py", workflow)]
-        self.assertEqual(len(refreshes), 2)
-        self.assertLess(refreshes[0], workflow.index("bash scripts/pr-review/run-panel.sh"))
-        self.assertLess(workflow.index("bash scripts/pr-review/run-panel.sh"), refreshes[1])
-        self.assertLess(refreshes[1], workflow.index("bash scripts/pr-review/synthesize.sh"))
+        self.assertNotIn("AWS_SESSION_MIN_TTL", workflow)
+        preflights = [m.start() for m in re.finditer("python3 scripts/pr-review/preflight-aws-session.py", workflow)]
+        self.assertEqual(len(preflights), 2)
+        self.assertLess(preflights[0], workflow.index("bash scripts/pr-review/run-panel.sh"))
+        self.assertLess(workflow.index("bash scripts/pr-review/run-panel.sh"), preflights[1])
+        self.assertLess(preflights[1], workflow.index("bash scripts/pr-review/synthesize.sh"))
         self.assertEqual(value("AWS_REGION"), "ap-northeast-2")
         self.assertEqual(value("ANTHROPIC_BEDROCK_BASE_URL"), "https://bedrock-runtime.ap-northeast-2.amazonaws.com")
         self.assertEqual(value("CLAUDE_CODE_USE_BEDROCK"), "1")
