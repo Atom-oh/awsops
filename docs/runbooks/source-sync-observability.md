@@ -45,8 +45,9 @@ python3 -B -m unittest discover -s scripts/v2 -p test_evaluate_diagnosis.py -v
   evidence counts and explicitly projected SQL-reader views.
 - `01M27AQXZKQQ5J611R01BEFHPD_worker_jobs_lifecycle_timestamps.sql`: first start and terminal
   timestamps, stamped by the existing worker ledger's status transitions.
-- `01M27B0000C6QWJ50NRJ8YAH9D_trace_queue_claim_provenance.sql`: typed queue claims and constant
-  telemetry provenance in the SQL-reader view, including retained legacy snapshots.
+- `01M27B0000C6QWJ50NRJ8YAH9D_trace_queue_claim_provenance.sql`: queue claimed account/region
+  derived only from destination ARN qualifiers and constant `telemetry_claim` provenance in the
+  SQL-reader projection, including retained snapshots; idempotent view-only SELECT grant.
 
 These migrations retain the reviewed source bytes and `-- since:` headers. Historical timestamps
 are not backfilled. Before migration, workers continue operating and new timing stays unknown;
@@ -66,6 +67,19 @@ after migration. See [the Tempo runbook](tempo-query-generation.md).
 승인된 운영자가 기존 origin 절차로 마이그레이션·웹·워커·Lambda·AgentCore를 배포한다.
 Terraform은 저장된 계획을 검토한 뒤 컨트롤러가 적용한다. 이 역이식 자체는 배포나
 기능 플래그 변경을 수행하지 않는다.
+
+Deploy the web/graph writer and redeploy the `inventory_read_mcp` Lambda through the existing
+Terraform operator flow. `make agentcore` alone does not ship this Lambda code. The projection
+migration corrects retained-row claims at read time without requiring a graph rebuild.
+The inventory-reader Lambda environment also receives the configured `graph_rebuild_interval_mins`
+through `GRAPH_REBUILD_INTERVAL_MINS`, matching the web reader. Apply this binding through the same
+Terraform operator flow; zero retains the 15-minute freshness floor, and failure/retention checks remain.
+웹/그래프 writer와 `inventory_read_mcp` Lambda도 배포한다. Lambda 코드는 기존 Terraform
+운영 절차로 배포하며 `make agentcore`만으로 반영되지 않는다. projection 마이그레이션은
+그래프 재구축 없이도 보존된 행의 claim을 읽을 때 바로잡는다.
+inventory-reader Lambda에도 웹과 같은 `graph_rebuild_interval_mins` 값을
+`GRAPH_REBUILD_INTERVAL_MINS`로 전달한다. 같은 Terraform 운영 절차로 환경 바인딩을 적용하며,
+0은 기존 15분 freshness 하한을 유지하고 실패·이전 결과 보존 검사도 유지한다.
 
 Datasource reindexing upgrades graph queries to catalog v3, preserving optional span metadata
 and metric scope labels. Earlier cached queries can supply less evidence until reindexed.
@@ -96,13 +110,17 @@ Related decisions / 관련 결정: [ADR-005](../decisions/005-aws-mutation-auton
 ## Trace identity boundaries / 트레이스 식별 경계
 
 - Queue ARNs join across caller accounts/regions only within the same datasource/environment.
-  `claimedAccountId` and `claimedRegion` come from telemetry, with constant
+  The same ARN can therefore have separate nodes in different datasource/environment scopes.
+  `claimedAccountId` and `claimedRegion` come only from parsed destination ARN qualifiers, with constant
   `identityProvenance: telemetry_claim`; even a host-account match does not verify a claim.
+  Non-ARN broker destinations and missing qualifiers have null claims. Reporter account/region and
+  stored legacy/current claim fields are never fallbacks. The UI displays the values beside the disclaimer.
   Queues have no AWS-inventory bridge. The graph row's `account_id = self` is snapshot storage
   scope, not evidence of queue ownership. Apply the new projection migration before relying on
-  direct SQL-reader queries; the API and AI tool also relabel legacy retained queue metadata.
-- DB hostname matching retains its existing host-scope eligibility: absent account, `self`, or
-  an explicit account matching configured `HOST_ACCOUNT_ID`. Set `HOST_ACCOUNT_ID` from trusted
+  direct SQL-reader queries; the API and AI tool also rederive claims from retained destinations.
+- DB hostname matching adds a new host-configured branch: an explicit account matching
+  configured `HOST_ACCOUNT_ID`, alongside the existing absent-account and `self` branches.
+  Set `HOST_ACCOUNT_ID` from trusted
   deployment configuration for manual graph rebuilds, never from a span. The resulting DB link
   is a host-name correlation, not validation of arbitrary telemetry or a queue-identity rule.
 - Tempo search may omit leading hex zeros or return a 64-bit trace ID. Normalize trace hex up
@@ -110,15 +128,47 @@ Related decisions / 관련 결정: [ADR-005](../decisions/005-aws-mutation-auton
   Opaque nonhex legacy IDs stay exact. A full zero parent means no parent; zero trace/child IDs
   are invalid and contribute no graph identity.
 
-큐 ARN은 같은 데이터소스·환경에서만 호출자의 계정·리전을 넘어 연결된다. 계정·리전은
-텔레메트리가 주장한 값이며 호스트 계정과 같아도 검증되지 않는다. 큐를 AWS 인벤토리로
+큐 ARN은 같은 데이터소스·환경에서만 호출자의 계정·리전을 넘어 연결되며, 범위가 다르면
+같은 ARN도 별도 노드가 된다. 계정·리전 claim은 destination ARN을 파싱해 얻은 값만 사용한다.
+비-ARN 브로커 목적지와 누락된 한정자는 null이며 호출자 정보나 저장된 claim으로 폴백하지 않는다.
+UI는 값과 미검증 고지를 함께 표시하고, 호스트 계정과 같아도 검증되지 않는다. 큐를 AWS 인벤토리로
 연결하지 않고, 행의 `self`는 저장 범위일 뿐 소유권 증명이 아니다. 직접 SQL 조회는 새
-projection 마이그레이션을 적용해야 하며 API와 AI 도구는 이전 큐 메타데이터도 주장 값으로
-표시한다. DB 호스트명 매칭의 기존 범위(계정 부재·`self`·설정된 호스트 계정)는 유지한다.
+projection 마이그레이션을 적용해야 하며 API와 AI 도구도 보존된 destination에서 claim을 재계산한다.
+DB 호스트명 매칭에는 기존 계정 부재·`self` 분기에 더해 설정된 `HOST_ACCOUNT_ID`와
+명시적 계정이 일치하는 새 분기를 추가한다.
 수동 그래프 재구축의 `HOST_ACCOUNT_ID`는 배포 설정에서 가져오며 span에서 설정하지 않는다.
 이 DB 링크는 호스트명 상관관계이고 임의 텔레메트리 검증이나 큐 식별 규칙이 아니다.
 Tempo의 짧은 hex trace ID는 16바이트로 정규화하고 span/base64 너비 검증은 유지한다.
 비-hex 레거시 ID는 그대로 보존하며, 전체 0 부모는 부재이고 0 trace/child는 무효이다.
+
+## Direct Connect assessment scope / Direct Connect 평가 범위
+
+Only `available` and `down` establish deployed connections for health, location summaries and
+owned-only SLA counts. All other states, including `deleting`, `unknown`, missing and future values,
+are excluded and disclosed as unassessed. A deployed-scope health pass does not certify the whole
+inventory. Missing metrics, location/device evidence and failed reads retain their unknown gates;
+two observed deployed sites establish a lower bound, not complete inventory coverage.
+`totals.connectionsDown`, the scoped down KPI and the deployed-health checklist share this
+classification. Excluded lifecycle metadata alone is not a failure. An explicit
+`ConnectionState` minimum of zero on an excluded row remains visible as a separate critical
+period observation in the KPI area and checklist, without asserting a current deployed failure.
+The KPI discloses assessed/excluded/unknown counts; an all-excluded fleet is unassessed, not zero-down healthy.
+Graph connections, location links and LAG summaries use the same affirmative evidence.
+Only deployed connections with an up metric and no down evidence count as `up`; unknown and
+unassessed members are labeled separately, including period-down observations on excluded members.
+
+상태가 `available` 또는 `down`인 커넥션만 배포된 것으로 인정해 상태·위치·owned 전용 SLA를
+평가한다. `deleting`·`unknown`·누락·미래 값을 포함한 다른 상태는 제외·미평가로 고지한다.
+배포 범위의 정상 판정은 전체 인벤토리의 정상 증명이 아니다. 메트릭·위치·디바이스 근거 누락과
+조회 실패의 미확인 판정은 유지하며, 관측된 두 배포 위치는 하한일 뿐 전체 수집을 증명하지 않는다.
+`totals.connectionsDown`·범위를 명시한 다운 KPI·배포된 커넥션 상태 체크리스트는 같은
+분류를 사용한다. 제외된 수명 주기 상태만으로 장애를 만들지 않는다. 제외 행의
+`ConnectionState` 최솟값이 명시적으로 0이면 KPI 영역과 체크리스트에 별도의 중요 기간 관측으로
+유지하되 현재 배포 장애로 단정하지 않는다. KPI는 평가·제외·미확인 수를 고지하며,
+전부 제외된 인벤토리는 다운 0건 정상 대신 미평가로 표시한다.
+그래프 커넥션·로케이션 링크·LAG 요약도 같은 긍정 근거를 사용한다. 배포 상태이고 up 메트릭이
+있으며 다운 근거가 없는 커넥션만 `up`으로 세고, 미확인·미평가 멤버와 제외 멤버의 기간 내
+다운 관측을 별도로 표시한다.
 
 ## Frozen approval contract / 동결된 승인 계약
 

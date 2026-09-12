@@ -440,16 +440,27 @@ export default function DirectConnectPage() {
           </div>
         )}
 
-        {data && t && (() => {
+        {data && t && resiliency && (() => {
           // 각 KPI/판정이 실제로 의존하는 리전 실패에만 반응 — 배너와 별개로, 그 지표
           // 자체가 낙관적일 수 있으면 "정상/0건"을 확신 있는 색으로 보여주지 않는다.
           const resourcesDegraded = data.degradedRegions.length > 0;
           const anyMetricsDegraded = resourcesDegraded || data.metricsDegradedRegions.length > 0;
-          const downTileVariant = kpiVariant(t.connectionsDown + t.vifsDown > 0, anyMetricsDegraded);
-          const downHint = downTileVariant !== 'danger' && anyMetricsDegraded
-            ? tt('일부 리전 조회 실패 — 실제보다 적게 집계될 수 있음')
-            // danger 라도 degraded 면 확정 수치가 아니라 하한 — 커넥션/VIF 타일의 `+` 관행 일치 (리뷰 L2-3)
-            : `${tt('커넥션')} ${t.connectionsDown}${anyMetricsDegraded ? '+' : ''} · VIF ${t.vifsDown}${anyMetricsDegraded ? '+' : ''}`;
+          const health = resiliency.connectionHealthCoverage;
+          // Use the same classification as the API and checklist, including cached older responses.
+          const scopedDown = health.down + t.vifsDown;
+          const downUnknown = anyMetricsDegraded || health.unknown > 0 || health.excluded > 0;
+          const downTileVariant = kpiVariant(scopedDown > 0, downUnknown);
+          const downHint = (
+            <span className="block whitespace-normal">
+              {tt('배포된 커넥션')} {health.down}{anyMetricsDegraded || health.unknown > 0 ? '+' : ''}
+              {' · '}VIF {t.vifsDown}{anyMetricsDegraded ? '+' : ''}
+              <br />
+              {tt('커넥션')} {health.assessed}/{health.total}
+              {' · '}{tt('제외')} · {tt('미평가')} {health.excluded}
+              {' · '}{tt('확인 불가')} {health.unknown}
+              {anyMetricsDegraded && <><br />{tt('일부 리전 조회 실패 — 실제보다 적게 집계될 수 있음')}</>}
+            </span>
+          );
           const gwTileVariant = kpiVariant(false, data.gatewaysDegraded || t.gatewaysUnassociated > 0 || t.gatewaysAssociationsUnknown > 0);
           const gwHint = data.gatewaysDegraded
             ? tt('DX Gateway 조회 실패 — 확인 불가')
@@ -490,8 +501,8 @@ export default function DirectConnectPage() {
                 icon={<Gauge size={16} />}
               />
               <StatTile
-                label="다운 감지"
-                value={t.connectionsDown + t.vifsDown}
+                label="다운 감지 (배포된 커넥션·VIF)"
+                value={health.assessed === 0 && health.excluded > 0 && t.vifs === 0 ? '—' : scopedDown}
                 variant={downTileVariant}
                 hint={downHint}
                 icon={<Unplug size={16} />}
@@ -504,6 +515,15 @@ export default function DirectConnectPage() {
                 icon={<Activity size={16} />}
               />
             </div>
+            {health.excludedObservedDown > 0 && (
+              <div role="alert" className="flex items-start gap-2 rounded-md border border-negative-border bg-negative-surface px-3 py-2 text-[12px] text-negative-text">
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  {tt('제외·미평가 커넥션의 기간 내 다운 관측')}: {health.excludedObservedDown}
+                  {' — '}{tt('현재 배포 장애 판정 아님')}
+                </span>
+              </div>
+            )}
 
             {/* ② 분포 — VIF 타입 도넛 + VIF별 평균 트래픽 */}
             <div className="grid gap-6 lg:grid-cols-2">
@@ -554,9 +574,9 @@ export default function DirectConnectPage() {
                       </div>
                     )}
                     <p className="px-4 pb-2 text-[12px] text-ink-500">
-                      {tt('커넥션 상태 평가 범위: 배포된 dedicated·hosted, 미배포 제외')}
+                      {tt('커넥션 상태 평가 범위: available/down인 dedicated·hosted만 평가, 기타·미확인 상태는 제외·미평가')}
                       {' · '}{resiliency.connectionHealthCoverage.assessed}/{resiliency.connectionHealthCoverage.total}
-                      {' · '}{tt('제외')} {resiliency.connectionHealthCoverage.excluded}
+                      {' · '}{tt('제외')} · {tt('미평가')} {resiliency.connectionHealthCoverage.excluded}
                       {' · '}{tt('확인 불가')} {resiliency.connectionHealthCoverage.unknown}
                     </p>
                     <ul className="border-t border-ink-100">
@@ -582,16 +602,16 @@ export default function DirectConnectPage() {
               </Card>
             </div>
 
-            {/* ③ 로케이션 이중화 — 전 커넥션 단일 로케이션 = 위치 장애 시 전체 DX 경로 상실 */}
+            {/* Two observed deployed sites establish a lower bound even if sibling reads failed. */}
             <Card
               title="로케이션 이중화"
-              subtitle="배포된 커넥션의 로케이션 분포 — 생성 중·삭제된 커넥션 제외"
+              subtitle="available/down 커넥션의 로케이션 분포 — 기타·미확인 상태는 제외·미평가"
               padded={false}
             >
               {locationSummary.knownLocations >= 2 ? (
                 <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-emerald-700">
                   <CheckCircle2 size={15} />
-                  {tt('이상 없음 — 커넥션이 2개 이상 로케이션에 분산되어 있습니다')}
+                  {tt('확인된 배포 커넥션이 2개 이상 로케이션에 분산되어 있습니다')}
                 </div>
               ) : resourcesDegraded ? (
                 <div className="px-4 py-3 text-[13px] text-warning-text">
@@ -599,14 +619,17 @@ export default function DirectConnectPage() {
                 </div>
               ) : locationSummary.singleLocation ? (
                 <div className="px-4 pt-3 text-[12px] text-warning-text">
-                  {tt('모든 커넥션이 단일 로케이션에 있습니다 — 이 로케이션 장애 시 전체 DX 경로가 끊깁니다. AWS Resiliency Toolkit은 2개 이상 로케이션을 권장합니다')}
+                  {tt('배포된 커넥션이 단일 로케이션에 있습니다 — 평가 범위의 위치 단일 장애점입니다. AWS Resiliency Toolkit은 2개 이상 로케이션을 권장합니다')}
                 </div>
               ) : locationSummary.assessedConnections === 0 ? (
-                <div className="px-4 py-3 text-[13px] text-ink-400">{tt('커넥션 없음')}</div>
+                <div className="px-4 py-3 text-[13px] text-ink-400">
+                  {data.connections.length === 0 ? tt('커넥션 없음') : tt('배포 확인된 커넥션 없음')}
+                </div>
               ) : null}
               {locationSummary.excludedConnections > 0 && (
                 <div className="px-4 py-2 text-[12px] text-ink-500">
                   {tt('판정 범위')} {locationSummary.assessedConnections}/{data.connections.length}
+                  {' · '}{tt('제외')} · {tt('미평가')} {locationSummary.excludedConnections}
                 </div>
               )}
               {locationSummary.unknownConnections > 0 && (

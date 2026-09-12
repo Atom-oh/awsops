@@ -1,4 +1,4 @@
-import { summarizeDxLocations } from './dx-evidence';
+import { hasDxDownEvidence, summarizeDxConnectionHealth, summarizeDxLocations } from './dx-evidence';
 import {
   DirectConnectClient,
   DescribeConnectionsCommand,
@@ -62,7 +62,7 @@ export interface DxConnectionRow {
   vifCount: number;
   /** CW ConnectionState 기간 내 최소값 (1=계속 up, 0=다운 감지, null=메트릭 없음). */
   stateMetricMin: number | null;
-  /** API 상태 비정상 또는 기간 내 ConnectionState 0 감지. */
+  /** Explicit API down or a period ConnectionState zero; other lifecycle states alone are not failures. */
   down: boolean;
 }
 
@@ -129,7 +129,7 @@ export interface DxAnalysis {
   connections: DxConnectionRow[];
   vifs: DxVifRow[];
   gateways: DxGatewayRow[];
-  /** 로케이션별 커넥션 집계 (이중화 분석용). */
+  /** Known sites of available/down owned + hosted connections, grouped by location/region. */
   locations: { location: string; region: string; connections: number; bandwidthBps: number }[];
   /** 리소스 목록(Describe*) 자체가 실패해 그 리전의 커넥션/VIF가 전부 빠진 리전 —
    *  singleLocation·다운 카운트·총 대역폭이 실제보다 낙관적일 수 있다(누락된 리전에
@@ -141,16 +141,20 @@ export interface DxAnalysis {
   /** DX Gateway(글로벌) 조회 자체가 실패 — gatewaysUnassociated/vifCount 등이 0으로 강등됨. */
   gatewaysDegraded: boolean;
   totals: {
-    connections: number; connectionsDown: number;
+    connections: number;
+    /** Down evidence among available/down connections only; excluded metric zeros remain on the rows. */
+    connectionsDown: number;
     vifs: number; vifsDown: number; bgpPeersDown: number;
     gateways: number; gatewaysUnassociated: number;
     /** association 조회 실패로 미할당 여부를 판정할 수 없는 게이트웨이 수 — >0 이면
      *  gatewaysUnassociated 는 하한(실제보다 적을 수 있음)이다. UI 타일/배너가 노출. */
     gatewaysAssociationsUnknown: number;
-    totalBandwidthBps: number; locations: number;
+    totalBandwidthBps: number;
+    /** Distinct known site names among available/down connections (not location/region rows). */
+    locations: number;
     /** VIF 피크 사용률 최댓값 (%). */
     maxUtilizationPct: number | null;
-    /** 커넥션이 있는데 로케이션이 1곳뿐 — 위치 단일 장애점. */
+    /** Exactly one known deployed site, with no deployed connection missing its location. */
     singleLocation: boolean;
   };
   rangeSec: number;
@@ -353,7 +357,10 @@ async function dxMetrics(
       const v = res.Values?.[0];
       if (!mm || typeof v !== 'number') continue;
       const idx = Number(mm[2]);
-      if (mm[1] === 'cs' && connIds[idx]) out.connState[connIds[idx]] = v;
+      if (mm[1] === 'cs' && connIds[idx]) {
+        // A partial/failed query can show a down sample, but cannot prove no down occurred.
+        out.connState[connIds[idx]] = res.StatusCode && res.StatusCode !== 'Complete' && v !== 0 ? null : v;
+      }
       else if (mm[1] === 'bgp' && bgpTuples[idx]) {
         const vifId = bgpTuples[idx].vifId;
         const prev = out.bgpMin[vifId];
@@ -561,7 +568,7 @@ export async function dxAnalysis(rangeSec: number): Promise<DxAnalysis> {
             hasLogicalRedundancy: c.hasLogicalRedundancy ?? null, lagId: c.lagId ?? null,
             vifCount: vifs.filter((v) => v.connectionId === id).length,
             stateMetricMin: stateMin,
-            down: !['available', 'ordering', 'requested', 'pending'].includes(state) || stateMin === 0,
+            down: hasDxDownEvidence({ state, stateMetricMin: stateMin }),
           };
         });
         return { region, connections, vifs, degraded: false, metricsDegraded: !metrics.ok };
@@ -575,12 +582,13 @@ export async function dxAnalysis(rangeSec: number): Promise<DxAnalysis> {
     const { gateways, ok: gatewaysOk } = await fetchGateways(vifs);
 
     const locationSummary = summarizeDxLocations(connections);
+    const connectionHealth = summarizeDxConnectionHealth(connections);
     const { locations } = locationSummary;
 
     const utils = vifs.map((v) => v.peakUtilizationPct).filter((u): u is number => u != null);
     const totals: DxAnalysis['totals'] = {
       connections: connections.length,
-      connectionsDown: connections.filter((c) => c.down).length,
+      connectionsDown: connectionHealth.down,
       vifs: vifs.length,
       vifsDown: vifs.filter((v) => v.down).length,
       bgpPeersDown: vifs.reduce((s, v) => s + (v.bgpPeersTotal - v.bgpPeersUp), 0),
