@@ -10,6 +10,33 @@ ensure_slots() {
   rm -rf "$1/slot"; mkdir -p "$1/slot"
 }
 
+# Shared with the chair: normalize terminal output before validation or secret scrubbing.
+strip_controls() {
+  sed -E -e 's#(\x1B\][^\x07\x1B]*(\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][0-9A-Z])##g' \
+         -e 's#(\xC2[\x80-\x9F]|[\x00-\x08\x0B-\x1F\x7F])##g'
+}
+
+panel_report_valid() {
+  [ -s "$1" ] || return 1
+  local kiro=0
+  case "${1##*/}" in kiro-*) kiro=1 ;; esac
+  strip_controls < "$1" | awk -v marker="REVIEW_COMPLETE: $2" -v kiro="$kiro" '
+    BEGIN {
+      number = "[0-9]+([.][0-9]+)?"
+      footer = "^▸ (Credits: " number " • )?Time: ([0-9]+m )?" number "s$"
+    }
+    kiro {
+      sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); sub(/^> /, "")
+      # Kiro emits this numeric usage/time footer AFTER the assistant response.
+      # It never proves completion; ignore at most one after the report marker.
+      if ($0 ~ footer) { if (markers) footers++; next }
+    }
+    NF { last = $0; lines++ }
+    /^REVIEW_COMPLETE:/ { markers++ }
+    END { exit !(markers == 1 && last == marker && lines > 1 && footers <= 1) }
+  '
+}
+
 # 한 패널 실행 결과를 평가해 responded 에 기록.
 #   $1 슬롯 파일 경로, $2 패널 라벨, $3 responded 파일
 # non-empty 체크만으로는 "응답함"이 실제 리뷰인지 보일러플레이트/거부 응답인지 구분이 안 되고,
@@ -20,8 +47,8 @@ ensure_slots() {
 # 사람 범위보다 넓을 수 있으므로, 원시 200B 를 그대로 찍으면 별도의 스크럽 없는 유출구가 된다.
 record_result() {
   local slot="$1" label="$2" responded="$3"
-  echo "[preview] $label: $(scrub_secrets < "$slot" | head -c 200 | tr '\n' ' ')" >&2
-  if [ -s "$slot" ]; then
+  echo "[preview] $label: $(strip_controls < "$slot" | scrub_secrets | head -c 200 | tr '\n' ' ')" >&2
+  if panel_report_valid "$slot" "${label##*/}"; then
     echo "$label" >> "$responded"
   else
     echo "[skip] $label" >&2

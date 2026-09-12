@@ -53,10 +53,7 @@ SCRUB_TMP="$WORK/scrub-cell.tmp"
 # UTF-8 caveat: stripping C1 (\x80-\x9F) as raw bytes would corrupt multibyte characters (this
 # log is mostly non-ASCII text), so only the UTF-8-encoded form `\xC2[\x80-\x9F]` is removed.
 # \x09 (TAB) / \x0A (LF) are preserved.
-strip_controls() {
-  sed -E -e 's#(\x1B\][^\x07\x1B]*(\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][0-9A-Z])##g' \
-         -e 's#(\xC2[\x80-\x9F]|[\x00-\x08\x0B-\x1F\x7F])##g'
-}
+# strip_controls is shared with panel completion validation in lib.sh.
 
 # run_chair scrubs its stderr file in place once the call returns — but that call is the chair
 # model, bounded at CHAIR_TIMEOUT, which makes it by far the likeliest moment for the job to
@@ -206,10 +203,12 @@ PROMPT_EOF
 # 96KB), the Fable 5 primary hit the 600s cap on three consecutive runs the same day (empty
 # stderr isn't an error — it's the timeout killing a process that was still generating; the
 # same chair completes normally on a small diff). Worst normal path: (120s fast-fail + 900s
-# retry) x2 chair attempts + panel ~15min ~= 49min — the job's timeout-minutes is 60 to match.
+# retry + 10s kill grace) x2 chair attempts + panel 40m20s < 75min; job ceiling is 90min.
 PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-global.anthropic.claude-fable-5-1}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-global.anthropic.claude-opus-5}"
 CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-900}"
+CHAIR_KILL_AFTER="${CHAIR_KILL_AFTER:-10s}"
+CHAIR_STATUS=1
 
 chair_label() { case "$1" in
   *fable-5-1*) echo "Claude Fable 5.1" ;;
@@ -218,7 +217,8 @@ chair_label() { case "$1" in
   *)           echo "$1" ;;
 esac ; }
 
-run_chair() {  # $1=model $2=err-file -> writes "$OUT". Continues via `|| true` even if claude fails.
+run_chair() {  # $1=model $2=err-file -> writes "$OUT" only on successful CLI/scrubber exits.
+  CHAIR_STATUS=1
   # The chair synthesizes the diff + panel output it receives via stdin; the base verification
   # the prompt asks for is done via read/grep on the checkout — so local read-only tools are
   # enough.
@@ -290,16 +290,23 @@ run_chair() {  # $1=model $2=err-file -> writes "$OUT". Continues via `|| true` 
   local scrub_out=$!
   strip_controls < "$errfifo" | scrub_secrets > "$2" &
   local scrub_err=$!
-  ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
+  ANTHROPIC_MODEL="$1" timeout --kill-after="$CHAIR_KILL_AFTER" "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
     --strict-mcp-config --allowedTools "Read Grep Glob" \
     < "$WORK/synth-stdin.txt" \
     > "$outfifo" 2> "$errfifo" &
   CHAIR_JOB_PID=$!
-  wait "$CHAIR_JOB_PID" || true
+  CHAIR_STATUS=0
+  wait "$CHAIR_JOB_PID" || CHAIR_STATUS=$?
   CHAIR_JOB_PID=""
-  wait "$scrub_out" "$scrub_err" || true   # deterministic — replaces the settle-loop heuristic
+  wait "$scrub_out" || CHAIR_STATUS=1
+  wait "$scrub_err" || CHAIR_STATUS=1
   rm -f "$outfifo" "$errfifo"
+  if [ "$CHAIR_STATUS" -ne 0 ]; then
+    : > "$OUT"
+    echo "run_chair: exit=$CHAIR_STATUS; discarded incomplete review" >> "$2"
+  fi
+  return 0
 }
 
 scrubbed_err_excerpt() {
@@ -316,8 +323,8 @@ scrubbed_err_excerpt() {
   strip_controls < "$1" 2>/dev/null | scrub_secrets | head -c 500 | tr '\n' ' '
 }
 
-# Requirement: valid only when there is exactly one verdict line and it is the last non-empty
-# line. (Revision history) An earlier attempt loosened this to "grep for FAIL-first/PASS
+# Requirement: a report body plus exactly one verdict on the last non-empty line.
+# (Revision history) An earlier attempt loosened this to "grep for FAIL-first/PASS
 # anywhere, same as the gate" — but a mixed FAIL/PASS case was never actually rescuable by a
 # fallback in the first place, since the gate itself is FAIL-first and would always resolve to
 # FAIL regardless (reusing the gate's own logic here doesn't unblock that case either); and
@@ -329,7 +336,9 @@ scrubbed_err_excerpt() {
 # that mismatch is effectively harmless: this validator only filters out "malformed responses,"
 # and there is no case where the format is fine but only the gate's verdict differs.
 chair_valid() {
+  [ "$CHAIR_STATUS" -eq 0 ] || return 1
   [ -s "$OUT" ] || return 1
+  awk 'NF{lines++} END{exit !(lines > 1)}' "$OUT" || return 1
   local last verdict_count
   last="$(awk 'NF{last=$0} END{print last}' "$OUT")"
   verdict_count="$(grep -c '^VERDICT:' "$OUT" || true)"
@@ -361,7 +370,8 @@ attempt_chair() {  # $1=model $2=err-file
   t0=$(date +%s)
   run_chair "$1" "$2"
   elapsed=$(( $(date +%s) - t0 ))
-  if ! chair_valid && [ "$elapsed" -lt "$FAST_FAIL_SECS" ]; then
+  if ! chair_valid && [ "$CHAIR_STATUS" -ne 124 ] && [ "$CHAIR_STATUS" -ne 137 ] \
+      && [ "$elapsed" -lt "$FAST_FAIL_SECS" ]; then
     echo "::warning::chair '$(chair_label "$1")' returned invalid output in ${elapsed}s (fast-fail — transient API error pattern): $(scrubbed_err_excerpt "$2") — one retry"
     run_chair "$1" "$2"
   fi
@@ -397,9 +407,7 @@ if ! chair_valid; then
   : > "$WORK/chair-failed.flag"
 fi
 
-# Surface coverage degradation — if one model silently dropped out with no response across
-# every lens (run-panel.sh's degraded-models.txt), this does NOT force the VERDICT itself to
-# FAIL, but leaves an explicit banner at the top of the review.
+# Surface model diagnostics; any missing cell now forces FAIL via coverage-severe.flag.
 if [ -s "$WORK/degraded-models.txt" ]; then
   DEGRADED="$(tr '\n' ',' < "$WORK/degraded-models.txt" | sed 's/,$//; s/,/, /g')"
   { echo "⚠️ **Coverage degraded**: model(s) [$DEGRADED] had no response across every lens (invalid flag/missing binary/auth failure, etc.) — the review below was synthesized without them."
@@ -408,18 +416,16 @@ if [ -s "$WORK/degraded-models.txt" ]; then
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
-# Surface a lens-coverage collapse — if one lens got no response from ANY model
-# (run-panel.sh's degraded-lenses.txt), it already forces FAIL via coverage-severe.flag, but a
-# banner is still left so the review body shows immediately WHY it FAILed.
+# Surface incomplete lenses, including a single missing model's report.
 if [ -s "$WORK/degraded-lenses.txt" ]; then
   DEGRADED_LENSES="$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')"
-  { echo "🛑 **Lens coverage collapse**: lens(es) [$DEGRADED_LENSES] got no response from any model — nobody reviewed it."
+  { echo "🛑 **Incomplete lens coverage**: lens(es) [$DEGRADED_LENSES] did not receive every required completed model report."
     echo ""
     cat "$OUT"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
-# Severity escalation (run-panel.sh's coverage-severe.flag) — if at most one vendor survived,
+# Severity escalation (run-panel.sh's coverage-severe.flag) — if any required cell is missing,
 # force the VERDICT to FAIL regardless of the chair's judgment (preserves the fail-closed
 # contract). Only strip the last VERDICT line when there's a match
 # (`tac | sed '0,/re/d' | tac` — GNU sed's `0,/re/d` has a trap where it deletes the ENTIRE file
@@ -434,8 +440,10 @@ if [ -f "$WORK/coverage-severe.flag" ]; then
   # otherwise responded fine on other lenses), leave a cause description that directly
   # contradicts the lens-collapse banner already attached above. Disambiguate by which file was
   # actually raised, and pick the matching message.
-  if [ -s "$WORK/degraded-lenses.txt" ]; then
-    SEVERE_REASON="lens(es) [$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')] got no response from any model, so cross-verification cannot happen"
+  if [ -s "$WORK/missing-cells.txt" ]; then
+    SEVERE_REASON="missing completed reports: $(tr '\n' ' ' < "$WORK/missing-cells.txt"); all 12 cells are required"
+  elif [ -s "$WORK/degraded-lenses.txt" ]; then
+    SEVERE_REASON="lens(es) [$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')] have incomplete model coverage"
   else
     SEVERE_REASON="at most one vendor survived, so cross-verification across the lens x model matrix cannot happen"
   fi
@@ -450,6 +458,11 @@ fi
 
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "chair_used=$(chair_label "$CHAIR_USED")" >> "$GITHUB_ENV"
+  if [ -f "$WORK/coverage-severe.flag" ]; then
+    echo "panel_incomplete=1" >> "$GITHUB_ENV"
+  else
+    echo "panel_incomplete=0" >> "$GITHUB_ENV"
+  fi
   # chair-failed.flag (above) — signals the workflow so it can distinguish, in the PR comment
   # badge text (separately from the gate verdict), a FAIL caused by an actual code finding from
   # one caused by the chair's own infrastructure failure (timeout/connection error). If an
