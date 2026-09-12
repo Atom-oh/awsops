@@ -75,6 +75,9 @@ try_panel() {
       rc=$?
     fi
     # Even a complete-looking report is invalid if the CLI failed or timed out.
+    # Keep only a bounded diagnostic; scrub before the byte cap so a truncated
+    # credential cannot evade redaction. Rejected text never reaches the chair.
+    echo "[rejected-preview] $(basename "$slot" .md) attempt=$a: $(strip_controls < "$slot" | scrub_secrets | head -c 200 | tr '\n' ' ')" >&2
     : > "$slot"
     echo "[attempt $a/$RETRIES] $(basename "$slot" .md) exit=$rc elapsed=$((SECONDS-started))s; no completed review" >&2
     [ "$a" -lt "$RETRIES" ] && echo "[retry $a/$RETRIES] $(basename "$slot" .md)" >&2

@@ -202,12 +202,37 @@ class ReviewCompletion(unittest.TestCase):
 
     def test_nonzero_complete_looking_output_is_discarded_and_retried(self):
         self.plan({"kiro-opus-L2": ["nonzero"]})
-        self.panel()
+        result = self.panel()
+        self.assertIn("[rejected-preview] kiro-opus-L2 attempt=1:", result.stderr)
+        self.assertIn("DISCARD_FAILED_OUTPUT", result.stderr)
         self.assert_matrix(["kiro-opus/L2"])
         self.assertEqual(self.count("kiro-opus-L2"), 2)
         self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(), "")
         self.assertIn("VERDICT: FAIL", self.chair())
         self.assertNotIn("DISCARD_FAILED_OUTPUT", (self.work / "synth-stdin.txt").read_text())
+
+    def test_rejected_preview_is_bounded_scrubbed_and_never_review_input(self):
+        secret = "fixtureSession" + "9" * 100
+        (self.work / "tool-transcript.txt").write_text(
+            "Inspecting code (using tool: code)\n"
+            + "\x1b[31m" + "x" * 80 + "\x1b[0m AWS_SESSION_TOKEN=" + secret
+            + "\n" + "z" * 400 + "\n"
+        )
+        self.plan({"kiro-opus-L2": ["tool-chatter"]})
+        result = self.panel()
+        previews = [line.split(": ", 1)[1] for line in result.stderr.splitlines()
+                    if line.startswith("[rejected-preview] kiro-opus-L2 attempt=")]
+        self.assertEqual(len(previews), 2)
+        for preview in previews:
+            self.assertLessEqual(len(preview.encode()), 200)
+            self.assertIn("[REDACTED]", preview)
+            self.assertNotIn("\x1b", preview)
+        self.assertNotIn(secret[:16], result.stderr)
+        self.assert_matrix(["kiro-opus/L2"])
+        self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(), "")
+        self.assertIn("VERDICT: FAIL", self.chair())
+        self.assertNotIn(secret, (self.work / "synth-stdin.txt").read_text())
+        self.assertNotIn("x" * 80, (self.work / "synth-stdin.txt").read_text())
 
     def test_exit_zero_requires_unique_matching_final_marker_and_report_body(self):
         for mode in ("partial", "wrong", "duplicate", "trailing", "marker-only", "missing"):
