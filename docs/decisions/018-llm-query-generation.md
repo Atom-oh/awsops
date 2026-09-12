@@ -2,6 +2,7 @@
 
 ## Status / 상태
 **Accepted — 워커 두 경로는 GATED, 기본 false: `graph_querygen_enabled`, `diag_signal_querygen_enabled`. Explore NL→쿼리 초안 경로(2026-09-04 편입)는 LIVE·무플래그·초안 전용(§D).**
+**Amended 2026-09-12 (§D TraceQL):** Tempo 초안의 문법·관측 스키마·지원 HTTP 상태 필터 검증과 메타데이터 전달 범위를 기록한다. PromQL의 ADVISORY 계약·워커 플래그·실행 권한은 유지한다. / Record Tempo draft validation and schema-metadata disclosure; PromQL advisory behavior, worker gates, and execution permissions remain unchanged.
 **Amended 2026-09-04 (§D 신설):** 제3의 LLM 쿼리 생성 경로를 이 ADR의 기록 범위에 편입 — **Explore NL→쿼리
 초안 생성**(`POST /api/datasources/generate`, `web/lib/datasource-querygen.ts`). 이 경로는 이 ADR 본문의
 두 경로와 **계약이 다르다**: 라이브(플래그 없음 — 항상 켜진 사용자 개시 요청), 캐시 없음, **dry-run
@@ -14,7 +15,7 @@
 경고 문구에 오탐 가능성을 명시한다 — **단 하나의 예외**(2026-09-04 후속 수정): 미지 토큰 **전부**가
 recording-rule 형식 이름이고 그 raw 코어가 캐시 메트릭에 실존하면(증명 가능한 교정) 절단·스테일에서도
 재시도하되, 결과가 깨끗해도 헤지 경고를 유지한다. Consent 관점: 사용자가 버튼을 눌러
-자기 데이터소스의 스키마 이름을 모델에 보내는 명시적 요청이므로 두 워커 경로의 플래그 동의 모델과
+자기 데이터소스의 스키마 메타데이터(Tempo 범위·타입·버전은 §D)를 모델에 보내는 명시적 요청이므로 두 워커 경로의 플래그 동의 모델과
 다르며, 실행이 없어 dry-run 상한 계약도 적용되지 않는다.
 
 이 ADR은 새 권한이나 새 substrate를 만들지 않는다. 이미 존재하는 두 폴백 경로(그래프 쿼리 1건 · Explore
@@ -68,6 +69,7 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
    실행 시 커넥터의 `assert_read_only(extra_forbidden_re=_TABLE_FN)` 이 막는다. 즉 파이프라인은 두 경로 모두
    보호되지만 *어느 층에서* 막느냐가 다르다(리뷰 MAJOR-8: 이 차이를 "공통"으로 뭉개면 안 된다).
 4. **캐시된 결과만 쓴다** — 생성물은 스키마 버전에 키를 두고 저장되며, 매 실행 재생성이 아니다.
+   Tempo의 결정론적 signal/graph/card 카탈로그는 LLM 생성물이 아니며, 해시는 수집 성공 여부·카탈로그 버전·생성 플래그에 의존한다. / Deterministic Tempo catalogs are not LLM artifacts; their hash tracks successful introspection, catalog versions, and generation flags.
 5. **ADR-005와 무관하다** — 생성물은 SQL/PromQL/LogQL 조회문이고 AWS API 호출 경로가 아니다.
 
 ### B. `signal_catalog_gen` (diag-signal 칩) 전용 방어 — graph 경로에는 **없다**
@@ -127,7 +129,7 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
 ### D. Explore NL→쿼리 초안 경로 (2026-09-04 편입) — 자체 계약
 
 `POST /api/datasources/generate` (`web/lib/datasource-querygen.ts`). §A와 다르다:
-- **LIVE·무플래그** — 사용자가 버튼을 눌러 자기 데이터소스의 스키마 이름을 모델에 보내는 명시적
+- **LIVE·무플래그** — 사용자가 버튼을 눌러 자기 데이터소스의 스키마 메타데이터(Tempo는 아래 범위·타입·버전 포함)를 모델에 보내는 명시적
   요청(동의 모델이 플래그가 아니라 사용자 행위).
 - **dry-run 없음, 생성물 캐시 없음**(스키마 캐시는 별개 — 아래 크기 폴백) — 라우트 계약이 "절대 실행하지 않음": 생성물은 사용자가 검토 후 실행하는
   초안이고, 실행 시 커넥터의 read-only/SSRF 가드가 최종 방어다.
@@ -146,6 +148,26 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
   확인한 `probed` 이름은 절단에서 제외(“probed인데 metrics에 없음 = 확정 부재” 계약 보존). 구 캡 스냅샷
   (`truncated`·`trimmed` 아님·PromQL 종류·500~524개)은 백그라운드 재수집 대상이며, 재수집은 인스턴스당
   쿨다운(10분)으로 보호된다(정확히 500~524개 메트릭 + 라벨 초과인 타깃의 오탐은 쿨다운 1회/10분으로 수용).
+- **TraceQL 정적 검증(2026-09-12)** — `web/package.json`·`web/package-lock.json`에 고정한 Grafana
+  `@grafana/lezer-traceql@1.0.0` + `@lezer/lr@1.4.10` 파서로 문법을 검사한 뒤, 관측 속성명·호환 리터럴 타입과
+  지원하는 완전한 긍정 HTTP 요청의 상태 값 보존을 검사한다. 오류 시 교정은 최대 1회(요청당 모델 ≤2콜)이며,
+  재검증 실패는 **502로 거부**한다. `SCHEMA_REQUIRED`, 제한된 수집의 미관측 이름, HTTP 근거가 없는 초안은
+  불완전한 근거로 재시도하지 않고 스키마 새로고침·수동 조회 안내를 반환한다. 내장 필터는 속성 스키마 없이도 사용할 수 있다.
+  / **TraceQL uses hard validation**, unlike PromQL's advisory vocabulary check: pinned grammar, observed names/types,
+  and supported affirmative HTTP-status templates. One correction at most; invalid results return 502. Insufficient-schema
+  cases return guidance without correction; intrinsic filters do not require custom attributes.
+- **Tempo 메타데이터·한계** — 사용자 요청과 함께 범위 있는 속성명·관측 타입·Tempo 버전을 Bedrock에 전달한다.
+  수집한 원시 태그 값은 스키마 응답·캐시·프롬프트에 넣지 않는다. 최근 1시간에서 최대 200개 속성·64,000바이트,
+  HTTP 상태·서비스 이름 관련 4개 속성당 최대 32개 값으로 타입을 표본화하며, 이름/타입 수집 제한은 따로 표시한다.
+  확인된 빈 관측의 TTL과 Tempo 백그라운드 갱신 쿨다운은 60초다. / The prompt includes scoped names, observed types,
+  and server version alongside the user request, never collected raw tag values. Discovery samples the last hour with
+  200-attribute/64,000-byte caps and at most 32 values for each of four HTTP/service fields. Name/type limits stay distinct;
+  confirmed-empty TTL and all Tempo background-refresh cooldowns are 60 seconds.
+- **검증은 실행 성공 보증이 아니다.** 고정 파서는 서버 버전별 전체 문법을 보장하지 않으며, 표본·과거 캐시는
+  속성 전체 목록이나 타입 완전성을 보장하지 않는다. 일반 문장·부정·범위 조건과 비표준 속성의 HTTP 의미는
+  사용자가 검토한다. 생성은 검색 시간 범위를 바꾸지 않는다. / Validation does not guarantee server acceptance,
+  complete schema/type evidence, or general-language semantics. Users review nonstandard HTTP meanings and historical
+  time bounds. 배포·갱신 절차 / Deployment and refresh: [Tempo runbook](../runbooks/tempo-query-generation.md).
 - SQL 은 §A와 무관하게 기존 read-only 1st-verb 게이트 + 커넥터 런타임 가드.
 
 ### Negative / 부정 (수용된 잔여 리스크)
@@ -154,7 +176,7 @@ collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)�
   차례 우회 사례가 발견되어 그때마다 좁혔다. 이 게이트는 "정확성 판정"이 아니라 "명백한 무관/상수 차단"이며,
   다음 우회가 나오면 개별 패턴을 덧대기보다 커넥터 파서(예: ClickHouse `EXPLAIN AST`)로 옮기는 것이 옳다.
 - 생성 칩의 품질은 보장되지 않는다 — 사용자가 읽고 판단하는 표면이라는 전제(§B-6)가 이 리스크의 상한이다.
-- §D(Explore 초안) 수용 잔여: 어휘 게이트는 ADVISORY 다 — `{__name__="…"}` 셀렉터는 브레이스 스트립으로
+- §D(Explore PromQL 초안) 수용 잔여: 어휘 게이트는 ADVISORY 다 — `{__name__="…"}` 셀렉터는 브레이스 스트립으로
   게이트를 우회하고, 상수식(`vector(1)`)은 통과하며(§B의 `_is_constant_expr` 쌍은 미이식), 캐시
   절단(커넥터 이름-개수 캡)·스테일 캐시에서는 실존 메트릭이 경고로 오탐될 수 있다(그래서 경고이지 거부가
   아님). 증명 가능한 교정 예외는 raw 코어의 **존재**를 증명할 뿐 rule 이름의 **부재**를 증명하지 않는다 —
