@@ -9,14 +9,14 @@ import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
 import { layoutFlow } from '@/lib/flow-layout';
 import { useI18n } from '@/components/shell/LanguageProvider';
-import GraphCollectionStatus, { type GraphCollection } from '@/components/topology/GraphCollectionStatus';
+import GraphCollectionStatus from '@/components/topology/GraphCollectionStatus';
 
 // ReactFlow touches the DOM on mount — client-only.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
 interface GNode { id: string; kind: string; label: string; meta?: Record<string, unknown> }
 interface GEdge { source: string; target: string; rel: string }
-interface Graph { nodes: GNode[]; edges: GEdge[]; captured_at: string | null; collection?: GraphCollection }
+interface Graph { nodes: GNode[]; edges: GEdge[]; captured_at: string | null; collection?: unknown }
 
 // kind → [bg, border] (paper/ink tokens; service-map kinds, mirrors resource/[id]'s COLORS)
 const COLORS: Record<string, [string, string]> = {
@@ -143,14 +143,18 @@ export default function ServiceMapPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="서비스 맵 (trace)"
-        subtitle="ClickHouse · Tempo · Prometheus · Mimir"
+        subtitle="등록된 트레이스와 서비스 그래프 지표에서 파생된 호출 관계. 네트워크 흐름은 통합 토폴로지에서 확인하세요."
         right={
+          <div className="flex flex-wrap gap-2">
+          <Link href="/topology?view=e2e" className="rounded-md bg-brand-action px-3 py-1 text-[12px] text-white">
+            {tt('서비스 + 네트워크')}
+          </Link>
           <Link href="/topology" className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600 hover:bg-ink-50">
             {tt('← 트래픽 흐름')}
           </Link>
+          </div>
         }
       />
-      {graph && <GraphCollectionStatus collection={graph.collection} />}
       <div className="flex flex-wrap items-center gap-3 px-4 py-1 text-[11px] text-ink-500">
         <label className="flex items-center gap-1">Environment
           <select aria-label="Environment" value={environment} onChange={(e) => setEnvironment(e.target.value)}
@@ -166,7 +170,11 @@ export default function ServiceMapPage() {
         {busy && <span>{tt('불러오는 중…')}</span>}
         {err && <span className="text-red-600">{tt('조회 실패:')} {err}</span>}
         {graph?.captured_at && <span>{tt('그래프 시점:')} {new Date(graph.captured_at).toLocaleString()}</span>}
+        {graph && graph.nodes.length === 0 && !busy && (
+          <span>{tt('저장된 서비스 관측이 없습니다. 데이터소스 연결과 그래프 갱신을 확인하세요.')}</span>
+        )}
       </div>
+      {graph?.collection != null && !busy && !err && <div className="px-4"><GraphCollectionStatus collection={graph.collection} /></div>}
       <div ref={canvas} className="min-h-0 flex-1">
         <ReactFlow nodes={nodes} edges={edges} onInit={(instance) => { flow.current = instance; }}
           onNodeClick={onNodeClick} fitView fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>

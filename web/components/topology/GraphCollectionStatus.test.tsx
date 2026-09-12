@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-vi.mock('@/components/shell/LanguageProvider', () => ({ useI18n: () => ({ lang: 'en' }) }));
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const language = vi.hoisted(() => ({ current: 'en' }));
+vi.mock('@/components/shell/LanguageProvider', () => ({ useI18n: () => ({ lang: language.current }) }));
 import GraphCollectionStatus from './GraphCollectionStatus';
 
 afterEach(cleanup);
 
 describe('graph collection status', () => {
+  beforeEach(() => { language.current = 'en'; });
   it('identifies failed collection and retained data without claiming no traffic', () => {
     render(<GraphCollectionStatus collection={{
       status: 'error', stale: true, retainedPrevious: true,
@@ -25,5 +27,64 @@ describe('graph collection status', () => {
   it('does not describe a stale successful snapshot as current', () => {
     render(<GraphCollectionStatus collection={{ status: 'ok', stale: true }} />);
     expect(screen.getByRole('alert').textContent).toContain('Stale');
+  });
+});
+
+describe('GraphCollectionStatus', () => {
+  beforeEach(() => { language.current = 'ko'; });
+  it.each([undefined, null, {}, { status: 'unknown' }])('keeps absent or unknown metadata neutral: %j', collection => {
+    render(<GraphCollectionStatus collection={collection} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('수집 상태 미확인');
+    expect(screen.getByRole('status').className).not.toContain('amber');
+  });
+
+  it.each([
+    { status: 'partial', stale: false, sources: [{ sourceId: 'tempo:fixture', status: 'error', reasons: ['timeout'] }] },
+    { status: 'ok', stale: true },
+    { status: 'ok', stale: false, retainedPrevious: true },
+    { status: 'error', stale: false },
+  ])('preserves a provided collection warning: %j', collection => {
+    render(<GraphCollectionStatus collection={collection} />);
+    expect(screen.getByRole('alert')).toBeTruthy();
+    if ('sources' in collection) {
+      expect(screen.getByRole('alert').textContent).toContain('tempo:fixture');
+      expect(screen.getByRole('alert').textContent).toContain('timeout');
+    }
+  });
+
+  it.each([false, 7, 'invalid', []])('treats malformed collection payloads as unknown: %j', collection => {
+    render(<GraphCollectionStatus collection={collection} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('수집 상태 미확인');
+  });
+
+  it('normalizes malformed sources and displays only string failure reasons', () => {
+    render(<GraphCollectionStatus collection={{
+      status: 'partial', sources: [
+        null, false, [],
+        { sourceId: 123, status: 'retained', reasons: 'invalid' },
+        { sourceId: 'tempo:fixture', status: 'error', reasons: ['timeout', null, { message: 'invalid' }] },
+      ],
+    }} />);
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.getByRole('alert').textContent).toContain('tempo:fixture: 수집 실패 · timeout');
+    expect(screen.getByRole('alert').textContent).not.toContain('[object Object]');
+    expect(screen.getByRole('alert').textContent).not.toContain('invalid');
+  });
+
+  it('renders attempt and saved timestamps while omitting invalid values', () => {
+    const attempted = '2026-09-12T12:00:00Z';
+    const captured = '2026-09-11T12:00:00Z';
+    const { container, rerender } = render(<GraphCollectionStatus collection={{
+      status: 'error', retainedPrevious: true, attempted_at: attempted, captured_at: captured,
+    }} />);
+    expect(Array.from(container.querySelectorAll('time'), time => time.dateTime)).toEqual([attempted, captured]);
+    expect(screen.getByRole('alert').textContent).toContain('최근 수집 시도');
+    expect(screen.getByRole('alert').textContent).toContain('저장된 그래프 시각');
+    expect(screen.getByRole('alert').textContent).toContain('이전 그래프');
+    rerender(<GraphCollectionStatus collection={{ status: 'unknown', attempted_at: 'invalid', captured_at: {} }} />);
+    expect(container.querySelectorAll('time')).toHaveLength(0);
+    expect(screen.getByRole('status').textContent).not.toContain('Invalid Date');
   });
 });
