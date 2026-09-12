@@ -501,11 +501,16 @@ rm -rf "$WORK9" "$DIFF9"
 # the property that makes the race impossible: the scrub PIDs are captured and waited on, and the
 # size-settle poll is gone. Honest limitation: this checks the mechanism, not the outcome.
 RC_BODY="$(awk '/^run_chair\(\) \{/,/^\}/' "$SCRIPT")"
-if printf '%s' "$RC_BODY" | grep -Eq 'wait "\$scrub_out" "\$scrub_err"'; then
-  pass "run_chair waits on both scrub processes (PIDs captured, completion guaranteed)"
-else
-  fail "run_chair waits on both scrub processes (PIDs captured, completion guaranteed)"
-fi
+for scrub_pid in scrub_out scrub_err; do
+  # Each PID must be captured and waited on. Independent waits also retain each
+  # scrubber's exit status; a single literal joint-wait command is not the contract.
+  if printf '%s' "$RC_BODY" | grep -Eq "(^|[[:space:]])${scrub_pid}=\\\$!" &&
+     printf '%s' "$RC_BODY" | grep -Eq "^[[:space:]]*wait .*\"\\\$${scrub_pid}\""; then
+    pass "run_chair captures and waits on $scrub_pid (completion guaranteed)"
+  else
+    fail "run_chair captures and waits on $scrub_pid (completion guaranteed)"
+  fi
+done
 
 if printf '%s' "$RC_BODY" | grep -q 'wc -c'; then
   fail "run_chair no longer size-polls for scrub completion (heuristic replaced by wait)"

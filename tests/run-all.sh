@@ -33,6 +33,13 @@ for f in tests/structure/test-*.sh; do
   bash "$f" && pass "$(basename "$f") clean" || fail "$(basename "$f") reported failures"
 done
 
+# ── PR Review Offline Tests ──
+# Fake CLIs cover completion, exit status, hard kills, retries and Pod Identity
+# preflight without reaching AWS or AI services.
+echo "# PR review offline tests"
+python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v \
+  && pass "PR review offline tests passed" || fail "PR review offline tests failed"
+
 # ── Core Structure Assertions ──
 echo "# Core structure"
 
