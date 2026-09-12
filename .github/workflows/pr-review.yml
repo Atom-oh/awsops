@@ -26,12 +26,23 @@ on:
   pull_request_target:
     types: [opened, synchronize]
     branches: [main] # the only PR target in this repo — there are no non-main PRs
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Read-only verification of an already merged, same-repository main PR"
+        required: true
+        type: string
 
 jobs:
   review:
     name: AI Code Review
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: awsops-claude-arm
+    defaults:
+      run:
+        shell: bash
     # Hang backstop: GitHub's default is 360 minutes (6h), so a hang in a section the
     # in-script timeouts don't cover (gh pr diff, npm fallback, panel wait, etc.) would pin
     # the runner pod for 6 hours. Normal ceiling (after adding CHAIR_TIMEOUT 900s + fast-fail
@@ -40,12 +51,13 @@ jobs:
     # 60 minutes only cuts a hang, never a normal run.
     timeout-minutes: 60
     concurrency:
-      group: pr-review-${{ github.event.pull_request.number }}
+      group: pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
       cancel-in-progress: true
     permissions:
       pull-requests: write
       contents: read
     env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
       # claude-fable-5-1 is a global inference profile. Its "global." prefix only affects
       # Bedrock's internal routing after the request lands, NOT the SigV4 signing region:
       # AWS_REGION must still match ANTHROPIC_BEDROCK_BASE_URL's endpoint or signing fails
@@ -72,11 +84,32 @@ jobs:
       # verbatim (lib.sh's scrub_secrets rule for this token format was added in the same
       # PR, but that's a last-line-of-defense, not prevention). Not persisting credentials
       # at checkout time is the prevention layer.
-      - uses: actions/checkout@v4
+      - name: Checkout trusted workflow control code
+        uses: actions/checkout@v4
         with:
-          # Pin to the immutable base SHA (not base.ref branch tip): deterministic base context, and
-          # no window where a moved/unprotected base injects unreviewed code into this trusted job.
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Resolve and pin the review scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export REVIEW_SCOPE_FILE="$RUNNER_TEMP/review-scope-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          export REVIEW_CONTROL="$RUNNER_TEMP/review-control-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          export REVIEW_HELPER="$REVIEW_CONTROL/review_scope.py"
+          printf 'REVIEW_SCOPE_FILE=%s\nREVIEW_HELPER=%s\nREVIEW_CONTROL=%s\n' "$REVIEW_SCOPE_FILE" "$REVIEW_HELPER" "$REVIEW_CONTROL" >> "$GITHUB_ENV"
+          # A historical merged-PR base may predate this helper. Preserve trusted
+          # control code outside the checkout; never load control code from PR head.
+          mkdir -p "$REVIEW_CONTROL"
+          cp scripts/pr-review/{review_scope.py,run-panel.sh,synthesize.sh,lib.sh} "$REVIEW_CONTROL/"
+          python3 "$REVIEW_HELPER" select
+
+      - name: Checkout the selected immutable review base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.scope.outputs.base }}
           persist-credentials: false
 
       - name: Verify CLIs present (runner image)
@@ -90,9 +123,11 @@ jobs:
       - name: Get PR diff
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ steps.scope.outputs.head }}
+          BASE_SHA: ${{ steps.scope.outputs.base }}
+          MERGE_BASE_SHA: ${{ steps.scope.outputs.diff_base }}
         run: |
+          set -euo pipefail
           # gh pr diff hits the GitHub REST diff endpoint, which 406s past 300 changed files
           # (confirmed on PR #124, a 666-file integration PR) — git diff has no such cap.
           #
@@ -107,8 +142,11 @@ jobs:
           # truncating only its `files`/`commits` arrays, which we don't use). Fetch just that
           # commit + head (both shallow, single SHA — no full-history fetch needed), then a plain
           # two-dot diff between merge-base and head is exactly equivalent to BASE...HEAD.
-          MERGE_BASE_SHA=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')
-          git fetch --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
+          # Resolver used the authenticated current base ref + compare API for
+          # open PRs, or verified merge first/second parents for merged PRs.
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            fetch --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
           # TWO passes, code first: git emits hunks in tree (alphabetical) order, so on a >3000-line
           # PR the docs/ diff (sorting before scripts/terraform/web) ate the truncation budget and
           # the panel kept raising phantom "X is missing" CRITICALs about the very code files that
@@ -237,6 +275,7 @@ jobs:
           if [ -s /tmp/pr-diff-omitted-source.txt ]; then
             echo "omitted_source_paths=$(tr '\n' ' ' < /tmp/pr-diff-omitted-source.txt)" >> "$GITHUB_ENV"
           fi
+          python3 "$REVIEW_HELPER" bind
 
       - name: Build lens prompts (L2-L5 — each self-contained, one lens only)
         run: |
@@ -377,43 +416,32 @@ jobs:
 
       - name: Run panel + synthesize (lens×model matrix -> Claude chair)
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
           PANEL_TIMEOUT: "300"
         run: |
           set -euo pipefail
-          bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
-          bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
+          PR_TITLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["title"])' "$REVIEW_SCOPE_FILE")"
+          bash "$REVIEW_CONTROL/run-panel.sh" /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
+          bash "$REVIEW_CONTROL/synthesize.sh" /tmp/pr-diff-truncated.txt /tmp/pr-review \
             "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
       - name: Check for blocking issues
         id: gate
         run: |
-          # Fail-closed first: if an oversized line was dropped from a real source/IaC file (not a
-          # known generated/export type), no lens saw that content — force BLOCKED regardless of the
-          # chair's VERDICT, matching the pre-cap behaviour where the oversized line failed the job.
-          if [ -n "${omitted_source_paths:-}" ]; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=oversized line(s) omitted from reviewable source/IaC file(s): ${omitted_source_paths} — no lens saw them, fail-closed" >> "$GITHUB_OUTPUT"
-          elif grep -q "^VERDICT: FAIL$" /tmp/review.md; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=VERDICT: FAIL" >> "$GITHUB_OUTPUT"
-          elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-            echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=No VERDICT line found — fail-closed" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          python3 "$REVIEW_HELPER" gate
 
       - name: Post review comment (upsert)
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           GATE_RESULT: ${{ steps.gate.outputs.result }}
+          GATE_REASON: ${{ steps.gate.outputs.reason }}
         run: |
+          set -euo pipefail
+          # Re-fetch PR metadata (and current base for open PRs) before publishing.
+          # Recheck diff bytes, truncation and all 12 cells as well.
+          python3 "$REVIEW_HELPER" verify > /tmp/review-provenance.md
           MARKER="<!-- multi-ai-pr-review -->"
           if [ "$GATE_RESULT" = "fail" ] && [ "${chair_failed:-0}" = "1" ]; then
             # The chair (both Fable 5 and Opus 5) failed to produce a review due to a
@@ -422,9 +450,11 @@ jobs:
             # (synthesize.sh's chair-failed.flag -> chair_failed).
             STATUS_BADGE="**Status: BLOCKED** — review generation failed (model timeout/error) — not a code problem, re-run the workflow"
           elif [ "$GATE_RESULT" = "fail" ]; then
-            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
-          else
+            STATUS_BADGE="**Status: BLOCKED** — incomplete review or blocking findings"
+          elif [ "$GATE_RESULT" = "pass" ]; then
             STATUS_BADGE="**Status: PASSED** — No blocking issues found"
+          else
+            exit 1
           fi
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
@@ -432,28 +462,33 @@ jobs:
             echo "## 🤖 AI Code Review (${chair_used:-Claude Fable 5} chair · lens×model matrix)"
             echo ""
             echo "_Cells (model/lens): ${panel_responded:-solo}_"
-            [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
-            [ -n "${omitted_paths:-}" ] && echo "_⚠️ oversized lines (>50k chars) omitted from the reviewed diff in: ${omitted_paths} — no lens saw those lines; verify them manually._"
-            [ -n "${omitted_source_paths:-}" ] && echo "_🛑 omitted lines include reviewable source/IaC files (${omitted_source_paths}) — gate forced to BLOCKED (fail-closed); split/reformat those files so the change is reviewable._"
+            echo "_Cell list records nonempty outputs; semantic completion requires the chair's explicit COVERAGE assessment._"
+            if [ "${panel_truncated:-0}" = "1" ]; then echo "_⚠️ diff truncated to first 3000 lines — review is partial._"; fi
+            if [ -n "${omitted_paths:-}" ]; then echo "_⚠️ oversized lines omitted — gate forced to BLOCKED._"; fi
             echo ""
             echo "$STATUS_BADGE"
+            echo "$GATE_REASON"
+            cat /tmp/review-provenance.md
             echo ""
             cat /tmp/review-clean.md
             echo ""
             echo "---"
-            echo "_Triggered by commit \`${{ github.event.pull_request.head.sha }}\` · workflow: \`.github/workflows/pr-review.yml\`_"
+            echo "_Triggered by commit \`${{ steps.scope.outputs.head }}\` · workflow: \`.github/workflows/pr-review.yml\`_"
           } > /tmp/comment.md
-          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.body | contains("<!-- multi-ai-pr-review -->")) | .id' 2>/dev/null | head -1)
+          gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- multi-ai-pr-review -->"))) | .id' > /tmp/review-comment-ids.txt
+          EXISTING=$(sed -n '1p' /tmp/review-comment-ids.txt)
           if [ -n "$EXISTING" ]; then
-            gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH -f body="$(cat /tmp/comment.md)" 2>/dev/null || \
-              gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+            python3 -c 'import json; json.dump({"body":open("/tmp/comment.md").read()},open("/tmp/comment.json","w"))'
+            gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH --input /tmp/comment.json
           else
-            gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
           fi
 
-      - name: Fail if CRITICAL or MAJOR
+      - name: Fail if review is incomplete or blocking
         if: steps.gate.outputs.result == 'fail'
+        env:
+          GATE_REASON: ${{ steps.gate.outputs.reason }}
         run: |
-          echo "AI Review failed: ${{ steps.gate.outputs.reason }}"
+          echo "AI Review failed: $GATE_REASON"
           exit 1
