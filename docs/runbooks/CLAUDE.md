@@ -22,6 +22,8 @@ Operational playbooks organized by scenario. Each follows symptoms → diagnosis
 | [v1-decommission.md](v1-decommission.md) | v1 legacy decommission — 5-phase procedure (ADR-016) |
 | [steampipe-quota-and-staleness.md](steampipe-quota-and-staleness.md) | Steampipe quota guard — rate limiter knobs, partial runs, freshness ledger/staleness response |
 | [agent-sql-reader.md](agent-sql-reader.md) | `execute_sql`/`inventory-read` Data API auth failures — `awsops_sql_reader` role/password sync (`apply → make migrate → make agentcore`) |
+| [tempo-query-generation.md](tempo-query-generation.md) | Tempo query generation — connector/web deployment, admin API schema refresh, cached summaries, and recent-window limits |
+| [source-sync-observability.md](source-sync-observability.md) | Bounded origin observability backport — migration contracts, rollout dependencies and evidence limits |
 
 ## Conventions
 - Filename: `kebab-case.md`, domain-then-topic order.

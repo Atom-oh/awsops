@@ -1,10 +1,10 @@
 # API 레퍼런스 / API Reference
 
 ## 역할 / Role
-`web/app/api/**/route.ts` 전수(99개 라우트) 인덱스 — 경로·메서드·역할·인증.
-(Full index of all 99 `route.ts` files under `web/app/api` — path, methods, role, auth.)
+`web/app/api/**/route.ts` 경로 인덱스 — 경로·메서드·역할·인증.
+(API route index under `web/app/api` — path, methods, role, auth.)
 - 인증 컬럼: `verifyUser` = Cognito `awsops_token` 쿠키 검증(`@/lib/auth`). `없음` = 라우트 자체 비게이트(엣지 Lambda@Edge 게이트는 별도). 역할에 "admin"이 있으면 `isAdmin` 추가 게이트.
-- 모든 라우트는 루트 경로(`/api/*`) — basePath 없음. web은 thin-BFF: 무거운 작업은 `POST /api/jobs`로 enqueue.
+- 모든 라우트는 루트 경로(`/api/*`) — basePath 없음. web은 thin-BFF: 도메인 작업은 소유권을 검사하는 전용 라우트로 enqueue하며, 일반 `POST /api/jobs`는 허용된 noop 종류만 받는다.
 
 ## auth (2)
 | 경로 | 메서드 | 역할 | 인증 |
@@ -138,7 +138,8 @@
 | `/api/integrations/credential` | GET, PUT | 통합 크리덴셜 저장 — 단일 Secrets Manager secret에 slug(kind) 키 (admin) | verifyUser |
 | `/api/integrations/schema` | GET, POST | 인스턴스 스키마 introspect/캐시 (admin) | verifyUser |
 | `/api/jobs` | GET, POST | 비동기 작업 enqueue/목록 (P2 — `worker_jobs` + SQS) | verifyUser |
-| `/api/jobs/[id]` | GET | 작업 상태 단건 조회 — UUID 형식 검증만 | 없음 |
+| `/api/jobs/[id]` | GET | 작업 상태 단건 조회 — UUID 검증 + 소유자 또는 관리자 / owner-or-admin | verifyUser |
+| `/api/jobs/observability` | GET | 접수 기간별 작업 시간·완료 목표: `windowHours` 1–168, 선택적 `type` 및 `targetMs` 1–86400000. 소유자/관리자 범위, 최대 2000건 표본·최근 50건 상세, 누락·잘림 시 미확정 / ownership-scoped workload observations | verifyUser |
 | `/api/me` | GET | 현재 사용자 + `isAdmin` 시그널 (UI 표시용 — 쓰기 게이트는 서버측 별도 유지) | verifyUser |
 | `/api/monitoring` | GET | 모니터링 허브 — `?tab=ec2\|rds` 플릿, `?series=`+`range`로 단일 리소스 시계열 | verifyUser |
 | `/api/opencost/[cluster]` | GET, PUT | OpenCost 저장 설정 — 조회 auth / 저장 admin (null = 미저장, 페이지가 기본값 사용) | verifyUser |

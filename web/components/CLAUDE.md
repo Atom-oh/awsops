@@ -1,12 +1,13 @@
 # Components Module
 
 ## Role
-110 client components across 14 subdirectories: `ui` (shared primitives), `shell` (AppShell, Sidebar, LanguageProvider, AccountSelector, etc.), `charts`, `chat`, `inventory` (+`metrics/`), `eks`, `diagnosis`, `datasources`, `finops`, `graph`, `insights`, `nfm`, `overview`, `topology`.
+Client components span `ui`, `shell`, `charts`, `chat`, `inventory` (including `metrics/`), `eks`, `diagnosis`, `datasources`, `dx`, `finops`, `graph`, `insights`, `nfm`, `overview`, and `topology`.
 
 ## Key Files
 - `ui/DataTable.tsx` + `ui/DetailPanel.tsx` — the default list+detail combo. DetailPanel renders the full data the row already holds (plus a handful of type-specific fetching sections: RDS metrics/trends/SG rules, EBS related, live metrics, S3 IAM access) — if the spec (`InvType`) has `sections`, it renders grouped sections; otherwise a flat key list (backward-compat). New inventory types must define `sections`.
 - `inventory/metrics/MetricTable.tsx` — a declarative `MetricCol` model (`{value, render?, danger?, facet?, facetValues?, type}`) gets you sort, global search, facet filters, and a "problems only" toggle for free. Per-service tables (Ec2/Rds/Alb/...) are written purely as column definitions. Opt-in props: `facetValues` (multi-value facet — an exact-match on the joined display string drops multi-value rows), `maxRender`+`capKeep` (render-stage row cap — a data-stage cut silently zeroes an exact search), `rowClass` (per-row class hook).
 - `inventory/metrics/guides.tsx` + `guides.{en,zh,ja}.tsx` — per-language diagnosis-guide bodies. i18n lockstep — update all four files together.
+- `dx/DxTopology.tsx` — Direct Connect topology diagram (React Flow + dagre; follows the topology-page conventions — dynamic ssr:false, colorMode, light/dark color pairs, imperative fitView). Graph/SLA logic lives in the pure `lib/dx-topology.ts`.
 - `nfm/FlowHopPath.tsx` — end-to-end hop stepper (local endpoint → traversedConstructs → remote endpoint). Each kind has its own glyph and color — never rely on color alone to identify a kind.
 - `eks/NodeCapacityCards.tsx` — node capacity 3-split cards; also exports the shared `StackBar` (named export) reused by `NodeCapacityList` on the nodes fleet page — a deliberate exception to the default-export-per-page convention.
 - `eks/NodeDrilldownPanel.tsx` — node drilldown (capacity cards + Pod/ENI sections, with its own live nodes+pods query). Shared by the EKS overview and the `/eks/nodes` fleet page (`FleetKindPage`).
