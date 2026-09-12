@@ -211,6 +211,10 @@ If the recent window remains empty, repeated refreshes cannot recover historical
 - `scripts/v2/workers/card_catalog.py`
 - `terraform/v2/foundation/ai.tf`
 
-관련 결정: **ADR-005는 AWS 리소스 변경과 자율 실행을 동결**한다. **ADR-007은 거버넌스를 따르는 외부 데이터 읽기·쓰기를 허용**하며, 이 절차의 Tempo 접근은 읽기 전용이다. 컨트롤러의 승인된 릴리스 배포는 제품의 자율 복구 기능을 활성화하지 않는다. 현재 결정은 `docs/decisions/BASELINE.md`와 같은 디렉터리의 ADR 본문에서 확인한다.
+관련 결정: **ADR-005는 AWS 리소스 변경과 자율 실행을 동결**한다. **ADR-007은 거버넌스를 따르는 외부 데이터 읽기·쓰기를 허용**하며, 이 절차의 Tempo 접근은 읽기 전용이다. 컨트롤러의 승인된 릴리스 배포는 제품의 자율 복구 기능을 활성화하지 않는다. 결정 원문은 [ADR-005](../decisions/005-aws-mutation-autonomy-frozen.md)와 [ADR-007](../decisions/007-external-data-integration-governance.md)을 참고한다.
 
-Related decisions: **ADR-005 freezes AWS-resource mutation and autonomy**. **ADR-007 permits external data reads and governed external writes**; this procedure reads Tempo data only. The controller's approved release deployment does not enable autonomous product remediation. Current decisions are recorded in `docs/decisions/BASELINE.md` and the ADR bodies in that directory.
+Related decisions: **ADR-005 freezes AWS-resource mutation and autonomy**. **ADR-007 permits external data reads and governed external writes**; this procedure reads Tempo data only. The controller's approved release deployment does not enable autonomous product remediation. See the local [ADR-005](../decisions/005-aws-mutation-autonomy-frozen.md) and [ADR-007](../decisions/007-external-data-integration-governance.md) decision records.
+
+현재 운영 상태는 [BASELINE](../decisions/BASELINE.md)을 기준으로 확인한다.
+
+Consult [BASELINE](../decisions/BASELINE.md) for the current operating posture.
