@@ -15,6 +15,7 @@ resolves legacy numbers; an old plan, review, or implementation comment is not c
 - Cite current decisions as `ADR-NNN`; qualify provenance as `legacy ADR-NNN` or
   `ADR-NNN[legacy MMM]`. Legacy bodies are preserved at `adr-legacy-2026-06-22`; do not read
   them without an explicit request. Historical records remain historical.
+- ADR filename: `NNN-kebab-case-title.md`.
 - New ADR: highest existing numbered ADR plus one, with Status, Context, Decision, Consequences,
   and relevant Well-Architected pillars. Update BASELINE's index/register in the same change.
 - Read actual call paths and flag dependencies before reporting a violation. Report policy/code
