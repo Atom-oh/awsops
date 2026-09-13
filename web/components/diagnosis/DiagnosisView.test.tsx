@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, within, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, within, fireEvent, waitFor, act } from '@testing-library/react';
 import DiagnosisView from './DiagnosisView';
 import { LanguageProvider } from '@/components/shell/LanguageProvider';
 
@@ -272,6 +272,49 @@ describe('DiagnosisView — invariant assessment coverage', () => {
 });
 
 describe('DiagnosisView — title / tags / soft delete', () => {
+  it.each(['patch', 'refresh'])('keeps report B and its draft selected when report A has a late %s response', async (stage) => {
+    const reports = [1, 2].map(id => ({ id, tier: 'mid', status: 'succeeded', created_at: 't',
+      title: `Report ${id === 1 ? 'A' : 'B'}`, tags: [], can_edit: true }));
+    const detail = (id: number) => ({
+      report: reports[id - 1], markdown: `## Executive Summary\nBody ${id === 1 ? 'A' : 'B'}`,
+      handoff: { notices: [], drafts: [{ target: 'notion', label: 'Notion', text: `Draft ${id}`, filename: `${id}.md` }] },
+    });
+    let finishPatch!: (r: Response) => void;
+    let finishRefresh!: (r: Response) => void;
+    let aReads = 0;
+    let listReads = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/diagnosis') { listReads++; return resp({ reports }); }
+      if (url === '/api/diagnosis/1' && init?.method === 'PATCH') return new Promise<Response>(resolve => { finishPatch = resolve; });
+      if (url === '/api/diagnosis/1') {
+        aReads++;
+        if (stage === 'refresh' && aReads === 2) return new Promise<Response>(resolve => { finishRefresh = resolve; });
+        return resp(detail(1));
+      }
+      if (url === '/api/diagnosis/2') return resp(detail(2));
+      return resp({}, 404);
+    }));
+    render(<DiagnosisView />);
+    await screen.findByText('Body A');
+    fireEvent.click(screen.getByRole('button', { name: /제목 수정/ }));
+    fireEvent.change(screen.getByLabelText('제목'), { target: { value: 'Updated A' } });
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
+    await waitFor(() => expect(finishPatch).toBeTypeOf('function'));
+    if (stage === 'refresh') {
+      await act(async () => { finishPatch(resp({ ok: true })); });
+      await waitFor(() => expect(aReads).toBe(2));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Report B/ }));
+    await screen.findByText('Body B');
+    await act(async () => {
+      if (stage === 'patch') finishPatch(resp({ ok: true }));
+      else finishRefresh(resp(detail(1)));
+    });
+    await waitFor(() => expect(listReads).toBe(2));
+    expect(screen.getByText('Body B')).toBeTruthy();
+    expect((screen.getByLabelText('초안 미리보기') as HTMLTextAreaElement).value).toBe('Draft 2');
+    expect(aReads).toBe(stage === 'patch' ? 1 : 2);
+  });
   function mockMeta(rows: Array<Record<string, unknown>>, calls: any[]) {
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET';
