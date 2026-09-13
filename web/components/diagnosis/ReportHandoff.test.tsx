@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ReportHandoff from './ReportHandoff';
-import type { ReportHandoffData } from '@/lib/report-handoff';
+import { buildReportHandoff, type ReportHandoffData } from '@/lib/report-handoff';
 let uiLang = 'en';
 vi.mock('@/components/shell/LanguageProvider', () => ({ useI18n: () => ({ lang: uiLang }) }));
 
@@ -28,6 +28,29 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('ReportHandoff', () => {
+  it.each(['notion', 'slack', 'wiki', 'devops', 'security', 'finops'])('preserves builder disclosures when copying and downloading %s', async target => {
+    const section = '[Info] One.\n[Info] Two.\n[Info] Three.\n[Critical] Late finding.';
+    const handoff = buildReportHandoff({ id: 71, status: 'partial', tier: 'mid', summary: {} },
+      `## Executive Summary\n${section}\n## Recommendations\n${section}`)!;
+    render(<ReportHandoff handoff={handoff} />);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: target } });
+    fireEvent.click(screen.getByRole('button', { name: /Copy draft/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    const copied = writeText.mock.calls[0][0] as string;
+    for (const notice of handoff.notices) expect(copied).toContain(notice);
+    expect(copied).toContain('1 line omitted');
+    expect(copied).toContain('Critical: 1');
+    fireEvent.click(screen.getByRole('button', { name: /Download draft/i }));
+    const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+    const downloaded = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(blob);
+    });
+    expect(downloaded).toBe(copied);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it('previews six formats without copying, downloading or invoking anything automatically', async () => {
     render(<ReportHandoff handoff={data} />);
     expect(screen.getAllByRole('option')).toHaveLength(6);

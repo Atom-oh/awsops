@@ -55,10 +55,19 @@ const TARGETS = [
   { key: 'finops', label: 'FinOps review context', section: 'cost_overview',
     checks: ['Confirm the billing period, currency and cost-data freshness.', 'Validate utilization and commitments before estimating savings.', 'What reliability constraint must a proposed saving preserve?'] },
 ] as const;
-const SOURCES = new Set(['inventory', 'cw_metrics', 'cost', 'idle', 'commitment', 'service_map', 'datasources_obs', 'posture', 'what_changed']);
 const MAX_INPUT = 100_000;
 const MAX_LINE = 4000;
 const PROSE_LIMIT = 650;
+const DRAFT_LIMIT = 3000; // Same character ceiling as the final egress-DLP backstop.
+const SEVERITIES = ['Critical', 'Warning', 'Info'] as const;
+type Omissions = { lines: number } & Record<typeof SEVERITIES[number], number>;
+const emptyOmissions = (): Omissions => ({ lines: 0, Critical: 0, Warning: 0, Info: 0 });
+
+function countOmission(stats: Omissions, line: string, countSeverity = false) {
+  stats.lines++;
+  const severity = countSeverity && /^\s*(?:[-*]\s+)?\[(Critical|Warning|Info)\]/.exec(line.slice(0, 128))?.[1];
+  if (severity) stats[severity as typeof SEVERITIES[number]]++;
+}
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -69,14 +78,6 @@ function date(value: unknown): string {
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : 'unknown';
 }
-function sources(value: unknown): string {
-  if (!Array.isArray(value)) return 'unknown';
-  if (!value.length) return 'none recorded';
-  const known = [...new Set(value.filter(v => typeof v === 'string' && SOURCES.has(v)))];
-  if (value.some(v => typeof v !== 'string' || !SOURCES.has(v))) known.push('unknown');
-  return known.join(', ');
-}
-
 /** Format only selected narrative from a known report. Never serialize source records or raw summary
  * objects. The existing regex redactor is best-effort, so also omit code/tables/credential-bearing
  * lines, URLs and identifiers. Manual review remains necessary; this is not an approval to publish.
@@ -85,14 +86,16 @@ export function buildReportHandoff(report: ReportEvidence, markdown: string | nu
   if (!Number.isSafeInteger(report.id) || report.id <= 0
       || !['succeeded', 'partial'].includes(report.status) || !markdown?.trim()) return null;
   let omitted = false;
-  let truncated = markdown.length > MAX_INPUT;
+  const inputTruncated = markdown.length > MAX_INPUT;
+  let truncated = inputTruncated;
   const sanitize = (line: string): string => {
     if (line.length > MAX_LINE) { omitted = truncated = true; return ''; }
+    const normalized = line.replace(/[\u0000-\u001f\u007f]/g, ' ');
     // Short secrets are not reliably caught by entropy-based DLP. Drop their entire prose line.
-    if (/\b(?:password|passwd|secrets?|tokens?|api[_ -]?key|access[_ -]?key|credentials?|authorization|cookies?|private[_ -]?key)\b|(?:\bBearer|\bBasic)\s+\S+|(?:xox[baprs]-|ntn_|gh[pousr]_)/i.test(line)) {
+    if (/\b(?:password|passwd|secrets?|tokens?|api[_ -]?key|access[_ -]?key|credentials?|authorization|cookies?|private[_ -]?key)\b|(?:\bBearer|\bBasic)\s+\S+|(?:xox[baprs]-|ntn_|gh[pousr]_)/i.test(normalized)) {
       omitted = true; return '';
     }
-    const masked = line
+    const masked = normalized
       .replace(/`[^`]*`/g, '[code omitted]')
       .replace(/!?\[[^\]]*\]\([^)]*\)/g, '[link omitted]')
       .replace(/(?:https?:\/\/|www\.)[^\s<>]+/gi, '[URL omitted]')
@@ -101,26 +104,41 @@ export function buildReportHandoff(report: ReportEvidence, markdown: string | nu
       .replace(/\b\d{12}\b/g, '[account omitted]')
       .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email omitted]')
       .replace(/\b(?:i|vpc|subnet|sg|eni|vol|snap|ami|nat|igw|tgw)-[0-9a-f]+\b/gi, '[resource omitted]')
-      .replace(/\b(?:[0-9a-f]{0,4}:){2,}[0-9a-f:]+\b/gi, '[address omitted]')
-      .replace(/[\u0000-\u001f\u007f]/g, ' ');
+      .replace(/(^|[^\w:])((?:[0-9a-f]{0,4}:){2,}[0-9a-f:]+)(?=$|[^\w:])/gi, (match, prefix: string, address: string) => {
+        const groups = address.split(':');
+        const compressed = address.includes('::') && !address.includes(':::')
+          && address.indexOf('::') === address.lastIndexOf('::');
+        const parts = groups.filter(Boolean);
+        const ipv6 = parts.every(p => p.length <= 4)
+          && (compressed ? parts.length < 8 : groups.length === 8 && parts.length === 8);
+        return ipv6 ? `${prefix}[address omitted]` : match; // HH:MM:SS is not an IPv6 address.
+      });
     const redacted = redactEgress(masked);
-    if (masked !== line || redacted.redactions.length) omitted = true;
+    if (masked !== normalized || redacted.redactions.length) omitted = true;
     return redacted.payload.trim();
   };
   const prose = new Map<string, string[]>();
+  const omissions = new Map<string, Omissions>();
   const allowed = new Set<string>(['executive_summary', ...TARGETS.map(t => t.section)]);
   let section = '';
+  const dropLine = (line: string, countSeverity = false) => {
+    if (!section || !line.trim()) return;
+    const stats = omissions.get(section) ?? emptyOmissions();
+    countOmission(stats, line, countSeverity);
+    omissions.set(section, stats);
+  };
   let fence: { char: string; size: number } | null = null;
   let pem = false;
   let input = markdown.slice(0, MAX_INPUT);
   // Never retain a partial line: its credential marker may be beyond the input bound.
-  if (truncated) input = input.slice(0, Math.max(0, input.lastIndexOf('\n')));
-  for (const line of input.split('\n')) {
+  if (inputTruncated) input = input.slice(0, Math.max(0, input.lastIndexOf('\n')));
+  for (const rawLine of input.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
     const oversized = line.length > MAX_LINE;
     if (oversized) omitted = truncated = true;
     // Linear delimiter scans preserve state even on omitted lines; prose regexes stay bounded.
-    if (line.includes('-----BEGIN ')) { pem = true; omitted = true; continue; }
-    if (pem) { if (line.includes('-----END ')) pem = false; continue; }
+    if (line.includes('-----BEGIN ')) { pem = true; omitted = true; dropLine(line); continue; }
+    if (pem) { dropLine(line); if (line.includes('-----END ')) pem = false; continue; }
     const leading = line.trimStart();
     if (leading.startsWith('```') || leading.startsWith('~~~')) {
       const char = leading[0];
@@ -128,10 +146,10 @@ export function buildReportHandoff(report: ReportEvidence, markdown: string | nu
       while (leading[size] === char) size++;
       if (!fence) fence = { char, size };
       else if (char === fence.char && size >= fence.size) fence = null;
-      omitted = true; continue;
+      omitted = true; dropLine(line); continue;
     }
-    if (fence) continue;
-    if (oversized) { if (line.startsWith('##')) section = ''; continue; }
+    if (fence) { dropLine(line); continue; }
+    if (oversized) { if (line.startsWith('##')) section = ''; dropLine(line, true); continue; }
     const heading = /^##\s+(.+?)\s*$/.exec(line);
     if (heading) {
       const key = DIAG_SECTIONS.find(s => titleMatches(s, heading[1]))?.key ?? '';
@@ -144,51 +162,85 @@ export function buildReportHandoff(report: ReportEvidence, markdown: string | nu
     const payload = marker ? line.slice(marker[0].length) : line;
     if (/^\s{4}|^\t|[|{}]|^\s*#{1,6}\s|^\s*[\w.-]+\s*[:=]/.test(line)
         || /^\s*["'[\]]|^\s*[\w.-]+\s*[:=]\s*["'[{]/.test(payload)) {
-      omitted = true; continue;
+      omitted = true; dropLine(line); continue;
     }
     const safe = sanitize(line);
-    if (!safe) continue;
+    if (!safe) { dropLine(line, true); continue; }
     const lines = prose.get(section) ?? [];
-    if (lines.length >= 3 || lines.join('\n').length >= PROSE_LIMIT) { truncated = true; continue; }
+    if (lines.length >= 3 || lines.join('\n').length >= PROSE_LIMIT) { truncated = true; dropLine(line, true); continue; }
     const remaining = PROSE_LIMIT - lines.join('\n').length - (lines.length ? 1 : 0);
-    if (remaining <= 0) { truncated = true; continue; }
-    if (safe.length > remaining) truncated = true;
-    lines.push(safe.slice(0, remaining));
+    // Keep complete lines: a cut qualifier could reverse a finding's meaning.
+    if (safe.length > remaining) { truncated = true; dropLine(line, true); continue; }
+    lines.push(safe);
     prose.set(section, lines);
   }
-  const title = sanitize(report.title ?? '').slice(0, 120) || `Diagnosis report #${report.id}`;
+  const safeTitle = sanitize(report.title ?? '');
+  if (safeTitle.length > 120) truncated = true;
+  const title = safeTitle.slice(0, 120) || `Diagnosis report #${report.id}`;
   const summary = record(report.summary);
   const tier = ['light', 'mid', 'deep'].includes(report.tier) ? report.tier : 'unknown';
   const common = [
-    `Scope: source report's diagnosed account; identifiers omitted. Tier: ${tier}. Status: ${report.status}.`,
+    `Scope: source report's diagnosed account; sanitized excerpt only. Tier: ${tier}. Status: ${report.status}.`,
     `Created: ${date(report.created_at)}; completed: ${date(report.finished_at)}.`,
     'Collection windows and freshness are source-specific; report creation time is not a measurement window.',
-    `Sources recorded: ${sources(report.sources_used)}. Degraded sources: ${sources(summary.degraded)}.`,
+    'Collector availability: unknown in this draft. Inspect the authenticated report and its data-coverage notes; source ok flags do not establish enabled coverage.',
     invariantSummary(summary),
     'Missing/unassessed evidence is not healthy zero. Revalidate scope, time and evidence before making decisions.',
     ...(report.status === 'partial' ? ['Partial report: some evidence or sections are incomplete.'] : []),
   ].join('\n');
-  const drafts = TARGETS.map(target => {
+  const makeNotices = () => [
+    'Selected excerpts only, not a complete report; higher-severity findings may be omitted. Review the authenticated source before transfer.',
+    'Sanitization is best-effort; check for remaining identifiers or secrets and confirm the audience.',
+    ...(omitted ? ['Sensitive or non-narrative content was redacted or omitted.'] : []),
+    ...(truncated ? ['Draft fields/excerpts are bounded or truncated; consult the authenticated source for full evidence.'] : []),
+    ...(inputTruncated ? ['Input limit reached; further omissions are unknown.'] : []),
+  ];
+  const renderDraft = (target: typeof TARGETS[number], notices: string[]) => {
     const heading = (text: string) => target.key === 'slack' ? `*${text}*` : `## ${text}`;
-    const text = [
+    const excerpts = ['executive_summary', target.section].map(key => ({
+      lines: [...(prose.get(key) ?? [])], stats: { ...(omissions.get(key) ?? emptyOmissions()) },
+    }));
+    const excerpt = ({ lines, stats }: typeof excerpts[number]) => {
+      const severity = SEVERITIES.filter(s => stats[s]).map(s => `${s}: ${stats[s]}`).join(', ');
+      const scope = `[excerpt bounded: ${inputTruncated ? 'at least ' : ''}${stats.lines} ${stats.lines === 1 ? 'line' : 'lines'} omitted${severity ? `; omitted severity markers — ${severity}` : ''}]`;
+      return `${scope}\n${lines.join('\n') || 'No narrative included in this excerpt; inspect the authenticated report for this section’s evidence and coverage.'}`;
+    };
+    const render = () => [
       heading(`${target.label}: ${title}`),
       'Manual handoff draft — review before transfer. No publishing or external agent invocation.',
       `Source: /ai-diagnosis?report=${report.id} (relative AWSops link; sign-in and report access required)`, '',
+      ...notices, '',
       heading('Report summary (excerpt)'),
-      (prose.get('executive_summary') ?? []).join('\n') || 'No eligible summary prose; inspect the authenticated source report.',
+      excerpt(excerpts[0]),
       '', common,
       '', heading('Review evidence (excerpt)'),
-      (prose.get(target.section) ?? []).join('\n') || 'No eligible prose for this review; request the missing evidence.',
+      excerpt(excerpts[1]),
       '', heading('Next questions / checks'), ...target.checks.map(check => `- ${check}`),
     ].join('\n');
-    const result = redactEgress(text);
-    if (result.redactions.includes('size-cap')) truncated = true;
+    let text = render();
+    let clipped = false;
+    // Budget before final DLP, so even output-size omissions have local counts.
+    while (text.length > DRAFT_LIMIT) {
+      const largest = excerpts.filter(e => e.lines.length)
+        .sort((a, b) => b.lines.join('\n').length - a.lines.join('\n').length)[0];
+      if (!largest) break;
+      countOmission(largest.stats, largest.lines.pop()!, true);
+      clipped = true;
+      text = render();
+    }
+    return { text, clipped };
+  };
+  let notices = makeNotices();
+  let rendered = TARGETS.map(target => renderDraft(target, notices));
+  if (!truncated && rendered.some(draft => draft.clipped)) {
+    truncated = true;
+    notices = makeNotices();
+    rendered = TARGETS.map(target => renderDraft(target, notices));
+  }
+  const drafts = TARGETS.map((target, i) => {
+    const result = redactEgress(rendered[i].text);
     return { target: target.key, label: target.label, text: result.payload,
       filename: `awsops-report-${report.id}-${target.key}.${target.key === 'slack' ? 'txt' : 'md'}` };
   });
-  return { drafts, notices: [
-    'Selected prose only; raw inventory, account dumps and source objects are excluded. Review before manual transfer.',
-    ...(omitted ? ['Sensitive or non-narrative content was redacted or omitted.'] : []),
-    ...(truncated ? ['Excerpts are bounded/truncated; consult the authenticated source for full evidence.'] : []),
-  ] };
+  return { drafts, notices };
 }

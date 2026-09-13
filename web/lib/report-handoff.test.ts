@@ -101,7 +101,7 @@ Check evidence before remediation.`;
   it('uses no arbitrary legacy body when known summary sections are absent', () => {
     const handoff = buildReportHandoff(report, '# Legacy\nUNRECOGNIZED_DUMP')!;
     expect(handoff.drafts[0].text).not.toContain('UNRECOGNIZED_DUMP');
-    expect(handoff.drafts[0].text).toContain('No eligible summary prose');
+    expect(handoff.drafts[0].text).toContain('No narrative included in this excerpt');
   });
 
   it.each(['running', 'failed'])('does not export a %s report', status => {
@@ -172,8 +172,89 @@ Check evidence before remediation.`;
   });
   it('calls unrecognized source keys unknown without exporting their arbitrary values', () => {
     const text = buildReportHandoff({ ...report, sources_used: ['PRIVATE_UNKNOWN'], summary: { degraded: ['PRIVATE_UNKNOWN'] } }, markdown)!.drafts[0].text;
-    expect(text).toContain('Sources recorded: unknown. Degraded sources: unknown.');
+    expect(text).toContain('Collector availability: unknown in this draft');
     expect(text).not.toContain('PRIVATE_UNKNOWN');
+  });
+  it.each([
+    { key: 'datasources_obs', ok: true, degraded: false, data: { instances: [], queried: 0 },
+      notes: 'datasource diagnosis disabled (datasource_diagnosis_enabled flag off)',
+      coverage: '비활성 (datasource_diagnosis_enabled OFF — 외부 datasource 미활용)' },
+    { key: 'datasources_obs', ok: true, degraded: false, data: { instances: [], queried: 0 },
+      notes: 'no connected observability datasources',
+      coverage: '연결된 datasource/빌드된 신호 없음 — no connected observability datasources' },
+    { key: 'posture', ok: true, degraded: false, data: { enabled: false, findings_by_severity: {} },
+      notes: 'Security Hub not subscribed in this account/region', coverage: 'empty (no data returned)' },
+    { key: 'cw_metrics', ok: true, degraded: false, data: { by_instance: {}, avg_cpu: null },
+      notes: 'no ec2 instance ids in inventory', coverage: 'empty (no data returned)' },
+    { key: 'cost', ok: false, degraded: true, data: {}, notes: 'collection failed',
+      coverage: 'degraded — collection failed' },
+  ])('does not turn producer ok flags into enabled collector coverage: $notes', collector => {
+    // report.py builds these arrays from _result() flags, not from enabled/queried state.
+    const collected = [collector];
+    const input = { ...report, sources_used: collected.filter(c => c.ok).map(c => c.key),
+      summary: { ...report.summary, degraded: collected.filter(c => c.degraded).map(c => c.key) } };
+    const md = markdown + `\n## Data coverage\n- \`${collector.key}\`: ${collector.coverage}`;
+    for (const draft of buildReportHandoff(input, md)!.drafts) {
+      expect(draft.text).toContain('Collector availability: unknown in this draft');
+      expect(draft.text).toContain('authenticated report');
+      expect(draft.text).not.toMatch(/Sources recorded:|Degraded sources:/);
+    }
+  });
+  it('puts transferable notices and section omission counts ahead of bounded findings', () => {
+    const section = ['[Info] First observation.', '[Info] Second observation.', '[Info] Third observation.',
+      '[Critical] Late critical finding.', '[Warning] Late warning finding.'].join('\n');
+    const md = `## Executive Summary\n${section}\n## Security Posture\n${section}`;
+    const handoff = buildReportHandoff(report, md)!;
+    for (const draft of handoff.drafts) {
+      for (const notice of handoff.notices) {
+        expect(draft.text).toContain(notice);
+        expect(draft.text.indexOf(notice)).toBeLessThan(draft.text.indexOf('Report summary (excerpt)'));
+      }
+      expect(draft.text).toContain('not a complete report');
+      expect(draft.text).toContain('2 lines omitted');
+      expect(draft.text).toContain('Critical: 1');
+      expect(draft.text).toContain('Warning: 1');
+      expect(draft.text.indexOf('2 lines omitted')).toBeLessThan(draft.text.indexOf('[Info] First observation.'));
+    }
+    const security = handoff.drafts.find(d => d.target === 'security')!.text;
+    expect(security.match(/2 lines omitted/g)).toHaveLength(2);
+    expect(security).not.toContain('Late critical finding.');
+  });
+  it('accounts for whole-line omissions when the complete transferred draft hits its size budget', () => {
+    const line = `[Info] ${'Observation '.repeat(17)}`;
+    const section = [line, line, line, '[Critical] Later risk.'].join('\n');
+    const handoff = buildReportHandoff({ ...report, title: 'T'.repeat(120) },
+      `## Executive Summary\n${section}\n## Recommendations\n${section}`)!;
+    for (const draft of handoff.drafts) {
+      expect(draft.text.length).toBeLessThanOrEqual(3000);
+      for (const notice of handoff.notices) expect(draft.text).toContain(notice);
+      expect(draft.text).toContain('Critical: 1');
+      expect(draft.text).not.toContain('…[truncated]'); // budget omissions are counted before the final DLP backstop
+    }
+  });
+  it('labels unscanned tails as unknown rather than claiming complete omission counts', () => {
+    const md = ('## Executive Summary\n[Info] Seen.\n').padEnd(100_100, '\n') + '[Critical] Unscanned.';
+    const handoff = buildReportHandoff(report, md)!;
+    for (const draft of handoff.drafts) {
+      expect(draft.text).toContain('further omissions are unknown');
+      expect(draft.text).toContain('at least 0 lines omitted');
+    }
+  });
+  it('keeps clock times and benign CRLF normalization without a redaction warning', () => {
+    const handoff = buildReportHandoff(report, '## Executive Summary\r\n[Info] Latency rose at 10:00:00 and 23:59:59 UTC.\r\n')!;
+    expect(handoff.drafts[0].text).toContain('10:00:00 and 23:59:59');
+    expect(handoff.drafts[0].text).not.toContain('[address omitted]');
+    expect(handoff.notices).not.toContain('Sensitive or non-narrative content was redacted or omitted.');
+  });
+  it('still masks compressed and full IPv6 addresses', () => {
+    const text = buildReportHandoff(report, '## Executive Summary\n[Info] Endpoints fd00::1 and 2001:db8:0:0:0:0:0:1 were inspected.')!.drafts[0].text;
+    expect(text).not.toMatch(/fd00::1|2001:db8/);
+    expect(text).toContain('[address omitted]');
+  });
+  it('does not claim evidence is absent when the excerpt excludes its table or section', () => {
+    const text = buildReportHandoff(report, '## Executive Summary\n| metric | value |\n## External observability signals\nEvidence in a non-exported section.')!.drafts[0].text;
+    expect(text).toContain('No narrative included in this excerpt');
+    expect(text).not.toMatch(/request the missing evidence|No eligible prose/);
   });
   it('skips an oversized ordinary line and preserves later findings', () => {
     const md = `## Executive Summary\n${'X'.repeat(5000)}\n[Info] Evidence continues.\n## Recommendations\n[Warning] Review the deployment.`;
