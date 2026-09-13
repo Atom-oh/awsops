@@ -8,12 +8,7 @@ description: Connect observability providers, verify access, and explore evidenc
 
 Open **Integrations → Datasources** to register observability endpoints and open an instance's **Explore →** page. Multiple instances of the same provider are supported. A saved configuration, a successful connection test, and a healthy workload are different states.
 
-## Access and scope
-
-- Authenticated users can list configured instances, use Explore, and request AI query drafts.
-- Administrators create, edit, delete and choose defaults, manage credentials, and run connection probes. Endpoint/settings details are shown only to administrators.
-- Registration is global. Changing the sidebar account does not switch the selected datasource endpoint; Explore queries the selected instance ID.
-- The first instance of a kind becomes its default. The default marker is a selection preference, not a connectivity or health result.
+**Access and scope** Authenticated users can list configured instances, use Explore, and request AI query drafts. Administrators create, edit, delete and choose defaults, manage credentials, and run connection probes. Endpoint/settings details are shown only to administrators. Registration is global. Changing the sidebar account does not switch the selected datasource endpoint; Explore queries the selected instance ID. The first instance of a kind becomes its default. The default marker is a selection preference, not a connectivity or health result.
 
 ## Supported providers
 
@@ -34,16 +29,14 @@ Use metric, label, service and table names that exist in your environment. Jaege
 
 1. Select **Add Datasource**, choose a provider, and enter a name and API base URL. The form supplies provider-specific URL hints; use the correct Datadog site or Dynatrace environment.
 2. Enter authentication details. Keep credentials out of the URL; API base URLs must not contain user information, query parameters or fragments.
-3. Supply **Org ID (X-Scope-OrgID)** whenever the backend requires a tenant header, for any connector kind or authentication method. A blank field preserves the stored tenant when editing the same endpoint. Re-enter credentials and the tenant when changing the address or repairing mismatched stored addresses. Explicit API input `creds: { org_id: '' }` removes the tenant header.
+3. Supply **Org ID (X-Scope-OrgID)** when the backend requires it, for any connector/auth method. Blank edits preserve the tenant at the same endpoint; address changes or mismatches require credentials and the tenant again. To remove the tenant, explicitly select **Clear stored Org ID** in Edit (API: `creds: { org_id: '' }`). It starts unchecked, disables the Org ID input while checked, and is never selected automatically by an endpoint change.
 4. Optionally set Timeout (integer seconds 1–60, default 10) and a ClickHouse Database (identifier, at most 128 characters; no `system`/`information_schema`).
 5. Select **Test Connection** and inspect success/failure and, on success, round-trip latency. Datadog validates both API-key validity and application-key metric-query access. An empty query result can still be a successful probe.
 6. Select **Save**, then open **Explore →** and run a small read-only query to verify the intended dataset. ClickHouse `/ping`, for example, establishes reachability rather than query permission.
 
 Testing is recommended; saving is not proof that a probe succeeded. Editing does not reveal stored secrets. Keep the endpoint and authentication method unchanged, and leave credential fields blank to retain stored values. An edit-time probe reuses only that instance's saved credentials when the entire endpoint is unchanged; changing host, scheme, port or path requires re-entry. Connection-field edits clear the previous probe result.
 
-- **None** needs no auth; **Basic** uses username/password; **Bearer token** uses a token. Dynatrace preselects token auth, sends `Authorization: Api-Token`, and needs `metrics.read`.
-- **Custom header** allows two name/value pairs; Host, Content-Length and Authorization overrides are blocked. Datadog preselects **API key** / **Application key**, sent as `DD-API-KEY` / `DD-APPLICATION-KEY`.
-- Credentials stay server-side in Secrets Manager and are not returned to the form.
+**None** needs no auth; **Basic** uses username/password; **Bearer token** uses a token. Dynatrace preselects token auth, sends `Authorization: Api-Token`, and needs `metrics.read`. **Custom header** allows two name/value pairs; Host, Content-Length and Authorization overrides are blocked. Datadog preselects **API key** / **Application key**, sent as `DD-API-KEY` / `DD-APPLICATION-KEY`. Credentials stay server-side in Secrets Manager and are not returned to the form.
 
 ### Read the state correctly
 

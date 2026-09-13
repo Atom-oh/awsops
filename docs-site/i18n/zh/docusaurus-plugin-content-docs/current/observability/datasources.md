@@ -8,12 +8,7 @@ description: 连接可观测性提供商、验证访问，并通过只读查询�
 
 通过**集成 → Datasources** 注册可观测性端点，再打开实例的 **浏览 →** 页面。同一种提供商可注册多个实例。配置已保存、连接测试成功和工作负载健康是不同状态。
 
-## 权限与范围
-
-- 已登录用户可以查看实例列表、使用 Explore，并请求 AI 查询草稿。
-- 管理员负责创建、编辑、删除、选择默认实例、管理凭证和执行连接测试。端点与设置详情仅向管理员显示。
-- 注册配置是全局的。切换侧边栏账号不会切换数据源端点；Explore 按所选实例 ID 查询。
-- 同类型的首个实例成为默认实例。默认标记是选择偏好，不是连接或健康检查结果。
+**权限与范围** 已登录用户可以查看实例列表、使用 Explore，并请求 AI 查询草稿。 管理员负责创建、编辑、删除、选择默认实例、管理凭证和执行连接测试。端点与设置详情仅向管理员显示。 注册配置是全局的。切换侧边栏账号不会切换数据源端点；Explore 按所选实例 ID 查询。 同类型的首个实例成为默认实例。默认标记是选择偏好，不是连接或健康检查结果。
 
 ## 支持的提供商
 
@@ -34,16 +29,14 @@ description: 连接可观测性提供商、验证访问，并通过只读查询�
 
 1. 选择**添加数据源**、提供商，输入名称和 API 基础 URL。表单提供类型对应的 URL 提示；请使用正确的 Datadog 站点或 Dynatrace 环境。
 2. 输入认证信息。不要将凭证放入 URL；API 基础 URL 不得包含用户信息、查询参数或片段。
-3. 无论连接器类型或认证方式，只要后端要求租户标头，就填写 **Org ID (X-Scope-OrgID)**。编辑同一端点时，留空会保留已保存的租户。更改地址或修复已保存地址不一致的问题时，请重新输入凭证和租户。API 显式传入 `creds: { org_id: '' }` 会移除租户标头。
+3. 无论连接器类型或认证方式，请填写后端要求的 **Org ID (X-Scope-OrgID)**。同一端点留空会保留租户；地址更改或不一致时需重新输入凭证和租户。若要移除租户，请在编辑中明确勾选默认未选中的 **清除已保存的 Org ID**（API: `creds: { org_id: '' }`）。勾选期间 Org ID 输入框被禁用，更改端点不会自动勾选此项。
 4. 按需设置 Timeout（整数秒1–60，默认10）和 ClickHouse Database（最多128字符的标识符，不允许 `system`/`information_schema`）。
 5. 点击**测试连接**并检查成功或失败状态。成功时显示往返延迟。Datadog 验证 API key 和 Application key 的指标查询权限；空查询结果也可能表示连接测试成功。
 6. **保存**后，通过 **浏览 →** 执行一个小范围只读查询，确认目标数据集访问。例如，ClickHouse `/ping` 只验证可达性，不证明查询权限。
 
 建议先测试，但保存本身不代表测试成功。编辑时不会显示已存储的秘密值。保持端点和认证方式不变，并将认证字段留空，可继续使用已存值。编辑测试仅在完整端点不变时复用该实例的凭证；更改主机、协议、端口或路径后必须重新输入。修改连接字段会清除先前测试结果。
 
-- **None** 无需认证，**Basic** 使用用户名和密码，**Bearer token** 使用令牌。Dynatrace 默认选择令牌认证，发送 `Authorization: Api-Token`，并需要 `metrics.read`。
-- **Custom header** 支持最多两组名称和值，禁止覆盖 Host、Content-Length、Authorization。Datadog 默认选择 **API key** / **Application key**，分别发送为 `DD-API-KEY` / `DD-APPLICATION-KEY`。
-- 凭证存储在服务端 Secrets Manager，不会返回到表单。
+**None** 无需认证，**Basic** 使用用户名和密码，**Bearer token** 使用令牌。Dynatrace 默认选择令牌认证，发送 `Authorization: Api-Token`，并需要 `metrics.read`。 **Custom header** 支持最多两组名称和值，禁止覆盖 Host、Content-Length、Authorization。Datadog 默认选择 **API key** / **Application key**，分别发送为 `DD-API-KEY` / `DD-APPLICATION-KEY`。 凭证存储在服务端 Secrets Manager，不会返回到表单。
 
 ### 正确理解状态
 

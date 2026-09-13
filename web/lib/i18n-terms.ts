@@ -7,6 +7,8 @@ import type { Lang } from './i18n';
 type Pair = { en: string; zh: string; ja: string };
 
 export const TERMS: Record<string, Pair> = {
+  '저장된 Org ID 지우기': { en: 'Clear stored Org ID', zh: '清除已保存的 Org ID', ja: '保存済み Org ID をクリア' },
+  'Org ID를 입력하거나 저장된 Org ID 지우기를 선택하세요.': { en: 'Enter Org ID or select Clear stored Org ID.', zh: '请输入 Org ID，或选择“清除已保存的 Org ID”。', ja: 'Org ID を入力するか、「保存済み Org ID をクリア」を選択してください。' },
   '요청한 데이터소스를 사용할 수 없습니다. 다른 인스턴스를 직접 선택하세요.': { en: 'The requested datasource is unavailable. Select another instance explicitly.', zh: '请求的数据源不可用。请明确选择其他实例。', ja: '要求されたデータソースは利用できません。別のインスタンスを明示的に選択してください。' },
   '기본 연결 설정 · 인스턴스 저장 필요': { en: 'Default connection only · save instance configuration', zh: '仅有默认连接配置 · 需要保存实例配置', ja: '既定の接続設定のみ・インスタンス設定の保存が必要' },
   '연결 주소 확인 필요': { en: 'Endpoint setup required', zh: '需要检查连接地址', ja: '接続先の確認が必要' },
