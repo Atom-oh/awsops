@@ -38,6 +38,10 @@ Admin authority is Cognito admin-group membership or the SSM email allowlist, re
 (`allow_admin_create_user_only=true`); client-writable attributes exclude email and email_verified.
 Recovery is `admin_only`, including Hosted UI recovery: password resets are operator tasks.
 
+`verifyUser()` adopts `email` only when `email_verified === true`; otherwise it omits email
+while retaining valid sub-based access. SSM email-admin and legacy-owner matching use only this
+adopted claim. A truthy string or an unverified address must not satisfy that gate.
+
 ### BFF authorization and revocation
 
 Every data-returning/billable user route must call `verifyUser()` and enforce its own authorization

@@ -21,11 +21,15 @@ also need explicit controls without treating every communication as infrastructu
 When enabled, bound the body and rate-limit requests, then authenticate by envelope:
 
 - SNS envelopes require SNS signature verification and an enabled ingress integration's TopicArn
-  allowlist. Only then may subscription confirmation fetch an SNS-host URL with a bounded timeout.
+  allowlist. Only then may subscription confirmation fetch a URL matching
+  `^https://sns\.[a-z0-9-]+\.amazonaws\.com/`, checked immediately before the five-second-bounded fetch.
 - Direct POSTs accept configured active/standby bearer tokens or HMAC-SHA256 over the raw body,
   using constant-time comparison. Secrets come from encrypted SSM parameters, not local config files.
 - Source hints/headers do not choose the authentication scheme. Missing/invalid credentials fail closed.
   Normalize after authentication and discard AWSops write-back echoes before enqueue.
+
+Behind CloudFront and ALB, the rate-limit key uses the second-to-last nonempty `x-forwarded-for`
+entry; a single entry falls back to that address, and an empty header to `unknown`.
 
 The implemented bearer/SNS branches are part of the current route; the older HMAC-only description
 was incomplete. This clarification does not widen the public-path list or enable incident execution.
@@ -51,6 +55,12 @@ Compliance completion uses the same topic and pause semantics after successful p
 its 60-minute per-benchmark dedup window atomically **before** publishing; preserve the claim on
 failure and do not overwrite prior delivery outcomes on re-drive. `skipped_dedup` records suppression.
 The message attribute identifies compliance notices; no additional topic or general write authority is implied.
+
+The [diagnosis outcome migration](../../terraform/v2/foundation/migrations/01M1EG88Z182Q5ZCQ7FZHDHZZJ_diagnosis_reports_notify_outcome.sql)
+and [compliance notification migration](../../terraform/v2/foundation/migrations/01M1FWJNXWQDP5B929S2MJYBMS_compliance_runs_notify.sql)
+also rebuild the corresponding `sql_reader` views with explicit columns and restore their
+`awsops_sql_reader` SELECT grants when the reader role/schema exists. Preserve that projection
+contract when adding notification metadata; a base-table column alone does not expose it to the reader.
 
 ### Downloads
 

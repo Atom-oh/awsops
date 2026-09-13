@@ -29,6 +29,14 @@ inventory or Network Path Check identity reads. Athena activity uses the separat
 automatically trust every host collector or AgentCore role; verify the principal
 used by the intended read path.
 
+For worker reads, the host must already have worker infrastructure applied with
+`workers_enabled=true`. Resolve its role from the host backend before adding worker trust:
+
+```bash
+HOST_WORKER_ROLE_ARN=$(terraform -chdir=terraform/v2/foundation output -raw worker_task_role_arn) || exit 1
+test -n "$HOST_WORKER_ROLE_ARN" && test "$HOST_WORKER_ROLE_ARN" != null || exit 1
+```
+
 For third-party accounts, choose an ExternalId of at least eight characters and use
 the same value in the template and account registration. ExternalId is a coordination
 value/confused-deputy guard, not a credential.

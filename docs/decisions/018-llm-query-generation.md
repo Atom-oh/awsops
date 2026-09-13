@@ -50,6 +50,10 @@ and SETTINGS before execution; graph generation relies on the connector for that
 
 ### C. ClickHouse graph fallback
 
+The `workers.tf` precondition directly requires `agentcore_enabled` for `graph_querygen_enabled`,
+in addition to §A's datasource prerequisite. The precheck reads the provisioned interpreter ID from
+SSM; an absent/unavailable interpreter skips the advisory check, not the connector validation.
+
 `scripts/v2/workers/graph_querygen.py` is scoped to one `trace_spans` graph query. It checks required
 aliases, performs a `LIMIT 1` dry-run, and can use an advisory Code Interpreter precheck when configured.
 It does **not** have the signal path's identifier sanitation, relevance gate, weekly budget, BFF
