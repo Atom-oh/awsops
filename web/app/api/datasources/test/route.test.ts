@@ -16,7 +16,7 @@ vi.mock('@/lib/integration-credentials', () => ({
 }));
 vi.mock('@/lib/mcp-lambda-invoke', () => ({
   invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a),
-  KNOWN_MCP_LAMBDA_KINDS: ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'],
+  KNOWN_MCP_LAMBDA_KINDS: ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir', 'datadog'],
 }));
 
 function req(body: unknown) {
@@ -40,6 +40,27 @@ beforeEach(() => {
 });
 
 describe('POST /api/datasources/test', () => {
+  it('tests a partial Datadog rotation using the other key by header name', async () => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'datadog', endpoint: 'https://api.datadoghq.com', authType: 'custom_header', settings: {} });
+    getCredentialById.mockResolvedValue({
+      endpoint: 'https://api.datadoghq.com',
+      headerName: 'DD-APPLICATION-KEY', headerValue: 'old-app',
+      headerName2: 'DD-API-KEY', headerValue2: 'old-api',
+    });
+    const { POST } = await import('./route');
+    await POST(req({ id: 7, kind: 'datadog', endpoint: 'https://api.datadoghq.com', creds: { headerName: 'DD-API-KEY', headerValue: 'new-api' } }));
+    expect(invokeMcpLambdaTool.mock.calls[0][0].connConfig).toMatchObject({
+      headerName: 'DD-API-KEY', headerValue: 'new-api',
+      headerName2: 'DD-APPLICATION-KEY', headerValue2: 'old-app',
+    });
+  });
+  it('reuses only the exact id-secret endpoint for migrated rows without endpoint metadata', async () => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: null, authType: 'bearer', settings: {} });
+    const { POST } = await import('./route');
+    const response = await POST(req({ id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/api' }));
+    expect((await response.json()).ok).toBe(true);
+    expect(invokeMcpLambdaTool.mock.calls[0][0].connConfig.token).toBe('stored-secret');
+  });
   it('401 unauthenticated / 403 non-admin', async () => {
     verifyUser.mockResolvedValueOnce(null);
     let { POST } = await import('./route');

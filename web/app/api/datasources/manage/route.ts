@@ -13,6 +13,7 @@ import { invokeMcpLambdaTool, type ConnConfig } from '@/lib/mcp-lambda-invoke';
 import { upsertSchema } from '@/lib/datasource-schema';
 import { enqueueDatasourceIndex } from '@/lib/diag-signals';
 import { currentAccountId } from '@/lib/account';
+import { normalizeDatadogHeaderSlots } from '@/lib/datasource-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -178,7 +179,8 @@ export async function PATCH(request: Request) {
     // Merge base: for a migrated DEFAULT instance the credential can live only under the
     // kind mirror (round-4 gate) — an id-only read would come back empty and a settings-only
     // PATCH would de-authenticate the instance AND clobber the mirror the agent path reads.
-    const existing: Record<string, unknown> = { ...((await getCredentialById(id, ds.isDefault ? ds.kind : undefined)) ?? {}) };
+    const saved = (await getCredentialById(id, ds.isDefault ? ds.kind : undefined)) ?? {};
+    const existing: Record<string, unknown> = ds.kind === 'datadog' ? normalizeDatadogHeaderSlots(saved) : { ...saved };
     // Settings keys are stripped UNCONDITIONALLY (the row is authoritative; an endpoint-only
     // PATCH must not carry a historical stale timeoutS/database forward either).
     delete existing.timeoutS;

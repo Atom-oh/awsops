@@ -15,6 +15,14 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('DatasourceForm', () => {
+  it('retains the tenant when the authentication method changes on the same provider', () => {
+    render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'loki' } });
+    const orgInput = screen.getByText(/Org ID/).parentElement!.querySelector('input')!;
+    fireEvent.change(orgInput, { target: { value: 'tenant-a' } });
+    fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'bearer' } });
+    expect(screen.getByDisplayValue('tenant-a')).toBeTruthy();
+  });
   it('shows conditional credential fields per auth method', () => {
     render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
     // none → no credential inputs

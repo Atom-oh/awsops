@@ -72,6 +72,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
   const [execMs, setExecMs] = useState<number | null>(null);
   // gap-audit L200: what the last successful AI generation was drafted from (null = no banner).
   const [genFrom, setGenFrom] = useState<string | null>(null);
+  const [listState, setListState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [reload, setReload] = useState(0);
 
   const ds = list.find((d) => d.id === selId) ?? null;
   const canRange = ds ? RANGE_KINDS.has(ds.kind) : false;
@@ -80,24 +82,28 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
   const queryIsMultiline = ds?.kind === 'clickhouse';
 
   useEffect(() => {
+    let current = true;
+    setListState('loading');
     (async () => {
       try {
         const r = await fetch('/api/datasources');
-        if (r.ok) {
-          const items: DatasourceInstance[] = (await r.json()).datasources ?? [];
-          setList(items);
-          // preselect: the pinned instance, else the only one
-          if (instanceId && items.some((d) => d.id === instanceId)) setSelId(instanceId);
-          else if (!instanceId && items.length === 1) setSelId(items[0].id);
-        }
-      } catch { /* leave empty; the panel still renders */ }
+        const body = await r.json();
+        if (!r.ok || body.available === false) throw new Error('unavailable');
+        if (!current) return;
+        const items: DatasourceInstance[] = body.datasources ?? [];
+        setList(items);
+        setListState('ready');
+        if (instanceId && items.some((d) => d.id === instanceId)) setSelId(instanceId);
+        else setSelId(previous => items.some(d => d.id === previous) ? previous : items.length === 1 ? items[0].id : '');
+      } catch { if (current) setListState('error'); }
     })();
-  }, [instanceId]);
+    return () => { current = false; };
+  }, [instanceId, reload]);
 
   // `windowOverride` lets the range dropdown re-run immediately with its new value (state is async).
   const run = useCallback(async (windowOverride?: number, queryOverride?: string) => {
     const q = queryOverride ?? query;  // a quick-query chip can run its expr without waiting on setQuery
-    if (selId === '' || !q.trim()) return;
+    if (listState !== 'ready' || selId === '' || !q.trim()) return;
     const w = windowOverride ?? rangeWindow;
     const kindNow = list.find((d) => d.id === selId)?.kind; // bind kind to THIS query, not the live selection
     const range = canRange && w > 0 ? { window: w, step: autoStep(w, kindNow) } : false;
@@ -116,11 +122,11 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
     } catch (e) {
       setErr(e instanceof Error ? e.message : tt('쿼리 실패'));
     } finally { setBusy(false); }
-  }, [selId, query, rangeWindow, canRange, list, tt]);
+  }, [selId, query, rangeWindow, canRange, list, listState, tt]);
 
   // NL → query (AI drafts, user reviews, then runs). Never auto-runs.
   const generate = useCallback(async () => {
-    if (selId === '' || !nl.trim()) return;
+    if (listState !== 'ready' || selId === '' || !nl.trim()) return;
     setGenBusy(true); setErr(''); setGenWarn('');
     try {
       const r = await fetch('/api/datasources/generate', {
@@ -137,17 +143,24 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
     } catch (e) {
       setErr(e instanceof Error ? e.message : tt('AI 생성 실패'));
     } finally { setGenBusy(false); }
-  }, [selId, nl, tt]);
+  }, [selId, nl, listState, tt]);
 
   return (
     <div className="space-y-4">
       <Card className="p-4 space-y-3">
+        {listState === 'loading' && <p role="status" className="text-[13px] text-ink-500">{tt('불러오는 중…')}</p>}
+        {listState === 'error' && (
+          <div role="alert" className="space-y-2 text-[13px] text-rose-600">
+            <p>{tt('데이터소스 설정을 불러오지 못했습니다. 새로고침하거나 관리자에게 확인하세요.')}</p>
+            <Button variant="secondary" onClick={() => setReload(value => value + 1)}>{tt('다시 시도')}</Button>
+          </div>
+        )}
         {/* Always show the picker (preselected to the scoped instance) — never a dead-end if the
             scoped id isn't in the list yet. */}
         {(
           <div className="flex flex-wrap items-center gap-2">
             {/* switching instances resets the range to 즉시 — a 30d window carried onto Loki would 400 (per-kind 7d cap) */}
-            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy || genBusy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); setGenFrom(null); setExecMs(null); setRangeWindow(0); }}>
+            <select aria-label={tt('데이터소스')} className={selectCls} value={selId} disabled={busy || genBusy || listState !== 'ready'} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); setGenFrom(null); setExecMs(null); setRangeWindow(0); }}>
               <option value="">{tt('데이터소스 선택…')}</option>
               {list.map((d) => (
                 <option key={d.id} value={d.id}>{d.name} ({d.kind}){d.isDefault ? ` ${tt('· 기본')}` : ''}</option>
@@ -176,7 +189,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             onKeyDown={(e) => { if (e.key === 'Enter') generate(); }}
             disabled={!ds}
           />
-          <Button variant="secondary" onClick={generate} disabled={genBusy || !ds || !nl.trim()}>
+          <Button variant="secondary" onClick={generate} disabled={genBusy || listState !== 'ready' || !ds || !nl.trim()}>
             {genBusy ? tt('생성 중…') : tt('AI로 생성')}
           </Button>
         </div>
@@ -258,8 +271,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
           onPick={(expr) => { setQuery(expr); setGenFrom(null); run(undefined, expr); }}
         />
         <div className="flex items-center gap-2">
-          <Button onClick={() => run()} disabled={busy || !ds || !query.trim()}>{busy ? tt('실행 중…') : tt('실행')}</Button>
-          {list.length === 0 && (
+          <Button onClick={() => run()} disabled={busy || listState !== 'ready' || !ds || !query.trim()}>{busy ? tt('실행 중…') : tt('실행')}</Button>
+          {listState === 'ready' && list.length === 0 && (
             <span className="text-[12px] text-ink-400">{tt('설정된 데이터소스가 없습니다 — Datasources 탭에서 추가하세요.')}</span>
           )}
         </div>

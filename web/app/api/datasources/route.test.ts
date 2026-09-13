@@ -29,6 +29,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/datasources (list instances)', () => {
+  it('counts an id-keyed migrated configuration without claiming a live connection', async () => {
+    listDatasources.mockResolvedValue([{ id: 2, name: 'migrated', kind: 'prometheus', endpoint: null, authType: 'bearer', isDefault: true }]);
+    const { GET } = await import('./route');
+    expect((await (await GET(get())).json()).datasources[0]).toMatchObject({ connected: true, configurationStatus: 'stored' });
+  });
   it('401 unauthenticated', async () => {
     verifyUser.mockResolvedValue(null);
     const { GET } = await import('./route');

@@ -21,6 +21,20 @@ export interface DatasourceCreds {
   org_id?: string;
 }
 
+/** Older Datadog forms accepted the two keys in either slot. Normalize a recognized
+ * pair before a partial credential update so the untouched key keeps its identity. */
+export function normalizeDatadogHeaderSlots(creds: Record<string, unknown>): Record<string, unknown> {
+  const first = typeof creds.headerName === 'string' ? creds.headerName.toLowerCase() : '';
+  const second = typeof creds.headerName2 === 'string' ? creds.headerName2.toLowerCase() : '';
+  if (new Set([first, second]).size !== 2
+    || ![first, second].every(name => ['dd-api-key', 'dd-application-key'].includes(name))) return { ...creds };
+  return {
+    ...creds, headerName: 'DD-API-KEY', headerName2: 'DD-APPLICATION-KEY',
+    headerValue: first === 'dd-api-key' ? creds.headerValue : creds.headerValue2,
+    headerValue2: first === 'dd-application-key' ? creds.headerValue : creds.headerValue2,
+  };
+}
+
 // RFC 7230 token: header field-name grammar (no separators / control chars / whitespace).
 const HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
 // Names a custom header may never set (would let a datasource override transport-critical headers).

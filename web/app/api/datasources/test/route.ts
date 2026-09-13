@@ -10,7 +10,7 @@ import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getDatasource, sanitizeDsSettings } from '@/lib/datasources';
 import { getCredentialById } from '@/lib/integration-credentials';
-import { buildAuthHeaders, type AuthType } from '@/lib/datasource-auth';
+import { buildAuthHeaders, normalizeDatadogHeaderSlots, type AuthType } from '@/lib/datasource-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +29,7 @@ const object = (value: unknown): value is Record<string, unknown> =>
 // Upstream error text may echo authorization headers. Classify it, never return it.
 function failure(error: unknown) {
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error ?? '');
-  if (/401|403|unauthoriz|forbidden/i.test(text)) {
+  if (/401|403|unauthoriz|forbidden|Datadog API key validation failed/i.test(text)) {
     return { ok: false, code: 'authentication', error: 'Authentication failed. Check the credentials, API site and read permissions.' };
   }
   if (/ResourceNotFound|AccessDenied|not connected|not configured/i.test(text)) {
@@ -90,9 +90,12 @@ export async function POST(request: Request) {
     let stored: Record<string, unknown> = {};
     // No kind-mirror fallback. Stored secrets are reusable only for this instance's
     // unchanged URL, including path: a shared host can serve multiple tenants.
-    if (ds && endpoint === ds.endpoint) {
+    if (ds) {
       const candidate = await getCredentialById(ds.id);
-      if (object(candidate) && (!candidate.endpoint || candidate.endpoint === endpoint)) stored = candidate;
+      const savedEndpoint = ds.endpoint ?? candidate?.endpoint;
+      if (endpoint === savedEndpoint && object(candidate) && (!candidate.endpoint || candidate.endpoint === endpoint)) {
+        stored = kind === 'datadog' ? normalizeDatadogHeaderSlots(candidate) : candidate;
+      }
     }
     const creds: Record<string, string> = {};
     const incoming = object(body.creds) ? body.creds : {};

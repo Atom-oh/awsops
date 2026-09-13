@@ -147,12 +147,12 @@ describe('GET', () => {
     expect(new Set(body.mcpConfigured)).toEqual(new Set(['datadog']));
   });
 
-  it('NARROW downgrade: Secrets Manager AccessDenied → 200 empty (not 500)', async () => {
+  it('marks inaccessible credentials as unavailable, not unconfigured', async () => {
     getConfiguredSlugs.mockRejectedValue(Object.assign(new Error('denied'), { name: 'AccessDeniedException' }));
     const { GET } = await import('./route');
     const resp = await GET(req(undefined, 'GET'));
     expect(resp.status).toBe(200);
-    expect((await resp.json()).configured).toEqual([]);
+    expect(await resp.json()).toMatchObject({ configured: [], available: false });
   });
 
   it('a NON-Secrets-Manager error (e.g. PG) surfaces as 500 — not masked', async () => {

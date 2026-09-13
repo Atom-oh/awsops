@@ -123,6 +123,21 @@ describe('POST create', () => {
 });
 
 describe('PATCH update', () => {
+  it('preserves the application key when rotating a legacy swapped Datadog pair', async () => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'datadog', endpoint: 'https://api.datadoghq.com', authType: 'custom_header', isDefault: false, settings: {} });
+    getCredentialById.mockResolvedValue({
+      endpoint: 'https://api.datadoghq.com', authType: 'custom_header',
+      headerName: 'DD-APPLICATION-KEY', headerValue: 'old-app',
+      headerName2: 'DD-API-KEY', headerValue2: 'old-api',
+    });
+    const { PATCH } = await import('./route');
+    const response = await PATCH(req({ id: 7, creds: { headerName: 'DD-API-KEY', headerValue: 'new-api' } }, 'PATCH'));
+    expect(response.status).toBe(200);
+    expect(setIntegrationCredentialById.mock.calls.at(-1)![1]).toMatchObject({
+      headerName: 'DD-API-KEY', headerValue: 'new-api',
+      headerName2: 'DD-APPLICATION-KEY', headerValue2: 'old-app',
+    });
+  });
   it('404 when not found', async () => {
     getDatasource.mockResolvedValue(null);
     const { PATCH } = await import('./route');

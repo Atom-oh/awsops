@@ -1,6 +1,6 @@
 ---
 sidebar_position: 7
-title: 데이터소스
+title: 이전 데이터소스 참고 문서
 description: 외부 데이터소스 연동 관리 (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
@@ -8,7 +8,15 @@ import Screenshot from '@site/src/components/Screenshot';
 import DatasourceFlow from '@site/src/components/diagrams/DatasourceFlow';
 import DatasourceExploreFlow from '@site/src/components/diagrams/DatasourceExploreFlow';
 
-# 데이터소스
+# 이전 데이터소스 참고 문서
+
+:::warning
+이 페이지는 여러 이전 버전의 안내와 그림을 참고용으로 보존합니다. 현재 운영 절차가 아닙니다. 지원 API, 인증, 상태 표시와 실행 순서는 [최신 데이터소스 가이드](../observability/datasources)를 확인하세요.
+:::
+
+<details>
+<summary>이전 문서 내용 — 현재 운영에 사용하지 마세요</summary>
+
 
 외부 모니터링 및 관측성 시스템을 AWSops에 연동하여 통합 관리할 수 있는 Grafana 스타일의 데이터소스 관리 페이지입니다.
 
@@ -359,3 +367,5 @@ AI 어시스턴트가 인식하는 키워드: **프로메테우스/prometheus**,
 - [모니터링 대시보드](./monitoring.md) - 시스템 모니터링 현황
 - [CloudWatch](./cloudwatch) - AWS CloudWatch 메트릭
 - [AI 어시스턴트](../overview/ai-assistant) - AI 분석 기능
+
+</details>

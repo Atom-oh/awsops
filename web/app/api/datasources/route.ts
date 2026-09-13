@@ -32,8 +32,8 @@ export async function GET(request: Request) {
       enabled: r.enabled,
       // Keep the legacy field for existing consumers. It means saved configuration,
       // never live connectivity; a default flag does not establish credential presence.
-      connected: Boolean(r.endpoint) && (r.authType === 'none' || idSet.has(String(r.id))),
-      configurationStatus: Boolean(r.endpoint) && (r.authType === 'none' || idSet.has(String(r.id))) ? 'stored' : 'missing',
+      connected: idSet.has(String(r.id)) || (Boolean(r.endpoint) && r.authType === 'none'),
+      configurationStatus: idSet.has(String(r.id)) || (Boolean(r.endpoint) && r.authType === 'none') ? 'stored' : 'missing',
     }));
     return json({ datasources, available: true }, 200);
   } catch {

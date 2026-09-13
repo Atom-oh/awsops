@@ -25,7 +25,7 @@ const ENDPOINT_PH: Record<string, string> = {
 // Auth hints: Dynatrace uses an API token (Authorization: Api-Token — pick Bearer/token here);
 // Datadog needs the DD-API-KEY + DD-APPLICATION-KEY custom-header PAIR.
 const AUTH_HINT: Record<string, string> = {
-  dynatrace: 'Bearer 선택 후 API 토큰 입력 — 커넥터가 Api-Token 스킴으로 전송합니다 (metrics.read/problems.read 스코프 필요).',
+  dynatrace: 'Dynatrace API token을 입력하세요. 메트릭에는 metrics.read, 문제 조회에는 problems.read 권한이 필요합니다.',
   datadog: 'Datadog 사이트에 맞는 API key와 메트릭 조회 권한이 있는 Application key를 함께 입력하세요.',
 };
 const labelCls = 'block text-[11px] uppercase tracking-wide text-ink-400 mb-1';
@@ -164,7 +164,7 @@ export default function DatasourceForm({
 
       <div>
         <label className={labelCls}>Auth method</label>
-        <select className={selectCls} value={authType} onChange={(e) => { invalidateTest(); setAuthType(e.target.value); setCreds({}); }} aria-label="Auth method">
+        <select className={selectCls} value={authType} onChange={(e) => { invalidateTest(); setAuthType(e.target.value); setCreds(current => ({ org_id: current.org_id ?? '' })); }} aria-label="Auth method">
           {AUTH_TYPES.map((a) => <option key={a.value} value={a.value}>{kind === 'dynatrace' && a.value === 'bearer' ? 'Dynatrace API token' : kind === 'datadog' && a.value === 'custom_header' ? 'Datadog API + Application keys' : tt(a.label)}</option>)}
         </select>
       </div>

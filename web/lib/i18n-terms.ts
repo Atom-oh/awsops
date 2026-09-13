@@ -7,6 +7,8 @@ import type { Lang } from './i18n';
 type Pair = { en: string; zh: string; ja: string };
 
 export const TERMS: Record<string, Pair> = {
+  '다시 시도': { en: 'Retry', zh: '重试', ja: '再試行' },
+  'Dynatrace API token을 입력하세요. 메트릭에는 metrics.read, 문제 조회에는 problems.read 권한이 필요합니다.': { en: 'Enter a Dynatrace API token. Metrics require metrics.read; problem queries require problems.read.', zh: '请输入 Dynatrace API 令牌。指标需要 metrics.read，问题查询需要 problems.read 权限。', ja: 'Dynatrace API トークンを入力してください。メトリクスには metrics.read、問題の照会には problems.read 権限が必要です。' },
   'Datadog 사이트에 맞는 API key와 메트릭 조회 권한이 있는 Application key를 함께 입력하세요.': { en: 'Enter an API key for your Datadog site and an Application key with metric query permission.', zh: '请输入对应 Datadog 站点的 API key 和具有指标查询权限的 Application key。', ja: 'Datadog サイトに対応する API key と、メトリクス照会権限のある Application key を入力してください。' },
   '비활성': { en: 'Disabled', zh: '已禁用', ja: '無効' },
   '1. 운영 데이터 연결': { en: '1. Connect operational data', zh: '1. 连接运维数据', ja: '1. 運用データを接続' },

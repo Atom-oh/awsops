@@ -129,7 +129,8 @@ export async function setMcpPresetCredential(
 
 /** Preset slugs (namespace-stripped) that currently have an ADR-017 MCP credential stored —
  *  KEYS ONLY. Best-effort: degrades to [] on a Secrets Manager read failure, same as
- *  getConfiguredSlugs (the gated/off state must not 500 the Connectors tab). */
+ *  getConfiguredSlugs. strict=true propagates read failures so status APIs can
+ *  distinguish unavailable from empty. A missing secret remains empty. */
 export async function getConfiguredMcpPresetSlugs(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap())
@@ -196,8 +197,8 @@ export async function getCredentialById(
   return null;
 }
 
-/** Configured instance id keys (numeric keys only — excludes kind-mirror keys). Best-effort: [] on a
- *  Secrets Manager read failure (mirrors getConfiguredSlugs degrade so the read-only list doesn't 500). */
+/** Configured instance id keys, excluding kind mirrors. Default callers get [] on
+ * a read failure; strict status callers propagate it and render unavailable. */
 export async function getConfiguredIds(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap()).filter((k) => /^\d+$/.test(k));
@@ -223,8 +224,8 @@ export async function deleteCredentialKeys(keys: string[]): Promise<void> {
  *  Best-effort: when the integrations secret is absent or unreadable — e.g. the integrations
  *  feature is gated off, so the task role has no access and Secrets Manager returns
  *  AccessDenied (not ResourceNotFound) — treat it as "none configured" so the read-only
- *  list/explore surfaces (/api/datasources, /customization) degrade to an empty state instead
- *  of 500-ing the page. The admin write path (setIntegrationCredential) stays strict and still
+ *  legacy callers degrade to an empty state instead of 500-ing the page. Status APIs
+ *  use strict=true to expose unavailable. The admin write path stays strict and still
  *  surfaces errors. SECURITY: log only the error name, never the secret contents. */
 export async function getConfiguredSlugs(strict = false): Promise<string[]> {
   try {

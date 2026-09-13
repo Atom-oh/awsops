@@ -27,6 +27,19 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('ExplorePanel', () => {
+  it('shows unavailable configuration as an error and recovers through retry', async () => {
+    let unavailable = true;
+    global.fetch = mockFetch(() => unavailable
+      ? { datasources: [], available: false }
+      : { datasources: INSTANCES, available: true });
+    render(<ExplorePanel />);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.queryByText(/설정된 데이터소스가 없습니다/)).toBeNull();
+    unavailable = false;
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
+    await waitFor(() => expect(screen.getByText(/prod-prom \(prometheus\)/)).toBeTruthy());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
   it('lists instances by name and runs a query against the selected instance id', async () => {
     const calls: { url: string; body?: string }[] = [];
     global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
