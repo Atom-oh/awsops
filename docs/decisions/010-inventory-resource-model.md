@@ -34,12 +34,12 @@ superseded blanket ban from legacy ADR-003.
 Recorded hydration-risk examples remain useful during permission diagnosis; they are not a
 new instruction to remove accepted columns or expand IAM:
 
-| Attribute / table | Hydration API |
-|---|---|
-| `mfa_enabled` / `aws_iam_user` | `iam:ListMFADevices` |
-| `attached_policy_arns` / `aws_iam_user` | `iam:ListAttachedUserPolicies` |
-| List-view `tags` / `aws_lambda_function` | `lambda:GetFunction` |
-| `attached_policy_arns` / `aws_iam_role` | `iam:ListAttachedRolePolicies`; accepted fallback below |
+| Attribute / table | Current collection | Hydration API / recorded risk |
+|---|---|---|
+| `mfa_enabled` / `aws_iam_user` | Collected; no hydrate-free fallback | `iam:ListMFADevices` |
+| `attached_policy_arns` / `aws_iam_user` | Not selected | Historical `iam:ListAttachedUserPolicies` risk; no current permission request |
+| List-view `tags` / `aws_lambda_function` | Not selected | Historical `lambda:GetFunction` risk; absent data is not a current hydrate failure |
+| `attached_policy_arns` / `aws_iam_role` | Collected with the accepted fallback below | `iam:ListAttachedRolePolicies` |
 
 ### Accepted hydrate fallback (2026-09-02)
 

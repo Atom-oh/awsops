@@ -21,6 +21,9 @@ and availability. Denied or unconfigured cost APIs should not cause repeated fai
   durable local JSON snapshots and do not survive process replacement.
 - Day-normalized service changes use completed UTC days. Incomplete or unsuitable evidence produces
   no verdict, rather than an apparent saving/increase based on incompatible time windows.
+- Workload request estimates use `web/lib/cost-basis.ts:ESTIMATE_UNIT_PRICES`, separate from billed
+  usage. Those constants model ap-northeast-2 on-demand rates without Spot/RI/Savings Plans discounts;
+  keep estimate-based displays explicitly distinguished from measured cost.
 - Keep FinOps MCP tools separate from spend views. Handle denied/not-enabled/support-plan-limited
   recommendation APIs with structured unavailable reasons. The current `ai.tf` grant uses service-specific
   read-prefix actions and explicitly names `cost-optimization-hub:ListRecommendations`; preserve its
@@ -51,7 +54,7 @@ availability/freshness and measured cost attribution. Security: read-only tools 
 
 ## Evidence
 
-`web/lib/{cost,cost-availability}.ts`, `web/app/api/cost/route.ts`,
+`web/lib/{cost,cost-availability,cost-basis}.ts`, `web/app/api/cost/route.ts`,
 `agent/lambda/aws_finops_mcp.py`, `scripts/v2/workers/ai_cost_aggregator.py`,
 `scripts/v2/workers/ai_cost/aggregate.py`,
 `terraform/v2/foundation/{ai,workers}.tf`, and ADR-020.

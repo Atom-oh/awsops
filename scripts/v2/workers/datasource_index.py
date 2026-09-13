@@ -8,6 +8,7 @@ independent tables, each gated on its OWN schema-version hash so a rebuild only 
 actually changed:
   - datasource_diag_signals (diagnosis/signal_catalog.py) — per-kind deterministic catalogs,
     with a flag-gated LLM fallback for every wired kind when zero ready rows remain;
+    ClickHouse has no deterministic entries, so its signals remain fallback-only.
     jaeger/dynatrace/datadog are NOT wired
     (DIAG_SIGNAL_KINDS, the daily dispatcher's _LIST_SQL and ds_connector_arns are all 5-kind).
     Per-kind catalog + LLM hybrid fallback when a kind's catalog has zero ready matches.

@@ -67,7 +67,7 @@ also default false. Consult the linked ADR and source for complete dependencies.
 | GATED query generation | `graph_querygen_enabled` | Requires datasource diagnosis and agentcore; Code Interpreter precheck is best effort (unavailable skips, explicit failure rejects); ClickHouse graph fallback only | ADR-018 |
 | GATED query generation | `diag_signal_querygen_enabled` | Requires datasource diagnosis; Explore chips only, separate budget and read gate | ADR-018 |
 | GATED batch | `steampipe_enabled` | Warm FDW and inventory sync; Powerpipe CIS also uses the FDW. Live BFF Steampipe stays disabled; FinOps checks persisted freshness | ADR-010, ADR-021 |
-| GATED cost | `ai_cost_tracking_enabled` | Invocation-log aggregation into `ai_usage_daily` | ADR-012 |
+| GATED cost | `ai_cost_tracking_enabled` | Requires workers; invocation-log aggregation into `ai_usage_daily` | ADR-012 |
 | GATED batch | `diagnosis_schedule_enabled`, `ai_insights_enabled` | Worker-backed scheduled diagnosis / insight generation | ADR-008, ADR-009 |
 | GATED read observation | `eks_auto_register_enabled` | Requires workers; records operator-created View/AdminView access in Aurora, with no EKS mutation permission | BASELINE §2 only; no dedicated ADR |
 | GATED batch | `finops_baseline_enabled` | Requires workers; EBS rule also needs successful inventory sync or reports partial | ADR-020 |

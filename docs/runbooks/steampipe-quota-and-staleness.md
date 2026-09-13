@@ -66,7 +66,7 @@ docker buildx build --platform linux/arm64 -f scripts/v2/steampipe/Dockerfile \
 make migrate
 terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
 terraform -chdir=terraform/v2/foundation plan -out tfplan
-# Controller operation after plan review:
+# Controller-approved operation only:
 terraform -chdir=terraform/v2/foundation apply tfplan
 ```
 
@@ -92,20 +92,36 @@ An accepted Event invocation is not completed sync. Check the ledger/logs below.
 
 ### First-time enablement
 
-Establish foundation/Aurora with Steampipe off, then migrate. If ECR does not exist, create **only**
-that repository through a reviewed saved target plan, with no Lambda/event rule/service creation:
+Establish foundation/Aurora with Steampipe off. Complete migrations before either activation path:
 
 ```bash
+set -euo pipefail
 make migrate
+```
+
+If ECR does not exist, create **only** that repository through a reviewed saved target plan.
+Verify that the plan contains no Lambda/event rule/service creation:
+
+```bash
+set -euo pipefail
 terraform -chdir=terraform/v2/foundation plan \
   -target=aws_ecr_repository.steampipe -var='steampipe_enabled=true' -out tfplan-steampipe-ecr
-# Controller operation after verifying repository-only scope:
+# Controller-approved operation only:
 terraform -chdir=terraform/v2/foundation apply tfplan-steampipe-ecr
 ```
 
-Build/push the image, set `steampipe_enabled=true` and the matching tag in reviewed configuration,
-then make a fresh full saved plan for controller apply. Wait for service stability and verify one
-sync. Sync-all sends `{type:"all"}` through the same limits/locks; it has no server-side cooldown.
+Build/push the image and set the matching `steampipe_image_tag` in reviewed configuration.
+Then make and review a fresh full saved plan that enables the service and sync Lambda:
+
+```bash
+set -euo pipefail
+terraform -chdir=terraform/v2/foundation plan -var='steampipe_enabled=true' -out tfplan
+# Controller-approved operation only:
+terraform -chdir=terraform/v2/foundation apply tfplan
+```
+
+Wait for service stability and verify one sync. Sync-all sends `{type:"all"}` through the same
+limits/locks; it has no server-side cooldown.
 Do not bypass the bounded path with parallel manual invocations.
 
 ## 5. Check logs and freshness

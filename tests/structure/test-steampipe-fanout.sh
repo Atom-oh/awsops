@@ -130,7 +130,7 @@ grep -Eq 'cafile=RDS_CA_BUNDLE' "$ENTRYPOINT" && ! grep -Eq 'verify_mode\s*=\s*s
 # The inv-sync Lambda package is owned by Terraform, while its running UPSERT depends on the
 # run_token column created by make migrate. Guard the operator contract against documenting
 # Terraform apply before the migration (which would create a schema/code incompatibility window).
-DEPLOY_ORDER=$(sed -n '/^## 4\. 배포 순서/,/^## 5\./p' "$RUNBOOK")
+DEPLOY_ORDER=$(sed -n '/^## 4\. Deployment order/,/^## 5\./p' "$RUNBOOK")
 MIGRATE_LINE=$(printf '%s\n' "$DEPLOY_ORDER" | grep -n -m1 '^make migrate' | cut -d: -f1)
 APPLY_LINE=$(printf '%s\n' "$DEPLOY_ORDER" | grep -n -m1 '^terraform -chdir=terraform/v2/foundation apply tfplan' | cut -d: -f1)
 if [ -n "$MIGRATE_LINE" ] && [ -n "$APPLY_LINE" ] && [ "$MIGRATE_LINE" -lt "$APPLY_LINE" ]; then
@@ -139,7 +139,7 @@ else
   fail "runbook must place make migrate before apply tfplan in the deployment-order section"
 fi
 
-FIRST_ENABLE=$(printf '%s\n' "$DEPLOY_ORDER" | sed -n '/^### 최초 활성화/,$p')
+FIRST_ENABLE=$(printf '%s\n' "$DEPLOY_ORDER" | sed -n '/^### First-time enablement/,$p')
 FIRST_ENABLE_APPLIES=$(printf '%s\n' "$FIRST_ENABLE" \
   | grep -c '^terraform -chdir=terraform/v2/foundation apply ')
 FIRST_ENABLE_QUALIFIED=$(printf '%s\n' "$FIRST_ENABLE" | awk '
