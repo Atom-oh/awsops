@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e39d22f94e54 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: bbc5a8e493d3 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 # Decisions — Reviewer Context
 
@@ -28,3 +28,5 @@ are evidence of their time, not current enforcement or permission.
 - **ADR-019:** isolated SELECT-only Athena queries are inside the read-only invariant, not a new freeze exception.
 
 Regenerate this context after editing CLAUDE.md with the installed co-agent marker/check helper.
+
+Use `NNN-kebab-case-title.md` for ADR filenames.
