@@ -151,6 +151,10 @@ export const TERMS: Record<string, Pair> = {
   '리포트 생성이 실패했습니다.': { en: 'Report generation failed.', zh: '报告生成失败。', ja: 'レポート生成に失敗しました。' },
   '리포트가 아직 완료되지 않았습니다.': { en: 'The report is not finished yet.', zh: '报告尚未完成。', ja: 'レポートはまだ完了していません。' },
   // EKS overview filter + node capacity (gap L130/L132)
+  '노드 리소스 (Allocated / Usage)': { en: 'Node Resources (Allocated / Usage)', zh: '节点资源（Allocated / Usage）', ja: 'ノードリソース（Allocated / Usage）' },
+  'Allocated = Pod 요청 합계 · Usage = Metrics API 실측 · 비율은 Allocatable 기준 · Usage 미수집은 별도 표시': { en: 'Allocated = Pod requests · Usage = Metrics API readings · Percentages use Allocatable · Missing readings are unavailable', zh: 'Allocated = Pod 请求合计 · Usage = Metrics API 实测 · 百分比以 Allocatable 为基准 · 缺失值显示未采集', ja: 'Allocated = Pod 要求合計 · Usage = Metrics API 実測 · 比率は Allocatable 基準 · 欠測値は未収集' },
+  'Allocated = Pod 요청 합계 · Usage = Metrics API 실측 · 비율은 Allocatable 기준 · 디스크 Usage 미지원': { en: 'Allocated = Pod requests · Usage = Metrics API readings · Percentages use Allocatable · Disk Usage unsupported', zh: 'Allocated = Pod 请求合计 · Usage = Metrics API 实测 · 百分比以 Allocatable 为基准 · 不支持磁盘 Usage', ja: 'Allocated = Pod 要求合計 · Usage = Metrics API 実測 · 比率は Allocatable 基準 · ディスク Usage 非対応' },
+  '미지원': { en: 'Unsupported', zh: '不支持', ja: '非対応' },
   '클러스터 / VPC 필터': { en: 'Cluster / VPC Filter', zh: '集群 / VPC 筛选', ja: 'クラスター / VPC フィルター' },
   '노드 용량 (Requested / Available / Reserved)': { en: 'Node Capacity (Requested / Available / Reserved)', zh: '节点容量（Requested / Available / Reserved）', ja: 'ノード容量（Requested / Available / Reserved）' },
   'Reserved = Capacity − Allocatable (system-reserved) · Requested = 스케줄러 요청 합계 (native-sidecar init 요청 제외)': { en: 'Reserved = Capacity − Allocatable (system-reserved) · Requested = scheduler-requested total (excl. native-sidecar init requests)', zh: 'Reserved = Capacity − Allocatable（系统保留）· Requested = 调度器请求合计（不含 native-sidecar init 请求）', ja: 'Reserved = Capacity − Allocatable（システム予約）· Requested = スケジューラ要求合計（native-sidecar init 要求を除く）' },
