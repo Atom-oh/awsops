@@ -75,7 +75,7 @@ export function mergeDatasourceConnection(kind: string, input: Record<string, un
     return fail('Invalid settings: timeoutS must be 1–60; database must be a non-system ClickHouse identifier.');
   }
   const incoming = object(input.creds) ? input.creds : {};
-  if (saved?.hasTenant && (saved.bindingMismatch || saved.endpoint !== endpoint) && typeof incoming.org_id !== 'string') return requireCredentials();
+  if (saved?.hasTenant && (saved.bindingMismatch || saved.endpoint !== endpoint) && typeof incoming.org_id !== 'string') return fail('Enter Org ID or select Clear stored Org ID.');
   const base = saved?.endpoint === endpoint && !saved.bindingMismatch ? saved.creds : {};
   const merged = kind === 'datadog' ? normalizeDatadogHeaderSlots(base, incoming) : { ...base, ...incoming };
   const creds: Record<string, string> = {};

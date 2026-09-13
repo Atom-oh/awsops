@@ -41,7 +41,7 @@ it.each(['https://metrics.example/other', 'http://metrics.example/tenant', 'http
     const base = saved(row, { 7: blob });
     expect(() => merge(row.kind, { endpoint, creds: {} }, base)).toThrow();
     for (const authType of ['none', 'bearer'] as const) {
-      expect(() => merge(row.kind, { endpoint, authType, creds: { token: 'replacement' } }, base)).toThrow(/credentials/i);
+      expect(() => merge(row.kind, { endpoint, authType, creds: { token: 'replacement' } }, base)).toThrow(/Org ID.*Clear stored Org ID/);
       for (const org_id of ['tenant-a', '']) {
         expect(merge(row.kind, { endpoint, authType, creds: { token: 'replacement', org_id } }, base)).toMatchObject({ endpoint, authType, org_id });
       }

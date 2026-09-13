@@ -51,6 +51,7 @@ export default function DatasourceForm({
   const [endpoint, setEndpoint] = useState(initial?.endpoint ?? '');
   const [authType, setAuthType] = useState(initial?.authType ?? (editing ? '' : 'none'));
   const [creds, setCreds] = useState<Record<string, string>>({});
+  const [clearOrgId, setClearOrgId] = useState(false);
   // gap L203: settings kept as strings for the inputs; settingsPayload() validates/coerces
   const [timeoutS, setTimeoutS] = useState(initial?.settings?.timeoutS != null ? String(initial.settings.timeoutS) : '');
   const [database, setDatabase] = useState(initial?.settings?.database ?? '');
@@ -61,6 +62,7 @@ export default function DatasourceForm({
   const revision = useRef(0);
 
   const invalidateTest = () => { revision.current += 1; setTest(null); setErr(''); };
+  const errorText = (message: string) => tt(message === 'Enter Org ID or select Clear stored Org ID.' ? 'Org ID를 입력하거나 저장된 Org ID 지우기를 선택하세요.' : message);
   const setCred = (k: string, v: string) => { invalidateTest(); setCreds((c) => ({ ...c, [k]: v })); };
   const changeKind = (value: string) => {
     invalidateTest();
@@ -85,7 +87,8 @@ export default function DatasourceForm({
         if (creds.headerValue2) c.headerValue2 = creds.headerValue2;
       }
     }
-    if (creds.org_id) c.org_id = creds.org_id;
+    if (editing && clearOrgId) c.org_id = '';
+    else if (creds.org_id) c.org_id = creds.org_id;
     return c;
   };
   // An empty field clears; an OUT-OF-RANGE value is a visible validation error (round-3:
@@ -114,7 +117,7 @@ export default function DatasourceForm({
       });
       const b = await r.json();
       if (revision.current !== testedRevision) return;
-      if (!r.ok) { setErr(b.error || tt(`오류 ${r.status}`)); return; }
+      if (!r.ok) { setErr(b.error ? errorText(b.error) : tt(`오류 ${r.status}`)); return; }
       setTest({ ok: Boolean(b.ok), ms: b.latencyMs, error: b.error });
     } catch { if (revision.current === testedRevision) setErr(tt('테스트 실패')); }
     finally { setTesting(false); }
@@ -131,7 +134,7 @@ export default function DatasourceForm({
         body: JSON.stringify(body),
       });
       const b = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(b.error || tt(`저장 실패 (${r.status})`)); return; }
+      if (!r.ok) { setErr(b.error ? errorText(b.error) : tt(`저장 실패 (${r.status})`)); return; }
       onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : tt('저장 실패')); }
     finally { setSaving(false); }
@@ -199,7 +202,11 @@ export default function DatasourceForm({
       )}
       {AUTH_HINT[kind] && <p className="text-[12px] text-ink-400">{tt(AUTH_HINT[kind])}</p>}
       {editing && <p className="text-[12px] text-ink-500">{tt('기존 자격증명은 표시하지 않습니다. 같은 엔드포인트에서는 빈 인증 필드를 유지하면 저장된 값을 사용합니다. 주소를 바꾸면 자격증명을 다시 입력하세요.')}</p>}
-      <div><label className={labelCls}>{tt('Org ID (X-Scope-OrgID, 선택)')}</label><Input value={creds.org_id ?? ''} onChange={(e) => setCred('org_id', e.target.value)} /></div>
+      <div><label className={labelCls}>{tt('Org ID (X-Scope-OrgID, 선택)')}</label><Input disabled={clearOrgId} value={creds.org_id ?? ''} onChange={(e) => setCred('org_id', e.target.value)} /></div>
+      {editing && <label className="flex items-center gap-2 text-[12px] text-ink-600">
+        <input type="checkbox" checked={clearOrgId} disabled={saving} onChange={e => { invalidateTest(); setClearOrgId(e.target.checked); }} />
+        {tt('저장된 Org ID 지우기')}
+      </label>}
 
       {/* gap L203: per-datasource connection settings (v1 Settings section parity — v1's
           result-cache TTL is deliberately not ported: the v2 query path is uncached by design) */}
