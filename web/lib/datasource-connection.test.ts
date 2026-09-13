@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { effectiveSavedConnection as saved, mergeDatasourceConnection as merge, datasourceConnectionMetadata as metadata } from './datasource-connection';
 
 const row = { id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/tenant', authType: 'bearer' as const, isDefault: true, settings: { timeoutS: 20 } };
-const blob = { endpoint: row.endpoint, token: 'private-token' };
+const blob = { endpoint: row.endpoint, token: 'private-token', org_id: 'tenant-a' };
 
 it('derives null row fields only from the own-id blob and prunes dormant auth under explicit none', () => {
   const snapshot = { 7: blob, prometheus: { endpoint: 'https://foreign.example', token: 'foreign' } };
@@ -25,6 +25,9 @@ it('permits a default mirror with no id entry for matched or SQL-backfilled null
     [row, { 7: { ...blob, endpoint: 'https://foreign.example' }, prometheus: blob }],
   ] as const) expect(metadata(r, snapshot).connected).toBe(false);
   expect(merge(row.kind, {}, saved(row, { 7: { ...blob, token: 'own' }, prometheus: blob })).token).toBe('own');
+  for (const snapshot of [{ 7: { ...blob, endpoint: 'https://foreign.example' } }, { prometheus: { ...blob, endpoint: 'https://foreign.example' } }]) {
+    expect(metadata({ ...row, authType: 'none' }, snapshot)).toMatchObject({ connected: false, configurationStatus: 'missing' });
+  }
 });
 
 it('separates missing/unsafe endpoints from missing authentication without exposing unsafe URLs', () => {
@@ -36,8 +39,13 @@ it('separates missing/unsafe endpoints from missing authentication without expos
 it.each(['https://metrics.example/other', 'http://metrics.example/tenant', 'https://metrics.example:444/tenant', 'https://other.example/tenant'])(
   'requires new credentials for endpoint change %s', endpoint => {
     const base = saved(row, { 7: blob });
-    expect(() => merge(row.kind, { endpoint, creds: {} }, base)).toThrow(/credentials/);
-    expect(merge(row.kind, { endpoint, creds: { token: 'replacement' } }, base).token).toBe('replacement');
+    expect(() => merge(row.kind, { endpoint, creds: {} }, base)).toThrow();
+    for (const authType of ['none', 'bearer'] as const) {
+      expect(() => merge(row.kind, { endpoint, authType, creds: { token: 'replacement' } }, base)).toThrow(/credentials/i);
+      for (const org_id of ['tenant-a', '']) {
+        expect(merge(row.kind, { endpoint, authType, creds: { token: 'replacement', org_id } }, base)).toMatchObject({ endpoint, authType, org_id });
+      }
+    }
   });
 
 it('infers legacy auth shapes and rejects ambiguous credentials', () => {
@@ -59,7 +67,7 @@ it('merges Datadog keys by header identity, including dedicated legacy keys', ()
 
 it('shares strict settings, header and URL validation without including secret values in errors', () => {
   const base = saved(row, { 7: blob });
-  for (const input of [{ settings: { timeoutS: 0 } }, { creds: { token: 'private\nvalue' } }, { endpoint: 'http://169.254.169.254' },
+  for (const input of [{ settings: { timeoutS: 0 } }, { creds: { token: 'private\nvalue' } }, { creds: { org_id: 'private\nvalue' } }, { endpoint: 'http://169.254.169.254' },
     { authType: 'custom_header', creds: { headerName: 'Host', headerValue: 'private-value' } }]) {
     expect(() => merge(row.kind, input, base)).toThrow();
     try { merge(row.kind, input, base); } catch (e) { expect(String(e)).not.toContain('private-value'); }

@@ -127,7 +127,7 @@ describe('POST create', () => {
 
 it('saves a migrated row using the same own-id endpoint and inferred authentication as its probe', async () => {
   getDatasource.mockResolvedValue({ id: 7, name: 'migrated', kind: 'prometheus', endpoint: null, authType: null, isDefault: true, settings: {} });
-  getCredentialById.mockResolvedValue({ endpoint: 'https://metrics.example/tenant', token: 'retained' });
+  getCredentialById.mockResolvedValue({ endpoint: 'https://metrics.example/tenant', token: 'retained', org_id: 'tenant-a' });
   const { POST: test } = await import('../test/route');
   invokeMcpLambdaTool.mockResolvedValue({ ok: true });
   const body = { id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/tenant', creds: {} };
@@ -137,7 +137,7 @@ it('saves a migrated row using the same own-id endpoint and inferred authenticat
   expect((await PATCH(req(body, 'PATCH'))).status).toBe(200);
   expect(setIntegrationCredentialById.mock.calls[0][1]).toEqual(tested);
   expect(setIntegrationCredentialById).toHaveBeenCalledWith(7, expect.objectContaining({
-    endpoint: 'https://metrics.example/tenant', authType: 'bearer', token: 'retained',
+    endpoint: 'https://metrics.example/tenant', authType: 'bearer', token: 'retained', org_id: 'tenant-a',
   }), expect.anything());
   expect(updateDatasource).toHaveBeenCalledWith(7, expect.objectContaining({
     endpoint: 'https://metrics.example/tenant', authType: 'bearer',
@@ -145,6 +145,33 @@ it('saves a migrated row using the same own-id endpoint and inferred authenticat
 });
 
 describe('PATCH update', () => {
+  it.each(['none', 'bearer'] as const)('repairs drift with fresh %s credentials and an explicit tenant decision', async authType => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'https://new.example', authType, isDefault: true, settings: {} });
+    getCredentialById.mockResolvedValue({ endpoint: 'https://old.example', token: 'old-secret', org_id: 'tenant-a' });
+    const { POST: test } = await import('../test/route');
+    const { PATCH } = await import('./route');
+    const candidate = { id: 7, kind: 'prometheus', endpoint: 'https://new.example', authType, creds: authType === 'bearer' ? { token: 'fresh' } : {} };
+    for (const input of [{ id: 7, name: 'renamed', kind: 'prometheus' }, candidate,
+      { ...candidate, endpoint: undefined, creds: { ...candidate.creds, org_id: 'tenant-a' } },
+      { ...candidate, authType: undefined, creds: { ...candidate.creds, org_id: 'tenant-a' } },
+      ...(authType === 'bearer' ? [{ ...candidate, creds: { org_id: 'tenant-a' } }] : [])]) {
+      expect((await test(req(input))).status).toBe(400);
+      expect((await PATCH(req(input, 'PATCH'))).status).toBe(400);
+    }
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
+    expect(updateDatasource).not.toHaveBeenCalled();
+    invokeMcpLambdaTool.mockResolvedValue({ ok: true });
+    for (const org_id of ['tenant-a', '']) {
+      const body = { ...candidate, creds: { ...candidate.creds, org_id } };
+      expect((await (await test(req(body))).json()).ok).toBe(true);
+      expect((await PATCH(req(body, 'PATCH'))).status).toBe(200);
+      const expected = { endpoint: candidate.endpoint, authType, ...candidate.creds, org_id };
+      expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].connConfig).toEqual(expected);
+      expect(setIntegrationCredentialById.mock.calls.at(-1)![1]).toEqual(expected);
+      expect(mirrorDefaultCredential.mock.calls.at(-1)![1]).toEqual(expected);
+    }
+  });
   it('preserves the application key when rotating a legacy swapped Datadog pair', async () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'datadog', endpoint: 'https://api.datadoghq.com', authType: 'custom_header', isDefault: false, settings: {} });
     getCredentialById.mockResolvedValue({
@@ -174,16 +201,18 @@ describe('PATCH update', () => {
     expect(updateDatasource).toHaveBeenCalled();
   });
 
-  it('a settings-only PATCH MERGES onto the existing credential — stored auth material survives', async () => {
-    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
-    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
+  it.each([{ name: 'renamed' }, { settings: { timeoutS: 15 } }])('a metadata PATCH preserves stored authentication and tenant: %j', async update => {
+    getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw', org_id: 'tenant-a' });
+    getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: true, settings: {} });
     const { PATCH } = await import('./route');
-    const resp = await PATCH(req({ id: 7, settings: { timeoutS: 15 } }, 'PATCH'));
+    const resp = await PATCH(req({ id: 7, creds: {}, ...update }, 'PATCH'));
     expect(resp.status).toBe(200);
     const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
     expect(blob.username).toBe('u');    // NOT wiped by the settings-only rewrite
     expect(blob.password).toBe('pw');
-    expect(blob.timeoutS).toBe(15);
+    expect(blob.org_id).toBe('tenant-a');
+    expect(blob.timeoutS).toBe('settings' in update ? 15 : undefined);
+    expect(mirrorDefaultCredential.mock.calls.at(-1)![1]).toEqual(blob);
   });
 
   it('settings:{} genuinely clears — stale blob settings keys are stripped, auth survives', async () => {

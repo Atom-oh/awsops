@@ -14,7 +14,6 @@ const AUTH_TYPES = [
   { value: 'bearer', label: 'Bearer token' },
   { value: 'custom_header', label: 'Custom header' },
 ] as const;
-const ORG_ID_KINDS = new Set(['loki', 'tempo', 'mimir']); // X-Scope-OrgID multi-tenancy
 // Per-kind endpoint placeholder (SaaS kinds get their real API base as the hint).
 const ENDPOINT_PH: Record<string, string> = {
   prometheus: 'http://prometheus.internal:9090', mimir: 'http://mimir.internal:9009',
@@ -86,7 +85,7 @@ export default function DatasourceForm({
         if (creds.headerValue2) c.headerValue2 = creds.headerValue2;
       }
     }
-    if (ORG_ID_KINDS.has(kind) && creds.org_id) c.org_id = creds.org_id;
+    if (creds.org_id) c.org_id = creds.org_id;
     return c;
   };
   // An empty field clears; an OUT-OF-RANGE value is a visible validation error (round-3:
@@ -200,9 +199,7 @@ export default function DatasourceForm({
       )}
       {AUTH_HINT[kind] && <p className="text-[12px] text-ink-400">{tt(AUTH_HINT[kind])}</p>}
       {editing && <p className="text-[12px] text-ink-500">{tt('기존 자격증명은 표시하지 않습니다. 같은 엔드포인트에서는 빈 인증 필드를 유지하면 저장된 값을 사용합니다. 주소를 바꾸면 자격증명을 다시 입력하세요.')}</p>}
-      {ORG_ID_KINDS.has(kind) && (
-        <div><label className={labelCls}>{tt('Org ID (X-Scope-OrgID, 선택)')}</label><Input value={creds.org_id ?? ''} onChange={(e) => setCred('org_id', e.target.value)} /></div>
-      )}
+      <div><label className={labelCls}>{tt('Org ID (X-Scope-OrgID, 선택)')}</label><Input value={creds.org_id ?? ''} onChange={(e) => setCred('org_id', e.target.value)} /></div>
 
       {/* gap L203: per-datasource connection settings (v1 Settings section parity — v1's
           result-cache TTL is deliberately not ported: the v2 query path is uncached by design) */}

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DATASOURCE_KINDS } from './integrations-category';
 
 const query = vi.fn();
 const getPoolMock: { query: unknown; connect?: unknown } = { query };
@@ -134,11 +135,11 @@ describe('resolveConnConfig', () => {
     expect(await resolveConnConfig(row)).toEqual({ endpoint: 'http://p:9090', authType: 'none' });
   });
 
-  it('resolves the credential by id ONLY — no kind-mirror fallback (no default-cred leak to another instance)', async () => {
-    getCredentialById.mockResolvedValueOnce(null);
-    await resolveConnConfig(row);
-    expect(getCredentialById).toHaveBeenCalledWith(1);           // id only
-    expect(getCredentialById).not.toHaveBeenCalledWith(1, 'prometheus'); // never the kind fallback
+  it.each(DATASOURCE_KINDS.flatMap(kind => (['none', 'basic', 'bearer', 'custom_header'] as const).map(authType => ({ kind, authType }))))(
+    'preserves the own-id tenant for $kind/$authType', async ({ kind, authType }) => {
+    const blob = { endpoint: row.endpoint, authType, org_id: 'tenant-a', username: 'u', password: 'pw', token: 't', headerName: 'X-Key', headerValue: 'v' };
+    getIntegrationCredentialSnapshot.mockResolvedValue({ 1: blob, [kind]: { ...blob, org_id: 'other-tenant' } });
+    expect(await resolveConnConfig({ ...row, kind, authType })).toMatchObject({ endpoint: row.endpoint, authType, org_id: 'tenant-a' });
   });
 
   it('clickhouse settings ride the conn config (database + timeoutS); other kinds never set them', async () => {
@@ -161,9 +162,9 @@ describe('resolveConnConfig', () => {
     expect(cc).not.toHaveProperty('username'); // explicit none discards dormant credentials
   });
 
-  it('rejects credentials bound to a different endpoint instead of forwarding them', async () => {
-    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://STALE:9090', username: 'u', password: 'pw' });
-    await expect(resolveConnConfig({ ...row, authType: 'basic' })).rejects.toThrow(/credentials/);
+  it.each(['none', 'basic'] as const)('rejects endpoint drift under %s authentication', async authType => {
+    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://STALE:9090', username: 'u', password: 'pw', org_id: 'tenant-a' });
+    await expect(resolveConnConfig({ ...row, authType })).rejects.toThrow(/credentials/);
   });
 });
 

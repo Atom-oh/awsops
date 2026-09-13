@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const verifyUser = vi.fn();
 const isAdmin = vi.fn();
@@ -28,6 +28,7 @@ function req(body: unknown) {
     body: JSON.stringify(body),
   });
 }
+afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
   getIntegrationCredentialSnapshot.mockReset().mockImplementation(async () => { const blob = await getCredentialById(7); return blob ? { 7: blob } : {}; });
@@ -75,11 +76,14 @@ describe('POST /api/datasources/test', () => {
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
   });
 
-  it('probes ${kind}_health with an inline conn-config and returns {ok,latencyMs}', async () => {
+  it.each([[42, 42], [0, 0], [undefined, 25], [-1, 25], [NaN, 25], [Infinity, 25], ['42', 25]])(
+    'probes inline and prefers valid connector latency %s → %s', async (latency_ms, expected) => {
+    vi.spyOn(Date, 'now').mockReturnValueOnce(100).mockReturnValue(125);
+    invokeMcpLambdaTool.mockResolvedValue({ ok: true, latency_ms });
     const { POST } = await import('./route');
     const resp = await POST(req({ kind: 'prometheus', endpoint: 'http://p:9090', authType: 'bearer', creds: { token: 't' } }));
     expect(resp.status).toBe(200);
-    expect(await resp.json()).toEqual({ ok: true, latencyMs: expect.any(Number) });
+    expect(await resp.json()).toEqual({ ok: true, latencyMs: expected });
     const call = invokeMcpLambdaTool.mock.calls[0][0];
     expect(call.tool).toBe('prometheus_health');
     expect(call.connConfig).toEqual({ endpoint: 'http://p:9090', authType: 'bearer', token: 't' });
@@ -155,11 +159,13 @@ describe('POST /api/datasources/test', () => {
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
   });
 
-  it('does not disclose upstream responses that contain credentials', async () => {
+  it.each(['HTTP 401', 'Datadog API key validation failed', 'Datadog metric query validation failed'])('classifies %s without disclosing upstream text', async error => {
     const { POST } = await import('./route');
-    invokeMcpLambdaTool.mockResolvedValue({ ok: false, error: 'HTTP 401 echoed supersecret' });
+    invokeMcpLambdaTool.mockResolvedValue({ ok: false, error: `${error} echoed supersecret` });
     let resp = await POST(req({ kind: 'prometheus', endpoint: 'https://metrics.example', authType: 'bearer', creds: { token: 'supersecret' } }));
-    expect(await resp.text()).not.toContain('supersecret');
+    const body = await resp.json();
+    expect(body.code).toBe('authentication');
+    expect(JSON.stringify(body)).not.toContain('supersecret');
     invokeMcpLambdaTool.mockRejectedValue(new Error('HTTP 401 echoed stored-secret'));
     resp = await POST(req({ id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/api', authType: 'bearer' }));
     expect(await resp.text()).not.toContain('stored-secret');

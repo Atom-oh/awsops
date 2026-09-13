@@ -25,6 +25,7 @@ interface Row {
 interface Saved {
   endpoint: string; authType: AuthType | undefined; creds: Record<string, unknown>;
   settings: DsSettings; source: 'id' | 'mirror' | 'none';
+  bindingMismatch: boolean; hasTenant: boolean;
 }
 function inferAuth(blob: Record<string, unknown>): AuthType | undefined {
   if (blob.authType != null) return auth(blob.authType) ? blob.authType : undefined;
@@ -41,7 +42,8 @@ export function effectiveSavedConnection(row: Row, snapshot: Record<string, unkn
   const mirror = snapshot[row.kind];
   const source = own ? 'id' : row.isDefault && object(mirror) && typeof mirror.endpoint === 'string'
     && (row.endpoint === null || mirror.endpoint === row.endpoint) ? 'mirror' : 'none';
-  const selected = source === 'id' ? snapshot[String(row.id)] : source === 'mirror' ? mirror : {};
+  // Retain rejected default-mirror binding metadata, never its credentials.
+  const selected = own ? snapshot[String(row.id)] : row.isDefault && object(mirror) && typeof mirror.endpoint === 'string' ? mirror : {};
   const raw = object(selected) ? selected : {};
   const endpoint = row.endpoint ?? (source !== 'none' && typeof raw.endpoint === 'string' ? raw.endpoint : '');
   const bound = !Object.hasOwn(raw, 'endpoint') || raw.endpoint === endpoint;
@@ -49,18 +51,22 @@ export function effectiveSavedConnection(row: Row, snapshot: Record<string, unkn
   const authType = row.authType ?? (source !== 'none' && object(selected) && bound ? inferAuth(creds) : undefined);
   const keys = [...(authType ? AUTH_KEYS[authType] : []), 'org_id'];
   return { endpoint, authType, creds: Object.fromEntries(keys.filter(k => Object.hasOwn(creds, k)).map(k => [k, creds[k]])),
-    source, settings: sanitizeDsSettings(row.settings) };
+    source, settings: sanitizeDsSettings(row.settings), bindingMismatch: !bound,
+    hasTenant: Object.hasOwn(raw, 'org_id') && raw.org_id !== '' };
 }
 
 /** Identical Test/Save validation and merge. Invalid input errors are fixed messages, never secrets. */
 export function mergeDatasourceConnection(kind: string, input: Record<string, unknown>, saved?: Saved) {
   const fail = (message: string): never => { throw new ConnectionInputError(message); };
+  const requireCredentials = (): never => fail('Enter the required credentials. Stored credentials are only reused for the unchanged endpoint.');
   const endpoint = input.endpoint === undefined ? saved?.endpoint ?? '' : typeof input.endpoint === 'string' ? input.endpoint.trim() : '';
   try { assertDatasourceEndpointAllowed(endpoint); }
   catch { fail('Use a valid HTTP(S) API base URL without credentials, query parameters or fragments.'); }
   const authType = input.authType === undefined ? saved ? saved.authType : 'none' : input.authType;
   if (!auth(authType)) return fail('Select a valid authentication method.');
   if (input.creds !== undefined && !object(input.creds)) return fail('creds must be an object');
+  // Empty read inputs and incidental metadata edits cannot repair endpoint drift.
+  if (saved?.bindingMismatch && (typeof input.endpoint !== 'string' || !auth(input.authType) || !object(input.creds))) return requireCredentials();
   if (input.settings !== undefined && !object(input.settings)) return fail('settings must be an object');
   const settings = sanitizeDsSettings(input.settings ?? saved?.settings);
   if (kind !== 'clickhouse') delete settings.database;
@@ -69,11 +75,12 @@ export function mergeDatasourceConnection(kind: string, input: Record<string, un
     return fail('Invalid settings: timeoutS must be 1–60; database must be a non-system ClickHouse identifier.');
   }
   const incoming = object(input.creds) ? input.creds : {};
-  const base = saved?.endpoint === endpoint ? saved.creds : {};
+  if (saved?.hasTenant && (saved.bindingMismatch || saved.endpoint !== endpoint) && typeof incoming.org_id !== 'string') return requireCredentials();
+  const base = saved?.endpoint === endpoint && !saved.bindingMismatch ? saved.creds : {};
   const merged = kind === 'datadog' ? normalizeDatadogHeaderSlots(base, incoming) : { ...base, ...incoming };
   const creds: Record<string, string> = {};
   for (const key of CRED_KEYS) {
-    if (!AUTH_KEYS[authType].includes(key) && !(key === 'org_id' && ['loki', 'tempo', 'mimir'].includes(kind))) continue;
+    if (!AUTH_KEYS[authType].includes(key) && key !== 'org_id') continue;
     const value = merged[key];
     if (value === undefined) continue;
     if (typeof value !== 'string' || value.length > 8192 || /[\x00-\x1f\x7f]/.test(value)) return fail('Invalid credential value.');
@@ -81,7 +88,7 @@ export function mergeDatasourceConnection(kind: string, input: Record<string, un
   }
   if ((authType === 'bearer' && !creds.token?.trim()) || (authType === 'basic' && !creds.username?.trim())
     || (authType === 'custom_header' && (!creds.headerName || !creds.headerValue || Boolean(creds.headerName2) !== Boolean(creds.headerValue2)))) {
-    return fail('Enter the required credentials. Stored credentials are only reused for the unchanged endpoint.');
+    return requireCredentials();
   }
   try { buildAuthHeaders(authType, creds); } catch { return fail('Invalid authentication headers.'); }
   return { endpoint, authType, ...creds, ...settings };

@@ -20,7 +20,7 @@ function json(obj: unknown, status: number) {
 // Upstream error text may echo authorization headers. Classify it, never return it.
 function failure(error: unknown) {
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error ?? '');
-  if (/401|403|unauthoriz|forbidden|Datadog API key validation failed/i.test(text)) {
+  if (/401|403|unauthoriz|forbidden|Datadog (?:API key|metric query) validation failed/i.test(text)) {
     return { ok: false, code: 'authentication', error: 'Authentication failed. Check the credentials, API site and read permissions.' };
   }
   if (/ResourceNotFound|AccessDenied|not connected|not configured/i.test(text)) {
@@ -64,7 +64,8 @@ export async function POST(request: Request) {
       kind, tool: `${kind}_health`, connConfig,
     })) as { ok?: boolean; latency_ms?: number; error?: string };
     if (result?.ok !== true) return json(failure(result?.error), 200);
-    return json({ ok: true, latencyMs: Date.now() - started }, 200);
+    const latencyMs = typeof result.latency_ms === 'number' && Number.isFinite(result.latency_ms) && result.latency_ms >= 0 ? result.latency_ms : Date.now() - started;
+    return json({ ok: true, latencyMs }, 200);
   } catch (e) {
     if (e instanceof ConnectionInputError) return json({ error: e.message }, 400);
     return json(failure(e), 200);

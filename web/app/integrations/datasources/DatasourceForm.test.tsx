@@ -22,9 +22,9 @@ describe('DatasourceForm', () => {
     fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'none' } });
     expect((screen.getByRole('button', { name: '저장' }) as HTMLButtonElement).disabled).toBe(false);
   });
-  it('retains the tenant when the authentication method changes on the same provider', () => {
+  it.each(['prometheus', 'mimir', 'loki', 'tempo', 'clickhouse', 'jaeger', 'dynatrace', 'datadog'])('retains the %s tenant when authentication changes', kind => {
     render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'loki' } });
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: kind } });
     const orgInput = screen.getByText(/Org ID/).parentElement!.querySelector('input')!;
     fireEvent.change(orgInput, { target: { value: 'tenant-a' } });
     fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'bearer' } });
@@ -54,10 +54,11 @@ describe('DatasourceForm', () => {
   it('Test connection posts the unsaved form and shows a success banner', async () => {
     render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
     fireEvent.change(screen.getByPlaceholderText(/prometheus.internal/), { target: { value: 'http://p:9090' } });
+    fireEvent.change(screen.getByText(/Org ID/).parentElement!.querySelector('input')!, { target: { value: 'tenant-a' } });
     fireEvent.click(screen.getByRole('button', { name: /연결 테스트/ }));
     await waitFor(() => expect(screen.getByText(/연결 성공/)).toBeTruthy());
     const t = calls.find((c) => c.url === '/api/datasources/test');
-    expect(JSON.parse(t!.body!)).toMatchObject({ kind: 'prometheus', endpoint: 'http://p:9090', authType: 'none' });
+    expect(JSON.parse(t!.body!)).toMatchObject({ kind: 'prometheus', endpoint: 'http://p:9090', authType: 'none', creds: { org_id: 'tenant-a' } });
   });
 
   it('Save (create) POSTs /manage with name+kind+endpoint+authType and calls onSaved', async () => {
@@ -80,7 +81,7 @@ describe('DatasourceForm', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     const s = calls.find((c) => c.url === '/api/datasources/manage');
     expect(s!.method).toBe('PATCH');
-    expect(JSON.parse(s!.body!)).toMatchObject({ id: 5 });
+    expect(JSON.parse(s!.body!)).toMatchObject({ id: 5, creds: {} }); // blank tenant means preserve, never an implicit clear
   });
 
   it('tests edits using the instance id and current connection settings', async () => {

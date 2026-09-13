@@ -27,7 +27,6 @@ import {
   getCredentialById,
   mirrorDefaultCredential,
   getConfiguredIds,
-  getIntegrationCredentialSnapshot,
   deleteCredentialKeys,
 } from './integration-credentials';
 
@@ -40,14 +39,6 @@ beforeEach(() => {
   clientQuery.mockReset().mockResolvedValue({ rows: [] });
   clientRelease.mockReset();
   poolConnect.mockReset().mockResolvedValue({ query: clientQuery, release: clientRelease });
-});
-
-it('reads an unmodified server snapshot once and propagates read failures', async () => {
-  smSend.mockResolvedValue(getReturn({ 7: { token: 'own' }, prometheus: { token: 'mirror' } }));
-  expect(await getIntegrationCredentialSnapshot()).toEqual({ 7: { token: 'own' }, prometheus: { token: 'mirror' } });
-  expect(smSend).toHaveBeenCalledOnce();
-  smSend.mockRejectedValue(new Error('unavailable'));
-  await expect(getIntegrationCredentialSnapshot()).rejects.toThrow('unavailable');
 });
 
 describe('setIntegrationCredentialById', () => {

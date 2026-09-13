@@ -34,69 +34,41 @@ Use metric, label, service and table names that exist in your environment. Jaege
 
 1. Select **Add Datasource**, choose a provider, and enter a name and API base URL. The form supplies provider-specific URL hints; use the correct Datadog site or Dynatrace environment.
 2. Enter authentication details. Keep credentials out of the URL; API base URLs must not contain user information, query parameters or fragments.
-3. For Loki, Tempo or Mimir, supply **Org ID (X-Scope-OrgID)** if the deployment requires a tenant header.
-4. Optionally set the query timeout and, for ClickHouse, the default database. Their effective limits are listed below.
+3. Supply **Org ID (X-Scope-OrgID)** whenever the backend requires a tenant header, for any connector kind or authentication method. A blank field preserves the stored tenant when editing the same endpoint. Re-enter credentials and the tenant when changing the address or repairing mismatched stored addresses. Explicit API input `creds: { org_id: '' }` removes the tenant header.
+4. Optionally set Timeout (integer seconds 1–60, default 10) and a ClickHouse Database (identifier, at most 128 characters; no `system`/`information_schema`).
 5. Select **Test Connection** and inspect success/failure and, on success, round-trip latency. Datadog validates both API-key validity and application-key metric-query access. An empty query result can still be a successful probe.
 6. Select **Save**, then open **Explore →** and run a small read-only query to verify the intended dataset. ClickHouse `/ping`, for example, establishes reachability rather than query permission.
 
 Testing is recommended; saving is not proof that a probe succeeded. Editing does not reveal stored secrets. Keep the endpoint and authentication method unchanged, and leave credential fields blank to retain stored values. An edit-time probe reuses only that instance's saved credentials when the entire endpoint is unchanged; changing host, scheme, port or path requires re-entry. Connection-field edits clear the previous probe result.
 
-### Authentication
-
-| Method | Use |
-|---|---|
-| None | A backend that needs no authentication |
-| Basic | Username and password, for example an authenticated ClickHouse endpoint |
-| Bearer token | Token authentication; the Dynatrace connector sends `Authorization: Api-Token` instead of Bearer |
-| Custom header | Up to two name/value pairs; transport-critical headers such as Host, Content-Length and Authorization cannot be overridden |
-
-Choosing Datadog preselects dedicated **API key** and **Application key** fields, sent as `DD-API-KEY` and `DD-APPLICATION-KEY`. Choosing Dynatrace preselects its token field; metric access needs `metrics.read`. Credentials are stored server-side in Secrets Manager and are not returned to the form.
+- **None** needs no auth; **Basic** uses username/password; **Bearer token** uses a token. Dynatrace preselects token auth, sends `Authorization: Api-Token`, and needs `metrics.read`.
+- **Custom header** allows two name/value pairs; Host, Content-Length and Authorization overrides are blocked. Datadog preselects **API key** / **Application key**, sent as `DD-API-KEY` / `DD-APPLICATION-KEY`.
+- Credentials stay server-side in Secrets Manager and are not returned to the form.
 
 ### Read the state correctly
 
 | State | Meaning / next step |
 |---|---|
-| Configuration saved · unverified | The required configuration is present; perform a probe and a representative query |
+| Saved · unverified | The required configuration is present; perform a probe and a representative query |
 | Default connection only · save instance configuration | Legacy default connection only; verify the endpoint in Edit, test and save the instance |
 | Endpoint setup required | Endpoint is missing or invalid; an administrator must check the HTTP(S) API base URL |
-| Authentication setup required | Required saved credential material is missing; ask an administrator to complete it |
+| Authentication setup needed | Required saved credential material is missing; ask an administrator to complete it |
 | Connection success (Edit test) | This provider's probe succeeded; it does not certify every API permission, dataset or workload |
-| State/configuration unavailable | Configuration could not be read; retry or ask an administrator to check access rather than treating the list as empty |
+| Status unavailable | Configuration could not be read; retry or ask an administrator to check access rather than treating the list as empty |
 | Disabled | The row is disabled; its AI diagnosis shortcut is not offered |
 
 ## Explore and query limits
 
-Choose an instance, review a native query, then select **Run**. Pressing Enter in a single-line query field runs it; Ctrl+Enter runs multiline SQL. Query-example chips execute immediately, while natural-language example chips only fill the request field. Diagnostic-signal chips, when available, also run the selected query.
+Choose an instance, review a native query, then select **Run**. Pressing Enter in a single-line query field runs it; Ctrl+Enter runs multiline SQL. Query-example chips execute immediately, while natural-language example chips only fill the request field. Diagnostic-signal chips, when available, also run the selected query. For Prometheus/Mimir/Loki, changing a supported time range reruns the current query.
 
-Prometheus, Mimir and Loki support **Instant** and range presets: 5m, 15m, 1h, 6h, 24h and 7d; Prometheus/Mimir also offer 30d. Changing a range reruns the current query. Other providers do not expose this range selector. Direct range requests are bounded by a 60-second minimum, a 30-day maximum for Prometheus/Mimir or 7 days for Loki, and at most 5,000 evaluation points. Native query text is limited to 8,000 characters.
-
-| Setting / limit | Current behavior |
-|---|---|
-| Timeout | Integer seconds, 1–60; default 10 |
-| ClickHouse timeout | Query execution ceiling across Explore, graph and agent paths; effective maximum 55 seconds. Callers may tighten it; 56–60 becomes 55. The HTTP deadline is aligned above it |
-| Prometheus/Mimir timeout | Applied to Explore queries as the upstream API timeout, capped at 10 seconds below the connector's 12-second HTTP deadline |
-| Other providers' timeout | Saved but not currently applied by Loki, Tempo, Jaeger, Dynatrace or Datadog |
-| ClickHouse Database | Optional identifier, at most 128 characters; `system` and `information_schema` are rejected |
-| ClickHouse rows | Explore requests at most 500 rows; the connector's general ceiling is 1,000. Narrow queries with a safe LIMIT |
-| Query result cache | No configurable result-cache TTL; schema caching for AI vocabulary is separate |
-
-These query settings are not a promise that every health probe uses the same deadline. ClickHouse rejects mutating statements, SYSTEM and table-function access; use `SELECT 1` or a discovered, permitted user table. Do not assume that a read-only-looking query is allowed by every backend.
-
-Results include row/series counts, connector round-trip time and result shape. Prometheus/Mimir range charts show up to eight series, with Line/Bar selection; the data table and notices provide additional context. Loki has a log viewer; Tempo/Jaeger have compact trace results and duration bars. Check truncation, partial-coverage and empty-result notices before interpreting a chart. A small or empty result does not establish workload health or complete coverage.
+- Timeout effects differ: ClickHouse execution is capped at 55 seconds; Prometheus/Mimir Explore at 10 seconds. Other providers store the setting without applying it. Health probes have separate deadlines.
+- Native queries are limited to 8,000 characters; ClickHouse Explore requests at most 500 rows. ClickHouse blocks mutations, SYSTEM/system tables and table functions. Start with `SELECT 1` or a discovered, permitted user table.
 
 ## AI query drafts, chat and diagnosis
 
-### Generate a query, then review and run
+Enter a natural-language request and select **Generate with AI**, or press Enter in that field. This fills the query editor and may show vocabulary or schema warnings. **Generation never executes the generated query**; review it and select **Run** separately. Natural-language input is bounded to 4,000 characters. Schema vocabulary may be missing, stale or partial; verify names, scope and warnings before running.
 
-Enter a natural-language request and select **Generate with AI**, or press Enter in that field. This fills the query editor and may show vocabulary or schema warnings. **Generation never executes the generated query**; review it and select **Run** separately. Natural-language input is bounded to 4,000 characters.
-
-Drafting uses the selected instance's available schema vocabulary. Missing, stale or partial schema may trigger a background refresh; a draft may proceed without complete schema. Verify names, time scope, permissions and warnings. The datasource's result cache and this schema cache are different concepts.
-
-### Diagnose a default instance
-
-For **enabled, configured default instances** of Prometheus, ClickHouse, Loki, Mimir and Tempo, **Diagnose with AI** opens `/assistant` with a prefilled, section-pinned prompt. Prometheus/ClickHouse use `/observability`; Loki/Mimir/Tempo use `/monitoring`. These are prompt section selectors. Review and send the prompt yourself; opening the link does not send it and sending starts a fresh conversation.
-
-Native chat tools use each kind's default instance. Select another instance in Explore when you need its evidence; a non-default row does not get this diagnosis shortcut. The agent uses available connector read/query/schema tools, not a guaranteed NLB, security-group or Kubernetes diagnosis pipeline.
+**Diagnose with AI** appears only for enabled, configured defaults of Prometheus, ClickHouse, Loki, Mimir and Tempo. It opens a prefilled `/assistant` prompt: `/observability` for Prometheus/ClickHouse, `/monitoring` for Loki/Mimir/Tempo. Review and send manually to start a fresh conversation. Native chat uses the default instance; use Explore for other instances.
 
 **Datadog and Dynatrace support Explore and AI query drafting. Their native chat gateway targets and automatic diagnosis-report collection are not wired by default.** Jaeger also supports Explore/drafting without a native chat target or automatic report collector. Registering one of these datasources does not add those paths.
 
@@ -106,14 +78,8 @@ Supported vendor-hosted MCP presets are a separate **Connectors** path, with sep
 
 ## Troubleshooting and safe use
 
-- For authentication failures, verify the API site/environment, authentication method and required read scopes. A successful metric probe does not establish Problems API access.
-- For timeouts, verify endpoint reachability and network rules from the connector, then narrow the query/window. Private endpoints require appropriate connector network access.
+- For authentication or timeout failures, check the API site/environment, read scopes and connector reachability, then narrow the query/window. A metric probe does not verify Problems API access.
 - HTTP(S) datasource endpoints may be private. Metadata, loopback, link-local and other blocked special addresses remain prohibited; redirects and unsafe URL forms are rejected. There is no v2 Allowed Networks exception editor.
-- For configuration read/save/delete/default-change failures, use the visible error and retry; do not infer success from an unchanged row or cached display.
-- For truncated, partial, stale or unassessed evidence, inspect the source/window and narrow the request. Do not turn unavailable measurements into healthy zeroes.
+- On read/save/delete/default-selection failure, use the error and retry. Truncated, partial, stale, unassessed or empty results do not establish health; inspect the source/window and request narrower evidence.
 
-## Related guides
-
-- [Custom agents and skills](../operations/custom-agents)
-- [AI assistant](../overview/assistant)
-- [AI diagnosis reports](../operations/ai-diagnosis)
+Related guides: [Custom agents and skills](../operations/custom-agents) · [AI assistant](../overview/assistant) · [AI diagnosis reports](../operations/ai-diagnosis)
