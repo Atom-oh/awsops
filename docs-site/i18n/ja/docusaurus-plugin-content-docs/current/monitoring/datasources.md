@@ -1,6 +1,6 @@
 ---
 sidebar_position: 7
-title: データソース
+title: 旧データソース参考資料
 description: 外部データソース連携の管理 (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
@@ -8,7 +8,15 @@ import Screenshot from '@site/src/components/Screenshot';
 import DatasourceFlow from '@site/src/components/diagrams/DatasourceFlow';
 import DatasourceExploreFlow from '@site/src/components/diagrams/DatasourceExploreFlow';
 
-# データソース
+# 旧データソース参考資料
+
+:::warning
+このページは複数の旧バージョンの説明と図を参考用に保存しています。現在の運用手順ではありません。対応 API・認証・状態・実行手順は[最新のデータソースガイド](../observability/datasources)を参照してください。
+:::
+
+<details>
+<summary>旧資料 — 現在の運用には使用しないでください</summary>
+
 
 外部のモニタリングおよびオブザーバビリティシステムを AWSops に連携し、統合管理できる Grafana スタイルのデータソース管理ページです。
 
@@ -363,3 +371,5 @@ AI アシスタントが認識するキーワード: **プロメテウス/promet
 - [モニタリングダッシュボード](./monitoring.md) - システムモニタリングの現況
 - [CloudWatch](./cloudwatch) - AWS CloudWatch メトリクス
 - [AI アシスタント](../overview/ai-assistant) - AI 分析機能
+
+</details>

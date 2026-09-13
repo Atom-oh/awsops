@@ -12,6 +12,7 @@ import { getDatasource, resolveConnConfig } from '@/lib/datasources';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
+import { ConnectionInputError } from '@/lib/datasource-connection';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,7 +56,13 @@ export async function POST(request: Request) {
   const ds = await getDatasource(id);
   if (!ds || !isDatasourceKind(ds.kind)) return json({ error: 'unknown datasource instance' }, 400);
 
-  const connConfig = await resolveConnConfig(ds); // row endpoint (authoritative) + SM cred — works even for auth=none
+  let connConfig;
+  try { connConfig = await resolveConnConfig(ds); }
+  catch (error) {
+    return json({ code: 'configuration', error: error instanceof ConnectionInputError
+      ? error.message : 'Datasource configuration is unavailable. Retry or ask an administrator to check access.' },
+    error instanceof ConnectionInputError ? 400 : 503);
+  }
   if (connConfig?.endpoint) {
     try { assertDatasourceEndpointAllowed(connConfig.endpoint); }
     catch (e) { return json({ error: (e as Error).message }, 400); }
