@@ -172,6 +172,8 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         body = json.loads(result["body"])
         self.assertEqual(body["resources"], [{"id": expected}])
         self.assertEqual(body["count"], 1)
+        self.assertEqual(body["projection"], "identity_only")
+        self.assertEqual(body["resource_id"], expected)
 
     def test_identity_lookup_rejects_other_types_and_invalid_ids_before_sql(self):
         with mock.patch.object(inv, "_execute") as execute:
