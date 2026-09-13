@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 70aeb4e6c639 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d4fc600bfd00 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo. This context is distilled from
 > CLAUDE.md and shared by Kiro, Codex and Agy.
@@ -59,7 +59,8 @@ AWS mutation stays FROZEN regardless of requester, except the exact ADR-015 path
   fallback and host-account `get_role_arn() -> None`; both are deliberate fixes.
 - Live `aws-data`/collector Steampipe paths are hard-disabled and fall back to normal
   routing; never re-gate them on `steampipe_enabled`. That flag gates the FDW and
-  batch sync; CIS compliance and FinOps EBS also depend on it. Partial/stale/unassessed
+  batch sync. CIS uses the FDW; FinOps EBS checks persisted inventory freshness.
+  Partial/stale/unassessed
   evidence is not a healthy zero; follow ADR-010/021 and the actual producer schema.
 - New large features default off; this does not mean an entire fresh stack costs $0.
   No `-auto-approve` for shared Terraform; controller applies the reviewed saved plan.

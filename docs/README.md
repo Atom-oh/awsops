@@ -28,8 +28,8 @@ records retain their original language/evidence. Do not translate an old approva
 into a new decision or load archives as default reviewer context.
 
 The origin repository owns decision bodies. Public samples may cite ADR numbers
-without shipping private records. Always resolve code paths against the repository
-being reviewed: private Terraform uses `terraform/v2/foundation/`, public samples
+without shipping the decision bodies. Always resolve code paths against the repository
+being reviewed: this checkout uses `terraform/v2/foundation/`, public samples
 use `terraform/foundation/`.
 
 A material contradiction should identify both sources and the actual code path.

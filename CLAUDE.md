@@ -69,7 +69,8 @@ of who requests it, except for the exact ADR-015 path.
   also has bounded service-specific reads. Models and gateway membership come from
   configuration/catalog source, not prose inventories.
 - **Inventory:** `steampipe_enabled` gates the Steampipe FDW and batch sync into
-  Aurora; the Powerpipe CIS worker and FinOps EBS rule also depend on it. Live
+  Aurora. The Powerpipe CIS worker uses that FDW; the FinOps EBS rule instead
+  requires fresh persisted inventory evidence. Live
   Steampipe SQL in `aws-data` and auto-collect handlers is deliberately disabled by
   `steampipeAvailable()`. Those registered routing keys fall back to normal routing;
   they are not active collectors. Never replace this hard-disable with a check of

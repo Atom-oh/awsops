@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 6906baf1ceef · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 8ec020609869 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 # Decisions — Reviewer Context
 
@@ -8,7 +8,7 @@ are evidence of their time, not current enforcement or permission.
 
 - Keep decision docs concise and English-only. Preserve acceptance dates, rationale, owner overrides,
   and evidence limits. Distinguish policy, checked-in code, defaults, and dated deployment observations.
-- Verify the reviewed checkout: this private tree uses `terraform/v2/foundation/`. Resolve current
+- Verify the reviewed checkout: this checkout uses `terraform/v2/foundation/`. Resolve current
   `ADR-NNN` separately from `legacy ADR-NNN` / `ADR-NNN[legacy MMM]`; do not read legacy tag bodies
   without an explicit request.
 - New ADR = highest existing number plus one, with a same-change BASELINE index/register update.
