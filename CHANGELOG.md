@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Reviewed diagnosis handoffs: preview, copy or download redacted drafts for knowledge, communication, and specialist workflows. Drafts preserve severity-marked narrative, distinguish invariant coverage from report findings, and require manual transfer; the Integrations hub explains the available paths and gated delivery boundaries.
+
 - Add a topology diagram + resilience assessment to the Direct Connect page (modeled on aws-samples/sample-network-resilience-agent, fitted to the house React Flow conventions): an on-premises → DX location → connection/LAG → VIF → DX Gateway → TGW/VGW layered graph (dagre layout, state-colored nodes/edges — down connections and BGP-down VIFs in red, degraded LAGs and non-associated gateway links in amber/dashed, unattached VIFs dashed), node click opens the existing side detail panel, and a resilience card scoring the AWS Direct Connect SLA tier (Maximum 99.99% = 2+ connections at each of 2+ locations · High 99.9% = 2+ locations · Single 95%) with a critical/warn checklist (connection/VIF health, location redundancy, per-location dual connections, unassociated DXGWs, unattached VIFs) — built entirely from data the page already fetches, no new AWS API calls; 4-language i18n.
 
 - Async workload observations: ownership-scoped acceptance→first worker start→terminal timing and an optional completion objective over a selected window. Wait includes queue/scheduling and worker lifecycle includes retries; missing/inverted timestamps and truncated samples withhold unsupported timing or attainment. Existing deployments remain compatible before the additive migration, with new timing reported as unknown.

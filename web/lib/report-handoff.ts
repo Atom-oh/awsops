@@ -9,6 +9,36 @@ interface ReportEvidence {
   id: number; status: string; tier: string; title?: string | null;
   created_at?: string | Date; finished_at?: string | Date | null; sources_used?: unknown; summary?: unknown;
 }
+export interface InvariantCoverage {
+  total: number; assessed: number; passed: number; failed: number; unassessed: number;
+}
+const COVERAGE_FIELDS = ['total', 'assessed', 'passed', 'failed', 'unassessed'] as const;
+
+/** Shared with the on-screen invariant panel. Count only consistent producer coverage. */
+export function invariantCoverage(value: unknown): InvariantCoverage | null {
+  const summary = record(value);
+  const raw = summary.invariant_coverage;
+  const verdictArray = (v: unknown): v is Record<string, unknown>[] =>
+    Array.isArray(v) && v.every(row => row && typeof row === 'object' && !Array.isArray(row));
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || !verdictArray(summary.drift) || !verdictArray(summary.unassessed)) return null;
+  const values = raw as Record<string, unknown>;
+  if (!COVERAGE_FIELDS.every(k => typeof values[k] === 'number'
+      && Number.isSafeInteger(values[k]) && (values[k] as number) >= 0)) return null;
+  const c = raw as InvariantCoverage;
+  return c.total === c.assessed + c.unassessed && c.assessed === c.passed + c.failed
+    && c.failed === summary.drift.length && c.unassessed === summary.unassessed.length ? c : null;
+}
+
+function invariantSummary(summary: Record<string, unknown>): string {
+  const c = invariantCoverage(summary);
+  if (!c) return `Invariant coverage: ${summary.invariant_coverage == null ? 'missing' : 'invalid'}. Invariant violations: unknown. Unassessed invariant checks: unknown.`;
+  if (c.total === 0) return 'Invariant assessment: no active invariants; not assessed.';
+  const state = c.assessed === 0 ? 'unassessed' : c.assessed < c.total ? 'partial' : 'complete';
+  return `Invariant assessment: ${state}. Assessed: ${c.assessed}/${c.total}.`
+    + (c.assessed ? ` Passed: ${c.passed}.` : '')
+    + ` Invariant violations: ${c.assessed ? c.failed : 'unknown'}. Unassessed invariant checks: ${c.unassessed}.`;
+}
 
 // These are formatting destinations, never service discovery, credentials or executable actions.
 const TARGETS = [
@@ -40,10 +70,11 @@ function date(value: unknown): string {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : 'unknown';
 }
 function sources(value: unknown): string {
-  return Array.isArray(value) ? [...new Set(value.filter(v => typeof v === 'string' && SOURCES.has(v)))].join(', ') || 'none recorded' : 'unknown';
-}
-function count(value: unknown): string {
-  return Array.isArray(value) ? String(value.length) : 'unknown';
+  if (!Array.isArray(value)) return 'unknown';
+  if (!value.length) return 'none recorded';
+  const known = [...new Set(value.filter(v => typeof v === 'string' && SOURCES.has(v)))];
+  if (value.some(v => typeof v !== 'string' || !SOURCES.has(v))) known.push('unknown');
+  return known.join(', ');
 }
 
 /** Format only selected narrative from a known report. Never serialize source records or raw summary
@@ -85,17 +116,22 @@ export function buildReportHandoff(report: ReportEvidence, markdown: string | nu
   // Never retain a partial line: its credential marker may be beyond the input bound.
   if (truncated) input = input.slice(0, Math.max(0, input.lastIndexOf('\n')));
   for (const line of input.split('\n')) {
-    // Stop, rather than resume in a possibly dropped fence/PEM block. No regex sees a huge line.
-    if (line.length > MAX_LINE) { omitted = truncated = true; break; }
-    if (/-----BEGIN /.test(line)) { pem = true; omitted = true; continue; }
-    if (pem) { if (/-----END /.test(line)) pem = false; continue; }
-    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
-    if (marker) {
-      if (!fence) fence = { char: marker[0], size: marker.length };
-      else if (marker[0] === fence.char && marker.length >= fence.size) fence = null;
+    const oversized = line.length > MAX_LINE;
+    if (oversized) omitted = truncated = true;
+    // Linear delimiter scans preserve state even on omitted lines; prose regexes stay bounded.
+    if (line.includes('-----BEGIN ')) { pem = true; omitted = true; continue; }
+    if (pem) { if (line.includes('-----END ')) pem = false; continue; }
+    const leading = line.trimStart();
+    if (leading.startsWith('```') || leading.startsWith('~~~')) {
+      const char = leading[0];
+      let size = 3;
+      while (leading[size] === char) size++;
+      if (!fence) fence = { char, size };
+      else if (char === fence.char && size >= fence.size) fence = null;
       omitted = true; continue;
     }
     if (fence) continue;
+    if (oversized) { if (line.startsWith('##')) section = ''; continue; }
     const heading = /^##\s+(.+?)\s*$/.exec(line);
     if (heading) {
       const key = DIAG_SECTIONS.find(s => titleMatches(s, heading[1]))?.key ?? '';
@@ -104,14 +140,18 @@ export function buildReportHandoff(report: ReportEvidence, markdown: string | nu
     }
     if (!section || !line.trim()) continue;
     // Code, tables, JSON/YAML-like records and raw inventory lines are not narrative.
-    if (/^\s{4}|^\t|[|{}]|^\s*["'[\]]|^\s*#{1,6}\s|^\s*[\w.-]+\s*[:=]/.test(line)) {
+    const marker = /^\s*\[(?:Critical|Warning|Info)\](?:\s+|$)/.exec(line);
+    const payload = marker ? line.slice(marker[0].length) : line;
+    if (/^\s{4}|^\t|[|{}]|^\s*#{1,6}\s|^\s*[\w.-]+\s*[:=]/.test(line)
+        || /^\s*["'[\]]|^\s*[\w.-]+\s*[:=]\s*["'[{]/.test(payload)) {
       omitted = true; continue;
     }
     const safe = sanitize(line);
     if (!safe) continue;
     const lines = prose.get(section) ?? [];
     if (lines.length >= 3 || lines.join('\n').length >= PROSE_LIMIT) { truncated = true; continue; }
-    const remaining = PROSE_LIMIT - lines.join('\n').length - 1;
+    const remaining = PROSE_LIMIT - lines.join('\n').length - (lines.length ? 1 : 0);
+    if (remaining <= 0) { truncated = true; continue; }
     if (safe.length > remaining) truncated = true;
     lines.push(safe.slice(0, remaining));
     prose.set(section, lines);
@@ -124,7 +164,7 @@ export function buildReportHandoff(report: ReportEvidence, markdown: string | nu
     `Created: ${date(report.created_at)}; completed: ${date(report.finished_at)}.`,
     'Collection windows and freshness are source-specific; report creation time is not a measurement window.',
     `Sources recorded: ${sources(report.sources_used)}. Degraded sources: ${sources(summary.degraded)}.`,
-    `Recorded findings: ${count(summary.drift)}. Unassessed checks: ${count(summary.unassessed)}.`,
+    invariantSummary(summary),
     'Missing/unassessed evidence is not healthy zero. Revalidate scope, time and evidence before making decisions.',
     ...(report.status === 'partial' ? ['Partial report: some evidence or sections are incomplete.'] : []),
   ].join('\n');
