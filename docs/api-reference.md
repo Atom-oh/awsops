@@ -7,6 +7,11 @@ revocation, cost and response semantics. Current auth boundaries are in
 [ADR-002](decisions/002-auth-and-login.md); the edge public-path allowlist is in
 `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl`.
 
+`/api/db` and `/api/stream` rely on edge authentication without BFF `verifyUser`;
+`/api/incidents/webhook` uses its separately verified machine-ingress authentication.
+Login/signout/health are documented entry/health routes. Do not infer a new exception
+from the absence of an authentication column in this index.
+
 Heavy work goes through ownership-checked domain routes. Generic `POST /api/jobs`
 accepts only noop job types. Unknown/partial/unassessed telemetry is not successful
 collection. See [architecture](architecture.md) for data ownership.

@@ -9,6 +9,14 @@
 | S3 | The local runner executes isolated Python tests, web Vitest, and opportunistic Terraform checks; the CI workflow invokes that runner. | Current merge runner and workflow | `scripts/v2/merge-verify.sh`, `.github/workflows/merge-verify.yml` | `bash scripts/v2/merge-verify.sh` |
 | S4 | Every configured model/lens cell requires a successful CLI exit and nonce-bound final report frames; only decoded, scrubbed reports reach the chair. | PR-review execution protocol | `scripts/pr-review/test_report_frame.py`, `scripts/pr-review/test_review_completion.py`, `scripts/pr-review/test_aws_preflight.py` | `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v` |
 
+## Structural gate limitation
+
+`ungated_resources()` searches the whole Terraform resource body for `count` or
+`for_each`. A `for_each` inside a nested `dynamic` block can satisfy this heuristic
+without gating the resource itself. S1 therefore does not prove top-level gating;
+review the actual resource arguments and saved plan. The scanner has not been
+changed by this documentation update.
+
 ## Runner Usage
 
 Run the full merge verification from the repository root:

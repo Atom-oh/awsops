@@ -16,8 +16,9 @@ or restore deleted `src/` paths. Production code lives under `web/`.
 | Architecture and feature gates | `docs/decisions/BASELINE.md` |
 
 Use existing semantic tokens (`surface`, `ink`, `brand`, `positive`, `negative`,
-`warning`, chart colors) rather than embedding a second palette. The default theme
-uses teal and cool neutrals; cobalt and dark modes override tokens. Preserve contrast
+`warning`, chart colors) rather than embedding a second palette. The base CSS palette uses teal and cool neutrals. The application default is cobalt
+(`web/lib/theme.ts:DEFAULT_THEME`, applied by `web/app/layout.tsx`); cobalt and dark
+modes override the base tokens. Preserve contrast
 and native form-field appearance in all supported themes. Chart palette variables
 read by `useChartColors` must hold concrete hex values: the helper reads computed
 custom properties and does not resolve nested `var()` references. Section-accent

@@ -52,7 +52,7 @@ on shared infrastructure. Keep generated tfvars/backend settings untracked.
 Default-off optional features still require explicit configuration; a new foundation
 plan creates resources and may incur cost.
 
-Use [deploy-new-version.md](runbooks/deploy-new-version.md) for web, agent, worker and
+Use the [root deployment commands](../CLAUDE.md) for web, agent, worker and
 MCP Lambda release boundaries. `make deploy` runs migrations before the web rollout.
 `make agentcore` requires both Terraform apply and `make migrate` beforehand.
 `make help` lists supported targets.

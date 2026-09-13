@@ -3,7 +3,9 @@
 AWS and Kubernetes operations dashboard with inventory, monitoring, topology,
 security/compliance visibility and AI-assisted diagnosis. The application proposes
 remediation; AWS-resource mutation and autonomous remediation remain frozen under
-[ADR-005](docs/decisions/005-aws-mutation-autonomy-frozen.md).
+[ADR-005](docs/decisions/005-aws-mutation-autonomy-frozen.md). The only default-off
+owner exception is the host web-service restart after its own Aurora secret rotation,
+with unchanged image/task definition ([ADR-015](docs/decisions/015-operational-self-healing.md)).
 
 ## Architecture
 
@@ -24,11 +26,12 @@ flowchart LR
 ```
 
 The web application serves `/` and `/api/*` from an arm64 standalone container.
-CloudFront reaches an internal ALB through a VPC Origin; no public ALB is required.
+CloudFront reaches an internal ALB through a VPC Origin; the ALB must remain internal.
 Aurora holds application state and inventory snapshots. AgentCore MCP tools provide
 live domain reads. Heavy diagnosis/compliance jobs run outside the web process.
 
-Steampipe is an optional **batch ingestion** source. The old live SQL chat and
+Steampipe supplies optional **batch inventory ingestion** and the Powerpipe CIS
+worker's FDW query path. Disabling it also removes that benchmark dependency. The old live SQL chat and
 collector paths remain disabled. Cross-account reads use registered target roles;
 the host account uses its execution role directly. External observability connectors
 are governed separately from AWS-resource mutation by
@@ -91,7 +94,7 @@ make deploy
 for stability and checks `/api/health`. AgentCore and worker images have separate
 Make targets; `make agentcore` requires prior Terraform apply and `make migrate`.
 MCP Lambda code is shipped by Terraform. See the
-[deployment runbook](docs/runbooks/deploy-new-version.md) before operating a live stack.
+[deployment commands and prerequisites](CLAUDE.md) before operating a live stack.
 
 ## Documentation and review
 
