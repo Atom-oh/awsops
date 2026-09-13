@@ -5,7 +5,7 @@ These references describe implemented component contracts and operational limits
 migrations, and tests establish behavior. A reference or default flag value does
 not prove deployment. Use dated runbooks for environment-specific evidence.
 
-This private checkout uses `terraform/v2/foundation/`. Public samples have a
+This checkout uses `terraform/v2/foundation/`. Public samples have a
 separate root; verify the checkout before copying commands. Developer references
 are English-only; application localization and multilingual `docs-site` guides
 remain separate.
