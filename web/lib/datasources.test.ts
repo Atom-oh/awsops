@@ -4,10 +4,12 @@ const query = vi.fn();
 const getPoolMock: { query: unknown; connect?: unknown } = { query };
 vi.mock('@/lib/db', () => ({ getPool: () => getPoolMock }));
 const getCredentialById = vi.fn();
+const getIntegrationCredentialSnapshot = vi.fn();
 const mirrorDefaultCredential = vi.fn();
 const deleteCredentialKeys = vi.fn();
 vi.mock('@/lib/integration-credentials', () => ({
   getCredentialById: (...a: unknown[]) => getCredentialById(...a),
+  getIntegrationCredentialSnapshot: () => getIntegrationCredentialSnapshot(),
   mirrorDefaultCredential: (...a: unknown[]) => mirrorDefaultCredential(...a),
   deleteCredentialKeys: (...a: unknown[]) => deleteCredentialKeys(...a),
 }));
@@ -17,6 +19,7 @@ import {
 } from './datasources';
 
 beforeEach(() => {
+  getIntegrationCredentialSnapshot.mockReset().mockImplementation(async () => { const blob = await getCredentialById(1); return blob ? { 1: blob } : {}; });
   query.mockReset();
   getCredentialById.mockReset();
   mirrorDefaultCredential.mockReset();
@@ -155,16 +158,12 @@ describe('resolveConnConfig', () => {
     const cc = await resolveConnConfig(ch);
     expect(cc).not.toHaveProperty('database');
     expect(cc).not.toHaveProperty('timeoutS');
-    expect(cc).toMatchObject({ username: 'u' });
+    expect(cc).not.toHaveProperty('username'); // explicit none discards dormant credentials
   });
 
-  it('takes auth material from the SM credential but keeps the ROW authoritative for endpoint+authType', async () => {
-    // cred carries a DIFFERENT (stale) endpoint + authType — the row must win so a stale secret can't
-    // redirect the query; only the auth material (username/password) is taken from the cred.
-    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://STALE:9090', authType: 'bearer', username: 'u', password: 'pw' });
-    const cc = await resolveConnConfig({ ...row, endpoint: 'http://p:9090', authType: 'basic' as const });
-    expect(cc).toMatchObject({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
-    expect(cc.endpoint).not.toBe('http://STALE:9090'); // row endpoint wins over the stale secret
+  it('rejects credentials bound to a different endpoint instead of forwarding them', async () => {
+    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://STALE:9090', username: 'u', password: 'pw' });
+    await expect(resolveConnConfig({ ...row, authType: 'basic' })).rejects.toThrow(/credentials/);
   });
 });
 

@@ -14,3 +14,15 @@ it('normalizes a legacy swapped Datadog pair without changing other configuratio
   const custom = { headerName: 'X-Proxy-Key', headerValue: 'proxy' };
   expect(normalizeDatadogHeaderSlots(custom)).toEqual(custom);
 });
+
+it.each([
+  { headerName: 'DD-APPLICATION-KEY', headerValue: 'new-app' },
+  { headerName2: 'DD-APPLICATION-KEY', headerValue2: 'new-app' },
+  { appKey: 'new-app' },
+])('rotates the application key by identity without changing the API key', update => {
+  expect(normalizeDatadogHeaderSlots({
+    apiKey: 'api', appKey: 'app', headerName: 'DD-APPLICATION-KEY', headerValue: 'stale-app',
+    headerName2: 'DD-API-KEY', headerValue2: 'stale-api',
+  }, update)).toEqual({ headerName: 'DD-API-KEY', headerValue: 'api',
+    headerName2: 'DD-APPLICATION-KEY', headerValue2: 'new-app' });
+});

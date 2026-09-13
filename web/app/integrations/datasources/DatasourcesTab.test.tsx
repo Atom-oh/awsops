@@ -17,6 +17,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('DatasourcesTab', () => {
+  it('shows mirror-only configuration distinctly and uses inferred auth when editing', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ datasources: [{
+      id: 7, name: 'migrated', kind: 'prometheus', endpoint: 'https://p/tenant',
+      authType: 'bearer', isDefault: true, connected: true, configurationStatus: 'mirror_only',
+    }] }) })) as unknown as typeof fetch;
+    render(<DatasourcesTab canManage />);
+    expect(await screen.findByText('기본 연결 설정 · 인스턴스 저장 필요')).toBeTruthy();
+    expect(screen.getByText('AI로 진단')).toBeTruthy();
+    fireEvent.click(screen.getByText('편집'));
+    expect((screen.getByLabelText('Auth method') as HTMLSelectElement).value).toBe('bearer');
+  });
   it('lists instances (name/type/auth/default) with an Explore link per row', async () => {
     render(<DatasourcesTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());

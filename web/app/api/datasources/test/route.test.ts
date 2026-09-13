@@ -5,6 +5,7 @@ const isAdmin = vi.fn();
 const invokeMcpLambdaTool = vi.fn();
 const getDatasource = vi.fn();
 const getCredentialById = vi.fn();
+const getIntegrationCredentialSnapshot = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/datasources', async (original) => ({
@@ -13,6 +14,7 @@ vi.mock('@/lib/datasources', async (original) => ({
 }));
 vi.mock('@/lib/integration-credentials', () => ({
   getCredentialById: (...a: unknown[]) => getCredentialById(...a),
+  getIntegrationCredentialSnapshot: () => getIntegrationCredentialSnapshot(),
 }));
 vi.mock('@/lib/mcp-lambda-invoke', () => ({
   invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a),
@@ -28,6 +30,7 @@ function req(body: unknown) {
 }
 
 beforeEach(() => {
+  getIntegrationCredentialSnapshot.mockReset().mockImplementation(async () => { const blob = await getCredentialById(7); return blob ? { 7: blob } : {}; });
   for (const m of [verifyUser, isAdmin, invokeMcpLambdaTool, getDatasource, getCredentialById]) m.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u' });
   isAdmin.mockResolvedValue(true);

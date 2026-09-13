@@ -87,7 +87,6 @@ do not maintain a separate route count in README or agent context.
 | `/api/integrations/credential` | GET, PUT | [route.ts](../web/app/api/integrations/credential/route.ts) |
 | `/api/integrations` | GET, POST, PUT | [route.ts](../web/app/api/integrations/route.ts) |
 | `/api/integrations/schema` | GET, POST | [route.ts](../web/app/api/integrations/schema/route.ts) |
-| `/api/integrations/test` | POST | [route.ts](../web/app/api/integrations/test/route.ts) |
 | `/api/inventory/[type]/metrics` | GET | [route.ts](../web/app/api/inventory/[type]/metrics/route.ts) |
 | `/api/inventory/[type]/refresh` | POST | [route.ts](../web/app/api/inventory/[type]/refresh/route.ts) |
 | `/api/inventory/[type]` | GET | [route.ts](../web/app/api/inventory/[type]/route.ts) |

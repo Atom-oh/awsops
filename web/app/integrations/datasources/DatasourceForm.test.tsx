@@ -15,6 +15,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('DatasourceForm', () => {
+  it('requires an explicit auth choice for an unresolved migrated authentication method', () => {
+    render(<DatasourceForm initial={{ id: 7, name: 'legacy', kind: 'prometheus', endpoint: 'https://p', authType: '' }} onSaved={() => {}} onCancel={() => {}} />);
+    expect((screen.getByLabelText('Auth method') as HTMLSelectElement).value).toBe('');
+    expect((screen.getByRole('button', { name: '저장' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'none' } });
+    expect((screen.getByRole('button', { name: '저장' }) as HTMLButtonElement).disabled).toBe(false);
+  });
   it('retains the tenant when the authentication method changes on the same provider', () => {
     render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'loki' } });

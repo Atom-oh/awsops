@@ -54,6 +54,9 @@ async function readMap(): Promise<Record<string, unknown>> {
   }
 }
 
+/** Server-only snapshot: one read for all datasource rows; callers must project metadata only. */
+export const getIntegrationCredentialSnapshot = readMap;
+
 /** Read-modify-write the single shared credential map under a pg advisory lock so concurrent admin
  *  writes can't clobber each other. The mutator edits the map in place; size is checked before PUT. */
 async function mutateCredentialMap(

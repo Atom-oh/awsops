@@ -30,8 +30,9 @@ async function gate(request: Request) {
 export async function GET(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
-  // Status reads are strict: a denied/unavailable secret is unknown, not proof
-  // that no credential exists. Never return secret values.
+  // NARROW downgrade: a Secrets Manager AccessDenied/NotFound (e.g. integrations gated off, task role
+  // has no access) degrades to an empty configured list so the read-only status panel doesn't 500.
+  // Any OTHER failure (PG, malformed secret, …) surfaces as 500 — masking it would hide real breakage.
   try {
     // Keep the plain connector-mirror slugs and the ADR-017 namespaced ("mcp:<slug>") MCP-preset
     // slugs as TWO DISTINCT sets (round-2 review MAJOR, 2026-07-31: merging them into one
@@ -40,16 +41,16 @@ export async function GET(request: Request) {
     // empty, or vice versa). `configured` also strips any stray "mcp:"/numeric-id keys that
     // getConfiguredSlugs' unfiltered Object.keys() would otherwise leak in.
     const [rawSlugs, mcpConfigured, configuredIds] = await Promise.all([
-      getConfiguredSlugs(true),
-      getConfiguredMcpPresetSlugs(true),
-      getConfiguredIds(true),
+      getConfiguredSlugs(),
+      getConfiguredMcpPresetSlugs(),
+      getConfiguredIds(),
     ]);
     const configured = rawSlugs.filter((k) => !k.startsWith('mcp:') && !/^\d+$/.test(k));
-    return json({ configured, mcpConfigured, configuredIds, available: true }, 200);
+    return json({ configured, mcpConfigured, configuredIds }, 200);
   } catch (e) {
     const name = (e as { name?: string })?.name || '';
     if (/AccessDenied|ResourceNotFound|NotFound/i.test(name)) {
-      return json({ configured: [], mcpConfigured: [], configuredIds: [], available: false }, 200);
+      return json({ configured: [], mcpConfigured: [], configuredIds: [] }, 200);
     }
     console.error('[credential GET] unexpected error reading configured integrations:', name);
     return json({ error: 'failed to read configured integrations' }, 500);

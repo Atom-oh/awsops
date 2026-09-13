@@ -5,7 +5,8 @@
 import { verifyUser } from '@/lib/auth';
 import { listDatasources } from '@/lib/datasources';
 import { isAdmin } from '@/lib/admin';
-import { getConfiguredIds } from '@/lib/integration-credentials';
+import { getIntegrationCredentialSnapshot } from '@/lib/integration-credentials';
+import { datasourceConnectionMetadata } from '@/lib/datasource-connection';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,23 +19,16 @@ export async function GET(request: Request) {
   if (!user) return json({ error: 'unauthenticated' }, 401);
 
   try {
-    const [rows, configuredIds, admin] = await Promise.all([listDatasources(), getConfiguredIds(true), isAdmin(user)]);
-    const idSet = new Set(configuredIds);
-    const datasources = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      kind: r.kind,
-      // Connection detail is admin-only (v1 showed the URL; v2 keeps it off the read-any shape).
-      // settings ride the same admin-only visibility as the endpoint (gap L203)
-      ...(admin ? { endpoint: r.endpoint, settings: r.settings } : {}),
-      authType: r.authType,
-      isDefault: r.isDefault,
-      enabled: r.enabled,
-      // Keep the legacy field for existing consumers. It means saved configuration,
-      // never live connectivity; a default flag does not establish credential presence.
-      connected: idSet.has(String(r.id)) || (Boolean(r.endpoint) && r.authType === 'none'),
-      configurationStatus: idSet.has(String(r.id)) || (Boolean(r.endpoint) && r.authType === 'none') ? 'stored' : 'missing',
-    }));
+    const [rows, snapshot, admin] = await Promise.all([listDatasources(), getIntegrationCredentialSnapshot(), isAdmin(user)]);
+    const datasources = rows.map(r => {
+      const meta = datasourceConnectionMetadata(r, snapshot);
+      return {
+        id: r.id, name: r.name, kind: r.kind, authType: meta.authType,
+        isDefault: r.isDefault, enabled: r.enabled,
+        ...(admin ? { endpoint: meta.endpoint, settings: r.settings } : {}),
+        connected: meta.connected, configurationStatus: meta.configurationStatus,
+      };
+    });
     return json({ datasources, available: true }, 200);
   } catch {
     return json({ datasources: [], available: false, error: 'Datasource configuration is unavailable. Retry or ask an administrator to check access.' }, 200);

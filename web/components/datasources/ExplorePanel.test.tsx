@@ -27,6 +27,16 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('ExplorePanel', () => {
+  it('never substitutes the only remaining instance for an unavailable pinned id', async () => {
+    global.fetch = mockFetch(() => ({ datasources: [INSTANCES[0]], available: true }));
+    render(<ExplorePanel instanceId={99} />);
+    await waitFor(() => expect(screen.getByText(/prod-prom \(prometheus\)/)).toBeTruthy());
+    expect((screen.getByRole('combobox', { name: '데이터소스' }) as HTMLSelectElement).value).toBe('');
+    expect(screen.getByRole('alert').textContent).toMatch(/요청한 데이터소스/);
+    expect((screen.getByRole('button', { name: '실행' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'AI로 생성' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.every(([url]) => url === '/api/datasources')).toBe(true);
+  });
   it('shows unavailable configuration as an error and recovers through retry', async () => {
     let unavailable = true;
     global.fetch = mockFetch(() => unavailable

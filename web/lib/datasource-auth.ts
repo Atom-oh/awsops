@@ -23,16 +23,24 @@ export interface DatasourceCreds {
 
 /** Older Datadog forms accepted the two keys in either slot. Normalize a recognized
  * pair before a partial credential update so the untouched key keeps its identity. */
-export function normalizeDatadogHeaderSlots(creds: Record<string, unknown>): Record<string, unknown> {
-  const first = typeof creds.headerName === 'string' ? creds.headerName.toLowerCase() : '';
-  const second = typeof creds.headerName2 === 'string' ? creds.headerName2.toLowerCase() : '';
-  if (new Set([first, second]).size !== 2
-    || ![first, second].every(name => ['dd-api-key', 'dd-application-key'].includes(name))) return { ...creds };
-  return {
-    ...creds, headerName: 'DD-API-KEY', headerName2: 'DD-APPLICATION-KEY',
-    headerValue: first === 'dd-api-key' ? creds.headerValue : creds.headerValue2,
-    headerValue2: first === 'dd-application-key' ? creds.headerValue : creds.headerValue2,
-  };
+export function normalizeDatadogHeaderSlots(creds: Record<string, unknown>, updates: Record<string, unknown> = {}): Record<string, unknown> {
+  const names = ['dd-api-key', 'dd-application-key'];
+  const values: Record<string, unknown> = {};
+  for (const [input, partial] of [[creds, false], [updates, true]] as const) {
+    for (const [index, suffix] of ['', '2'].entries()) {
+      const name = String(input[`headerName${suffix}`] ?? (partial ? names[index] : '')).toLowerCase();
+      if (names.includes(name) && Object.hasOwn(input, `headerValue${suffix}`)) values[name] = input[`headerValue${suffix}`];
+    }
+    // Match the connector's precedence for legacy blobs; a supplied update still wins over saved data.
+    for (const [key, name] of [['apiKey', names[0]], ['appKey', names[1]]]) {
+      if (Object.hasOwn(input, key) && (partial || input[key])) values[name] = input[key];
+    }
+  }
+  if (!Object.keys(values).length) return { ...creds, ...updates };
+  const out: Record<string, unknown> = { ...creds, ...updates, headerName: 'DD-API-KEY', headerName2: 'DD-APPLICATION-KEY',
+    headerValue: values[names[0]], headerValue2: values[names[1]] };
+  delete out.apiKey; delete out.appKey;
+  return out;
 }
 
 // RFC 7230 token: header field-name grammar (no separators / control chars / whitespace).

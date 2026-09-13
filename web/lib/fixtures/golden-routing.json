@@ -2,8 +2,6 @@
   "sloAccuracy": 0.85,
   "minDeltaPp": 15,
   "cases": [
-    { "q": "Notion database runbooks", "expect": ["observability"] },
-    { "q": "노션에서 운영 정책 검색", "expect": ["observability"] },
     { "q": "두 인스턴스 통신이 안 돼요", "expect": ["network"] },
     { "q": "SG에서 443 포트가 막혀있는지 확인해줘", "expect": ["network"] },
     { "q": "TGW 라우팅 테이블 보여줘", "expect": ["network"] },

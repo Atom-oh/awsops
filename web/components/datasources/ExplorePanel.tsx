@@ -93,7 +93,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
         const items: DatasourceInstance[] = body.datasources ?? [];
         setList(items);
         setListState('ready');
-        if (instanceId && items.some((d) => d.id === instanceId)) setSelId(instanceId);
+        if (instanceId) setSelId(items.some((d) => d.id === instanceId) ? instanceId : '');
         else setSelId(previous => items.some(d => d.id === previous) ? previous : items.length === 1 ? items[0].id : '');
       } catch { if (current) setListState('error'); }
     })();
@@ -154,6 +154,9 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             <p>{tt('데이터소스 설정을 불러오지 못했습니다. 새로고침하거나 관리자에게 확인하세요.')}</p>
             <Button variant="secondary" onClick={() => setReload(value => value + 1)}>{tt('다시 시도')}</Button>
           </div>
+        )}
+        {listState === 'ready' && instanceId && !list.some(d => d.id === instanceId) && (
+          <p role="alert" className="text-[13px] text-rose-600">{tt('요청한 데이터소스를 사용할 수 없습니다. 다른 인스턴스를 직접 선택하세요.')}</p>
         )}
         {/* Always show the picker (preselected to the scoped instance) — never a dead-end if the
             scoped id isn't in the list yet. */}
@@ -266,7 +269,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
           </div>
         )}
         <DiagSignalChips
-          instanceId={selId === '' ? undefined : selId}
+          instanceId={listState === 'ready' ? ds?.id : undefined}
           kind={ds?.kind}
           onPick={(expr) => { setQuery(expr); setGenFrom(null); run(undefined, expr); }}
         />

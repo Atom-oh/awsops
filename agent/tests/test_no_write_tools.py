@@ -30,10 +30,10 @@ class TestReadOnlyTools(unittest.TestCase):
                 self.assertFalse(MUTATING.search(name), f"{mod.__name__}: mutating tool {name!r}")
                 self.assertTrue(READ_OK.search(name), f"{mod.__name__}: {name!r} lacks a read-only verb")
 
-    def test_notion_is_search_fetch_query_and_authentication_probe_only(self):
+    def test_notion_is_search_fetch_query_only(self):
         self.assertEqual(
             set(notion_mcp._TOOLS.keys()),
-            {"notion_search", "notion_fetch_page", "notion_query_database", "notion_health"},
+            {"notion_search", "notion_fetch_page", "notion_query_database"},
         )
 
 

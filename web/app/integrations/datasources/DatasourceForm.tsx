@@ -50,7 +50,7 @@ export default function DatasourceForm({
   const [kind, setKind] = useState(initial?.kind ?? 'prometheus');
   const [name, setName] = useState(initial?.name ?? '');
   const [endpoint, setEndpoint] = useState(initial?.endpoint ?? '');
-  const [authType, setAuthType] = useState(initial?.authType ?? 'none');
+  const [authType, setAuthType] = useState(initial?.authType ?? (editing ? '' : 'none'));
   const [creds, setCreds] = useState<Record<string, string>>({});
   // gap L203: settings kept as strings for the inputs; settingsPayload() validates/coerces
   const [timeoutS, setTimeoutS] = useState(initial?.settings?.timeoutS != null ? String(initial.settings.timeoutS) : '');
@@ -165,6 +165,7 @@ export default function DatasourceForm({
       <div>
         <label className={labelCls}>Auth method</label>
         <select className={selectCls} value={authType} onChange={(e) => { invalidateTest(); setAuthType(e.target.value); setCreds(current => ({ org_id: current.org_id ?? '' })); }} aria-label="Auth method">
+          {!authType && <option value="">{tt('인증 방식을 선택하세요')}</option>}
           {AUTH_TYPES.map((a) => <option key={a.value} value={a.value}>{kind === 'dynatrace' && a.value === 'bearer' ? 'Dynatrace API token' : kind === 'datadog' && a.value === 'custom_header' ? 'Datadog API + Application keys' : tt(a.label)}</option>)}
         </select>
       </div>
@@ -221,7 +222,7 @@ export default function DatasourceForm({
       </div>
 
       <div className="flex items-center gap-2 pt-1">
-        <Button variant="secondary" onClick={runTest} disabled={testing || saving || !endpoint.trim() || timeoutInvalid || databaseInvalid}>
+        <Button variant="secondary" onClick={runTest} disabled={testing || saving || !authType || !endpoint.trim() || timeoutInvalid || databaseInvalid}>
           {testing ? tt('테스트 중…') : `🧪 ${tt('연결 테스트')}`}
         </Button>
         {test && (
@@ -234,7 +235,7 @@ export default function DatasourceForm({
       {err && <p className="text-[13px] text-rose-600">{err}</p>}
 
       <div className="flex gap-2 pt-1">
-        <Button onClick={save} disabled={saving || testing || !name.trim() || !endpoint.trim() || timeoutInvalid || databaseInvalid}>{saving ? tt('저장 중…') : tt('저장')}</Button>
+        <Button onClick={save} disabled={saving || testing || !authType || !name.trim() || !endpoint.trim() || timeoutInvalid || databaseInvalid}>{saving ? tt('저장 중…') : tt('저장')}</Button>
         <Button variant="secondary" onClick={onCancel}>{tt('취소')}</Button>
       </div>
     </div>

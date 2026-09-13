@@ -7,6 +7,7 @@ const updateDatasource = vi.fn();
 const getDatasource = vi.fn();
 const setIntegrationCredentialById = vi.fn();
 const getCredentialById = vi.fn();
+const getIntegrationCredentialSnapshot = vi.fn();
 const mirrorDefaultCredential = vi.fn();
 const invokeMcpLambdaTool = vi.fn();
 const upsertSchema = vi.fn();
@@ -33,8 +34,9 @@ vi.mock('@/lib/integration-credentials', () => ({
   setIntegrationCredentialById: (...a: unknown[]) => setIntegrationCredentialById(...a),
   mirrorDefaultCredential: (...a: unknown[]) => mirrorDefaultCredential(...a),
   getCredentialById: (...a: unknown[]) => getCredentialById(...a),
+  getIntegrationCredentialSnapshot: () => getIntegrationCredentialSnapshot(),
 }));
-vi.mock('@/lib/mcp-lambda-invoke', () => ({ invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a) }));
+vi.mock('@/lib/mcp-lambda-invoke', () => ({ invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a), KNOWN_MCP_LAMBDA_KINDS: ['prometheus', 'datadog', 'clickhouse'] }));
 vi.mock('@/lib/datasource-schema', () => ({ upsertSchema: (...a: unknown[]) => upsertSchema(...a) }));
 vi.mock('@/lib/account', () => ({ currentAccountId: () => 'self' }));
 
@@ -45,6 +47,7 @@ function req(body: unknown, method = 'POST') {
 }
 
 beforeEach(() => {
+  getIntegrationCredentialSnapshot.mockReset().mockImplementation(async () => { const blob = await getCredentialById(7); return blob ? { 7: blob } : {}; });
   for (const m of [verifyUser, isAdmin, createDatasource, updateDatasource, getDatasource, setIntegrationCredentialById, getCredentialById, mirrorDefaultCredential, invokeMcpLambdaTool, upsertSchema]) m.mockReset();
   invokeMcpLambdaTool.mockResolvedValue({ version: '2.48.0', metrics: ['up'] });
   upsertSchema.mockResolvedValue(undefined);
@@ -122,6 +125,25 @@ describe('POST create', () => {
   });
 });
 
+it('saves a migrated row using the same own-id endpoint and inferred authentication as its probe', async () => {
+  getDatasource.mockResolvedValue({ id: 7, name: 'migrated', kind: 'prometheus', endpoint: null, authType: null, isDefault: true, settings: {} });
+  getCredentialById.mockResolvedValue({ endpoint: 'https://metrics.example/tenant', token: 'retained' });
+  const { POST: test } = await import('../test/route');
+  invokeMcpLambdaTool.mockResolvedValue({ ok: true });
+  const body = { id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/tenant', creds: {} };
+  expect((await (await test(req(body))).json()).ok).toBe(true);
+  const tested = invokeMcpLambdaTool.mock.calls[0][0].connConfig;
+  const { PATCH } = await import('./route');
+  expect((await PATCH(req(body, 'PATCH'))).status).toBe(200);
+  expect(setIntegrationCredentialById.mock.calls[0][1]).toEqual(tested);
+  expect(setIntegrationCredentialById).toHaveBeenCalledWith(7, expect.objectContaining({
+    endpoint: 'https://metrics.example/tenant', authType: 'bearer', token: 'retained',
+  }), expect.anything());
+  expect(updateDatasource).toHaveBeenCalledWith(7, expect.objectContaining({
+    endpoint: 'https://metrics.example/tenant', authType: 'bearer',
+  }), expect.anything());
+});
+
 describe('PATCH update', () => {
   it('preserves the application key when rotating a legacy swapped Datadog pair', async () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'datadog', endpoint: 'https://api.datadoghq.com', authType: 'custom_header', isDefault: false, settings: {} });
@@ -179,15 +201,11 @@ describe('PATCH update', () => {
     getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
     const { PATCH } = await import('./route');
-    await PATCH(req({ id: 7, endpoint: 'http://evil.internal:9090' }, 'PATCH'));
-    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
-    expect(blob.username).toBeUndefined(); // write-only creds never transmit to a new host
-    expect(blob.password).toBeUndefined();
-    // A path can identify another tenant on the same host.
-    await PATCH(req({ id: 7, endpoint: 'http://old:9090/subpath' }, 'PATCH'));
-    const blob2 = setIntegrationCredentialById.mock.calls.at(-1)![1];
-    expect(blob2.username).toBeUndefined();
-    expect(blob2.password).toBeUndefined();
+    for (const endpoint of ['http://evil.internal:9090', 'http://old:9090/subpath']) {
+      expect((await PATCH(req({ id: 7, endpoint }, 'PATCH'))).status).toBe(400);
+    }
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
+    expect(updateDatasource).not.toHaveBeenCalled();
   });
 
   it("the UI's creds:{} does NOT defeat the host-change guard (round-4)", async () => {
@@ -195,10 +213,8 @@ describe('PATCH update', () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
     const { PATCH } = await import('./route');
     // the shipped form always sends creds (possibly {}) — an endpoint host edit from the UI
-    await PATCH(req({ id: 7, endpoint: 'http://evil.internal:9090', creds: {} }, 'PATCH'));
-    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
-    expect(blob.username).toBeUndefined();
-    expect(blob.password).toBeUndefined();
+    expect((await PATCH(req({ id: 7, endpoint: 'http://evil.internal:9090', creds: {} }, 'PATCH'))).status).toBe(400);
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
     // genuinely re-supplied creds DO follow the new host
     await PATCH(req({ id: 7, endpoint: 'http://new.internal:9090', creds: { username: 'n', password: 'npw' } }, 'PATCH'));
     const blob2 = setIntegrationCredentialById.mock.calls.at(-1)![1];
@@ -230,7 +246,7 @@ describe('PATCH update', () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
     updateDatasource.mockRejectedValueOnce(new Error('duplicate datasource name'));
     const { PATCH } = await import('./route');
-    const res = await PATCH(req({ id: 7, name: 'dupe', endpoint: 'http://new:9090', settings: { timeoutS: 5 } }, 'PATCH'));
+    const res = await PATCH(req({ id: 7, name: 'dupe', endpoint: 'http://new:9090', authType: 'none', settings: { timeoutS: 5 } }, 'PATCH'));
     expect(res.status).toBe(409);
     expect(setIntegrationCredentialById).not.toHaveBeenCalled();
   });
@@ -239,18 +255,22 @@ describe('PATCH update', () => {
     getCredentialById.mockResolvedValue({ endpoint: 'https://prom:9090', authType: 'basic', username: 'u', password: 'pw' });
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'https://prom:9090', authType: 'basic', isDefault: false, settings: {} });
     const { PATCH } = await import('./route');
-    await PATCH(req({ id: 7, endpoint: 'http://prom:9090', creds: {} }, 'PATCH'));
-    const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
-    expect(blob.username).toBeUndefined();
+    expect((await PATCH(req({ id: 7, endpoint: 'http://prom:9090', creds: {} }, 'PATCH'))).status).toBe(400);
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
   });
 
   it('a migrated DEFAULT instance merges from the kind mirror and re-mirrors the post-merge blob (round-4)', async () => {
     // credential lives ONLY under the kind mirror — the id-keyed entry is empty
-    getCredentialById.mockImplementation(async (_id: number, kind?: string) => (kind ? { endpoint: 'http://p:9090', authType: 'bearer', token: 'tok' } : null));
+    getIntegrationCredentialSnapshot.mockResolvedValue({ prometheus: { endpoint: 'http://p:9090', authType: 'bearer', token: 'tok' } });
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://p:9090', authType: 'bearer', isDefault: true, settings: {} });
+    const { POST: test } = await import('../test/route');
+    invokeMcpLambdaTool.mockResolvedValue({ ok: true });
+    expect((await (await test(req({ id: 7, kind: 'prometheus', settings: { timeoutS: 15 } }))).json()).ok).toBe(true);
+    const tested = invokeMcpLambdaTool.mock.calls[0][0].connConfig;
     const { PATCH } = await import('./route');
     await PATCH(req({ id: 7, settings: { timeoutS: 15 } }, 'PATCH'));
     const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
+    expect(blob).toEqual(tested);
     expect(blob.token).toBe('tok');       // NOT de-authenticated
     expect(blob.timeoutS).toBe(15);
     // the kind mirror is refreshed with the POST-merge blob (not the stale pre-PATCH one)
@@ -304,8 +324,9 @@ describe('PATCH update', () => {
     const { PATCH } = await import('./route');
     await PATCH(req({ id: 7, settings: { timeoutS: 15 } }, 'PATCH'));
     expect(updateDatasource.mock.calls.at(-1)![1].settings).toEqual({ timeoutS: 15 });
+    getDatasource.mockResolvedValue({ id: 7, name: 'p', kind: 'prometheus', endpoint: 'http://p', authType: 'none', settings: { timeoutS: 15 } });
     await PATCH(req({ id: 7, name: 'renamed' }, 'PATCH'));
-    expect(updateDatasource.mock.calls.at(-1)![1].settings).toBeUndefined();
+    expect(updateDatasource.mock.calls.at(-1)![1].settings).toEqual({ timeoutS: 15 });
     await PATCH(req({ id: 7, settings: {} }, 'PATCH'));
     expect(updateDatasource.mock.calls.at(-1)![1].settings).toEqual({});
   });

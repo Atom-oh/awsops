@@ -10,6 +10,7 @@ import DatasourceForm, { type DatasourceFormValue } from './DatasourceForm';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 interface Instance {
+  configurationStatus?: string;
   id: number; name: string; kind: string; endpoint?: string | null; authType?: string | null; isDefault?: boolean; connected?: boolean; enabled?: boolean; settings?: { timeoutS?: number; database?: string };
 }
 
@@ -144,9 +145,9 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                     <span className="block max-w-[260px] truncate font-mono text-[11px] text-ink-500" title={i.endpoint ?? ''}>{i.endpoint ?? '—'}</span>
                   </td>
                 )}
-                <td className="px-3 py-2 text-ink-500">{i.authType ?? 'none'}</td>
+                <td className="px-3 py-2 text-ink-500">{i.authType ?? '—'}</td>
                 <td className="px-3 py-2">
-                  <span className="text-ink-500">{unavailable ? tt('상태 확인 불가') : i.enabled === false ? tt('비활성') : i.connected ? tt('설정 저장됨 · 미검증') : tt('인증 설정 필요')}</span>
+                  <span className="text-ink-500">{unavailable ? tt('상태 확인 불가') : i.enabled === false ? tt('비활성') : i.configurationStatus === 'mirror_only' ? tt('기본 연결 설정 · 인스턴스 저장 필요') : i.connected ? tt('설정 저장됨 · 미검증') : tt('인증 설정 필요')}</span>
                 </td>
                 <td className="px-3 py-2">{i.isDefault ? <span className="text-amber-600">{tt('★ 기본')}</span> : (canManage && <button className="text-[12px] text-brand-600 hover:underline" onClick={() => onSetDefault(i)} disabled={busyId === i.id}>{tt('기본으로 설정')}</button>)}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -163,7 +164,7 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                     </Link>
                   )}
                   <Link href={`/integrations/datasources/${i.id}`} className="text-[12px] text-brand-600 hover:underline mr-3">{tt('탐색')} →</Link>
-                  {canManage && <button className="text-[12px] text-ink-600 hover:underline mr-3" onClick={() => setForm({ mode: 'edit', value: { id: i.id, name: i.name, kind: i.kind, endpoint: i.endpoint ?? '', authType: i.authType ?? 'none', settings: i.settings } })}>{tt('편집')}</button>}
+                  {canManage && <button className="text-[12px] text-ink-600 hover:underline mr-3" onClick={() => setForm({ mode: 'edit', value: { id: i.id, name: i.name, kind: i.kind, endpoint: i.endpoint ?? '', authType: i.authType ?? '', settings: i.settings } })}>{tt('편집')}</button>}
                   {canManage && <button className="text-[12px] text-rose-600 hover:underline" onClick={() => onDelete(i)} disabled={busyId === i.id}>{tt('삭제')}</button>}
                 </td>
               </tr>
