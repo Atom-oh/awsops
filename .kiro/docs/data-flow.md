@@ -1,65 +1,24 @@
-# Data Flow / 데이터 흐름
+# Data Flow
 
-## Dashboard Pages (일반 페이지)
-```
-Browser → Next.js page ('use client')
-  → fetch('/awsops/api/steampipe', { queries })
-    → steampipe.ts: batchQuery() → pg Pool :9193 (max 5, 120s timeout)
-      → Steampipe → AWS API / K8s API / Trivy DB
-    → node-cache (5min TTL)
-  → JSON response → Recharts / DataTable / React Flow
-```
-- 응답 시간: ~2s (캐시 히트 시 즉시)
-- batchQuery: 3개 쿼리 동시 실행 (순차 배치)
+Read [AGENTS.md](../../AGENTS.md) for policy and
+[web/CLAUDE.md](../../web/CLAUDE.md) for the web boundary.
 
-## AI Assistant (SSE Streaming)
-```
-Browser → POST /awsops/api/ai (question + model + history)
-  → Classifier: 질문 분석 → 1~3개 route 결정
-  → 각 route별 처리:
-    ├─ code      → Bedrock + Code Interpreter (Python sandbox) ~10s
-    ├─ network   → AgentCore Runtime → Network Gateway (17 MCP tools) ~30-60s
-    ├─ container → AgentCore Runtime → Container Gateway (24 tools) ~30-60s
-    ├─ iac       → AgentCore Runtime → IaC Gateway (12 tools) ~30-60s
-    ├─ data      → AgentCore Runtime → Data Gateway (24 tools) ~10-30s
-    ├─ security  → AgentCore Runtime → Security Gateway (14 tools) ~30-60s
-    ├─ monitoring→ AgentCore Runtime → Monitoring Gateway (16 tools) ~30-60s
-    ├─ cost      → AgentCore Runtime → Cost Gateway (9 tools) ~30-60s
-    ├─ aws-data  → Steampipe SQL + Bedrock Sonnet 4.6 ~5s
-    └─ general   → Ops Gateway (9 tools) + Bedrock fallback ~5-30s
-  → 멀티 라우트: 병렬 호출 → Bedrock 응답 합성
-  → SSE stream → Browser
-```
+- Dashboard requests use `/api/*`. BFF handlers use Aurora through
+  `web/lib/db.ts`, scoped AWS SDK reads, or read-only Kubernetes APIs.
+  Authentication, authorization, and ownership checks follow `web/lib/auth.ts`.
+- Chat enters `web/app/api/chat/route.ts`. Routing comes from `web/lib/route.ts`
+  and the resolver; AgentCore invokes the selected gateway's tools. Gateway
+  wiring comes from `scripts/v2/agentcore/catalog.py` and
+  `terraform/v2/foundation/ai.tf`. Multi-gateway synthesis requires both routing
+  flags in the chat handler.
+- Chat's Steampipe SQL and collector paths remain disabled by
+  `steampipeAvailable()`. The separately gated batch inventory sync writes Aurora;
+  its flag does not enable live Steampipe chat queries.
+- Domain work is submitted through its dedicated authorized route, then
+  `web/lib/jobs.ts` and SQS. The dispatcher starts Step Functions, which selects
+  Lambda or Fargate execution. Workers record progress/results in Aurora; failure
+  handling and reaping are defined in `terraform/v2/foundation/workers.tf` and
+  `scripts/v2/workers/`.
 
-## CIS Compliance
-```
-Browser → POST /awsops/api/benchmark (version)
-  → Powerpipe → Steampipe → AWS API
-  → 431 controls 평가 (~3-5min)
-  → JSON response
-```
-
-## CloudWatch Metrics (MSK, RDS, ElastiCache, OpenSearch)
-```
-Browser → GET /awsops/api/{msk,rds,elasticache,opensearch}
-  → boto3 CloudWatch get_metric_statistics()
-  → JSON response (CPU, Memory, Network, etc.)
-```
-
-## Container Cost
-```
-ECS: Browser → POST /awsops/api/container-cost
-  → Steampipe (ECS services) + Fargate pricing + Container Insights
-EKS: Browser → POST /awsops/api/eks-container-cost
-  → OpenCost API (CPU/Mem/Net/Storage/GPU) || request-based fallback
-```
-
-## AgentCore Gateway → Lambda
-```
-AgentCore Runtime (Strands agent.py)
-  → MCP StreamableHTTP + SigV4
-    → AgentCore Gateway (role-based)
-      → Lambda Target (boto3 read-only)
-        → AWS API
-      → Response → Gateway → Runtime → API → Browser
-```
+Trace the changed request through these sources. Deployment status and gate
+policy come from [BASELINE.md](../../docs/decisions/BASELINE.md), not this overview.
