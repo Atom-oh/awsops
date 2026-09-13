@@ -2,6 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { pickGateway, classifyRoute, matchedSections, ACTIVE_FALLBACK } from './route';
 
 describe('pickGateway', () => {
+  it('routes Notion knowledge requests to the gateway that owns its read tools', async () => {
+    for (const prompt of ['Notion database runbooks', '노션에서 운영 정책 검색']) {
+      expect(pickGateway(prompt)).toBe('observability');
+      expect((await classifyRoute(prompt, undefined, { llmEnabled: false })).primary).toBe('observability');
+    }
+  });
   it('honors an explicit pin over keywords', () => {
     expect(pickGateway('이번 달 비용 알려줘', 'security')).toBe('security');
   });

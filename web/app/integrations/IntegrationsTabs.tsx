@@ -66,7 +66,7 @@ export default function IntegrationsTabs({ initialTab, canManage = false }: { in
       </div>
       <div>
         {active === 'datasources' && <DatasourcesTab canManage={canManage} />}
-        {active === 'connectors' && <ConnectorsTab canManage={canManage} />}
+        {active === 'connectors' && <ConnectorsTab canManage={canManage} onShowDatasources={() => select('datasources')} />}
         {active === 'agents-skills' && <AgentsSkillsTab />}
       </div>
     </div>

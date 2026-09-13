@@ -29,14 +29,16 @@ function req(body: unknown, method = 'POST') {
   return new Request('http://x/api/integrations', init);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   for (const m of [verifyUser, isAdmin, query, writeAudit, validateIntegration, assertEgressEndpointAllowed, upsertIntegration, listIntegrations, setIntegrationEnabled]) m.mockReset();
   process.env.AURORA_ENDPOINT = 'aurora.example';
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   isAdmin.mockResolvedValue(true);
-  validateIntegration.mockReturnValue({ ok: true, errors: [] });
+  const actual = await vi.importActual<typeof import('@/lib/integration-validation')>('@/lib/integration-validation');
+  validateIntegration.mockImplementation(actual.validateIntegration);
   query.mockResolvedValue({ rows: [] });          // no agent_spaces opt-in row ⇒ allowPrivate false
   upsertIntegration.mockResolvedValue(9);
+  setIntegrationEnabled.mockResolvedValue(true);
 });
 
 describe('/api/integrations gate', () => {
@@ -58,6 +60,17 @@ describe('/api/integrations gate', () => {
 });
 
 describe('/api/integrations POST', () => {
+  it('rejects custom_mcp before endpoint validation or persistence', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ name: 'retired', kind: 'custom_mcp', direction: 'egress', endpoint: 'https://example.invalid', transport: 'api_key' }))).status).toBe(400);
+    expect(assertEgressEndpointAllowed).not.toHaveBeenCalled();
+    expect(upsertIntegration).not.toHaveBeenCalled();
+  });
+  it.each([null, [], { name: 'malformed', direction: 'ingress', kind: 'pagerduty', authMode: 42 }])('rejects malformed bodies: %j', async (body) => {
+    const { POST } = await import('./route');
+    expect((await POST(req(body))).status).toBe(400);
+    expect(upsertIntegration).not.toHaveBeenCalled();
+  });
   it('egress: SSRF-guards with the account allowPrivate then upserts (200)', async () => {
     query.mockResolvedValue({ rows: [{ allow_private_datasource: false }] });
     const { POST } = await import('./route');
@@ -102,6 +115,17 @@ describe('/api/integrations POST', () => {
 });
 
 describe('/api/integrations GET + PUT', () => {
+  it.each([null, [], { op: 'enable', id: -1 }, { op: 'enable', id: 'bad' }])('rejects malformed toggle bodies: %j', async (body) => {
+    const { PUT } = await import('./route');
+    expect((await PUT(req(body, 'PUT'))).status).toBe(400);
+    expect(setIntegrationEnabled).not.toHaveBeenCalled();
+  });
+  it('does not report success when the authoritative enable guard rejects a row', async () => {
+    setIntegrationEnabled.mockResolvedValue(false);
+    const { PUT } = await import('./route');
+    expect((await PUT(req({ op: 'enable', id: 7, kind: 'notion' }, 'PUT'))).status).toBe(409);
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
   it('GET lists integrations', async () => {
     listIntegrations.mockResolvedValue([{ id: 1, name: 'g' }]);
     const { GET } = await import('./route');

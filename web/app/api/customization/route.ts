@@ -27,13 +27,17 @@ export async function GET(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
   const accountId = currentAccountId();
-  return json({
-    aurora: true,
-    accountId,
-    agents: await listAgentsWithSkills(),
-    skills: await listSkills(),
-    space: await getAgentSpace(accountId), // null ⇒ Phase-1 (UI shows "global" mode)
-  }, 200);
+  try {
+    return json({
+      aurora: true,
+      accountId,
+      agents: await listAgentsWithSkills(),
+      skills: await listSkills(),
+      space: await getAgentSpace(accountId), // null means confirmed absence, not a read failure
+    }, 200);
+  } catch {
+    return json({ error: 'Agent catalog unavailable' }, 503);
+  }
 }
 
 export async function POST(request: Request) {
@@ -42,9 +46,10 @@ export async function POST(request: Request) {
   let body: Record<string, unknown>;
   try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
   catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'body must be an object' }, 400);
 
   if (body.kind === 'skill') {
-    const v = validateSkill(body as never);
+    const v = validateSkill(body);
     if (!v.ok) return json({ error: 'invalid skill', detail: v.errors }, 400);
     let id: number;
     try {
@@ -60,7 +65,7 @@ export async function POST(request: Request) {
     return json({ ok: true, id }, 200);
   }
   if (body.kind === 'agent') {
-    const v = validateAgent(body as never);
+    const v = validateAgent(body);
     if (!v.ok) return json({ error: 'invalid agent', detail: v.errors }, 400);
     let id: number;
     try {
@@ -87,6 +92,7 @@ export async function PUT(request: Request) {
   let body: Record<string, unknown>;
   try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
   catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'body must be an object' }, 400);
   const actor = g.user!.email ?? g.user!.sub;
 
   if (body.op === 'enable' || body.op === 'disable') {
@@ -96,7 +102,20 @@ export async function PUT(request: Request) {
     return json({ ok: true }, 200);
   }
   if (body.op === 'attach') {
-    await attachSkill(Number(body.agentId), Number(body.skillId), Number(body.ord ?? 0));
+    const { agentId, skillId } = body;
+    const ord = body.ord ?? 0;
+    if (typeof agentId !== 'number' || !Number.isSafeInteger(agentId) || agentId <= 0 ||
+        typeof skillId !== 'number' || !Number.isSafeInteger(skillId) || skillId <= 0 ||
+        typeof ord !== 'number' || !Number.isInteger(ord) || ord < 0 || ord > 2147483647) {
+      return json({ error: 'positive integer agentId/skillId and non-negative integer ord required' }, 400);
+    }
+    const [agents, skills] = await Promise.all([listAgentsWithSkills(), listSkills()]);
+    const agent = agents.find((a) => a.id === agentId);
+    const skill = skills.find((s) => s.id === skillId);
+    if (!agent || !skill) return json({ error: 'Agent or skill not found' }, 404);
+    if (agent.tier !== 'custom') return json({ error: 'Built-in agents cannot be customized' }, 403);
+    if (!skill.enabled) return json({ error: 'Enable the skill before attaching it' }, 409);
+    await attachSkill(agentId, skillId, ord);
     await writeAudit({ actor, action: 'attach', objectType: 'agent_skill', objectId: `${body.agentId}:${body.skillId}` });
     return json({ ok: true }, 200);
   }

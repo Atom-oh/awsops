@@ -32,6 +32,7 @@ do not maintain a separate route count in README or agent context.
 | `/api/auth/signout` | POST | [route.ts](../web/app/api/auth/signout/route.ts) |
 | `/api/bedrock-metrics` | GET | [route.ts](../web/app/api/bedrock-metrics/route.ts) |
 | `/api/changelog` | GET | [route.ts](../web/app/api/changelog/route.ts) |
+| `/api/chat/agents` | GET | [route.ts](../web/app/api/chat/agents/route.ts) |
 | `/api/chat` | POST | [route.ts](../web/app/api/chat/route.ts) |
 | `/api/chat/stats` | GET | [route.ts](../web/app/api/chat/stats/route.ts) |
 | `/api/chat/threads/[id]` | DELETE, GET | [route.ts](../web/app/api/chat/threads/[id]/route.ts) |
@@ -87,6 +88,7 @@ do not maintain a separate route count in README or agent context.
 | `/api/integrations/credential` | GET, PUT | [route.ts](../web/app/api/integrations/credential/route.ts) |
 | `/api/integrations` | GET, POST, PUT | [route.ts](../web/app/api/integrations/route.ts) |
 | `/api/integrations/schema` | GET, POST | [route.ts](../web/app/api/integrations/schema/route.ts) |
+| `/api/integrations/test` | POST | [route.ts](../web/app/api/integrations/test/route.ts) |
 | `/api/inventory/[type]/metrics` | GET | [route.ts](../web/app/api/inventory/[type]/metrics/route.ts) |
 | `/api/inventory/[type]/refresh` | POST | [route.ts](../web/app/api/inventory/[type]/refresh/route.ts) |
 | `/api/inventory/[type]` | GET | [route.ts](../web/app/api/inventory/[type]/route.ts) |
