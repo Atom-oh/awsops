@@ -55,23 +55,23 @@ also default false. Consult the linked ADR and source for complete dependencies.
 | GATED, narrow owner exception | `secret_rotation_redeploy_enabled` | Own-secret rotation restart of own web service only; requires CloudTrail event delivery. Current BFF uses IAM DB auth | ADR-015 |
 | GATED analysis | `incident_lifecycle_enabled` | Requires workers; triage/investigation/RCA/prevention recommendations only | ADR-006 |
 | GATED, blocked dependency | `rca_writeback_enabled` | Requires lifecycle and independent write-back role. Current validation still requires frozen remediation; do not satisfy it by enabling remediation | ADR-006 |
-| GATED analysis | `k8sgpt_enabled` | Read Result CRDs; no cluster fixes; operator installation is separate | ADR-006 |
+| GATED analysis | `k8sgpt_enabled` | Read Result CRDs; no cluster fixes. New operator installation/enablement awaits the ADR-006 §5 compatibility review | ADR-006 |
 | GATED infrastructure | `agentcore_enabled`, `workers_enabled` | AgentCore and async execution infrastructure; no mutation permission implied | ADR-004, ADR-009 |
 | GATED reads | `integrations_enabled`, connector `*_vpc_enabled` | Curated connectors, scoped secrets and path-specific egress controls | ADR-007 |
-| GATED reads | `datasource_diagnosis_enabled` | Governed external evidence collection; dependent worker paths need workers | ADR-007, ADR-008 |
+| GATED reads | `datasource_diagnosis_enabled` | Governed external evidence collection; requires agentcore, integrations, and workers | ADR-007, ADR-008 |
 | GATED communication | `diagnosis_notify_enabled` | Single-topic SNS notifications; runtime pause and test-send behavior in ADR-013 | ADR-013 |
 | GATED governed write | `integrations_write_enabled` | Requires agentcore/integrations/workers, independent IAM/kill-switch, DLP and human gate | ADR-007 |
 | GATED reads | `official_mcp_enabled` | Requires agentcore/integrations, catalog host pin, exact endpoint acknowledgement, runtime fail-closed tool allowlist | ADR-017 |
 | GATED routing | `hybrid_routing_enabled`, `multi_route_synthesis_enabled` | Classifier and synthesis have separate gates/IAM; golden routing checks before enablement | ADR-003 |
 | GATED experiment | `ANTHROPIC_AGENT_LOOP_ENABLED` (runtime env) | Bedrock chat loop; BFF must not forward client-controlled `agentLoop` | ADR-003, ADR-008 |
-| GATED query generation | `graph_querygen_enabled` | Requires datasource diagnosis; ClickHouse graph fallback only | ADR-018 |
+| GATED query generation | `graph_querygen_enabled` | Requires datasource diagnosis and agentcore/Code Interpreter; ClickHouse graph fallback only | ADR-018 |
 | GATED query generation | `diag_signal_querygen_enabled` | Requires datasource diagnosis; Explore chips only, separate budget and read gate | ADR-018 |
 | GATED batch | `steampipe_enabled` | Warm FDW and inventory sync; Powerpipe CIS also uses the FDW. Live BFF Steampipe stays disabled; FinOps checks persisted freshness | ADR-010, ADR-021 |
 | GATED cost | `ai_cost_tracking_enabled` | Invocation-log aggregation into `ai_usage_daily` | ADR-012 |
 | GATED batch | `diagnosis_schedule_enabled`, `ai_insights_enabled` | Worker-backed scheduled diagnosis / insight generation | ADR-008, ADR-009 |
 | GATED read observation | `eks_auto_register_enabled` | Requires workers; records operator-created View/AdminView access in Aurora, with no EKS mutation permission | BASELINE §2 only; no dedicated ADR |
 | GATED batch | `finops_baseline_enabled` | Requires workers; EBS rule also needs successful inventory sync or reports partial | ADR-020 |
-| GATED analysis | `network_path_check_enabled` | Requires workers; new runs blocked by `LIVE_TOPOLOGY_IMPLEMENTED=false`; no Create/DeleteNetworkInsightsPath grant or active probe | BASELINE §2 only; no governing ADR |
+| GATED analysis | `network_path_check_enabled` | Requires workers and one adapter-safety review before enablement; new runs blocked by `LIVE_TOPOLOGY_IMPLEMENTED=false`. Worker cross-account reads follow ADR-011; live pod/node identity needs an EKS Access Entry. Source-side SG/NACL/routes only; Calico/Route53/Ingress implemented, Cilium/Istio adapters remain stubs. No Create/DeleteNetworkInsightsPath grant or active probe | BASELINE §2 only; no governing ADR |
 | GATED analysis | `sg_rule_activity_enabled` | Requires workers; `sg_rule_scan` plus isolated Athena broker, SELECT-only/prefix restrictions | ADR-019 |
 | Migration switch, default **true** | `legacy_email_owner_match` | Temporary verified-email matching for reads and report PATCH/DELETE. Complete reviewed ownership backfill and confirm zero residual legacy rows before disabling | ADR-002, ADR-009 |
 | Ungated user request | Explore `POST /api/datasources/generate` | Authenticated draft generation; never executes/dry-runs/caches generated queries | ADR-018 |

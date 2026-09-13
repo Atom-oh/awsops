@@ -55,7 +55,7 @@ Permitted operations, with their scopes intact:
 | Athena | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup`; constrained workgroup and generated SELECT |
 | Glue | `GetDatabase`, `GetTable`, `GetPartitions`; validated source catalog |
 | S3 source | `GetBucketLocation`, `GetObject`, prefix-scoped `ListBucket` for configured Flow Log source locations |
-| S3 results | `GetObject`, prefix-scoped `ListBucket`, `PutObject`, `AbortMultipartUpload` on the customer workgroup's preconfigured result prefix |
+| S3 results | `GetBucketLocation` on the result bucket; `GetObject`, prefix-scoped `ListBucket`, `PutObject`, `AbortMultipartUpload` on the customer workgroup's preconfigured result prefix |
 
 Result reads are necessary to retrieve/reuse query output; result-prefix writes are explicitly
 accepted query mechanics. Source and result locations can differ and must not be conflated.

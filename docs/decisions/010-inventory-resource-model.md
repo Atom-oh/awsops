@@ -31,13 +31,26 @@ and ADR-021's SDK partial-collection semantics are separate cases. Default to om
 list attributes unless their risk is explicitly accepted and disclosed; do not reinstate the
 superseded blanket ban from legacy ADR-003.
 
+Recorded hydration-risk examples remain useful during permission diagnosis; they are not a
+new instruction to remove accepted columns or expand IAM:
+
+| Attribute / table | Hydration API |
+|---|---|
+| `mfa_enabled` / `aws_iam_user` | `iam:ListMFADevices` |
+| `attached_policy_arns` / `aws_iam_user` | `iam:ListAttachedUserPolicies` |
+| List-view `tags` / `aws_lambda_function` | `lambda:GetFunction` |
+| `attached_policy_arns` / `aws_iam_role` | `iam:ListAttachedRolePolicies`; accepted fallback below |
+
 ### Accepted hydrate fallback (2026-09-02)
 
 `iam_role.attached_policy_arns` is retained for access-role investigation. If hydration fails, retry
 once without that column. A successful fallback refreshes the base inventory with the column absent
-and records `unknown_attribute_count` plus `inventory_sync_hydrate_fallback`. Consumers show
-"not synced" rather than a definitive absence of access. Final status still follows the normal
-lifecycle: overlapping unreachable accounts can produce partial; later DB failures can fail the run.
+and records `unknown_attribute_count` plus `inventory_sync_hydrate_fallback`. The S3 access-role
+drill-down shows "not synced" for the absent column rather than a definitive absence of access.
+The generic `iam_role` inventory page still needs a follow-up: `web/lib/inventory.ts` does not
+project `unknown_attribute_count`, so do not claim all UI consumers disclose this gap. Final status
+still follows the normal lifecycle: overlapping unreachable accounts can produce partial; later
+DB failures can fail the run.
 
 If the base query also fails, fail the whole type, skip pruning, and preserve last-good rows across
 accounts. The aggregate Steampipe query is not account-isolated. The existing `iam_user.mfa_enabled`
