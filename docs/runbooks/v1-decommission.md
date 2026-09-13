@@ -38,6 +38,11 @@ Public signup/email changes/recovery are separately controlled by ADR-002. Passw
 between pools. Updating a verified claim affects newly issued tokens; existing tokens need revocation
 where immediate cutoff is required.
 
+The self-hosted login does not complete Cognito challenges such as `NEW_PASSWORD_REQUIRED`.
+An admin-created account left in `FORCE_CHANGE_PASSWORD` cannot finish sign-in. An authorized
+operator must finish provisioning its permanent password through the approved credential-delivery
+procedure; do not promise an in-app first-login password-change flow.
+
 Check external webhook and native SNS/SQS senders separately. Empty app-log grep does not prove no
 traffic. The **2026-07-09** evidence was native subscriptions/alarms/queue depth plus actual v1
 `alertDiagnosis` OFF; it did not prove external sender configurations absent. Current v2 supports
@@ -50,7 +55,7 @@ any sender before retiring its receiver.
 ## Phase 2 — Historical domain cutover
 
 This phase was executed **2026-07-09**. Do not repeat the old singleton-to-for_each code edits: the
-current private Terraform root already models aliases. The historical operation added certificate
+current origin Terraform root already models aliases. The historical operation added certificate
 SANs, moved the CloudFront domain association, remapped/imported Route53 state, then applied a fresh
 plan for DNS/Cognito URLs. Health/login checks for both domains were recorded successful.
 

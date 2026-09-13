@@ -70,8 +70,10 @@ node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --account-id "$BACKFILL_ACC
 ```
 
 The runner masks connection credentials and reports per-source results. It uses per-file
-transactions: a file error does not roll back successful files. For full certificate verification,
-set `PGSSLROOTCERT` to the reviewed RDS CA bundle before running.
+transactions: a file error does not roll back successful files. For the Secrets Manager connection
+path, set `PGSSLROOTCERT` to the reviewed RDS CA bundle for certificate verification.
+`--dsn`/`BACKFILL_DSN` instead supplies its own connection/TLS settings; that branch bypasses the
+runner's `PGSSLROOTCERT` helper. Verify the selected connection path before relying on its TLS mode.
 
 ## 5. Verify
 
@@ -111,4 +113,4 @@ node scripts/v2/backfill-v1.itest.mjs
 
 [ADR-001](../decisions/001-v2-foundation.md), [ADR-016](../decisions/016-v1-decommission.md),
 `scripts/v2/{backfill-v1,backfill-core}.mjs`, and
-`docs/superpowers/specs/2026-06-12-v1-to-v2-aurora-backfill-design.md` (historical design).
+[historical backfill design](../history/specs/2026-06-12-v1-to-v2-aurora-backfill-design.md).
