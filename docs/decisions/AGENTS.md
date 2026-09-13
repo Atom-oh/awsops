@@ -1,25 +1,30 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 398f4adb3042 · generated-at: 2026-09-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
-
-> You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 6906baf1ceef · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 # Decisions — Reviewer Context
 
-**Current truth = `BASELINE.md`** + the consolidated ADRs in this directory (`0NN-*.md`, highest
-currently **021**). Old ADR 001–046 bodies are not in the tree (git tag
-`adr-legacy-2026-06-22`) — never read them without an explicit request; resolve legacy numbers
-via `ADR-MAPPING.md`.
+Start with [BASELINE.md](BASELINE.md); numbered ADRs state accepted decisions and rationale.
+[ADR-MAPPING.md](ADR-MAPPING.md) qualifies legacy references. Historical plans, reviews, and comments
+are evidence of their time, not current enforcement or permission.
 
-## Review checklist
-1. A new ADR = highest number + 1, single Status (Accepted), and **must update `BASELINE.md`
-   §3 (or §2) in the same PR** — an ADR without that update is "not live" (anti-drift).
-2. BASELINE §1/§2 is the deterministic source for read-only definitions and freeze/gate status
-   — don't take a single ADR's prose over it if they conflict.
-3. AWS resource mutation/autonomy is FROZEN (ADR-005). Relaxing it requires a new ADR + multi-AI
-   panel + a dated owner-override — never a docs-only PR.
-4. Bar for ADR content: "can an AI block/pass a PR from reading this document alone?"
+- Keep decision docs concise and English-only. Preserve acceptance dates, rationale, owner overrides,
+  and evidence limits. Distinguish policy, checked-in code, defaults, and dated deployment observations.
+- Verify the reviewed checkout: this private tree uses `terraform/v2/foundation/`. Resolve current
+  `ADR-NNN` separately from `legacy ADR-NNN` / `ADR-NNN[legacy MMM]`; do not read legacy tag bodies
+  without an explicit request.
+- New ADR = highest existing number plus one, with a same-change BASELINE index/register update.
+  Report policy/code conflicts explicitly; neither existing code nor stale prose reverses a decision.
+- **ADR-005 FROZEN:** AWS-resource mutation/autonomous mitigation, arbitrary BYO-MCP, mutating tools.
+  Disabled substrate is intentional. Reversal needs a new ADR, multi-AI panel, and dated owner override.
+- **ADR-015 exception:** own-Aurora-secret rotation restart of the host web service only, default-off.
+  No general self-healing permission. Current web IAM DB auth makes password-injection rationale historical.
+- **ADR-006 GATED:** analysis-only incident/RCA/K8sGPT. Write-back needs role separation; never enable
+  frozen remediation to satisfy the current dependency.
+- **ADR-007:** governed external data reads/writes are permitted. Single-topic SNS and broad writes
+  have separate controls. Attribute transport/DLP/approval controls to their actual call paths.
+- **ADR-017:** hosted presets are gated behind endpoint acknowledgement and runtime tool allowlists;
+  ClickHouse stdio remains frozen.
+- **ADR-021:** bounded batch inventory is supported while live BFF Steampipe execution stays disabled.
+  Aurora inventory reads and direct domain tools coexist; the accepted cutover is not yet implemented.
+- **ADR-019:** isolated SELECT-only Athena queries are inside the read-only invariant, not a new freeze exception.
 
-## Known false-positives
-- A consolidated ADR citing a legacy number as `ADR-0NN[legacy 0XX]` is the documented
-  convention, not a typo.
-- Frozen-but-present substrate (e.g. remediation code) existing in the tree is intentional dark
-  code — the violation is *enabling* it, not its presence.
+Regenerate this context after editing CLAUDE.md with the installed co-agent marker/check helper.
