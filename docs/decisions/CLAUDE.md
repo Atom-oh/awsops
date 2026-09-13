@@ -10,7 +10,7 @@ resolves legacy numbers; an old plan, review, or implementation comment is not c
   rationale, explicit owner overrides, and the limits of dated evidence.
 - Distinguish accepted policy, checked-in implementation, declared defaults, and observed deployment.
   A merged change or a default value does not prove deployment. Date live observations and cite evidence.
-- Verify paths in the reviewed checkout. This private tree uses `terraform/v2/foundation/`.
+- Verify paths in the reviewed checkout. This checkout uses `terraform/v2/foundation/`.
   Do not import paths or ADR numbering from another repository or historical branch.
 - Cite current decisions as `ADR-NNN`; qualify provenance as `legacy ADR-NNN` or
   `ADR-NNN[legacy MMM]`. Legacy bodies are preserved at `adr-legacy-2026-06-22`; do not read

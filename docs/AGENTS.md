@@ -1,10 +1,12 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 139ef8a9772f · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f1a96df2de8d · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > Reviewer context distilled from CLAUDE.md; shared across AI reviewers.
 
 # Documentation review
 
-Developer/reviewer docs are English-only. Keep multilingual docs-site user guides
+New/rewritten developer/reviewer docs are English-only. Existing bilingual bodies
+are a migration backlog; convert whole maintained documents while retaining facts.
+Keep multilingual docs-site user guides
 and app translations. Historical records retain their language/evidence.
 
 Current decisions: `decisions/BASELINE.md` plus consolidated `NNN-*.md` ADRs.
