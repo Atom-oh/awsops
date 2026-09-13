@@ -55,6 +55,11 @@ These are supported code paths, not a claim that every deployment enables them.
 [BASELINE.md](docs/decisions/BASELINE.md) defines the gate/freeze register. Default-off
 features do not make a newly provisioned foundation cost-free.
 
+`legacy_email_owner_match` is a default-true migration switch. `make backfill-owner-sub`
+creates a preview only; disable the switch only after a completed reviewed apply and
+zero residual legacy rows. The current tool cannot apply an empty plan; a zero-row
+preview alone does not authorize cutover. See [ADR-009](docs/decisions/009-async-worker-backbone.md).
+
 ## Development
 
 Use Node.js 20 (matching CI and the web image), Python with the subsystem requirements,
