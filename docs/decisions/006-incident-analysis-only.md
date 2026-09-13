@@ -32,6 +32,16 @@ mitigation. Historical workflow stages and write-back roles depended on the now-
 - Manual entry and ADR-013's authenticated alert ingress remain supported trigger designs. The webhook
   returns disabled status when the lifecycle gate is off; retained authentication code does not prove activation.
 
+### §5 K8sGPT compatibility gap
+
+The accepted operator-role constraint remains get/list/watch only, with
+create/update/patch/delete denied. A controller that publishes Result CRs or manages
+its own reconciliation objects may require writes and therefore cannot be assumed
+to satisfy that constraint. This is an unresolved compatibility issue, not a new
+exception granted by documentation cleanup. Keep new installation/enablement behind
+policy review until a compatible pinned configuration or a separately approved ADR
+amendment resolves it. AWSops' own Result-read access remains read-only.
+
 ## Consequences
 
 Diagnosis value survives without automated mitigation. State-machine retries, partial evidence, and
