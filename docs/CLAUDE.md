@@ -1,52 +1,35 @@
-# Documentation
+# Developer documentation
 
-Project documentation organized by purpose. Each subdirectory has its own CLAUDE.md.
+Use English only for developer/reviewer docs: context files, ADRs, architecture,
+references, runbooks and new plans. Keep multilingual user guides under `docs-site/`
+and application i18n. Historical records preserve their original evidence and
+language; do not treat them as current instructions or bulk-load them for review.
 
-## Structure
+## Authority and scope
 
-| Directory | Purpose |
-|---|---|
-| [architecture.md](architecture.md) | System architecture (single file) |
-| [onboarding.md](onboarding.md) | New-joiner onboarding |
-| [decisions/](decisions/) | **Decision single source of truth = `BASELINE.md`** + consolidated ADRs 001–021 + `ADR-MAPPING.md` (old ADR 001–046 bodies are at git tag `adr-legacy-2026-06-22`) |
-| [reference/](reference/) | Current v2 design, one file per component (single source per component) |
-| [runbooks/](runbooks/) | Operational playbooks by scenario |
-| [diagrams/](diagrams/) | Interactive archify diagrams (spec `.json` + delivered standalone `.html`) — regenerate via the archify skill, never hand-edit the HTML |
-| [reviews/](reviews/) | Code review / cross-review results |
-| [plans/](plans/) | Old planning docs (legacy) — current plans live under `superpowers/plans/` |
-| [superpowers/specs/](superpowers/specs/) | Design specs (brainstorming output) |
-| [superpowers/plans/](superpowers/plans/) | Implementation plans (writing-plans output) — **a mix of current and frozen/superseded**; frozen-era plans (029–036 remediation, etc.) are not live (ADR-005 FROZEN); current truth is `decisions/BASELINE.md` |
-| [history/](history/) | Old history — `archive/` (execution history), etc. Not current truth |
-| [guides/](guides/) | AI test question sets (`ai-test-questions.md`, `ai-testing.md`), test coverage plan (`test-coverage-plan.md`), install/onboarding/troubleshooting guides |
-| [api-reference.md](api-reference.md) | Full API route index (root `CLAUDE.md` calls this the 99-route index) |
+1. `decisions/BASELINE.md` is the current decision/gate register. Consolidated
+   `NNN-*.md` ADRs contain rationale/amendments; update the register with a new ADR.
+2. Source, migrations and tests establish behavior; accepted invariants establish
+   what is allowed. Investigate disagreement rather than silently changing policy.
+3. `architecture.md`, `reference/` and `runbooks/` describe current implementation.
+4. `plans/`, `specs/`, `reviews/`, `superpowers/` and `history/` are dated design or
+   execution records. A plan is not evidence of deployment, approval or enablement.
+   `superpowers/reference/` is historical, not the current `reference/` tree.
 
-## Conventions
-- All new documents are **bilingual Korean/English** — exceptions: (a) **all `CLAUDE.md`-type
-  files, regardless of directory, are English-only** (root `CLAUDE.md`, `AGENTS.md`,
-  `web/**/CLAUDE.md`, `agent/CLAUDE.md`, `terraform/CLAUDE.md`, `docs/decisions/CLAUDE.md`,
-  `docs/runbooks/CLAUDE.md`, `docs/CLAUDE.md` itself, etc. — these are context files Claude Code
-  auto-loads, so the goal is context-size savings), and (b) implementation-facing design specs
-  under `docs/superpowers/specs/` (technical documents whose primary readers are AI
-  agents/implementers) are also **English-only**, and (c) generated archify artifacts under
-  `docs/diagrams/` (spec JSON + rendered HTML — tool output regenerated via the archify skill,
-  never hand-translated) are **English-only**. "Stays bilingual" applies to a directory's
-  **body content**, not its `CLAUDE.md` — `docs/runbooks/*.md` (the runbook bodies, excluding
-  `CLAUDE.md`), `docs/decisions/BASELINE.md`/`0NN-*.md` (ADR bodies), and other
-  user-/operator-facing documents keep the bilingual rule.
-- Decision current truth = `docs/decisions/BASELINE.md`. New ADR = consolidated-ADR highest
-  number + 1 (currently **021**); update BASELINE in the same PR.
-- ADR filename: `NNN-kebab-case-title.md`.
-- **Don't mix current truth (`decisions/BASELINE.md` + `reference/`) with old plans/history.**
-  `superpowers/plans|specs` and `history/archive/` contain reversed/frozen-era/superseded
-  documents — don't treat them as live guidance; anything about mutation/autonomy is settled by
-  ADR-005 FROZEN regardless. (`docs/superpowers/reference/` is a separate, stale planning-era
-  copy — not the current-truth `docs/reference/`; don't confuse the two.)
-- Runbooks follow the rules in `docs/runbooks/CLAUDE.md`.
-- Watch for secrets/credentials in committed docs (account IDs, ARNs, live domains, tokens) and
-  reject them.
+Do not rewrite historical decisions to authorize frozen behavior. Use
+`decisions/ADR-MAPPING.md` for legacy numbers; old ADR bodies are available at
+`adr-legacy-2026-06-22` only when explicitly needed. Choose the next unused ADR number
+from the files rather than a hardcoded count in prose.
 
-## Related Skills
-- `/sync-docs` — auto-sync CLAUDE.md
-- `/project-init:add-adr` — create a new ADR
-- `/project-init:add-runbook` — create a new runbook
-- `/project-init:health-check` — verify documentation coverage
+## Maintenance
+
+- Keep one explanation of each policy; link to it instead of copying long lists.
+- Verify paths/commands against this checkout. Private Terraform lives at
+  `terraform/v2/foundation/`; public samples use `terraform/foundation/`.
+- Do not maintain counts of pages, routes, components or tools by hand.
+- Distinguish default settings, supported capability and dated deployment evidence.
+- Commands must name their working directory and avoid secrets. Use placeholders
+  for example account IDs/domains; identifiers are not credentials by themselves.
+- Regenerate a scoped `AGENTS.md` after its `CLAUDE.md` source changes.
+- Navigation and historical scope are in `README.md`. User-site localization is
+  a separate surface; lack of Korean developer text is not a review defect.

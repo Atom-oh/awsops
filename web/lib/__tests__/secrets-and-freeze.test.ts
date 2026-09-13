@@ -1,6 +1,6 @@
-// Task 22 — AWS-freeze regression: the datasource/connector work must NOT enable any mutating /
-// autonomous / external-write capability. These flags are permanently frozen (2026-06-11 reversal,
-// ADR-005). A default-value assertion fails CI if someone flips a default to true.
+// Default-off regression: remediation is FROZEN by ADR-005; governed external writes
+// are GATED by ADR-007. Both defaults remain false, but their approval paths differ.
+// A default-value assertion fails CI if someone flips either default to true.
 //
 // Reads terraform/v2/foundation/variables.tf (committed, always present in CI) — NOT
 // terraform.tfvars (gitignored, per-environment, never present on a CI runner; the original
@@ -14,7 +14,7 @@ import { variableDefault } from '../tf-frozen-flags';
 
 const VARIABLES_TF = new URL('../../../terraform/v2/foundation/variables.tf', import.meta.url);
 
-describe('AWS-resource-mutation / external-write freeze (ADR-005)', () => {
+describe('FROZEN remediation and GATED external-write defaults (ADR-005/007)', () => {
   const tf = readFileSync(VARIABLES_TF, 'utf8');
 
   it('external integration WRITE stays disabled by default (propose-only / flag-OFF)', () => {
