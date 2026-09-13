@@ -19,8 +19,19 @@ The controller applies the saved plan; never use `-auto-approve` on shared
 infrastructure. `backend.hcl` is local partial S3 configuration. Keep credentials,
 state, plans, and sensitive tfvars out of commits; use the example configs.
 Version constraints are declared in `backend.tf`; selections are in the lockfile.
+Merge Verify pins Terraform 1.15.7 and requires `tests/runtime_iam.tftest.hcl`
+with mocked providers and `init -backend=false`; no AWS credentials are supplied.
 
 ## Review boundaries
+
+- `v2/foundation/runtime-read-scope.tf` defines opt-in host-only inventory,
+  nullable inventory/worker image digests, region/model scopes and verifier provisioning.
+  Web SSM access names exactly three project parameters. Runtime Gateway/model and
+  worker task permissions are scoped; allowed host reads retain enabled regions
+  and global endpoints. Terraform omits only collector cross-account role grants in host-only mode; Agent MCP
+  grants and original credential-report access remain. Optional ci_readiness_enabled creates
+  the verifier app group without an IAM role; private membership is operator-managed.
+  These configuration checks do not prove effective deployed access or collection.
 
 - Preserve private CloudFront VPC Origin access to the internal ALB, scoped IAM,
   closed Cognito signup/admin-only recovery, and root security mandates.

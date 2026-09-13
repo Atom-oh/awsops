@@ -55,6 +55,7 @@ do not maintain a separate route count in README or agent context.
 | `/api/datasources` | GET | [route.ts](../web/app/api/datasources/route.ts) |
 | `/api/datasources/test` | POST | [route.ts](../web/app/api/datasources/test/route.ts) |
 | `/api/db` | GET | [route.ts](../web/app/api/db/route.ts) |
+| `/api/deployment/readiness` | POST | [route.ts](../web/app/api/deployment/readiness/route.ts) |
 | `/api/diagnosis/[id]/download` | GET | [route.ts](../web/app/api/diagnosis/[id]/download/route.ts) |
 | `/api/diagnosis/[id]` | DELETE, GET, PATCH | [route.ts](../web/app/api/diagnosis/[id]/route.ts) |
 | `/api/diagnosis/intent` | GET, POST | [route.ts](../web/app/api/diagnosis/intent/route.ts) |
@@ -123,3 +124,7 @@ do not maintain a separate route count in README or agent context.
 | `/api/stream` | GET | [route.ts](../web/app/api/stream/route.ts) |
 | `/api/tgw` | GET | [route.ts](../web/app/api/tgw/route.ts) |
 | `/api/vpce` | GET | [route.ts](../web/app/api/vpce/route.ts) |
+
+Deployment readiness requires admin or deployment-verifiers, a bounded nonce/account request,
+and a process cooldown. Inventory summary `collection.scope=aggregate` describes the
+whole collection job; selected account/region counts do not turn it into per-account health.

@@ -90,8 +90,16 @@ contains compatibility and legacy tools; catalog membership plus runtime gates
 establish reachability. For credential/grant troubleshooting see
 [the SQL reader runbook](../runbooks/agent-sql-reader.md).
 
+Deployment readiness is a default-off runtime mode. Applied `ci_readiness_enabled` feeds
+`agentcore.deployment_readiness_enabled`; the provisioner sets DEPLOYMENT_READINESS_ENABLED
+from that boolean. The probe uses fixed inventory tools, source freshness and bounded model
+invocation, preserving unknown coverage and timeout evidence. App access requires admin or
+deployment-verifiers. PENDING/malformed runtime ARNs are rejected before caching; an empty
+runtime SSM parameter disables invocation/readiness discovery.
+
 The curated query_inventory tool accepts optional resource_id for CloudFront only. That
 branch validates the ID, binds it as a SQL parameter, scopes it to host inventory and
-returns at most one id-only record. Ordinary list calls keep their existing projection.
-Deploy the reader Lambda via Terraform and refresh the AgentCore catalog target before
-using this argument. No new IAM grant or activation flag is introduced.
+returns at most one id-only record. Readiness uses this exact lookup. Ordinary list calls
+keep their existing projection. Deploy the reader Lambda via Terraform and refresh the
+AgentCore catalog target before using this argument. The lookup itself adds no IAM grant
+or activation flag.

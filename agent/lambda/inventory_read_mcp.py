@@ -484,7 +484,7 @@ def _sync_freshness(resource_type=None):
         "WHEN latest_success_at < CURRENT_TIMESTAMP - "
         "(:stale_after_minutes * INTERVAL '1 minute') THEN 'stale' "
         "WHEN status IN ('partial', 'failed', 'running') THEN 'degraded' "
-        "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 THEN 'degraded' "
+        "WHEN status = 'succeeded' AND (unknown_attribute_count IS NULL OR unknown_attribute_count > 0) THEN 'degraded' "
         "WHEN status = 'succeeded' THEN 'healthy' "
         "ELSE 'unavailable' END AS freshness, "
         "CASE WHEN latest_success_at IS NULL THEN NULL ELSE "
@@ -587,6 +587,8 @@ def lambda_handler(event, context):
             "resources": rows,
             "freshness": _freshness_for_type(rtype),
         }
+        if resource_id is not None:
+            result.update(projection="identity_only", resource_id=resource_id)
         if rtype not in PROJECTIONS:
             # PR #197 review MAJOR: an unregistered type's `resources` entries only carry whatever
             # keys happen to be on SOME other type's projection allowlist — genuinely absent fields

@@ -12,17 +12,23 @@ Strands AgentCore runtime; `agent.py` selects gateways and streams responses.
   `web/app/api/chat/route.ts`; do not duplicate their inventories here.
 - Transport: `streamable_http_sigv4.py`. Keep the Dockerfile and requirements
   consistent; deployed images remain arm64.
-- From the repository root: `cd agent && python3 -m pytest test_agent.py -q`.
+- From the repository root: `cd agent && python3 -m pytest test_agent.py test_readiness.py -q`.
   Run additional affected suites in isolation as `scripts/v2/merge-verify.sh` does.
 
 ## Contracts
+
+- `readiness.py` requires `DEPLOYMENT_READINESS_ENABLED=true` (default off, from applied
+  provisioning output, never caller payload). Its `deployment_readiness` branch checks: runtime STS account,
+  curated inventory tools through the existing Ops gateway, a known fresh CloudFront
+  record and a bounded model call. Return strict nonce/account-bound evidence without
+  inventory data in the model prompt. Failures never fall through to normal chat.
 
 - Preserve the `observability` to `external-obs` alias and canonical/`v2-` gateway
   key compatibility in `_resolve_gateway_key()` while both discovery paths exist.
 - Host-account requests use execution credentials. Preserve `effective_account_id()`
   and the host short-circuit in `lambda/cross_account.py`; do not self-assume the
   target-account role on the host.
-- Tool discovery/connection failures before streaming may fall back to a tool-less
+- Normal chat tool discovery/connection failures before streaming may fall back to a tool-less
   answer. After output starts, do not replay an answer through that fallback.
 - Multi-gateway synthesis in the BFF requires both `hybrid_routing_enabled` and
   `multi_route_synthesis_enabled`; selecting candidate routes does not imply fan-out.

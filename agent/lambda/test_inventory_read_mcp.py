@@ -172,6 +172,8 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         body = json.loads(result["body"])
         self.assertEqual(body["resources"], [{"id": expected}])
         self.assertEqual(body["count"], 1)
+        self.assertEqual(body["projection"], "identity_only")
+        self.assertEqual(body["resource_id"], expected)
 
     def test_identity_lookup_rejects_other_types_and_invalid_ids_before_sql(self):
         with mock.patch.object(inv, "_execute") as execute:
@@ -408,7 +410,7 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
                     "unknown_attribute_count": None,
                     "oldest_captured_at": "2026-08-31T00:25:00+00:00",
                     "latest_success_at": "2026-08-31T00:25:00+00:00",
-                    "freshness": "healthy",
+                    "freshness": "degraded",
                     "age_minutes": 2,
                     "stale_after_minutes": 30,
                 },
@@ -418,22 +420,24 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         rows = inv._sync_freshness()
 
         by_type = {row["resource_type"]: row for row in rows}
-        # blind attribute reads degrade the DISCLOSED freshness; an explicit 0/None stays healthy
+        # Unknown attribute coverage stays unknown/degraded; only an explicit zero can be healthy.
         self.assertEqual(by_type["s3_public_access"]["freshness"], "degraded")
         self.assertEqual(by_type["s3_public_access"]["unknown_attribute_count"], 2)
         self.assertEqual(by_type["s3"]["freshness"], "healthy")
-        self.assertEqual(by_type["alb"]["freshness"], "healthy")
+        self.assertEqual(by_type["alb"]["freshness"], "degraded")
+        self.assertIsNone(by_type["alb"]["unknown_attribute_count"])
         freshness_sql = calls[0][0]
         self.assertIn("runs.unknown_attribute_count", freshness_sql)
+        self.assertNotIn("COALESCE(unknown_attribute_count, 0)", freshness_sql)
         self.assertIn(
-            "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 "
+            "WHEN status = 'succeeded' AND (unknown_attribute_count IS NULL OR unknown_attribute_count > 0) "
             "THEN 'degraded'",
             freshness_sql,
         )
         # the unknown-attribute arm must precede the plain succeeded->healthy arm
         self.assertLess(
             freshness_sql.index(
-                "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 "
+                "WHEN status = 'succeeded' AND (unknown_attribute_count IS NULL OR unknown_attribute_count > 0) "
                 "THEN 'degraded'"
             ),
             freshness_sql.index("WHEN status = 'succeeded' THEN 'healthy'"),
