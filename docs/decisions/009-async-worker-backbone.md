@@ -86,7 +86,11 @@ The ordered termination steps retain the numbering used by runtime/runbook citat
    never a broad owner predicate; post-commit reporting failure is not a rollback.
 3. Require a successfully completed `--apply` and verify zero residual legacy rows,
    then deploy `LEGACY_EMAIL_OWNER_MATCH=false` (`legacy_email_owner_match=false`).
-   A clean preview is insufficient; complete and verify the reviewed apply even for a zero-row case.
+   A clean preview is insufficient. The current `apply()` rejects empty plans with
+   `has no entries` before verification, so it cannot supply completion evidence for a zero-entry
+   first cutover. Without completed apply evidence and residual verification, keep the switch true.
+   Supporting that empty-plan case needs a separately reviewed implementation; this ADR does not
+   waive the apply requirement or present the currently rejected command as a working procedure.
    Resume scheduling only after the residual check; otherwise it can recreate email-keyed rows.
 
 Use `scripts/v2/backfill-owner-sub.mjs` for executable plan/apply steps and
