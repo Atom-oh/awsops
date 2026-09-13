@@ -43,7 +43,7 @@ flowchart TB
     SP["Steampipe Fargate (FDW) + quota-limited inventory sync (rate-limited, freshness ledger)"]
   end
 
-  subgraph AI["AI (AgentCore)"]
+  subgraph AI["AI services"]
     RT["AgentCore Runtime (Strands agent)"]
     GW["Catalog-defined section gateways (read-only MCP tools)"]
     MCP["MCP tool Lambdas"]
@@ -82,6 +82,9 @@ flowchart TB
   SFN --> WF
   WL --> AUR
   WF --> AUR
+  WL -->|"query / insight inference"| BR
+  WF -->|"diagnosis inference"| BR
+  W -->|"direct chat paths"| BR
   SP --> AUR
 ```
 

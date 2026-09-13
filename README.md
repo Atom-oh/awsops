@@ -22,6 +22,9 @@ flowchart LR
   Jobs --> SFN[Step Functions]
   SFN --> Workers[Lambda or Fargate workers]
   Workers --> DB
+  Workers -->|diagnosis inference| Bedrock[Amazon Bedrock]
+  AI --> Bedrock
+  Web -->|direct chat paths| Bedrock
   Sync[Batch inventory sync] --> DB
 ```
 

@@ -26,7 +26,8 @@ Do not cache error/empty dry-run results. Deterministic Tempo catalogs are not L
 **§A-4 — Schema-version cache:** reuse validated worker artifacts for the same schema version;
 do not regenerate them on every execution.
 
-The connector transport enforces destination checks. ClickHouse additionally enforces SQL/read-only
+The shared connector transport calls `agent/lambda/datasource_http.py:assert_host_allowed` for
+destination checks. ClickHouse additionally enforces SQL/read-only
 and table-function restrictions; other kinds use their read endpoints. The graph and signal paths use
 the same ClickHouse connector. Generator-level checks differ: signal generation blocks table functions
 and SETTINGS before execution; graph generation relies on the connector for that surface.
@@ -34,8 +35,10 @@ and SETTINGS before execution; graph generation relies on the connector for that
 ### B. Diagnostic-signal fallback
 
 `scripts/v2/workers/diagnosis/signal_catalog_gen.py` governs the signal fallback.
-Fallback eligibility is selected per connector kind in `datasource_index.py`;
-the following controls apply across its eligible kinds:
+With the signal-generation flag enabled, every wired connector kind whose deterministic catalog
+has zero ready rows is eligible for the fallback in `datasource_index.py`, subject to the
+per-instance budgets below. Generated chips retain their `provenance='generated'` label.
+The following controls apply across those kinds:
 
 - Sanitize/bound prompt identifiers; require an expression that mentions the instance's vocabulary
   and is not a constant. The relevance check is heuristic, not a complete query parser.
