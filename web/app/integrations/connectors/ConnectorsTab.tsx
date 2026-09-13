@@ -91,7 +91,7 @@ export default function ConnectorsTab({ canManage = false, onShowDatasources }: 
       <Card className="p-4 space-y-2">
         <h3 className="text-sm font-semibold text-ink-800">{tt('보고서 정리와 전달')}</h3>
         <p className="text-[13px] text-ink-600">{tt('Notion · Slack · Wiki/Confluence로 공유할 보고서는 AI 진단에서 초안을 미리 보고 복사하거나 내려받으세요.')}</p>
-        <p className="text-[12px] text-ink-500">{tt('Notion은 지식 검색을 지원합니다. Slack 직접 전송은 기본 비활성이며 소유자 제어 게이트와 2인 승인 거버넌스를 따릅니다. Wiki 직접 게시는 아직 지원하지 않습니다.')}</p>
+        <p className="text-[12px] text-ink-500">{tt('Notion은 지식 검색을 지원합니다. Slack 직접 전송은 기본 비활성이며 소유자 제어 게이트와 사람의 승인 거버넌스를 따릅니다. Wiki 직접 게시는 아직 지원하지 않습니다.')}</p>
         <Link href="/ai-diagnosis" className="text-[13px] text-brand-600 hover:underline">{tt('진단 보고서 열기 →')}</Link>
       </Card>
       <div className="grid gap-3 sm:grid-cols-2">
