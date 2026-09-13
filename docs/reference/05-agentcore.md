@@ -37,9 +37,39 @@ Connection/tool-discovery failure before output can yield a tool-less answer.
 After streaming begins, failures must not trigger a duplicated fallback answer.
 Runtime experimental-loop selection remains server-controlled at the BFF boundary.
 
-## Custom tool policy
+Custom dispatch reads one available/unavailable context from `web/lib/catalog-source.ts`.
+Either policy or agent-catalog failure denies custom candidates, while built-in chat/help remain
+usable. Explicit custom pins receive an unavailable response; automatic fallback is visibly
+identified and persisted as a built-in answer. Confirmed no-row policies retain Phase-1 behavior.
 
-The resolver uses `web/lib/gateway-tool-catalog.json`, a qualified-name snapshot of the Python catalog's Lambda schemas and hosted-MCP read allowlists. Refresh it from those catalog entries when membership changes and run `web/lib/agent-resolver.test.ts`'s parity check. It is an eligibility catalog, not live discovery. Runtime provisioning and official-MCP gates still apply. Instruction-only skills inherit existing gateway reads unless a declared or retained restriction exists. Account caps narrow that baseline; declared/revoked empty intersections remain deny-all. An empty account cap is unrestricted at that layer; an effective `[]` denies all tools and is encoded as `!awsops-deny-all!` for older runtimes. `undefined` retains legacy unrestricted filtering. Chat discloses and persists a policy-zero limitation instead of implying live evidence was read.
+## Custom tool policy and registration
+
+`web/lib/gateway-tool-catalog.json` maps approved target names to `{gateway, tools}`.
+The resolver accepts unambiguous shorthand only within that gateway and emits exact `target___tool`
+identities. This snapshot describes eligibility, not live discovery; runtime provisioning and
+official-MCP gates still apply. Instruction-only skills without tool declarations or a retained
+`toolPolicyConfigured` restriction use existing gateway reads as their baseline. Account caps narrow
+that baseline. Declared or revoked restrictions keep empty intersections deny-all. An empty account
+cap adds no restriction at that layer; an effective `[]` denies all tools and the wire token
+`!awsops-deny-all!` also denies on old exact-match runtimes. `undefined` retains legacy unrestricted
+filtering. Chat discloses and persists a policy-zero limitation instead of implying live evidence
+was read. Legacy `agent-space.ts` helpers are not the live resolver.
+
+Regenerate the JSON by projecting `catalog.py`'s `TARGETS[*].tools[*].name` and
+`MCP_SERVER_TARGETS[*].tool_allowlist` into that shape, then run
+`cd web && npx vitest run lib/agent-resolver.test.ts` for offline parity verification.
+Restricted ClickHouse stdio vocabulary remains outside this contract while that path is FROZEN.
+
+The customization page retains curated egress/ingress registry registration and enable/disable
+controls under **Integrations (advanced)**; `custom_mcp` is excluded. New rows are disabled.
+Credentials, exposed tools, source allowlists and incident/write gates require separate
+configuration. Ordinary datasource and Notion credentials remain in the integrations hub.
+Registration does not provision a gateway, verify connectivity or grant infrastructure permissions.
+
+Skill attachment locks the custom agent row in a transaction, then appends after all persisted
+bindings, including disabled skills. Repeated attachment preserves its existing ordinal.
+The API assigns and returns that ordinal, ignoring legacy client ordering. A successful attachment
+followed by a failed refresh is reported as saved with a reload notice, not as a failed attachment.
 
 ## Security and operational limits
 
