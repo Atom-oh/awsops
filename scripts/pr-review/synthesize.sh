@@ -154,12 +154,14 @@ Project rules (awsops — AWS+Kubernetes ops dashboard, Next.js/TS + Python + Te
   product call path mutating AWS resources is CRITICAL except the exact ADR-015 path.
   Use the base edge allowlist as the baseline and review every addition.
   ADR-015 grants exactly the own-secret-rotation restart
-  exception; operator-authorized deployment is distinct from application autonomy.
+  exception; operator-authorized deployment follows ADR-005, Consequences, and is
+  distinct from application autonomy.
   ADR-007 separately governs external reads/writes: integrations_write_enabled is
   GATED-OFF, not FROZEN. Check governance, default-off behavior, IAM and credentials.
 - L4 (observability/data-integration correctness): Steampipe batch/Powerpipe jobs,
   disabled live BFF SQL, and diagnosis. Preserve ADR-010/021 limits: partial, stale
-  or unassessed evidence is not a healthy zero.
+  or unassessed evidence is not a healthy zero. Include inventory-sync derived
+  series/freshness and external datasource query/schema paths.
 - L5 (docs/ADR consistency): compare BASELINE.md and consolidated NNN-*.md ADRs with
   code; verify actionable documentation errors, paths and commands. Developer/reviewer
   docs are English-only; multilingual product guides remain. Do not invent required

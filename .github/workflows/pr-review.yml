@@ -303,7 +303,7 @@ jobs:
           - Any new product call path that mutates AWS resources is CRITICAL except the exact
             ADR-015 path. Use the base edge allowlist as the baseline; review every addition.
           - Read ADR-015 for its exact secret-rotation restart exception. Operator-authorized
-            deployment is distinct from application autonomy.
+            deployment is distinct from application autonomy (ADR-005, Consequences).
           - External data reads/writes follow ADR-007. integrations_write_enabled is GATED-OFF,
             not FROZEN; verify its governance and default-off behavior.
           - IAM least privilege, no hardcoded secrets.
@@ -315,6 +315,7 @@ jobs:
           LENS: L4 — Observability / data-integration correctness
           - Correctness of Steampipe batch/Powerpipe jobs, disabled live BFF SQL, and diagnosis.
           - Preserve ADR-010/021 evidence limits: partial/stale/unassessed is not a healthy zero.
+          - Check inventory-sync derived series/freshness and external datasource query/schema paths.
           PROMPT_EOF
 
           cat <<PROMPT_EOF > /tmp/pr-review/lenses/L5.txt

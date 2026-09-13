@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: a54c22755a14 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 2ebeaf80760d · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo. This context is distilled from
 > CLAUDE.md and shared by Kiro, Codex and Agy.
@@ -34,7 +34,8 @@ no PR/review-round numbers or duplicates. Preserve version provenance.
 | ADR-017 GATED | Curated vendor-hosted MCP presets use runtime tool allowlists. Arbitrary custom MCP and embedded ClickHouse stdio stay FROZEN. |
 | ADR-019 GATED | SG-rule Athena activity is read-only; not another mutation exception. |
 
-Operator-authorized deploy/onboarding/teardown is not application autonomy. Apply
+Operator-authorized deploy/onboarding/teardown follows ADR-005, Consequences, and
+is not application autonomy. Apply
 normal task authorization and reviewed saved-plan discipline. Product UI/API/agent
 AWS mutation stays FROZEN regardless of requester, except the exact ADR-015 path.
 

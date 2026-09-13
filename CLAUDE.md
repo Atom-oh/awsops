@@ -38,7 +38,7 @@ only relevant module instructions and implementation references.
 | SG-rule activity | ADR-019 is an ordinary GATED read-only Athena query path, not another ADR-005 exception. |
 
 Operator-authorized deployments, account onboarding and teardown are operations
-outside the application's autonomy boundary. They still require the task's
+outside the application's autonomy boundary (ADR-005, Consequences). They still require the task's
 approval scope, least privilege and a reviewed saved Terraform plan. Any AWS
 mutation reachable through the product UI, API or agent remains FROZEN regardless
 of who requests it, except for the exact ADR-015 path.
@@ -46,7 +46,8 @@ of who requests it, except for the exact ADR-015 path.
 ## Architecture and code ownership
 
 - **Web:** `web/`, Next.js 14 App Router, standalone arm64, root `/` and `/api/*`.
-  Components use default exports. No v1 `/awsops` basePath or JSON-file app state.
+  Page components use default exports; preserve existing named shared-component
+  and helper contracts. No v1 `/awsops` basePath or JSON-file app state.
 - **Data:** Aurora via `web/lib/db.ts:getPool`. Schema is the frozen
   `terraform/v2/foundation/data/schema.sql` **plus** ULID migrations under
   `terraform/v2/foundation/migrations/`. Add migrations, not baseline edits.
@@ -166,7 +167,7 @@ already describes the change. Keep release provenance and version ordering intac
 CHANGELOG is now English-only, so Korean readers receive the full English version
 body; legacy bilingual input is still supported by the parser.
 
-<!-- AUTO-MANAGED:references -->
+<!-- AUTO-MANAGED:references — managed by project-init sync; do not hand-edit this region. -->
 Implementation reference index: [docs/reference/README.md](docs/reference/README.md).
 <!-- /AUTO-MANAGED:references -->
 
