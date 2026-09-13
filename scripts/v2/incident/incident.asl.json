@@ -1,5 +1,5 @@
 {
-  "Comment": "AWSops v2 ADR-032 sibling incident state machine. Autonomous incident LIFECYCLE — ships flag-OFF; nothing starts an execution unless incident_lifecycle_enabled provisions the dispatcher INCIDENT_STATE_MACHINE_ARN. Stage progression: Triage -> (Choice on $.decision: Skipped/Linked -> Done; New -> Lead) -> Investigation (Map over $.roster, MaxConcurrency.$ = the Lead-resolved fan-out cap; each item a read-only Sub-agent consult; per-item Catch continues) -> RootCause -> MitigationPlan -> Prevention -> Done. SAFETY: the Lead DELEGATES ONLY and the Sub-agents are recommendation-only — NO state in this SM performs an AWS mutation / runTask / remediation call. Idempotent: execution name == job_id (set by the dispatcher). Every stage Task Catches States.ALL -> StageFailed, which marks the running stage failed (incident_stage_failed) then terminalizes the worker_jobs row via the reused P2 status_updater (SFN cannot write VPC Aurora) -> Fail. job_id + incident_id are preserved across stages via ResultPath so the failure path always has them.",
+  "Comment": "AWSops v2 incident state machine (ADR-006; legacy ADR-032). Analysis-only incident lifecycle — ships flag-OFF; nothing starts an execution unless incident_lifecycle_enabled provisions the dispatcher INCIDENT_STATE_MACHINE_ARN. Stage progression: Triage -> (Choice on $.decision: Skipped/Linked -> Done; New -> Lead) -> Investigation (Map over $.roster, MaxConcurrency.$ = the Lead-resolved fan-out cap; each item a read-only Sub-agent consult; per-item Catch continues) -> RootCause -> MitigationPlan -> Prevention -> Done. SAFETY: the Lead DELEGATES ONLY and the Sub-agents are recommendation-only — NO state in this SM performs an AWS mutation / runTask / remediation call. Idempotent: execution name == job_id (set by the dispatcher). Every stage Task Catches States.ALL -> StageFailed, which marks the running stage failed (incident_stage_failed) then terminalizes the worker_jobs row via the reused P2 status_updater (this workflow uses Lambda for SQL persistence) -> Fail. job_id + incident_id are preserved across stages via ResultPath so the failure path always has them.",
   "StartAt": "Triage",
   "States": {
     "Triage": {
@@ -158,7 +158,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "TimeoutSeconds": 60,
-      "Comment": "Reused P2 status_updater terminalizes the worker_jobs row (SFN cannot write VPC Aurora). Retry hard so a transient blip does not leave the job stuck 'running' until the reaper. No Catch by design.",
+      "Comment": "Reused P2 status_updater terminalizes the worker_jobs row (this workflow uses Lambda for SQL persistence). Retry hard so a transient blip does not leave the job stuck 'running' until the reaper. No Catch by design.",
       "Parameters": {
         "FunctionName": "${status_fn_arn}",
         "Payload": {

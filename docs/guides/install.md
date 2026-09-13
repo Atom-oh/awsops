@@ -2,7 +2,8 @@
 
 Start with [developer onboarding](../onboarding.md) for prerequisites and setup.
 For an authorized v2 release, follow the [root deployment guidance](../../CLAUDE.md#commands-repository-root)
-and run `make deploy` from the repository root. It migrates, builds the arm64 image,
+after `make configure` and a reviewed saved-plan apply establish the foundation.
+Then run `make deploy` from the repository root. It migrates, builds the arm64 image,
 pushes to ECR, rolls ECS, and checks `/api/health`.
 
 v2 uses `web/`, root `/api/*` routes, Aurora state and Terraform under
