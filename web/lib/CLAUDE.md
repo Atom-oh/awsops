@@ -44,5 +44,11 @@ catalog changes still need inspection. `trend-utils.ts` also shares derived-seri
 contracts with the batch sync; check `test_sync_lambda_queries.py` when changing them.
 
 `changelog.ts` reads root `CHANGELOG.md` (copied into the image by deployment).
-The parser accepts English-only entries and falls back to English for missing
-translations. Developer-doc language policy does not remove product i18n.
+The parser reads English-only documents. In legacy bilingual documents, fallback
+applies when a whole Korean version section is missing, not an individual bullet.
+Developer-doc language policy does not remove product i18n.
+
+For Network Firewall evidence (`anfw-logs.ts`), `ruleHits: null` is unavailable,
+not a confirmed empty result. `ruleHitsTruncated` makes absent SIDs unknown after
+the merged join cap; `ruleHitsPartial` makes even present positive counts lower
+bounds after a per-region cap. Preserve both flags and `alertCoverageComplete`.
