@@ -1,24 +1,20 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e6d4d1cac5b4 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 28e6b46443fa · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
-> You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
+> Reviewer context distilled from CLAUDE.md and shared across AI reviewers.
 
-# Runbooks — Reviewer Context
+# Runbook review
 
-Operational playbooks organized by scenario, each following symptoms → diagnosis → action. See
-`docs/runbooks/CLAUDE.md`'s index for the current runbook list (several are marked **v1
-(legacy)** — v2 has since replaced their procedure with a different mechanism; don't treat a
-legacy runbook's steps as the current operational path).
+Use English-only developer procedures; product user guides remain multilingual.
+`CLAUDE.md` indexes current v2 runbooks. Verify commands against the actual code,
+working directory, deployment surface and migration dependency. Use configured
+variables/placeholders and never expose credentials.
 
-## Conventions
-- Filename: `kebab-case.md`, domain-then-topic order.
-- Structure: symptoms → candidate causes → verification commands → action → related files/ADRs.
-- New/rewritten runbooks use English. Existing bilingual bodies are a migration
-  backlog: convert a whole maintained document without losing operational facts.
-  Do not require parallel Korean developer text; multilingual product guides remain.
-- Commands should be copy-paste ready; cite the related ADR number(s) at the bottom.
-- Do not let a runbook embed secrets, AWS account IDs, ARNs, or live domains.
+`../decisions/BASELINE.md` defines current gates. Operator-authorized deployment,
+onboarding and teardown are distinct from autonomous product action, and still
+require appropriate authorization and reviewed saved Terraform plans. Do not enable
+frozen features or widen IAM to make a runbook succeed.
 
-## Known false-positives
-- A runbook marked **v1 (legacy)** describing a procedure that no longer matches v2's
-  architecture is intentional — it's kept for reference during the v1 decommission window
-  (ADR-016), not stale content to delete outright.
+Preserve dated evidence; distinguish a supported procedure from executed work.
+An old plan, status table or absent verification cannot prove current deployment or
+teardown. v1 EC2/CDK/startup and embedded-Steampipe procedures are retired; do not
+require their restoration in current runbooks. Use the ADR mapping for legacy IDs.
