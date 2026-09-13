@@ -31,7 +31,8 @@ Aurora holds application state and inventory snapshots. AgentCore MCP tools prov
 live domain reads. Heavy diagnosis/compliance jobs run outside the web process.
 
 Steampipe supplies optional **batch inventory ingestion** and the Powerpipe CIS
-worker's FDW query path. Disabling it also removes that benchmark dependency. The old live SQL chat and
+worker's FDW query path. Disabling it removes that query path, so enqueued CIS runs
+fail without their required data source. The old live SQL chat and
 collector paths remain disabled. Cross-account reads use registered target roles;
 the host account uses its execution role directly. External observability connectors
 are governed separately from AWS-resource mutation by
@@ -41,8 +42,8 @@ are governed separately from AWS-resource mutation by
 
 - Inventory and detail views across compute, Kubernetes, storage, databases, network
   and security, with account/region scoping and collection freshness.
-- AI chat and asynchronous diagnosis using configured Bedrock models and AgentCore
-  section gateways, with streamed progress and persisted reports.
+- AI chat includes AgentCore gateway tools and direct Bedrock paths. Asynchronous diagnosis
+  calls Bedrock from workers and persists per-section progress and reports.
 - Topology combines resource relationships, service traces and network evidence.
   A configured relationship does not prove traffic; partial/unavailable telemetry
   must remain visible. See [observability reference](docs/reference/observability-e2e.md).
@@ -67,13 +68,21 @@ and Docker for disposable PostgreSQL integration tests. Deployment additionally
 requires AWS CLI credentials, Terraform matching
 `terraform/v2/foundation/backend.tf`, and Docker buildx with arm64 support.
 
+Run the web application locally:
+
 ```bash
 npm ci --prefix web
 (cd web && npm run dev)
+```
+
+Run verification separately:
+
+```bash
 (cd web && npx vitest run)
 (cd web && npm run build)
 python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
 bash scripts/v2/merge-verify.sh
+bash tests/run-all.sh
 ```
 
 There is no root package.json or web lint command. Configuration and connection
@@ -112,7 +121,8 @@ Historical plans/reviews are not current policy or proof of deployment.
 PRs require review of their latest HEAD, resolution of verified Critical/Major
 findings and passing required checks. Missing or partial AI coverage is not a pass.
 [CHANGELOG.md](CHANGELOG.md) records local integration changes under `[Unreleased]`;
-imported upstream releases do not establish this deployment's version.
+the upstream `whchoi98/awsops` v0.9.0 release/tag provenance is recorded there.
+That imported release does not establish this deployment's version.
 
 v1 app code is archived in git at `v1-pre-code-removal-20260712`. Its CDK/EC2,
 `/awsops` basePath and local JSON/Steampipe rules do not apply to v2.

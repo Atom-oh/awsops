@@ -1,202 +1,123 @@
-# ADR-018: LLM 쿼리 생성 (읽기 전용) / LLM Query Generation (read-only)
+# ADR-018: Read-Only Query Generation
 
-## Status / 상태
-**Accepted — 워커 두 경로는 GATED, 기본 false: `graph_querygen_enabled`, `diag_signal_querygen_enabled`. Explore NL→쿼리 초안 경로(2026-09-04 편입)는 LIVE·무플래그·초안 전용(§D).**
-**Amended 2026-09-12 (§D TraceQL):** Tempo 초안의 문법·관측 스키마·지원 HTTP 상태 필터 검증과 메타데이터 전달 범위를 기록한다. PromQL의 ADVISORY 계약·워커 플래그·실행 권한은 유지한다. / Record Tempo draft validation and schema-metadata disclosure; PromQL advisory behavior, worker gates, and execution permissions remain unchanged.
-**Amended 2026-09-04 (§D 신설):** 제3의 LLM 쿼리 생성 경로를 이 ADR의 기록 범위에 편입 — **Explore NL→쿼리
-초안 생성**(`POST /api/datasources/generate`, `web/lib/datasource-querygen.ts`). 이 경로는 이 ADR 본문의
-두 경로와 **계약이 다르다**: 라이브(플래그 없음 — 항상 켜진 사용자 개시 요청), 캐시 없음, **dry-run
-없음**(라우트 계약이 "절대 실행하지 않음" — 생성물은 사용자가 검토 후 실행하는 초안), 요청당 Haiku ≤2콜
-(어휘 위반 시 교정 재시도 1회). 2026-09-04 수정으로 §B의 스키마-어휘 앵커링에 상응하는 정적 게이트를
-얻었다: 생성 PromQL 의 모든 메트릭 토큰이 **전체 캐시 메트릭 목록**에 존재해야 하며(렌더 블록 아님),
-어휘가 없으면(스키마리스 생성은 이 라우트의 지원 경로 — 워커 게이트의 "빈 어휘 = 거부" 규칙과 다른
-자체 계약) 검사하지 않고, 어휘가 있으면 **항상 검사하되 결과는 ADVISORY** 다 — 위반이 남으면 경고와
-함께 초안을 반환(하드 거부 없음); 커넥터 `truncated` 플래그·스테일 캐시에서는 교정 재시도를 생략하고
-경고 문구에 오탐 가능성을 명시한다 — **단 하나의 예외**(2026-09-04 후속 수정): 미지 토큰 **전부**가
-recording-rule 형식 이름이고 그 raw 코어가 캐시 메트릭에 실존하면(증명 가능한 교정) 절단·스테일에서도
-재시도하되, 결과가 깨끗해도 헤지 경고를 유지한다. Consent 관점: 사용자가 버튼을 눌러
-자기 데이터소스의 스키마 메타데이터(Tempo 범위·타입·버전은 §D)를 모델에 보내는 명시적 요청이므로 두 워커 경로의 플래그 동의 모델과
-다르며, 실행이 없어 dry-run 상한 계약도 적용되지 않는다.
+## Status
 
-이 ADR은 새 권한이나 새 substrate를 만들지 않는다. 이미 존재하는 두 폴백 경로(그래프 쿼리 1건 · Explore
-diag-signal 칩 1건)가 **공통으로 무엇에 동의하는지**를 한곳에 적어, 리뷰어가 "이건 어느 결정에 속하는가"를
-BASELINE 행의 각주로 추론하지 않게 한다. PR #205 리뷰가 지적한 귀속 공백(ADR-007은 external-data
-collector/SSRF 거버넌스이고 §A의 어느 항목도 다루지 않는다)을 닫는 것이 이 문서의 존재 이유다.
+Accepted. Worker graph and diagnostic-signal fallbacks remain **GATED, default false**.
+Amended **2026-09-04** to document the already-implemented, ungated, user-requested Explore draft
+path; amended **2026-09-12** for TraceQL validation/metadata. The **2026-08-06** connector attribution
+correction remains reflected below. Repository evidence checked **2026-09-13**; no new permission granted.
 
-## Context / 컨텍스트
+## Context
 
-결정론적 카탈로그는 이름을 미리 알고 있는 스키마에만 매칭된다. K8s가 아닌 Prometheus, OTel 표준 shape이
-아닌 ClickHouse, 임의 라벨만 있는 Loki에서는 카탈로그가 ready 0행을 내고, 사용자는 빈 패널을 본다.
-이때 **그 인스턴스의 실제 스키마 이름**을 근거로 Bedrock(Haiku)에 쿼리를 생성시키는 경로가 세 곳에
-있다 — 워커 폴백 두 곳과, 2026-09-04 편입된 사용자 개시 초안 경로 하나:
+A deterministic catalog can miss an instance's schema. Model-generated queries can supply a starting
+point, but automatic worker dry-runs and user-requested drafts have different consent, execution,
+validation, and budget contracts. Neither should inherit controls merely because another path has them.
 
-- `scripts/v2/workers/graph_querygen.py` — ClickHouse `trace_spans` 그래프 쿼리 1건 (`graph_querygen_enabled`)
-- `scripts/v2/workers/diagnosis/signal_catalog_gen.py` — Explore diag-signal 칩 1건 (`diag_signal_querygen_enabled`)
-- `web/lib/datasource-querygen.ts` (`POST /api/datasources/generate`) — Explore "AI로 생성" NL→쿼리 초안
-  (LIVE·무플래그·사용자 버튼 개시·실행 없음 — §D)
+## Decision
 
-워커 두 경로는 **한 종류의 동의**를 요구한다: 외부 데이터소스의 식별자를 모델에 보내고, 모델이 쓴 조회문을
-그 데이터소스에 실행한다. ADR-007(외부 데이터 통합 거버넌스)은 커넥터·SSRF·시크릿·human-gate를 다루지만
-"모델이 쿼리를 쓴다"는 사실 자체는 다루지 않는다. ADR-005(AWS 리소스 변경·자율 FROZEN)와는 무관하다 —
-생성물은 SQL/PromQL/LogQL 조회문이고 AWS API 호출 경로가 아니다.
+### A. Worker fallback contract
 
-## Decision / 결정
+`graph_querygen_enabled` and `diag_signal_querygen_enabled` are separate default-off flags and require
+`datasource_diagnosis_enabled`. Only invoke their fallback when the deterministic catalog has no ready
+result for its scope. Send schema identifiers, not source rows or credentials, to Bedrock; generate one
+candidate, validate it, and dry-run through the existing read-only connector before caching by schema version.
+Do not cache error/empty dry-run results. Deterministic Tempo catalogs are not LLM-generated artifacts.
 
-**워커 두 경로(§B·§C): 결정론 매처가 ready 0행을 낸 인스턴스에 한해, 스키마 어휘를 근거로 LLM이 조회문
-1건을 생성하는 것을 허용한다. 각 경로는 자기 플래그(기본 false) 뒤에 있다. Explore 초안 경로(§D)는 이
-조건·플래그·dry-run 계약의 **적용 대상이 아니다** — 사용자 개시·실행 없는 초안이며 자체 계약은 §D 에만
-적는다.**
+**§A-4 — Schema-version cache:** reuse validated worker artifacts for the same schema version;
+do not regenerate them on every execution.
 
-아래는 **공통 동의(A)** 와 **경로별 방어(B/C)** 를 구조로 갈라 적는다. 한 문장이 두 경로에 다 적용되는 것처럼
-읽히면 리뷰어가 없는 방어를 있다고 믿게 되므로(리뷰 MAJOR, 2회), 공통 절에는 두 경로에 **실제로 모두** 있는
-것만 둔다.
+The connector transport enforces destination checks. ClickHouse additionally enforces SQL/read-only
+and table-function restrictions; other kinds use their read endpoints. The graph and signal paths use
+the same ClickHouse connector. Generator-level checks differ: signal generation blocks table functions
+and SETTINGS before execution; graph generation relies on the connector for that surface.
 
-### A. 워커 두 경로(§B·§C) 공통 — 이것이 "동의"의 내용 (§D Explore 경로에는 적용되지 않음 — 자체 계약은 §D)
+### B. Diagnostic-signal fallback
 
-1. **스키마 식별자가 Bedrock으로 나간다.** 테이블/컬럼/메트릭/라벨 **이름**만 나가고 데이터 행·자격증명은
-   나가지 않는다.
-2. **모델이 쓴 조회문을 라이브로 dry-run 한다.** 실행은 기존 read-only 커넥터에서만 이뤄지고, 모델은 실행
-   권한을 갖지 않는다. **`assert_host_allowed`(SSRF 호스트 핀, `datasource_http.py`)는 모든 kind 공통 가드다**
-   (`prometheus_mcp.py`·`loki_mcp.py`·`tempo_mcp.py`·`mimir_mcp.py`·`clickhouse_mcp.py` 전부 호출). `readonly=1` ·
-   `assert_read_only`는 **ClickHouse 전용**이다 — Prometheus/Mimir/Loki/Tempo API 자체가 읽기 전용 엔드포인트라
-   SQL 레벨 read-only 강제가 필요 없다(그 API들엔 애초에 mutating 호출이 없다). dry-run 이 error envelope 나
-   빈 payload 를 돌려주면 그 후보는 캐시되지 않는다.
-3. **정적 게이트를 먼저 통과해야 한다** — **ClickHouse만** mutating 키워드 denylist + 단일문 검사를 한다
-   (`signal_catalog_gen._static_check`는 `kind == "clickhouse"`일 때만 이 검사를 수행하고, 다른 kind는
-   그대로 통과시킨다 — PromQL/LogQL/TraceQL 에는 애초에 mutating 동사가 없으므로 no-op). graph 경로의
-   `graph_querygen._static_readonly_check`도 ClickHouse `trace_spans` 전용이라 마찬가지다. **생성기
-   단계의 table-function denylist(`url`/`s3`/`remote` 등 SSRF 표면)는 diag-signal 쪽에만 있다** — graph 쪽은
-   실행 시 커넥터의 `assert_read_only(extra_forbidden_re=_TABLE_FN)` 이 막는다. 즉 파이프라인은 두 경로 모두
-   보호되지만 *어느 층에서* 막느냐가 다르다(리뷰 MAJOR-8: 이 차이를 "공통"으로 뭉개면 안 된다).
-4. **캐시된 결과만 쓴다** — 생성물은 스키마 버전에 키를 두고 저장되며, 매 실행 재생성이 아니다.
-   Tempo의 결정론적 signal/graph/card 카탈로그는 LLM 생성물이 아니며, 해시는 수집 성공 여부·카탈로그 버전·생성 플래그에 의존한다. / Deterministic Tempo catalogs are not LLM artifacts; their hash tracks successful introspection, catalog versions, and generation flags.
-5. **ADR-005와 무관하다** — 생성물은 SQL/PromQL/LogQL 조회문이고 AWS API 호출 경로가 아니다.
+`scripts/v2/workers/diagnosis/signal_catalog_gen.py` governs the signal fallback.
+Fallback eligibility is selected per connector kind in `datasource_index.py`;
+the following controls apply across its eligible kinds:
 
-### B. `signal_catalog_gen` (diag-signal 칩) 전용 방어 — graph 경로에는 **없다**
+- Sanitize/bound prompt identifiers; require an expression that mentions the instance's vocabulary
+  and is not a constant. The relevance check is heuristic, not a complete query parser.
+- Bound dry-runs: ClickHouse execution/row limits, Prometheus/Mimir timeout, Loki/Tempo result limit.
+  Loki/Tempo lack an equivalent server-side execution-time bound on this path; do not describe a
+  result limit as a timeout. Empty data is transient, not permanently rejected.
+- **§B-4 — Cost budget:** at most **three attempts per instance per ISO week**. After three consecutively exhausted
+  weeks, park until schema change is recognized at a later week boundary. Same-week schema churn
+  cannot reset the budget; disabled periods do not spend attempts.
+- Store budget state in `__diag_signal_budget__` / `meta.budget`, separately from content schema
+  versions. Pending/exhausted/conclusive states preserve consumed attempts and exhaustion streaks;
+  a settled unchanged schema stays settled across weeks. Legacy-marker migration must not relabel
+  stale content as the current schema or reset a still-current weekly budget.
+- Generated rows are Explore chips only, excluded from report `_signal_plan` decisions. Enforce the
+  flag on both worker generation and BFF reads; an inactive worker cannot be relied on to sweep
+  cached rows after disablement. Retained validated content is not authority to bypass the flag.
 
-1. **식별자 정화**: 평범한 식별자만(`^[A-Za-z_][\w.:-]*$`) 60개 상한으로 프롬프트에 넣는다(프롬프트 인젝션).
-2. **관련성 게이트**: 그 인스턴스 어휘를 실제로 언급하고 상수를 측정하지 않아야 한다.
-3. **dry-run 상한 + 빈 응답의 분류**: ClickHouse `max_execution_time=5`+`max_rows=1`, Prometheus/Mimir `timeout=5s`,
-   Loki/Tempo `limit=1`. **Loki/Tempo는 커넥터를 통한 서버측 실행시간 상한이 없다** — 알려진 잔여 리스크이며,
-   그래서 생성 표현식을 자동 반복 실행 경로에 두지 않는다. 빈 응답은 §A-2 대로 캐시되지 않지만, 그 **분류**는
-   REJECTED 가 아니라 TRANSIENT 다 — 조용한 시간대의 정상 datasource 가 영구 skip 되지 않도록 주간 예산
-   안에서 재시도한다.
-4. **비용 예산**: 인스턴스당 **ISO 주 3회**, 그리고 **연속 3주** 소진되면 스키마가 바뀔 때까지 정지
-   (`_MAX_SPENT_WEEKS`). 마커(`:<pend|done>N w<주차>[s<연속소진주차수>]`)는 **콘텐츠 행의 `schema_version`
-   컬럼과 완전히 분리된 전용 북키핑 행**(`__diag_signal_budget__`, `meta.budget` 필드)에만 저장한다 — 콘텐츠
-   행은 항상 **현재** 스키마의 진짜 버전만 가지므로, 스키마 롤백이 일치검사를 거짓으로 통과시켜 잘못 태깅된
-   콘텐츠를 서빙하는 경로가 없다. 마커는 `pend`(재시도 미결)/`done`(이번 주 소진, 연속-소진 아님)/`conc`
-   (이 스키마에 대해 결론적으로 정산 — 주 경계가 지나도 유효, `attempts`/연속소진주차수를 계속 보존) **3-state**
-   다. 이번 주에 아무것도 쓰지 않았고 연속소진주차수도 0인 **conclusive** 결과(ready 정산 또는 플래그
-   꺼짐/DISABLED)만 북키핑 행을 남기지 않는다 — 그 외의 모든 conclusive 결과(이번 주에 attempts를 썼거나
-   연속소진주차수가 있는 경우)는 `conc` 마커로 그 상태를 보존해, 다음 실행이 "정산됐다"는 사실과 "이번 주
-   이미 얼마를 썼다"는 사실을 둘 다 잃지 않게 한다. 마커는 주 안에서는 스키마 해시와 무관하게 읽어 churn 이
-   예산을 리셋하지 못하게 한다. **연속 3주
-   park**(스키마 무관) 해제는 **주 경계에서만** 일어나며, 그 시점에 스키마가 실제로 바뀌었으면 해제한다 — 같은
-   주 안의 스키마 변경은 주간 상한 자체를 갱신하지 않는다(인스턴스당 주 3회는 스키마별이 아니라 인스턴스당
-   하드 상한). 플래그가 꺼진 기간은 과금하지 않는다. **v4→v5 전환**: 이 북키핑 행은 v5 부터 존재하므로,
-   `datasource_index.py`는 예산 행이 없고 콘텐츠의 저장된 `schema_version`이 v4 시절 마커 문자열이면
-   부트스트랩한다 — **연속소진주차수(streak)만** 이어받고, attempts 는 옛 마커의 주차가 **현재 주와 같을
-   때만**(배포가 주 중간에 일어난 경우) 이어받는다. v4 해시와 v5 해시는 어느 방향으로도 비교 불가능하므로,
-   부트스트랩은 옛 해시를 그대로 유지하거나 현재 버전으로 재고정하지 않고 항상 정직한 fresh `pend` 상태로
-   시작한다.
-5. **플래그를 끄면 제공이 멈춘다 — 쓰기와 읽기 양쪽에서.** 저장된 생성 행은 검증 실패/park 구간에 보존되지만
-   그 보존이 플래그 뒤에 있어 게이트를 닫으면 다음 rebuild의 sweep이 걷어낸다. **그 rebuild는 워커가 돌아야
-   일어나므로** BFF read path도 같은 플래그로 게이트한다(`web/lib/diag-signals.ts`, web task env
-   `DIAG_SIGNAL_QUERYGEN_ENABLED`).
-6. **소비 표면 제한**: `provenance='generated'` 행은 Explore 칩 전용이며 진단 리포트 경로(`_signal_plan`)에서
-   제외된다 — 리포트 프롬프트는 `pillar`/`threshold`로 심각도를 판정하고 생성 행에는 그 근거가 없다.
+### C. ClickHouse graph fallback
 
-### C. `graph_querygen` (ClickHouse `trace_spans` 1건) 전용 — B의 방어는 아직 적용되지 않는다
+The `workers.tf` precondition directly requires `agentcore_enabled` for `graph_querygen_enabled`,
+in addition to §A's datasource prerequisite. The precheck reads the provisioned interpreter ID from
+SSM; an absent/unavailable interpreter skips the advisory check, not the connector validation.
 
-1. **AgentCore Code Interpreter 사전검사**(advisory, `agentcore_enabled` 필요) — B에는 없는 단계다.
-2. **필수 alias 존재 검사** + `LIMIT 1` dry-run.
-3. 식별자 정화·관련성 게이트·주간 예산·읽기 게이트·생성기 단계 table-function denylist는 **없다**(마지막 항목은 실행 시 커넥터가 막는다 — §A-3). 범위가 ClickHouse `trace_spans` 쿼리 1건으로
-   좁고 소비 표면이 토폴로지 그래프 하나이기 때문에 현재로선 수용하지만, **의도된 설계가 아니라 현행 사실**이다.
-   B의 방어를 C로 넓히는 것은 후속 작업이며, 그 전에 `graph_querygen_enabled` 의 범위를 넓히지 않는다.
+`scripts/v2/workers/graph_querygen.py` is scoped to one `trace_spans` graph query. It checks required
+aliases, performs a `LIMIT 1` dry-run, and can use an advisory Code Interpreter precheck when configured.
+It does **not** have the signal path's identifier sanitation, relevance gate, weekly budget, BFF
+read gate, or generator-level table-function denylist. The connector still enforces its own SQL/SSRF
+checks. These recorded limits are not intentional requirements to keep weaker controls; broadening
+the graph scope requires addressing them rather than borrowing §B's assurances.
 
-**어느 경로에서도 허용하지 않는 것**: 모델이 쓴 문장으로 데이터를 변경하는 것(A-3이 차단), AWS API 호출(경로
-자체가 없음), 사용자 프롬프트를 그대로 쿼리로 실행하는 것(프롬프트는 코드 안 템플릿 + 스키마 어휘뿐).
-**diag-signal 경로에서 추가로** 허용하지 않는 것: 생성물을 자동 판정/알림의 근거로 쓰는 것(B-6).
+### D. Explore user-requested draft
 
-## Consequences / 결과
+`POST /api/datasources/generate` and `web/lib/datasource-querygen.ts` are authenticated, user-initiated,
+and have no feature flag. The route **never executes or dry-runs**, and does not cache generated queries.
+Schema caching is separate. The user reviews a draft before any separately authorized connector execution.
+Allow at most two model calls per request (one correction); the route has no separate rate limit.
 
-### Positive / 긍정
-- 카탈로그가 커버하지 못하는 스키마에서도 사용자가 최소 한 개의 유효한 시작 쿼리를 얻는다.
-- 게이트가 층으로 쌓여 있어(정적 → 관련성 → dry-run) 어느 층이 무엇을 막는지 리뷰 가능하다.
-- 비용 상한이 코드에 있고 테스트로 고정되어, "LLM이 매일 도는" 형태로 조용히 번지지 않는다.
+- **PromQL vocabulary is advisory.** Compare metric tokens with the full cached vocabulary. A remaining
+  mismatch returns a warned draft, not rejection. With stale/truncated evidence, skip corrective retry
+  unless every unknown recording-rule token has a provably present raw metric core. Keep the uncertainty
+  warning even after a clean correction; raw-core existence does not prove the recording rule absent.
+  Schemaless generation remains supported. Constant expressions and name selectors can evade this
+  heuristic; do not import the worker's stronger relevance contract.
+- **TraceQL validation is hard.** Use the pinned parser, observed attribute names/types, and supported
+  affirmative HTTP-status templates. Correct at most once; invalid results return 502. Insufficient
+  schema/HTTP evidence returns refresh/manual-query guidance without speculative correction. Intrinsic
+  filters need not have custom-attribute evidence. The parser is not proof of server/version acceptance
+  or general-language semantic correctness.
+- **Tempo metadata:** send scoped names, observed types, and server version alongside the user's request;
+  never collected raw tag values. Discovery uses bounded recent samples with separate name/type
+  truncation signals. Confirmed-empty and background-refresh behavior is intentionally short-lived;
+  exact limits live in the collector/cache code and Tempo runbook.
+- **Schema-cache overflow:** bound the stored payload, mark trimmed/truncated vocabularies, preserve
+  individually probed-name semantics, and cool down background recollection. An incomplete cache
+  cannot prove that an unobserved identifier does not exist.
+  Every writer must preserve this contract: `web/lib/datasource-schema.ts` uses
+  `upsertSchema` / `trimSchemaForCache` / `isLegacyCapSnapshot`; worker `db.py` mirrors it in
+  `_trim_schema_for_cache` / `upsert_datasource_schema`.
+- **SQL drafts:** keep the existing first-verb read-only check; actual execution remains subject to
+  the connector's guards. Draft validation is not execution authorization.
 
-### D. Explore NL→쿼리 초안 경로 (2026-09-04 편입) — 자체 계약
+## Consequences
 
-`POST /api/datasources/generate` (`web/lib/datasource-querygen.ts`). §A와 다르다:
-- **LIVE·무플래그** — 사용자가 버튼을 눌러 자기 데이터소스의 스키마 메타데이터(Tempo는 아래 범위·타입·버전 포함)를 모델에 보내는 명시적
-  요청(동의 모델이 플래그가 아니라 사용자 행위).
-- **dry-run 없음, 생성물 캐시 없음**(스키마 캐시는 별개 — 아래 크기 폴백) — 라우트 계약이 "절대 실행하지 않음": 생성물은 사용자가 검토 후 실행하는
-  초안이고, 실행 시 커넥터의 read-only/SSRF 가드가 최종 방어다.
-- **정적·ADVISORY 어휘 앵커링(PromQL)** — 생성 쿼리의 메트릭 토큰을 전체 캐시 메트릭 목록과 대조,
-  위반 시 직전 답을 보여주는 교정 재시도 1회(요청당 Haiku ≤2콜) 후에도 남으면 **경고와 함께 초안 반환**
-  (하드 거부 아님 — 정적 토크나이저와 캐시 어휘 둘 다 틀릴 수 있고, 런타임 권위는 커넥터).
-  캐시가 커넥터 `truncated` 플래그이거나 오래되면(isSchemaStale) 교정 재시도를 생략하고 경고 문구가
-  오탐 가능성을 명시 — 예외는 **증명 가능한 교정**만: 미지 토큰 전부의 raw 코어(`:x:sum`→`x`)가 캐시
-  메트릭에 실존할 때(`confidentNearMisses`). 하나라도 증명 불가면(캡 너머의 실존 메트릭일 수 있음)
-  재시도 없음 — 재시도 프롬프트가 미지 토큰 집합 전체를 "스키마에 없음"으로 단정하기 때문. 예외 경로의
-  깨끗한 재작성도 헤지 경고를 유지한다(절단 어휘는 재작성을 보증할 수 없음).
-- **캐시 크기 폴백** — 커넥터 캡은 이름 **개수**(Prometheus/Mimir 3000)이므로 긴 이름 환경은 캐시 행
-  바이트 상한(256KB)을 넘을 수 있다 → **공유 기록 헬퍼**(web `upsertSchema`·워커 `upsert_datasource_schema`,
-  모든 캐시 기록 경로)가 메트릭 목록을 k번째마다 하나씩(interleave — 알파벳 뒤쪽 node_*/kube_* 계열이 살아남게)
-  줄여 맞춘 뒤 `truncated: true, trimmed: true`로 저장(행 없음 → 요청마다 재수집을 피함); 커넥터가 개별
-  확인한 `probed` 이름은 절단에서 제외(“probed인데 metrics에 없음 = 확정 부재” 계약 보존). 구 캡 스냅샷
-  (`truncated`·`trimmed` 아님·PromQL 종류·500~524개)은 백그라운드 재수집 대상이며, 재수집은 인스턴스당
-  쿨다운(10분)으로 보호된다(정확히 500~524개 메트릭 + 라벨 초과인 타깃의 오탐은 쿨다운 1회/10분으로 수용).
-- **TraceQL 정적 검증(2026-09-12)** — `web/package.json`·`web/package-lock.json`에 고정한 Grafana
-  `@grafana/lezer-traceql@1.0.0` + `@lezer/lr@1.4.10` 파서로 문법을 검사한 뒤, 관측 속성명·호환 리터럴 타입과
-  지원하는 완전한 긍정 HTTP 요청의 상태 값 보존을 검사한다. 오류 시 교정은 최대 1회(요청당 모델 ≤2콜)이며,
-  재검증 실패는 **502로 거부**한다. `SCHEMA_REQUIRED`, 제한된 수집의 미관측 이름, HTTP 근거가 없는 초안은
-  불완전한 근거로 재시도하지 않고 스키마 새로고침·수동 조회 안내를 반환한다. 내장 필터는 속성 스키마 없이도 사용할 수 있다.
-  / **TraceQL uses hard validation**, unlike PromQL's advisory vocabulary check: pinned grammar, observed names/types,
-  and supported affirmative HTTP-status templates. One correction at most; invalid results return 502. Insufficient-schema
-  cases return guidance without correction; intrinsic filters do not require custom attributes.
-- **Tempo 메타데이터·한계** — 사용자 요청과 함께 범위 있는 속성명·관측 타입·Tempo 버전을 Bedrock에 전달한다.
-  수집한 원시 태그 값은 스키마 응답·캐시·프롬프트에 넣지 않는다. 최근 1시간에서 최대 200개 속성·64,000바이트,
-  HTTP 상태·서비스 이름 관련 4개 속성당 최대 32개 값으로 타입을 표본화하며, 이름/타입 수집 제한은 따로 표시한다.
-  확인된 빈 관측의 TTL과 Tempo 백그라운드 갱신 쿨다운은 60초다. / The prompt includes scoped names, observed types,
-  and server version alongside the user request, never collected raw tag values. Discovery samples the last hour with
-  200-attribute/64,000-byte caps and at most 32 values for each of four HTTP/service fields. Name/type limits stay distinct;
-  confirmed-empty TTL and all Tempo background-refresh cooldowns are 60 seconds.
-- **검증은 실행 성공 보증이 아니다.** 고정 파서는 서버 버전별 전체 문법을 보장하지 않으며, 표본·과거 캐시는
-  속성 전체 목록이나 타입 완전성을 보장하지 않는다. 일반 문장·부정·범위 조건과 비표준 속성의 HTTP 의미는
-  사용자가 검토한다. 생성은 검색 시간 범위를 바꾸지 않는다. / Validation does not guarantee server acceptance,
-  complete schema/type evidence, or general-language semantics. Users review nonstandard HTTP meanings and historical
-  time bounds. 배포·갱신 절차 / Deployment and refresh: [Tempo runbook](../runbooks/tempo-query-generation.md).
-- SQL 은 §A와 무관하게 기존 read-only 1st-verb 게이트 + 커넥터 런타임 가드.
+Fallback queries extend discoverability.
 
-### Negative / 부정 (수용된 잔여 리스크)
-- Loki/Tempo dry-run에는 서버측 실행시간 상한이 없다(§B-3).
-- diag-signal 경로의 관련성 게이트는 정규식 기반이며 SQL/PromQL 파서가 아니다 — 우회 가능성이 남고, 실제로 리뷰에서 여러
-  차례 우회 사례가 발견되어 그때마다 좁혔다. 이 게이트는 "정확성 판정"이 아니라 "명백한 무관/상수 차단"이며,
-  다음 우회가 나오면 개별 패턴을 덧대기보다 커넥터 파서(예: ClickHouse `EXPLAIN AST`)로 옮기는 것이 옳다.
-- 생성 칩의 품질은 보장되지 않는다 — 사용자가 읽고 판단하는 표면이라는 전제(§B-6)가 이 리스크의 상한이다.
-- §D(Explore PromQL 초안) 수용 잔여: 어휘 게이트는 ADVISORY 다 — `{__name__="…"}` 셀렉터는 브레이스 스트립으로
-  게이트를 우회하고, 상수식(`vector(1)`)은 통과하며(§B의 `_is_constant_expr` 쌍은 미이식), 캐시
-  절단(커넥터 이름-개수 캡)·스테일 캐시에서는 실존 메트릭이 경고로 오탐될 수 있다(그래서 경고이지 거부가
-  아님). 증명 가능한 교정 예외는 raw 코어의 **존재**를 증명할 뿐 rule 이름의 **부재**를 증명하지 않는다 —
-  실존하지만 캐시에 없는 recording rule(`x:rate5m`)이 raw 메트릭으로 재작성될 수 있다(집계 의미 상이; 헤지
-  경고 유지·초안 전용이라 수용). 요청당 Bedrock 비용 상한은 2콜(인증 사용자 라우트, 별도 rate limit 없음).
+### Negative
 
-## 6 Pillars
-- **Operational Excellence** — 폴백은 결정론 카탈로그를 대체하지 않고 보완한다. 실패는 항상 카탈로그 결과로
-  되돌아가며(never raises), diag-signal 경로의 주간 예산·마커가 운영 로그에 남는다.
-- **Security** — 공통: read-only 커넥터 + SSRF 호스트 검사, 모델은 실행 권한이 없다. **정정(리뷰
-  2026-08-06, PR #205): graph 경로도 diag-signal과 같은 ClickHouse 커넥터를 거치므로 "다른 커넥터라 가드가
-  없다"는 서술은 틀렸다 — §A-3이 정확한 서술이다.** 두 경로 모두 실행 시 동일 커넥터의
-  `assert_read_only(extra_forbidden_re=_TABLE_FN)`이 table-function(SSRF 표면) + mutating SQL을 막는다.
-  차이는 *어느 층에서* 막느냐뿐이다: diag-signal(`signal_catalog_gen`)은 생성기 단계에서도 `_TABLE_FN`/
-  `SETTINGS`를 사전차단하지만(§A-3), graph(`graph_querygen`)는 생성기 단계 사전차단이 없고 실행 시 커넥터
-  가드에만 의존한다. diag-signal 경로에는 식별자 정화도 추가된다(graph 경로에는 없음 — §C-3).
-- **Reliability** — diag-signal 경로: 일시 실패는 주 3회 상한으로 재시도, 소진은 주 경계에서 해제, 검증된 칩은
-  재검증 실패로 삭제되지 않는다. graph 경로: schema_version 캐시가 재생성 시점을 정한다.
-- **Performance** — diag-signal dry-run은 커넥터가 지원하는 최소 상한으로 실행된다(§B-3). graph dry-run은
-  ClickHouse `LIMIT 1`이다.
-- **Cost** — 워커 두 경로는 Haiku 1콜(§D Explore 경로는 요청당 ≤2콜 — 교정 재시도 1회). diag-signal 경로는 인스턴스당 주 3회 상한이 있고 꺼진 기간은 무과금이며, graph 경로는
-  주간 상한 없이 schema_version 드리프트에만 의존한다(§C-3).
-- **Sustainability** — 워커 두 경로는 생성물을 캐시하여 스키마가 바뀔 때만 재생성한다(불필요한 반복 추론 없음). §D는 사용자 개시 1회성 초안이라 캐시하지 않는다.
+Costs, heuristic errors, and sample-dependent false positives remain. Worker-generated chips
+cannot drive automated findings/alerts. Graph generation has a
+narrower scope and fewer controls than signals. Explore drafts intentionally permit advisory PromQL
+warnings while rejecting invalid TraceQL. None of these paths authorizes mutation or arbitrary AWS calls.
+
+## Six Pillars
+
+Security: path-specific validation, connector boundaries, and limited metadata disclosure.
+Reliability: explicit transient/empty states and bounded retries. Cost/Performance: separate budgets,
+schema-version caching for worker artifacts, and per-request limits for drafts. Operational Excellence:
+honest provenance and user-visible uncertainty.
+
+## Evidence
+
+`scripts/v2/workers/graph_querygen.py`, `scripts/v2/workers/diagnosis/signal_catalog_gen.py`,
+`scripts/v2/workers/datasource_index.py`, `web/lib/{datasource-querygen,diag-signals}.ts`,
+`web/app/api/datasources/generate/route.ts`, `agent/lambda/datasource_http.py`, and
+[Tempo operating procedure](../runbooks/tempo-query-generation.md).
