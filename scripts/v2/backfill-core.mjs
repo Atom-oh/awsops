@@ -2,7 +2,7 @@
 // Pure helpers for the v1 → v2 Aurora backfill (driven by scripts/v2/backfill-v1.mjs).
 // No fs, no DB, no side effects — unit-tested in backfill-core.test.mjs (`node --test`).
 //
-// Spec:    docs/superpowers/specs/2026-06-12-v1-to-v2-aurora-backfill-design.md
+// Spec:    docs/history/specs/2026-06-12-v1-to-v2-aurora-backfill-design.md
 // Mapping: derived verbatim from src/lib/db/*-writer.ts (zero parity drift with the
 //          v1 runtime dual-write layer) and the DDL in
 //          terraform/v2/foundation/data/schema.sql.

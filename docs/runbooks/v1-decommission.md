@@ -32,7 +32,8 @@ or bulk-set verified-email flags. Confirm the address belongs to the intended pe
 to them, and should receive any matching admin allowlist authority. `email_verified` is an assertion,
 not lasting operator control: users can verify an address already placed on their account. If an
 address cannot be established, do not create the account with it. Follow
-[user offboarding](user-offboarding.md) for existing incorrectly assigned/departed users.
+[user offboarding](user-offboarding.md) for the executable `list-users`, `admin-disable-user`,
+revocation, and allowlist-cleanup steps for existing incorrectly assigned/departed users.
 
 Public signup/email changes/recovery are separately controlled by ADR-002. Passwords cannot migrate
 between pools. Updating a verified claim affects newly issued tokens; existing tokens need revocation
@@ -40,8 +41,95 @@ where immediate cutoff is required.
 
 The self-hosted login does not complete Cognito challenges such as `NEW_PASSWORD_REQUIRED`.
 An admin-created account left in `FORCE_CHANGE_PASSWORD` cannot finish sign-in. An authorized
-operator must finish provisioning its permanent password through the approved credential-delivery
-procedure; do not promise an in-app first-login password-change flow.
+operator must set a permanent password; there is no in-app first-login password-change flow.
+
+### Operator credential provisioning
+
+These current Cognito admin operations are separate from destructive v1 retirement. Use AWS CLI v2,
+Python 3, and an interactive Bash terminal in the intended AWS account/region. Set `COGNITO_POOL_ID`,
+`OPERATOR_USERNAME`, and, for creation, `OPERATOR_EMAIL` to the reviewed native account. The pool ID
+is available through `terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id`.
+Confirm the person's current email ownership before asserting `email_verified=true`.
+
+For a **new** native account only, create it without an automatic invitation. Skip this block for
+an existing Terraform-created account or an approved password reset:
+
+```bash
+(
+  set -euo pipefail
+  : "${COGNITO_POOL_ID:?Set the intended user pool ID}"
+  : "${OPERATOR_USERNAME:?Set the intended native Cognito username}"
+  : "${OPERATOR_EMAIL:?Set the independently verified operator email}"
+  aws cognito-idp admin-create-user \
+    --user-pool-id "$COGNITO_POOL_ID" --username "$OPERATOR_USERNAME" \
+    --user-attributes "Name=email,Value=$OPERATOR_EMAIL" Name=email_verified,Value=true \
+    --message-action SUPPRESS --query User.UserStatus --output text \
+    --no-cli-auto-prompt --no-cli-pager
+)
+```
+
+Finish bootstrap or perform an approved reset with `AdminSetUserPassword` and `Permanent=true`
+(the `admin-set-user-password --permanent` operation cited by `auth.tf`). Choose a password that
+meets the pool policy and use the approved secure credential-delivery channel. This procedure prompts
+without echo and creates a mode-`0600` JSON file in a private temporary directory, removed on normal
+completion or error. The password is not a shell argument or environment variable. Keep AWS CLI
+history and debug logging disabled; the check below stops if CLI history is enabled.
+
+```bash
+(
+  set -euo pipefail
+  set +x
+  : "${COGNITO_POOL_ID:?Set the intended user pool ID}"
+  : "${OPERATOR_USERNAME:?Set the intended native Cognito username}"
+  if CREDENTIAL_HISTORY=$(aws configure get cli_history); then
+    test "$CREDENTIAL_HISTORY" = disabled || {
+      echo "Disable AWS CLI history for this profile before handling a password." >&2
+      exit 1
+    }
+  else
+    CREDENTIAL_HISTORY_STATUS=$?
+    test "$CREDENTIAL_HISTORY_STATUS" -eq 1 || exit "$CREDENTIAL_HISTORY_STATUS"
+  fi
+  umask 077
+  CREDENTIAL_TMPDIR=$(mktemp -d)
+  trap 'rm -rf -- "$CREDENTIAL_TMPDIR"' EXIT
+  python3 - "$CREDENTIAL_TMPDIR/password.json" "$COGNITO_POOL_ID" "$OPERATOR_USERNAME" <<'PY'
+import getpass
+import json
+import os
+import sys
+
+if not sys.stderr.isatty():
+    raise SystemExit("Use an interactive terminal for the password prompt.")
+password = getpass.getpass("New permanent password: ")
+confirmation = getpass.getpass("Confirm permanent password: ")
+if not password or password != confirmation:
+    raise SystemExit("Passwords must be nonempty and match.")
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as output:
+    json.dump({
+        "UserPoolId": sys.argv[2],
+        "Username": sys.argv[3],
+        "Password": password,
+        "Permanent": True,
+    }, output)
+PY
+  aws cognito-idp admin-set-user-password \
+    --cli-input-json "file://$CREDENTIAL_TMPDIR/password.json" \
+    --no-cli-auto-prompt --no-cli-pager
+  aws cognito-idp admin-get-user \
+    --user-pool-id "$COGNITO_POOL_ID" --username "$OPERATOR_USERNAME" \
+    --query UserStatus --output text --no-cli-auto-prompt --no-cli-pager
+)
+```
+
+Expect `CONFIRMED`, then verify the intended person's `/login` access. Account creation alone does
+not grant AWSops administrator authority; the approved Cognito group or SSM allowlist is separate.
+See AWS's [AdminCreateUser](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AdminCreateUser.html)
+and [AdminSetUserPassword](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AdminSetUserPassword.html)
+contracts. Do not use this native-password procedure on a federated identity.
+
+### Alert sender review
 
 Check external webhook and native SNS/SQS senders separately. Empty app-log grep does not prove no
 traffic. The **2026-07-09** evidence was native subscriptions/alarms/queue depth plus actual v1
@@ -50,6 +138,9 @@ SNS signature/TopicArn verification and direct bearer/HMAC ingress behind the li
 old assertion that it rejects every SNS Notification for lack of HMAC is obsolete. A v2 webhook is
 still not a drop-in consumer for an old SQS queue. Record migration or explicitly approved loss of
 any sender before retiring its receiver.
+Before repointing a sender, verify deployed `workers_enabled` and `incident_lifecycle_enabled`,
+the applicable SSM bearer/HMAC secret or enabled SNS TopicArn allowlist, and an approved test event's
+persisted incident/job result. A receiver that returns 503 or rejects authentication is not migrated.
 
 <a id="phase-2"></a>
 ## Phase 2 — Historical domain cutover
@@ -59,8 +150,9 @@ current origin Terraform root already models aliases. The historical operation a
 SANs, moved the CloudFront domain association, remapped/imported Route53 state, then applied a fresh
 plan for DNS/Cognito URLs. Health/login checks for both domains were recorded successful.
 
-The actual domain move used `cloudfront update-domain-association`, not the superseded
-`associate-alias` recipe. It deliberately skipped redeploying the old CDK stack because of instance,
+The retained evidence records the domain-association move but does not establish the executed CLI
+operation. The old `associate-alias` recipe is not proof of which command ran. The cutover record
+deliberately skipped redeploying the old CDK stack because of instance,
 secret-parameter, and network-context risk. Import did not remove CFN ownership; the recorded deletion
 mitigation was retaining `DomainARecord`. This is historical evidence, not general permission for dual
 IaC ownership. Any remaining DNS change needs current configuration/state review and a new saved plan.
@@ -128,6 +220,7 @@ The helper drains gateway targets before gateways and handles versioned bucket o
 Deleting a versioned bucket needs that complete drain, not just `aws s3 rm --recursive`. Preserve its
 bounds/failures and review CloudTrail/command results; no documentation flag substitutes for review.
 
+<a id="manual-residue"></a>
 ### Residue outside helper deletion scope
 
 If the helper reports a remaining ALB/SQS resource, confirm it is v1-owned and outside any surviving
