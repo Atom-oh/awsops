@@ -22,8 +22,9 @@ and availability. Denied or unconfigured cost APIs should not cause repeated fai
 - Day-normalized service changes use completed UTC days. Incomplete or unsuitable evidence produces
   no verdict, rather than an apparent saving/increase based on incompatible time windows.
 - Keep FinOps MCP tools separate from spend views. Handle denied/not-enabled/support-plan-limited
-  recommendation APIs with structured unavailable reasons. IAM must enumerate actual read operations;
-  an old `cost-optimization-hub:*` example is not authority for a wildcard grant.
+  recommendation APIs with structured unavailable reasons. The current `ai.tf` grant uses service-specific
+  read-prefix actions and explicitly names `cost-optimization-hub:ListRecommendations`; preserve its
+  read scope. An old `cost-optimization-hub:*` example is not authority for that all-action grant.
   Recommendation data can be days or weeks old; no new recommendation today is not evidence of health.
 - Aggregate Bedrock invocation usage into Aurora `ai_usage_daily` behind `ai_cost_tracking_enabled`
   (default false). The worker queries `BEDROCK_LOG_GROUP` (default `/aws/bedrock/invocation-logs`)
