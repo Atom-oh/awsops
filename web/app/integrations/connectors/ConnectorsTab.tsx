@@ -16,7 +16,7 @@ import Link from 'next/link';
 // writes it to the shared credentials secret provision.py reads for the ADR-017 gateway targets.
 const CONNECTORS = MCP_PRESETS;
 
-export default function ConnectorsTab({ canManage = false }: { canManage?: boolean }) {
+export default function ConnectorsTab({ canManage = false, onShowDatasources }: { canManage?: boolean; onShowDatasources?: () => void }) {
   const { tt } = useI18n();
   // Two distinct sets (round-2 review MAJOR, 2026-07-31): `configured` = plain-slug
   // datasource-mirror credentials; `mcpConfigured` = ADR-017 namespaced "mcp:<slug>" credentials,
@@ -115,7 +115,11 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
               </p>
             )}
             {['datadog', 'dynatrace'].includes(c.slug) && (
-              <Link href="/integrations?tab=datasources" className="block text-[12px] text-brand-600 hover:underline">{tt('메트릭 조회용 API 연결은 Datasources에서 등록 →')}</Link>
+              <Link href="/integrations?tab=datasources" onClick={event => {
+                if (onShowDatasources && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+                  event.preventDefault(); onShowDatasources();
+                }
+              }} className="block text-[12px] text-brand-600 hover:underline">{tt('메트릭 조회용 API 연결은 Datasources에서 등록 →')}</Link>
             )}
             {c.slug === 'dynatrace' && (
               <p className="text-[12px] text-amber-700">{tt('이 MCP 프리셋은 검증된 읽기 도구가 아직 없어 토큰 저장만으로 조회할 수 없습니다.')}</p>
