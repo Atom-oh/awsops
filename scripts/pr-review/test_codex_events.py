@@ -50,12 +50,12 @@ class CodexEvents(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
 
-    def test_error_event_is_diagnostic_even_with_complete_turn(self):
+    def test_error_event_is_forwarded_for_caller_terminal_classification(self):
         result = self.parse([START, {"type": "error", "message":
                                     "[warn] failed to set model: Method not found"},
                              message("frame"), DONE])
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "frame\n")
         self.assertIn("failed to set model", result.stderr)
 
 

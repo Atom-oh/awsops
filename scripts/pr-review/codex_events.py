@@ -12,6 +12,12 @@ import sys
 def main():
     started = completed = failed = False
     messages = []
+    def diagnostic(text):
+        line = " ".join(text.splitlines())
+        if line.lower().startswith("model rerouted:"):
+            line = "Falling back to another model: " + line
+        print(line, file=sys.stderr)
+
     try:
         for line in sys.stdin:
             try:
@@ -26,13 +32,18 @@ def main():
             if completed:
                 failed = True
             if kind in ("error", "turn.failed"):
-                failed = True
+                # Native "error" also carries recovered stream reconnects.
+                # The caller still rejects terminal model/account diagnostics.
+                if kind == "turn.failed":
+                    failed = True
                 error = event.get("error", event)
                 text = error.get("message") if isinstance(error, dict) else None
                 if isinstance(text, str):
                     # One native event is one physical diagnostic line. Do not
                     # let its formatting open a fence in the stderr classifier.
-                    print(" ".join(text.splitlines()), file=sys.stderr)
+                    diagnostic(text)
+                else:
+                    failed = True
                 continue
             if kind == "turn.started":
                 if started:
@@ -46,6 +57,12 @@ def main():
                 item = event.get("item")
                 if not started or not isinstance(item, dict):
                     failed = True
+                elif item.get("type") == "error":
+                    text = item.get("message")
+                    if isinstance(text, str):
+                        diagnostic(text)
+                    else:
+                        failed = True
                 elif item.get("type") == "agent_message":
                     text = item.get("text")
                     if not isinstance(text, str):

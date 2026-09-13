@@ -54,12 +54,15 @@ exit_code = entry.get("exit", 0) if isinstance(entry, dict) else 0
 if message: print(message, file=sys.stderr)
 tool_output = entry.get("tool_output", "") if isinstance(entry, dict) else ""
 event_error = entry.get("event_error", "") if isinstance(entry, dict) else ""
+item_error = entry.get("item_error", "") if isinstance(entry, dict) else ""
 if cli == "codex" and "--json" in args:
  print(json.dumps({"type":"turn.started"}))
  if tool_output:
   print(json.dumps({"type":"item.completed","item":{"id":"tool","type":"command_execution","command":"cat runbook.md","aggregated_output":tool_output,"exit_code":0,"status":"completed"}}))
  if event_error:
   print(json.dumps({"type":"error","message":event_error}))
+ if item_error:
+  print(json.dumps({"type":"item.completed","item":{"id":"native-error","type":"error","message":item_error}}))
  print(json.dumps({"type":"item.completed","item":{"id":"reply","type":"agent_message","text":body}}))
  print(json.dumps({"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}))
 else:
@@ -167,6 +170,20 @@ class ProviderDiagnostics(unittest.TestCase):
                 self.assertNotIn("codex/", (root/'work/responded.txt').read_text())
                 self.assertEqual((root/'codex.count').read_text(), "1")
                 self.assertTrue((root/'work/coverage-severe.flag').exists())
+
+    def test_recovered_codex_error_event_does_not_spend_another_attempt(self):
+        root = self.panel({"codex": {"event_error":
+                                    "Reconnecting... stream disconnected before completion"}})
+        self.assertEqual((root/'codex.count').read_text(), "1")
+        self.assertIn("codex/L2", (root/'work/responded.txt').read_text())
+        self.assertFalse((root/'work/coverage-severe.flag').exists())
+
+    def test_native_codex_model_reroute_item_remains_terminal(self):
+        root = self.panel({"codex": {"item_error":
+                                    "model rerouted: requested -> fallback (unavailable)"}})
+        self.assertEqual((root/'codex.count').read_text(), "1")
+        self.assertNotIn("codex/", (root/'work/responded.txt').read_text())
+        self.assertTrue((root/'work/coverage-severe.flag').exists())
 
     def test_terminal_chair_error_cannot_accept_pass_or_try_another_model(self):
         for diagnostic in (MODEL_ERROR,FALLBACK,QUOTA,OVERAGE,TRANSIENT+"\n"+MODEL_ERROR,DIFF_FENCE+MODEL_ERROR):

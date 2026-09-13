@@ -41,9 +41,12 @@ Kiro startup uses the same diagnostic parser.
 Codex uses `exec --json`: command output stays inside JSONL tool events and never
 enters the stderr classifier. `codex_events.py` forwards completed agent messages
 to the unchanged nonce validator and native error events to diagnostics. It rejects
-failed, malformed or incomplete streams. An unprefixed error example in a file
+`turn.failed`, malformed or incomplete streams. An `error` event can describe a
+recovered reconnect: retain a completed, valid report when its diagnostic is
+nonterminal, without spending another attempt. An unprefixed error example in a file
 read therefore cannot become a Codex provider failure; a real terminal diagnostic
-still invalidates an otherwise valid report. Kiro transcript decoding and the
+still invalidates an otherwise valid report. Native error items are also forwarded;
+an explicit model-reroute item is a terminal fallback. Kiro transcript decoding and the
 Claude print-mode chair retain their existing interfaces.
 
 The adapter adds one startup request per configured Kiro model: two serial calls
