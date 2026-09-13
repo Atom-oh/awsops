@@ -1,8 +1,8 @@
 # AWSops v2
 
-AWS/Kubernetes operations dashboard and AI diagnosis. This checkout is the private
-upstream (`origin/main`); the public sample has a separate release path. Read only
-the relevant module instructions and implementation references.
+AWS/Kubernetes operations dashboard and AI diagnosis. The integration branch for
+this checkout is `origin/main`; public samples have a separate release path. Read
+only relevant module instructions and implementation references.
 
 ## Documentation authority
 
@@ -15,7 +15,10 @@ the relevant module instructions and implementation references.
   implementation and operations. Plans, specs and historical reviews are design
   evidence, not permission to enable features. Legacy ADR numbers require
   `docs/decisions/ADR-MAPPING.md`; an unqualified number means a consolidated ADR.
-- Developer/reviewer documentation is English-only. Keep the multilingual
+- New or rewritten developer/reviewer documentation is English-only. Convert a
+  maintained document as a whole when updating its language; retain its facts.
+  Existing untranslated bodies are a migration backlog, not a bilingual mandate.
+  Keep the multilingual
   `docs-site` user guides and application translations. Do not require bilingual
   developer docs or restore duplicate translations.
 - `CLAUDE.md` is the context source. Distill `AGENTS.md` with `/co-agent sync-context`
@@ -36,7 +39,9 @@ the relevant module instructions and implementation references.
 
 Operator-authorized deployments, account onboarding and teardown are operations
 outside the application's autonomy boundary. They still require the task's
-approval scope, least privilege and a reviewed saved Terraform plan.
+approval scope, least privilege and a reviewed saved Terraform plan. Any AWS
+mutation reachable through the product UI, API or agent remains FROZEN regardless
+of who requests it, except for the exact ADR-015 path.
 
 ## Architecture and code ownership
 
@@ -63,17 +68,19 @@ approval scope, least privilege and a reviewed saved Terraform plan.
   configuration; no ECS `valueFrom` race. Live domain reads use MCP tools; the BFF
   also has bounded service-specific reads. Models and gateway membership come from
   configuration/catalog source, not prose inventories.
-- **Inventory:** `steampipe_enabled` controls batch ingestion into Aurora. Live
+- **Inventory:** `steampipe_enabled` gates the Steampipe FDW and batch sync into
+  Aurora; the Powerpipe CIS worker and FinOps EBS rule also depend on it. Live
   Steampipe SQL in `aws-data` and auto-collect handlers is deliberately disabled by
   `steampipeAvailable()`. Those registered routing keys fall back to normal routing;
-  they are not active collectors. ADR-010/021 define partial/freshness semantics.
+  they are not active collectors. Never replace this hard-disable with a check of
+  `steampipe_enabled`. ADR-010/021 define partial/freshness semantics.
 - **Jobs:** heavy work uses ownership-checked domain routes (`/api/diagnosis`,
   `/api/compliance/run`) -> `worker_jobs` + SQS -> dispatcher -> Step Functions ->
   Lambda/Fargate worker. Generic `POST /api/jobs` accepts only the noop allowlist.
   Workers record running/succeeded; catch handler and reaper reconcile failures.
 - **EKS:** the web-role Access Entry uses `AmazonEKSAdminViewPolicy`; tool-specific
   roles may have different view policies. Registration does not authorize mutation.
-- **Terraform:** private root `terraform/v2/foundation/`; public samples use
+- **Terraform:** origin root `terraform/v2/foundation/`; public samples use
   `terraform/foundation/`. Do not copy paths across repositories without checking.
   v2 has no CDK deployment. Version requirements live in `backend.tf`/manifests.
 
@@ -152,7 +159,13 @@ required checks pass and the base/integration path is correct. Do not bypass che
 Changelog: one bullet per feature/category, amend net behavior instead of adding
 review-round or PR-number entries. No new bullet is required when an existing one
 already describes the change. Keep release provenance and version ordering intact;
-`web/lib/changelog.ts` supports English-only entries with a Korean fallback.
+`web/lib/changelog.ts` falls back per whole version, not per bullet. The maintained
+CHANGELOG is now English-only, so Korean readers receive the full English version
+body; legacy bilingual input is still supported by the parser.
+
+<!-- AUTO-MANAGED:references -->
+Implementation reference index: [docs/reference/README.md](docs/reference/README.md).
+<!-- /AUTO-MANAGED:references -->
 
 Start with `docs/README.md` for documentation scope and navigation. v1 code is retained
 in git history (`v1-pre-code-removal-20260712`), not a source of v2 rules. Teardown
