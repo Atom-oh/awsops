@@ -181,7 +181,9 @@ OFFBOARD_GROUPS=$(aws cognito-idp admin-list-groups-for-user --region "$AWS_REGI
   --user-pool-id "$V2_POOL" --username "$EMAIL" --query 'Groups[].GroupName' --output json)
 printf '%s' "$OFFBOARD_GROUPS" | jq -e --arg g "$OFFBOARD_ADMIN_GROUP" 'index($g) == null' >/dev/null
 
-# Filter state in memory; never save/print its sensitive JSON. Any read/parse failure aborts.
+# Full Terraform JSON can contain credentials. Keep this direct pipe: only managed
+# Cognito usernames enter TF_USERS. Do not print/cache raw state or insert tee.
+# Any read/parse failure aborts.
 TF_USERS=$(terraform -chdir=terraform/v2/foundation show -json | jq -r '
   if (.values.root_module | type) != "object" then error("No readable foundation state")
   else .values.root_module | .. | objects

@@ -111,7 +111,8 @@ Do not bypass the bounded path with parallel manual invocations.
 ## 5. Check logs and freshness
 
 ```text
-fields @timestamp, event, resource_type, row_count, unreachable_account_count,
+fields @timestamp, event, max_concurrency, bucket_size, fill_rate,
+       resource_type, row_count, unreachable_account_count,
   unknown_attribute_count, elapsed_ms, degraded, throttled,
   freshness, age_minutes, error_category, error_type
 | filter event like /^inventory_sync_/ or event = "steampipe_limiter_config"
@@ -156,10 +157,15 @@ ORDER BY oldest_captured_at;
 The agent's safe views exclude raw errors/internal run tokens. `current_count` is current inventory
 count; `row_count` is latest run count. Do not hide stale/unavailable evidence by live-API fallback.
 
+The completion event intentionally omits account identifiers. Failure events expose safe
+categories/types, not raw exception text or `run_token`; absence of those fields is deliberate.
+
 ## 6. Safe tuning
 
-Use observed production headroom before raising limits. A timeout may indicate inadequate hydration
-budget; an IAM/SCP denial needs permission review and cannot be fixed by rate changes. Follow approved
+Use observed production headroom before raising limits. For hydration timeouts, review
+`steampipe_aws_fill_rate`, the tunable named by the emitted remedy; the fixed statement-timeout
+constant is not the documented operator knob. IAM/SCP denial needs permission review and
+cannot be fixed by rate changes. Follow approved
 operator changes, one control at a time, observing at least one full cycle and preserving prior values.
 Lower limits through a reviewed saved plan when throttling or production contention appears.
 These are safeguards, not universal service quotas.

@@ -27,60 +27,41 @@ Check operator/image/CRD version against `web/lib/k8sgpt-adapter.ts` and its fix
 forbidden reads, and incompatible schemas are different failures. Avoid copying raw Result data into
 shared logs; anonymization is not complete redaction of events, configuration, or workload metadata.
 
-## Action — deterministic-only operator install
+## Compatibility review — installation remains gated
 
-Use the selected release's real values and rendered manifests. The former
-`--set k8sgpt.deployAnonymized=true` recipe was not a verified chart contract. Inspect the chart
-and explicitly disable AI explanation and automatic remediation in the CR. AWSops provides its own
-separate narration; no K8sGPT AI credential is needed for deterministic analysis.
+ADR-006 Decision 5 currently requires an operator ClusterRole limited to get/list/watch,
+with create/update/patch/delete denied. A controller that publishes Result CRs or manages
+reconciliation objects may require writes. That is an unresolved compatibility conflict,
+not permission for this runbook to redefine the accepted boundary.
+
+This checkout pins the reader adapter contract, not an approved Helm chart/image pair.
+Do not install or enable a write-capable controller on the authority of this document.
+First establish a configuration satisfying the accepted boundary, or obtain a separately
+approved ADR amendment through the project's policy process. Neither this review nor the
+operator/non-product distinction silently grants an exception.
+
+The following commands inspect a selected version locally; they do not install it:
 
 ```bash
 set -euo pipefail
-: "${PINNED_OPERATOR_VERSION:?Set the reviewed compatible Helm chart version}"
+: "${PINNED_OPERATOR_VERSION:?Set a candidate compatible Helm chart version for review}"
 helm repo add k8sgpt https://charts.k8sgpt.ai/
 helm repo update k8sgpt
 helm show chart k8sgpt/k8sgpt-operator --version "$PINNED_OPERATOR_VERSION"
 helm show values k8sgpt/k8sgpt-operator --version "$PINNED_OPERATOR_VERSION" \
   > /tmp/awsops-k8sgpt-values.yaml
-helm template k8sgpt-operator k8sgpt/k8sgpt-operator \
+helm template k8sgpt-operator k8sgpt/k8sgpt-operator --include-crds \
   --namespace k8sgpt-operator-system --version "$PINNED_OPERATOR_VERSION" \
   > /tmp/awsops-k8sgpt-rendered.yaml
 ```
 
-Review permissions/default CRs before the separately authorized installation:
-
-```bash
-: "${PINNED_OPERATOR_VERSION:?Set the reviewed compatible Helm chart version}"
-helm upgrade --install k8sgpt-operator k8sgpt/k8sgpt-operator \
-  --namespace k8sgpt-operator-system --create-namespace --version "$PINNED_OPERATOR_VERSION"
-kubectl explain k8sgpt.spec.ai --api-version=core.k8sgpt.ai/v1alpha1
-```
-
-Example CR for a release that supports these fields; replace the image version and verify the selected
-CRD before applying. `ai.enabled=false` is explicit; merely omitting an explanation CLI flag is not proof
-of controller behavior. Keep automatic remediation disabled and configure no external sink or AI secret.
-
-```yaml
-apiVersion: core.k8sgpt.ai/v1alpha1
-kind: K8sGPT
-metadata:
-  name: k8sgpt-deterministic
-  namespace: k8sgpt-operator-system
-spec:
-  version: "<REVIEWED_COMPATIBLE_IMAGE_VERSION>"
-  noCache: false
-  ai:
-    enabled: false
-    anonymized: true
-    autoRemediation:
-      enabled: false
-```
-
-The operator/controller must be able to manage its own reconciliation objects and publish Results;
-a claim that the entire operator has only GET/list/watch permissions is inaccurate. Review the
-rendered RBAC to distinguish controller bookkeeping from analyzed-workload permissions. Do not grant
-workload mutation/auto-remediation for this integration. If the selected release cannot meet that
-boundary, it is not a compatible deployment for this runbook.
+Inspect rendered RBAC and the selected release's CRD before accepting any configuration.
+No anonymization control is set by these inspection commands. Do not rely on unverified
+`deployAnonymized`, `ai.anonymized`, or `ai.autoRemediation` fields: an unsupported field
+may be ignored. Keep AI credentials, external sinks, fix mode and automatic remediation
+absent/disabled in any subsequently approved configuration, and verify the rendered values
+against that pinned release. Never send raw Results to an external model on an assumption
+that anonymization is active. Existing controllers are not retroactively approved here.
 
 ## Action — AWSops Result-read access
 
@@ -125,24 +106,37 @@ subjects:
     name: "<ACTUAL_MAPPED_KUBERNETES_GROUP>"
 ```
 
-## Validation the operator runs
+## Validate Result-read access
 
-Verify deterministic Results, compatible schema, and reads using the AWSops principal, not only an
-operator's cluster-admin session. Run adapter tests after a version change:
+Use an isolated kubeconfig authenticated as the actual AWSops principal. A successful
+cluster-admin read or group impersonation alone does not prove the EKS IAM mapping works.
+Do not widen a role's trust policy merely to run this check.
+
+```bash
+: "${AWSOPS_KUBECONFIG:?Set an isolated kubeconfig using the actual AWSops principal}"
+kubectl --kubeconfig "$AWSOPS_KUBECONFIG" auth can-i list results.result.core.k8sgpt.ai --all-namespaces
+kubectl --kubeconfig "$AWSOPS_KUBECONFIG" get results.result.core.k8sgpt.ai -A -o json \
+  | jq '{items: [.items[] | {apiVersion, kind, specFields: ((.spec // {}) | keys), statusFields: ((.status // {}) | keys)}]}'
+```
+
+The shape-only output avoids dumping raw findings. Compare the selected version with
+`web/lib/k8sgpt-adapter.ts` and its fixtures, then run adapter tests:
 
 ```bash
 (cd web && npx vitest run lib/k8sgpt-adapter.test.ts)
 ```
 
-Confirm no AI backend credential, fix mode, or automatic remediation is enabled. Empty/down/stale
-operator results should degrade honestly; a controller install alone does not establish successful narration.
+Missing, denied, empty, down, stale and incompatible Results are distinct states. Reader
+compatibility does not approve controller installation or prove successful AI narration.
 
 ## H3a remediation seam
 
 `raiseIncidentFromFinding` remains retained code and is not invoked by the Result-read route.
 The old recipe that enabled lifecycle → write-back → `remediation_enabled` is **retired**, not an
 activation guide. ADR-006 abandoned that remediation wiring; write-back still needs role separation
-from frozen remediation. Gates and an approval screen do not lift ADR-005.
+from frozen remediation. `rca_writeback_enabled` currently hard-requires
+`remediation_enabled`; do not satisfy that dependency by enabling the frozen substrate.
+Gates and an approval screen do not lift ADR-005.
 
 ## Related
 
