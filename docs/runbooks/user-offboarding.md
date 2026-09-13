@@ -1,7 +1,7 @@
 # Runbook: User Offboarding
 
 End a departing user's login, administrator access, schedules, and existing sessions. Disabling
-Cognito alone does not revoke the self-contained ID token or stop scheduled diagnosis. ADR-002's
+Cognito alone does not revoke the self-contained ID token (up to 12 hours under ADR-002) or stop scheduled diagnosis. ADR-002's
 `admin_only` recovery closes mailbox-based password recovery; it does not end a password/session
 the departing user already holds. Repository commands checked **2026-09-13**; no account was changed.
 
@@ -15,7 +15,8 @@ complete ownership migration under ADR-009 separately. Do not guess historical o
 
 ## Verification
 
-Run from the intended checkout on a host that can reach Aurora. Required tools: AWS CLI, Terraform,
+Run from the intended checkout on a host that can reach Aurora. Required tools: AWS CLI v2 with
+ISO-8601 timestamp output, Terraform,
 psql, and jq. Use the configured AWS profile/region and verify caller identity. The operator must have
 `rds-db:connect` for `awsops_web` plus the required Cognito/SSM permissions. No master-secret fallback.
 The blocks below are for a human at a terminal; addresses are read literally, not pasted into shell code.
@@ -30,7 +31,7 @@ OFFBOARD_DATABASE=$(terraform -chdir=terraform/v2/foundation output -raw aurora_
 : "${V2_POOL:?No Cognito pool output}"
 [[ "$AURORA_ENDPOINT" =~ ^[A-Za-z0-9.-]+\.rds\.amazonaws\.com$ ]] || exit 1
 [[ "$OFFBOARD_DATABASE" =~ ^[A-Za-z0-9_]+$ ]] || exit 1
-SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
+: "${SSM_ADMIN_EMAILS_PARAM:?Set the SSM_ADMIN_EMAILS_PARAM used by the deployed web task}"
 OFFBOARD_ADMIN_GROUP=${ADMIN_GROUP:-admins}
 DSN="postgresql://awsops_web@${AURORA_ENDPOINT}:5432/${OFFBOARD_DATABASE}?sslmode=require"
 refresh_offboard_db_token() {
@@ -46,6 +47,9 @@ aws cognito-idp describe-user-pool --region "$AWS_REGION" --user-pool-id "$V2_PO
 Confirm admin-create-only and `admin_only` recovery against the real pool; code/defaults do not prove
 application. The connection recipe validates each component so an empty endpoint cannot turn into a
 nonempty but wrong DSN. Refresh the IAM token before connections; never print it.
+Match `SSM_ADMIN_EMAILS_PARAM` and the admin-group setting to the deployed web task definition.
+The parameter path includes the actual project prefix; do not assume `/ops/awsops-v2/admin_emails`
+belongs to the deployment being offboarded.
 
 ```bash
 set -euo pipefail
@@ -131,12 +135,12 @@ unset PGPASSWORD
 
 A single-space StringList means Cognito-group-only administration; Terraform ignores runtime value
 changes to this parameter. Allowlist cache propagation can take five minutes. Group removal affects
-new tokens; existing group claims survive until token expiry or effective BFF revocation.
+new tokens; existing group claims survive for up to the 12-hour token lifetime or effective BFF revocation.
 Revocation has a five-second per-task cache and fails open during Aurora failure (ADR-002).
-If a step fails, record what completed and resume at the failed step; schedules and old sessions can
+If an operation fails, record what completed and resume at that operation; schedules and old sessions can
 remain active until the DB steps succeed. Do not label partial offboarding complete.
 
-### 5) After the grace period — run separately
+### After the grace period — run separately
 
 Deletion is irreversible and leaves historical sub-owned rows. After the actual approved grace period,
 **rerun connection setup in the current shell**, then this block re-prompts and verifies completion.
@@ -160,7 +164,9 @@ USER_JSON=$(aws cognito-idp admin-get-user --region "$AWS_REGION" \
 SUB=$(printf '%s' "$USER_JSON" | jq -er '.UserAttributes[] | select(.Name=="sub") | .Value')
 RESOLVED_USERNAME=$(printf '%s' "$USER_JSON" | jq -er '.Username')
 [[ "$SUB" =~ ^[0-9a-fA-F-]{36}$ ]] || exit 1
-printf '%s' "$USER_JSON" | jq -e '.Enabled == false' >/dev/null
+printf '%s' "$USER_JSON" | jq -e '.Enabled == false' >/dev/null || {
+  echo 'User is not confirmed disabled; stop'; exit 1;
+}
 MODIFIED=$(printf '%s' "$USER_JSON" | jq -er '.UserLastModifiedDate')
 refresh_offboard_db_token
 DB_CHECK=$(psql -X "$DSN" -At -v ON_ERROR_STOP=1 \
@@ -179,7 +185,9 @@ ALLOW_LC=$(printf '%s' "$ALLOW" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'
 case ",$ALLOW_LC," in *,"$EMAIL_LC",*) echo 'Still in admin allowlist'; exit 1;; esac
 OFFBOARD_GROUPS=$(aws cognito-idp admin-list-groups-for-user --region "$AWS_REGION" \
   --user-pool-id "$V2_POOL" --username "$EMAIL" --query 'Groups[].GroupName' --output json)
-printf '%s' "$OFFBOARD_GROUPS" | jq -e --arg g "$OFFBOARD_ADMIN_GROUP" 'index($g) == null' >/dev/null
+printf '%s' "$OFFBOARD_GROUPS" | jq -e --arg g "$OFFBOARD_ADMIN_GROUP" 'index($g) == null' >/dev/null || {
+  echo 'Admin-group removal is not confirmed; stop'; exit 1;
+}
 
 # Full Terraform JSON can contain credentials. Keep this direct pipe: only managed
 # Cognito usernames enter TF_USERS. Do not print/cache raw state or insert tee.
@@ -190,6 +198,7 @@ TF_USERS=$(terraform -chdir=terraform/v2/foundation show -json | jq -r '
     | select(.type? == "aws_cognito_user" and has("values"))
     | .values.username // error("Managed Cognito user has no username")
   end')
+: "${TF_USERS:?No managed Cognito users found; verify the foundation root/workspace before deletion}"
 USERNAME_LC=$(printf '%s' "$RESOLVED_USERNAME" | tr '[:upper:]' '[:lower:]')
 while IFS= read -r TF_USER; do
   [ -n "$TF_USER" ] || continue
