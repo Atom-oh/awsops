@@ -26,8 +26,12 @@ and availability. Denied or unconfigured cost APIs should not cause repeated fai
   an old `cost-optimization-hub:*` example is not authority for a wildcard grant.
   Recommendation data can be days or weeks old; no new recommendation today is not evidence of health.
 - Aggregate Bedrock invocation usage into Aurora `ai_usage_daily` behind `ai_cost_tracking_enabled`
-  (default false). Preserve AWSops attribution through configured inference profiles and invocation
-  logs. Empty usage can mean no attributable data, not zero total Bedrock spend.
+  (default false). The worker queries `BEDROCK_LOG_GROUP` (default `/aws/bedrock/invocation-logs`)
+  and filters `identity.arn` with `AWSOPS_IDENTITY_MATCH` (default `awsops-v2`). Keep that filter
+  aligned with actual caller-role ARNs when changing the project or role-name prefix.
+  `modelId` normalization merges full-ARN and bare inference-profile/model identifiers for
+  model keys; the BFF resolves pricing and labels. Empty usage can mean no attributable data,
+  not zero total Bedrock spend.
 - ADR-020 owns the deterministic baseline recommendations batch. Its implemented inputs are narrower
   than all APIs available to chat; do not attribute the MCP toolset to every baseline rule.
 
@@ -47,4 +51,5 @@ availability/freshness and measured cost attribution. Security: read-only tools 
 
 `web/lib/{cost,cost-availability,cost-basis}.ts`, `web/app/api/cost/route.ts`,
 `agent/lambda/aws_finops_mcp.py`, `scripts/v2/workers/ai_cost_aggregator.py`,
+`scripts/v2/workers/ai_cost/aggregate.py`,
 `terraform/v2/foundation/{ai,workers}.tf`, and ADR-020.

@@ -42,7 +42,7 @@ are governed separately from AWS-resource mutation by
 
 - Inventory and detail views across compute, Kubernetes, storage, databases, network
   and security, with account/region scoping and collection freshness.
-- AI chat streams responses through AgentCore section gateways. Asynchronous diagnosis
+- AI chat includes AgentCore gateway tools and direct Bedrock paths. Asynchronous diagnosis
   calls Bedrock from workers and persists per-section progress and reports.
 - Topology combines resource relationships, service traces and network evidence.
   A configured relationship does not prove traffic; partial/unavailable telemetry

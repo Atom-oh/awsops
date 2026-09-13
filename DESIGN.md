@@ -8,7 +8,7 @@ or restore deleted `src/` paths. Production code lives under `web/`.
 
 | Concern | Source |
 | --- | --- |
-| Theme tokens and light/cobalt/dark palettes | `web/app/globals.css` |
+| Theme tokens and cobalt/teal/dark palettes | `web/app/globals.css` |
 | Tailwind aliases, spacing, typography and shadows | `web/tailwind.config.ts` |
 | Shared UI components | `web/components/` |
 | Page behavior and loading/error states | `web/app/` |

@@ -33,7 +33,9 @@ and SETTINGS before execution; graph generation relies on the connector for that
 
 ### B. Diagnostic-signal fallback
 
-`scripts/v2/workers/diagnosis/signal_catalog_gen.py` adds these controls:
+`scripts/v2/workers/diagnosis/signal_catalog_gen.py` governs the signal fallback.
+Fallback eligibility is selected per connector kind in `datasource_index.py`;
+the following controls apply across its eligible kinds:
 
 - Sanitize/bound prompt identifiers; require an expression that mentions the instance's vocabulary
   and is not a constant. The relevance check is heuristic, not a complete query parser.
@@ -91,7 +93,7 @@ Allow at most two model calls per request (one correction); the route has no sep
   cannot prove that an unobserved identifier does not exist.
   Every writer must preserve this contract: `web/lib/datasource-schema.ts` uses
   `upsertSchema` / `trimSchemaForCache` / `isLegacyCapSnapshot`; worker `db.py` mirrors it in
-  `_trim` / `upsert_datasource_schema`.
+  `_trim_schema_for_cache` / `upsert_datasource_schema`.
 - **SQL drafts:** keep the existing first-verb read-only check; actual execution remains subject to
   the connector's guards. Draft validation is not execution authorization.
 
