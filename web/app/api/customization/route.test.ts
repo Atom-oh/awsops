@@ -7,13 +7,17 @@ const upsertAgent = vi.fn();
 const writeAudit = vi.fn();
 const getAgentSpace = vi.fn();
 const upsertAgentSpace = vi.fn();
+const attachSkill = vi.fn();
+const listAgentsWithSkills = vi.fn();
+const listSkills = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/catalog', () => ({
   upsertSkill: (...a: unknown[]) => upsertSkill(...a),
   upsertAgent: (...a: unknown[]) => upsertAgent(...a),
-  attachSkill: vi.fn(), setEnabled: vi.fn(),
-  listAgentsWithSkills: vi.fn(async () => []), listSkills: vi.fn(async () => []),
+  attachSkill: (...a: unknown[]) => attachSkill(...a), setEnabled: vi.fn(),
+  listAgentsWithSkills: (...a: unknown[]) => listAgentsWithSkills(...a),
+  listSkills: (...a: unknown[]) => listSkills(...a),
   writeAudit: (...a: unknown[]) => writeAudit(...a),
 }));
 vi.mock('@/lib/agent-space', () => ({
@@ -37,10 +41,24 @@ beforeEach(() => {
   verifyUser.mockResolvedValue({ sub: 'a', email: 'admin@x', groups: ['admins'] });
   isAdmin.mockResolvedValue(true);
   getAgentSpace.mockResolvedValue(null);
+  attachSkill.mockReset();
+  listAgentsWithSkills.mockReset().mockResolvedValue([{ id: 1, tier: 'custom', skills: [] }]);
+  listSkills.mockReset().mockResolvedValue([{ id: 2, enabled: true }]);
   process.env.AURORA_ENDPOINT = 'h';
 });
 
 describe('POST /api/customization', () => {
+  it.each(['observability', 'auto', 'code'])('rejects reserved names before a catalog write: %s', async (name) => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ kind: 'agent', name, description: 'd', gateway: 'ops', routingKeywords: [] }))).status).toBe(400);
+    expect(upsertAgent).not.toHaveBeenCalled();
+  });
+  it.each([null, [], { kind: 'skill', description: 42 }, { kind: 'agent', persona: {} }])('returns 400 for malformed registration: %j', async (body) => {
+    const { POST } = await import('./route');
+    expect((await POST(req(body))).status).toBe(400);
+    expect(upsertSkill).not.toHaveBeenCalled();
+    expect(upsertAgent).not.toHaveBeenCalled();
+  });
   it('401 unauthenticated', async () => {
     verifyUser.mockResolvedValue(null);
     const { POST } = await import('./route');
@@ -65,7 +83,44 @@ describe('POST /api/customization', () => {
   });
 });
 
+describe('PUT /api/customization attachment', () => {
+  it.each([null, [], { op: 'attach', agentId: -1, skillId: 2 }, { op: 'attach', agentId: 1, skillId: 'bad' },
+    { op: 'attach', agentId: 1, skillId: 2, ord: 1.5 }])('rejects malformed attachment: %j', async (body) => {
+    const { PUT } = await import('./route');
+    expect((await PUT(putReq(body))).status).toBe(400);
+    expect(attachSkill).not.toHaveBeenCalled();
+  });
+  it('does not allow attachment to a built-in agent', async () => {
+    listAgentsWithSkills.mockResolvedValue([{ id: 1, tier: 'builtin', skills: [] }]);
+    const { PUT } = await import('./route');
+    expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2 }))).status).toBe(403);
+    expect(attachSkill).not.toHaveBeenCalled();
+  });
+  it('reports a missing or disabled skill instead of claiming attachment succeeded', async () => {
+    const { PUT } = await import('./route');
+    listSkills.mockResolvedValue([]);
+    expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2 }))).status).toBe(404);
+    listSkills.mockResolvedValue([{ id: 2, enabled: false }]);
+    expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2 }))).status).toBe(409);
+    expect(attachSkill).not.toHaveBeenCalled();
+  });
+  it('attaches an enabled skill with the supplied order and preserves the admin gate', async () => {
+    const { PUT } = await import('./route');
+    isAdmin.mockResolvedValue(false);
+    expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2, ord: 3 }))).status).toBe(403);
+    expect(attachSkill).not.toHaveBeenCalled();
+    isAdmin.mockResolvedValue(true);
+    expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2, ord: 3 }))).status).toBe(200);
+    expect(attachSkill).toHaveBeenCalledWith(1, 2, 3);
+  });
+});
+
 describe('GET /api/customization', () => {
+  it('returns 503 when Agent Space policy cannot be read', async () => {
+    getAgentSpace.mockRejectedValue(new Error('Agent Space policy unavailable'));
+    const { GET } = await import('./route');
+    expect((await GET(getReq())).status).toBe(503);
+  });
   it('403 non-admin', async () => {
     isAdmin.mockResolvedValue(false);
     const { GET } = await import('./route');

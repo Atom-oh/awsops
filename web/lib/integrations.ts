@@ -62,6 +62,7 @@ function mapRow(r: Record<string, unknown>): IntegrationRow {
 /** Upsert a custom integration. ON CONFLICT(name) updates ONLY a tier='custom' row (never clobbers a
  *  built-in — returns no row → throws). No `version` column. Disabled-by-default on insert. */
 export async function upsertIntegration(i: IntegrationInput): Promise<number> {
+  if (i.kind === 'custom_mcp') throw new Error('custom_mcp is retired; use a curated integration');
   const { rows } = await getPool().query(
     `INSERT INTO integrations
        (name, kind, direction, description, endpoint, transport, credentials_ref, private_connection_ref,
@@ -101,12 +102,15 @@ export async function listIntegrations(): Promise<IntegrationRow[]> {
   return rows.map(mapRow);
 }
 
-export async function setIntegrationEnabled(id: number, enabled: boolean): Promise<void> {
-  // builtin rows are never togglable from the API (custom-only at the SQL level)
-  await getPool().query(
-    `UPDATE integrations SET enabled = $1, updated_at = NOW() WHERE id = $2 AND tier = 'custom'`,
+export async function setIntegrationEnabled(id: number, enabled: boolean): Promise<boolean> {
+  // Retired historical rows may be disabled, never enabled. Enforce atomically at the write.
+  const { rows } = await getPool().query(
+    `UPDATE integrations SET enabled = $1, updated_at = NOW() WHERE id = $2 AND tier = 'custom'
+       AND ($1 = false OR kind <> 'custom_mcp')
+     RETURNING id`,
     [enabled, id],
   );
+  return rows.length > 0;
 }
 
 /**
@@ -145,6 +149,7 @@ export async function getEnabledIntegrations(accountId = 'self'): Promise<Integr
               i.auth_mode, i.receive_path, i.inbound_auth_ref, i.source_allowlist, i.trigger_target, i.tier, i.enabled
        FROM integrations i
        WHERE i.enabled = true
+         AND i.kind <> 'custom_mcp'
          AND (
            NOT EXISTS (SELECT 1 FROM agent_spaces s WHERE s.account_id = $1)
            OR i.id IN (

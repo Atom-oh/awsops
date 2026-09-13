@@ -5,10 +5,32 @@ const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
 
 import { computeSkillHash, upsertSkill, upsertAgent, listSkills, listAgentsWithSkills, writeAudit, isCustomAgentEnabled } from './catalog';
+import { resolveAgent } from './agent-resolver';
 
 beforeEach(() => query.mockReset());
 
 describe('catalog', () => {
+  it.each([false, true])('disabled bindings retain restrictions only when tools were configured: %s', async (configured) => {
+    query.mockResolvedValueOnce({ rows: [{
+      id: 1, name: 'scoped', tier: 'custom', enabled: true, gateway: 'security', persona: 'Inspect',
+      skills: [], tool_policy_configured: configured,
+    }] });
+    const [agent] = await listAgentsWithSkills({ enabledOnly: true });
+    // Pin the emitted SQL boundary: disabling an empty prompt-only skill must not make
+    // this hand-computed false fixture true. Disabled nonempty bindings remain joined.
+    const sql = query.mock.calls[0][0];
+    expect(sql).toMatch(/bool_or\(jsonb_array_length\(s\.tool_allowlist\) > 0\)/);
+    expect(sql).not.toMatch(/LEFT JOIN skills s ON[^\n]*enabled/);
+    expect(resolveAgent(agent.name, [agent]).toolAllowlist).toEqual(configured ? [] : undefined);
+  });
+  it('retains configured tool-policy state when disabled skills leave the active composition', async () => {
+    query.mockResolvedValueOnce({ rows: [{
+      id: 1, name: 'scoped', tier: 'custom', enabled: true, skills: [], tool_policy_configured: true,
+    }] });
+    const [agent] = await listAgentsWithSkills({ enabledOnly: true });
+    expect(agent.skills).toEqual([]);
+    expect(agent.toolPolicyConfigured).toBe(true);
+  });
   it('computeSkillHash is stable and order-independent on tool_allowlist', () => {
     const a = computeSkillHash({ name: 's', description: 'd', instructions: 'i', toolAllowlist: ['x', 'y'] });
     const b = computeSkillHash({ name: 's', description: 'd', instructions: 'i', toolAllowlist: ['y', 'x'] });

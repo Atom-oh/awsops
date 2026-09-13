@@ -9,6 +9,8 @@ const pickCustomAgent = vi.fn();
 const resolveAgent = vi.fn();
 const isCustomAgentEnabled = vi.fn();
 const recordCustomAgentTrace = vi.fn();
+const policyQuery = vi.fn();
+vi.mock('@/lib/db', () => ({ getPool: () => ({ query: policyQuery }) }));
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 // container/iac가 2026-08-02 활성화됨(게이트웨이+READY 타깃) — 이 파일의 🔒/degrade 픽스처는
 // 'container 비활성'을 전제하므로 여기서만 container를 비활성으로 강제해, 미래의 비활성
@@ -131,6 +133,8 @@ async function readStream(res: Response): Promise<string> {
 }
 
 beforeEach(() => {
+  delete process.env.AURORA_ENDPOINT;
+  policyQuery.mockReset().mockResolvedValue({ rows: [] });
   verifyUser.mockReset();
   invokeAgent.mockReset();
   pickGateway.mockReset();
@@ -167,9 +171,40 @@ beforeEach(() => {
   streamDetailedGenerator = null;
 });
 
-afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; });
+afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; delete process.env.AURORA_ENDPOINT; });
 
 describe('POST /api/chat', () => {
+  it.each(['catalog', 'resolution'])('returns 503 without AgentCore invocation when the %s policy read fails', async (stage) => {
+    process.env.AURORA_ENDPOINT = 'fixture';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'restricted-agent' }]);
+    pickCustomAgent.mockReturnValue('restricted-agent');
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', agentName: 'restricted-agent', skillHashes: [] });
+    invokeAgent.mockResolvedValue('This must never run');
+    if (stage === 'catalog') getEnabledCustomAgents.mockRejectedValue(new Error('Agent Space policy unavailable'));
+    else policyQuery.mockRejectedValue(new Error('connection refused'));
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'Inspect IAM users' }));
+    await res.text();
+    expect(res.status).toBe(503);
+    expect(invokeAgent).not.toHaveBeenCalled();
+    expect(resolveAgent).not.toHaveBeenCalled();
+  });
+  it('preserves Phase-1 custom routing after a confirmed no-row policy read', async () => {
+    process.env.AURORA_ENDPOINT = 'fixture';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'legacy-agent' }]);
+    pickCustomAgent.mockReturnValue('legacy-agent');
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', agentName: 'legacy-agent', skillHashes: [] });
+    invokeAgent.mockResolvedValue('Allowed legacy answer');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'Inspect IAM users' }));
+    expect(await res.text()).toContain('Allowed legacy answer');
+    expect(res.status).toBe(200);
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+  });
   it('401 when unauthenticated', async () => {
     verifyUser.mockResolvedValue(null);
     const { POST } = await import('./route');
@@ -421,7 +456,7 @@ describe('hybrid routing (ADR-038)', () => {
     delete process.env.HYBRID_ROUTING_ENABLED;            // hybrid off → gateway = pickGateway
     verifyUser.mockResolvedValue({ sub: 'u' });
     pickGateway.mockReturnValue('security');
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]); // 30s-stale cache still lists it
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]); // disable raced the fresh catalog read
     pickCustomAgent.mockReturnValue('compliance');
     isCustomAgentEnabled.mockResolvedValue(false);        // authoritative Aurora check: revoked
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
@@ -1097,4 +1132,3 @@ describe('chat sessionId — bound to the caller, never client-trusted', () => {
     expect(used2.startsWith('awsops-u-5-')).toBe(true);
   });
 });
-

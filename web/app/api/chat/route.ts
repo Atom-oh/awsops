@@ -437,8 +437,14 @@ export async function POST(request: Request) {
       accountAlias = target.alias || undefined;
     }
   }
-  const customAgents = await getEnabledCustomAgents(accountId);   // [] when Aurora off / no customs
-  const space = await getAgentSpace(accountId);                   // null ⇒ Phase-1
+  let customAgents: Awaited<ReturnType<typeof getEnabledCustomAgents>>;
+  let space: Awaited<ReturnType<typeof getAgentSpace>>;
+  try {
+    customAgents = await getEnabledCustomAgents(accountId);
+    space = await getAgentSpace(accountId); // only confirmed absence permits Phase-1 behavior
+  } catch {
+    return json({ error: 'Agent Space policy unavailable' }, 503);
+  }
   const pinIsBuiltin = !!(body.section && sectionByKey(body.section));
   // ADR-044 §2: an explicit pin (picker / pin chip) may target a CUSTOM agent, not only a built-in
   // section — and it sits ABOVE keyword-matched custom agents and the classifier in the ladder.
@@ -450,9 +456,7 @@ export async function POST(request: Request) {
   // ADR-044 §2: a pin to an agent disabled/absent in this Agent Space gets an HONEST message,
   // never a silent fallback to keyword/classifier routing.
   const unavailablePin = !!customPinTarget && !customPinEnabled;
-  // ADR-031/039 fail-closed revocation: pickCustomAgent matches against the 30s-cached enabled
-  // set; re-check the picked custom agent against Aurora (authoritative) before routing to it, so
-  // a just-disabled agent is unusable immediately on every instance (not after the cache TTL).
+  // Re-check enablement after the fresh catalog read to catch a concurrent agent revocation.
   const customPick = unavailablePin
     ? null
     : customPinEnabled

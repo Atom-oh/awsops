@@ -84,7 +84,7 @@ export async function getAgentSpace(accountId: string): Promise<AgentSpace | nul
       version: r.version as number,
     };
   } catch {
-    return null; // degrade to Phase-1; never break chat
+    throw new Error('Agent Space policy unavailable'); // unavailable is never an absent policy
   }
 }
 
