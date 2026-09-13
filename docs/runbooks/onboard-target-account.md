@@ -23,8 +23,9 @@ HOST_WEB_ROLE_ARN=$(aws ecs describe-task-definition \
   --query 'taskDefinition.taskRoleArn' --output text)
 ```
 
-The optional `worker_task_role_arn` output is used only for worker-side member-account
-inventory or Network Path Check identity reads. Athena activity uses the separate
+The optional `worker_task_role_arn` output supports worker-side member-account inventory,
+including the SG/ENI snapshot in `sg_rule_scan.py`, and Network Path Check identity reads.
+Athena activity uses the separate
 `AWSopsSgRuleAthenaRole`, not this worker trust parameter. The template does not
 automatically trust every host collector or AgentCore role; verify the principal
 used by the intended read path.
@@ -59,8 +60,11 @@ aws cloudformation deploy \
 ```
 
 Only for explicitly first-party onboarding without ExternalId, replace the assertion
-with `TARGET_EXTERNAL_ID=''` and keep the empty parameter (or omit that parameter).
+with `TARGET_EXTERNAL_ID=''` and keep the empty parameter.
 Do not use this alternative for third-party/shared accounts.
+On an existing stack, the explicit empty value removes its ExternalId trust condition.
+Omitting the override instead preserves the existing value during an update; it is not an
+equivalent way to remove that condition. See the [CLI deploy parameter contract](https://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy.html).
 For worker reads, add `WorkerTaskRoleArn="$HOST_WORKER_ROLE_ARN"` to the parameter
 list. Review the exact trust-policy change before updating an existing stack.
 Do not broaden it to wildcard principals to work around AccessDenied.

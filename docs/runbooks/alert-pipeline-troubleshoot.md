@@ -12,14 +12,16 @@ settings are retired.
    allowed topic. Direct posts use configured bearer/HMAC verification. Secrets are
    managed configuration; do not print tokens or weaken checks to accept a test.
 3. Verify normalized events and the durable job ledger. HTTP acceptance does not
-   establish worker execution or completion.
+   establish worker execution or completion; correlate the job ID with `worker_jobs.status`.
 4. Inspect SQS/ESM, dispatcher, Step Functions and worker logs for the same job ID.
    Check catch-handler/reaper status when a worker fails or becomes stale.
 5. Inspect diagnosis evidence and assessment coverage. Missing/partial collector
    results and unassessed invariants must remain visible in the report.
 6. Diagnose notification delivery separately. SNS diagnosis notifications have a
    specific governed path; broad external writes remain gated off. A failed email
-   does not prove the diagnosis itself failed.
+   does not prove the diagnosis itself failed. Inspect `diagnosis_reports.notify_outcome`
+   or `compliance_runs.notify_outcome` and the matching worker publish logs; `emailed`
+   records SNS acceptance, not mailbox delivery.
 
 Do not clear durable incident/job state by restarting the web service. Keep the
 original error, timestamps, source scope and correlation/job identifiers in the

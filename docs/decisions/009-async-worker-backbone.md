@@ -76,6 +76,9 @@ The ordered termination steps retain the numbering used by runtime/runbook citat
    establish historically; current Cognito email ownership alone is insufficient. Apply reviewed
    entries with `node scripts/v2/backfill-owner-sub.mjs --apply "$OWNER_BACKFILL_PLAN"`,
    after setting that variable to the reviewed plan file.
+   Keep curated copies named `backfill-owner-sub-<name>.json`: the CLI enforces that
+   gitignored basename pattern. Plans and journals contain email-to-sub mappings and row IDs;
+   generated artifacts use mode `0600`, which reviewed copies must preserve.
    Cover `worker_jobs`, `diagnosis_reports`, `compliance_runs`, and `report_schedules`. Exclude
    unverified/unmapped/ambiguous addresses and conflicting target schedules. Reject missing or
    unparsable evidence and accounts created after the earliest owned row; an older account later
