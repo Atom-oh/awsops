@@ -1,17 +1,13 @@
-"""AWSops v2 P1f — AgentCore skeleton catalog (MID-minus).
+"""Current AWSops v2 AgentCore gateway and target catalog.
 
-GATEWAYS: 9 domain gateway short-keys. provision.py provisions each as
-'awsops-v2-<key>-gateway' (v2-namespaced to avoid colliding with v1 'awsops-*' in a
-shared account); the agent runtime receives the {key: url} map via GATEWAYS_JSON, so
-these short keys (not the gateway names) are what payload.gateway selects. 'external-obs'
-is the NEW §4 #7 split, left EMPTY in P1f (plugin datasource registry + OTLP + datasource-diag
-re-home are P3).
-
-TARGETS: the representative read-only slice proving every provisioner code path:
-  - iam-mcp (14 tools, cross-account, largest schema) -> security gateway
-  - flow-monitor (1 tool, single-tool, proves for_each>=2) -> network gateway
-Schemas are copied verbatim from agent/lambda/create_targets.py. provision.py injects
-target_account_id into every tool inputSchema (cross-account), exactly like v1.
+GATEWAYS contains canonical section keys; provision.py names gateways
+awsops-v2-<key>-gateway and supplies canonical GATEWAYS_JSON mappings.
+TARGETS defines the Lambda-backed tool contracts, including external-obs.
+The provisioner injects target_account_id into every Lambda-backed tool schema.
+Handlers interpret it differently: execute_sql rejects foreign accounts;
+inventory_read_mcp ignores it and reads the configured host scope.
+Inspect each target's contract and provisioner path rather than
+assuming the retired P1f skeleton or v1 create_targets.py is authoritative.
 """
 
 # short-key -> domain. provision.py builds the gateway name 'awsops-v2-<key>-gateway'.

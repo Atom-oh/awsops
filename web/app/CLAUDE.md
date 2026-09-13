@@ -1,16 +1,27 @@
-# App Routes Module
+# App Routes
 
-## Role
-Next.js App Router — 41 pages + 99 API routes (`app/api/`). APIs are thin-BFF: Aurora reads, AWS SDK reads, and AgentCore calls only. Long/OOM-risk work is enqueued — but only through allowlisted (`noop`-family) types on the generic `POST /api/jobs`; domain jobs (`report`, `compliance`, etc.) go through their own ownership-checked dedicated routes (ADR-009), never the generic one.
+Read root [CLAUDE.md](../../CLAUDE.md),
+[BASELINE.md](../../docs/decisions/BASELINE.md), and [web context](../CLAUDE.md).
+Discover current pages/API handlers from this directory; do not maintain counts
+or duplicate inventories in instructions.
 
-## Structure
-- Pages: overview `page.tsx`, `inventory/[type]` · `inventory/g/[group]` · `inventory/ecs` (unified ECS overview), `eks/` (overview · nodes · pods · deployments · services · explorer · cost · `[cluster]`), `topology/` (overview · infra · services · `resource/[id]`), `monitoring`, `network-flow`, `dns-query`, `ip-addresses`, `vpc-endpoints`, `direct-connect`, `network-firewall`, `sg/usage` · `sg/rules` (SG Rules & Usage, ADR-019), `network-paths` (+`[id]`, Network Path Check saved definitions/runs), `security`, `compliance`, `cost` (+FinOps baseline-recommendations card, ADR-020), `bedrock`, `agentcore`, `ai-diagnosis` (+`report` print view), `assistant`, `datasources`, `integrations` (+`datasources/[id]`), `accounts`, `customization`, `jobs`, `login`.
-- API (`app/api/`): accounts, actions, agentcore, ai-usage, anfw, auth(login/signout), bedrock-metrics, changelog, chat(+threads/stats), compliance, cost, customization, datasources, db, diagnosis, dns-logs, dx, eks, finops, graph, health, incidents, insights, integrations, inventory, ip-inventory, jobs, me, monitoring, network-path-runs, network-paths (+`[id]`, `[id]/runs`), nfm, opencost, overview, security, sg (flow-sources, rules, usage), stream, tgw, vpce.
-
-## Rules
-- Auth: private APIs call `verifyUser(request.headers.get('cookie'))` (`lib/auth.ts`, re-verifies the `awsops_token` cookie via RS256 JWKS) → 401 if null. Admin-only routes additionally check `isAdmin()` (`lib/admin.ts`). This is BFF-level authorization, distinct from the edge's authentication allowlist (root CLAUDE.md's public-path list — `/api/health`, `/api/auth/signout`, `/login`, `/api/auth/login`, `/icon.svg`, `/_next/static/*`, the ADR-013 `/api/incidents/webhook` carve-out, and 5 PWA static assets [`/manifest.webmanifest`, `/apple-touch-icon.png`, `/icon-192.png`, `/icon-512.png`, `/icon-512-maskable.png`]): a route being edge-public does not mean it skips `verifyUser()`. Exactly **three** ADR-002 §2-4 carve-outs skip `verifyUser()` by design and are not bugs: `/api/db` (leaks only a table count + db name), `/api/stream` (leaks only a tick counter), and `/api/incidents/webhook` (machine ingress, HMAC-SHA256/SNS-verified per ADR-013, never a Cognito session path). Every other data-returning or billable route must call `verifyUser()` regardless of the edge allowlist — do not "fix" the three enumerated carve-outs by adding `verifyUser()` to them.
-- Route handlers declare `export const dynamic = 'force-dynamic'` (consistent across the existing 91 files).
-- `api/chat`'s `aws-data` (Steampipe SQL, `lib/aws-data.ts`) and the 6 auto-collect collectors (`lib/collectors/`) are **local handlers** — they have no AgentCore gateway behind them, so they're excluded from ADR-003[legacy 044]'s multi-route fan-out (fan-out covers only gateway-backed built-ins).
-- Request bodies are parsed via `readJsonBounded` (`lib/http-body.ts`) — a streaming cap, doubled up with `middleware.ts`'s 2MB belt.
-- Fetch paths are `/api/*` — the v1 `/awsops` prefix is banned (no basePath).
-- When adding a new page, also register it in `components/shell/Sidebar.tsx` and add its nav key to `lib/i18n.ts`.
+- Private data and billable handlers call `verifyUser()` before work. Preserve
+  BFF revocation/ownership checks and `isAdmin()` on admin operations.
+  Edge authentication and BFF authorization are separate boundaries.
+- The edge public-path source is
+  `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl:is_public()`.
+  Preserve its narrow allowlist. Root policy defines BFF carve-outs: diagnostic
+  `api/db` and `api/stream`, and alternate-auth machine ingress at
+  `api/incidents/webhook`. Login/signout have their own authentication contracts;
+  do not apply a generic session check blindly or expand an exemption.
+- Use `readJsonBounded()` for JSON bodies and preserve the middleware cap.
+  Keep existing `force-dynamic`/cache behavior when changing handlers.
+- Submit domain work through its dedicated authorized route. Generic `api/jobs`
+  is limited to its noop allowlist; do not expose arbitrary worker job types.
+- `api/chat/route.ts` owns dispatch. Steampipe SQL/collector branches remain
+  hard-disabled and return to normal routing. Multi-gateway synthesis requires
+  both hybrid-routing and synthesis gates; it excludes local collector handlers.
+- Fetch `/api/*`. Add `'use client'` only where browser state/APIs require it;
+  server layouts and metadata exports are established patterns.
+- Register new navigable pages in `components/shell/Sidebar.tsx` with the required
+  i18n keys. Preserve app localization when updating English developer docs.
