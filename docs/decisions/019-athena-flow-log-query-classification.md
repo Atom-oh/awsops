@@ -50,12 +50,21 @@ worker/web roles can invoke the broker but cannot directly assume the Athena rol
 
 Permitted operations, with their scopes intact:
 
+**Editorial clarification — 2026-09-13:** the pre-condensation accepted text listed
+`s3:GetBucketLocation` as a standalone permitted action, separately from source-object and
+result-prefix operations. The initial condensed table placed it only in the source row.
+The [retained original excerpt and commit](../history/adr-019-s3-permission-provenance.md)
+document that provenance. The separate metadata row below restores that distinction for the
+configured buckets; it adds no action or unrelated bucket access and is not a new grant or
+permission to apply an IAM change. Object-prefix restrictions and the other accepted controls remain.
+
 | Service | Operations / scope |
 |---|---|
 | Athena | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup`; constrained workgroup and generated SELECT |
 | Glue | `GetDatabase`, `GetTable`, `GetPartitions`; validated source catalog |
-| S3 source | `GetBucketLocation`, `GetObject`, prefix-scoped `ListBucket` for configured Flow Log source locations |
-| S3 results | `GetBucketLocation` on the result bucket; `GetObject`, prefix-scoped `ListBucket`, `PutObject`, `AbortMultipartUpload` on the customer workgroup's preconfigured result prefix |
+| S3 bucket metadata | Existing `GetBucketLocation` permission, bucket-scoped to the configured source/result bucket ARNs; this action cannot be prefix-scoped |
+| S3 source objects | `GetObject`, prefix-scoped `ListBucket` for configured Flow Log source locations |
+| S3 result objects | `GetObject`, prefix-scoped `ListBucket`, `PutObject`, `AbortMultipartUpload` on the customer workgroup's preconfigured result prefix |
 
 Result reads are necessary to retrieve/reuse query output; result-prefix writes are explicitly
 accepted query mechanics. Source and result locations can differ and must not be conflated.
