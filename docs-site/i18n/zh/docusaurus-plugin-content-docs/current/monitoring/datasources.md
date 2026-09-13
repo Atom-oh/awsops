@@ -37,8 +37,8 @@ AWSops 数据源功能对外部可观测性平台进行集中管理。注册数�
 | **Tempo** | TraceQL | 3200 | 分布式追踪、Span 搜索 |
 | **ClickHouse** | SQL | 8123 | 列式分析、海量数据处理 |
 | **Jaeger** | Trace ID | 16686 | 分布式追踪、服务依赖 |
-| **Dynatrace** | DQL | 443 | 全栈监控、基于 AI 的分析 |
-| **Datadog** | Query | 443 | 基础设施监控、APM、日志 |
+| **Dynatrace** | metricSelector | 443 | Metrics API v2 指标和问题查询；不支持 Grail DQL |
+| **Datadog** | Datadog metric query | 443 | 只读指标时间序列 |
 
 ## 添加数据源
 
@@ -80,12 +80,13 @@ v2 中没有 v1 的结果缓存 TTL 设置 — v2 查询路径刻意不做缓存
 | 数据源 | 测试端点 | 确认内容 |
 |-----------|-----------------|----------|
 | Prometheus | `/-/healthy` | 服务器状态、响应时间 |
+| Mimir | `/ready` | 服务器就绪状态、响应时间 |
 | Loki | `/ready` | 服务器就绪状态、响应时间 |
 | Tempo | `/ready` | 服务器就绪状态、响应时间 |
-| ClickHouse | `SELECT 1` | 查询是否可执行、响应时间 |
+| ClickHouse | `/ping` | 服务器可达性；查询权限需在探索中验证 |
 | Jaeger | `/api/services` | 服务列表查询、响应时间 |
-| Dynatrace | `/api/v2/entities` | API 是否可访问、响应时间 |
-| Datadog | `/api/v1/validate` | API 密钥有效性、响应时间 |
+| Dynatrace | `/api/v2/metrics?pageSize=1` | API 是否可访问、响应时间 |
+| Datadog | `/api/v1/validate` + `/api/v1/query` | API key 有效性及 Application key 的指标查询权限（1 分钟查询） |
 
 测试结果会显示连接成功/失败状态以及响应延迟时间 (ms)。
 
@@ -133,15 +134,15 @@ ORDER BY hour
 
 按服务名称或 Trace ID 搜索分布式 Trace。
 
-### Dynatrace (DQL)
+### Dynatrace (metricSelector)
 
 ```
-fetch logs | filter contains(content, "error") | limit 100
+builtin:host.cpu.usage:avg
 ```
 
 ### Datadog
 
-使用指标查询或日志搜索语法。
+使用 `avg:system.cpu.user{*}` 等指标查询。此数据源连接器不执行 Datadog 日志搜索。
 
 ## 认证设置
 
@@ -151,7 +152,7 @@ fetch logs | filter contains(content, "error") | limit 100
 |----------|------|----------|
 | **None** | 无认证 | 内部网络中的 Prometheus/Loki |
 | **Basic** | 用户名/密码 | ClickHouse、启用了认证的 Prometheus |
-| **Bearer Token** | API 令牌 | Dynatrace、Datadog、Tempo |
+| **Bearer Token** | API 令牌 | Dynatrace、Tempo |
 | **Custom Header** | 自定义头 | 自定义代理、API 网关 |
 
 :::tip 凭证掩码
@@ -170,7 +171,7 @@ fetch logs | filter contains(content, "error") | limit 100
 - **协议限制**：仅允许 `http://` 和 `https://`
 
 :::caution SSRF 保护
-外部数据源 URL 由服务器发出请求，因此为防止 SSRF（Server-Side Request Forgery）攻击，会拦截对内部网络的访问。
+支持连接器可访问的私有数据源。元数据、环回和链路本地地址仍被阻止；凭证应填写在身份验证字段中，而不是 URL 中。
 :::
 
 ### ClickHouse SQL 注入防护
@@ -363,3 +364,11 @@ AI 助手识别的关键词：**프로메테우스/prometheus**、**로키/loki*
 - [监控仪表板](./monitoring.md) - 系统监控现状
 - [CloudWatch](./cloudwatch) - AWS CloudWatch 指标
 - [AI 助手](../overview/ai-assistant) - AI 分析功能
+
+## 连接流程与状态
+
+在**集成 → Datasources** 中选择提供商，输入 API 基础 URL，并在保存前测试。Datadog 默认显示两个专用密钥字段；Dynatrace 默认选择 API 令牌并使用 `Api-Token` 方案发送。
+
+**配置已保存**不代表实时连接成功。编辑测试仅在端点完全不变时复用该实例保存的凭证。更改主机、协议、端口或路径后，请重新输入凭证。修改连接字段会清除之前的测试结果。API 基础 URL 不应包含凭证、查询参数或片段。
+
+Datadog 测试 API key 有效性及实际指标查询权限。Dynatrace 测试指标读取权限，Problems API 需要单独的权限范围。空查询结果不代表工作负载正常。配置读取或修改失败会明确显示，可在当前页面重试。

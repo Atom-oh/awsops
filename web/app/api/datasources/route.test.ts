@@ -41,7 +41,7 @@ describe('GET /api/datasources (list instances)', () => {
     const { datasources } = await resp.json();
     expect(datasources).toHaveLength(2);
     // admin (default mock): the registered URL is included (v1 parity for managers)
-    expect(datasources[0]).toEqual({ id: 1, name: 'prod-prom', kind: 'prometheus', endpoint: 'http://p', authType: 'none', isDefault: true, connected: true });
+    expect(datasources[0]).toMatchObject({ id: 1, name: 'prod-prom', kind: 'prometheus', endpoint: 'http://p', authType: 'none', isDefault: true, connected: true });
     expect(datasources[1].connected).toBe(true); // id '2' has a credential
   });
 
@@ -57,7 +57,14 @@ describe('GET /api/datasources (list instances)', () => {
     const { GET } = await import('./route');
     const resp = await GET(get());
     expect(resp.status).toBe(200);
-    expect((await resp.json()).datasources).toEqual([]);
+    expect(await resp.json()).toMatchObject({ datasources: [], available: false });
+  });
+  it('does not mark an authenticated default as configured without an instance credential', async () => {
+    listDatasources.mockResolvedValue([{ id: 1, name: 'p', kind: 'prometheus', endpoint: 'https://p', authType: 'bearer', isDefault: true }]);
+    const { GET } = await import('./route');
+    const { datasources } = await (await GET(get())).json();
+    expect(datasources[0].connected).toBe(false);
+    expect(datasources[0].configurationStatus).toBe('missing');
   });
 });
 

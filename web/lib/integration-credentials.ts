@@ -130,12 +130,13 @@ export async function setMcpPresetCredential(
 /** Preset slugs (namespace-stripped) that currently have an ADR-017 MCP credential stored —
  *  KEYS ONLY. Best-effort: degrades to [] on a Secrets Manager read failure, same as
  *  getConfiguredSlugs (the gated/off state must not 500 the Connectors tab). */
-export async function getConfiguredMcpPresetSlugs(): Promise<string[]> {
+export async function getConfiguredMcpPresetSlugs(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap())
       .filter((k) => k.startsWith('mcp:'))
       .map((k) => k.slice(4));
   } catch (e) {
+    if (strict) throw e;
     console.warn(
       '[integration-credentials] getConfiguredMcpPresetSlugs read failed; treating as none configured:',
       (e as { name?: string })?.name || 'unknown error',
@@ -197,10 +198,11 @@ export async function getCredentialById(
 
 /** Configured instance id keys (numeric keys only — excludes kind-mirror keys). Best-effort: [] on a
  *  Secrets Manager read failure (mirrors getConfiguredSlugs degrade so the read-only list doesn't 500). */
-export async function getConfiguredIds(): Promise<string[]> {
+export async function getConfiguredIds(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap()).filter((k) => /^\d+$/.test(k));
   } catch (e) {
+    if (strict) throw e;
     console.warn(
       '[integration-credentials] getConfiguredIds read failed; treating as none configured:',
       (e as { name?: string })?.name || 'unknown error',
@@ -224,10 +226,11 @@ export async function deleteCredentialKeys(keys: string[]): Promise<void> {
  *  list/explore surfaces (/api/datasources, /customization) degrade to an empty state instead
  *  of 500-ing the page. The admin write path (setIntegrationCredential) stays strict and still
  *  surfaces errors. SECURITY: log only the error name, never the secret contents. */
-export async function getConfiguredSlugs(): Promise<string[]> {
+export async function getConfiguredSlugs(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap());
   } catch (e) {
+    if (strict) throw e;
     console.warn(
       '[integration-credentials] getConfiguredSlugs read failed; treating as none configured:',
       (e as { name?: string })?.name || 'unknown error',

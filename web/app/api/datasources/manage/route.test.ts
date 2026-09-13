@@ -160,7 +160,7 @@ describe('PATCH update', () => {
     expect(blob.username).toBe('u');
   });
 
-  it('auth material does NOT follow an endpoint HOST change unless creds are re-supplied', async () => {
+  it('auth material does not follow an endpoint or tenant-path change unless resupplied', async () => {
     getCredentialById.mockResolvedValue({ endpoint: 'http://old:9090', authType: 'basic', username: 'u', password: 'pw' });
     getDatasource.mockResolvedValue({ id: 7, kind: 'prometheus', endpoint: 'http://old:9090', authType: 'basic', isDefault: false, settings: {} });
     const { PATCH } = await import('./route');
@@ -168,10 +168,11 @@ describe('PATCH update', () => {
     const blob = setIntegrationCredentialById.mock.calls.at(-1)![1];
     expect(blob.username).toBeUndefined(); // write-only creds never transmit to a new host
     expect(blob.password).toBeUndefined();
-    // same host (port path changes only) keeps them
+    // A path can identify another tenant on the same host.
     await PATCH(req({ id: 7, endpoint: 'http://old:9090/subpath' }, 'PATCH'));
     const blob2 = setIntegrationCredentialById.mock.calls.at(-1)![1];
-    expect(blob2.username).toBe('u');
+    expect(blob2.username).toBeUndefined();
+    expect(blob2.password).toBeUndefined();
   });
 
   it("the UI's creds:{} does NOT defeat the host-change guard (round-4)", async () => {

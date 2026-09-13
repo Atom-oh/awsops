@@ -155,7 +155,7 @@ export async function PATCH(request: Request) {
   // The merge is NOT blind (round-3 review):
   //  - settings keys are stripped from the existing blob whenever the request carries
   //    `settings` — `{}` genuinely clears and a partial replace leaves no stale sibling;
-  //  - auth material never follows an ENDPOINT HOST change unless creds are re-supplied
+  //  - auth material never follows an endpoint change unless creds are re-supplied
   //    (write-only credentials must not become admin-extractable by pointing the row at a
   //    new host — the next query would transmit them there);
   //  - keys outside the EFFECTIVE authType are pruned (basic→none leaves no residue).
@@ -183,20 +183,16 @@ export async function PATCH(request: Request) {
     // PATCH must not carry a historical stale timeoutS/database forward either).
     delete existing.timeoutS;
     delete existing.database;
-    // ORIGIN compare (scheme+host+port — an https→http downgrade must count as a change, or
-    // Basic material would transmit in cleartext); a malformed URL counts as changed.
-    const originOf = (u: string | null | undefined): string | null => { try { return new URL(u ?? '').origin; } catch { return null; } };
-    // Defense in depth (round-9): the kind mirror could in principle hold ANOTHER same-kind
-    // instance's blob — trust it as a merge base only when its endpoint origin matches THIS
-    // row's; otherwise drop the auth keys rather than bind foreign creds to this endpoint.
-    if (ds.isDefault && existing.endpoint && originOf(String(existing.endpoint)) !== originOf(ds.endpoint)) {
+    // Match the connection-test boundary: paths can identify different tenants on
+    // the same host. Only the exact saved endpoint may reuse write-only credentials.
+    if (existing.endpoint && existing.endpoint !== ds.endpoint) {
       for (const k of CRED_KEYS) delete existing[k];
     }
-    const hostChanged = endpoint !== undefined && originOf(endpoint) !== originOf(ds.endpoint);
-    // On a host change, stored auth material is dropped UNCONDITIONALLY (round-5: a partial
+    const endpointChanged = endpoint !== undefined && endpoint !== ds.endpoint;
+    // On an endpoint change, stored auth material is dropped unconditionally: a partial
     // creds object like {username} must not carry the stored password to the new origin) —
     // whatever the client genuinely re-supplied is reinstated by the creds spread below.
-    if (hostChanged) {
+    if (endpointChanged) {
       for (const k of CRED_KEYS) delete existing[k]; // org_id included — tenant id is host-scoped
     }
     const effAuth = authType ?? ds.authType ?? 'none';

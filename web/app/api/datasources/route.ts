@@ -1,6 +1,7 @@
 // GET /api/datasources — list configured datasource INSTANCES for the hub + Explore picker.
 // Authenticated (read-only), NOT admin. Returns {id,name,kind,authType,isDefault,connected} — never
-// credentials. Degrade-safe: [] when Aurora is off / on error so the page doesn't 500.
+// credentials. Configuration presence is not a connectivity probe. Read failures
+// carry available:false so consumers distinguish unavailable from an empty inventory.
 import { verifyUser } from '@/lib/auth';
 import { listDatasources } from '@/lib/datasources';
 import { isAdmin } from '@/lib/admin';
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
   if (!user) return json({ error: 'unauthenticated' }, 401);
 
   try {
-    const [rows, configuredIds, admin] = await Promise.all([listDatasources(), getConfiguredIds(), isAdmin(user)]);
+    const [rows, configuredIds, admin] = await Promise.all([listDatasources(), getConfiguredIds(true), isAdmin(user)]);
     const idSet = new Set(configuredIds);
     const datasources = rows.map((r) => ({
       id: r.id,
@@ -28,11 +29,14 @@ export async function GET(request: Request) {
       ...(admin ? { endpoint: r.endpoint, settings: r.settings } : {}),
       authType: r.authType,
       isDefault: r.isDefault,
-      // "connected" = a credential is resolvable: the instance id key, or (for migrated defaults) the kind mirror.
-      connected: idSet.has(String(r.id)) || r.isDefault,
+      enabled: r.enabled,
+      // Keep the legacy field for existing consumers. It means saved configuration,
+      // never live connectivity; a default flag does not establish credential presence.
+      connected: Boolean(r.endpoint) && (r.authType === 'none' || idSet.has(String(r.id))),
+      configurationStatus: Boolean(r.endpoint) && (r.authType === 'none' || idSet.has(String(r.id))) ? 'stored' : 'missing',
     }));
-    return json({ datasources }, 200);
+    return json({ datasources, available: true }, 200);
   } catch {
-    return json({ datasources: [] }, 200);
+    return json({ datasources: [], available: false, error: 'Datasource configuration is unavailable. Retry or ask an administrator to check access.' }, 200);
   }
 }

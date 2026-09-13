@@ -37,8 +37,8 @@ AWSops のデータソース機能は、外部オブザーバビリティプラ�
 | **Tempo** | TraceQL | 3200 | 分散トレーシング、スパン検索 |
 | **ClickHouse** | SQL | 8123 | カラム指向分析、大量データ処理 |
 | **Jaeger** | Trace ID | 16686 | 分散トレーシング、サービス依存関係 |
-| **Dynatrace** | DQL | 443 | フルスタックモニタリング、AI ベースの分析 |
-| **Datadog** | Query | 443 | インフラモニタリング、APM、ログ |
+| **Dynatrace** | metricSelector | 443 | Metrics API v2 のメトリクス・問題照会（Grail DQL 非対応） |
+| **Datadog** | Datadog metric query | 443 | 読み取り専用のメトリクス時系列 |
 
 ## データソースの追加
 
@@ -80,12 +80,13 @@ v1 の結果キャッシュ TTL 設定は v2 にはありません — v2 のク
 | データソース | テストエンドポイント | 確認内容 |
 |-----------|-----------------|----------|
 | Prometheus | `/-/healthy` | サーバー状態、応答時間 |
+| Mimir | `/ready` | サーバー準備状態、応答時間 |
 | Loki | `/ready` | サーバー準備状態、応答時間 |
 | Tempo | `/ready` | サーバー準備状態、応答時間 |
-| ClickHouse | `SELECT 1` | クエリ実行の可否、応答時間 |
+| ClickHouse | `/ping` | サーバー到達性（クエリ権限は探索で確認） |
 | Jaeger | `/api/services` | サービス一覧の取得、応答時間 |
-| Dynatrace | `/api/v2/entities` | API アクセスの可否、応答時間 |
-| Datadog | `/api/v1/validate` | API キーの有効性、応答時間 |
+| Dynatrace | `/api/v2/metrics?pageSize=1` | API アクセスの可否、応答時間 |
+| Datadog | `/api/v1/validate` + `/api/v1/query` | API キーの有効性と Application キーのメトリクス照会権限（1分間のクエリ） |
 
 テスト結果には、接続の成功/失敗ステータスと応答遅延時間 (ms) が表示されます。
 
@@ -133,15 +134,15 @@ ORDER BY hour
 
 サービス名または Trace ID で分散トレースを検索します。
 
-### Dynatrace (DQL)
+### Dynatrace (metricSelector)
 
 ```
-fetch logs | filter contains(content, "error") | limit 100
+builtin:host.cpu.usage:avg
 ```
 
 ### Datadog
 
-メトリクスクエリまたはログ検索構文を使用します。
+`avg:system.cpu.user{*}` などのメトリクスクエリを使います。このコネクターは Datadog のログ検索を実行しません。
 
 ## 認証設定
 
@@ -151,7 +152,7 @@ fetch logs | filter contains(content, "error") | limit 100
 |----------|------|----------|
 | **None** | 認証なし | 内部ネットワークの Prometheus/Loki |
 | **Basic** | ユーザー名/パスワード | ClickHouse、認証が設定された Prometheus |
-| **Bearer Token** | API トークン | Dynatrace, Datadog, Tempo |
+| **Bearer Token** | API トークン | Dynatrace, Tempo |
 | **Custom Header** | ユーザー定義ヘッダー | カスタムプロキシ、API ゲートウェイ |
 
 :::tip 資格情報のマスキング
@@ -170,7 +171,7 @@ fetch logs | filter contains(content, "error") | limit 100
 - **プロトコル制限**: `http://` と `https://` のみ許可
 
 :::caution SSRF 保護
-外部データソースの URL はサーバーからリクエストを送信するため、SSRF（Server-Side Request Forgery）攻撃を防止する目的で内部ネットワークへのアクセスがブロックされます。
+コネクターから到達できるプライベートデータソースをサポートします。メタデータ・ループバック・リンクローカル宛ては引き続き拒否します。認証情報は URL ではなく認証欄に入力してください。
 :::
 
 ### ClickHouse SQL インジェクション防止
@@ -363,3 +364,11 @@ AI アシスタントが認識するキーワード: **プロメテウス/promet
 - [モニタリングダッシュボード](./monitoring.md) - システムモニタリングの現況
 - [CloudWatch](./cloudwatch) - AWS CloudWatch メトリクス
 - [AI アシスタント](../overview/ai-assistant) - AI 分析機能
+
+## 接続手順と状態の確認
+
+**連携 → Datasources** でプロバイダーと API ベース URL を指定し、保存前にテストします。Datadog では専用のキー入力欄を2つ、Dynatrace では API トークンを選択し、`Api-Token` 方式で送信します。
+
+**設定保存済み**は接続成功の証明ではありません。編集時のテストは接続先が変わらない場合のみ、そのインスタンスの保存済み認証情報を再利用します。ホスト・スキーム・ポート・パスを変更した場合は認証情報を再入力してください。接続項目を編集すると前のテスト結果は消去されます。API ベース URL に認証情報・クエリ・フラグメントを含めないでください。
+
+Datadog は API キーと実際のメトリクス照会権限を確認します。Dynatrace はメトリクス読取権限を確認し、Problems API には別のスコープが必要です。空の結果はワークロードの正常性を示しません。設定取得や変更の失敗は画面に表示され、再試行できます。

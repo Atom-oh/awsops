@@ -150,6 +150,26 @@ class TestErrors(_Base):
 
 
 class TestGatewayContract(_Base):
+    def test_token_cache_expires_and_auth_failure_invalidates_it(self):
+        with mock.patch.object(nm, "_get_secret_string", side_effect=[
+            '{"notion":{"token":"first"}}', '{"notion":{"token":"second"}}',
+            '{"notion":{"token":"third"}}',
+        ]), mock.patch("time.monotonic", side_effect=[0, 61, 62]):
+            self.assertEqual(nm._get_token(), "first")
+            self.assertEqual(nm._get_token(), "second")
+            with mock.patch.object(nm, "_urlopen", return_value=_resp(401, {})):
+                nm._http_json("GET", "/users/me", "second")
+            self.assertEqual(nm._get_token(), "third")
+
+    def test_health_checks_fresh_token_without_exposing_bot_or_workspace_data(self):
+        nm._TOKEN = "old"
+        with mock.patch.object(nm, "_get_secret_string", return_value='{"notion":{"token":"fresh"}}'), \
+                mock.patch.object(nm, "_urlopen", return_value=_resp(200, {"id": "bot-id", "object": "user", "type": "bot"})) as http:
+            out = nm.lambda_handler({"tool_name": "notion_health"}, None)
+        self.assertEqual(json.loads(out["body"]), {"ok": True})
+        self.assertEqual(http.call_args.args[0].get_header("Authorization"), "Bearer fresh")
+        self.assertEqual(http.call_args.args[0].full_url, "https://api.notion.com/v1/users/me")
+
     def test_target_account_id_is_ignored(self):
         def fake_urlopen(req, timeout=None):
             return _resp(200, {"results": []})

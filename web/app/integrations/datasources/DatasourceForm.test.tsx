@@ -67,6 +67,38 @@ describe('DatasourceForm', () => {
     expect(s!.method).toBe('PATCH');
     expect(JSON.parse(s!.body!)).toMatchObject({ id: 5 });
   });
+
+  it('tests edits using the instance id and current connection settings', async () => {
+    render(<DatasourceForm initial={{ id: 5, name: 'p', kind: 'prometheus', endpoint: 'https://metrics.example', authType: 'bearer', settings: { timeoutS: 20 } }} onSaved={() => {}} onCancel={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /연결 테스트/ }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/test'))).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.url.endsWith('/test'))!.body!)).toMatchObject({
+      id: 5, settings: { timeoutS: 20 }, creds: {},
+    });
+  });
+
+  it('uses Datadog dual-key defaults and clears a previous provider credential', () => {
+    render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'bearer' } });
+    fireEvent.change(document.querySelector('input[type=password]')!, { target: { value: 'old-provider-token' } });
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'datadog' } });
+    expect((screen.getByLabelText('Auth method') as HTMLSelectElement).value).toBe('custom_header');
+    expect(screen.getByLabelText('API key')).toBeTruthy();
+    expect(screen.getByLabelText('Application key')).toBeTruthy();
+    expect(screen.queryByDisplayValue('old-provider-token')).toBeNull();
+  });
+
+  it('invalidates a pending success when the endpoint changes', async () => {
+    let resolve!: (value: unknown) => void;
+    global.fetch = vi.fn(() => new Promise((r) => { resolve = r; })) as unknown as typeof fetch;
+    render(<DatasourceForm onSaved={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText(/prometheus.internal/), { target: { value: 'http://p:9090' } });
+    fireEvent.click(screen.getByRole('button', { name: /연결 테스트/ }));
+    fireEvent.change(screen.getByPlaceholderText(/prometheus.internal/), { target: { value: 'http://other:9090' } });
+    resolve({ ok: true, json: async () => ({ ok: true, latencyMs: 1 }) });
+    await waitFor(() => expect((screen.getByRole('button', { name: /연결 테스트/ }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText(/연결 성공/)).toBeNull();
+  });
 });
 
 describe('connection settings (gap L203)', () => {

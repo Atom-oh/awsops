@@ -48,7 +48,7 @@ describe('DatasourcesTab', () => {
     render(<DatasourcesTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
     expect(screen.getByText('총 데이터소스')).toBeTruthy();
-    expect(screen.getByText('연결됨')).toBeTruthy();
+    expect(screen.getByText('설정 저장됨')).toBeTruthy();
     expect(screen.getByText('타입 종류')).toBeTruthy();
     expect(screen.getByText('기본 데이터소스')).toBeTruthy();
     // single default in this scenario → the tile names it
@@ -105,5 +105,25 @@ describe('DatasourcesTab', () => {
     expect(screen.getAllByText('AI로 진단')).toHaveLength(1);
     const links = screen.getAllByText('AI로 진단') as HTMLAnchorElement[];
     expect(decodeURIComponent(links[0].getAttribute('href')!)).toContain('prod-prom');
+  });
+
+  it('shows unavailable data as an error instead of an empty inventory', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ datasources: [], available: false }) })) as unknown as typeof fetch;
+    render(<DatasourcesTab />);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.queryByText('등록된 데이터소스가 없습니다.')).toBeNull();
+  });
+
+  it('keeps the row and reports a failed delete', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    global.fetch = vi.fn(async (_url, init) => ({
+      ok: init?.method !== 'DELETE', status: init?.method === 'DELETE' ? 503 : 200,
+      json: async () => ({ datasources: INSTANCES }),
+    })) as unknown as typeof fetch;
+    render(<DatasourcesTab canManage />);
+    await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
+    fireEvent.click(screen.getAllByText('삭제')[0]);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByText('prod-prom')).toBeTruthy();
   });
 });

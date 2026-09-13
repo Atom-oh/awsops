@@ -3,8 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const invokeMcpLambdaTool = vi.fn();
+const getDatasource = vi.fn();
+const getCredentialById = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
+vi.mock('@/lib/datasources', async (original) => ({
+  ...await original<typeof import('@/lib/datasources')>(),
+  getDatasource: (...a: unknown[]) => getDatasource(...a),
+}));
+vi.mock('@/lib/integration-credentials', () => ({
+  getCredentialById: (...a: unknown[]) => getCredentialById(...a),
+}));
 vi.mock('@/lib/mcp-lambda-invoke', () => ({
   invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a),
   KNOWN_MCP_LAMBDA_KINDS: ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'],
@@ -19,10 +28,15 @@ function req(body: unknown) {
 }
 
 beforeEach(() => {
-  for (const m of [verifyUser, isAdmin, invokeMcpLambdaTool]) m.mockReset();
+  for (const m of [verifyUser, isAdmin, invokeMcpLambdaTool, getDatasource, getCredentialById]) m.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u' });
   isAdmin.mockResolvedValue(true);
   invokeMcpLambdaTool.mockResolvedValue({ ok: true, latency_ms: 42 });
+  getDatasource.mockResolvedValue({
+    id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/api',
+    authType: 'bearer', settings: { timeoutS: 20 },
+  });
+  getCredentialById.mockResolvedValue({ endpoint: 'https://metrics.example/api', token: 'stored-secret' });
 });
 
 describe('POST /api/datasources/test', () => {
@@ -41,7 +55,7 @@ describe('POST /api/datasources/test', () => {
     const { POST } = await import('./route');
     const resp = await POST(req({ kind: 'prometheus', endpoint: 'http://p:9090', authType: 'bearer', creds: { token: 't' } }));
     expect(resp.status).toBe(200);
-    expect(await resp.json()).toEqual({ ok: true, latencyMs: 42, error: undefined });
+    expect(await resp.json()).toEqual({ ok: true, latencyMs: expect.any(Number) });
     const call = invokeMcpLambdaTool.mock.calls[0][0];
     expect(call.tool).toBe('prometheus_health');
     expect(call.connConfig).toEqual({ endpoint: 'http://p:9090', authType: 'bearer', token: 't' });
@@ -68,5 +82,62 @@ describe('POST /api/datasources/test', () => {
     const body = await resp.json();
     expect(body.ok).toBe(false);
     expect(JSON.stringify(body)).not.toContain('supersecret');
+  });
+
+  it('tests an existing instance with its stored credential and settings without returning them', async () => {
+    const { POST } = await import('./route');
+    const resp = await POST(req({ id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/api', authType: 'bearer', creds: {} }));
+    expect((await resp.json()).ok).toBe(true);
+    expect(getCredentialById).toHaveBeenCalledWith(7);
+    expect(invokeMcpLambdaTool.mock.calls[0][0].connConfig).toMatchObject({
+      endpoint: 'https://metrics.example/api', token: 'stored-secret', timeoutS: 20,
+    });
+  });
+
+  it.each(['https://other.example/api', 'https://metrics.example/other', 'http://metrics.example/api'])(
+    'does not forward stored credentials to a changed endpoint: %s', async (endpoint) => {
+      const { POST } = await import('./route');
+      const resp = await POST(req({ id: 7, kind: 'prometheus', endpoint, authType: 'bearer', creds: {} }));
+      expect(resp.status).toBe(400);
+      expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not let creds override the validated endpoint or authentication mode', async () => {
+    const { POST } = await import('./route');
+    const resp = await POST(req({
+      kind: 'prometheus', endpoint: 'https://metrics.example', authType: 'none',
+      creds: { endpoint: 'http://169.254.169.254', authType: 'bearer', token: 'unused' },
+    }));
+    expect(resp.status).toBe(200);
+    expect(invokeMcpLambdaTool.mock.calls[0][0].connConfig).toEqual({
+      endpoint: 'https://metrics.example', authType: 'none',
+    });
+  });
+
+  it.each([null, [], { kind: 'prometheus', endpoint: 'https://metrics.example', authType: 'typo' }])(
+    'rejects malformed candidates with a controlled error', async (body) => {
+      const { POST } = await import('./route');
+      expect((await POST(req(body))).status).toBe(400);
+      expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects an instance/kind mismatch and missing stored credentials', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ id: 7, kind: 'loki', endpoint: 'https://metrics.example/api' }))).status).toBe(400);
+    getCredentialById.mockResolvedValue(null);
+    expect((await POST(req({ id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/api', authType: 'bearer' }))).status).toBe(400);
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+  });
+
+  it('does not disclose upstream responses that contain credentials', async () => {
+    const { POST } = await import('./route');
+    invokeMcpLambdaTool.mockResolvedValue({ ok: false, error: 'HTTP 401 echoed supersecret' });
+    let resp = await POST(req({ kind: 'prometheus', endpoint: 'https://metrics.example', authType: 'bearer', creds: { token: 'supersecret' } }));
+    expect(await resp.text()).not.toContain('supersecret');
+    invokeMcpLambdaTool.mockRejectedValue(new Error('HTTP 401 echoed stored-secret'));
+    resp = await POST(req({ id: 7, kind: 'prometheus', endpoint: 'https://metrics.example/api', authType: 'bearer' }));
+    expect(await resp.text()).not.toContain('stored-secret');
   });
 });
