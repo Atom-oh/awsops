@@ -89,3 +89,9 @@ Memory expiry. Runtime updates retain role and network configuration. Source
 contains compatibility and legacy tools; catalog membership plus runtime gates
 establish reachability. For credential/grant troubleshooting see
 [the SQL reader runbook](../runbooks/agent-sql-reader.md).
+
+The curated query_inventory tool accepts optional resource_id for CloudFront only. That
+branch validates the ID, binds it as a SQL parameter, scopes it to host inventory and
+returns at most one id-only record. Ordinary list calls keep their existing projection.
+Deploy the reader Lambda via Terraform and refresh the AgentCore catalog target before
+using this argument. No new IAM grant or activation flag is introduced.
