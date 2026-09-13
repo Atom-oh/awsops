@@ -103,12 +103,29 @@ export async function upsertAgent(a: AgentInput): Promise<number> {
   return rows[0].id;
 }
 
-export async function attachSkill(agentId: number, skillId: number, ord = 0): Promise<void> {
-  await getPool().query(
-    `INSERT INTO agent_skills (agent_id, skill_id, ord) VALUES ($1,$2,$3)
-     ON CONFLICT (agent_id, skill_id) DO UPDATE SET ord = EXCLUDED.ord`,
-    [agentId, skillId, ord],
-  );
+export async function attachSkill(agentId: number, skillId: number): Promise<number> {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+    // Separate statements matter: after waiting for the parent-row lock, MAX sees
+    // the preceding attachment's committed row. Include disabled skill bindings.
+    const parent = await client.query("SELECT id FROM agents WHERE id = $1 AND tier = 'custom' FOR UPDATE", [agentId]);
+    if (!parent.rows.length) throw new Error('Custom agent not found');
+    const { rows } = await client.query(
+      `INSERT INTO agent_skills (agent_id, skill_id, ord)
+       SELECT $1, $2, COALESCE(MAX(ord), -1) + 1 FROM agent_skills WHERE agent_id = $1
+       ON CONFLICT (agent_id, skill_id) DO UPDATE SET ord = agent_skills.ord
+       RETURNING ord`,
+      [agentId, skillId],
+    );
+    await client.query('COMMIT');
+    return Number(rows[0].ord);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function setEnabled(kind: 'skill' | 'agent', id: number, enabled: boolean): Promise<void> {

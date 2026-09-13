@@ -41,7 +41,7 @@ beforeEach(() => {
   verifyUser.mockResolvedValue({ sub: 'a', email: 'admin@x', groups: ['admins'] });
   isAdmin.mockResolvedValue(true);
   getAgentSpace.mockResolvedValue(null);
-  attachSkill.mockReset();
+  attachSkill.mockReset().mockResolvedValue(8);
   listAgentsWithSkills.mockReset().mockResolvedValue([{ id: 1, tier: 'custom', skills: [] }]);
   listSkills.mockReset().mockResolvedValue([{ id: 2, enabled: true }]);
   process.env.AURORA_ENDPOINT = 'h';
@@ -84,8 +84,7 @@ describe('POST /api/customization', () => {
 });
 
 describe('PUT /api/customization attachment', () => {
-  it.each([null, [], { op: 'attach', agentId: -1, skillId: 2 }, { op: 'attach', agentId: 1, skillId: 'bad' },
-    { op: 'attach', agentId: 1, skillId: 2, ord: 1.5 }])('rejects malformed attachment: %j', async (body) => {
+  it.each([null, [], { op: 'attach', agentId: -1, skillId: 2 }, { op: 'attach', agentId: 1, skillId: 'bad' }])('rejects malformed attachment: %j', async (body) => {
     const { PUT } = await import('./route');
     expect((await PUT(putReq(body))).status).toBe(400);
     expect(attachSkill).not.toHaveBeenCalled();
@@ -104,14 +103,15 @@ describe('PUT /api/customization attachment', () => {
     expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2 }))).status).toBe(409);
     expect(attachSkill).not.toHaveBeenCalled();
   });
-  it('attaches an enabled skill with the supplied order and preserves the admin gate', async () => {
+  it('ignores client order, returns the server order, and preserves the admin gate', async () => {
     const { PUT } = await import('./route');
     isAdmin.mockResolvedValue(false);
     expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2, ord: 3 }))).status).toBe(403);
     expect(attachSkill).not.toHaveBeenCalled();
     isAdmin.mockResolvedValue(true);
-    expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2, ord: 3 }))).status).toBe(200);
-    expect(attachSkill).toHaveBeenCalledWith(1, 2, 3);
+    const res = await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2, ord: 3 }));
+    expect(await res.json()).toEqual({ ok: true, ord: 8 });
+    expect(attachSkill).toHaveBeenCalledWith(1, 2);
   });
 });
 

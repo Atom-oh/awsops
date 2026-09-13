@@ -33,6 +33,8 @@ section agents, and governed data integrations. Large/risky features have explic
   enforces restart-only arguments and secret matching. No broader authority follows from it.
 - **GATED** means eligible for controlled enablement after its documented dependencies and controls
   are satisfied. It does not mean live, nor does it waive a frozen dependency.
+- Custom policy/catalog read failure denies custom candidates, never grants Phase-1 access.
+  Built-in routing and product help remain usable under ADR-003/004; custom pins are not silently substituted.
 - Verify defaults in `terraform/v2/foundation/variables.tf`, `ai.tf`, `secret-rotation.tf`, and
   runtime/provisioner sources. Disabled feature resources can be absent while shared infrastructure
   still costs money; a false flag does not guarantee a whole-stack no-change plan.
