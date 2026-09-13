@@ -1,5 +1,11 @@
 # P1a verification — private edge + spine (served at ROOT `/`)
 
+> Historical verification record from 2026-05-31, not current runtime guidance.
+> The spine `/healthz`, exp-only token checks and primary Hosted UI flow below
+> were superseded. Current contracts use `/api/health`, RS256/JWKS edge verification
+> and self-hosted login; see `docs/reference/01-edge-network.md` and `02-auth.md`
+> from the repository root. Preserve this record as dated evidence.
+
 - **Date:** 2026-05-31
 - **Public URL:** https://awsops-v2.example.com (reuses mgmt-vpc, create_network=false)
 - v2 drops the v1 `/awsops` basePath — spine is served at **root `/`**.
