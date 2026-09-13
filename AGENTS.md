@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d4fc600bfd00 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: a54c22755a14 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo. This context is distilled from
 > CLAUDE.md and shared by Kiro, Codex and Agy.
@@ -46,7 +46,8 @@ AWS mutation stays FROZEN regardless of requester, except the exact ADR-015 path
   No public ALB/world-open ingress, unscoped IAM wildcard principal/action or secrets
   in code/env/IaC. Secrets Manager/SSM hold credentials; identifiers are not secrets.
 - Edge RS256/JWKS + issuer/audience/token use; review changes to the public allowlist
-  in `edge-lambda/cognito_edge.py.tftpl`. Closed Cognito signup/admin-only recovery.
+  in `edge-lambda/cognito_edge.py.tftpl`; the base contents are the baseline and every
+  addition needs security review. Closed Cognito signup/admin-only recovery.
   BFF data/billable routes verify users, revocation and ownership; documented data
   carve-outs are `/api/db`, `/api/stream`, `/api/incidents/webhook` (alternate auth).
   Login/signout/health are entry/health routes, not new carve-outs.
@@ -57,6 +58,8 @@ AWS mutation stays FROZEN regardless of requester, except the exact ADR-015 path
   noop job types. SQS/SFN workers, catch handler and reaper own job status recovery.
 - AgentCore settings are read from SSM at runtime. Preserve canonical/`v2-` gateway
   fallback and host-account `get_role_arn() -> None`; both are deliberate fixes.
+  Golden-routing labels follow `route.ts` first-match RULES order; `observability`
+  must resolve to a real gateway.
 - Live `aws-data`/collector Steampipe paths are hard-disabled and fall back to normal
   routing; never re-gate them on `steampipe_enabled`. That flag gates the FDW and
   batch sync. CIS uses the FDW; FinOps EBS checks persisted inventory freshness.
