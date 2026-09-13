@@ -121,16 +121,16 @@ override_resource {
 }
 
 variables {
-  project                      = "awsops-fixture"
-  region                       = "ap-northeast-2"
-  domain_name                  = "dev.example.com"
-  hosted_zone_name             = "example.com"
+  project          = "awsops-fixture"
+  region           = "ap-northeast-2"
+  domain_name      = "dev.example.com"
+  hosted_zone_name = "example.com"
   # Synthetic inputs for offline mocked plans only; never applied or used to log in.
   admin_email                 = "fixture@example.test"
   admin_password              = "offline-fixture-only"
-  create_network               = false
-  existing_vpc_id              = "vpc-0123456789abcdef0"
-  existing_private_subnet_ids  = ["subnet-0123456789abcdef0", "subnet-0123456789abcdef1"]
+  create_network              = false
+  existing_vpc_id             = "vpc-0123456789abcdef0"
+  existing_private_subnet_ids = ["subnet-0123456789abcdef0", "subnet-0123456789abcdef1"]
 }
 
 run "defaults_remain_dark" {
@@ -229,11 +229,12 @@ run "host_core_permissions_and_digest_binding" {
   }
   assert {
     condition = (
+      data.aws_regions.runtime_read[0].all_regions == true &&
       toset(local.runtime_read_regions) == toset(["ap-northeast-2", "eu-west-1", "us-east-1"]) &&
       toset(jsondecode(aws_iam_role_policy.steampipe_task[0].policy).Statement[0].Condition.StringEquals["aws:RequestedRegion"]) == toset(local.runtime_read_regions) &&
       contains(jsondecode(aws_iam_role_policy.steampipe_task[0].policy).Statement[0].Action, "iam:GenerateCredentialReport")
     )
-    error_message = "Host reads retain enabled regions/global endpoints and existing report access."
+    error_message = "Host read permissions must cover opt-in regions before activation, global endpoints and existing report access."
   }
   assert {
     condition = alltrue([
@@ -260,21 +261,24 @@ run "host_core_permissions_and_digest_binding" {
     condition = alltrue([
       for p in [aws_iam_role_policy.agentcore[0].policy, aws_iam_role_policy.worker_diagnosis[0].policy,
       aws_iam_role_policy.worker_lambda_diagnosis[0].policy] :
-      alltrue([for s in jsondecode(p).Statement : toset(s.Resource) == toset(local.runtime_model_resources)
+      alltrue([for s in jsondecode(p).Statement : toset(s.Resource) == toset([
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:*:123456789012:inference-profile/*anthropic.claude-*"
+        ])
       if contains(s.Action, "bedrock:InvokeModel")])
     ])
-    error_message = "Model invocation must use the curated model/profile resources."
+    error_message = "Model invocation must retain Claude-only foundation and system profiles, without arbitrary application profiles."
   }
 }
 
 run "legacy_tag_and_scope_behavior" {
   command = plan
   variables {
-    agentcore_enabled = true
+    agentcore_enabled    = true
     integrations_enabled = true
     official_mcp_enabled = true
-    workers_enabled   = true
-    steampipe_enabled = true
+    workers_enabled      = true
+    steampipe_enabled    = true
   }
   assert {
     condition = (

@@ -39,8 +39,10 @@ locals {
 }
 
 data "aws_regions" "runtime_read" {
-  count       = local.core_runtime_enabled ? 1 : 0
-  all_regions = false
+  count = local.core_runtime_enabled ? 1 : 0
+  # Include existing opt-in regions before account activation. The collector
+  # still scans enabled regions; a later opt-in must not require an IAM refresh.
+  all_regions = true
 }
 
 locals {
@@ -56,6 +58,5 @@ locals {
   runtime_model_resources = [
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
     "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic.claude-*",
-    "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
   ]
 }
