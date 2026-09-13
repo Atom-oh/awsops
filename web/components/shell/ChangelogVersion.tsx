@@ -6,9 +6,9 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 import Markdown from '@/components/chat/Markdown';
 import type { Changelog, ChangelogVersion as CV } from '@/lib/changelog';
 
-// 사이드바 풋터의 버전 칩 (CHANGELOG.md 최신 릴리스와 항상 일치 — /api/changelog가
-// 배포 이미지에 실린 파일을 읽음) + 클릭 시 버전별 변경 이력 모달.
-// 본문은 ko면 한국어 섹션, 그 외(en/zh/ja)는 영어 섹션을 렌더 (CHANGELOG는 2개 언어만 보유).
+// Version chip and modal read the CHANGELOG shipped in the deployment image.
+// Maintained content is English-only. Korean selects the parser's per-version
+// English fallback; legacy documents with both language headings remain supported.
 
 export default function ChangelogVersion() {
   const { lang, tt } = useI18n();

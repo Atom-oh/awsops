@@ -150,12 +150,16 @@ $( # Only exists/valid on truncated runs (pr-review.yml regenerates it every tru
 Project rules (awsops — AWS+Kubernetes ops dashboard, Next.js/TS + Python + Terraform, per-lens checklist):
 - L2 (code correctness): real logic bugs / edge cases in the TS/React frontend + Python API.
 - L3 (security/AWS mutation safety): unauthorized AWS mutation/autonomy enablement
-  is CRITICAL under ADR-005; dark code presence alone is not enablement.
+  is CRITICAL under ADR-005; dark code presence alone is not enablement. Any new
+  product call path mutating AWS resources is CRITICAL except the exact ADR-015 path.
+  Use the base edge allowlist as the baseline and review every addition.
   ADR-015 grants exactly the own-secret-rotation restart
   exception; operator-authorized deployment is distinct from application autonomy.
   ADR-007 separately governs external reads/writes: integrations_write_enabled is
   GATED-OFF, not FROZEN. Check governance, default-off behavior, IAM and credentials.
-- L4 (observability/data-integration correctness): correctness of Steampipe queries, CIS compliance checks, AgentCore diagnosis logic.
+- L4 (observability/data-integration correctness): Steampipe batch/Powerpipe jobs,
+  disabled live BFF SQL, and diagnosis. Preserve ADR-010/021 limits: partial, stale
+  or unassessed evidence is not a healthy zero.
 - L5 (docs/ADR consistency): compare BASELINE.md and consolidated NNN-*.md ADRs with
   code; verify actionable documentation errors, paths and commands. Developer/reviewer
   docs are English-only; multilingual product guides remain. Do not invent required
