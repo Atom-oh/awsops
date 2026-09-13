@@ -32,5 +32,5 @@ description: 診断ペルソナの登録、再利用スキルの関連付け、�
 
 Datadog・Dynatrace などは **連携 → Datasources** に登録します。Notion の認証情報や対応する hosted MCP の事前設定は **Connectors** で管理します。認証情報の保存は接続確認とは異なります。任意の MCP エンドポイントや自律的なインフラ変更は有効になりません。
 
-- [データソース管理](../monitoring/datasources)
+- [データソース管理](../observability/datasources)
 - [AI アシスタント](../overview/assistant)

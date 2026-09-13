@@ -32,5 +32,5 @@ description: 注册诊断角色、关联可复用技能，并在聊天中选择
 
 通过**集成 → Datasources** 注册 Datadog、Dynatrace 等数据源。通过 **Connectors** 管理 Notion 凭证及受支持的 hosted MCP 预配置。保存凭证不等于连接已验证。注册自定义代理不会启用任意 MCP 端点或自主基础设施变更。
 
-- [数据源管理](../monitoring/datasources)
+- [数据源管理](../observability/datasources)
 - [AI 助手](../overview/assistant)

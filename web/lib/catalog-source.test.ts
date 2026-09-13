@@ -7,7 +7,7 @@ vi.mock('@/lib/catalog', () => ({ listAgentsWithSkills: (...a: unknown[]) => lis
 const spaceMock = vi.fn();
 vi.mock('@/lib/agent-space', () => ({ getAgentSpace: (...a: unknown[]) => spaceMock(...a) }));
 
-import { getEnabledCustomAgents } from './catalog-source';
+import { getEnabledCustomAgents, getCustomAgentContext } from './catalog-source';
 
 beforeEach(() => {
   listMock.mockReset();
@@ -17,10 +17,19 @@ beforeEach(() => {
 });
 
 describe('catalog-source', () => {
+  it.each(['space', 'agents'])('denies custom candidates consistently on a failed %s read', async (failure) => {
+    process.env.AURORA_ENDPOINT = 'h';
+    listMock.mockResolvedValue([{ id: 1, name: 'audit', enabled: true, tier: 'custom', skills: [] }]);
+    if (failure === 'space') spaceMock.mockRejectedValue(new Error('down'));
+    else listMock.mockRejectedValue(new Error('down'));
+    expect(await getCustomAgentContext('self')).toEqual({ status: 'unavailable', agents: [], space: null });
+    expect(spaceMock).toHaveBeenCalledTimes(1);
+    expect(listMock).toHaveBeenCalledTimes(failure === 'space' ? 0 : 1);
+  });
   it('propagates policy read errors instead of degrading to an unscoped catalog', async () => {
     process.env.AURORA_ENDPOINT = 'h';
     spaceMock.mockRejectedValue(new Error('Agent Space policy unavailable'));
-    await expect(getEnabledCustomAgents()).rejects.toThrow('Agent Space policy unavailable');
+    await expect(getEnabledCustomAgents()).rejects.toThrow('Custom-agent catalog unavailable');
     expect(listMock).not.toHaveBeenCalled();
   });
   it('excludes historical command-name collisions from discovery and runtime candidates', async () => {
@@ -43,10 +52,10 @@ describe('catalog-source', () => {
     listMock.mockResolvedValue([{ id: 1, name: 'compliance', enabled: true, tier: 'custom', skills: [], routingKeywords: [] }]);
     expect(await getEnabledCustomAgents()).toHaveLength(1);
     listMock.mockRejectedValue(new Error('unavailable'));
-    expect(await getEnabledCustomAgents()).toEqual([]);
+    expect(await getCustomAgentContext()).toEqual({ status: 'unavailable', agents: [], space: null });
   });
-  it('returns [] when Aurora is unconfigured (no AURORA_ENDPOINT)', async () => {
-    expect(await getEnabledCustomAgents()).toEqual([]);
+  it('returns an available empty context when Aurora is unconfigured', async () => {
+    expect(await getCustomAgentContext()).toEqual({ status: 'available', agents: [], space: null });
     expect(listMock).not.toHaveBeenCalled();
   });
 
@@ -63,10 +72,10 @@ describe('catalog-source', () => {
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
-  it('returns [] (never throws) on DB error', async () => {
+  it('returns an unavailable context on catalog DB error', async () => {
     process.env.AURORA_ENDPOINT = 'h';
     listMock.mockRejectedValue(new Error('down'));
-    expect(await getEnabledCustomAgents()).toEqual([]);
+    expect(await getCustomAgentContext()).toEqual({ status: 'unavailable', agents: [], space: null });
   });
 
   // --- Phase 2: account-aware, degrade-safe ---
@@ -95,8 +104,11 @@ describe('catalog-source', () => {
       { id: 2, name: 'finops', enabled: true, tier: 'custom', skills: [], routingKeywords: [] },
       { id: 3, name: 'network', enabled: true, tier: 'builtin', skills: [], routingKeywords: [] },
     ]);
-    const a = await getEnabledCustomAgents('self');
-    expect(a.map((x) => x.id)).toEqual([1]); // agent-level scoping
+    const context = await getCustomAgentContext('self');
+    expect(context.status).toBe('available');
+    expect(context.space?.version).toBe(1);
+    expect(spaceMock).toHaveBeenCalledOnce();
+    expect(context.agents.map((x) => x.id)).toEqual([1]); // agent-level scoping
   });
 
   it('reads fresh content even when the Agent Space version is unchanged', async () => {
@@ -128,10 +140,10 @@ describe('catalog-source', () => {
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
-  it('DB error → [] (never throws), even with a space lookup in play', async () => {
+  it('reports unavailable after catalog failure with a space lookup in play', async () => {
     process.env.AURORA_ENDPOINT = 'h';
     spaceMock.mockResolvedValue(null);
     listMock.mockRejectedValue(new Error('down'));
-    expect(await getEnabledCustomAgents('self')).toEqual([]);
+    expect(await getCustomAgentContext('self')).toEqual({ status: 'unavailable', agents: [], space: null });
   });
 });

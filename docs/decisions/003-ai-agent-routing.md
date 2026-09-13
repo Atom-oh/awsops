@@ -18,6 +18,10 @@ pins, product help, custom agents, disabled agents, and per-turn context.
 - Precedence: explicit pin, product-help intent, custom-agent keyword match, then section routing with
   Agent Space filtering. A disabled explicit pin is reported honestly; automatic unavailable routes
   degrade to supported fallback behavior. Switch chips clear a stale pin and intentionally reroute.
+- Implementation clarification **2026-09-13**: domain chat reads one fresh account policy/catalog
+  context per turn. Failure of either read denies custom candidates; it is not Phase-1 absence.
+  Explicit custom pins get an unavailable response without invocation. Built-in pins and product
+  help remain usable; automatic built-in fallback identifies its persona and displays a notice.
 - `pickGateway()` follows `route.ts` RULES order, first match wins. Hybrid `classifyRoute()` uses a
   distinct single match as its fast path, asks Haiku about ambiguity/unmatched prompts and weak
   catch-all matches, and safely falls back when classification fails. Explicit observability vendor

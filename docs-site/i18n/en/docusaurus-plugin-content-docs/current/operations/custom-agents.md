@@ -32,5 +32,5 @@ These are AWSops personas. AWS DevOps Agent and AWS Security Agent are separate 
 
 Use **Integrations → Datasources** for Datadog, Dynatrace and other observability endpoints. Use **Connectors** for Notion credentials and the supported hosted-MCP preparation paths. A saved credential is not verified connectivity. Arbitrary MCP endpoints and autonomous infrastructure changes are not enabled by custom-agent registration.
 
-- [Datasource management](../monitoring/datasources)
+- [Datasource management](../observability/datasources)
 - [AI Assistant](../overview/assistant)

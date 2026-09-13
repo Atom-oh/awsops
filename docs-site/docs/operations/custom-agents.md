@@ -32,5 +32,5 @@ description: 진단 페르소나 등록, 재사용 스킬 연결, 채팅에서 �
 
 Datadog·Dynatrace 등은 **연동 → Datasources**에서 등록합니다. Notion 자격증명과 지원하는 hosted MCP의 사전 설정은 **Connectors**에서 관리합니다. 자격증명 저장은 접속 확인과 다릅니다. 커스텀 에이전트 등록으로 임의 MCP 엔드포인트나 자율 인프라 변경이 활성화되지 않습니다.
 
-- [데이터소스 관리](../monitoring/datasources)
+- [데이터소스 관리](../observability/datasources)
 - [AI 어시스턴트](../overview/assistant)

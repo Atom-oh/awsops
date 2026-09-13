@@ -1,8 +1,8 @@
 import { verifyUser } from '@/lib/auth';
 import { currentAccountId } from '@/lib/account';
 import { getAccount, validateAccountId } from '@/lib/accounts';
-import { getEnabledCustomAgents } from '@/lib/catalog-source';
-import { sectionByKey } from '@/lib/sections';
+import { getCustomAgentContext } from '@/lib/catalog-source';
+import { isReservedAgentName } from '@/lib/skill-validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,8 +20,10 @@ export async function GET(request: Request) {
       if (!account?.enabled) return Response.json({ error: 'account unavailable' }, { status: 404 });
       accountId = requested;
     }
-    const agents = (await getEnabledCustomAgents(accountId))
-      .filter(a => !sectionByKey(a.name) && a.name !== 'auto' && /^[a-z0-9][a-z0-9-]{1,63}$/.test(a.name))
+    const context = await getCustomAgentContext(accountId);
+    if (context.status === 'unavailable') return Response.json({ error: 'agent catalog unavailable' }, { status: 503 });
+    const agents = context.agents
+      .filter(a => !isReservedAgentName(a.name) && /^[a-z0-9][a-z0-9-]{1,63}$/.test(a.name))
       .map(a => ({ key: a.name, label: a.name, icon: '', active: true }));
     return Response.json({ enabled: true, agents });
   } catch {

@@ -7,15 +7,19 @@
 // enabled_skill_ids is persisted metadata; neither the attachment UI/API nor this
 // reader enforces it. Only globally enabled attached skills enter the composition.
 import { listAgentsWithSkills, type AgentWithSkills } from '@/lib/catalog';
-import { getAgentSpace } from '@/lib/agent-space';
+import { getAgentSpace, type AgentSpace } from '@/lib/agent-space';
 import { isReservedAgentName } from '@/lib/skill-validation';
 
-export async function getEnabledCustomAgents(accountId?: string): Promise<AgentWithSkills[]> {
-  if (!process.env.AURORA_ENDPOINT) return [];
+export type CustomAgentContext =
+  | { status: 'available'; agents: AgentWithSkills[]; space: AgentSpace | null }
+  | { status: 'unavailable'; agents: []; space: null };
+
+/** Read one policy/catalog context per turn. An unavailable context authorizes no custom agent. */
+export async function getCustomAgentContext(accountId?: string): Promise<CustomAgentContext> {
+  if (!process.env.AURORA_ENDPOINT) return { status: 'available', agents: [], space: null };
   const acct = accountId ?? 'self';
-  // Policy failures must reach the caller's 503 path, never a global/built-in fallback.
-  const space = await getAgentSpace(acct); // null only for a confirmed missing row
   try {
+    const space = await getAgentSpace(acct); // null only after a confirmed no-row read
     const all = await listAgentsWithSkills({ enabledOnly: true });
     // Preserve historical rows, but never expose/run command-name collisions as custom agents.
     let data = all.filter((a) => a.tier === 'custom' && !isReservedAgentName(a.name));
@@ -24,8 +28,15 @@ export async function getEnabledCustomAgents(accountId?: string): Promise<AgentW
       const agentSet = new Set(space.enabledAgentIds);
       data = data.filter((a) => agentSet.has(a.id));     // account-scoped subset
     }
-    return data;
+    return { status: 'available', agents: data, space };
   } catch {
-    return []; // resolver falls back to built-in; assistant never breaks
+    return { status: 'unavailable', agents: [], space: null };
   }
+}
+
+/** Compatibility for list-only callers; dispatch uses the explicit context above. */
+export async function getEnabledCustomAgents(accountId?: string): Promise<AgentWithSkills[]> {
+  const context = await getCustomAgentContext(accountId);
+  if (context.status === 'unavailable') throw new Error('Custom-agent catalog unavailable');
+  return context.agents;
 }

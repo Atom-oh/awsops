@@ -27,6 +27,9 @@ Aurora agent/skill catalogs and account-scoped Agent Spaces drive resolver-selec
 composed skills, and tool allowlists. Preserve content-addressed artifacts, integrity checks,
 immutable safeguards, traceable versions/hashes and fail-closed security revocation. Treat
 custom skills and MCP output as untrusted; a cache TTL does not authorize revoked content.
+Implementation clarification **2026-09-13**: custom candidates and their once-read Agent Space travel
+as one available/unavailable context. Both policy and catalog errors deny custom execution.
+Built-in routing is independent of custom caps and follows ADR-003's disclosed fallback posture.
 
 ### §3 Integration read substrate
 

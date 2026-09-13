@@ -16,7 +16,7 @@ import { sanitizeHistory } from '@/lib/chat-context';
 import { synthesizeStream } from '@/lib/synthesize';
 import { assistantAnswer, isProductHelpIntent } from '@/lib/assistant';
 import { sectionByKey } from '@/lib/sections';
-import { getEnabledCustomAgents } from '@/lib/catalog-source';
+import { getCustomAgentContext } from '@/lib/catalog-source';
 import { isCustomAgentEnabled } from '@/lib/catalog';
 import { getEnabledIntegrations } from '@/lib/integrations';
 import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
@@ -26,13 +26,30 @@ import { currentAccountId, currentAccountAlias } from '@/lib/account';
 import { listConfiguredSchemas, renderSchemaForPrompt } from '@/lib/datasource-schema';
 import { listDatasources } from '@/lib/datasources';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
-import { getAgentSpace } from '@/lib/agent-space';
 import { randomUUID, createHash } from 'crypto';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 180; // 콜드 Steampipe(≤35s) + 자기수정 + 장문 분석 스트림이 60s를 넘던 실측(2026-08-02) // long agent calls
 
 const MAX_PROMPT = 50_000;
+const CUSTOM_ROUTE_NOTICE: Record<ChatLang, { fallback: string; pin: string }> = {
+  ko: {
+    fallback: '커스텀 에이전트를 사용할 수 없어 이번 답변은 기본 에이전트로 라우팅합니다.',
+    pin: '선택한 커스텀 에이전트의 설정을 읽을 수 없어 일시적으로 사용할 수 없습니다. 다시 시도하세요.',
+  },
+  en: {
+    fallback: 'Custom-agent routing is unavailable; using built-in routing for this reply.',
+    pin: 'The requested custom agent is temporarily unavailable because its settings could not be read. Please retry.',
+  },
+  zh: {
+    fallback: '无法使用自定义代理；本次回复使用内置代理路由。',
+    pin: '无法读取所选自定义代理的设置，因此暂时无法使用。请重试。',
+  },
+  ja: {
+    fallback: 'カスタムエージェントを利用できないため、この回答には組み込みエージェントのルーティングを使用します。',
+    pin: '選択したカスタムエージェントの設定を読み込めないため、一時的に利用できません。再試行してください。',
+  },
+};
 const TYPE_DELAY_MS = Number(process.env.CHAT_TYPEWRITER_MS) || 0;
 const STATUS_TICK_MS = 1500;
 const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -437,14 +454,8 @@ export async function POST(request: Request) {
       accountAlias = target.alias || undefined;
     }
   }
-  let customAgents: Awaited<ReturnType<typeof getEnabledCustomAgents>>;
-  let space: Awaited<ReturnType<typeof getAgentSpace>>;
-  try {
-    customAgents = await getEnabledCustomAgents(accountId);
-    space = await getAgentSpace(accountId); // only confirmed absence permits Phase-1 behavior
-  } catch {
-    return json({ error: 'Agent Space policy unavailable' }, 503);
-  }
+  const customContext = await getCustomAgentContext(accountId);
+  const { agents: customAgents, space } = customContext;
   const pinIsBuiltin = !!(body.section && sectionByKey(body.section));
   // ADR-044 §2: an explicit pin (picker / pin chip) may target a CUSTOM agent, not only a built-in
   // section — and it sits ABOVE keyword-matched custom agents and the classifier in the ladder.
@@ -465,6 +476,7 @@ export async function POST(request: Request) {
   let routeKey = customPinEnabled
     ? customPinTarget!
     : (customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway);
+  const customRevoked = !!customPick && routeKey !== customPick;
   // v1 priority-10 'aws-data' local handler: when the routing decision (pin included — a pinned
   // built-in section reaches here as `gateway`) lands on aws-data, answer with live Steampipe SQL
   // instead of an AgentCore gateway. Fail-open like the code route: Steampipe unreachable /
@@ -535,6 +547,8 @@ export async function POST(request: Request) {
   const inactiveWasPinned = inactiveSection != null && route?.method === 'pin';
   const useAssistant = hybridOn && !unavailablePin
     && ((!explicitPin && isProductHelpIntent(prompt)) || (inactiveSection != null && !inactiveWasPinned));
+  const fallbackNotice = !explicitPin && !useAssistant && (customContext.status === 'unavailable' || customRevoked)
+    ? `${CUSTOM_ROUTE_NOTICE[lang].fallback}\n\n` : '';
   const messages: ChatMsg[] = [...history, { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
   // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).
@@ -552,7 +566,7 @@ export async function POST(request: Request) {
     recordExchange({
       threadId, userSub: user.sub, sessionId,
       promptTitle: prompt.slice(0, 40),
-      userContent: prompt, assistantContent,
+      userContent: prompt, assistantContent: fallbackNotice + assistantContent,
       gateway: recordGateway, meta: extras ? { ...(exchangeMeta ?? {}), ...extras } : exchangeMeta,
     }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
   };
@@ -603,7 +617,7 @@ export async function POST(request: Request) {
       // HONEST message — never a silent fallback to keyword/classifier routing.
       if (unavailablePin) {
         const name = String(body.section).slice(0, 40);
-        const guide = chatMsg.unavailablePin(lang, name);
+        const guide = customContext.status === 'unavailable' ? CUSTOM_ROUTE_NOTICE[lang].pin : chatMsg.unavailablePin(lang, name);
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: guide })}\n\n`));
         record(guide);
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -627,6 +641,7 @@ export async function POST(request: Request) {
         controller.close();
         return;
       }
+      if (fallbackNotice) controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: fallbackNotice })}\n\n`));
       // ADR-044 cross-domain auto-synthesis: fan out over the selected built-in gateways, then merge.
       if (doFanout) {
         const tf0 = Date.now();
