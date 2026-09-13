@@ -107,6 +107,18 @@ class SpecialistRoles(unittest.TestCase):
         self.assertEqual(len({p.read_text() for p in (work / "slot").glob("*.nonce")}), 3)
         self.assertFalse((root / ".kiro/agents/pr-review-readonly.json").exists())
 
+    def test_specialist_kiro_prompts_keep_headless_tool_guidance(self):
+        root = self.run_panel()
+        for tag in ("kiro-opus-L3", "kiro-gpt-L4"):
+            prompt = (root / (tag + ".prompt")).read_text()
+            self.assertIn("PERMITTED TOOLS: read, grep.", prompt)
+            self.assertIn("Do not call execute_bash", prompt)
+            self.assertIn("Do not run builds or tests", prompt)
+            self.assertIn("separate CI jobs", prompt)
+            self.assertIn("state validation limits", prompt)
+            self.assertNotIn("PERMITTED TOOLS: read, grep, fs_read.", prompt)
+        self.assertNotIn("PERMITTED TOOLS:", (root / "codex-L2.prompt").read_text())
+
     def test_missing_invalid_and_unsafe_role_never_count_as_coverage(self):
         for mode in ("missing", "nonce", "tool-only", "fallback", "quota"):
             with self.subTest(mode=mode):
