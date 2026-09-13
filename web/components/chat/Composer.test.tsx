@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, within, waitFor } from '@testing-library/react';
 import Composer from './Composer';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function setup() {
   const onSend = vi.fn();
@@ -13,6 +13,18 @@ function setup() {
 }
 
 describe('Composer slash targeting', () => {
+  it('offers an enabled custom agent and sends a pinned message after selection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, json: async () => ({ enabled: true, agents: [{ key: 'sre-2', label: 'sre-2', icon: '', active: true }] }),
+    })));
+    const { input, onSend } = setup();
+    fireEvent.change(input, { target: { value: '/sre' } });
+    await waitFor(() => expect(screen.getByRole('option', { name: /sre-2/ })).toBeTruthy());
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.change(input, { target: { value: 'inspect errors' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('inspect errors', 'sre-2');
+  });
   it('typing / opens the section menu; typing narrows it', () => {
     const { input } = setup();
     fireEvent.change(input, { target: { value: '/' } });

@@ -1,6 +1,5 @@
 """
 Notion read MCP Lambda — read-only Notion knowledge tools via AgentCore Gateway MCP.
-Notion 읽기 전용 MCP Lambda — AgentCore Gateway를 통해 Notion 지식 조회 도구를 제공합니다.
 
 First concrete integration on the M1 gateway-target pattern (ADR-039 read-tier; the
 external-obs gateway). READ-ONLY: search / fetch page / query database. No mutation
@@ -11,6 +10,7 @@ internet. Stdlib + boto3 only (zip-packaging constraint — no third-party HTTP 
 """
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -22,7 +22,9 @@ DEFAULT_PAGE_SIZE = 10
 MAX_PAGE_SIZE = 25  # bound responses well under the 6 MB Lambda limit
 HTTP_TIMEOUT = 12   # seconds — chat budget is short; a hung Notion call must not dominate
 
-_TOKEN = None  # warm-container cache (avoid re-fetching the secret each invocation)
+_TOKEN = None
+_TOKEN_AT = 0.0
+TOKEN_TTL_SECONDS = 60
 _SM = None
 
 
@@ -46,17 +48,19 @@ def _get_secret_string():
         raise
 
 
-def _get_token():
-    """Return this connector's token, cached per warm container.
+def _get_token(force_refresh=False):
+    """Return this connector's token, with a bounded warm-container cache.
 
     The single secret holds a JSON map keyed by integration slug (=kind):
     ``{"notion": {"token": "secret_x"}, ...}``. This connector extracts ``map[INTEGRATION_SLUG]``
     (default slug ``notion``). A missing/empty secret or a missing slug ⇒ a clear
     "credential not configured" error (never an opaque trace).
     """
-    global _TOKEN
-    if _TOKEN:
+    global _TOKEN, _TOKEN_AT
+    now = time.monotonic()
+    if not force_refresh and _TOKEN and now - _TOKEN_AT < TOKEN_TTL_SECONDS:
         return _TOKEN
+    _TOKEN = None  # expired/replaced credentials never fall back after a failed read
     slug = os.environ.get("INTEGRATION_SLUG", "notion")
     raw = (_get_secret_string() or "").strip()
     if not raw:
@@ -68,10 +72,12 @@ def _get_token():
     entry = data.get(slug) if isinstance(data, dict) else None
     if not isinstance(entry, dict):
         raise ValueError(f"credential not configured for '{slug}'")
-    token = (entry.get("token") or "").strip()
+    value = entry.get("token")
+    token = value.strip() if isinstance(value, str) else ""
     if not token:
         raise ValueError(f"credential for '{slug}' is missing a token")
     _TOKEN = token
+    _TOKEN_AT = now
     return _TOKEN
 
 
@@ -83,6 +89,7 @@ def _urlopen(req, timeout=HTTP_TIMEOUT):
 
 def _http_json(method, path, token, body=None):
     """Call the Notion API. Returns (status, parsed_dict). Non-2xx → (status, error_body)."""
+    global _TOKEN
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method)
     req.add_header("Authorization", f"Bearer {token}")
@@ -100,6 +107,8 @@ def _http_json(method, path, token, body=None):
         parsed = json.loads(raw or b"{}")
     except ValueError:
         parsed = {}
+    if status == 401:
+        _TOKEN = None
     return status, parsed
 
 
@@ -160,8 +169,18 @@ def notion_query_database(args):
                "has_more": data.get("has_more", False),
                "next_cursor": data.get("next_cursor")})
 
+def notion_health(args):
+    """Check the latest saved token; do not expose bot/workspace identity.
+
+    Authentication does not prove access to a particular page. Operators still
+    need to share the desired pages with their internal integration.
+    """
+    status, data = _http_json("GET", "/users/me", _get_token(force_refresh=True))
+    return ok({"ok": status == 200 and isinstance(data, dict) and data.get("object") == "user"})
+
 
 _TOOLS = {
+    "notion_health": notion_health,  # administrator probe; not added to gateway tools
     "notion_search": notion_search,
     "notion_fetch_page": notion_fetch_page,
     "notion_query_database": notion_query_database,

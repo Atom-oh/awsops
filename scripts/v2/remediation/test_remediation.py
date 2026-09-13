@@ -9,8 +9,8 @@ import sys
 
 _HERE = pathlib.Path(__file__).resolve().parent
 # action_catalog.py does `import db` (scripts/v2/workers/db.py, shipped in the same artifact).
-sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "workers"))
+sys.path.insert(0, str(_HERE))  # test canonical code, not the staged worker-build copy
 os.environ.setdefault("AWS_REGION", "ap-northeast-2")
 
 import action_catalog as ac  # noqa: E402
@@ -175,6 +175,7 @@ def _boom_assume(*_a, **_k):  # pragma: no cover - must never be reached on a bl
 
 
 def test_executor_module_compiles():
+    assert pathlib.Path(ex.__file__).resolve() == _HERE / "remediation_executor.py"
     src = (_HERE / "remediation_executor.py").read_text()
     ast.parse(src)  # raises SyntaxError on a broken module
 
@@ -225,6 +226,42 @@ def test_handler_rollback_without_handler_raises_manual(monkeypatch):
         ex.lambda_handler(
             {"job_id": "j2", "action": "incident-manager-enrich", "phase": "rollback"}, None)
     assert conn.closed is True
+
+
+def test_slack_dry_run_uses_terraform_role_key_without_posting(monkeypatch):
+    conn, assumed = _ExecConn(), []
+    monkeypatch.setattr(ex.db, "connect", lambda: conn)
+    monkeypatch.setattr(ex.cat, "gate", lambda *args: ({"name": "slack.post_message"}, None))
+    monkeypatch.setenv("ACTION_ROLE_SLACK_POST_MESSAGE", "arn:aws:iam::1:role/slack")
+    monkeypatch.delenv("ACTION_ROLE_SLACK.POST_MESSAGE", raising=False)
+    monkeypatch.setattr(ex, "_assume", lambda arn: assumed.append(arn))
+    monkeypatch.setattr(ex, "_slack_http_post", _boom_assume)
+    result = ex.lambda_handler({"job_id": "slack-dry", "action": "slack.post_message",
+                               "phase": "dry_run", "payload": {"channel": "#ops", "text": "hi"}}, None)
+    assert result["result"]["posted"] is False
+    assert assumed == ["arn:aws:iam::1:role/slack"]
+    assert conn.calls == [] and conn.closed
+
+
+def test_slack_rejection_never_finishes_job_as_succeeded(monkeypatch):
+    from unittest.mock import Mock
+    import pytest
+
+    conn, finished = _ExecConn(), Mock()
+    monkeypatch.setattr(ex.db, "connect", lambda: conn)
+    monkeypatch.setattr(ex.cat, "gate", lambda *args: ({"name": "slack.post_message"}, None))
+    monkeypatch.setenv("ACTION_ROLE_SLACK_POST_MESSAGE", "arn:aws:iam::1:role/slack")
+    monkeypatch.setattr(ex, "_assume", lambda arn: object())
+    monkeypatch.setattr(ex.db, "claim_running", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(ex.db, "finish_job", finished)
+    monkeypatch.setattr(ex, "_slack_allowlist", lambda conn: ["#ops"])
+    monkeypatch.setattr(ex, "_slack_get_secret", lambda sess: {"token": "synthetic"})
+    monkeypatch.setattr(ex, "_slack_http_post", lambda *args: {"ok": False, "error": "channel_not_found"})
+    with pytest.raises(RuntimeError, match="not acknowledge"):
+        ex.lambda_handler({"job_id": "slack-rejected", "action": "slack.post_message",
+                           "payload": {"channel": "#ops", "text": "hi"}}, None)
+    finished.assert_not_called()
+    assert conn.closed
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,15 @@ class SlackExecutorTest(unittest.TestCase):
             ex.execute(SLACK, {"channel": "#ops", "text": "hi"}, [],
                        get_secret=lambda: {"token": "t"}, http_post=lambda *a: None)
 
+    def test_rejection_or_missing_boolean_acknowledgement_is_not_posted(self):
+        for response in ({"ok": False, "error": "channel_not_found"}, {}, None, [],
+                         {"ok": "true"}, {"ok": 1}):
+            with self.subTest(response=response):
+                with self.assertRaisesRegex(RuntimeError, "not acknowledge"):
+                    ex.execute(SLACK, {"channel": "#ops", "text": "hi"}, ALLOW,
+                               get_secret=lambda: {"token": "t"},
+                               http_post=lambda *args: response)
+
 
 if __name__ == "__main__":
     unittest.main()

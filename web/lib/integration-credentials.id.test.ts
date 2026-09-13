@@ -113,6 +113,7 @@ describe('getConfiguredIds', () => {
   it('degrades to [] on a Secrets Manager read failure', async () => {
     smSend.mockImplementation(() => { const e: any = new Error('denied'); e.name = 'AccessDeniedException'; throw e; });
     expect(await getConfiguredIds()).toEqual([]);
+    await expect(getConfiguredIds(true)).rejects.toThrow('denied');
   });
 });
 

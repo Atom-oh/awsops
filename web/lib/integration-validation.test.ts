@@ -10,6 +10,14 @@ const egress = { name: 'grafana-ro', kind: 'grafana', direction: 'egress', capab
 const ingress = { name: 'pd-in', kind: 'pagerduty', direction: 'ingress', authMode: 'vendor_sig', triggerTarget: 'incident' };
 
 describe('integration-validation', () => {
+  it('rejects the retired custom_mcp kind without rewriting historical kind metadata', () => {
+    expect(INTEGRATION_KINDS_EGRESS).toContain('custom_mcp');
+    expect(validateIntegration({ ...egress, kind: 'custom_mcp' }).ok).toBe(false);
+  });
+  it.each([null, [], { ...ingress, authMode: 42 }, { ...egress, name: 42 },
+    { ...egress, exposedTools: 'query' }])('returns validation errors for malformed input: %j', (input) => {
+    expect(validateIntegration(input as never).ok).toBe(false);
+  });
   it('exposes the kind/transport sets (source of truth shared with the migration)', () => {
     expect(INTEGRATION_KINDS_EGRESS).toContain('grafana');
     expect(INTEGRATION_KINDS_INGRESS).toContain('cloudwatch_sns');

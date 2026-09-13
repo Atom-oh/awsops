@@ -16,14 +16,22 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 ];
 
 const KEYS = new Set(SLASH_COMMANDS.map((c) => c.key));
+function commandList(custom: SlashCommand[]): SlashCommand[] {
+  const seen = new Set(KEYS);
+  return [...SLASH_COMMANDS, ...custom.filter((c) => {
+    if (!c.active || !/^[a-z0-9][a-z0-9-]{1,63}$/.test(c.key) || seen.has(c.key)) return false;
+    seen.add(c.key);
+    return true;
+  })];
+}
 // Leading `/<key>` only — NO left-trim (a leading space ⇒ literal text, not a command). The
 // separator is exactly ONE whitespace char; everything after it is the body, kept verbatim so
 // pasted indentation/newlines survive.
-const RE = /^\/([a-z][a-z-]*)(?:\s([\s\S]*))?$/;
+const RE = /^\/([a-z0-9][a-z0-9-]*)(?:\s([\s\S]*))?$/;
 
-export function parseSlash(text: string): { section: string | null; prompt: string } {
+export function parseSlash(text: string, custom: SlashCommand[] = []): { section: string | null; prompt: string } {
   const m = RE.exec(text);
-  if (m && KEYS.has(m[1])) {
+  if (m && commandList(custom).some(c => c.key === m[1])) {
     const key = m[1];
     const body = m[2] ?? '';
     return { section: key === 'auto' ? null : key, prompt: body };
@@ -32,7 +40,7 @@ export function parseSlash(text: string): { section: string | null; prompt: stri
 }
 
 // Prefix filter for the `/` autocomplete menu (fragment = text after the leading slash).
-export function matchCommands(fragment: string): SlashCommand[] {
+export function matchCommands(fragment: string, custom: SlashCommand[] = []): SlashCommand[] {
   const f = fragment.toLowerCase();
-  return SLASH_COMMANDS.filter((c) => c.key.startsWith(f));
+  return commandList(custom).filter((c) => c.key.startsWith(f));
 }
