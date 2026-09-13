@@ -9,14 +9,14 @@ const isAdmin = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/datasources', () => ({
-  listDatasources: vi.fn(async () => []),
+  listDatasources: vi.fn(async () => [{ id: 7, name: 'metrics', kind: 'prometheus', endpoint: 'https://metrics.example', authType: 'bearer', isDefault: true, enabled: true }]),
   getDatasource: vi.fn(async () => null),
   deleteDatasource: vi.fn(),
   setDefaultDatasource: vi.fn(),
   createDatasource: vi.fn(), updateDatasource: vi.fn(),
 }));
 vi.mock('@/lib/integration-credentials', () => ({
-  getConfiguredIds: vi.fn(async () => []),
+  getIntegrationCredentialSnapshot: vi.fn(async () => ({ 7: { endpoint: 'https://metrics.example', token: 'private-token', org_id: 'tenant-a' } })),
   setIntegrationCredentialById: vi.fn(), mirrorDefaultCredential: vi.fn(),
 }));
 vi.mock('@/lib/mcp-lambda-invoke', () => ({ invokeMcpLambdaTool: vi.fn(), KNOWN_MCP_LAMBDA_KINDS: ['prometheus'] }));
@@ -38,6 +38,9 @@ describe('datasource authorization matrix', () => {
     const { GET } = await import('./route');
     const resp = await GET(cookie);
     expect(resp.status).toBe(200); // read allowed; isAdmin not required
+    const body = await resp.json();
+    expect(body).toMatchObject({ available: true, datasources: [{ id: 7, connected: true, configurationStatus: 'stored' }] });
+    expect(JSON.stringify(body)).not.toMatch(/private-token|tenant-a|metrics\.example/);
   });
 
   it('mutating routes 403 for a non-admin', async () => {

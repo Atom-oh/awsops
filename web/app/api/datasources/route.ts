@@ -1,10 +1,12 @@
 // GET /api/datasources — list configured datasource INSTANCES for the hub + Explore picker.
 // Authenticated (read-only), NOT admin. Returns {id,name,kind,authType,isDefault,connected} — never
-// credentials. Degrade-safe: [] when Aurora is off / on error so the page doesn't 500.
+// credentials. Configuration presence is not a connectivity probe. Read failures
+// carry available:false so consumers distinguish unavailable from an empty inventory.
 import { verifyUser } from '@/lib/auth';
 import { listDatasources } from '@/lib/datasources';
 import { isAdmin } from '@/lib/admin';
-import { getConfiguredIds } from '@/lib/integration-credentials';
+import { getIntegrationCredentialSnapshot } from '@/lib/integration-credentials';
+import { datasourceConnectionMetadata } from '@/lib/datasource-connection';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,22 +19,18 @@ export async function GET(request: Request) {
   if (!user) return json({ error: 'unauthenticated' }, 401);
 
   try {
-    const [rows, configuredIds, admin] = await Promise.all([listDatasources(), getConfiguredIds(), isAdmin(user)]);
-    const idSet = new Set(configuredIds);
-    const datasources = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      kind: r.kind,
-      // Connection detail is admin-only (v1 showed the URL; v2 keeps it off the read-any shape).
-      // settings ride the same admin-only visibility as the endpoint (gap L203)
-      ...(admin ? { endpoint: r.endpoint, settings: r.settings } : {}),
-      authType: r.authType,
-      isDefault: r.isDefault,
-      // "connected" = a credential is resolvable: the instance id key, or (for migrated defaults) the kind mirror.
-      connected: idSet.has(String(r.id)) || r.isDefault,
-    }));
-    return json({ datasources }, 200);
+    const [rows, snapshot, admin] = await Promise.all([listDatasources(), getIntegrationCredentialSnapshot(), isAdmin(user)]);
+    const datasources = rows.map(r => {
+      const meta = datasourceConnectionMetadata(r, snapshot);
+      return {
+        id: r.id, name: r.name, kind: r.kind, authType: meta.authType,
+        isDefault: r.isDefault, enabled: r.enabled,
+        ...(admin ? { endpoint: meta.endpoint, settings: r.settings } : {}),
+        connected: meta.connected, configurationStatus: meta.configurationStatus,
+      };
+    });
+    return json({ datasources, available: true }, 200);
   } catch {
-    return json({ datasources: [] }, 200);
+    return json({ datasources: [], available: false, error: 'Datasource configuration is unavailable. Retry or ask an administrator to check access.' }, 200);
   }
 }
