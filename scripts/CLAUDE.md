@@ -6,6 +6,11 @@ points from the repository root through the `Makefile`.
 
 ## Operational entry points
 
+- `v2/steampipe/gen_spc_entrypoint.py` verifies STS and the enabled host registry
+  before rendering when `INVENTORY_HOST_ONLY=true`. An invalid initial scope prevents
+  startup; a scope failure observed by the watchdog stops the service. Host collection
+  keeps all enabled regions. Terraform controls the associated role grants.
+
 - `make deps` installs `scripts/v2/package.json` dependencies. `make configure`
   writes local config for `terraform/v2/foundation/`.
 - `make deploy` runs migrations, builds/pushes the arm64 web image, rolls ECS,

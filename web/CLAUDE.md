@@ -20,6 +20,15 @@ root. Web tasks require runtime `HOSTNAME=0.0.0.0` and `/api/health` checks.
 
 ## Boundaries
 
+- `POST /api/deployment/readiness` authenticates the user, verifies the actual web-role
+  STS identity and three fresh AgentCore SSM reads, and accepts only a nonce/account-bound
+  runtime readiness response. Disabled, pending, denied or missing dependencies fail
+  explicitly; normal chat fallback is not readiness evidence.
+- `lib/agentcore-config.ts` rejects invalid runtime ARNs before caching; an explicitly
+  empty runtime parameter disables discovery. Inventory summaries expose account-wide
+  collection ledger metadata through `lib/inventory-collection.ts`, preserving missing
+  runs and unknown attributes separately from region-filtered resource counts.
+
 - BFF handlers use Aurora via `lib/db.ts:getPool()`, existing scoped AWS SDK reads,
   read-only Kubernetes APIs, and AgentCore. Heavy/long-running work belongs in
   the worker tier. Generic `POST /api/jobs` accepts its noop allowlist; domain

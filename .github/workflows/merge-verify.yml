@@ -25,6 +25,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+
       - name: Offline AI review reliability regressions
         run: python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
 
@@ -43,6 +48,17 @@ jobs:
 
       - name: Run merge verification
         run: bash scripts/v2/merge-verify.sh
+
+      - name: Verify runtime IAM with mocked providers
+        working-directory: terraform/v2/foundation
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_CONFIG_FILE: /dev/null
+          AWS_SHARED_CREDENTIALS_FILE: /dev/null
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+          terraform test -filter=tests/runtime_iam.tftest.hcl
 
   # Pre-merge mirror of deploy-guide.yml's deck gates, so a sensitive-content
   # leak or generator drift in the committed pptx is caught BEFORE the binary
