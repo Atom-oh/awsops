@@ -7,7 +7,7 @@ vi.mock('next/navigation', () => ({ useParams: () => ({ cluster: 'c1' }) }));
 afterEach(cleanup);
 beforeEach(() => { vi.unstubAllGlobals(); });
 
-function mockKind(handlers: Record<string, unknown[]>) {
+function mockKind(handlers: Record<string, unknown[] | null>) {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const u = String(url);
     // The OpenCost panel (mounted on this page) fetches /api/me + /api/opencost/* — answer
@@ -19,12 +19,32 @@ function mockKind(handlers: Record<string, unknown[]>) {
       return { ok: true, status: 200, json: async () => ({ cluster: 'c1', config: null }) } as Response;
     }
     const kind = new URL(u, 'http://x').searchParams.get('kind') ?? '';
+    if (handlers[kind] === null) return { ok: false, status: 502, json: async () => ({}) } as Response;
     const rows = handlers[kind] ?? [];
     return { ok: true, status: 200, json: async () => ({ kind, rows }) } as Response;
   }));
 }
 
 describe('EKS [cluster] per-tab KPI/viz', () => {
+  it('keeps measured usage visible when pod requests are unavailable, including the drilldown', async () => {
+    mockKind({
+      nodes: [{
+        name: 'usage-node', status: 'Ready', roles: 'worker', instanceType: 'm6g.large',
+        cpuCapacity: 4, cpuAllocatable: 3.5, cpuUsage: 0.7,
+        memCapacity: 8192, memAllocatable: 7168, memUsage: 3584,
+      }],
+      pods: null,
+    });
+    render(<EksClusterPage />);
+    await waitFor(() => expect(screen.getByText('0.70 / 3.50 vCPU (20%)')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText(/요청량 미상/)).toHaveLength(2));
+    expect(screen.queryByRole('meter', { name: 'CPU Allocated' })).toBeNull();
+    fireEvent.click(screen.getAllByText('usage-node').find((el) => el.closest('tbody'))!);
+    const dialog = await screen.findByRole('dialog', { name: 'usage-node' });
+    expect(within(dialog).getByText('0.70 / 3.50 vCPU (20%)')).toBeTruthy();
+    expect(within(dialog).queryByRole('meter', { name: 'CPU Allocated' })).toBeNull();
+  });
+
   it('mounts the per-cluster OpenCost panel', async () => {
     mockKind({ nodes: [] });
     render(<EksClusterPage />);

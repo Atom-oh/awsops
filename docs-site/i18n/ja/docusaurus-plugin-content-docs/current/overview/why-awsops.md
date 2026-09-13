@@ -158,5 +158,5 @@ AWS データに加え、既存のオブザーバビリティスタックを**�
 ## さらに見る
 
 - [ダッシュボード概要](./dashboard) · [AI アシスタント](./ai-assistant) · [AgentCore 詳細](./agentcore) · [アカウント管理](./accounts)
-- [AI 総合診断](../monitoring/ai-diagnosis) · [EKS コンテナコスト](../compute/eks-container-cost) · [外部データソース](../monitoring/datasources)
+- [AI 総合診断](../monitoring/ai-diagnosis) · [EKS コンテナコスト](../compute/eks-container-cost) · [外部データソース](../observability/datasources)
 - [AWSops の紹介（アーキテクチャ全体）](../intro)

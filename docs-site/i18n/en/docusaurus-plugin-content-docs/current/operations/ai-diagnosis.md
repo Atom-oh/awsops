@@ -35,7 +35,7 @@ The left sidebar lists your recent reports — completed rows carry inline **MD/
 - The body renders as collapsible **section cards** with severity icons and a sticky **table of contents (TOC)** sidebar on the right.
 - Use the top buttons to export as **MD / DOCX / PDF**, or open **Print view** — a new tab with a white A4 layout (cover, numbered TOC, per-section page breaks) for direct browser Print-to-PDF.
 
-- **Manual report handoff** previews, copies or downloads selected excerpts for knowledge sharing and specialist review, with omission/truncation notices; it does not publish or invoke external agents.
+- **Manual report handoff** is available for `succeeded` or `partial` reports with readable Markdown. Preview, copy or download selected excerpts with omission/truncation notices. Template headings, notices and checklists are English; excerpts preserve the source report's language. Transfer is manual; no publishing or external agent invocation.
 
 ### Insight badges
 - **Invariant assessment coverage** separates total, assessed, passed, violated and unassessed counts. Unassessed reasons appear in the UI, report body and exports; unassessed results or an empty violation list do not establish health or improvement. Historical reports without recorded coverage show **assessment unavailable**.

@@ -160,6 +160,15 @@ for lens_file in "${LENS_FILES[@]}"; do
   # 각 lens 프롬프트($LENS_PROMPT) 자체에 이미 포함되어 있다고 가정(워크플로의 COMMON 블록).
   KIRO_INSTRUCTION="$LENS_PROMPT
 
+CI TOOL BOUNDARY:
+PERMITTED TOOLS: read, grep, fs_read.
+This review is non-interactive; no user can approve another tool. Do not call execute_bash,
+shell, or another command-execution tool, even when repository docs show runnable commands.
+Do not run builds or tests or install dependencies; separate CI jobs validate the PR code.
+Use the permitted tools to inspect source, tests, manifests and migrations for this lens.
+Complete the static review from the available evidence and state validation limits explicitly.
+Never claim an execution check ran, and identify missing evidence rather than inventing results.
+
 === DIFF UNDER REVIEW ===
 The diff to review is saved at this file path: $DIFF (already truncated upstream if the PR was
 large). Read the file with your file-read tool (read or fs_read) BEFORE reviewing. Do not wait

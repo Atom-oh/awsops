@@ -20,6 +20,8 @@ served at `/` with `/api/*` endpoints and a standalone arm64 image.
   supports gated routing/synthesis. Candidate selection does not enable fan-out;
   both hybrid-routing and synthesis gates must be on. Chat's Steampipe SQL and
   collector execution remains disabled. See [AgentCore](05-agentcore.md).
+- [Integration workflows](integration-workflows.md) distinguish datasource setup
+  and probes, custom-agent selection, and manual report handoff from live delivery.
 - [middleware.ts](../../web/middleware.ts) caps API bodies at 2 MB; route-specific
   `readJsonBounded()` limits remain necessary. Preserve status/error responses and
   explicit partial/unavailable data instead of returning healthy zeroes.

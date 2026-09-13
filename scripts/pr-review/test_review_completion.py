@@ -317,6 +317,21 @@ class ReviewCompletion(unittest.TestCase):
         self.assertEqual(len({path.read_text() for path in (self.work / "slot").glob("*.nonce")}), 12)
         self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
 
+    def test_kiro_prompt_matches_noninteractive_read_only_tool_permissions(self):
+        result = self.panel()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_matrix()
+        for model in ("kiro-opus", "kiro-gpt"):
+            for lens in LENSES:
+                prompt = (self.work / f"{model}-{lens}.prompt").read_text()
+                self.assertIn("PERMITTED TOOLS: read, grep, fs_read.", prompt)
+                self.assertIn("Do not call execute_bash", prompt)
+                self.assertIn("Do not run builds or tests", prompt)
+                self.assertIn("separate CI jobs", prompt)
+                self.assertIn("state validation limits", prompt)
+        # Codex retains its own read-only sandbox contract, including safe shell reads.
+        self.assertNotIn("PERMITTED TOOLS:", (self.work / "codex-L2.prompt").read_text())
+
     def test_missing_required_lens_cannot_shrink_matrix(self):
         (self.work / "missing-cells.txt").write_text("kiro-opus/L2\n")
         (self.lenses / "L5.txt").unlink()

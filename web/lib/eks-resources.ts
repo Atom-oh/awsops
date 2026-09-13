@@ -20,6 +20,8 @@ export interface NodeRow {
   name: string; status: string; roles: string; version: string; instanceType: string; zone: string; age: string;
   // capacity/allocatable: cpu in cores, memory in MiB (0 when the API didn't report it).
   cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number;
+  // Actual metrics-server usage: cores / MiB, null when unavailable; timestamp of the sample.
+  cpuUsage?: number | null; memUsage?: number | null; usageTimestamp?: string | null;
   // ephemeral-storage capacity/allocatable in MiB (0 when the API didn't report it).
   diskCapacity: number; diskAllocatable: number;
   // Detail-only metadata for node drilldowns. Secrets are never included here.
@@ -43,10 +45,42 @@ export interface PodRow {
   labels?: Record<string, string>;
 }
 
-/** Parse a K8s CPU quantity to cores: "8"→8, "7910m"→7.91, ""/null→0. */
+// Kubernetes quantities use the same decimal/binary suffixes for cores and bytes.
+const QUANTITY_EXPONENT: Record<string, number> = {
+  '': 0, n: -9, u: -6, m: -3, k: 3, M: 6, G: 9, T: 12, P: 15, E: 18,
+  Ki: 10, Mi: 20, Gi: 30, Ti: 40, Pi: 50, Ei: 60,
+};
+
+/** Strict quantity parsing for measurements: missing/invalid/negative is unknown, not zero. */
+function parseUsageQuantity(quantity: unknown): number | null {
+  if (typeof quantity !== 'string' && typeof quantity !== 'number') return null;
+  const match = String(quantity).trim().match(/^(\+?(?:\d+(?:\.\d*)?|\.\d+))([numkMGTPE]|[KMGTPE]i|[eE][+-]?\d+)?$/);
+  if (!match) return null;
+  const magnitude = Number(match[1]);
+  const suffix = match[2] ?? '';
+  const exponent = QUANTITY_EXPONENT[suffix] ?? Number(suffix.slice(1));
+  const base = suffix.endsWith('i') ? 2 : 10;
+  const value = exponent < 0 ? magnitude / base ** -exponent : magnitude * base ** exponent;
+  return Number.isFinite(value) && !(magnitude > 0 && value === 0) ? value : null;
+}
+
+/** Actual CPU usage in cores, retaining nano/microcore precision and explicit zero. */
+export function parseCpuUsage(cpu: unknown): number | null {
+  return parseUsageQuantity(cpu);
+}
+
+/** Actual memory working set in MiB, without request/capacity rounding. */
+export function parseMemUsage(mem: unknown): number | null {
+  const bytes = parseUsageQuantity(mem);
+  return bytes === null ? null : bytes / (1024 * 1024);
+}
+
+/** Parse a K8s CPU quantity to cores, including n/u/m suffixes; unknown requests → 0. */
 export function parseCpuCores(cpu: unknown): number {
   if (cpu == null || cpu === '') return 0;
   const s = String(cpu).trim();
+  if (s.endsWith('n')) return (parseFloat(s) || 0) / 1e9;
+  if (s.endsWith('u')) return (parseFloat(s) || 0) / 1e6;
   if (s.endsWith('m')) return (parseFloat(s) || 0) / 1000;
   return parseFloat(s) || 0;
 }
@@ -80,6 +114,7 @@ export function parseMem(mem: unknown): number {
 export interface NodeResourceAgg {
   name: string;
   instanceType: string;
+  cpuUsage?: number | null; memUsage?: number | null; usageTimestamp?: string | null;
   cpuAllocatable: number; cpuRequest: number; cpuPct: number;
   memAllocatable: number; memRequest: number; memPct: number;
   diskAllocatable: number; diskRequest: number; diskPct: number;
@@ -117,6 +152,7 @@ export function aggregateNodeResources(nodes: NodeRow[], pods: PodRow[]): NodeRe
     return {
       name: n.name,
       instanceType: n.instanceType,
+      cpuUsage: n.cpuUsage ?? null, memUsage: n.memUsage ?? null, usageTimestamp: n.usageTimestamp ?? null,
       cpuAllocatable: n.cpuAllocatable, cpuRequest: e.cpu, cpuPct: pct(e.cpu, n.cpuAllocatable),
       memAllocatable: n.memAllocatable, memRequest: e.mem, memPct: pct(e.mem, n.memAllocatable),
       diskAllocatable: n.diskAllocatable, diskRequest: e.disk, diskPct: pct(e.disk, n.diskAllocatable),

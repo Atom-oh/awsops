@@ -9,7 +9,7 @@ import Badge from '@/components/ui/Badge';
 import StatCard from '@/components/ui/StatCard';
 import { useActiveAccount, accountParam } from '@/lib/account-context';
 import Card from '@/components/ui/Card';
-import Meter from '@/components/ui/Meter';
+import NodeResourceMeters from '@/components/eks/NodeResourceMeters';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import BarDistribution from '@/components/charts/BarDistribution';
 import { useI18n } from '@/components/shell/LanguageProvider';
@@ -18,7 +18,7 @@ import NodeDrilldownPanel from '@/components/eks/NodeDrilldownPanel';
 import EksFilterPanel, { NO_VPC, type EksFilterState } from '@/components/eks/EksFilterPanel';
 import NodePodsSection from '@/components/eks/NodePodsSection';
 import NodeEniSection from '@/components/eks/NodeEniSection';
-import type { NodeRow, PodRow } from '@/lib/eks-resources';
+import type { NodeResourceAgg } from '@/lib/eks-resources';
 
 // EKS fleet overview — v1 /k8s-Overview parity. Access Entry holders register
 // instantly (the v2 equivalent of v1's "Register kubeconfig"); others get the
@@ -35,14 +35,6 @@ interface Cluster {
 }
 interface Guide { commands: string[]; note: string }
 
-interface NodeAgg {
-  name: string;
-  instanceType: string;
-  cpuAllocatable: number; cpuRequest: number; cpuPct: number;
-  memAllocatable: number; memRequest: number; memPct: number;
-  diskAllocatable: number; diskRequest: number; diskPct: number;
-  podCount: number;
-}
 interface FleetEvent {
   kind: string; object: string; reason: string; message: string;
   count: number; lastSeen: string; lastSeenTs: number;
@@ -50,15 +42,12 @@ interface FleetEvent {
 interface FleetCluster {
   name: string; reachable: boolean; error?: string;
   counts: { nodes: number; nodesReady: number; pods: number; podsRunning: number; deployments: number; services: number };
-  nodeAgg: NodeAgg[];
+  nodeAgg: NodeResourceAgg[];
   instanceTypes: Array<{ type: string; count: number }>;
   podStatus: Record<string, number>;
   podsByNamespace: Array<{ namespace: string; count: number }>;
   events: FleetEvent[];
 }
-
-// [PR#40 review MINOR] readable size: GiB at/above 1 GiB, else MiB (avoids tiny nodes showing "0.7").
-const fmtMib = (mib: number): string => (mib >= 1024 ? `${(mib / 1024).toFixed(1)}G` : `${Math.round(mib)}M`);
 
 export default function EksPage() {
   const { tt, lang } = useI18n();
@@ -600,7 +589,7 @@ export default function EksPage() {
       )}
 
       {connected > 0 && reachable.some((f) => f.nodeAgg.length > 0) && (
-        <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리/디스크 G=GiB·M=MiB · request/allocatable 기준 — 디스크는 Pod가 ephemeral-storage request를 명시할 때만 채워짐)">
+        <Card title={tt('노드 리소스 (Allocated / Usage)')} subtitle={tt('Allocated = Pod 요청 합계 · Usage = Metrics API 실측 · 비율은 Allocatable 기준 · 디스크 Usage 미지원')}>
           <div className="flex flex-col gap-4">
             {reachable.filter((f) => f.nodeAgg.length > 0).map((f) => (
               <div key={f.name} className="flex flex-col gap-2">
@@ -619,21 +608,12 @@ export default function EksPage() {
                       {n.instanceType && <span className="ml-2 text-ink-400">{n.instanceType}</span>}
                       <span className="ml-2 text-ink-400">{n.podCount} pods</span>
                     </span>
-                    <span className="flex items-center gap-2 text-ink-500">
-                      <span className="w-8 shrink-0">CPU</span>
-                      <Meter value={n.cpuPct} />
-                      <span className="tabular text-ink-400">{n.cpuRequest.toFixed(1)}/{n.cpuAllocatable.toFixed(1)}</span>
-                    </span>
-                    <span className="flex items-center gap-2 text-ink-500">
-                      <span className="w-8 shrink-0">Mem</span>
-                      <Meter value={n.memPct} />
-                      <span className="tabular text-ink-400">{fmtMib(n.memRequest)}/{fmtMib(n.memAllocatable)}</span>
-                    </span>
-                    <span className="flex items-center gap-2 text-ink-500">
-                      <span className="w-8 shrink-0">Disk</span>
-                      <Meter value={n.diskPct} />
-                      <span className="tabular text-ink-400">{fmtMib(n.diskRequest)}/{fmtMib(n.diskAllocatable)}</span>
-                    </span>
+                    <NodeResourceMeters resource="CPU" allocated={n.cpuRequest} usage={n.cpuUsage}
+                      allocatable={n.cpuAllocatable} unit="cpu" usageTimestamp={n.usageTimestamp} />
+                    <NodeResourceMeters resource="Memory" allocated={n.memRequest} usage={n.memUsage}
+                      allocatable={n.memAllocatable} unit="memory" usageTimestamp={n.usageTimestamp} />
+                    <NodeResourceMeters resource="Disk" allocated={n.diskRequest} allocatable={n.diskAllocatable}
+                      unit="memory" usageUnsupported />
                   </div>
                 ))}
               </div>

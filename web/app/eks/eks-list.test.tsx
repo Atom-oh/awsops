@@ -17,7 +17,7 @@ const fleetCluster = {
   name: 'conn',
   reachable: true,
   counts: { nodes: 2, nodesReady: 2, pods: 10, podsRunning: 9, deployments: 3, services: 4 },
-  nodeAgg: [{ name: 'n1', cpuAllocatable: 3.9, cpuRequest: 1.2, cpuPct: 31, memAllocatable: 15000, memRequest: 4000, memPct: 27, podCount: 5 }],
+  nodeAgg: [{ name: 'n1', cpuAllocatable: 3.9, cpuRequest: 1.2, cpuPct: 31, cpuUsage: 0.39, memUsage: 7500, memAllocatable: 15000, memRequest: 4000, memPct: 27, podCount: 5 }],
   podStatus: { Running: 9, Pending: 1 },
   podsByNamespace: [{ namespace: 'default', count: 6 }, { namespace: 'kube-system', count: 4 }],
   events: [{ kind: 'Pod', object: 'default/p1', reason: 'BackOff', message: 'restarting', count: 3, lastSeen: '5m', lastSeenTs: 1000 }],
@@ -108,6 +108,9 @@ describe('EKS list page (ADR buildout)', () => {
     render(<EksPage />);
     // node resource bars
     await waitFor(() => expect(screen.getByText('n1')).toBeTruthy());
+    expect(screen.getByText('1.20 / 3.90 vCPU (31%)')).toBeTruthy();
+    expect(screen.getByText('0.39 / 3.90 vCPU (10%)')).toBeTruthy();
+    expect(screen.getByText('미지원')).toBeTruthy();
     // warning events table — DataTable renders both desktop table + mobile card
     // list, so the cell value appears twice in jsdom → assert via getAllByText.
     await waitFor(() => expect(screen.getAllByText('BackOff').length).toBeGreaterThan(0));

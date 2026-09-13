@@ -2,6 +2,7 @@
 import Card from '@/components/ui/Card';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { StackBar } from './NodeCapacityCards';
+import NodeResourceMeters from './NodeResourceMeters';
 
 // Fleet nodes capacity visualization (gap L132, v1 parity): one row per node with 3-segment
 // CPU/Memory stacked bars (Requested / Available / System-Reserved) and v1's 'avail X | rsv Y'
@@ -14,6 +15,8 @@ export interface NodeCapacityRow {
   name: string;
   cpuCapacity: number; cpuAllocatable: number; cpuRequest: number | null;
   memCapacityMiB: number; memAllocatableMiB: number; memRequestMiB: number | null;
+  cpuUsage?: number | null; memUsageMiB?: number | null;
+  usageTimestamp?: string | null;
 }
 
 const MAX_RENDER = 40;
@@ -37,6 +40,8 @@ export default function NodeCapacityList({ rows, requestsPending = false }: { ro
   const pressure = (n: NodeCapacityRow) => Math.max(
     n.cpuAllocatable > 0 && n.cpuRequest != null ? n.cpuRequest / n.cpuAllocatable : 0,
     n.memAllocatableMiB > 0 && n.memRequestMiB != null ? n.memRequestMiB / n.memAllocatableMiB : 0,
+    n.cpuAllocatable > 0 && n.cpuUsage != null ? n.cpuUsage / n.cpuAllocatable : 0,
+    n.memAllocatableMiB > 0 && n.memUsageMiB != null ? n.memUsageMiB / n.memAllocatableMiB : 0,
   );
   const shown = rows.length > MAX_RENDER
     ? [...rows].sort((a, b) => (Number(unknown(b)) - Number(unknown(a))) || (pressure(b) - pressure(a))).slice(0, MAX_RENDER)
@@ -46,8 +51,8 @@ export default function NodeCapacityList({ rows, requestsPending = false }: { ro
   const cpuFmt = (v: number) => `${v.toFixed(1)} vCPU`;
   return (
     <Card
-      title={tt('노드 용량 (Requested / Available / Reserved)')}
-      subtitle={tt('Reserved = Capacity − Allocatable (system-reserved) · Requested = 스케줄러 요청 합계 (native-sidecar init 요청 제외)')}
+      title={tt('노드 리소스 (Allocated / Usage)')}
+      subtitle={tt('Allocated = Pod 요청 합계 · Usage = Metrics API 실측 · 비율은 Allocatable 기준 · Usage 미수집은 별도 표시')}
       padded={false}
     >
       {rows.length > MAX_RENDER && (
@@ -63,6 +68,8 @@ export default function NodeCapacityList({ rows, requestsPending = false }: { ro
               <div className="truncate font-mono text-[10.5px] text-ink-400">{n.cluster}</div>
             </div>
             <div>
+              <NodeResourceMeters resource="CPU" allocated={n.cpuRequest} usage={n.cpuUsage}
+                allocatable={n.cpuAllocatable} unit="cpu" usageTimestamp={n.usageTimestamp} />
               <div className="mb-0.5 flex items-baseline justify-between text-[10.5px] text-ink-400">
                 <span>CPU {n.cpuCapacity.toFixed(1)} vCPU</span>
                 <span>{caption(n.cpuRequest, n.cpuAllocatable, n.cpuCapacity, cpuFmt, unknownText)}</span>
@@ -70,6 +77,8 @@ export default function NodeCapacityList({ rows, requestsPending = false }: { ro
               <StackBar requested={n.cpuRequest} allocatable={n.cpuAllocatable} capacity={n.cpuCapacity} />
             </div>
             <div>
+              <NodeResourceMeters resource="Memory" allocated={n.memRequestMiB} usage={n.memUsageMiB}
+                allocatable={n.memAllocatableMiB} unit="memory" usageTimestamp={n.usageTimestamp} />
               <div className="mb-0.5 flex items-baseline justify-between text-[10.5px] text-ink-400">
                 <span>Mem {gib(n.memCapacityMiB)}</span>
                 <span>{caption(n.memRequestMiB, n.memAllocatableMiB, n.memCapacityMiB, gib, unknownText)}</span>
