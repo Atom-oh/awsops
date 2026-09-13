@@ -34,7 +34,8 @@ Operational playbooks organized by scenario. Each follows symptoms → diagnosis
   product guides under `docs-site/` remain unchanged.
 - Commands should be copy-paste ready.
 - Cite the related ADR number(s) at the bottom.
-- Do not let a runbook embed secrets, AWS account IDs, ARNs, or live domains.
+- Follow `../CLAUDE.md` for credential handling: no credentials in docs, and use
+  placeholders for deployment identifiers in examples. Identifiers alone are not secrets.
 
 ## Adding a Runbook
 1. Add it to this index.

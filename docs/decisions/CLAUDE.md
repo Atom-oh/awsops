@@ -37,6 +37,7 @@ resolves legacy numbers; an old plan, review, or implementation comment is not c
 
 ## Generated reviewer context
 
-`AGENTS.md` is distilled from this file. Regenerate its marker with the installed co-agent
-`check_ai_context.py docs/decisions --emit-marker`, then verify with
-`check_ai_context.py docs/decisions --verify AGENTS.md`. Do not invent a source hash.
+`AGENTS.md` is distilled from this file. Run the installed `/co-agent sync-context`
+workflow after editing this source; it updates the distilled body and validates
+its marker, size and content. The helper's `--emit-marker` only emits metadata;
+it does not regenerate the body. Never update a hash without reviewing the context.
