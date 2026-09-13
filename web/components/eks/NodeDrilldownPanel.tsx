@@ -61,6 +61,9 @@ export default function NodeDrilldownPanel({ cluster, nodeName, onClose }: {
             memCapacityMiB={detail.node.memCapacity}
             memAllocatableMiB={detail.node.memAllocatable}
             memRequestMiB={memRequest}
+            cpuUsage={detail.node.cpuUsage}
+            memUsageMiB={detail.node.memUsage}
+            usageTimestamp={detail.node.usageTimestamp}
             podCIDR={detail.node.podCIDR}
             podCount={pods?.length ?? 0}
             podRunning={(pods ?? []).filter((x) => x.status === 'Running').length}

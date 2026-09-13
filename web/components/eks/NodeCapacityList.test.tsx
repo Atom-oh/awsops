@@ -13,6 +13,30 @@ const node = (over: Partial<NodeCapacityRow> = {}): NodeCapacityRow => ({
 });
 
 describe('NodeCapacityList (gap L132)', () => {
+  it('shows allocated requests and measured usage separately against allocatable', () => {
+    render(<NodeCapacityList rows={[node({ cpuUsage: 0.7, memUsageMiB: 3584 })]} />);
+    expect(screen.getAllByText('Allocated')).toHaveLength(2);
+    expect(screen.getAllByText('Usage')).toHaveLength(2);
+    expect(screen.getByText('1.50 / 3.50 vCPU (43%)')).toBeTruthy();
+    expect(screen.getByText('0.70 / 3.50 vCPU (20%)')).toBeTruthy();
+    expect(screen.getByText('3.5 GiB / 7.0 GiB (50%)')).toBeTruthy();
+  });
+
+  it('keeps missing usage distinct from an actual zero measurement', () => {
+    render(<NodeCapacityList rows={[node({ cpuUsage: 0, memUsageMiB: null })]} />);
+    expect(screen.getByText('0.00 / 3.50 vCPU (0%)')).toBeTruthy();
+    expect(screen.getByText('미수집')).toBeTruthy();
+  });
+
+  it('keeps nodes with high usage visible even when their requests are low', () => {
+    const rows = [
+      ...Array.from({ length: 44 }, (_, i) => node({ name: `reserved-${i}`, cpuRequest: 2 })),
+      node({ name: 'busy-node', cpuRequest: 0.1, cpuUsage: 3.4 }),
+    ];
+    render(<NodeCapacityList rows={rows} />);
+    expect(screen.getByText('busy-node')).toBeTruthy();
+  });
+
   it("renders v1's 'avail X | rsv Y' captions from capacity/allocatable/requested", () => {
     render(<NodeCapacityList rows={[node()]} />);
     // CPU: avail = 3.5 - 1.5 = 2.0; rsv = 4 - 3.5 = 0.5

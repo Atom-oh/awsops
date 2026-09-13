@@ -8,6 +8,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const NODE = {
   name: 'ip-10-0-1-1', status: 'Ready', roles: 'worker', version: 'v1.31', instanceType: 'm6g.large',
   zone: 'apne2-az1', age: '3d', cpuCapacity: 4, cpuAllocatable: 3.5, memCapacity: 8192, memAllocatable: 7168,
+  cpuUsage: 0.7, memUsage: 3584,
 };
 const POD = (over: Record<string, unknown> = {}) => ({
   name: 'p', namespace: 'default', status: 'Running', node: 'ip-10-0-1-1', restarts: 0, age: '1d',
@@ -44,9 +45,11 @@ describe('FleetKindPage nodes capacity list (gap L132)', () => {
       POD({ node: 'prod-a-n1', status: 'Failed', cpuRequest: 99, memRequest: 99999 }),    // must NOT count
     ] });
     render(<FleetKindPage kind="nodes" />);
-    await waitFor(() => expect(screen.getByText('노드 용량 (Requested / Available / Reserved)')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('노드 리소스 (Allocated / Usage)')).toBeTruthy());
     // Requested = 1 vCPU only → avail = 3.5 - 1 = 2.5; rsv = 4 - 3.5 = 0.5
     await waitFor(() => expect(screen.getByText('avail 2.5 vCPU | rsv 0.5 vCPU')).toBeTruthy());
+    expect(screen.getByText('0.70 / 3.50 vCPU (20%)')).toBeTruthy();
+    expect(screen.getByText('3.5 GiB / 7.0 GiB (50%)')).toBeTruthy();
   });
 
   it("a cluster whose pods fetch fails degrades only ITS rows to '요청량 미상'", async () => {
