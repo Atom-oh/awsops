@@ -33,7 +33,7 @@ export interface InvokeInput {
   // passed through untouched, only a value already matching this exact own-namespaced shape
   // (pentest-remediation P3-1, PR #200 review).
   systemPromptOverride?: string; // ADR-031: resolved custom prompt
-  toolAllowlist?: string[];      // ADR-031 Phase 2: now the server-side-enforced set
+  toolAllowlist?: string[];      // undefined = legacy unrestricted; [] = explicit deny-all
   agentName?: string;            // ADR-031: traceability
   agentVersion?: number;
   skillHashes?: string[];
@@ -154,7 +154,13 @@ async function* streamEvents(resp: unknown): AsyncGenerator<AgentEvent> {
 function buildCommand(input: InvokeInput, arn: string): InvokeAgentRuntimeCommand {
   const body: Record<string, unknown> = { gateway: input.gateway, messages: input.messages };
   if (input.systemPromptOverride) body.systemPromptOverride = input.systemPromptOverride;
-  if (input.toolAllowlist) body.toolAllowlist = input.toolAllowlist;
+  // Old runtimes treat [] as unrestricted. This reserved nonempty token cannot be a
+  // Bedrock ToolSpecification name (pattern [a-zA-Z0-9_-]+), so exact-match old filters
+  // also deny all. Keep [] in the internal spec; encode only at the transport boundary.
+  // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolSpecification.html
+  if (input.toolAllowlist !== undefined) {
+    body.toolAllowlist = input.toolAllowlist.length ? input.toolAllowlist : ['!awsops-deny-all!'];
+  }
   if (input.agentName) body.agentName = input.agentName;
   if (input.agentVersion !== undefined) body.agentVersion = input.agentVersion;
   if (input.skillHashes) body.skillHashes = input.skillHashes;

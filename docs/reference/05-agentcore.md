@@ -37,6 +37,10 @@ Connection/tool-discovery failure before output can yield a tool-less answer.
 After streaming begins, failures must not trigger a duplicated fallback answer.
 Runtime experimental-loop selection remains server-controlled at the BFF boundary.
 
+## Custom tool policy
+
+The resolver uses `web/lib/gateway-tool-catalog.json`, a qualified-name snapshot of the Python catalog's Lambda schemas and hosted-MCP read allowlists. Refresh it from those catalog entries when membership changes and run `web/lib/agent-resolver.test.ts`'s parity check. It is an eligibility catalog, not live discovery. Runtime provisioning and official-MCP gates still apply. Instruction-only skills inherit existing gateway reads unless a declared or retained restriction exists. Account caps narrow that baseline; declared/revoked empty intersections remain deny-all. An empty account cap is unrestricted at that layer; an effective `[]` denies all tools and is encoded as `!awsops-deny-all!` for older runtimes. `undefined` retains legacy unrestricted filtering. Chat discloses and persists a policy-zero limitation instead of implying live evidence was read.
+
 ## Security and operational limits
 
 Lambda-backed targets use `GATEWAY_IAM_ROLE`; curated vendor targets have their

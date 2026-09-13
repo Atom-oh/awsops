@@ -21,31 +21,36 @@ function isHttpsUrl(s: string): boolean {
   try { return new URL(s).protocol === 'https:'; } catch { return false; }
 }
 
-export function validateIntegration(i: {
-  name?: string; kind?: string; direction?: string; capability?: string; endpoint?: string;
-  transport?: string; authMode?: string; credentialsRef?: string; triggerTarget?: string;
-}): ValidationResult {
+export function validateIntegration(input: unknown): ValidationResult {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, errors: ['integration must be an object'] };
+  const i = input as Record<string, unknown>;
   const errors: string[] = [];
-  if (!i.name || !NAME_RE.test(i.name)) errors.push('name must be kebab-case, 2-64 chars');
-  if (!(INTEGRATION_DIRECTIONS as readonly string[]).includes(i.direction ?? '')) {
+  // Historical enum/schema values remain intact; ADR-005/017 retire new arbitrary MCP registration.
+  if (i.kind === 'custom_mcp') errors.push('custom_mcp is retired; use a curated integration');
+  if (typeof i.name !== 'string' || !NAME_RE.test(i.name)) errors.push('name must be kebab-case, 2-64 chars');
+  if (!(INTEGRATION_DIRECTIONS as readonly unknown[]).includes(i.direction)) {
     errors.push(`direction must be one of ${INTEGRATION_DIRECTIONS.join(', ')}`);
   }
   // kind must match the direction's set (mirrors the migration's conditional kind CHECK)
   if (i.direction === 'egress') {
-    if (!(INTEGRATION_KINDS_EGRESS as readonly string[]).includes(i.kind ?? '')) errors.push(`egress kind must be one of ${INTEGRATION_KINDS_EGRESS.join(', ')}`);
+    if (!(INTEGRATION_KINDS_EGRESS as readonly unknown[]).includes(i.kind)) errors.push(`egress kind must be one of ${INTEGRATION_KINDS_EGRESS.join(', ')}`);
   } else if (i.direction === 'ingress') {
-    if (!(INTEGRATION_KINDS_INGRESS as readonly string[]).includes(i.kind ?? '')) errors.push(`ingress kind must be one of ${INTEGRATION_KINDS_INGRESS.join(', ')}`);
+    if (!(INTEGRATION_KINDS_INGRESS as readonly unknown[]).includes(i.kind)) errors.push(`ingress kind must be one of ${INTEGRATION_KINDS_INGRESS.join(', ')}`);
   }
-  if (i.capability !== undefined && !(INTEGRATION_CAPABILITIES as readonly string[]).includes(i.capability)) {
+  if (i.capability !== undefined && !(INTEGRATION_CAPABILITIES as readonly unknown[]).includes(i.capability)) {
     errors.push(`capability must be one of ${INTEGRATION_CAPABILITIES.join(', ')}`);
   }
   if (i.direction === 'egress') {
-    if (!i.endpoint || !isHttpsUrl(i.endpoint)) errors.push('egress requires a valid https endpoint URL');
-    if (!(INTEGRATION_TRANSPORTS as readonly string[]).includes(i.transport ?? '')) errors.push(`egress transport must be one of ${INTEGRATION_TRANSPORTS.join(', ')}`);
+    if (typeof i.endpoint !== 'string' || !isHttpsUrl(i.endpoint)) errors.push('egress requires a valid https endpoint URL');
+    if (!(INTEGRATION_TRANSPORTS as readonly unknown[]).includes(i.transport)) errors.push(`egress transport must be one of ${INTEGRATION_TRANSPORTS.join(', ')}`);
   }
   if (i.direction === 'ingress') {
-    if (!i.authMode || !i.authMode.trim()) errors.push('ingress requires an auth_mode');
-    if (i.triggerTarget !== undefined && !(INGRESS_TRIGGER_TARGETS as readonly string[]).includes(i.triggerTarget)) errors.push(`triggerTarget must be one of ${INGRESS_TRIGGER_TARGETS.join(', ')}`);
+    if (typeof i.authMode !== 'string' || !i.authMode.trim()) errors.push('ingress requires an auth_mode');
+    if (i.triggerTarget !== undefined && !(INGRESS_TRIGGER_TARGETS as readonly unknown[]).includes(i.triggerTarget)) errors.push(`triggerTarget must be one of ${INGRESS_TRIGGER_TARGETS.join(', ')}`);
+  }
+  for (const field of ['exposedTools', 'writeActionRefs', 'sourceAllowlist']) {
+    const values = i[field];
+    if (values !== undefined && (!Array.isArray(values) || !values.every((v) => typeof v === 'string'))) errors.push(`${field} must be string[]`);
   }
   // credentialsRef is optional at P2 registration (the Secrets Manager write is P2-infra); if present it
   // must be a Secrets-Manager ARN or a non-empty string.
