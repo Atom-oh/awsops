@@ -78,7 +78,10 @@ set -euo pipefail
 : "${AWS_REGION:?Set the intended foundation region}"
 : "${STEAMPIPE_SERVICE:?Set the deployed Steampipe service name}"
 INV_CLUSTER=$(terraform -chdir=terraform/v2/foundation output -raw ecs_cluster_name)
-INV_FUNCTION=$(terraform -chdir=terraform/v2/foundation output -raw inv_sync_function)
+INV_FUNCTION=$(terraform -chdir=terraform/v2/foundation output -raw inv_sync_function) || {
+  echo 'Cannot read sync function output; verify Terraform access and feature deployment.' >&2
+  exit 1
+}
 : "${INV_CLUSTER:?No ECS cluster output}"
 : "${INV_FUNCTION:?No sync function output; check feature deployment}"
 aws ecs wait services-stable --region "$AWS_REGION" \
@@ -110,12 +113,14 @@ terraform -chdir=terraform/v2/foundation plan \
 terraform -chdir=terraform/v2/foundation apply tfplan-steampipe-ecr
 ```
 
-Build/push the image and set the matching `steampipe_image_tag` in reviewed configuration.
+Build/push the image, then persist `steampipe_enabled=true` and the matching
+`steampipe_image_tag` in reviewed Terraform configuration. The ECR bootstrap's `-var` override
+affects only that plan; it does not update the configuration used by later plans.
 Then make and review a fresh full saved plan that enables the service and sync Lambda:
 
 ```bash
 set -euo pipefail
-terraform -chdir=terraform/v2/foundation plan -var='steampipe_enabled=true' -out tfplan
+terraform -chdir=terraform/v2/foundation plan -out tfplan
 # Controller-approved operation only:
 terraform -chdir=terraform/v2/foundation apply tfplan
 ```
