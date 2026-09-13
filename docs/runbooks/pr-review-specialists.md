@@ -33,18 +33,23 @@ credential protection and output scrubbing remain necessary.
 Panel/chair output is invalid when anchored stderr reports model-selection,
 implicit fallback or account usage failure, even with exit zero and a valid
 completion frame. These failures stop subsequent retries/fallback and remain
-recorded. Service throttles keep the existing bounded recovery; quoted/fenced diff
-examples are ignored as diagnostic evidence. Kiro startup uses the same diagnostic parser.
+recorded. An exit-zero, protocol-valid report is retained when stderr contains only
+a nonterminal warning. Failed CLI exits and missing/invalid reports retain bounded
+retry/fallback. Quoted/fenced diff examples are ignored as diagnostic evidence.
+Kiro startup uses the same diagnostic parser.
 
-Startup remains one fail-closed attempt per configured Kiro model within its
-existing timeout; transient startup failure requires a later review run. Bounded
-transient retry/fallback applies to review cells and chairs, not startup. This
-keeps the existing startup request count and execution budgets unchanged.
+The adapter adds one startup request per configured Kiro model: two serial calls
+under `KIRO_PREFLIGHT_TIMEOUT` (default 120 seconds each). A failed startup,
+including a transient failure, blocks the review and requires a later run.
+Startup has no automatic retry. Review cells retain at most two 1200-second
+attempts; terminal model/account failures stop earlier. The workflow's 90-minute
+ceiling, 900-second chair timeout and kill bounds remain unchanged.
 
 
 The existing Pod Identity preflight still precedes both panel and chair. The
-adapter does not change identities, L1/source-omission gates, model roster,
-1200-second panel timeouts, retry/kill bounds, chair caps or publication checks.
+adapter preserves identities, provider membership, L1/source-omission gates,
+execution caps and publication checks. The requested model IDs change to the
+Sol/Astra pins listed above in both specialist and legacy modes.
 The existing workflow's 3000-line prefix limit remains a coverage limitation:
 the adapter gives every role the same supplied prefix; it does not implement
 complete-diff chunking or claim to review omitted bytes.
@@ -54,7 +59,7 @@ completion, not a validated absence of Critical/Major findings. Any missing
 required role forces failure regardless of the chair's verdict. No AWS product
 mutation or relaxation of ADR-005 is authorized by this review adapter.
 
-Offline verification:
+Offline verification from the repository root:
 
 ```bash
 python3 -m unittest discover -s scripts/pr-review -p 'test_*.py'

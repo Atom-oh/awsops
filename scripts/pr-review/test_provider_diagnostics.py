@@ -48,9 +48,12 @@ count_file = state/(key+".count")
 count = int(count_file.read_text())+1 if count_file.exists() else 1
 count_file.write_text(str(count))
 plan = json.loads((state/"plan.json").read_text())
-message = plan.get(key, "") if count == 1 else ""
+entry = plan.get(key, "") if count == 1 else ""
+message = entry.get("stderr", "") if isinstance(entry, dict) else entry
+exit_code = entry.get("exit", 0) if isinstance(entry, dict) else 0
 if message: print(message, file=sys.stderr)
 print(body)
+sys.exit(exit_code)
 '''
 
 
@@ -131,7 +134,7 @@ class ProviderDiagnostics(unittest.TestCase):
     def test_transient_panel_failure_can_retry_within_existing_limit(self):
         for tag in ('codex','kiro-opus'):
             with self.subTest(tag=tag):
-                root=self.panel({tag:TRANSIENT})
+                root=self.panel({tag:{"stderr":TRANSIENT,"exit":7}})
                 self.assertEqual((root/(tag+'.count')).read_text(),'2')
                 self.assertIn(tag+'/',(root/'work/responded.txt').read_text())
                 self.assertFalse((root/'work/coverage-severe.flag').exists())
@@ -145,9 +148,21 @@ class ProviderDiagnostics(unittest.TestCase):
                 self.assertFalse((root/'chair-fallback.count').exists())
 
     def test_transient_chair_failure_keeps_existing_recovery(self):
-        root=self.chair({'chair-primary':TRANSIENT})
+        root=self.chair({'chair-primary':{"stderr":TRANSIENT,"exit":7}})
         self.assertTrue((root/'report.md').read_text().rstrip().endswith('VERDICT: PASS'))
         self.assertEqual(sum(int(p.read_text()) for p in root.glob('chair-*.count')),2)
+
+    def test_valid_report_with_transient_warning_does_not_spend_retry(self):
+        for tag in ('codex', 'kiro-opus'):
+            with self.subTest(tag=tag):
+                root = self.panel({tag: TRANSIENT})
+                self.assertEqual((root/(tag+'.count')).read_text(), '1')
+                self.assertIn(tag+'/', (root/'work/responded.txt').read_text())
+                self.assertFalse((root/'work/coverage-severe.flag').exists())
+        root = self.chair({'chair-primary': TRANSIENT})
+        self.assertTrue((root/'report.md').read_text().rstrip().endswith('VERDICT: PASS'))
+        self.assertEqual((root/'chair-primary.count').read_text(), '1')
+        self.assertFalse((root/'chair-fallback.count').exists())
 
 
 if __name__ == '__main__':

@@ -61,8 +61,8 @@ try_panel() {
     local diagnostic
     diagnostic="$(provider_diagnostic "$err")" || diagnostic=$'diagnostic_read_error\tDiagnostic parser failed'
     if [ -n "$diagnostic" ]; then
-      : > "$slot"; rc=1
       if provider_diagnostic_terminal "$diagnostic"; then
+        : > "$slot"; rc=1
         printf '%s\n' "$diagnostic" | scrub_secrets > "$slot.provider-failure"
         cp "$slot.provider-failure" "$WORK/provider-failure.flag"
         : > "$WORK/coverage-severe.flag"
@@ -73,6 +73,8 @@ try_panel() {
         return 1
       fi
     fi
+    # A nonterminal warning cannot invalidate successful, nonce-validated output.
+    # Failed CLI exits and incomplete frames retain the existing bounded retry.
     [ "$rc" -eq 0 ] && panel_report_valid "$slot" "$lens" "$nonce" && return 0
     # Even a complete-looking report is invalid if the CLI failed or timed out.
     # Keep only a bounded diagnostic; scrub before the byte cap so a truncated

@@ -328,12 +328,13 @@ run_chair() {  # $1=model $2=err-file -> writes "$OUT" only on successful CLI/sc
   local diagnostic
   diagnostic="$(provider_diagnostic "$2")" || diagnostic=$'diagnostic_read_error\tDiagnostic parser failed'
   if [ -n "$diagnostic" ]; then
-    CHAIR_STATUS=1
     if provider_diagnostic_terminal "$diagnostic"; then
+      CHAIR_STATUS=1
       CHAIR_TERMINAL=1
       printf '%s\n' "$diagnostic" | scrub_secrets > "$WORK/chair-provider-failure.flag"
     fi
   fi
+  # Transient diagnostics leave successful output for the normal verdict check.
   if [ "$CHAIR_STATUS" -ne 0 ]; then
     : > "$OUT"
     echo "run_chair: exit=$CHAIR_STATUS; discarded incomplete review" >> "$2"
