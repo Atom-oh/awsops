@@ -300,6 +300,8 @@ jobs:
           LENS: L3 — Security / AWS mutation safety
           - Unauthorized enablement of AWS mutation/autonomy violates ADR-005 and is CRITICAL;
             retained dark code alone is not enablement.
+          - Any new product call path that mutates AWS resources is CRITICAL except the exact
+            ADR-015 path. Use the base edge allowlist as the baseline; review every addition.
           - Read ADR-015 for its exact secret-rotation restart exception. Operator-authorized
             deployment is distinct from application autonomy.
           - External data reads/writes follow ADR-007. integrations_write_enabled is GATED-OFF,
@@ -311,7 +313,8 @@ jobs:
           $COMMON
 
           LENS: L4 — Observability / data-integration correctness
-          - Correctness of Steampipe queries, CIS compliance checks, AgentCore diagnosis logic.
+          - Correctness of Steampipe batch/Powerpipe jobs, disabled live BFF SQL, and diagnosis.
+          - Preserve ADR-010/021 evidence limits: partial/stale/unassessed is not a healthy zero.
           PROMPT_EOF
 
           cat <<PROMPT_EOF > /tmp/pr-review/lenses/L5.txt
