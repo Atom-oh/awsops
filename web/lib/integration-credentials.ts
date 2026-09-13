@@ -129,13 +129,15 @@ export async function setMcpPresetCredential(
 
 /** Preset slugs (namespace-stripped) that currently have an ADR-017 MCP credential stored —
  *  KEYS ONLY. Best-effort: degrades to [] on a Secrets Manager read failure, same as
- *  getConfiguredSlugs (the gated/off state must not 500 the Connectors tab). */
-export async function getConfiguredMcpPresetSlugs(): Promise<string[]> {
+ *  getConfiguredSlugs. strict=true propagates read failures so status APIs can
+ *  distinguish unavailable from empty. A missing secret remains empty. */
+export async function getConfiguredMcpPresetSlugs(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap())
       .filter((k) => k.startsWith('mcp:'))
       .map((k) => k.slice(4));
   } catch (e) {
+    if (strict) throw e;
     console.warn(
       '[integration-credentials] getConfiguredMcpPresetSlugs read failed; treating as none configured:',
       (e as { name?: string })?.name || 'unknown error',
@@ -195,12 +197,13 @@ export async function getCredentialById(
   return null;
 }
 
-/** Configured instance id keys (numeric keys only — excludes kind-mirror keys). Best-effort: [] on a
- *  Secrets Manager read failure (mirrors getConfiguredSlugs degrade so the read-only list doesn't 500). */
-export async function getConfiguredIds(): Promise<string[]> {
+/** Configured instance id keys, excluding kind mirrors. Default callers get [] on
+ * a read failure; strict status callers propagate it and render unavailable. */
+export async function getConfiguredIds(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap()).filter((k) => /^\d+$/.test(k));
   } catch (e) {
+    if (strict) throw e;
     console.warn(
       '[integration-credentials] getConfiguredIds read failed; treating as none configured:',
       (e as { name?: string })?.name || 'unknown error',
@@ -221,13 +224,14 @@ export async function deleteCredentialKeys(keys: string[]): Promise<void> {
  *  Best-effort: when the integrations secret is absent or unreadable — e.g. the integrations
  *  feature is gated off, so the task role has no access and Secrets Manager returns
  *  AccessDenied (not ResourceNotFound) — treat it as "none configured" so the read-only
- *  list/explore surfaces (/api/datasources, /customization) degrade to an empty state instead
- *  of 500-ing the page. The admin write path (setIntegrationCredential) stays strict and still
+ *  legacy callers degrade to an empty state instead of 500-ing the page. Status APIs
+ *  use strict=true to expose unavailable. The admin write path stays strict and still
  *  surfaces errors. SECURITY: log only the error name, never the secret contents. */
-export async function getConfiguredSlugs(): Promise<string[]> {
+export async function getConfiguredSlugs(strict = false): Promise<string[]> {
   try {
     return Object.keys(await readMap());
   } catch (e) {
+    if (strict) throw e;
     console.warn(
       '[integration-credentials] getConfiguredSlugs read failed; treating as none configured:',
       (e as { name?: string })?.name || 'unknown error',
