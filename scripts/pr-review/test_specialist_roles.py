@@ -44,7 +44,16 @@ if mode == "fallback":
     print("no agent with name pr-review-readonly. Falling back to user specified default", file=sys.stderr)
 if mode == "quota":
     print("MONTHLY_REQUEST_COUNT limit reached", file=sys.stderr)
-print("REVIEW_COMPLETE: "+lens+" "+nonce+" "+json.dumps({"report": "No findings in the assigned specialist role.\n"}))
+body = "REVIEW_COMPLETE: "+lens+" "+nonce+" "+json.dumps({"report": "No findings in the assigned specialist role.\n"})
+if not kiro and "--json" in args:
+    for event in (
+        {"type":"turn.started"},
+        {"type":"item.completed","item":{"id":"reply","type":"agent_message","text":body}},
+        {"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}},
+    ):
+        print(json.dumps(event))
+else:
+    print(body)
 '''
 
 

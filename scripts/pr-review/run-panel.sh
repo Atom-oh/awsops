@@ -114,6 +114,14 @@ cell_nonce() {
   printf '%s' "$nonce"
 }
 
+# JSONL keeps command/file output off native stderr. The adapter forwards only
+# agent messages and native error events; pipefail preserves CLI/timeout failure.
+codex_review() {
+  timeout --kill-after="$KILL_AFTER" "$T" codex exec -s read-only --skip-git-repo-check \
+    --model global.openai.gpt-6-astra --json "$1" |
+    python3 "$DIR/codex_events.py"
+}
+
 # glm-5(kiro-glm) 는 로스터에서 제외 — AWS-Demo-Platform 저장소의 PR#88 리뷰에서 이 모델만 4건의 오탐을 냈다(AWS-Demo-Platform 저장소의 ADR-015). 되살릴 때는 오탐률을 먼저 재측정할 것.
 KIRO_MODELS=("claude-opus-5:kiro-opus" "gpt-5.6-sol:kiro-gpt")
 
@@ -142,7 +150,7 @@ for lens_file in "${LENS_FILES[@]}"; do
   # Pin the model; retain the existing Bedrock provider/endpoint/region settings.
   if command -v codex >/dev/null 2>&1; then
     ( try_panel "$SLOT/codex-$lens.md" "$SLOT/codex-$lens.err" "$lens" "$nonce" \
-        timeout --kill-after="$KILL_AFTER" "$T" codex exec -s read-only --skip-git-repo-check --model global.openai.gpt-6-astra "$CODEX_PROMPT" ) &
+        codex_review "$CODEX_PROMPT" ) &
   else echo "[skip] codex/$lens (binary absent)" >&2; : > "$SLOT/codex-$lens.md"; fi
 
   fi

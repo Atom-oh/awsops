@@ -52,7 +52,19 @@ entry = plan.get(key, "") if count == 1 else ""
 message = entry.get("stderr", "") if isinstance(entry, dict) else entry
 exit_code = entry.get("exit", 0) if isinstance(entry, dict) else 0
 if message: print(message, file=sys.stderr)
-print(body)
+tool_output = entry.get("tool_output", "") if isinstance(entry, dict) else ""
+event_error = entry.get("event_error", "") if isinstance(entry, dict) else ""
+if cli == "codex" and "--json" in args:
+ print(json.dumps({"type":"turn.started"}))
+ if tool_output:
+  print(json.dumps({"type":"item.completed","item":{"id":"tool","type":"command_execution","command":"cat runbook.md","aggregated_output":tool_output,"exit_code":0,"status":"completed"}}))
+ if event_error:
+  print(json.dumps({"type":"error","message":event_error}))
+ print(json.dumps({"type":"item.completed","item":{"id":"reply","type":"agent_message","text":body}}))
+ print(json.dumps({"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}))
+else:
+ if tool_output: print(tool_output, file=sys.stderr)
+ print(body)
 sys.exit(exit_code)
 '''
 
@@ -138,6 +150,23 @@ class ProviderDiagnostics(unittest.TestCase):
                 self.assertEqual((root/(tag+'.count')).read_text(),'2')
                 self.assertIn(tag+'/',(root/'work/responded.txt').read_text())
                 self.assertFalse((root/'work/coverage-severe.flag').exists())
+
+    def test_unprefixed_codex_file_output_is_not_a_provider_diagnostic(self):
+        root = self.panel({"codex": {"tool_output": "\n".join((
+            MODEL_ERROR, FALLBACK, QUOTA, "Monthly request limit reached",
+            '{"type":"error","message":"insufficient credits"}',
+        ))}})
+        self.assertIn("codex/L2", (root/'work/responded.txt').read_text())
+        self.assertEqual((root/'codex.count').read_text(), "1")
+        self.assertFalse((root/'work/coverage-severe.flag').exists())
+
+    def test_codex_terminal_error_event_cannot_hide_behind_valid_frame(self):
+        for diagnostic in (MODEL_ERROR, FALLBACK, QUOTA, OVERAGE):
+            with self.subTest(diagnostic=diagnostic):
+                root = self.panel({"codex": {"event_error": diagnostic}})
+                self.assertNotIn("codex/", (root/'work/responded.txt').read_text())
+                self.assertEqual((root/'codex.count').read_text(), "1")
+                self.assertTrue((root/'work/coverage-severe.flag').exists())
 
     def test_terminal_chair_error_cannot_accept_pass_or_try_another_model(self):
         for diagnostic in (MODEL_ERROR,FALLBACK,QUOTA,OVERAGE,TRANSIENT+"\n"+MODEL_ERROR,DIFF_FENCE+MODEL_ERROR):
