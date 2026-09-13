@@ -17,7 +17,8 @@ Strands AgentCore runtime; `agent.py` selects gateways and streams responses.
 
 ## Contracts
 
-- `readiness.py` implements the early `deployment_readiness` branch: runtime STS account,
+- `readiness.py` requires `DEPLOYMENT_READINESS_ENABLED=true` (default off, from applied
+  provisioning output, never caller payload). Its `deployment_readiness` branch checks: runtime STS account,
   curated inventory tools through the existing Ops gateway, a known fresh CloudFront
   record and a bounded model call. Return strict nonce/account-bound evidence without
   inventory data in the model prompt. Failures never fall through to normal chat.

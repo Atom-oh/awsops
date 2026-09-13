@@ -89,3 +89,10 @@ Memory expiry. Runtime updates retain role and network configuration. Source
 contains compatibility and legacy tools; catalog membership plus runtime gates
 establish reachability. For credential/grant troubleshooting see
 [the SQL reader runbook](../runbooks/agent-sql-reader.md).
+
+Deployment readiness is a default-off runtime mode. Applied `ci_readiness_enabled` feeds
+`agentcore.deployment_readiness_enabled`; the provisioner sets DEPLOYMENT_READINESS_ENABLED
+from that boolean. The probe uses fixed inventory tools, source freshness and bounded model
+invocation, preserving unknown coverage and timeout evidence. App access requires admin or
+deployment-verifiers. PENDING/malformed runtime ARNs are rejected before caching; an empty
+runtime SSM parameter disables discovery.

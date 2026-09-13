@@ -231,6 +231,28 @@ resource "aws_iam_role_policy" "agentcore" {
   })
 }
 
+# Gateway and Runtime share the role. Preserve API-key retrieval for the three
+# governed vendor presets, including Identity's required parent resources.
+resource "aws_iam_role_policy" "official_mcp_credentials" {
+  count = local.official_mcp_count
+  name  = "${var.project}-official-mcp-credentials"
+  role  = aws_iam_role.agentcore[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock-agentcore:GetResourceApiKey"]
+      Resource = concat([
+        for suffix in ["token-vault/default", "token-vault/default/apikeycredentialprovider",
+          "workload-identity-directory/default", "workload-identity-directory/default/workload-identity/*"] :
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:${suffix}"
+      ], [for preset in ["datadog", "dynatrace", "newrelic"] :
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:token-vault/default/apikeycredentialprovider/awsops-v2-${preset}-mcp"
+      ])
+    }]
+  })
+}
+
 # ---- ADR-039 P2-infra inc2: egress integrations — dedicated CMK + scoped runtime grant ----
 # Integration credentials (API keys / OAuth tokens) live in Secrets Manager under
 # ops/${project}/integrations/* encrypted with THIS dedicated key (isolated from the Aurora CMK).
@@ -957,6 +979,7 @@ resource "aws_lambda_permission" "agent_agentcore" {
 output "agentcore" {
   description = "AgentCore provisioning inputs for scripts/v2/agentcore/provision.py (null when disabled)."
   value = var.agentcore_enabled ? {
+    deployment_readiness_enabled = var.ci_readiness_enabled
     region             = var.region
     project            = var.project
     role_arn           = aws_iam_role.agentcore[0].arn
