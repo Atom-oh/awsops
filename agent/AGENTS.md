@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 142d74199ea8 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 24f2a7322fc6 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > Reviewer context distilled from this module’s CLAUDE.md; shared by Kiro, Codex, and Agy.
 
@@ -27,7 +27,7 @@ Use root [CLAUDE.md](../CLAUDE.md) and
 From the repository root:
 
 ```bash
-cd agent && python3 -m pytest test_agent.py -q
+cd agent && python3 -m pytest test_agent.py test_readiness.py -q
 ```
 
 Run other affected Python suites in isolation, following

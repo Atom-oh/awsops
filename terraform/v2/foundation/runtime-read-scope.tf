@@ -1,11 +1,11 @@
-# Runtime activation is opt-in. Host inventory retains its all-enabled-region
-# scan; global IAM/CloudFront/Route53 endpoints also require us-east-1.
-variable "ci_runtime_rollout" {
+variable "ci_readiness_enabled" {
   type        = bool
   default     = false
-  description = "Saved-plan intent for dev core-runtime activation/private discovery; not a permission bypass."
+  description = "Provision the deployment verifier application group without an IAM role."
 }
 
+# Runtime activation is opt-in. Host inventory retains its all-enabled-region
+# scan; global IAM/CloudFront/Route53 endpoints also require us-east-1.
 variable "inventory_host_only" {
   type        = bool
   default     = false

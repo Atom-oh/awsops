@@ -20,12 +20,13 @@ root. Web tasks require runtime `HOSTNAME=0.0.0.0` and `/api/health` checks.
 
 ## Boundaries
 
-- `POST /api/deployment/readiness` authenticates the user, verifies the actual web-role
+- `POST /api/deployment/readiness` requires an admin or deployment-verifiers membership,
+  one in-flight call and a 60-second process cooldown. It verifies the actual web-role
   STS identity and three fresh AgentCore SSM reads, and accepts only a nonce/account-bound
   runtime readiness response. Disabled, pending, denied or missing dependencies fail
   explicitly; normal chat fallback is not readiness evidence.
 - `lib/agentcore-config.ts` rejects invalid runtime ARNs before caching; an explicitly
-  empty runtime parameter disables discovery. Inventory summaries expose account-wide
+  empty runtime parameter disables discovery. Inventory summaries expose aggregate job
   collection ledger metadata through `lib/inventory-collection.ts`, preserving missing
   runs and unknown attributes separately from region-filtered resource counts.
 
@@ -43,3 +44,6 @@ root. Web tasks require runtime `HOSTNAME=0.0.0.0` and `/api/health` checks.
   See [components/CLAUDE.md](components/CLAUDE.md).
 - Developer/reviewer docs are English-only. Application translations, language
   selection, and localized report generation remain intact.
+
+Host-only inventory rejects account onboarding before STS/database writes. Existing reads,
+connection tests and deletion retain their behavior.

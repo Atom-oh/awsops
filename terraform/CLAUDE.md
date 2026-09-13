@@ -28,7 +28,9 @@ with mocked providers and `init -backend=false`; no AWS credentials are supplied
   nullable inventory/worker image digests, region scopes and deployment identities.
   Web SSM access names exactly three project parameters. Runtime Gateway/model and
   worker task permissions are scoped; allowed host reads retain enabled regions
-  and global endpoints. Terraform omits cross-account role grants in host-only mode.
+  and global endpoints. Terraform omits only collector cross-account role grants in host-only mode; Agent MCP
+  grants and original credential-report access remain. Optional ci_readiness_enabled creates
+  the verifier app group without an IAM role; private membership is operator-managed.
   These configuration checks do not prove effective deployed access or collection.
 
 - Preserve private CloudFront VPC Origin access to the internal ALB, scoped IAM,

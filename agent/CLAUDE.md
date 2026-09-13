@@ -12,7 +12,7 @@ Strands AgentCore runtime; `agent.py` selects gateways and streams responses.
   `web/app/api/chat/route.ts`; do not duplicate their inventories here.
 - Transport: `streamable_http_sigv4.py`. Keep the Dockerfile and requirements
   consistent; deployed images remain arm64.
-- From the repository root: `cd agent && python3 -m pytest test_agent.py -q`.
+- From the repository root: `cd agent && python3 -m pytest test_agent.py test_readiness.py -q`.
   Run additional affected suites in isolation as `scripts/v2/merge-verify.sh` does.
 
 ## Contracts

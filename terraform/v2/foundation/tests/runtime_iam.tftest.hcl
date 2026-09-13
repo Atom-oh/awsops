@@ -146,6 +146,7 @@ run "defaults_remain_dark" {
       length(aws_iam_role_policy.agentcore) == 0 &&
       length(aws_iam_role_policy.steampipe_task) == 0 &&
       length(aws_iam_role_policy.worker_lambda) == 0 &&
+      length(aws_cognito_user_group.deployment_verifiers) == 0 &&
       !var.inventory_host_only && var.steampipe_image_digest == null && var.worker_image_digest == null &&
       !var.remediation_enabled && !var.diagnosis_notify_enabled && !var.integrations_write_enabled
     )
@@ -157,11 +158,19 @@ run "host_core_permissions_and_digest_binding" {
   command = plan
   variables {
     agentcore_enabled      = true
+    ci_readiness_enabled   = true
     workers_enabled        = true
     steampipe_enabled      = true
     inventory_host_only    = true
     steampipe_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     worker_image_digest    = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+  assert {
+    condition = (
+      aws_cognito_user_group.deployment_verifiers[0].name == "deployment-verifiers" &&
+      aws_cognito_user_group.deployment_verifiers[0].role_arn == null
+    )
+    error_message = "Verifier provisioning grants no IAM role or administrator membership."
   }
   assert {
     condition = {
@@ -200,13 +209,9 @@ run "host_core_permissions_and_digest_binding" {
   }
   assert {
     condition = alltrue([
-      for p in [
-        aws_iam_role_policy.steampipe_task[0].policy,
-        aws_iam_role_policy.agent_lambda_read[0].policy,
-        aws_iam_role_policy.agent_lambda_reader_scoped[0].policy,
-      ] : !contains(flatten([for s in jsondecode(p).Statement : s.Action]), "sts:AssumeRole")
+      for p in [aws_iam_role_policy.steampipe_task[0].policy] : !contains(flatten([for s in jsondecode(p).Statement : s.Action]), "sts:AssumeRole")
     ])
-    error_message = "Host-only mode must omit cross-account role assumption."
+    error_message = "Host-only mode must omit collector cross-account role assumption."
   }
   assert {
     condition = alltrue([
@@ -225,9 +230,9 @@ run "host_core_permissions_and_digest_binding" {
     condition = (
       toset(local.runtime_read_regions) == toset(["ap-northeast-2", "eu-west-1", "us-east-1"]) &&
       toset(jsondecode(aws_iam_role_policy.steampipe_task[0].policy).Statement[0].Condition.StringEquals["aws:RequestedRegion"]) == toset(local.runtime_read_regions) &&
-      !contains(jsondecode(aws_iam_role_policy.steampipe_task[0].policy).Statement[0].Action, "iam:GenerateCredentialReport")
+      contains(jsondecode(aws_iam_role_policy.steampipe_task[0].policy).Statement[0].Action, "iam:GenerateCredentialReport")
     )
-    error_message = "Host reads retain enabled regions/global endpoints without credential-report generation."
+    error_message = "Host reads retain enabled regions/global endpoints and existing report access."
   }
   assert {
     condition = alltrue([

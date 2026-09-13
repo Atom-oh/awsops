@@ -35,7 +35,7 @@ section agents, and governed data integrations. Large/risky features have explic
   are satisfied. It does not mean live, nor does it waive a frozen dependency.
 - Custom policy/catalog read failure denies custom candidates, never grants Phase-1 access.
   Built-in routing and product help remain usable under ADR-003/004; custom pins are not silently substituted.
-- Verify defaults in `terraform/v2/foundation/variables.tf`, `ai.tf`, `secret-rotation.tf`, and
+- Verify defaults in `terraform/v2/foundation/variables.tf`, `ai.tf`, `secret-rotation.tf`, `runtime-read-scope.tf`, and
   runtime/provisioner sources. Disabled feature resources can be absent while shared infrastructure
   still costs money; a false flag does not guarantee a whole-stack no-change plan.
 - New ADRs or gate changes require a same-change update to this index/register. Accepted policy,
@@ -76,6 +76,9 @@ also default false. Consult the linked ADR and source for complete dependencies.
 | GATED analysis | `network_path_check_enabled` | Requires workers and one adapter-safety review before enablement; new runs blocked by `LIVE_TOPOLOGY_IMPLEMENTED=false`. Worker cross-account reads follow ADR-011; live pod/node identity needs an EKS Access Entry. Source-side SG/NACL/routes plus destination SG/NACL adapters when its own ENI is known; destination return routing remains unassessed. Calico/Route53/Ingress implemented, Cilium/Istio adapters remain stubs. No Create/DeleteNetworkInsightsPath grant or active probe | BASELINE §2 only; no governing ADR |
 | GATED analysis | `sg_rule_activity_enabled` | Requires workers; `sg_rule_scan` plus isolated Athena broker, SELECT-only/prefix restrictions | ADR-019 |
 | Migration switch, default **true** | `legacy_email_owner_match` | Temporary verified-email matching for reads and report PATCH/DELETE. Complete reviewed ownership backfill and confirm zero residual legacy rows before disabling | ADR-002, ADR-009 |
+| GATED collector scope | `inventory_host_only` / `INVENTORY_HOST_ONLY` | Default off; require one verified enabled host, reject onboarding while active and omit only collector AssumeRole. Agent MCP multi-account grants remain. No deployment state is inferred. | ADR-005, ADR-011, ADR-021 |
+| GATED verifier provisioning | `ci_readiness_enabled` | Default off; create deployment-verifiers application group without IAM role. Private operators manage membership; no admin promotion. | ADR-002, BASELINE §2 |
+| Controlled operator request | `POST /api/deployment/readiness` / `deployment_readiness` | Admin or deployment-verifiers; single in-flight probe, process cooldown; bounded identity/config, curated inventory and model evidence. No AWS-resource remediation. | ADR-002, ADR-004, ADR-005 |
 | Ungated user request | Explore `POST /api/datasources/generate` | Authenticated draft generation; never executes/dry-runs/caches generated queries | ADR-018 |
 | Deferred option | Neptune / alternate graph store | Postgres-first; legacy ADR-043 is provenance, not adoption | ADR-MAPPING |
 
