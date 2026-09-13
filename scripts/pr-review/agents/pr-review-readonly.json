@@ -1,0 +1,9 @@
+{
+  "name": "pr-review-readonly",
+  "description": "PR-review panel cell (run-panel.sh): read-only. The diff arrives as a file path and the BASE checkout is the cwd; the cell may read/grep files and nothing else — no write, shell, aws, web, MCP or subagent tools.",
+  "tools": ["read", "grep"],
+  "allowedTools": ["read", "grep"],
+  "mcpServers": {},
+  "useLegacyMcpJson": false,
+  "resources": []
+}

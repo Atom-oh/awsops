@@ -87,7 +87,7 @@ else:
     nonce_match = (re.search(r"^Cell nonce: ([0-9a-f]{32})$", prompt, re.M)
                    or re.search(r"REVIEW_COMPLETE: " + lens + r" ([0-9a-f]{32}) ", prompt))
     nonce = nonce_match.group(1)
-    model = "codex" if cli == "codex" else {"claude-opus-5": "kiro-opus", "gpt-5.6-terra": "kiro-gpt"}[args[args.index("--model") + 1]]
+    model = "codex" if cli == "codex" else {"claude-opus-5": "kiro-opus", "gpt-5.6-sol": "kiro-gpt"}[args[args.index("--model") + 1]]
     key = model + "-" + lens
     def frame(report):
         return "REVIEW_COMPLETE: " + lens + " " + nonce + " " + json.dumps({"report": report}) + "\n"
@@ -143,7 +143,15 @@ if mode in ("nonzero", "nonzero-report"):
 if cli == "kiro-cli":
     # Observed assistant prefix; the synthetic footer exercises accepted numeric syntax.
     body = "\x1b[38;5;141m> \x1b[0m" + body + "\n\x1b[90m ▸ Credits: 0.03 • Time: 6s\x1b[0m\n"
-print(body, end="", flush=True)
+if cli == "codex" and "--json" in args:
+    for event in (
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "reply", "type": "agent_message", "text": body}},
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}},
+    ):
+        print(json.dumps(event), flush=True)
+else:
+    print(body, end="", flush=True)
 if mode in ("timeout", "hardkill"):
     if mode == "hardkill":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
