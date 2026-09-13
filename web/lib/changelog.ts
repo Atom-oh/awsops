@@ -4,7 +4,7 @@ import path from 'node:path';
 // 사이드바 하단 버전 표시 + 변경 이력 모달의 데이터 계층 (서버 전용 — fs 사용).
 // 단일 진실 = 저장소 루트 CHANGELOG.md: 배포 이미지에는 deploy.mjs가 빌드 직전 복사해
 // /app/CHANGELOG.md 로 들어오고(standalone cwd), 로컬 dev(cwd=web/)는 ../CHANGELOG.md 폴백.
-// Developer CHANGELOG is English-only; legacy bilingual inputs remain supported.
+// Developer CHANGELOG is English-only; legacy documents with both language headings remain supported.
 // Missing Korean sections use the English body without changing version provenance.
 
 export interface ChangelogVersion {
