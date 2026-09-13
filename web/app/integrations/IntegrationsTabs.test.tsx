@@ -38,4 +38,9 @@ describe('IntegrationsTabs', () => {
     render(<IntegrationsTabs initialTab="bogus" canManage />);
     expect(screen.getByRole('tab', { name: 'Datasources' }).getAttribute('aria-selected')).toBe('true');
   });
+  it('follows navigation to a new tab on the same mounted page', async () => {
+    const { rerender } = render(<IntegrationsTabs initialTab="connectors" />);
+    rerender(<IntegrationsTabs initialTab="datasources" />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Datasources' }).getAttribute('aria-selected')).toBe('true'));
+  });
 });

@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import DatasourcesTab from './datasources/DatasourcesTab';
 import ConnectorsTab from './connectors/ConnectorsTab';
 import AgentsSkillsTab from './agents-skills/AgentsSkillsTab';
@@ -19,6 +19,7 @@ function normalize(t?: string): TabKey {
 
 export default function IntegrationsTabs({ initialTab, canManage = false }: { initialTab?: string; canManage?: boolean }) {
   const [active, setActive] = useState<TabKey>(normalize(initialTab));
+  useEffect(() => { setActive(normalize(initialTab)); }, [initialTab]);
 
   const select = (k: TabKey) => {
     setActive(k);
