@@ -285,20 +285,24 @@ describe('POST /api/chat', () => {
     const body = await readStream(res);
     expect(body).toContain('"error"');
   });
-  it('resolves a custom agent and forwards systemPromptOverride', async () => {
+  it('forwards the custom prompt and discloses a zero-tool policy in live and saved replies', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     pickGateway.mockReturnValue('security');
     listAgentsWithSkills.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
     pickCustomAgent.mockReturnValue('compliance');
-    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', agentVersion: 2, skillHashes: ['h1'] });
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', agentVersion: 2, skillHashes: ['h1'], toolAllowlist: [] });
     invokeAgent.mockResolvedValue('ok');
     const { POST } = await import('./route');
-    const res = await POST(req({ prompt: 'cis check', section: 'security', sessionId: 's'.repeat(36) }));
+    const res = await POST(req({ prompt: 'cis check', lang: 'en', section: 'security', sessionId: 's'.repeat(36) }));
     expect(res.status).toBe(200);
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ systemPromptOverride: 'OVR', agentName: 'compliance' }));
     const body = await readStream(res);
     expect(body).toContain('"agentName":"compliance"');
+    expect(body).toContain('configured tool policy permits zero tools');
+    expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({ assistantContent: expect.stringContaining('configured tool policy permits zero tools') }));
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ toolAllowlist: [] }));
   });
+
   it('forwards each agent delta as its own SSE frame as it arrives (real streaming, not buffered-then-rechunked)', async () => {
     // Regression: the route used to await the FULL answer (invokeAgentDetailed) before writing
     // anything, then re-split it into word chunks and enqueue them all in one tick — the user sees

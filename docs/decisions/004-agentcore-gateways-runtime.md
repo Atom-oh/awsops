@@ -27,16 +27,14 @@ Aurora agent/skill catalogs and account-scoped Agent Spaces drive resolver-selec
 composed skills, and tool allowlists. Preserve content-addressed artifacts, integrity checks,
 immutable safeguards, traceable versions/hashes and fail-closed security revocation. Treat
 custom skills and MCP output as untrusted; a cache TTL does not authorize revoked content.
-Implementation clarification **2026-09-13**: custom candidates and their once-read Agent Space travel
-as one available/unavailable context. Both policy and catalog errors deny custom execution.
-Built-in routing is independent of custom caps and follows ADR-003's disclosed fallback posture.
+Implementation clarification **2026-09-13**: custom candidates and their once-read Agent Space travel as one available/unavailable context. Both policy and catalog errors deny custom execution. Built-in routing is independent of custom caps and follows ADR-003's disclosed fallback posture. Instruction-only skills with no declarations and no durable `toolPolicyConfigured` restriction use the existing gateway read catalog as their baseline; an account cap can only narrow it. Declarations or retained/revoked restrictions keep empty intersections deny-all. An empty account cap means no account restriction, whereas an empty effective tool list denies all tools. The BFF encodes that list as `!awsops-deny-all!` for older runtimes; only the legacy unrestricted case omits it. Registry eligibility never proves live provisioning or tool availability.
 
 ### §3 Integration read substrate
 
 Arbitrary BYO-MCP, mutating tools and AWS-resource execution remain frozen (ADR-005).
 Curated external data uses ADR-007. Lambda schemas bound exposed tools; hosted vendor targets
 instead need ADR-017's runtime fail-closed allowlist in both chat loops. Endpoint acknowledgement
-alone is insufficient; managed egress does not inherit in-house connect-time IP pinning.
+alone is insufficient; managed egress does not inherit in-house connect-time IP pinning. Curated egress/ingress registration and toggles remain available to admins; `custom_mcp` is excluded. Registry enablement does not enable incident/write gates or AWS mutation.
 
 ### §4 Memory and conversation isolation
 

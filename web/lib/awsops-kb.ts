@@ -13,34 +13,34 @@ AWSops는 **읽기 전용(read-only) AWS/Kubernetes 운영 대시보드 + AI 진
 
 ## AI 채팅 / 라우팅 모델
 - 질문을 입력하면 **자동 라우팅**으로 섹션 에이전트가 선택됩니다(정규식 fast-path → Haiku 분류기).
-- **섹션 에이전트(활성)**: Network, Data, Security, Cost, Monitoring. 각자 라이브 AWS 조회 도구를 가집니다.
-- **아직 비활성(로드맵 P3)**: Container, IaC, Ops, Observability. 비활성 섹션으로 질문하면 활성 섹션/어시스턴트로 안내됩니다.
+- 섹션과 도구의 실제 가용성은 배포된 게이트웨이와 런타임 게이트에 따릅니다. 등록이나 정책 허용 수가 라이브 접속 성공을 뜻하지 않습니다.
+- UI의 지침 전용 스킬에 선언·유지된 제한이 없으면 기존 게이트웨이 읽기 도구가 기준입니다. 계정 상한은 이를 좁히며 선언·철회된 제한의 빈 교집합은 deny-all입니다. 정책상 0개이면 채팅이 안내합니다.
 - **교차 도메인 질문**은 여러 섹션을 자동 합성해 하나의 답으로 줍니다(설정에 따라). 수동 전환칩은 보조 수단입니다.
 - 특정 에이전트로 고정하려면 채팅 입력에서 \`/<섹션 또는 커스텀에이전트>\`로 핀(pin)할 수 있습니다.
 
 ## /customization — 에이전트·스킬·통합 만들기
-좌측 메뉴 **Customization** 페이지에서 다음을 구성합니다(계정별 Agent Space 기준):
-1. **Integrations(통합)** — 외부 시스템 커넥터를 등록(관리자).
-   - **egress-READ**(외부 관측성 읽기): Prometheus·Grafana·Datadog·Loki·ClickHouse 등. endpoint + 인증(SigV4 / API key / OAuth) 입력 → 자격증명은 **Secrets Manager**에 저장, **SSRF 방어**(사설/메타데이터 차단, 사설망은 계정별 opt-in).
-   - egress-READ 통합은 에이전트에 **도구 + 컨텍스트**로 주입됩니다.
-2. **Skills(스킬)** — \`SKILL.md\`(frontmatter + Markdown) 형태의 분석 지침/노하우. 에이전트에 붙여 행동을 특화합니다. 폼으로 작성하거나 zip 업로드(zip은 관리자 전용).
-3. **Agents(에이전트)** — 커스텀 프런티어 에이전트 생성: 이름, 설명, **routingKeywords**(이 키워드가 질문에 있으면 이 에이전트로 라우팅), 1차 게이트웨이, 붙일 스킬/통합, 모델, 응답 언어.
-4. **Agent Space(계정별)** — 위 에이전트/스킬/통합을 계정 단위로 **활성화·스코핑**합니다. 활성화된 것만 채팅에서 선택·사용됩니다. 비-관리자 작성은 \`nonAdminAuthoring\` 플래그(기본 OFF)로 통제됩니다.
+관리자는 **연동 → Agents & Skills → Custom Agents & Skills**에서 다음을 구성합니다:
+1. **Integrations (advanced)** — 지원하는 curated egress/ingress 레지스트리 등록과 활성·비활성 토글. custom_mcp는 등록·활성화할 수 없습니다.
+   - 일반 데이터소스와 Notion 자격증명은 **연동 허브**의 Datasources/Connectors에서 관리합니다. 고급 레지스트리는 새 행을 비활성으로 저장하며 자격증명 참조·노출 도구·소스 허용 목록·incident/write 게이트는 별도 설정입니다.
+   - 활성화된 curated egress-READ의 허용 도구·컨텍스트만 런타임 정책에 따라 사용됩니다. 등록만으로 접속·권한·기능 게이트가 활성화되지는 않습니다.
+2. **Skills(스킬)** — New Skill 폼에 Markdown 지침을 작성하고 활성화한 뒤 에이전트에 연결합니다. 실행 코드나 zip을 설치하는 흐름은 아닙니다.
+3. **Agents(에이전트)** — kebab-case 이름, 설명, 페르소나, routingKeywords, 1차 게이트웨이를 지정합니다. 채팅은 서버 모델과 선택한 UI 언어를 사용하며 이 폼에는 모델·응답 언어 선택이 없습니다.
+4. **Agent Space(계정별)** — 활성 에이전트·통합과 도구 상한을 계정별로 지정합니다. 새로 등록하거나 교체한 커스텀 항목은 비활성이며 스킬은 활성화 후 순서대로 연결합니다. 기본 제공 항목은 교체·토글할 수 없습니다.
 
 ## 예시: "Prometheus 분석 에이전트" 만들기 (당신의 질문)
-좌측 **Customization**에서:
-1. **Integrations → New Integration(egress / READ)**: kind=Prometheus, endpoint=당신의 Prometheus URL, 인증 입력 → 저장(자격증명은 Secrets Manager, SSRF 검사 통과 필요).
+**연동**에서:
+1. **Datasources**에서 Prometheus 인스턴스와 인증을 등록하고 작은 읽기 쿼리로 접근을 확인합니다.
 2. **Skills → New Skill**: 예) "prometheus-rca" — PromQL 작성 요령, 자주 보는 메트릭(에러율·p99·포화도), 분석 절차를 \`SKILL.md\`로 작성.
-3. **Agents → New Agent**: 이름 예) "Prometheus Analyst", routingKeywords=[\`prometheus\`,\`promql\`,\`메트릭\`], 1차 게이트웨이=monitoring(또는 적합 섹션), 위 스킬 + Prometheus 통합 attach, 모델/언어 선택.
-4. **Agent Space**에서 이 에이전트·스킬·통합을 **활성화**(관리자) → 이제 채팅에서 관련 질문이 이 에이전트로 라우팅되거나, \`/prometheus-analyst\`로 직접 핀 가능.
+3. **New Agent**: 이름 prometheus-analyst, 관련 키워드, observability 게이트웨이를 지정하고 활성 스킬을 연결합니다.
+4. 에이전트를 활성화하고 필요한 Agent Space에 포함합니다. 하이브리드 라우팅을 사용할 수 있을 때 채팅의 / 목록에서 선택한 뒤 직접 질문을 보냅니다.
 
 > 참고: AWSops는 **AWS 리소스를 변경하지 않습니다**. 에이전트는 외부 데이터를 **읽어** 분석/진단하며, 외부 기록 write(티켓·메시지)는 별도 거버넌스(DLP·4-eyes·flag-OFF) 하에서만 동작합니다.
 
 ## 관리자 / 권한
 - Integration/MCP 등록(egress·자격증명·SSRF 표면)과 Agent Space 활성화는 **관리자**(SSM admin_emails 또는 Cognito 그룹)만 가능.
-- 폼 기반 Skill·Agent 작성은 \`nonAdminAuthoring\`(기본 OFF) 활성 시 일반 사용자도 가능(작성물은 기본 비활성, 활성화는 관리자).
+- Skill·Agent 작성, 자격증명 관리, 레지스트리 등록과 활성화는 관리자 전용입니다.
 
 ## 한계 / 자주 묻는 것
-- "비활성 섹션(Container/IaC/Ops/Observability) 에이전트는 왜 안 되나요?" → 로드맵 P3. 현재는 활성 섹션 또는 커스텀 에이전트 + 통합으로 대체하세요(예: Prometheus는 위처럼 Integration+커스텀 에이전트).
+- 도구가 없거나 접근할 수 없으면 근거가 수집된 것으로 해석하지 마세요. 계정 상한이 빈 것은 추가 상한이 없다는 뜻이고, 최종 도구 정책의 빈 목록은 도구를 모두 거부한다는 뜻입니다.
 - AWS 리소스를 바꿔달라는 요청 → 불가(설계상 read-only). 변경은 SSM/Change Manager/IaC/콘솔에서.
 `;

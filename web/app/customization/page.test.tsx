@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import CustomizationPage from './page';
 import { LanguageProvider } from '@/components/shell/LanguageProvider';
 import type { Lang } from '@/lib/i18n';
+import { resolveAgent } from '@/lib/agent-resolver';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
+afterEach(async () => { await act(async () => {}); cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
 
-function setup(attachmentStatus = 200, lang: Lang = 'en', integrations: { id: number; name: string; kind: string }[] = [], catalogStatus = 200) {
+function setup(attachmentStatus = 200, lang: Lang = 'en', integrations: { id: number; name: string; kind: string; [key: string]: unknown }[] = [], catalogStatus = 200) {
   const agent = {
     id: 1, name: 'iam-advisor', description: 'IAM diagnosis', gateway: 'security', tier: 'custom',
     enabled: false, version: 1, skills: [{ name: 'existing-skill', ord: 4 }],
   };
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url === '/api/integrations') return Response.json({ integrations });
+    if (url === '/api/integrations' && !init?.method) return Response.json({ integrations });
     if (init?.method === 'PUT') {
       const body = JSON.parse(String(init.body));
       if (body.op === 'attach' && attachmentStatus === 200) agent.skills.push({ name: 'evidence-skill', ord: body.ord });
@@ -36,6 +37,38 @@ function setup(attachmentStatus = 200, lang: Lang = 'en', integrations: { id: nu
 }
 
 describe('custom agent registration', () => {
+  it('keeps a gateway read tool under an account cap for the real UI-authored empty tool list', async () => {
+    const fetcher = setup();
+    await screen.findByText('iam-advisor', { selector: 'span' });
+    const form = screen.getByRole('heading', { name: 'New Skill' }).closest('section')!;
+    for (const [placeholder, value] of [[/name/, 'evidence'], [/description/, 'Evidence guidance'], [/instructions/, 'Cite evidence.']] as const)
+      fireEvent.change(within(form).getByPlaceholderText(placeholder), { target: { value } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Create Skill' }));
+    await waitFor(() => expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
+    const body = JSON.parse(String(fetcher.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.body));
+    expect(body.toolAllowlist).toEqual([]);
+    const agent = { id: 1, name: 'iam-advisor', gateway: 'security', tier: 'custom' as const, enabled: true, version: 1,
+      persona: 'Read only', description: 'IAM', routingKeywords: [], toolPolicyConfigured: false,
+      skills: [{ ...body, contentHash: 'h', ord: 0 }] };
+    const spec = resolveAgent(agent.name, [agent], { accountId: 'self', enabledAgentIds: [1],
+      enabledSkillIds: [], toolAllowlist: ['list_users'], version: 1 });
+    expect(spec.toolAllowlist).toEqual(['iam-mcp-target___list_users']);
+  });
+  it.each(['egress', 'ingress'])('registers curated %s sources while excluding the retired kind', async direction => {
+    const fetcher = setup();
+    await screen.findByText('iam-advisor', { selector: 'span' });
+    const summary = screen.getByText('Advanced — register a custom integration');
+    fireEvent.click(summary);
+    const form = summary.closest('details')!;
+    fireEvent.click(within(form).getByRole('button', { name: direction }));
+    expect(within(form).queryByRole('option', { name: 'custom_mcp' })).toBeNull();
+    fireEvent.change(within(form).getByPlaceholderText('name (kebab-case)'), { target: { value: 'curated-source' } });
+    if (direction === 'egress') fireEvent.change(within(form).getByPlaceholderText('https endpoint'), { target: { value: 'https://grafana.example/mcp' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Register integration' }));
+    await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url === '/api/integrations' && init?.method === 'POST')).toBe(true));
+    const call = fetcher.mock.calls.find(([url, init]) => url === '/api/integrations' && init?.method === 'POST')!;
+    expect(JSON.parse(String(call[1]!.body))).toMatchObject({ name: 'curated-source', direction, kind: direction === 'egress' ? 'grafana' : 'pagerduty' });
+  });
   it('does not show global mode when catalog policy is unavailable', async () => {
     setup(200, 'en', [], 503);
     await screen.findByText('Agent catalog is temporarily unavailable. Refresh the page to retry.');
@@ -56,19 +89,28 @@ describe('custom agent registration', () => {
     await screen.findByText(error);
     expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
-  it('keeps supported integration membership while removing arbitrary registration controls', async () => {
+  it('keeps curated registration and membership while excluding retired rows', async () => {
     const fetcher = setup(200, 'en', [
-      { id: 4, name: 'team-notion', kind: 'notion' },
+      { id: 4, name: 'team-notion', kind: 'notion', tier: 'custom', direction: 'egress', enabled: false },
+      { id: 6, name: 'alert-source', kind: 'pagerduty', tier: 'custom', direction: 'ingress', enabled: true },
       { id: 5, name: 'retired-server', kind: 'custom_mcp' },
     ]);
     const membership = await screen.findByRole('checkbox', { name: 'team-notion' });
-    expect(screen.queryByRole('button', { name: 'Register integration' })).toBeNull();
-    expect(screen.queryByText('Advanced — register a custom integration')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Register integration' })).toBeTruthy();
+    expect(screen.getByText('Advanced — register a custom integration')).toBeTruthy();
     expect(screen.queryByRole('checkbox', { name: 'retired-server' })).toBeNull();
+    await act(async () => {
+      for (const [name, state] of [['team-notion', 'Disabled'], ['alert-source', 'Enabled']]) {
+        const row = screen.getByText(name, { selector: 'span' }).parentElement!.parentElement!;
+        fireEvent.click(within(row).getByRole('button', { name: state }));
+      }
+    });
+    expect(fetcher.mock.calls.filter(([url, init]) => url === '/api/integrations' && init?.method === 'PUT')
+      .map(([, init]) => JSON.parse(String(init!.body)))).toEqual([{ op: 'enable', id: 4 }, { op: 'disable', id: 6 }]);
     fireEvent.click(membership);
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent Space' }));
     await waitFor(() => {
-      const request = fetcher.mock.calls.find(([, init]) => init?.method === 'PUT');
+      const request = fetcher.mock.calls.find(([url, init]) => url === '/api/customization' && init?.method === 'PUT');
       expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ op: 'space', enabledIntegrationIds: [4] });
     });
   });

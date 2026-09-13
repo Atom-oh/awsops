@@ -159,7 +159,7 @@ print(json.dumps(out))
     expect(qualifyToolNames(['second___query'], ['first___query', 'second___query'])).toEqual(['second___query']);
   });
   it('does not let an integration grant a gateway-qualified tool', () => {
-    const scoped = { ...custom, skills: [] };
+    const scoped = { ...custom, skills: [], toolPolicyConfigured: true };
     const spec = resolveAgent(scoped.name, [scoped], null, [{
       name: 'external', exposedTools: ['iam-mcp-target___list_users'],
     }]);
@@ -170,11 +170,14 @@ print(json.dumps(out))
     expect(resolveAgent(scoped.name, [scoped]).toolAllowlist).toBeUndefined();
     expect(resolveAgent(scoped.name, [scoped], {
       accountId: 'self', enabledAgentIds: [1], enabledSkillIds: [], toolAllowlist: ['list_users'], version: 1,
-    }).toolAllowlist).toEqual([]);
+    }).toolAllowlist).toEqual(['iam-mcp-target___list_users']);
   });
   it('does not turn a disabled last scoped skill into legacy unrestricted mode', () => {
     const scoped = { ...custom, skills: [], toolPolicyConfigured: true };
     expect(resolveAgent(scoped.name, [scoped]).toolAllowlist).toEqual([]);
+    expect(resolveAgent(scoped.name, [scoped], {
+      accountId: 'self', enabledAgentIds: [1], enabledSkillIds: [], toolAllowlist: ['list_users'], version: 1,
+    }).toolAllowlist).toEqual([]);
   });
 });
 

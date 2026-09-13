@@ -32,20 +32,24 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 180; // 콜드 Steampipe(≤35s) + 자기수정 + 장문 분석 스트림이 60s를 넘던 실측(2026-08-02) // long agent calls
 
 const MAX_PROMPT = 50_000;
-const CUSTOM_ROUTE_NOTICE: Record<ChatLang, { fallback: string; pin: string }> = {
+const CUSTOM_ROUTE_NOTICE: Record<ChatLang, { fallback: string; pin: string; zeroTools: string }> = {
   ko: {
+    zeroTools: '설정된 도구 정책이 이 커스텀 에이전트에 허용하는 도구는 0개입니다. 이번 답변은 도구로 실시간 근거를 수집할 수 없습니다. 계정 상한과 스킬 제한을 확인하세요.',
     fallback: '커스텀 에이전트를 사용할 수 없어 이번 답변은 기본 에이전트로 라우팅합니다.',
     pin: '선택한 커스텀 에이전트의 설정을 읽을 수 없어 일시적으로 사용할 수 없습니다. 다시 시도하세요.',
   },
   en: {
+    zeroTools: 'The configured tool policy permits zero tools for this custom agent. This reply cannot collect live evidence through tools. Review the account cap and skill restrictions.',
     fallback: 'Custom-agent routing is unavailable; using built-in routing for this reply.',
     pin: 'The requested custom agent is temporarily unavailable because its settings could not be read. Please retry.',
   },
   zh: {
+    zeroTools: '配置的工具策略允许此自定义代理使用的工具数为零。本次回复无法通过工具收集实时证据。请检查账户上限和技能限制。',
     fallback: '无法使用自定义代理；本次回复使用内置代理路由。',
     pin: '无法读取所选自定义代理的设置，因此暂时无法使用。请重试。',
   },
   ja: {
+    zeroTools: '設定されたツールポリシーでは、このカスタムエージェントに許可されるツールは0件です。この回答はツールでライブの根拠を収集できません。アカウント上限とスキル制限を確認してください。',
     fallback: 'カスタムエージェントを利用できないため、この回答には組み込みエージェントのルーティングを使用します。',
     pin: '選択したカスタムエージェントの設定を読み込めないため、一時的に利用できません。再試行してください。',
   },
@@ -547,8 +551,11 @@ export async function POST(request: Request) {
   const inactiveWasPinned = inactiveSection != null && route?.method === 'pin';
   const useAssistant = hybridOn && !unavailablePin
     && ((!explicitPin && isProductHelpIntent(prompt)) || (inactiveSection != null && !inactiveWasPinned));
-  const fallbackNotice = !explicitPin && !useAssistant && (customContext.status === 'unavailable' || customRevoked)
-    ? `${CUSTOM_ROUTE_NOTICE[lang].fallback}\n\n` : '';
+  // Policy eligibility is not live tool discovery. Only a provable zero is disclosed here.
+  const fallbackNotice = !useAssistant && spec.tier === 'custom' && spec.toolAllowlist?.length === 0
+    ? `${CUSTOM_ROUTE_NOTICE[lang].zeroTools}\n\n`
+    : !explicitPin && !useAssistant && (customContext.status === 'unavailable' || customRevoked)
+      ? `${CUSTOM_ROUTE_NOTICE[lang].fallback}\n\n` : '';
   const messages: ChatMsg[] = [...history, { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
   // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).

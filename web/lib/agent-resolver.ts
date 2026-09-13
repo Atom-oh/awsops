@@ -148,7 +148,11 @@ export function resolveAgent(
     const declared = ordered.flatMap((s) => s.toolAllowlist);
     const capped = !!space?.toolAllowlist.length;
     const cap = new Set(qualifyToolNames(space?.toolAllowlist ?? [], known));
-    const skillEnforced = qualifyToolNames(declared, known).filter((id) => !capped || cap.has(id));
+    const declaredPolicy = custom.toolPolicyConfigured === true || declared.length > 0;
+    // UI-authored instruction-only skills inherit existing gateway reads. A retained
+    // restriction (including a revoked last scoped skill) must never regain that baseline.
+    const eligible = declaredPolicy ? qualifyToolNames(declared, known) : known;
+    const skillEnforced = eligible.filter((id) => !capped || cap.has(id));
     const integTools = egressReadIntegrations.flatMap((i) => i.exposedTools ?? []);
     // Gateway-qualified names are reserved: an external integration cannot grant a gateway
     // tool by putting its identity in exposedTools. Unqualified integration names remain exact.
@@ -156,7 +160,7 @@ export function resolveAgent(
       (!capped || space!.toolAllowlist.includes(tool));
     const integEnforced = integTools.filter(integrationAllowed);
     const merged = Array.from(new Set([...skillEnforced, ...integEnforced]));
-    const restricted = capped || custom.toolPolicyConfigured === true || declared.length > 0 || integTools.length > 0;
+    const restricted = capped || declaredPolicy || integTools.length > 0;
     // ADR-039 P2-infra inc2: surface ONLY connectable integrations (endpoint+transport present) for
     // agent.py to live-connect. Tool/context injection above is independent — a context-only integration
     // (no endpoint) still contributes tools/context but is not in this connect list.

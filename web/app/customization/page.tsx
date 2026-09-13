@@ -4,14 +4,26 @@ import PageHeader from '@/components/ui/PageHeader';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { KNOWN_GATEWAYS, isReservedAgentName } from '@/lib/skill-validation';
 import { CUSTOMIZATION_COPY } from './copy';
+import { INTEGRATION_KINDS_EGRESS, INTEGRATION_KINDS_INGRESS, INTEGRATION_TRANSPORTS } from '@/lib/integration-validation';
 
 interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string; ord: number }>; agentType?: string; gateways?: string[]; }
 interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
 interface SpaceState { enabledAgentIds: number[]; enabledSkillIds: number[]; enabledIntegrationIds: number[]; toolAllowlist: string[]; version?: number }
-interface IntegrationRow { id: number; name: string; kind: string; }
+interface IntegrationRow { id: number; name: string; kind: string; direction: string; capability: string; enabled: boolean; tier: string; receivePath?: string | null; }
+// ADR-039 P2 — integration kinds. Imported (not re-hardcoded) so this dropdown can't drift from the
+// migration's integrations_kind_check like it did before (missing clickhouse/mimir/loki/tempo/
+// jaeger/dynatrace) — see web/lib/integration-validation.ts for the source of truth.
+const INTEG_KINDS_EGRESS = INTEGRATION_KINDS_EGRESS.filter(kind => kind !== 'custom_mcp');
+const INTEG_KINDS_INGRESS = INTEGRATION_KINDS_INGRESS;
+const INTEG_TRANSPORTS = INTEGRATION_TRANSPORTS;
+
+
+// NOTE: curated read connectors (Prometheus/Loki/…/Notion credential cards) moved to the Integrations
+// hub (/integrations) — Datasources tab + Connectors tab. This page keeps Agents/Skills/Agent-Space +
+// the advanced custom-integration registration.
 
 export default function CustomizationPage() {
-  const { lang } = useI18n();
+  const { tt, lang } = useI18n();
   const copy = CUSTOMIZATION_COPY[lang];
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [skills, setSkills] = useState<SkillRow[]>([]);
@@ -27,6 +39,7 @@ export default function CustomizationPage() {
   const [space, setSpace] = useState<SpaceState | null>(null);
   const [allowlistText, setAllowlistText] = useState('');
   const [integrations, setIntegrations] = useState<IntegrationRow[]>([]);
+  const [integForm, setIntegForm] = useState({ direction: 'egress', name: '', kind: 'grafana', endpoint: '', transport: 'api_key', capability: 'read', authMode: 'hmac', sourceAllowlist: '', triggerTarget: 'incident' });
 
   async function load() {
     const r = await fetch('/api/customization');
@@ -45,6 +58,20 @@ export default function CustomizationPage() {
     setAllowlistText((d.space?.toolAllowlist || []).join(', '));
     const ir = await fetch('/api/integrations');
     if (ir.ok) setIntegrations(((await ir.json()).integrations || []).filter((i: IntegrationRow) => i.kind !== 'custom_mcp'));
+  }
+  async function createIntegration() {
+    const isEgress = integForm.direction === 'egress';
+    const body = isEgress
+      ? { name: integForm.name, kind: integForm.kind, direction: 'egress', endpoint: integForm.endpoint, transport: integForm.transport, capability: integForm.capability }
+      : { name: integForm.name, kind: integForm.kind, direction: 'ingress', authMode: integForm.authMode, triggerTarget: integForm.triggerTarget, sourceAllowlist: integForm.sourceAllowlist.split(',').map((s) => s.trim()).filter(Boolean) };
+    const res = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await res.json();
+    setMsg(res.ok ? `Created integration #${d.id} — disabled${d.receivePath ? `; receive URL: ${d.receivePath}` : ''}` : `Error: ${JSON.stringify(d.detail || d.error)}`);
+    if (res.ok) load();
+  }
+  async function toggleIntegration(id: number, enabled: boolean) {
+    await fetch('/api/integrations', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: enabled ? 'disable' : 'enable', id }) });
+    load();
   }
   useEffect(() => { load(); }, []);
 
@@ -200,6 +227,62 @@ export default function CustomizationPage() {
         ))}
       </section>
 
+      <section className="space-y-3 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
+        <div>
+          <h2 className="text-[13px] font-semibold">Integrations (advanced)</h2>
+          <p className="text-[11px] text-ink-400">
+            {tt('데이터소스(Prometheus·Loki·…)와 커넥터(Notion)는 이제')} <a href="/integrations" className="text-brand-600 underline">{tt('연동 허브')}</a>{tt('에서 관리합니다.')} {copy.integrationHint}
+          </p>
+        </div>
+
+        <details className="mt-2 border-t border-ink-100 pt-2">
+          <summary className="cursor-pointer text-[12px] text-ink-500">Advanced — register a custom integration</summary>
+          <div className="mt-2 space-y-2">
+            <div className="flex gap-2 text-[12px]">
+              {['egress', 'ingress'].map((d) => (
+                <button key={d} onClick={() => setIntegForm({ ...integForm, direction: d, kind: d === 'egress' ? 'grafana' : 'pagerduty' })}
+                  className={`rounded border px-2 py-1 ${integForm.direction === d ? 'border-brand-500 text-brand-600' : 'border-ink-100 text-ink-400'}`}>{d}</button>
+              ))}
+            </div>
+            <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={integForm.name} onChange={(e) => setIntegForm({ ...integForm, name: e.target.value })} />
+            <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.kind} onChange={(e) => setIntegForm({ ...integForm, kind: e.target.value })}>
+              {(integForm.direction === 'egress' ? INTEG_KINDS_EGRESS : INTEG_KINDS_INGRESS).map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+            {integForm.direction === 'egress' ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="https endpoint" value={integForm.endpoint} onChange={(e) => setIntegForm({ ...integForm, endpoint: e.target.value })} />
+                <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.transport} onChange={(e) => setIntegForm({ ...integForm, transport: e.target.value })}>
+                  {INTEG_TRANSPORTS.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.capability} onChange={(e) => setIntegForm({ ...integForm, capability: e.target.value })}>
+                  <option value="read">read</option><option value="read_write">read_write</option>
+                </select>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="auth mode (e.g. hmac, vendor_sig)" value={integForm.authMode} onChange={(e) => setIntegForm({ ...integForm, authMode: e.target.value })} />
+                <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="source allowlist (comma IPs)" value={integForm.sourceAllowlist} onChange={(e) => setIntegForm({ ...integForm, sourceAllowlist: e.target.value })} />
+                <span className="text-[11px] text-ink-400">trigger: incident (receive URL generated on create)</span>
+              </div>
+            )}
+            <button onClick={createIntegration} className="rounded border border-ink-200 px-3 py-1 text-[12px] font-medium">Register integration</button>
+            {integrations.map((i) => (
+              <div key={i.id} className="flex items-center justify-between rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
+                <div>
+                  <span className="font-semibold">{i.name}</span>{' '}
+                  <span className="text-ink-400">({i.tier}, {i.direction}, {i.kind}, {i.capability})</span>
+                  {i.direction === 'ingress' && i.receivePath && <div className="text-ink-500">{i.receivePath}</div>}
+                </div>
+                {i.tier === 'custom'
+                  ? <button onClick={() => toggleIntegration(i.id, i.enabled)} className={`rounded border px-2 py-1 text-[12px] ${i.enabled ? 'border-emerald-300 text-emerald-600' : 'border-ink-100 text-ink-400'}`}>{i.enabled ? 'Enabled' : 'Disabled'}</button>
+                  : <span className="text-ink-400">built-in</span>}
+              </div>
+            ))}
+            {integrations.length === 0 && <span className="text-[12px] text-ink-400">no custom integrations yet</span>}
+          </div>
+        </details>
+      </section>
+
       <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
         <h2 className="text-[13px] font-semibold">Agent Space — account {accountId}</h2>
         {!space && (
@@ -233,7 +316,7 @@ export default function CustomizationPage() {
           <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
                  placeholder="e.g. simulate_principal_policy, get_account_authorization_details"
                  value={allowlistText} onChange={(e) => setAllowlistText(e.target.value)} />
-          <div className="mt-1 text-ink-400">Empty = no account cap (Phase-1 advisory). A non-empty list can only REMOVE tools a skill declared — it never grants new tools.</div>
+          <div className="mt-1 text-ink-400">Empty = no account cap. Tool eligibility and live availability are separate.</div>
         </div>
         <button onClick={saveSpace} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Save Agent Space</button>
       </section>
