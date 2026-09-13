@@ -95,9 +95,11 @@ Deployment readiness is a default-off runtime mode. Applied `ci_readiness_enable
 from that boolean. The probe uses fixed inventory tools, source freshness and bounded model
 invocation, preserving unknown coverage and timeout evidence. App access requires admin or
 deployment-verifiers. PENDING/malformed runtime ARNs are rejected before caching; an empty
-runtime SSM parameter disables discovery.
+runtime SSM parameter disables invocation/readiness discovery.
 
-Readiness requests an exact CloudFront resource_id from the curated query_inventory tool,
-using a bound ID predicate and id-only projection rather than an unordered fleet sample.
-Ship the inventory-reader Lambda through Terraform and refresh the catalog target before
-using the new agent image. Existing list queries retain their previous contract.
+The curated query_inventory tool accepts optional resource_id for CloudFront only. That
+branch validates the ID, binds it as a SQL parameter, scopes it to host inventory and
+returns at most one id-only record. Readiness uses this exact lookup. Ordinary list calls
+keep their existing projection. Deploy the reader Lambda via Terraform and refresh the
+AgentCore catalog target before using this argument. The lookup itself adds no IAM grant
+or activation flag.
