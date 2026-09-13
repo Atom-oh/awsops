@@ -1,40 +1,29 @@
 ---
 name: code-review
-description: Review changed code against AWSops project conventions
+description: Use when reviewing an AWSops diff or pull request for correctness, security, and policy compliance
 triggers: review, PR, code quality
 ---
 
-# 스킬: 코드 리뷰 / Skill: Code Review
+# Code Review
 
-## 사용 시점 / When to Use
-머지 전에 변경된 페이지, 컴포넌트, 쿼리 파일 또는 API 라우트를 리뷰합니다.
-(Review any changed page, component, query file, or API route before merging.)
+Read root `CLAUDE.md`, `AGENTS.md`, `docs/decisions/BASELINE.md`, and the scoped
+instructions for changed files. Establish the review base and HEAD.
 
-## 체크리스트 / Checklist
+1. Trace the changed execution path, callers, inputs, tests, and deployment wiring.
+   A finding needs a concrete trigger and impact, not a match against stale prose.
+2. Check BFF authorization/revocation/ownership, bounded input, parameterized SQL,
+   sensitive outputs, and SSRF controls. `/api/*` is the web API prefix. Established
+   scoped SDK reads are valid; heavy jobs use dedicated authorized enqueue routes.
+3. Preserve the product gates: AWS-resource mutation/autonomy is FROZEN; governed
+   external-data writes follow ADR-007. Check BASELINE for prerequisites and the
+   narrow ADR-015 exception. Disabled substrate is not itself a regression.
+4. Compare component props, exports, routing registries, and query contracts with
+   source. Named helpers and server components are valid. Aurora `$1` parameters
+   are expected. English-only docs leave application i18n intact; bilingual
+   changelog parity and per-PR changelog bullets are not required.
+5. Report severity, file/line, trigger, impact, and a minimal fix in English.
+   Separate existing limitations, documentation drift, and missing verification.
 
-### 쿼리 파일 / Query Files (`src/lib/queries/*.ts`)
-- [ ] 컬럼명을 `information_schema.columns`로 검증 (Column names verified against `information_schema.columns`)
-- [ ] 목록 쿼리에 SCP 차단 컬럼 없음: mfa_enabled, tags, attached_policy_arns (No SCP-blocked columns in list queries) (ADR-010 2026-09-02 개정: v2 sync 한정, 명시적 위험 수용 시 예외 — 현재 iam_role.attached_policy_arns 수용됨)
-- [ ] `trivy_vulnerability`가 아닌 `trivy_scan_vulnerability` 사용 (Uses `trivy_scan_vulnerability` not `trivy_vulnerability`)
-- [ ] SQL에 `$` 문자 없음 — `::text LIKE` 사용 (No `$` character in SQL — use `::text LIKE` instead)
-- [ ] CloudTrail 쿼리는 지연 로딩 사용, 페이지 수준 fetch 아님 (CloudTrail queries use lazy-load, not page-level fetch)
-
-### 페이지 파일 / Page Files (`src/app/*/page.tsx`)
-- [ ] `'use client'`로 시작 (Starts with `'use client'`)
-- [ ] fetch URL이 `/awsops/api/steampipe` 접두사 사용 (fetch URL uses `/awsops/api/steampipe` prefix)
-- [ ] 컴포넌트는 default import: `import X from '...'` (Components imported as default: `import X from '...'`)
-- [ ] 색상은 hex가 아닌 이름('cyan') 사용 (StatsCard/LiveResourceCard color uses name ('cyan') not hex)
-- [ ] 상세 패널은 Section/Row 패턴 준수 (Detail panel follows Section/Row pattern)
-- [ ] 데이터 로딩 중 스켈레톤 표시 (Loading skeleton shown while data loads)
-- [ ] 오류 상태를 적절히 처리 (Error states handled gracefully)
-
-### API 라우트 / API Routes (`src/app/api/*/route.ts`)
-- [ ] 입력 검증 존재 (Input validation present)
-- [ ] 오류 시 적절한 HTTP 상태 코드 반환 (Errors return proper HTTP status codes)
-- [ ] 시크릿 하드코딩 금지 — 환경 변수 사용 (No secrets hardcoded — use env vars)
-- [ ] Steampipe 쿼리는 `runQuery()` 또는 `batchQuery()` 사용 (Steampipe queries go through `runQuery()` or `batchQuery()`)
-
-### 일반 / General
-- [ ] 프로덕션 코드에 `console.log` 남기지 않음 (No `console.log` left in production code)
-- [ ] TypeScript: 근거 없는 `@ts-ignore` 금지 (No `@ts-ignore` without justification)
-- [ ] Tailwind 클래스는 테마 토큰 사용 (navy-*, accent-*) (Tailwind classes use theme tokens)
+When PR completion is assigned, follow the user's latest-HEAD review, fix,
+validation, and merge procedure. Missing/failed required review coverage never
+counts as approval; a new HEAD needs review again.

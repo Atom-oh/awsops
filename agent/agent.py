@@ -42,19 +42,14 @@ _GATEWAY_ALIAS = {"observability": "external-obs"}
 def _resolve_gateway_key(role, gateways):
     """Map a chat/section role to an actual key in the runtime GATEWAYS map.
 
-    BUGFIX: `_discover_gateways` derives keys via name.replace("awsops-","").replace("-gateway","").
-    While v1 and v2 gateways COEXIST, v2 gateways are named `awsops-v2-<x>-gateway`, so discovery
-    yields `v2-<x>` (e.g. `v2-external-obs`), whereas the GATEWAYS_JSON env fallback uses the
-    canonical `<x>` (`external-obs`). The `observability`→`external-obs` alias only matched the env
-    spelling; on the (primary) discovery path `external-obs` was absent → silent fallback to `ops`.
-
-    We try the CANONICAL key first, then the `v2-`-prefixed transition spelling. This is
-    forward-compatible: once v2 merges to main and the gateways are renamed to `awsops-<x>-gateway`
-    (v1 retired, the `v2` name dropped), discovery yields the canonical `<x>` and the first branch
-    matches — the `v2-` fallback becomes dead code. **REMOVE the `v2-` candidate at the v2→main
-    cutover** (it is a coexistence shim, not permanent behavior)."""
+    Discovery strips "awsops-" and "-gateway", so current awsops-v2-<x>-gateway
+    names produce v2-<x>. GATEWAYS_JSON uses canonical <x> keys. Preserve both
+    spellings while these configuration paths differ; the v2 main cutover did
+    not remove the prefix. Without this compatibility, observability can
+    silently fall back to ops instead of external-obs.
+    """
     key = _GATEWAY_ALIAS.get(role, role)
-    # canonical first; `v2-` = transition shim (drop at v2→main). The DEFAULT_GATEWAY fallback is
+    # Canonical first, then the current discovery spelling. The DEFAULT_GATEWAY fallback is
     # resolved the SAME tolerant way — under v2-only discovery the default is `v2-ops`, not `ops`,
     # so a hard `GATEWAYS[DEFAULT_GATEWAY]` would KeyError. Returning DEFAULT_GATEWAY as the last
     # resort yields None at the call site (GATEWAYS.get), which the MCP try-block degrades to a
