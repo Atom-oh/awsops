@@ -17,6 +17,7 @@ rather than historical v1 implementations or the separate chat agent loop.
 - Collect evidence per source, narrowing to requested scope and running bounded independent work in
   parallel. Missing/unavailable sources are nonfatal but must appear in coverage notes. Never invent
   missing evidence or turn recommendations into AWS-resource execution.
+  Keep collector coverage separate from invariant-assessment coverage: unassessed is never a pass.
 - Run report generation in the asynchronous worker tier. `diagnosis/report.py` uses direct boto3
   Bedrock `invoke_model`; it is not a Strands agent. Render sections with bounded concurrency,
   timeouts, deterministic ordering, and partial-result handling.
@@ -59,6 +60,6 @@ read-only recommendations and governed datasource access.
 
 ## Evidence
 
-`scripts/v2/workers/diagnosis/{report,sections,sources,exporters}.py`,
+`scripts/v2/workers/diagnosis/{report,sections,sources,invariants,exporters}.py`,
 `scripts/v2/workers/handlers.py`, `agent/agent.py`, `agent/anthropic_loop.py`, `web/lib/agentcore.ts`,
 `web/app/api/chat/route.ts`, and ADR-009/012/018.

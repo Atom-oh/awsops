@@ -47,6 +47,7 @@ Set the deployment's actual profile and role ARN variables before running. This
 example uses only the web role; add the optional worker parameter when required.
 
 ```bash
+: "${TARGET_EXTERNAL_ID:?Set the reviewed ExternalId; third-party targets require it}"
 aws cloudformation deploy \
   --profile "$TARGET_PROFILE" \
   --template-file infra/cfn/awsops-target-account-role.yaml \
@@ -57,10 +58,14 @@ aws cloudformation deploy \
     ExternalId="$TARGET_EXTERNAL_ID"
 ```
 
-For explicitly first-party onboarding, omit `ExternalId` (or leave it empty).
+Only for explicitly first-party onboarding without ExternalId, replace the assertion
+with `TARGET_EXTERNAL_ID=''` and keep the empty parameter (or omit that parameter).
+Do not use this alternative for third-party/shared accounts.
 For worker reads, add `WorkerTaskRoleArn="$HOST_WORKER_ROLE_ARN"` to the parameter
 list. Review the exact trust-policy change before updating an existing stack.
 Do not broaden it to wildcard principals to work around AccessDenied.
+Some host policies use `arn:aws:iam::*:role/AWSopsReadOnlyRole`; an exact registered-account
+ARN allowlist is stricter. Tightening that host scope is a separate reviewed Terraform change.
 
 As an AWSops admin, open `/accounts`, add the target ID, alias, region and matching
 ExternalId. If omitting ExternalId, explicitly select the first-party checkbox.

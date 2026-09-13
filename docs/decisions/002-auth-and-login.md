@@ -41,13 +41,19 @@ Recovery is `admin_only`, including Hosted UI recovery: password resets are oper
 `verifyUser()` adopts `email` only when `email_verified === true`; otherwise it omits email
 while retaining valid sub-based access. SSM email-admin and legacy-owner matching use only this
 adopted claim. A truthy string or an unverified address must not satisfy that gate.
+Verify each email-admin account's `email_verified` state before relying on that access.
+Changes to identity claims require a newly issued ID token; old claims can persist for its
+12-hour lifetime. Re-login after claim changes. The separate SSM allowlist has a five-minute
+per-container cache; changing that list is not itself a token-claim update.
 
-### BFF authorization and revocation
+### BFF authorization
 
 Every data-returning/billable user route must call `verifyUser()` and enforce its own authorization
 and ownership. The recorded carve-outs are `/api/db` (diagnostic metadata), `/api/stream` (ticks), and
 `/api/incidents/webhook` (separate machine authentication, ADR-013). These are not permission for
 new routes to omit verification. Public login/signout/health/static handlers have their own contracts.
+
+### §2-4 Session revocation
 
 Aurora `session_revocations` stores a monotonic per-sub cutoff. Signout advances it only to that
 token's `iat`; `verifyUser()` rejects tokens with `iat <= revoked_at`. Signout checks signatures and
@@ -59,6 +65,9 @@ CloudWatch alarms. The timeout is three seconds; successful cutoff lookups have 
 per-container cache. Failed reads are not cached. A signout invalidates its local cache entry;
 other tasks can accept the old token until their cache expires. Do not describe logout as globally
 instantaneous or fail-closed during Aurora failure.
+Monitor `revocation_check_failed` and `revocation_write_failed` with the metric filters/alarms
+in `workload.tf`; the former means revocation reads failed open, the latter means logout
+could not persist the cutoff. These alarm bodies cite this §2-4.
 
 ### Immutable ownership and migration
 
@@ -67,7 +76,8 @@ controlled by `legacy_email_owner_match` (default **true**) / `LEGACY_EMAIL_OWNE
 both reads and report PATCH/DELETE through `matchesIdentity()`, not just display.
 
 Do not disable it on the strength of a clean backfill plan. Complete the reviewed apply and verify
-zero residual legacy rows, with the zero-row/no-rewrite case explicitly established (ADR-009).
+zero residual legacy rows. ADR-009 records the current empty-plan limitation; it is not an
+exception to the applied-backfill requirement.
 Reassigned mailboxes can still match legacy rows while the switch is on; verified email is not proof
 of historical ownership. Follow `docs/runbooks/user-offboarding.md` for revocation, account removal,
 allowlist cleanup, and schedule cleanup; this ADR does not duplicate the operational ordering.
