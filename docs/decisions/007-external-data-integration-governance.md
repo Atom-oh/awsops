@@ -45,7 +45,13 @@ egress, credential, disclosure, and approval controls without reopening AWS-reso
 5. Keep durable Aurora and S3 Object Lock audit records. Sharing a workflow does not share the frozen
    mutation tier's authorization.
 
-### Transport-specific evidence
+### §6 Transport, SSRF and private opt-in
+
+`web/lib/ssrf-guard.ts` is the registration-time literal-host/IP guard. General egress
+requires HTTPS and a per-account `allowPrivateDatasource` opt-in for private destinations;
+loopback, metadata and other always-blocked destinations remain blocked even with opt-in.
+Its finite localhost-alias check is not general DNS resolution. DNS and connection-time
+protection belong to the selected transport; do not conflate the following paths.
 
 | Path | Actual boundary / remaining limitation |
 |---|---|
@@ -74,4 +80,6 @@ connector failures and explicit draft-only fallback.
 ## Evidence
 
 `agent/agent.py`, `agent/lambda/datasource_http.py`, `terraform/v2/foundation/{variables,remediation}.tf`,
-`scripts/v2/agentcore/{catalog,provision}.py`, ADR-005/013/017, and the legacy mapping.
+`scripts/v2/agentcore/{catalog,provision}.py`, ADR-005/013/017, the legacy mapping, and
+[external-write ratification](../history/reviews/2026-06-14-external-write-unfreeze-consensus.md).
+The ratification pointer does not remove the PARTIAL re-scope qualification above.

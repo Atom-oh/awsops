@@ -29,7 +29,8 @@ section agents, and governed data integrations. Large/risky features have explic
 - **One narrow mutation exception:** ADR-015, owner Junseok Oh, **2026-07-01**, after PR #114's
   **2026-06-29** panel. Only `ecs:UpdateService(forceNewDeployment=True)` for the host's own web
   service on its own Aurora master-secret rotation, unchanged task definition/image, one-service
-  IAM scope, secret matching, default-off. No broader self-healing authority follows from it.
+  IAM scope, secret matching, default-off. IAM permits UpdateService on that ARN; the Lambda
+  enforces restart-only arguments and secret matching. No broader authority follows from it.
 - **GATED** means eligible for controlled enablement after its documented dependencies and controls
   are satisfied. It does not mean live, nor does it waive a frozen dependency.
 - Verify defaults in `terraform/v2/foundation/variables.tf`, `ai.tf`, `secret-rotation.tf`, and
@@ -65,12 +66,12 @@ also default false. Consult the linked ADR and source for complete dependencies.
 | GATED experiment | `ANTHROPIC_AGENT_LOOP_ENABLED` (runtime env) | Bedrock chat loop; BFF must not forward client-controlled `agentLoop` | ADR-003, ADR-008 |
 | GATED query generation | `graph_querygen_enabled` | Requires datasource diagnosis; ClickHouse graph fallback only | ADR-018 |
 | GATED query generation | `diag_signal_querygen_enabled` | Requires datasource diagnosis; Explore chips only, separate budget and read gate | ADR-018 |
-| GATED batch | `steampipe_enabled` | Warm Fargate Steampipe plus sync Lambda to Aurora; not live BFF Steampipe execution | ADR-010, ADR-021 |
+| GATED batch | `steampipe_enabled` | Warm FDW and inventory sync; Powerpipe CIS also uses the FDW. Live BFF Steampipe stays disabled; FinOps checks persisted freshness | ADR-010, ADR-021 |
 | GATED cost | `ai_cost_tracking_enabled` | Invocation-log aggregation into `ai_usage_daily` | ADR-012 |
 | GATED batch | `diagnosis_schedule_enabled`, `ai_insights_enabled` | Worker-backed scheduled diagnosis / insight generation | ADR-008, ADR-009 |
-| GATED read observation | `eks_auto_register_enabled` | Also requires workers; observes operator-created EKS access and records Aurora registration; does not create AWS access | ADR-001 |
+| GATED read observation | `eks_auto_register_enabled` | Requires workers; records operator-created View/AdminView access in Aurora, with no EKS mutation permission | BASELINE §2 only; no dedicated ADR |
 | GATED batch | `finops_baseline_enabled` | Requires workers; EBS rule also needs successful inventory sync or reports partial | ADR-020 |
-| GATED analysis | `network_path_check_enabled` | Requires workers; new runs additionally blocked by `LIVE_TOPOLOGY_IMPLEMENTED=false` until genuine live topology rereads exist | ADR-009 |
+| GATED analysis | `network_path_check_enabled` | Requires workers; new runs blocked by `LIVE_TOPOLOGY_IMPLEMENTED=false`; no Create/DeleteNetworkInsightsPath grant or active probe | BASELINE §2 only; no governing ADR |
 | GATED analysis | `sg_rule_activity_enabled` | Requires workers; `sg_rule_scan` plus isolated Athena broker, SELECT-only/prefix restrictions | ADR-019 |
 | Migration switch, default **true** | `legacy_email_owner_match` | Temporary verified-email matching for reads and report PATCH/DELETE. Complete reviewed ownership backfill and confirm zero residual legacy rows before disabling | ADR-002, ADR-009 |
 | Ungated user request | Explore `POST /api/datasources/generate` | Authenticated draft generation; never executes/dry-runs/caches generated queries | ADR-018 |
@@ -78,13 +79,19 @@ also default false. Consult the linked ADR and source for complete dependencies.
 
 ### Dated deployment evidence
 
-The previous register records an **2026-08-11** check: SNS diagnosis notification, EKS registration
-observation, and the legacy-email migration switch were ON. It records remediation, incident lifecycle,
-RCA write-back, K8sGPT, broad integration writes, datasource diagnosis, worker query generation,
-experimental chat loop, rotation restart, hosted MCP presets, and ClickHouse stdio as OFF.
-These are historical observations, **not reconfirmed on 2026-09-13**. Rows introduced after that
-snapshot cannot inherit its date. General external read integrations were also recorded enabled by
-that earlier baseline; their individual deployment settings require a fresh check.
+The previous register's live-state column was headed **2026-08-11**, with later rows
+and amendments also present. Its recorded labels were:
+
+- ON: `legacy_email_owner_match`, `diagnosis_notify_enabled`, `eks_auto_register_enabled`.
+- OFF: `remediation_enabled`, `incident_lifecycle_enabled`, `rca_writeback_enabled`, `k8sgpt_enabled`, `integrations_write_enabled`, `datasource_diagnosis_enabled`, `graph_querygen_enabled`, `diag_signal_querygen_enabled`, `ANTHROPIC_AGENT_LOOP_ENABLED`, `secret_rotation_redeploy_enabled`, `official_mcp_enabled`, `CLICKHOUSE_OFFICIAL_MCP`, `finops_baseline_enabled`, `network_path_check_enabled`, `sg_rule_activity_enabled`.
+
+The ungated Explore-generation row was labeled ON as a capability, and deferred
+Neptune was N/A; neither is a feature-gate deployment observation.
+
+These are historical labels, not checks performed on 2026-09-13. A later-added row
+cannot inherit the earlier heading's verification date. The previous register had no
+separate `integrations_enabled` live-state row; do not infer its deployed value here.
+Current per-gate deployment state requires a fresh check.
 
 Cognito `admin_only` recovery illustrates the distinction: merged **2026-08-04**, recorded applied
 **2026-08-11** (ADR-002). Ownership migration completion has no new evidence here. See ADR-016 for

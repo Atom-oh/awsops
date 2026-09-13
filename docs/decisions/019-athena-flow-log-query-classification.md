@@ -33,13 +33,15 @@ three controls hold**:
 `sg_rule_activity_enabled` is ordinary GATED, default false, and requires workers. A policy that
 satisfies this ADR is not proof that the feature has been deployed or enabled.
 
-### Role A: rule inventory
+### §4 Cross-account role separation
+
+#### Role A: rule inventory
 
 Reuse `AWSopsReadOnlyRole` for EC2 rule/interface/Flow Log descriptions under ADR-011's trust model.
 Do not attach Athena or S3 result-write privileges to it. The optional worker principal is a separate
 onboarding change, not an expansion of this role into a write-capable role.
 
-### Role B: isolated Athena query access
+#### Role B: isolated Athena query access
 
 Use `AWSopsSgRuleAthenaRole` in the target account. Its trust requires **both** an explicit host
 Athena-principal restriction **and ExternalId**. Do not copy ADR-011's optional first-party ExternalId

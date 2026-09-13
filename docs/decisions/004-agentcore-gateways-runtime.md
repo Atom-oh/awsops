@@ -14,47 +14,67 @@ without allowing custom content to override safety, ownership, or tool permissio
 
 ## Decision
 
-- Define gateway/target membership in `scripts/v2/agentcore/catalog.py`; provision through `provision.py`.
-  Use `agentcore_enabled` (default false). SSM
-  `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}` is runtime configuration authority;
-  the BFF reads it rather than relying on ECS `valueFrom` for those identifiers.
-- Keep routing and tool ownership aligned. `observability` maps to `external-obs`; canonical and
-  discovered `v2-` keys intentionally coexist. Inspect the catalog for membership rather than copying
-  gateway counts. Direct domain targets still coexist with the Aurora inventory reader (ADR-021).
-- Aurora agent/skill catalogs and account-scoped Agent Spaces drive resolver-selected personas,
-  composed skills, and tool allowlists. Content-addressed artifacts, integrity checks, immutable
-  safeguards, and traceable versions/hashes remain required. Treat skills and MCP output as untrusted.
-  Security revocation must fail closed; do not treat a cache TTL as authorization to keep revoked content.
-- Arbitrary BYO-MCP, mutating tools, and AWS-resource execution remain frozen (ADR-005).
-  Curated external reads/writes use ADR-007; custom personas do not relax those controls.
-- Lambda MCP target schemas bound exposed tools. Hosted vendor MCP targets instead use ADR-017's
-  runtime fail-closed allowlist in both chat loops. Endpoint acknowledgement alone is insufficient.
-  Managed remote egress does not inherit the in-house connector's connect-time IP pinning.
-- Shared AgentCore Memory uses user/account/session isolation and a configured event expiry of
-  365 days. Application persistence remains Aurora; remote memory writes are best effort. Never store
-  raw JWTs, cookies, or credentials. Memory availability must not block the basic conversation path.
-- Code Interpreter uses per-request sessions with cleanup on completion/abort. Computational requests
-  use this managed path; it is not a replacement for AWS API tools. Provisioned interpreter network
-  mode and IDs come from actual provisioning code, not historical resource-name examples.
+### §1 Gateways and shared Runtime
 
-### Aurora SQL boundary
+Define gateway/target membership in `scripts/v2/agentcore/catalog.py`; provision through
+`provision.py`, gated by `agentcore_enabled` (default false). `observability` maps to
+`external-obs`; canonical and discovered `v2-` keys intentionally coexist. Direct domain
+targets still coexist with the Aurora inventory reader under ADR-021.
 
-Data API tools `aws_rds_mcp.execute_sql` and `inventory_read_mcp` authenticate as
-`awsops_sql_reader`, not the Aurora master user. Its SELECT grants cover only explicit-column views
-in `sql_reader`, with no public base-table/column grants, write grants, or elevated role membership.
-Views hide credentials/capabilities such as Kubernetes auth and worker task tokens. Adding a view or
-column is security-relevant; `SELECT *` would reopen silent exposure when schemas grow.
+### §2 Runtime customization substrate
 
-Database grants are the boundary. Lexical SQL guards, read-only transactions, and
-`search_path=sql_reader,pg_catalog` are defense in depth; role-settable options are not privileges.
-Best-effort revocation of PUBLIC function execution is not a guarantee that no function can execute.
-Use the dedicated Terraform secret synchronized by `make migrate` for Data API access. This is
-separate from the web BFF's `awsops_web` IAM-auth role.
+Aurora agent/skill catalogs and account-scoped Agent Spaces drive resolver-selected personas,
+composed skills, and tool allowlists. Preserve content-addressed artifacts, integrity checks,
+immutable safeguards, traceable versions/hashes and fail-closed security revocation. Treat
+custom skills and MCP output as untrusted; a cache TTL does not authorize revoked content.
+
+### §3 Integration read substrate
+
+Arbitrary BYO-MCP, mutating tools and AWS-resource execution remain frozen (ADR-005).
+Curated external data uses ADR-007. Lambda schemas bound exposed tools; hosted vendor targets
+instead need ADR-017's runtime fail-closed allowlist in both chat loops. Endpoint acknowledgement
+alone is insufficient; managed egress does not inherit in-house connect-time IP pinning.
+
+### §4 Memory and conversation isolation
+
+The provisioner configures a Memory resource with 365-day event expiry. Current explicit chat
+persistence is Aurora. Runtime session IDs use the user sub and per-session entropy; account is
+request payload context, not part of that session identifier. Provisioning Memory alone does not
+establish account-partitioned Memory reads/writes. Verify the consumer before claiming that
+integration. The accepted user/account isolation requirement remains: its enforcement is an
+implementation obligation, not relaxed by the current gap. Exclude raw JWTs, cookies and credentials.
+
+### §5 Code Interpreter sessions
+
+Use per-request interpreter sessions with cleanup on completion/abort. Computational requests
+use this managed path; it does not replace AWS API tools. Network mode and resource identifiers
+come from the actual provisioner, not historical resource-name examples.
+
+### §6 Configuration source of truth
+
+SSM `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}` is runtime configuration
+authority. The BFF reads it at runtime instead of ECS `valueFrom` for these identifiers.
+
+### §7 Aurora SQL boundary
+
+Data API tools `aws_rds_mcp.execute_sql` and `inventory_read_mcp` use `awsops_sql_reader`,
+not the Aurora master user. SELECT grants cover explicit-column `sql_reader` views with no
+public base-table/column grants, write grants or elevated role membership. These owner-executed
+views use `security_invoker = false`; do not grant direct base-table access as a workaround.
+Keep credential/capability fields, including Kubernetes auth and worker task tokens, out of
+projections. A new view/column is security-relevant; `SELECT *` can expose future schema additions.
+
+Database grants are the boundary. Lexical guards, read-only transactions and
+`search_path=sql_reader,pg_catalog` are defense in depth; role-settable options do not grant
+privileges. Best-effort PUBLIC function revocation is not proof that no function can execute.
+Use the dedicated Terraform reader secret synchronized by `make migrate`, with no master-secret
+fallback. This is separate from the web BFF's `awsops_web` IAM-auth role.
 
 ## Consequences
 
-Gateway separation, scoped memory, and managed computation limit cross-domain and cross-user exposure.
-Runtime customization adds catalog/revocation/integrity work; memory can lag local persistence.
+Gateway separation, scoped runtime sessions and managed computation limit cross-domain and cross-user
+exposure. Runtime customization adds catalog/revocation/integrity work; provisioned Memory is not
+proof of an active persistence integration.
 Remote MCP tool filtering and connection safety are different boundaries. Disabled historical code
 is not evidence of an enabled capability.
 

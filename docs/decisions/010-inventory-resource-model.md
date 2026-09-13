@@ -14,6 +14,8 @@ attribute hydration fail. Historical local JSON snapshots and live BFF Steampipe
 
 ## Decision
 
+### §1 Resource inventory
+
 - Persist inventory in Aurora `inventory_resources` and track sync state separately. Keep the UI type
   registry aligned with sync collectors, including composite identities such as ECS cluster/service.
 - `steampipe_enabled` (default false) gates a warm Steampipe Fargate service plus a sync Lambda.
@@ -21,9 +23,13 @@ attribute hydration fail. Historical local JSON snapshots and live BFF Steampipe
   Aurora snapshots. This is batch ingestion, not the generic async Fargate job runner or live BFF SQL.
 - ADR-021 governs quota controls, last-success preservation, freshness, and the phased Aurora-only
   target. Direct domain MCP tools and limited Aurora inventory tools still coexist in repository code.
-- Avoid list-wide failure from denied/expensive hydrate columns. `ignore_error_codes` is not a promise
-  that every query succeeds. Default to omitting risky list attributes unless their risk is explicitly
-  accepted and disclosed. Do not reinstate the superseded blanket ban from legacy ADR-003.
+### §2 SCP-blocked columns and query robustness
+
+The v2 `spc_render.py` renderer does not set `ignore_error_codes`. A failing FDW table/base
+query fails the resource type and preserves last-good rows. The named hydrate fallback below
+and ADR-021's SDK partial-collection semantics are separate cases. Default to omitting risky
+list attributes unless their risk is explicitly accepted and disclosed; do not reinstate the
+superseded blanket ban from legacy ADR-003.
 
 ### Accepted hydrate fallback (2026-09-02)
 

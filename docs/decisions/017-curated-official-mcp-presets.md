@@ -15,13 +15,15 @@ A generic "paste a token" interface cannot make both usable or enforce read-only
 
 ## Decision
 
-### Hosted presets: GATED
+### Decision 1 — Hosted presets: GATED
 
 - The checked-in catalog supports Datadog, Dynatrace, and New Relic as hosted `mcpServer` targets.
   `official_mcp_enabled`, `agentcore_enabled`, and `integrations_enabled` are required and default false.
 - Endpoints remain operator data constrained by catalog `allowed_host_suffixes`. Require
   `official_mcp_read_only_ack[preset_key]` to match the exact reviewed endpoint; missing/mismatched
   configuration skips and retires the target.
+### Decision 2 — Runtime tool allowlist
+
 - Catalog `tool_allowlist` names must be transcribed from vendor documentation with date/source,
   not guessed. Provision them into `OFFICIAL_MCP_TOOL_ALLOWLIST_JSON`; runtime tool intersection
   fails closed in both Strands and the optional Anthropic loop. Empty/unset/invalid allowlists expose
@@ -34,7 +36,7 @@ A generic "paste a token" interface cannot make both usable or enforce read-only
   them idempotently. The brief old-runtime window during an update is the recorded residual tradeoff,
   not an assertion of instantaneous revocation throughout deployment.
 
-### ClickHouse stdio: FROZEN
+### Decision 3 — ClickHouse stdio: FROZEN
 
 `CLICKHOUSE_OFFICIAL_MCP` defaults false and is **do-not-enable** (review **2026-08-05**, PR #207).
 The retained adapter would reuse the existing default ClickHouse integration credentials and run
@@ -49,7 +51,7 @@ The adapter's supported credential/endpoint shape is basic/none auth and host/po
 headers or path prefixes. It suppresses the in-house ClickHouse tools only after successful stdio
 connection; failure retains them. Those dark implementation details are not an enabled capability.
 
-### Other connectors
+### Decision 4 — Other connectors
 
 Keep Tempo's existing Lambda target and datasource registration. Jaeger's Lambda does not by itself
 create a chat gateway target. Grafana/Splunk hosted connector cards and the old self-hosted presets
@@ -63,6 +65,17 @@ Hosted tools can be adopted through explicit catalog/endpoint/tool controls, wit
 favoring temporary loss of integration over unfiltered exposure. The intended ClickHouse maintenance
 benefit remains unavailable while frozen. General external-write governance in ADR-007 is unchanged;
 this ADR is not an ADR-005 mutation exception.
+
+### Trade-offs
+
+The retired Tempo-hosted-preset cutover described by an older `route.ts` comment is not a
+current instruction: the catalog no longer contains that preset. Keep Tempo on its existing
+Lambda/monitoring route; merely enabling the vendor-hosted preset flag must not move it.
+Any future routing move must follow actual target membership and routing tests.
+The frozen ClickHouse stdio adapter only reads the default datasource's kind-mirror credentials;
+non-default instance selection remains unsupported there. Managed-hosted egress lacks the
+in-house transport's connect-time pinning, and runtime updates retain the brief readiness
+window described in Decision 2. These limits do not authorize enabling frozen stdio.
 
 ## Six Pillars
 

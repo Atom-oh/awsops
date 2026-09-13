@@ -56,4 +56,4 @@ legacy citations. Phase labels describe provenance and do not prove deployment.
 | 043 | Optional Neptune graph store | BASELINE deferred option; Postgres-first, no adoption |
 | 044 | Multi-domain chat | ADR-003 |
 | 045 | Parallel diagnosis/streaming | ADR-008; section-output streaming remains unimplemented |
-| 046 | DevOps RCA orchestrator | Historical brainstorm `brainstorm/046-devops-rca-eog-PROPOSED.md`; not an accepted decision |
+| 046 | DevOps RCA orchestrator | [Historical brainstorm](../history/brainstorm/046-devops-rca-eog-PROPOSED.md); not an accepted decision |
