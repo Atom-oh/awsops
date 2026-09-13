@@ -57,8 +57,10 @@ Choosing Datadog preselects dedicated **API key** and **Application key** fields
 | State | Meaning / next step |
 |---|---|
 | Configuration saved · unverified | The required configuration is present; perform a probe and a representative query |
+| Default connection only · save instance configuration | Legacy default connection only; verify the endpoint in Edit, test and save the instance |
+| Endpoint setup required | Endpoint is missing or invalid; an administrator must check the HTTP(S) API base URL |
 | Authentication setup required | Required saved credential material is missing; ask an administrator to complete it |
-| Connection success | This provider's probe succeeded; it does not certify every API permission, dataset or workload |
+| Connection success (Edit test) | This provider's probe succeeded; it does not certify every API permission, dataset or workload |
 | State/configuration unavailable | Configuration could not be read; retry or ask an administrator to check access rather than treating the list as empty |
 | Disabled | The row is disabled; its AI diagnosis shortcut is not offered |
 

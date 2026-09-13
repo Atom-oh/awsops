@@ -9,6 +9,7 @@ type Pair = { en: string; zh: string; ja: string };
 export const TERMS: Record<string, Pair> = {
   '요청한 데이터소스를 사용할 수 없습니다. 다른 인스턴스를 직접 선택하세요.': { en: 'The requested datasource is unavailable. Select another instance explicitly.', zh: '请求的数据源不可用。请明确选择其他实例。', ja: '要求されたデータソースは利用できません。別のインスタンスを明示的に選択してください。' },
   '기본 연결 설정 · 인스턴스 저장 필요': { en: 'Default connection only · save instance configuration', zh: '仅有默认连接配置 · 需要保存实例配置', ja: '既定の接続設定のみ・インスタンス設定の保存が必要' },
+  '연결 주소 확인 필요': { en: 'Endpoint setup required', zh: '需要检查连接地址', ja: '接続先の確認が必要' },
   '인증 방식을 선택하세요': { en: 'Select an authentication method', zh: '请选择认证方式', ja: '認証方式を選択してください' },
   '다시 시도': { en: 'Retry', zh: '重试', ja: '再試行' },
   'Dynatrace API token을 입력하세요. 메트릭에는 metrics.read, 문제 조회에는 problems.read 권한이 필요합니다.': { en: 'Enter a Dynatrace API token. Metrics require metrics.read; problem queries require problems.read.', zh: '请输入 Dynatrace API 令牌。指标需要 metrics.read，问题查询需要 problems.read 权限。', ja: 'Dynatrace API トークンを入力してください。メトリクスには metrics.read、問題の照会には problems.read 権限が必要です。' },

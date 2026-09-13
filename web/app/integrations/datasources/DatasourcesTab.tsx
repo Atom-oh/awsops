@@ -147,7 +147,7 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                 )}
                 <td className="px-3 py-2 text-ink-500">{i.authType ?? '—'}</td>
                 <td className="px-3 py-2">
-                  <span className="text-ink-500">{unavailable ? tt('상태 확인 불가') : i.enabled === false ? tt('비활성') : i.configurationStatus === 'mirror_only' ? tt('기본 연결 설정 · 인스턴스 저장 필요') : i.connected ? tt('설정 저장됨 · 미검증') : tt('인증 설정 필요')}</span>
+                  <span className="text-ink-500">{unavailable ? tt('상태 확인 불가') : i.enabled === false ? tt('비활성') : i.configurationStatus?.startsWith('endpoint_') ? tt('연결 주소 확인 필요') : i.configurationStatus === 'mirror_only' ? tt('기본 연결 설정 · 인스턴스 저장 필요') : i.connected ? tt('설정 저장됨 · 미검증') : tt('인증 설정 필요')}</span>
                 </td>
                 <td className="px-3 py-2">{i.isDefault ? <span className="text-amber-600">{tt('★ 기본')}</span> : (canManage && <button className="text-[12px] text-brand-600 hover:underline" onClick={() => onSetDefault(i)} disabled={busyId === i.id}>{tt('기본으로 설정')}</button>)}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">

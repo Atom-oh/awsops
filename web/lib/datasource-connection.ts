@@ -34,16 +34,16 @@ function inferAuth(blob: Record<string, unknown>): AuthType | undefined {
   return methods.length === 1 ? methods[0] : methods.length === 0 ? 'none' : undefined;
 }
 
-/** Row fields win. Only an own-id blob can supply a missing endpoint. A mirror requires
- * default membership, no id entry at all, and an explicit exact row endpoint match. */
+/** Row fields win. The SQL backfill left default endpoints null: only without an id
+ * entry may the current kind mirror supply it. Explicit endpoints must match exactly. */
 export function effectiveSavedConnection(row: Row, snapshot: Record<string, unknown>): Saved {
   const own = Object.hasOwn(snapshot, String(row.id));
   const mirror = snapshot[row.kind];
-  const source = own ? 'id' : row.isDefault && !!row.endpoint && object(mirror)
-    && mirror.endpoint === row.endpoint ? 'mirror' : 'none';
+  const source = own ? 'id' : row.isDefault && object(mirror) && typeof mirror.endpoint === 'string'
+    && (row.endpoint === null || mirror.endpoint === row.endpoint) ? 'mirror' : 'none';
   const selected = source === 'id' ? snapshot[String(row.id)] : source === 'mirror' ? mirror : {};
   const raw = object(selected) ? selected : {};
-  const endpoint = row.endpoint ?? (source === 'id' && typeof raw.endpoint === 'string' ? raw.endpoint : '');
+  const endpoint = row.endpoint ?? (source !== 'none' && typeof raw.endpoint === 'string' ? raw.endpoint : '');
   const bound = !Object.hasOwn(raw, 'endpoint') || raw.endpoint === endpoint;
   const creds = bound ? (row.kind === 'datadog' ? normalizeDatadogHeaderSlots(raw) : raw) : {};
   const authType = row.authType ?? (source !== 'none' && object(selected) && bound ? inferAuth(creds) : undefined);
@@ -95,5 +95,6 @@ export function datasourceConnectionMetadata(row: Row, snapshot: Record<string, 
   let connected = false;
   try { mergeDatasourceConnection(row.kind, {}, saved); connected = true; } catch { /* incomplete configuration */ }
   return { endpoint, authType: saved.authType ?? null, connected,
-    configurationStatus: connected ? saved.source === 'mirror' ? 'mirror_only' : 'stored' : 'missing' };
+    configurationStatus: !saved.endpoint ? 'endpoint_missing' : !endpoint ? 'endpoint_invalid'
+      : connected ? saved.source === 'mirror' ? 'mirror_only' : 'stored' : 'missing' };
 }

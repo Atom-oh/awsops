@@ -10,17 +10,27 @@ it('derives null row fields only from the own-id blob and prunes dormant auth un
   expect(merge(row.kind, {}, saved({ ...row, authType: 'none' }, snapshot))).not.toHaveProperty('token');
 });
 
-it('permits only an endpoint-matched default mirror with no id entry', () => {
+it('permits a default mirror with no id entry for matched or SQL-backfilled null endpoints', () => {
   expect(metadata(row, { prometheus: blob })).toMatchObject({ connected: true, configurationStatus: 'mirror_only' });
+  const migrated = { ...row, endpoint: null, authType: null };
+  expect(merge(row.kind, {}, saved(migrated, { prometheus: blob }))).toEqual({ ...blob, authType: 'bearer', timeoutS: 20 });
+  expect(metadata(migrated, { prometheus: blob })).toMatchObject({ endpoint: blob.endpoint, connected: true, configurationStatus: 'mirror_only' });
   for (const [r, snapshot] of [
     [{ ...row, isDefault: false }, { prometheus: blob }],
-    [{ ...row, endpoint: null }, { prometheus: blob }],
+    [{ ...migrated, isDefault: false }, { prometheus: blob }],
+    [migrated, { 7: {}, prometheus: blob }],
     [row, { 7: {}, prometheus: blob }],
     [row, { 7: null, prometheus: blob }],
     [row, { prometheus: { ...blob, endpoint: row.endpoint + '/other' } }],
     [row, { 7: { ...blob, endpoint: 'https://foreign.example' }, prometheus: blob }],
   ] as const) expect(metadata(r, snapshot).connected).toBe(false);
   expect(merge(row.kind, {}, saved(row, { 7: { ...blob, token: 'own' }, prometheus: blob })).token).toBe('own');
+});
+
+it('separates missing/unsafe endpoints from missing authentication without exposing unsafe URLs', () => {
+  expect(metadata({ ...row, endpoint: null }, {})).toMatchObject({ endpoint: null, connected: false, configurationStatus: 'endpoint_missing' });
+  expect(metadata({ ...row, endpoint: 'https://private-token@metrics.example' }, {})).toMatchObject({ endpoint: null, connected: false, configurationStatus: 'endpoint_invalid' });
+  expect(metadata(row, {})).toMatchObject({ endpoint: row.endpoint, connected: false, configurationStatus: 'missing' });
 });
 
 it.each(['https://metrics.example/other', 'http://metrics.example/tenant', 'https://metrics.example:444/tenant', 'https://other.example/tenant'])(
