@@ -169,6 +169,7 @@ class TestGatewayContract(_Base):
         self.assertEqual(json.loads(out["body"]), {"ok": True})
         self.assertEqual(http.call_args.args[0].get_header("Authorization"), "Bearer fresh")
         self.assertEqual(http.call_args.args[0].full_url, "https://api.notion.com/v1/users/me")
+        self.assertEqual(http.call_args.args[0].get_method(), "GET")
 
     def test_target_account_id_is_ignored(self):
         def fake_urlopen(req, timeout=None):
