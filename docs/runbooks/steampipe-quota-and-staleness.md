@@ -203,3 +203,17 @@ and disclose stale data after stopping collection.
 [ADR-010](../decisions/010-inventory-resource-model.md),
 [ADR-021](../decisions/021-quota-isolated-inventory-reads.md),
 `scripts/v2/steampipe/{spc_render,sync_lambda}.py`, `terraform/v2/foundation/steampipe.tf`.
+
+## Optional host scope
+
+The runtime guard is default off. Enabling `INVENTORY_HOST_ONLY=true` requires
+`EXPECTED_HOST_ACCOUNT_ID`, exactly one enabled host registry row, and matching STS
+identity. Prepare account-management enforcement first. This code change alone
+enables no task or infrastructure flag; a task-definition rollout follows existing
+DNS/approval controls. Regions remain the existing host scan scope, not Seoul-only.
+
+Transient STS reads have three total attempts. Wrong identity or exhausted retries
+prevents startup or records fatal shutdown with exit 1. Stop and restart share a lock;
+crash backoff is interruptible. Ordinary SIGTERM remains graceful. Use
+`python3 -m pytest scripts/v2/steampipe/test_host_scope.py -q` from the repository root
+for the offline scope, retry, process-exit and concurrency regressions.
