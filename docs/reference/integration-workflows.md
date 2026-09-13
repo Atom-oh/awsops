@@ -54,19 +54,34 @@ returning identity data. Page sharing is separate; authentication does not prove
 access to a particular page. Notion content is not automatically collected into
 every diagnosis report.
 
-The report detail response builds manual handoff drafts from the existing
-ownership-checked artifact. Selected, bounded narrative is redacted; raw inventory,
-tables, code and account dumps are omitted. Missing evidence, partial reports and
-truncation remain explicit. Users preview, copy or download the draft. Template
-instructions are English; excerpts retain the source report's language.
+The report detail response builds manual handoff drafts only for `succeeded` or
+`partial` reports with a readable Markdown artifact, after the existing owner/admin
+access check. It selects bounded narrative and applies best-effort redaction and
+exclusion of recognized inventory, table, code and account-dump records. Heuristics
+do not recognize every record or identifier; formatted or unrecognized content can
+remain. Omitted-line counts and detected severity markers cover the scanned excerpts,
+not all report findings. Missing evidence, partial reports and truncation remain
+explicit. Users preview, copy or download the draft. Template headings, notices and
+checklists are English; excerpts retain the source report's language.
 
 | Destination | Purpose | Current delivery |
 |---|---|---|
 | Notion / Wiki / Confluence | Durable investigation summary and follow-up ownership | Manual draft; no page-publishing adapter |
-| Slack | Short investigation update and evidence reference | Manual draft; the separate governed Slack action remains gated |
+| Slack | Short investigation update and evidence reference | Manual draft; the separate governed Slack action remains gated with unresolved packaging dependencies |
 | AWS DevOps Agent | Timeline, competing hypotheses and missing operational evidence | Manual investigation context; no agent invocation |
 | AWS Security Agent | Trust boundary, exposure evidence and unassessed controls | Manual review context; no scan or agent invocation |
 | FinOps review | Billing period, utilization, commitments and reliability constraints | Manual review context; not measured savings or automated purchases |
+
+The separate Slack executor has unresolved packaging dependencies.
+`remediation_executor.py` imports `external_slack_executor.py`, which imports
+`egress_dlp.py`. Neither dependency is included by the `remediation_src` archive in
+[remediation.tf](../../terraform/v2/foundation/remediation.tf), the `incident_src`
+archive in [incidents.tf](../../terraform/v2/foundation/incidents.tf), or the worker
+image's COPY list in [Dockerfile](../../scripts/v2/workers/Dockerfile). These are
+pre-existing gaps. The source's role-key and API-acknowledgment fixes do not make
+those packages ready for direct delivery. Packaging and import validation remain
+separate work. Any future delivery still needs owner-controlled gates and ADR-007
+human approval governance: four-eyes approval or an explicitly logged single-operator escape.
 
 These destinations do not grant export approval. The draft redactor is conservative
 and best effort; the operator reviews both content and audience. No new external

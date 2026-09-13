@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Reviewed diagnosis handoffs: preview, copy or download selected, best-effort-sanitized drafts for knowledge, communication, and specialist workflows. Transferred text carries omission/truncation notices and per-section omitted-line counts, including severity markers; collector availability is deferred to the authenticated report, and invariant coverage stays distinct from narrative findings. Transfer remains manual. The gated Slack path now resolves normalized action-role keys and rejects unacknowledged API responses instead of recording success; delivery remains default-off under owner-controlled gates and four-eyes governance.
+- Reviewed diagnosis handoffs: preview, copy or download selected, best-effort-sanitized drafts for knowledge, communication, and specialist workflows. Transferred text carries omission/truncation notices, per-section omitted-line counts and counts of detected severity markers; these counts do not represent complete finding coverage. Collector availability is deferred to the authenticated report, and invariant coverage stays distinct from narrative findings. Transfer remains manual.
 
 - Custom agents and skills: account-scoped slash selection, server-ordered skill attachment, and qualified tool policies. Repeated attachment preserves its order; refresh failures retain a successful save notice. Forms expose only runtime-supported settings. Instruction-only skills retain existing gateway reads under account caps; declared or revoked empty intersections deny all tools with an explicit chat notice. Curated egress/ingress registration and toggles remain available while arbitrary MCP registration stays retired. Unavailable custom routing is disclosed while built-in chat and product help remain usable.
 
@@ -81,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Relocated the security group usage analysis page from `/inventory/security_group` to its own top-level `/network/security-groups/usage` page — the embedded `SgAnalysisSection` component's own behavior/IAM is unchanged, but the new page itself additionally carries a relationship graph, a fixed-24h hits request, and a link to the Rules page; moved out of the generic inventory-type page so it can sit alongside the new SG Rules page under one `security-groups` route group.
 
 ### Fixed
+
+- Notion and connector readiness: saved-token verification checks fresh credentials, warm read caches expire, and unavailable credential status is distinct from unconfigured. Authentication does not establish page access or chat-gateway readiness; MCP Lambda updates ship through the normal Terraform deployment.
+
+- Gated Slack executor: normalize action-role environment keys and reject API responses that do not acknowledge the message. Direct delivery remains off by default under owner-controlled gates and human approval governance. These source corrections do not resolve the existing archive and worker-image packaging dependencies.
+
 - Topology IP-target attribution now requires matching region/VPC and subnet or pod evidence, and host EKS ownership is not mixed into member-account graphs. Completed pods no longer obscure the active owner of a reused IP; grouped IPv6 targets preserve unambiguous address/port notation. NFM query responses expose the original cached observation window and top-contributor limit metadata.
 
 - Tempo query generation: preserve discovered attribute scopes and observed value types for four selected HTTP-status/service-name attributes, render legacy cached tags with valid unscoped TraceQL syntax, and check AI drafts with Grafana's TraceQL parser before returning them (one correction attempt). Disable stale-value early termination for schema discovery while retaining count/time bounds; keep virtual intrinsics separate, use scoped v2 tag-value lookups with legacy fallback, and validate generated custom attributes, literal types, and explicit HTTP-status filters; disclose per-attribute sampling limits, treat truncated legacy type evidence as unknown, and distinguish name-discovery limits from type-sampling limits. Complete empty observations refresh after a short one-minute TTL and explain historical queries through Grafana/Tempo API or intrinsic-only recent queries; incomplete empty results retry discovery and report collection failure instead of an idle window. Tempo catalog hashes exclude schema content because these catalogs depend only on successful introspection; catalog versions and generation flags still invalidate them. Admin schema GET/POST summaries expose custom-attribute counts and discovery/type limits. The richer metadata requires deploying the Tempo connector Lambda and refreshing its schema, and updated gateway tool descriptions require AgentCore provisioning; see the [Tempo query-generation runbook](docs/runbooks/tempo-query-generation.md).
@@ -123,8 +128,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add EKS fleet-node drilldown: `/eks/nodes` rows open the same rich drilldown as the overview (CPU/Memory tri-split, pods on node, ENI) via a shared `NodeDrilldownPanel` — the overview reuses it too.
 
 ### Fixed
-
-- Notion and connector readiness: saved-token verification checks fresh credentials, warm read caches expire, and unavailable credential status is distinct from unconfigured. Authentication does not establish page access or chat-gateway readiness; MCP Lambda updates ship through the normal Terraform deployment.
 
 - `opencost_config` — read-only OpenCost install config (cluster-scoped helm version/values)
 - `prevention_insights` — ADR-032 Phase 4 cross-incident proactive-prevention tier
