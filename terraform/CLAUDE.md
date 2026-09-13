@@ -25,7 +25,7 @@ with mocked providers and `init -backend=false`; no AWS credentials are supplied
 ## Review boundaries
 
 - `v2/foundation/runtime-read-scope.tf` defines opt-in host-only inventory,
-  nullable inventory/worker image digests, region scopes and deployment identities.
+  nullable inventory/worker image digests, region/model scopes and verifier provisioning.
   Web SSM access names exactly three project parameters. Runtime Gateway/model and
   worker task permissions are scoped; allowed host reads retain enabled regions
   and global endpoints. Terraform omits only collector cross-account role grants in host-only mode; Agent MCP

@@ -144,6 +144,7 @@ run "defaults_remain_dark" {
   assert {
     condition = (
       length(aws_iam_role_policy.agentcore) == 0 &&
+      length(aws_iam_role_policy.official_mcp_credentials) == 0 &&
       length(aws_iam_role_policy.steampipe_task) == 0 &&
       length(aws_iam_role_policy.worker_lambda) == 0 &&
       length(aws_cognito_user_group.deployment_verifiers) == 0 &&
@@ -270,8 +271,20 @@ run "legacy_tag_and_scope_behavior" {
   command = plan
   variables {
     agentcore_enabled = true
+    integrations_enabled = true
+    official_mcp_enabled = true
     workers_enabled   = true
     steampipe_enabled = true
+  }
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.official_mcp_credentials[0].policy).Statement[0].Action == ["bedrock-agentcore:GetWorkloadAccessToken"] &&
+      toset(jsondecode(aws_iam_role_policy.official_mcp_credentials[0].policy).Statement[0].Resource) == toset([
+        "arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:workload-identity-directory/default/workload-identity/awsops-v2-external-obs-gateway-*"
+      ])
+    )
+    error_message = "Official gateways need their own scoped workload-token identity grant."
   }
   assert {
     condition = (

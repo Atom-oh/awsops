@@ -241,6 +241,13 @@ resource "aws_iam_role_policy" "official_mcp_credentials" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
+      Action = ["bedrock-agentcore:GetWorkloadAccessToken"]
+      Resource = [
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:workload-identity-directory/default/workload-identity/awsops-v2-external-obs-gateway-*"
+      ]
+    }, {
+      Effect = "Allow"
       Action = ["bedrock-agentcore:GetResourceApiKey"]
       Resource = concat([
         for suffix in ["token-vault/default", "token-vault/default/apikeycredentialprovider",
