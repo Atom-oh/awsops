@@ -3,6 +3,7 @@ import { verifyUser } from '@/lib/auth';
 import { getReport, canMutateReport, updateReportMeta, softDeleteReport } from '@/lib/diagnosis';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
+import { buildReportHandoff } from '@/lib/report-handoff';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +43,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       markdown = null;
     }
   }
-  return NextResponse.json({ report: { ...report, can_edit }, markdown });
+  return NextResponse.json({
+    report: { ...report, can_edit }, markdown, handoff: buildReportHandoff(report, markdown),
+  }, { headers: { 'Cache-Control': 'private, no-store' } });
 }
 
 const MAX_TITLE = 200;
