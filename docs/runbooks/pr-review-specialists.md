@@ -34,7 +34,13 @@ Panel/chair output is invalid when anchored stderr reports model-selection,
 implicit fallback or account usage failure, even with exit zero and a valid
 completion frame. These failures stop subsequent retries/fallback and remain
 recorded. Service throttles keep the existing bounded recovery; quoted/fenced diff
-examples are ignored as diagnostic evidence. Kiro startup uses the same parser.
+examples are ignored as diagnostic evidence. Kiro startup uses the same diagnostic parser.
+
+Startup remains one fail-closed attempt per configured Kiro model within its
+existing timeout; transient startup failure requires a later review run. Bounded
+transient retry/fallback applies to review cells and chairs, not startup. This
+keeps the existing startup request count and execution budgets unchanged.
+
 
 The existing Pod Identity preflight still precedes both panel and chair. The
 adapter does not change identities, L1/source-omission gates, model roster,

@@ -1,6 +1,7 @@
 """Specialist assignments; legacy lens IDs remain completion-frame coordinates."""
 from pathlib import Path
 import sys
+import re
 
 ROLES = {
     "codex": ("L2", "correctness", "Trace logic, state transitions, edge cases and regression tests."),
@@ -12,6 +13,11 @@ ROLES = {
 def prompt(tag, directory):
     lens, role, focus = ROLES[tag]
     base = (Path(directory) / f"{lens}.txt").read_text()
+    base = re.sub(
+        r"Stay inside your assigned lens below\s*[—-]\s*do not comment on other lenses"
+        r"\s*\(other agents\s*cover those independently\)\.",
+        "Review every concern assigned to this specialist role.", base,
+    )
     if tag == "kiro-gpt":
         docs = (Path(directory) / "L5.txt").read_text()
         # Retain the established documentation checklist without a second role assignment.

@@ -62,7 +62,15 @@ class SpecialistRoles(unittest.TestCase):
         lenses = root / "lenses"
         lenses.mkdir()
         for lens in ("L2", "L3", "L4", "L5"):
-            (lenses / (lens + ".txt")).write_text("TRUSTED_BASE_POLICY\n\nLENS: "+lens+"\nReview this boundary.\n")
+            text = (
+                "TRUSTED_BASE_POLICY\n"
+                "Stay inside your assigned lens below — do not comment on other lenses "
+                "(other agents\ncover those independently).\n\n"
+                "LENS: "+lens+"\nReview this boundary.\n"
+            )
+            if lens == "L5":
+                text += "Check ADR status, commands, links and documentation.\n"
+            (lenses / (lens + ".txt")).write_text(text)
         diff = root / "diff"
         diff.write_text("x" * 150000 + "\nFULL_DIFF_TAIL\n")
         env = {"PATH": f"{binaries}:/usr/bin:/bin", "FAKE_STATE": str(root),
@@ -84,6 +92,9 @@ class SpecialistRoles(unittest.TestCase):
         roles = [p.read_text().split("SPECIALIST ROLE: ")[1].splitlines()[0] for p in prompts]
         self.assertEqual(set(roles), {"correctness", "aws", "operations"})
         self.assertTrue(all("TRUSTED_BASE_POLICY" in p.read_text() for p in prompts))
+        self.assertTrue(all("do not comment on other lenses" not in p.read_text()
+                            for p in prompts))
+        self.assertIn("Check ADR status", (root / "kiro-gpt-L4.prompt").read_text())
         self.assertEqual(len({p.read_text() for p in (work / "slot").glob("*.nonce")}), 3)
         self.assertFalse((root / ".kiro/agents/pr-review-readonly.json").exists())
 
