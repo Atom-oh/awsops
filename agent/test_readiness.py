@@ -67,7 +67,8 @@ class ReadinessTest(unittest.TestCase):
         self.assertEqual(result["status"], "ready")
         self.assertTrue(all(result["checks"].values()))
         self.assertEqual([name for name, _ in self.client.calls], self.client.tools)
-        self.assertEqual(self.client.calls[1][1]["arguments"], {"resource_type": "cloudfront", "limit": 500})
+        self.assertEqual(self.client.calls[1][1]["arguments"], {
+            "resource_type": "cloudfront", "resource_id": PAYLOAD["expectedCloudfrontId"], "limit": 1})
         self.assertNotIn(PAYLOAD["expectedCloudfrontId"], json.dumps(result))
 
     def test_invalid_request_never_calls_aws_or_gateway(self):

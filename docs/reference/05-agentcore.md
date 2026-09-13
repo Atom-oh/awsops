@@ -96,3 +96,8 @@ from that boolean. The probe uses fixed inventory tools, source freshness and bo
 invocation, preserving unknown coverage and timeout evidence. App access requires admin or
 deployment-verifiers. PENDING/malformed runtime ARNs are rejected before caching; an empty
 runtime SSM parameter disables discovery.
+
+Readiness requests an exact CloudFront resource_id from the curated query_inventory tool,
+using a bound ID predicate and id-only projection rather than an unordered fleet sample.
+Ship the inventory-reader Lambda through Terraform and refresh the catalog target before
+using the new agent image. Existing list queries retain their previous contract.
