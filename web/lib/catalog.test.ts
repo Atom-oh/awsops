@@ -2,12 +2,62 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const query = vi.fn();
-vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
+const connect = vi.fn();
+vi.mock('@/lib/db', () => ({ getPool: () => ({ query, connect }) }));
 
-import { computeSkillHash, upsertSkill, upsertAgent, listSkills, listAgentsWithSkills, writeAudit, isCustomAgentEnabled } from './catalog';
+import { computeSkillHash, upsertSkill, upsertAgent, attachSkill, listSkills, listAgentsWithSkills, writeAudit, isCustomAgentEnabled } from './catalog';
 import { resolveAgent } from './agent-resolver';
 
-beforeEach(() => query.mockReset());
+beforeEach(() => { query.mockReset(); connect.mockReset(); });
+
+describe('server-assigned attachment order', () => {
+  it('serializes concurrent appends after every persisted binding, including disabled skills', async () => {
+    const bindings = new Map([[1, 0], [2, 7]]); // skill 2 is disabled and absent from the UI
+    let lock = Promise.resolve();
+    const releases: ReturnType<typeof vi.fn>[] = [];
+    connect.mockImplementation(async () => {
+      let unlock: (() => void) | undefined;
+      let locked = false;
+      const release = vi.fn(); releases.push(release);
+      return { release, query: async (sql: string, args: number[]) => {
+        if (sql.startsWith('BEGIN')) { expect(sql).toContain('READ COMMITTED'); return { rows: [] }; }
+        if (sql.includes('FOR UPDATE')) {
+          const previous = lock;
+          lock = new Promise<void>(resolve => { unlock = resolve; });
+          await previous; locked = true;
+          expect(args).toEqual([10]);
+          return { rows: [{ id: 10 }] };
+        }
+        if (sql.startsWith('INSERT INTO agent_skills')) {
+          expect(locked).toBe(true);
+          expect(sql).toMatch(/MAX\(ord\)/);
+          expect(sql).not.toMatch(/JOIN skills|enabled/);
+          expect(args).toHaveLength(2);
+          const ord = bindings.get(args[1]) ?? Math.max(...bindings.values()) + 1;
+          await Promise.resolve(); // expose a missing-lock race between the two calls
+          bindings.set(args[1], ord);
+          return { rows: [{ ord }] };
+        }
+        if (sql === 'COMMIT' || sql === 'ROLLBACK') { unlock?.(); return { rows: [] }; }
+        throw new Error(`Unexpected query: ${sql}`);
+      } };
+    });
+    expect(await Promise.all([attachSkill(10, 3), attachSkill(10, 4)])).toEqual([8, 9]);
+    expect(await attachSkill(10, 3)).toBe(8); // duplicate attach does not reorder the prompt
+    expect([...bindings.values()]).toEqual([0, 7, 8, 9]);
+    expect(releases.every(release => release.mock.calls.length === 1)).toBe(true);
+  });
+  it('rolls back and releases the connection when attachment fails', async () => {
+    const clientQuery = vi.fn().mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 10 }] }).mockRejectedValueOnce(new Error('insert failed'))
+      .mockResolvedValueOnce({ rows: [] });
+    const release = vi.fn();
+    connect.mockResolvedValue({ query: clientQuery, release });
+    await expect(attachSkill(10, 3)).rejects.toThrow('insert failed');
+    expect(clientQuery).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(release).toHaveBeenCalledOnce();
+  });
+});
 
 describe('catalog', () => {
   it.each([false, true])('disabled bindings retain restrictions only when tools were configured: %s', async (configured) => {

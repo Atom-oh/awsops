@@ -17,7 +17,7 @@ function setup(attachmentStatus = 200, lang: Lang = 'en', integrations: { id: nu
     if (url === '/api/integrations' && !init?.method) return Response.json({ integrations });
     if (init?.method === 'PUT') {
       const body = JSON.parse(String(init.body));
-      if (body.op === 'attach' && attachmentStatus === 200) agent.skills.push({ name: 'evidence-skill', ord: body.ord });
+      if (body.op === 'attach' && attachmentStatus === 200) agent.skills.push({ name: 'evidence-skill', ord: 8 });
       return Response.json(attachmentStatus === 200 ? { ok: true } : { error: 'Skill is disabled' }, { status: attachmentStatus });
     }
     if (init?.method === 'POST') return Response.json({ ok: true, id: 3 });
@@ -150,7 +150,7 @@ describe('custom agent registration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Attach skill to iam-advisor' }));
     await screen.findByText('Skills: existing-skill, evidence-skill');
     const call = fetcher.mock.calls.find(([, init]) => init?.method === 'PUT');
-    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ op: 'attach', agentId: 1, skillId: 2, ord: 5 });
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ op: 'attach', agentId: 1, skillId: 2 });
     expect(screen.getAllByText('Disabled', { selector: 'button' }).length).toBeGreaterThan(0);
   });
 
@@ -160,5 +160,15 @@ describe('custom agent registration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Attach skill to iam-advisor' }));
     await screen.findByText(/Error:.*Skill is disabled/);
     expect(screen.queryByText('Skills: existing-skill, evidence-skill')).toBeNull();
+  });
+
+  it('keeps a successful attachment distinct from a failed refresh', async () => {
+    const fetcher = setup();
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Skill for iam-advisor' }), { target: { value: '2' } });
+    fetcher.mockResolvedValueOnce(Response.json({ ok: true, ord: 8 })).mockRejectedValueOnce(new Error('refresh failed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Attach skill to iam-advisor' }));
+    await screen.findByText('Skill attached to iam-advisor. Some details could not be refreshed; reload the page.');
+    expect(screen.getByRole('heading', { name: 'New Agent' })).toBeTruthy();
+    expect(screen.queryByText('Error: Could not attach skill. Try again.')).toBeNull();
   });
 });

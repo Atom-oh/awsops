@@ -1,6 +1,7 @@
 import type { Lang } from '@/lib/i18n';
 // Each row keeps ko/en/zh/ja translations together; the public typed locale map is unchanged.
 const TEXT = {
+  toolCapHint: ["선택한 모든 에이전트에 같은 목록을 적용합니다. 게이트웨이 도구는 해당 게이트웨이 안의 고유한 별칭도 허용하지만 통합 도구는 노출된 이름과 정확히 일치해야 합니다. 빈 입력은 추가 상한이 없다는 뜻이며, 입력한 목록과 일치하는 도구가 없으면 차단합니다. 정책 허용은 실제 접속 성공을 뜻하지 않습니다.", "This list applies to every selected agent. Gateway tools accept unambiguous aliases within their gateway; integration tools require exact exposed names. Empty means no additional cap; a list with no matching tools denies them all. Policy eligibility does not prove connectivity.", "此列表适用于所有选定代理。网关工具支持网关内无歧义的别名；集成工具须与暴露名称完全匹配。留空表示无额外上限；列表没有匹配工具时全部拒绝。策略允许不代表连接成功。", "同じリストを選択した全エージェントに適用します。ゲートウェイ内で一意なツール別名は使用できますが、連携ツールは公開名と完全一致が必要です。空欄は追加上限なし、入力したリストに一致がなければ全ツールを拒否します。ポリシー上の許可は接続成功を意味しません。"],
   integrationHint: ["지원하는 egress/ingress 유형만 등록합니다. 새 항목은 비활성이며 자격증명·도구 노출·실행 게이트 설정은 별도입니다. custom_mcp는 폐기되었습니다.", "Register supported egress/ingress kinds only. New rows are disabled; credentials, exposed tools and runtime gates require separate configuration. custom_mcp is retired.", "仅注册支持的 egress/ingress 类型。新记录默认禁用；凭证、工具暴露和运行开关须另外配置。custom_mcp 已退役。", "対応する egress/ingress 種類のみ登録します。新規行は無効で、認証情報・ツール公開・実行ゲートは別途設定が必要です。custom_mcp は廃止されています。"],
   catalogUnavailable: ["에이전트 카탈로그를 일시적으로 불러올 수 없습니다. 페이지를 새로고침하여 다시 시도하세요.", "Agent catalog is temporarily unavailable. Refresh the page to retry.", "暂时无法加载代理目录。请刷新页面重试。", "エージェントカタログを一時的に読み込めません。ページを再読み込みして再試行してください。"],
   reservedAgentName: ["기본 채팅 라우팅에 예약된 이름입니다. 다른 이름을 선택하세요.", "This name is reserved for built-in chat routing. Choose another name.", "此名称已保留用于内置聊天路由。请选择其他名称。", "この名前は組み込みチャットルーティング用に予約されています。別の名前を選んでください。"],
@@ -12,6 +13,7 @@ const TEXT = {
   attach: ["스킬 연결", "Attach skill", "关联技能", "スキルを関連付ける"],
   attachTo: ["{agent}에 스킬 연결", "Attach skill to {agent}", "将技能关联到 {agent}", "{agent} にスキルを関連付ける"],
   attached: ["{agent}에 스킬을 연결했습니다.", "Skill attached to {agent}.", "已将技能关联到 {agent}。", "{agent} にスキルを関連付けました。"],
+  attachedRefreshFailed: ["{agent}에 스킬을 연결했습니다. 일부 정보를 새로고침하지 못했습니다. 페이지를 다시 불러오세요.", "Skill attached to {agent}. Some details could not be refreshed; reload the page.", "已将技能关联到 {agent}。部分信息未能刷新，请重新加载页面。", "{agent} にスキルを関連付けました。一部の情報を更新できなかったため、ページを再読み込みしてください。"],
   attachmentFailed: ["오류: 스킬을 연결하지 못했습니다. 다시 시도하세요.", "Error: Could not attach skill. Try again.", "错误：无法关联技能。请重试。", "エラー：スキルを関連付けられませんでした。再試行してください。"],
   attachmentForbidden: ["오류: 관리자 권한과 커스텀 에이전트가 필요합니다.", "Error: Admin access and a custom agent are required.", "错误：需要管理员权限，且目标必须是自定义代理。", "エラー：管理者権限とカスタムエージェントが必要です。"],
   attachmentMissing: ["오류: 에이전트 또는 스킬을 찾을 수 없습니다. 페이지를 새로고침하세요.", "Error: Agent or skill not found. Refresh the page.", "错误：找不到代理或技能。请刷新页面。", "エラー：エージェントまたはスキルが見つかりません。ページを再読み込みしてください。"],

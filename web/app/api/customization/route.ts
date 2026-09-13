@@ -103,11 +103,9 @@ export async function PUT(request: Request) {
   }
   if (body.op === 'attach') {
     const { agentId, skillId } = body;
-    const ord = body.ord ?? 0;
     if (typeof agentId !== 'number' || !Number.isSafeInteger(agentId) || agentId <= 0 ||
-        typeof skillId !== 'number' || !Number.isSafeInteger(skillId) || skillId <= 0 ||
-        typeof ord !== 'number' || !Number.isInteger(ord) || ord < 0 || ord > 2147483647) {
-      return json({ error: 'positive integer agentId/skillId and non-negative integer ord required' }, 400);
+        typeof skillId !== 'number' || !Number.isSafeInteger(skillId) || skillId <= 0) {
+      return json({ error: 'positive integer agentId/skillId required' }, 400);
     }
     const [agents, skills] = await Promise.all([listAgentsWithSkills(), listSkills()]);
     const agent = agents.find((a) => a.id === agentId);
@@ -115,9 +113,9 @@ export async function PUT(request: Request) {
     if (!agent || !skill) return json({ error: 'Agent or skill not found' }, 404);
     if (agent.tier !== 'custom') return json({ error: 'Built-in agents cannot be customized' }, 403);
     if (!skill.enabled) return json({ error: 'Enable the skill before attaching it' }, 409);
-    await attachSkill(agentId, skillId, ord);
+    const ord = await attachSkill(agentId, skillId); // legacy client ord is intentionally ignored
     await writeAudit({ actor, action: 'attach', objectType: 'agent_skill', objectId: `${body.agentId}:${body.skillId}` });
-    return json({ ok: true }, 200);
+    return json({ ok: true, ord }, 200);
   }
   if (body.op === 'space') {
     const accountId = currentAccountId();

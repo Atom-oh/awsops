@@ -41,11 +41,11 @@ export default function CustomizationPage() {
   const [integrations, setIntegrations] = useState<IntegrationRow[]>([]);
   const [integForm, setIntegForm] = useState({ direction: 'egress', name: '', kind: 'grafana', endpoint: '', transport: 'api_key', capability: 'read', authMode: 'hmac', sourceAllowlist: '', triggerTarget: 'incident' });
 
-  async function load() {
+  async function load(preserveContent = false) {
     const r = await fetch('/api/customization');
     if (r.status === 401 || r.status === 403) { setDenied(true); return; }
     if (r.status === 400) { setNoAurora(true); return; }
-    if (!r.ok) { setLoadError(true); return; }
+    if (!r.ok) { if (!preserveContent) setLoadError(true); return false; }
     setLoadError(false);
     const d = await r.json();
     setAgents(d.agents || []); setSkills(d.skills || []);
@@ -58,6 +58,7 @@ export default function CustomizationPage() {
     setAllowlistText((d.space?.toolAllowlist || []).join(', '));
     const ir = await fetch('/api/integrations');
     if (ir.ok) setIntegrations(((await ir.json()).integrations || []).filter((i: IntegrationRow) => i.kind !== 'custom_mcp'));
+    return ir.ok;
   }
   async function createIntegration() {
     const isEgress = integForm.direction === 'egress';
@@ -105,11 +106,11 @@ export default function CustomizationPage() {
     const skillId = Number(selectedSkills[agent.id]);
     if (!skillId || attaching !== null) return;
     setAttaching(agent.id);
+    let saved = false;
     try {
-      const ord = Math.max(-1, ...agent.skills.map((s) => s.ord)) + 1;
       const res = await fetch('/api/customization', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ op: 'attach', agentId: agent.id, skillId, ord }),
+        body: JSON.stringify({ op: 'attach', agentId: agent.id, skillId }),
       });
       if (!res.ok) {
         setMsg(res.status === 409 ? copy.skillDisabled : res.status === 403 ? copy.attachmentForbidden :
@@ -118,9 +119,14 @@ export default function CustomizationPage() {
       }
       setSelectedSkills((current) => ({ ...current, [agent.id]: '' }));
       setMsg(copy.attached.replace('{agent}', agent.name));
-      await load();
+      saved = true;
     } catch { setMsg(copy.attachmentFailed); }
-    finally { setAttaching(null); }
+    finally {
+      if (saved && !(await load(true).catch(() => false))) {
+        setMsg(copy.attachedRefreshFailed.replace('{agent}', agent.name));
+      }
+      setAttaching(null);
+    }
   }
   async function toggle(kind: 'agent' | 'skill', id: number, enabled: boolean) {
     await fetch('/api/customization', {
@@ -314,9 +320,9 @@ export default function CustomizationPage() {
         <div className="text-[12px]">
           <div className="mb-1 font-medium">Tool allowlist (account cap, comma-separated)</div>
           <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
-                 placeholder="e.g. simulate_principal_policy, get_account_authorization_details"
+                 placeholder="e.g. iam-mcp-target___list_users"
                  value={allowlistText} onChange={(e) => setAllowlistText(e.target.value)} />
-          <div className="mt-1 text-ink-400">Empty = no account cap. Tool eligibility and live availability are separate.</div>
+          <div className="mt-1 text-ink-400">{copy.toolCapHint}</div>
         </div>
         <button onClick={saveSpace} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Save Agent Space</button>
       </section>
