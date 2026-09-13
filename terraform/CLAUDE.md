@@ -1,7 +1,7 @@
 # Terraform
 
 Read root [CLAUDE.md](../CLAUDE.md) and
-[BASELINE.md](../docs/decisions/BASELINE.md) for policy. This private tree's v2
+[BASELINE.md](../docs/decisions/BASELINE.md) for policy. This origin checkout's v2
 foundation root is `terraform/v2/foundation/`; `v2/bootstrap/` is separate bootstrap
 infrastructure. Use checked-in source paths, not paths copied from another tree.
 
