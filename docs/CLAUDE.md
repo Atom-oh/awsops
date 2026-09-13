@@ -1,7 +1,9 @@
 # Developer documentation
 
-Use English only for developer/reviewer docs: context files, ADRs, architecture,
-references, runbooks and new plans. Keep multilingual user guides under `docs-site/`
+Use English only for new or rewritten developer/reviewer docs: context files, ADRs, architecture,
+references, runbooks and new plans. Existing bilingual bodies are a migration backlog;
+convert the whole maintained document to English when rewriting it, retaining its
+facts rather than requiring parallel translations. Keep multilingual user guides under `docs-site/`
 and application i18n. Historical records preserve their original evidence and
 language; do not treat them as current instructions or bulk-load them for review.
 
@@ -24,7 +26,7 @@ from the files rather than a hardcoded count in prose.
 ## Maintenance
 
 - Keep one explanation of each policy; link to it instead of copying long lists.
-- Verify paths/commands against this checkout. Private Terraform lives at
+- Verify paths/commands against this checkout. This checkout's Terraform lives at
   `terraform/v2/foundation/`; public samples use `terraform/foundation/`.
 - Do not maintain counts of pages, routes, components or tools by hand.
 - Distinguish default settings, supported capability and dated deployment evidence.
