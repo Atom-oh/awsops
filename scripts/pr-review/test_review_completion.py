@@ -87,7 +87,7 @@ else:
     nonce_match = (re.search(r"^Cell nonce: ([0-9a-f]{32})$", prompt, re.M)
                    or re.search(r"REVIEW_COMPLETE: " + lens + r" ([0-9a-f]{32}) ", prompt))
     nonce = nonce_match.group(1)
-    model = "codex" if cli == "codex" else {"claude-opus-5": "kiro-opus", "gpt-5.6-terra": "kiro-gpt"}[args[args.index("--model") + 1]]
+    model = "codex" if cli == "codex" else {"claude-opus-5": "kiro-opus", "gpt-5.6-sol": "kiro-gpt"}[args[args.index("--model") + 1]]
     key = model + "-" + lens
     def frame(report):
         return "REVIEW_COMPLETE: " + lens + " " + nonce + " " + json.dumps({"report": report}) + "\n"
