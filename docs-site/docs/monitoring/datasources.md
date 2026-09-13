@@ -37,8 +37,8 @@ AWSops 데이터소스 기능은 외부 관측성 플랫폼을 중앙에서 관�
 | **Tempo** | TraceQL | 3200 | 분산 트레이싱, 스팬 검색 |
 | **ClickHouse** | SQL | 8123 | 컬럼 기반 분석, 대량 데이터 처리 |
 | **Jaeger** | Trace ID | 16686 | 분산 트레이싱, 서비스 의존성 |
-| **Dynatrace** | metricSelector | 443 | Metrics API v2 메트릭·문제 조회; Grail DQL 아님 |
-| **Datadog** | Datadog metric query | 443 | 읽기 전용 메트릭 시계열 |
+| **Dynatrace** | DQL | 443 | 풀스택 모니터링, AI 기반 분석 |
+| **Datadog** | Query | 443 | 인프라 모니터링, APM, 로그 |
 
 ## 데이터소스 추가
 
@@ -80,13 +80,12 @@ v1의 결과 캐시 TTL 설정은 v2에 없습니다 — v2의 질의 경로는 
 | 데이터소스 | 테스트 엔드포인트 | 확인 내용 |
 |-----------|-----------------|----------|
 | Prometheus | `/-/healthy` | 서버 상태, 응답 시간 |
-| Mimir | `/ready` | 서버 준비 상태, 응답 시간 |
 | Loki | `/ready` | 서버 준비 상태, 응답 시간 |
 | Tempo | `/ready` | 서버 준비 상태, 응답 시간 |
-| ClickHouse | `/ping` | 서버 도달 여부; 쿼리 권한은 탐색에서 확인 |
+| ClickHouse | `SELECT 1` | 쿼리 실행 가능 여부, 응답 시간 |
 | Jaeger | `/api/services` | 서비스 목록 조회, 응답 시간 |
-| Dynatrace | `/api/v2/metrics?pageSize=1` | API 접근 가능 여부, 응답 시간 |
-| Datadog | `/api/v1/validate` + `/api/v1/query` | API 키 유효성과 Application 키의 메트릭 조회 권한 (1분 쿼리) |
+| Dynatrace | `/api/v2/entities` | API 접근 가능 여부, 응답 시간 |
+| Datadog | `/api/v1/validate` | API 키 유효성, 응답 시간 |
 
 테스트 결과에는 연결 성공/실패 상태와 응답 지연 시간(ms)이 표시됩니다.
 
@@ -134,15 +133,15 @@ ORDER BY hour
 
 서비스 이름 또는 Trace ID로 분산 트레이스를 검색합니다.
 
-### Dynatrace (metricSelector)
+### Dynatrace (DQL)
 
 ```
-builtin:host.cpu.usage:avg
+fetch logs | filter contains(content, "error") | limit 100
 ```
 
 ### Datadog
 
-`avg:system.cpu.user{*}` 같은 메트릭 쿼리를 사용합니다. 이 데이터소스 커넥터는 Datadog 로그 검색을 실행하지 않습니다.
+메트릭 쿼리 또는 로그 검색 구문을 사용합니다.
 
 ## 인증 설정
 
@@ -152,7 +151,7 @@ builtin:host.cpu.usage:avg
 |----------|------|----------|
 | **None** | 인증 없음 | 내부 네트워크의 Prometheus/Loki |
 | **Basic** | 사용자명/비밀번호 | ClickHouse, 인증이 설정된 Prometheus |
-| **Bearer Token** | API 토큰 | Dynatrace, Tempo |
+| **Bearer Token** | API 토큰 | Dynatrace, Datadog, Tempo |
 | **Custom Header** | 사용자 정의 헤더 | 커스텀 프록시, API 게이트웨이 |
 
 :::tip 자격 증명 마스킹
@@ -171,7 +170,7 @@ builtin:host.cpu.usage:avg
 - **프로토콜 제한**: `http://`와 `https://`만 허용
 
 :::caution SSRF 보호
-커넥터에서 도달할 수 있는 사설 데이터소스는 지원합니다. 메타데이터·루프백·링크로컬 대상은 계속 차단하며, 자격증명은 URL 대신 인증 필드에 입력합니다.
+외부 데이터소스 URL은 서버에서 요청을 전송하므로 SSRF(Server-Side Request Forgery) 공격을 방지하기 위해 내부 네트워크 접근이 차단됩니다.
 :::
 
 ### ClickHouse SQL 인젝션 방지
@@ -360,11 +359,3 @@ AI 어시스턴트가 인식하는 키워드: **프로메테우스/prometheus**,
 - [모니터링 대시보드](./monitoring.md) - 시스템 모니터링 현황
 - [CloudWatch](./cloudwatch) - AWS CloudWatch 메트릭
 - [AI 어시스턴트](../overview/ai-assistant) - AI 분석 기능
-
-## 연결 순서와 상태 확인
-
-**연동 → Datasources**에서 제공업체를 선택하고 API 기본 URL을 입력한 후 저장 전에 테스트합니다. Datadog은 전용 키 입력란 두 개를, Dynatrace는 API 토큰을 기본 선택하며 `Api-Token` 방식으로 전송합니다.
-
-**설정 저장됨**은 설정이 존재한다는 뜻이며 실제 접속 성공을 의미하지 않습니다. 편집 중 테스트는 동일한 엔드포인트에 한해 해당 인스턴스의 저장된 자격증명을 재사용합니다. 호스트·스킴·포트·경로를 바꾸면 자격증명을 다시 입력하세요. 연결 필드를 수정하면 이전 테스트 결과가 지워집니다. API 기본 URL에 자격증명·쿼리 매개변수·프래그먼트를 넣지 마세요.
-
-Datadog은 API 키 유효성과 실제 메트릭 조회 권한을 확인합니다. Dynatrace는 메트릭 읽기 권한을 확인하며 Problems API에는 별도 스코프가 필요합니다. 조회 결과가 비어 있어도 워크로드가 정상이라는 뜻은 아닙니다. 설정 조회나 변경에 실패하면 화면의 오류를 확인하고 다시 시도할 수 있습니다.

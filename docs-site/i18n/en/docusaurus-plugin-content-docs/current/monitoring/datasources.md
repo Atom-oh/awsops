@@ -37,8 +37,8 @@ Key features:
 | **Tempo** | TraceQL | 3200 | Distributed tracing, span search |
 | **ClickHouse** | SQL | 8123 | Columnar analytics, large-scale data processing |
 | **Jaeger** | Trace ID | 16686 | Distributed tracing, service dependencies |
-| **Dynatrace** | metricSelector | 443 | Metrics API v2 metrics and problems; not Grail DQL |
-| **Datadog** | Datadog metric query | 443 | Read-only metric timeseries |
+| **Dynatrace** | DQL | 443 | Full-stack monitoring, AI-powered analysis |
+| **Datadog** | Query | 443 | Infrastructure monitoring, APM, logs |
 
 ## Adding Datasources
 
@@ -76,13 +76,12 @@ Clicking **Test Connection** performs the following checks per datasource type:
 | Datasource | Test Endpoint | Verification |
 |-----------|--------------|-------------|
 | Prometheus | `/-/healthy` | Server health, response time |
-| Mimir | `/ready` | Server readiness, response time |
 | Loki | `/ready` | Server readiness, response time |
 | Tempo | `/ready` | Server readiness, response time |
-| ClickHouse | `/ping` | Server reachability; query authorization is verified in Explore |
+| ClickHouse | `SELECT 1` | Query execution capability, response time |
 | Jaeger | `/api/services` | Service list retrieval, response time |
-| Dynatrace | `/api/v2/metrics?pageSize=1` | API accessibility, response time |
-| Datadog | `/api/v1/validate` + `/api/v1/query` | API key plus application-key metric query permission (one-minute query) |
+| Dynatrace | `/api/v2/entities` | API accessibility, response time |
+| Datadog | `/api/v1/validate` | API key validity, response time |
 
 Test results display success/failure status and response latency in milliseconds.
 
@@ -130,15 +129,15 @@ Fast analytical queries over large datasets.
 
 Search distributed traces by service name or Trace ID.
 
-### Dynatrace (metricSelector)
+### Dynatrace (DQL)
 
 ```
-builtin:host.cpu.usage:avg
+fetch logs | filter contains(content, "error") | limit 100
 ```
 
 ### Datadog
 
-Use a metric query such as `avg:system.cpu.user{*}`. This datasource connector does not execute Datadog log searches.
+Use metric queries or log search syntax.
 
 ## Authentication
 
@@ -148,7 +147,7 @@ Four authentication methods are supported for datasource connections:
 |------------|-------------|----------|
 | **None** | No authentication | Internal network Prometheus/Loki |
 | **Basic** | Username/password | ClickHouse, auth-enabled Prometheus |
-| **Bearer Token** | API token | Dynatrace, Tempo |
+| **Bearer Token** | API token | Dynatrace, Datadog, Tempo |
 | **Custom Header** | Custom HTTP header | Custom proxies, API gateways |
 
 :::tip Credential Masking
@@ -167,7 +166,7 @@ The following security checks are applied to datasource URLs:
 - **Protocol restriction**: Only `http://` and `https://` are allowed
 
 :::caution SSRF Protection
-Private datasource endpoints are supported when reachable from the connector. Metadata, loopback and link-local destinations remain blocked; credentials belong in authentication fields, not the URL.
+External datasource URLs trigger server-side requests. To prevent SSRF (Server-Side Request Forgery) attacks, access to internal networks is blocked.
 :::
 
 ### ClickHouse SQL Injection Prevention
@@ -335,11 +334,3 @@ Keywords recognized by the AI assistant: **prometheus**, **loki**, **tempo**, **
 - [Monitoring Dashboard](./monitoring.md) - System monitoring overview
 - [CloudWatch](./cloudwatch) - AWS CloudWatch metrics
 - [AI Assistant](../overview/ai-assistant) - AI analysis features
-
-## Connection workflow and status
-
-Open **Integrations → Datasources**. Choose the provider, enter its API base URL, and test before saving. Datadog preselects two dedicated key fields; Dynatrace preselects its API token and sends the `Api-Token` scheme.
-
-**Configuration saved** means configuration exists, not that a live probe succeeded. Editing tests reuse that instance’s stored credentials only for the unchanged endpoint; changing the host, scheme, port or path requires re-entering credentials. Changing connection fields clears the prior test result. Do not put credentials, query parameters or fragments in the API base URL.
-
-Datadog tests verify API-key validity and actual metric-query access. Dynatrace tests verify metric-read access; access to the Problems API requires its separate scope. An empty query result does not establish workload health. Unavailable configuration and failed changes are displayed explicitly; retry from the same screen.
