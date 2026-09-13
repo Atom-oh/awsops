@@ -364,6 +364,9 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
                     memCapacityMiB: Number(r.memCapacity) || 0,
                     memAllocatableMiB: Number(r.memAllocatable) || 0,
                     memRequestMiB: nodeAgg == null ? null : nodeAgg.mem,
+                    cpuUsage: typeof r.cpuUsage === 'number' ? r.cpuUsage : null,
+                    memUsageMiB: typeof r.memUsage === 'number' ? r.memUsage : null,
+                    usageTimestamp: typeof r.usageTimestamp === 'string' ? r.usageTimestamp : null,
                   };
                 })}
               />
