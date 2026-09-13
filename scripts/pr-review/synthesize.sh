@@ -149,8 +149,9 @@ $( # Only exists/valid on truncated runs (pr-review.yml regenerates it every tru
 
 Project rules (awsops — AWS+Kubernetes ops dashboard, Next.js/TS + Python + Terraform, per-lens checklist):
 - L2 (code correctness): real logic bugs / edge cases in the TS/React frontend + Python API.
-- L3 (security/AWS mutation safety): ADR-005 freezes AWS mutation/autonomy, not the
-  presence of dark code. ADR-015 grants exactly the own-secret-rotation restart
+- L3 (security/AWS mutation safety): unauthorized AWS mutation/autonomy enablement
+  is CRITICAL under ADR-005; dark code presence alone is not enablement.
+  ADR-015 grants exactly the own-secret-rotation restart
   exception; operator-authorized deployment is distinct from application autonomy.
   ADR-007 separately governs external reads/writes: integrations_write_enabled is
   GATED-OFF, not FROZEN. Check governance, default-off behavior, IAM and credentials.

@@ -1,11 +1,11 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b85e745c0e52 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d4fc600bfd00 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo. This context is distilled from
 > CLAUDE.md and shared by Kiro, Codex and Agy.
 
 # AWSops review context
 
-v2: `web/` Next.js thin-BFF, Aurora, AgentCore and asynchronous workers. Private
+v2: `web/` Next.js thin-BFF, Aurora, AgentCore and asynchronous workers. This checkout's
 Terraform root: `terraform/v2/foundation/`; public samples use `terraform/foundation/`.
 Verify the checkout before applying paths. No v1 basePath, JSON-file app state or CDK.
 
@@ -17,7 +17,9 @@ invariants establish allowed behavior. Investigate contradictions; do not declar
 code correct merely because it exists. Legacy numbers require ADR-MAPPING.md.
 Plans/specs/review archives are historical evidence, not current authorization.
 
-Developer/reviewer docs are English-only. Multilingual docs-site guides and app
+New/rewritten developer/reviewer docs are English-only. Existing bilingual bodies
+are a migration backlog; preserve their facts when converting the whole document.
+Multilingual docs-site guides and app
 translations remain. Do not require bilingual developer docs, new changelog bullets
 already covered by an existing feature entry, static component counts or missing
 ADR bodies in public samples. Changelog entries describe net feature behavior;
@@ -33,7 +35,8 @@ no PR/review-round numbers or duplicates. Preserve version provenance.
 | ADR-019 GATED | SG-rule Athena activity is read-only; not another mutation exception. |
 
 Operator-authorized deploy/onboarding/teardown is not application autonomy. Apply
-normal task authorization and reviewed saved-plan discipline.
+normal task authorization and reviewed saved-plan discipline. Product UI/API/agent
+AWS mutation stays FROZEN regardless of requester, except the exact ADR-015 path.
 
 ## Implementation checks
 
@@ -55,7 +58,9 @@ normal task authorization and reviewed saved-plan discipline.
 - AgentCore settings are read from SSM at runtime. Preserve canonical/`v2-` gateway
   fallback and host-account `get_role_arn() -> None`; both are deliberate fixes.
 - Live `aws-data`/collector Steampipe paths are hard-disabled and fall back to normal
-  routing. `steampipe_enabled` gates batch inventory only. Partial/stale/unassessed
+  routing; never re-gate them on `steampipe_enabled`. That flag gates the FDW and
+  batch sync. CIS uses the FDW; FinOps EBS checks persisted inventory freshness.
+  Partial/stale/unassessed
   evidence is not a healthy zero; follow ADR-010/021 and the actual producer schema.
 - New large features default off; this does not mean an entire fresh stack costs $0.
   No `-auto-approve` for shared Terraform; controller applies the reviewed saved plan.

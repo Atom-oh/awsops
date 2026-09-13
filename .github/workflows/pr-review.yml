@@ -298,7 +298,8 @@ jobs:
           $COMMON
 
           LENS: L3 — Security / AWS mutation safety
-          - Enabling AWS mutation/autonomy violates ADR-005; retained dark code alone does not.
+          - Unauthorized enablement of AWS mutation/autonomy violates ADR-005 and is CRITICAL;
+            retained dark code alone is not enablement.
           - Read ADR-015 for its exact secret-rotation restart exception. Operator-authorized
             deployment is distinct from application autonomy.
           - External data reads/writes follow ADR-007. integrations_write_enabled is GATED-OFF,
