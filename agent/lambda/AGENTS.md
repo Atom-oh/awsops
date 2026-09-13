@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 6002b4e4f78c · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 5dd63b3197f3 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > Reviewer context distilled from this module’s CLAUDE.md; shared by Kiro, Codex, and Agy.
 
@@ -16,12 +16,17 @@ Use root [CLAUDE.md](../../CLAUDE.md) and
   credential/driver rule.
 - Use `cross_account.py`; host calls use execution credentials directly.
 - Aurora SQL tools use server-selected `awsops_sql_reader` credentials and the
-  foundation cluster/database. Missing config or foreign targets fail closed;
-  caller secret selection must not elevate privileges.
+  foundation cluster/database; callers cannot select credentials.
+- `execute_sql` rejects foreign accounts/non-foundation clusters and missing
+  required reader configuration; caller secret/database selection is ignored.
+- `inventory_read_mcp.py` accepts and ignores `target_account_id`, reading only
+  the configured Aurora `self` scope. It does not reject foreign account arguments
+  or use them to select data.
 - Preserve view-only grants in `sql_reader`, explicit columns, and named JSON
   projections. Keep base tables/columns in `public` inaccessible and exclude
-  credentials/capability tokens. Align views with `inventory_read_mcp.PROJECTIONS`
-  and `test_inventory_view_contract.py`.
+  credentials/capability tokens, including `eks_registrations.auth` and
+  `worker_jobs.task_token`. Align views with
+  `inventory_read_mcp.PROJECTIONS` and `test_inventory_view_contract.py`.
 - The DB grants are the primary SQL boundary; lexical guards add defense in
   depth. Analyze actual impact rather than a denylist omission alone. Other
   connectors do not inherit the Aurora role boundary.

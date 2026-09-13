@@ -28,12 +28,18 @@ Live wiring is defined by `scripts/v2/agentcore/catalog.py`, `provision.py`, and
 credential and the `sql_reader` view schema. The role's restricted grants are the
 primary boundary; `sql_readonly_guard.py` adds defense in depth.
 
-- Server configuration chooses the reader secret and foundation cluster/database.
-  Caller-supplied secret selection is ignored; missing config and foreign
-  account/cluster targets fail closed. Do not fall back to the master secret.
+- Server configuration chooses the reader secret and foundation cluster/database;
+  callers cannot select credentials. Do not fall back to the master secret.
+- `aws_rds_mcp.py:execute_sql` rejects foreign account targets and non-foundation
+  clusters. Missing required reader configuration fails closed; caller-supplied
+  secret/database selection is ignored.
+- `inventory_read_mcp.py` accepts and discards `target_account_id`, then reads
+  `account_id = 'self'` from its configured Aurora database. The argument neither
+  selects another account nor causes foreign-target rejection.
 - Keep base tables/columns in `public` inaccessible to the reader. Expose only
   reviewed explicit columns and named JSON-key projections through views.
-  Raw tokens, credentials, and capability fields must remain excluded.
+  Exclude credentials and capability tokens, including `eks_registrations.auth`
+  (Kubernetes bearer credentials) and `worker_jobs.task_token` (Step Functions token).
 - Coordinate view changes with `inventory_read_mcp.PROJECTIONS` and
   `test_inventory_view_contract.py`; dropping fields can break valid reads.
 - A lexical SQL gap needs an actual privilege/impact analysis. Do not assume the

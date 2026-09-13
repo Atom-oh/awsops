@@ -14,6 +14,9 @@ Read [AGENTS.md](../../AGENTS.md) for policy and
 - Chat's Steampipe SQL and collector paths remain disabled by
   `steampipeAvailable()`. The separately gated batch inventory sync writes Aurora;
   its flag does not enable live Steampipe chat queries.
+- The CIS/Powerpipe compliance worker also queries the FDW gated by
+  `steampipe_enabled` and writes `compliance_runs`/`compliance_results` in Aurora.
+  A disabled or unavailable FDW is a dependency failure, not a healthy zero-result scan.
 - Domain work is submitted through its dedicated authorized route, then
   `web/lib/jobs.ts` and SQS. The dispatcher starts Step Functions, which selects
   Lambda or Fargate execution. Workers record progress/results in Aurora; failure

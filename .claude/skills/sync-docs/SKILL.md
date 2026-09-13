@@ -16,9 +16,10 @@ ownership and requested scope before editing.
    than copying route/tool counts, model versions, or release history.
 3. Preserve FROZEN/GATED distinctions and accepted compatibility paths. A docs
    cleanup cannot change product policy or application i18n.
-4. Edit canonical scoped `CLAUDE.md` first, then distill managed `AGENTS.md` with
-   `/co-agent sync-context`. Regenerate and validate its marker with the installed
-   `check_ai_context.py`. Kiro's project-context steering includes `AGENTS.md`.
+4. Edit canonical scoped `CLAUDE.md` first, then use the installed co-agent plugin's
+   `/co-agent sync-context` for that module to distill `AGENTS.md`, regenerate its
+   marker, and validate it. The command and validator come from the plugin, not
+   repository scripts. Kiro's project-context steering includes `AGENTS.md`.
 5. Check links, commands, generated markers, and the diff. Report changes,
    remaining contradictions, and validation. Leave other owners' files intact.
 

@@ -3,8 +3,10 @@
 GATEWAYS contains canonical section keys; provision.py names gateways
 awsops-v2-<key>-gateway and supplies canonical GATEWAYS_JSON mappings.
 TARGETS defines the Lambda-backed tool contracts, including external-obs.
-The provisioner injects target_account_id for cross-account-capable Lambda
-tools. Inspect each target's contract and provisioner path rather than
+The provisioner injects target_account_id into every Lambda-backed tool schema.
+Handlers interpret it differently: execute_sql rejects foreign accounts;
+inventory_read_mcp ignores it and reads the configured host scope.
+Inspect each target's contract and provisioner path rather than
 assuming the retired P1f skeleton or v1 create_targets.py is authoritative.
 """
 

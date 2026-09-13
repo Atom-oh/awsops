@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 2ebeaf80760d · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 7213b9351897 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo. This context is distilled from
 > CLAUDE.md and shared by Kiro, Codex and Agy.
@@ -10,6 +10,10 @@ Terraform root: `terraform/v2/foundation/`; public samples use `terraform/founda
 Verify the checkout before applying paths. No v1 basePath, JSON-file app state or CDK.
 
 ## Evidence and policy
+
+Use exact paths from the BASELINE index; do not guess ADR filename stems. On a
+missing path, list the directory or reread the index before retrying. ADR-005 is
+`docs/decisions/005-aws-mutation-autonomy-frozen.md`.
 
 Read `docs/decisions/BASELINE.md` for current gates and linked consolidated
 `NNN-*.md` ADRs for rationale. Code/migrations/tests establish behavior; accepted

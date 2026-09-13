@@ -6,6 +6,10 @@ only relevant module instructions and implementation references.
 
 ## Documentation authority
 
+- Use exact existing ADR paths from the BASELINE index; do not derive filenames
+  from abbreviated titles. A missing path requires directory/index lookup, not
+  repeating the same failing read. ADR-005 is
+  `docs/decisions/005-aws-mutation-autonomy-frozen.md`.
 - `docs/decisions/BASELINE.md` is the current decision and gate register; linked
   `docs/decisions/NNN-*.md` files supply rationale and dated amendments.
 - Source code, migrations and tests establish implemented behavior. If behavior
