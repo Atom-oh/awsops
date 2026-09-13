@@ -8,7 +8,7 @@ Bash-based structure/hook test suite. Separate from the v2 app's own tests — `
 | Path | Covers | Runner |
 |------|--------|--------|
 | `tests/hooks/test-*.sh` | `.claude/hooks/` hook script behavior, secret patterns | `bash tests/run-all.sh` |
-| `tests/structure/test-*.sh` | Agent contracts, PR review workflow, Steampipe/ExternalId terraform wiring | `bash tests/run-all.sh` |
+| `tests/structure/test-*.sh` | Agent contracts, PR review workflow (incl. `test-pr-review-panel.sh`: stubbed kiro-cli/codex — read-only agent, preflight, quota and agent-fallback detection), Steampipe/ExternalId terraform wiring | `bash tests/run-all.sh` |
 | `tests/fixtures/` | Secret samples, false-positive samples | Loaded by hook/secret tests |
 | `scripts/pr-review/test_*.py` | Offline fake-CLI review completion, all 12 reports, retries/hard kills, token redaction and Pod Identity preflight | `bash tests/run-all.sh` or `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v` |
 

@@ -402,6 +402,39 @@ if [ -s "$WORK/degraded-models.txt" ]; then
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
+# Kiro preflight (run-panel.sh's kiro-preflight.flag) — the fixed no-diff startup check did not
+# establish the read-only agent contract, so no PR input was sent to any Kiro cell.
+if [ -s "$WORK/kiro-preflight.flag" ]; then
+  PREFLIGHT_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-preflight.flag" | sed 's/ *$//')"
+  { echo "🛑 **Kiro 사전 검증 실패 / Kiro preflight failed**: $PREFLIGHT_DETAIL The read-only agent contract could not be confirmed, so no Kiro review was started (Codex cells ran). Procedure: docs/runbooks/pr-review-panel.md"
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro monthly quota exhausted (run-panel.sh's kiro-quota.flag) — replaces the degraded banner's
+# list of guesses with the actual cause. Not a code/flag problem: the KIRO_API_KEY account hit
+# MONTHLY_REQUEST_COUNT, so the operator action (enable overages or rotate the key) and the reset
+# date are readable directly from the comment.
+if [ -s "$WORK/kiro-quota.flag" ]; then
+  QUOTA_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-quota.flag" | sed 's/ *$//')"
+  { echo "🚫 **Kiro 월간 요청 한도 소진 / Kiro monthly request quota exhausted**: the KIRO_API_KEY account reached its MONTHLY_REQUEST_COUNT limit, so Kiro cells returned nothing (\`$QUOTA_DETAIL\`) — not a kiro-cli headless-flag failure. Repeats on every run until overages are enabled or KIRO_API_KEY in \`/demo-platform/actions/AI-key\` is rotated. Procedure: docs/runbooks/pr-review-panel.md"
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro agent fallback (run-panel.sh's kiro-agent-fallback.flag) — the runner's kiro-cli ignored
+# `--agent pr-review-readonly` and ran cells with the default agent. Those responses were already
+# discarded and coverage-severe forces FAIL; this makes the "why FAIL" readable in the comment.
+if [ -s "$WORK/kiro-agent-fallback.flag" ]; then
+  AGENTFAIL_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-agent-fallback.flag" | sed 's/ *$//')"
+  { echo "🔓 **Kiro 에이전트 계약 위반 / Kiro agent contract broken**: kiro-cli ignored \`--agent pr-review-readonly\` and ran with the default agent (\`$AGENTFAIL_DETAIL\`) — affected cell responses discarded, forced FAIL. Check the runner image's kiro-cli version / agent schema (docs/runbooks/pr-review-panel.md)."
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
 # Surface incomplete lenses, including a single missing model's report.
 if [ -s "$WORK/degraded-lenses.txt" ]; then
   DEGRADED_LENSES="$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')"

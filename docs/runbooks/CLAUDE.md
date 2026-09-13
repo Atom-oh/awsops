@@ -24,6 +24,7 @@ Operational playbooks organized by scenario. Each follows symptoms → diagnosis
 | [steampipe-quota-and-staleness.md](steampipe-quota-and-staleness.md) | Steampipe quota guard — rate limiter knobs, partial runs, freshness ledger/staleness response |
 | [agent-sql-reader.md](agent-sql-reader.md) | `execute_sql`/`inventory-read` Data API auth failures — `awsops_sql_reader` role/password sync (`apply → make migrate → make agentcore`) |
 | [source-sync-observability.md](source-sync-observability.md) | Bounded origin observability backport — graph identity/evidence, DX assessment scope, migration and Lambda rollout dependencies |
+| [pr-review-panel.md](pr-review-panel.md) | AI PR-review panel Kiro cells — read-only `--agent pr-review-readonly` contract, preflight, monthly quota exhaustion and agent-fallback banners |
 
 ## Conventions
 - Filename: `kebab-case.md`, domain-then-topic order.

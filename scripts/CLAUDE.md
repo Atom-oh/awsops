@@ -40,6 +40,20 @@ secrets-manager) — installed by `make deps`.
   Nonzero/timed-out CLI output is discarded; bounded retries and hard-kill backstops remain.
   `synthesize.sh` requires a successful chair CLI and both scrubbers, with a report body
   and a unique final verdict. The workflow ceiling is 90 minutes.
+  - Kiro cells run with `--agent pr-review-readonly` (`agents/pr-review-readonly.json`:
+    `tools` = `allowedTools` = `read`, `grep`; no MCP/resources/hooks), copied into the cell cwd's
+    `.kiro/agents/` at run time. `--trust-tools=…` is gone — kiro-cli 2.11.1 ignores unknown names
+    (empty value, stale `fs_read`) with a warning, so it never pinned the grant. Do not use
+    `--v3`/`--mode default`: the v3 engine ignores an agent's `tools` list. Unlike the sibling
+    repos this is a read-only agent, not `tools: []` — Kiro reads `$DIFF` from a file path and the
+    base checkout by design.
+  - Non-transient Kiro failures are detected on Kiro stderr only and are not retried: agent
+    fallback (`no agent with name … Falling back`, rc=0) discards the response and forces FAIL via
+    `kiro-agent-fallback.flag`; monthly quota (`Monthly request limit reached` / v3 JSON
+    `MONTHLY_REQUEST_COUNT`, rc=0 + empty stdout) writes `kiro-quota.flag`. A per-model no-diff
+    preflight (`PONG`) must pass for both models before any Kiro cell receives PR input
+    (`kiro-preflight.flag` otherwise). `synthesize.sh` renders the three banners; see
+    `docs/runbooks/pr-review-panel.md`. `run-panel.sh` logs `kiro-cli --version` first.
   - `preflight-aws-session.py` runs before panel and chair using the installed AWS CLI:
     `configure list` must select `container-role`, then signed `sts get-caller-identity`
     must succeed. It checks the existing EKS Pod Identity without changing SDK/provider,

@@ -56,7 +56,7 @@ record_result() {
 }
 
 # 자격증명 패턴 스크럽 — 마지막 방어선(last line of defense), 예방이 아님. Kiro 는 이 repo에서
-# read/grep/fs_read 로 base 체크아웃 전체를 읽을 수 있어(BASE CONTEXT 검증 목적, 의도된 동작),
+# read/grep(`--agent pr-review-readonly`)으로 base 체크아웃 전체를 읽을 수 있어(BASE CONTEXT 검증 목적, 의도된 동작),
 # diff 인젝션이 절대경로/레포 밖 크리덴셜을 읽게 유도하면 셀 출력에 그 값이 노출될 잔여 위험이
 # 있다. 셀 출력을 체어에 넘기기 전 흔한 크리덴셜 포맷을 정규식으로 치환한다. 패턴은 co-agent 의
 # `consensus_hooks.py::_SECRET_RE`(AWS/GitHub/Slack/OpenAI·Anthropic/Google + generic
