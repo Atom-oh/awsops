@@ -244,7 +244,7 @@ async function plan(client) {
   // (review MINOR) — the refusal only matters when there is something to map.
   const groups = await scan(client);
   if (groups.length === 0) {
-    console.log('No legacy email-keyed rows. Nothing to do — safe to deploy with LEGACY_EMAIL_OWNER_MATCH=false.');
+    console.log('No legacy email-keyed rows found; no plan was written. This preview is not completed apply evidence. Follow ADR-009 before changing LEGACY_EMAIL_OWNER_MATCH.');
     return;
   }
 

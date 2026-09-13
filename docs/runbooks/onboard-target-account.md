@@ -1,54 +1,80 @@
-# Runbook: Onboard a target account (multi-account) / 타깃 계정 온보딩
+# Onboard a target account
 
-AWSops reads connected accounts cross-account by assuming a **read-only** role (`AWSopsReadOnlyRole`)
-in each target account. Trust is pinned to the host task roles; an **ExternalId** (confused-deputy
-guard) is **optional for 1st-party accounts** and **required for 3rd-party/shared accounts**
-(ADR-011 amended 2026-06-26). AWSops never mutates target-account resources.
+Cross-account reads assume `AWSopsReadOnlyRole` in a registered target account.
+Trust is pinned to the required host role ARNs. ADR-011 permits explicitly selected
+first-party accounts to omit ExternalId; third-party/shared accounts require it.
+This operator setup does not authorize application-side resource mutation.
 
 ## Prerequisites
-- Admin access to AWSops (`/accounts` is gated by Cognito `ADMIN_GROUP` or the SSM email allowlist).
-- The **host web task role ARN** — full ARN `arn:aws:iam::<host>:role/awsops-v2-task` (Terraform output `web_task_role_arn`).
-  (When the multi-account inventory fan-out ships, the steampipe task role is added then.)
-- **Optional** — the **host worker task role ARN**, `arn:aws:iam::<host>:role/awsops-v2-worker-task`
-  (Terraform output `worker_task_role_arn`): only needed if this target account will be read by a
-  WORKER-driven member-account job against it — the sg-rules Athena scan (`sg_rule_scan.py`) or a
-  Network Path Check's live-identity resolution (`network_path.py`'s `resolve_live_identity()`/
-  `fetch_live_topology()`, see `docs/runbooks/network-path-eks-access.md`). Neither worker's task
-  role is trusted by this account until `WorkerTaskRoleArn` below is set — omitting it leaves those
-  two features correctly failing closed (AccessDenied) against this account, exactly as if it were
-  never onboarded for worker-driven reads at all.
-- **3rd-party only**: a chosen **ExternalId** string (≥8 chars), same value in the CFN and `/accounts`.
-  1st-party (same-org) accounts can omit it.
 
-## Steps
-1. In the **target account**, deploy the CloudFormation template:
-   ```
-   aws cloudformation deploy \
-     --template-file infra/cfn/awsops-target-account-role.yaml \
-     --stack-name awsops-readonly-role \
-     --capabilities CAPABILITY_NAMED_IAM \
-     --parameter-overrides \
-       HostTaskRoleArn=arn:aws:iam::<host>:role/awsops-v2-task \
-       WorkerTaskRoleArn=arn:aws:iam::<host>:role/awsops-v2-worker-task \  # OMIT unless a worker job needs this account
-       ExternalId=<YOUR_EXTERNAL_ID>   # OMIT this line for 1st-party (no-ExternalId) onboarding
-   ```
-   The stack outputs `RoleArn` (`arn:aws:iam::<target>:role/AWSopsReadOnlyRole`). Re-running
-   `aws cloudformation deploy` with the SAME `--stack-name` against an already-onboarded account is
-   an in-place update — adding `WorkerTaskRoleArn` to an existing stack is additive and does not
-   revoke the existing web-task-role trust.
-2. In AWSops, open **계정 관리 (`/accounts`)** as an admin → **계정 추가** → enter the target Account ID,
-   an Alias, the Region, and the ExternalId. **For 1st-party (no-ExternalId) onboarding: leave
-   ExternalId blank AND tick the "1st-party 계정 (ExternalId 생략)" checkbox** — registration is
-   rejected (400) if ExternalId is empty and that box is unchecked, so omission is an explicit
-   choice. AWSops assumes the role and confirms `GetCallerIdentity.Account` matches the submitted ID
-   (status → `verified`) before saving.
-3. Use the **global account selector** (sidebar) to switch the active account, or pick **All accounts**
-   to aggregate cost / Bedrock across every enabled account (the dashboard aggregates client-side).
+Use an AWSops admin and authorized target-account deployment credentials. Resolve
+the web role's `taskRoleArn` from the host ECS service's deployed task definition;
+this Terraform root does not export `web_task_role_arn`. From the repository root,
+with the host AWS session and region selected:
 
-## Notes
-- **ExternalId is not a secret** — it is a confused-deputy guard, stored in plaintext so AWSops can pass
-  it to `sts:AssumeRole`. Treat it like a coordination value, not a credential.
-- Host account: no role needed (AWSops uses its own task-role credentials for the host).
-- To remove an account, use the **제거** button on `/accounts` (the host row is protected).
-- The host web task role is granted `sts:AssumeRole` only on `arn:aws:iam::*:role/AWSopsReadOnlyRole`
-  (read-only assume). Tighten the wildcard to specific account IDs if your account set is fixed.
+```bash
+HOST_WEB_CLUSTER=$(terraform -chdir=terraform/v2/foundation output -raw ecs_cluster_name)
+HOST_WEB_SERVICE=$(terraform -chdir=terraform/v2/foundation output -raw ecs_service_name)
+HOST_WEB_TASK_DEFINITION=$(aws ecs describe-services \
+  --cluster "$HOST_WEB_CLUSTER" --services "$HOST_WEB_SERVICE" \
+  --query 'services[0].taskDefinition' --output text)
+HOST_WEB_ROLE_ARN=$(aws ecs describe-task-definition \
+  --task-definition "$HOST_WEB_TASK_DEFINITION" \
+  --query 'taskDefinition.taskRoleArn' --output text)
+```
+
+The optional `worker_task_role_arn` output is used only for worker-side member-account
+inventory or Network Path Check identity reads. Athena activity uses the separate
+`AWSopsSgRuleAthenaRole`, not this worker trust parameter. The template does not
+automatically trust every host collector or AgentCore role; verify the principal
+used by the intended read path.
+
+For worker reads, the host must already have worker infrastructure applied with
+`workers_enabled=true`. Resolve its role from the host backend before adding worker trust:
+
+```bash
+HOST_WORKER_ROLE_ARN=$(terraform -chdir=terraform/v2/foundation output -raw worker_task_role_arn) || exit 1
+test -n "$HOST_WORKER_ROLE_ARN" && test "$HOST_WORKER_ROLE_ARN" != null || exit 1
+```
+
+For third-party accounts, choose an ExternalId of at least eight characters and use
+the same value in the template and account registration. ExternalId is a coordination
+value/confused-deputy guard, not a credential.
+
+## Provision and register
+
+Set the deployment's actual profile and role ARN variables before running. This
+example uses only the web role; add the optional worker parameter when required.
+
+```bash
+: "${TARGET_EXTERNAL_ID:?Set the reviewed ExternalId; third-party targets require it}"
+aws cloudformation deploy \
+  --profile "$TARGET_PROFILE" \
+  --template-file infra/cfn/awsops-target-account-role.yaml \
+  --stack-name awsops-readonly-role \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides \
+    HostTaskRoleArn="$HOST_WEB_ROLE_ARN" \
+    ExternalId="$TARGET_EXTERNAL_ID"
+```
+
+Only for explicitly first-party onboarding without ExternalId, replace the assertion
+with `TARGET_EXTERNAL_ID=''` and keep the empty parameter (or omit that parameter).
+Do not use this alternative for third-party/shared accounts.
+For worker reads, add `WorkerTaskRoleArn="$HOST_WORKER_ROLE_ARN"` to the parameter
+list. Review the exact trust-policy change before updating an existing stack.
+Do not broaden it to wildcard principals to work around AccessDenied.
+Some host policies use `arn:aws:iam::*:role/AWSopsReadOnlyRole`; an exact registered-account
+ARN allowlist is stricter. Tightening that host scope is a separate reviewed Terraform change.
+
+As an AWSops admin, open `/accounts`, add the target ID, alias, region and matching
+ExternalId. If omitting ExternalId, explicitly select the first-party checkbox.
+Registration verifies `GetCallerIdentity.Account` before saving. Select the target
+account and verify the specific read path, not only the registration result.
+
+The host account needs no target role; it uses its own execution credentials.
+The host row cannot be removed through account deletion. See
+[network-path EKS access](network-path-eks-access.md) for worker Kubernetes reads.
+
+Sources: `infra/cfn/awsops-target-account-role.yaml`, `web/app/api/accounts/`,
+[ADR-011](../decisions/011-multi-account.md).
