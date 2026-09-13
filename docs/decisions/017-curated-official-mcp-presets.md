@@ -68,8 +68,7 @@ this ADR is not an ADR-005 mutation exception.
 
 ### Trade-offs
 
-The retired Tempo-hosted-preset cutover described by an older `route.ts` comment is not a
-current instruction: the catalog no longer contains that preset. Keep Tempo on its existing
+The catalog has no hosted Tempo preset. Keep Tempo on its existing
 Lambda/monitoring route; merely enabling the vendor-hosted preset flag must not move it.
 Any future routing move must follow actual target membership and routing tests.
 The frozen ClickHouse stdio adapter only reads the default datasource's kind-mirror credentials;

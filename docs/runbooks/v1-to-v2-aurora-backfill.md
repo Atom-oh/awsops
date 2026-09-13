@@ -23,8 +23,9 @@ Do not paste credential-bearing DSNs into shell history or logs.
 
 Use the retained authorized data copy where possible. v1 code was removed **2026-07-12** and AWS
 cleanup has separately dated status (ADR-016); do not assume a running legacy instance or restart one
-from this runbook. If an operator has approved extraction from an existing source, use the established
-SSM/session transfer procedure. Creating an archive through Run Command is an operator action,
+from this runbook. Extraction from an existing source is an operator-owned, out-of-band task;
+this repository provides no current transfer procedure. The linked historical design is provenance.
+Creating an archive through Run Command is an operator action,
 not a claim that AWSops performs no remote command.
 
 Archive only the approved stores, or protect a full archive as sensitive: excluded `config.json`

@@ -50,6 +50,7 @@ Python 3, and an interactive Bash terminal in the intended AWS account/region. S
 `OPERATOR_USERNAME`, and, for creation, `OPERATOR_EMAIL` to the reviewed native account. The pool ID
 is available through `terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id`.
 Confirm the person's current email ownership before asserting `email_verified=true`.
+Set `OPERATOR_EMAIL_VERIFIED=yes` only after the per-address roster/ownership checks above.
 
 For a **new** native account only, create it without an automatic invitation. Skip this block for
 an existing Terraform-created account or an approved password reset:
@@ -60,6 +61,14 @@ an existing Terraform-created account or an approved password reset:
   : "${COGNITO_POOL_ID:?Set the intended user pool ID}"
   : "${OPERATOR_USERNAME:?Set the intended native Cognito username}"
   : "${OPERATOR_EMAIL:?Set the independently verified operator email}"
+  [ "$OPERATOR_USERNAME" = "$OPERATOR_EMAIL" ] || {
+    echo 'This pool uses email sign-in; creation username and email must match.' >&2
+    exit 1
+  }
+  [ "${OPERATOR_EMAIL_VERIFIED:-}" = yes ] || {
+    echo 'Complete the operator email ownership checks before asserting verification.' >&2
+    exit 1
+  }
   aws cognito-idp admin-create-user \
     --user-pool-id "$COGNITO_POOL_ID" --username "$OPERATOR_USERNAME" \
     --user-attributes "Name=email,Value=$OPERATOR_EMAIL" Name=email_verified,Value=true \

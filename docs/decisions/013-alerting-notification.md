@@ -54,6 +54,8 @@ and `skipped_no_topic`. Failed publish still drains and does not trigger resend.
 Compliance completion uses the same topic and pause semantics after successful persistence. Claim
 its 60-minute per-benchmark dedup window atomically **before** publishing; preserve the claim on
 failure and do not overwrite prior delivery outcomes on re-drive. `skipped_dedup` records suppression.
+If the claim operation itself fails, the current worker logs the error and fails open to publishing;
+the window is not a hard delivery cap during that database failure.
 The message attribute identifies compliance notices; no additional topic or general write authority is implied.
 
 The [diagnosis outcome migration](../../terraform/v2/foundation/migrations/01M1EG88Z182Q5ZCQ7FZHDHZZJ_diagnosis_reports_notify_outcome.sql)

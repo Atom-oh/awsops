@@ -63,7 +63,8 @@ stale, and unavailable data. Fresh partial rows must not hide retained stale row
 The sync also replaces one `inventory_snapshots` row per trusted account, day, and
 `resource_type`, storing `account_id`, `captured_at`, `resource_type`, and
 `resource_count`. An unreachable account retains its earlier row; missing coverage
-is not zero. Derived security-series predicates must stay aligned with
+is not zero. Derived security-series predicates (`public_s3_buckets`,
+`open_security_groups`, and `unencrypted_ebs`) must stay aligned with
 [`security-findings.ts`](../../web/lib/security-findings.ts) and the derived-series
 total exclusions in `web/lib/trend-utils.ts`. The
 [`inventory/trend` route](../../web/app/api/inventory/trend/route.ts) reads only

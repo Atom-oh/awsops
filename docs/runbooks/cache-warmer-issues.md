@@ -8,9 +8,9 @@ Identify the failing data plane first:
 
 | Symptom | Check |
 | --- | --- |
-| Inventory is old | Per-type sync status/freshness, account scope, Lambda logs and the last successful snapshot |
+| Inventory is old | `inventory_sync_runs.status`, `last_success_at`, and `unknown_attribute_count`; account scope and retained inventory capture timestamps |
 | Live metric panel is empty | Source permissions, selected scope/window and explicit source error/degraded state |
-| Datasource schema is incomplete | Connector discovery limits, schema cache status and the admin refresh path |
+| Datasource schema is incomplete | `datasource_schemas.fetched_at` and schema coverage/truncation metadata, connector discovery limits and the admin refresh path |
 | App state is unavailable | Aurora configuration/connectivity and application logs |
 
 Preserve last-good inventory after failed/partial collection. Do not hide degraded

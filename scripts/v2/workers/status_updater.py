@@ -1,5 +1,5 @@
 """SFN Catch-invoked. Input: {job_id, error}. Sets failed+error CONDITIONALLY (won't overwrite a
-worker's succeeded). Exists because SFN cannot write VPC Aurora directly."""
+worker's succeeded). Exists because this workflow delegates SQL persistence to VPC Lambda handlers."""
 import json
 import db
 

@@ -17,17 +17,21 @@ and availability. Denied or unconfigured cost APIs should not cause repeated fai
   contains bounded Cost Explorer calls; the thin-BFF rule is not a ban on every direct AWS SDK read.
 - Probe Cost Explorer availability directly and cache the host verdict for one hour. The cost page's
   user-requested empty-data probe does not force a refresh or become an all-account probe.
-  Keep last-good per-account/month snapshots in process and disclose fallback state. They are not
+  Keep last-good snapshots per account and requested period in process and disclose fallback state. They are not
   durable local JSON snapshots and do not survive process replacement.
 - Day-normalized service changes use completed UTC days. Incomplete or unsuitable evidence produces
   no verdict, rather than an apparent saving/increase based on incompatible time windows.
+- Workload request estimates use `web/lib/cost-basis.ts:ESTIMATE_UNIT_PRICES`, separate from billed
+  usage. Those constants model ap-northeast-2 on-demand rates without Spot/RI/Savings Plans discounts;
+  keep estimate-based displays explicitly distinguished from measured cost.
 - Keep FinOps MCP tools separate from spend views. Handle denied/not-enabled/support-plan-limited
   recommendation APIs with structured unavailable reasons. The current `ai.tf` grant uses service-specific
   read-prefix actions and explicitly names `cost-optimization-hub:ListRecommendations`; preserve its
   read scope. An old `cost-optimization-hub:*` example is not authority for that all-action grant.
   Recommendation data can be days or weeks old; no new recommendation today is not evidence of health.
-- Aggregate Bedrock invocation usage into Aurora `ai_usage_daily` behind `ai_cost_tracking_enabled`
-  (default false). The worker queries `BEDROCK_LOG_GROUP` (default `/aws/bedrock/invocation-logs`)
+- Aggregate Bedrock invocation usage into Aurora `ai_usage_daily` only when both `workers_enabled`
+  and `ai_cost_tracking_enabled` are enabled (both default false). The worker queries
+  `BEDROCK_LOG_GROUP` (default `/aws/bedrock/invocation-logs`)
   and filters `identity.arn` with `AWSOPS_IDENTITY_MATCH` (default `awsops-v2`). Keep that filter
   aligned with actual caller-role ARNs when changing the project or role-name prefix.
   `modelId` normalization merges full-ARN and bare inference-profile/model identifiers for

@@ -16,7 +16,9 @@ cp web/.env.example web/.env.local
 ```
 
 Fill only the required local configuration; do not commit credentials or environment
-files. Database-backed routes need network access to Aurora and AWS credentials
+files. Store long-lived application secrets in Secrets Manager or encrypted SSM parameters;
+local configuration should contain nonsecret settings or secret identifiers.
+Database-backed routes need network access to Aurora and AWS credentials
 authorized for IAM DB login as `awsops_web`; an endpoint alone is insufficient.
 Without `AURORA_ENDPOINT`, `/api/db` returns 503 `unconfigured`, not an empty
 production dataset. Production uses ECS task configuration and managed secrets.

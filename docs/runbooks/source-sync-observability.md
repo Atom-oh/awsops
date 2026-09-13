@@ -28,6 +28,8 @@ Run from the repository root; keep Python test files in separate processes:
 (cd agent/lambda && python3 -m pytest test_tempo_mcp.py -q)
 (cd agent/lambda && python3 -m pytest test_inventory_read_mcp.py -q)
 (cd agent/lambda && python3 -m pytest test_aws_finops_mcp.py -q)
+(cd scripts/v2/workers/diagnosis && python3 -m pytest test_signal_catalog.py -q)
+(cd scripts/v2/workers/diagnosis && python3 -m pytest test_signal_catalog_gen.py -q)
 bash scripts/v2/merge-verify.sh
 (cd scripts/v2/incident && python3 -m pytest test_rootcause_rca.py -q)
 python3 -B -m unittest discover -s scripts/v2 -p test_evaluate_diagnosis.py -v

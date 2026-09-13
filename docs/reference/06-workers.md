@@ -26,7 +26,8 @@ read/compute handlers, not mutating job types.
 failures retry only the affected SQS messages. Separate action/incident state-machine
 branches are checked before that registry and remain governed by their own
 configuration and product gates. Their
-presence is not permission to enable frozen remediation.
+presence is not permission to enable frozen remediation. Unfreezing requires a new ADR,
+multi-AI review, and dated owner override under [ADR-005](../decisions/005-aws-mutation-autonomy-frozen.md).
 
 [sfn.asl.json](../../scripts/v2/workers/sfn.asl.json) selects Lambda or
 `ecs:runTask.sync`. Workers claim/start and finish their own rows through

@@ -61,6 +61,7 @@ Local regression checks, from the repository root:
 
 ```bash
 (cd agent/lambda && python3 -m pytest test_tempo_mcp.py -q)
+(cd scripts/v2/workers && python3 -m pytest test_datasource_index.py -q)
 (cd web && npx vitest run lib/tempo-schema.test.ts lib/datasource-schema.test.ts lib/datasource-querygen.test.ts app/api/datasources/generate/route.test.ts app/api/integrations/schema/route.test.ts)
 bash scripts/v2/merge-verify.sh
 ```

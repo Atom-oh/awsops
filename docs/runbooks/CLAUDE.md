@@ -24,7 +24,7 @@ and saved-plan review; they are distinct from application autonomy under ADR-005
 | [agent-sql-reader.md](agent-sql-reader.md) | SQL-reader grants/secret synchronization and enable order |
 | [tempo-query-generation.md](tempo-query-generation.md) | Draft validation, discovery limits and schema refresh |
 | [source-sync-observability.md](source-sync-observability.md) | Recorded backport contracts and deployment dependencies |
-| [v1-decommission.md](v1-decommission.md) | Dated teardown evidence and remaining verification |
+| [v1-decommission.md](v1-decommission.md) | Cognito operator credentials, dated teardown evidence, and remaining verification |
 | [v1-to-v2-aurora-backfill.md](v1-to-v2-aurora-backfill.md) | Legacy history migration |
 
 Current policy: `../decisions/BASELINE.md`. Use consolidated ADR numbers and qualify

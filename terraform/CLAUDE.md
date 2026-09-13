@@ -35,8 +35,9 @@ Version constraints are declared in `backend.tf`; selections are in the lockfile
   of the host web service, with unchanged image/task definition and scoped IAM.
 - `integrations_write_enabled` is GATED under ADR-007: independent control plane,
   no AWS-mutation IAM, and SSRF/Secrets/DLP/human-gate controls. SNS notification
-  is the established LIVE external-data write. Do not reclassify all writes as
-  frozen. RCA write-back cannot activate while it depends on frozen remediation
+  is the narrowly governed external-data write and defaults off; historical ON
+  labels in BASELINE do not establish current deployment. Do not reclassify all
+  writes as frozen. RCA write-back cannot activate while it depends on frozen remediation
   roles. Curated MCP and ClickHouse stdio have distinct gates in BASELINE.
 - `legacy_email_owner_match` is a default-true migration switch; do not treat it
   as a new feature flag or disable it before the required backfill is complete.
