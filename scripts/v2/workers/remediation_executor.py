@@ -129,7 +129,8 @@ def lambda_handler(event, _ctx):
         if reason:
             # blocked by flag/kill-switch/disabled — record + fail closed (NO mutation)
             raise RuntimeError(f"blocked:{reason}")
-        sess = _assume(os.environ[f"ACTION_ROLE_{action.upper().replace('-', '_')}"])
+        role_key = action.upper().replace("-", "_").replace(".", "_")
+        sess = _assume(os.environ[f"ACTION_ROLE_{role_key}"])
         fns = _EXEC[action]
         if phase == "dry_run" or dry_run:
             return {"job_id": job_id, "phase": "dry_run", "result": fns["dry"](payload, sess)}

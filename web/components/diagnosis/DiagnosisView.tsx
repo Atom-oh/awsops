@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback } from 'react';
 import SchedulePanel from './SchedulePanel';
 import SubscribersPanel from './SubscribersPanel';
 import ReportSections from './ReportSections';
+import ReportHandoff from './ReportHandoff';
+import type { ReportHandoffData } from '@/lib/report-handoff';
 import IntentPanel from './IntentPanel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -116,6 +118,7 @@ export default function DiagnosisView() {
   }, [lang, reportLangTouched]);
 
   const [reports, setReports] = useState<ReportRow[]>([]);
+  const [handoff, setHandoff] = useState<{ id: number; data: ReportHandoffData | null } | null>(null);
   const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress; title?: string | null; tags?: string[]; can_edit?: boolean; tier?: string; created_at?: string; finished_at?: string | null } | null>(null);
   const [titleDraft, setTitleDraft] = useState<string | null>(null); // non-null while editing the title
   const [tagDraft, setTagDraft] = useState('');
@@ -136,6 +139,7 @@ export default function DiagnosisView() {
     const r = await fetch(`/api/diagnosis/${id}`);
     if (r.ok) {
       const j = await r.json();
+      setHandoff({ id, data: j.handoff ?? null });
       setActive({
         id, markdown: j.markdown, summary: (j.report?.summary as ReportSummary) ?? null,
         status: j.report?.status, error: j.report?.error ?? null, progress: j.report?.progress,
@@ -164,9 +168,11 @@ export default function DiagnosisView() {
     });
     if (r.ok) {
       setActive((a) => (a && a.id === id ? { ...a, ...meta } : a));
+      setHandoff(null);
+      await open(id); // Refresh server-redacted drafts after title/tag edits.
       await loadList();
     }
-  }, [loadList]);
+  }, [loadList, open]);
 
   useEffect(() => {
     loadList();
@@ -367,6 +373,9 @@ export default function DiagnosisView() {
         <div className="mb-4">
           <IntentPanel />
         </div>
+        {view && view.status !== 'running' && (
+          <ReportHandoff key={view.id} handoff={handoff?.id === view.id ? handoff.data : null} />
+        )}
         {view?.markdown ? (
           <>
             {/* Title — editable inline by owner/admin; read-only otherwise. Plain text (React-escaped). */}

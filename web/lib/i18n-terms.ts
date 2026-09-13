@@ -7,6 +7,16 @@ import type { Lang } from './i18n';
 type Pair = { en: string; zh: string; ja: string };
 
 export const TERMS: Record<string, Pair> = {
+  '1. 운영 데이터 연결': { en: '1. Connect operational data', zh: '1. 连接运维数据', ja: '1. 運用データを接続' },
+  '2. 근거 기반 진단': { en: '2. Diagnose with evidence', zh: '2. 基于证据诊断', ja: '2. 根拠に基づく診断' },
+  '3. 보고와 전문 검토': { en: '3. Report and specialist review', zh: '3. 报告与专项审查', ja: '3. 報告と専門レビュー' },
+  '메트릭·로그·트레이스의 출처와 접속을 확인합니다.': { en: 'Verify sources and access for metrics, logs and traces.', zh: '确认指标、日志和追踪的数据源与访问。', ja: 'メトリクス・ログ・トレースの接続元とアクセスを確認します。' },
+  '조사 범위를 선택하고 관측 근거와 미확인 영역을 정리합니다.': { en: 'Choose the scope and separate observed evidence from unknowns.', zh: '选择调查范围，区分观测证据与未知项。', ja: '調査範囲を選び、観測根拠と未確認事項を整理します。' },
+  '공유 초안을 검토하고 운영·보안·FinOps 조사로 이어갑니다.': { en: 'Review a sharing draft for operations, security or FinOps investigation.', zh: '审核共享草稿，用于运维、安全或 FinOps 调查。', ja: '共有用の下書きを確認し、運用・セキュリティ・FinOps 調査につなげます。' },
+  '보고서 정리와 전달': { en: 'Prepare and share reports', zh: '整理与分享报告', ja: 'レポートの整理と共有' },
+  'Notion · Slack · Wiki/Confluence로 공유할 보고서는 AI 진단에서 초안을 미리 보고 복사하거나 내려받으세요.': { en: 'Preview, copy or download a report draft for Notion, Slack or Wiki/Confluence from AI Diagnosis.', zh: '在 AI 诊断中预览、复制或下载用于 Notion、Slack 或 Wiki/Confluence 的报告草稿。', ja: 'AI 診断で Notion・Slack・Wiki/Confluence 用の下書きをプレビュー、コピー、ダウンロードできます。' },
+  'Notion은 지식 검색을 지원합니다. Slack 직접 전송은 별도 승인·설정이 필요하며, Wiki 직접 게시는 아직 지원하지 않습니다.': { en: 'Notion supports knowledge search. Direct Slack delivery requires separate approval and setup; direct wiki publishing is not implemented.', zh: 'Notion 支持知识搜索。直接发送到 Slack 需要单独审批和配置；尚未实现 Wiki 直接发布。', ja: 'Notion はナレッジ検索に対応します。Slack への直接送信は別途承認と設定が必要で、Wiki への直接投稿は未実装です。' },
+  '진단 보고서 열기 →': { en: 'Open diagnosis reports →', zh: '打开诊断报告 →', ja: '診断レポートを開く →' },
   '불변식 평가 범위': { en: 'Invariant assessment coverage', zh: '不变量评估覆盖范围', ja: '不変条件の評価範囲' },
   '불변식 통과': { en: 'Passed', zh: '通过', ja: '合格' },
   '불변식 평가 정보 없음': { en: 'Invariant assessment unavailable', zh: '不变量评估信息不可用', ja: '不変条件の評価情報なし' },
