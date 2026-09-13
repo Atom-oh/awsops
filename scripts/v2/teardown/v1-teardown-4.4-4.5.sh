@@ -461,7 +461,7 @@ else
   BUCKET_STATE=indeterminate
 fi
 
-# ALB/SQS are NOT deleted by this script (docs/runbooks/v1-decommission.md §4.5 requires a manual
+# ALB/SQS are NOT deleted by this script (docs/runbooks/v1-decommission.md#manual-residue requires a manual
 # CFN-stack-membership check first — if AwsopsStack owns them, 4.3's stack delete already removed
 # them; if not, they need the manual listener→ALB→target-group teardown order the runbook spells
 # out, which this script deliberately does not automate). We only verify here, but we DO fail the
@@ -507,9 +507,9 @@ FAIL=0
 [ "$REMAINING_INTERPRETERS" != "[]" ] && { echo "FAIL: v1 code interpreter still present"; FAIL=1; }
 [ "$BUCKET_STATE" = "present" ] && { echo "FAIL: v1 deploy bucket still present"; FAIL=1; }
 [ "$BUCKET_STATE" = "indeterminate" ] && { echo "FAIL: could not verify deploy bucket (indeterminate): $BUCKET_OUT"; FAIL=1; }
-[ "$ALB_STATE" = "present" ] && { echo "FAIL: awsops-alb still present (billed!) — not deleted by this script, see docs/runbooks/v1-decommission.md §4.5"; FAIL=1; }
+[ "$ALB_STATE" = "present" ] && { echo "FAIL: awsops-alb still present (billed!) — not deleted by this script, see docs/runbooks/v1-decommission.md#manual-residue"; FAIL=1; }
 [ "$ALB_STATE" = "indeterminate" ] && { echo "FAIL: could not verify awsops-alb (indeterminate — presence NOT established): $ALB_OUT"; FAIL=1; }
-[ "$SQS1_STATE" = "present" ] || [ "$SQS2_STATE" = "present" ] && { echo "FAIL: awsops-alert-queue/awsops-alert-dlq still present — not deleted by this script, see docs/runbooks/v1-decommission.md §4.5"; FAIL=1; }
+[ "$SQS1_STATE" = "present" ] || [ "$SQS2_STATE" = "present" ] && { echo "FAIL: awsops-alert-queue/awsops-alert-dlq still present — not deleted by this script, see docs/runbooks/v1-decommission.md#manual-residue"; FAIL=1; }
 [ "$SQS1_STATE" = "indeterminate" ] || [ "$SQS2_STATE" = "indeterminate" ] && { echo "FAIL: could not verify awsops-alert-queue/awsops-alert-dlq (indeterminate — presence NOT established)"; FAIL=1; }
 [ "$V2_HEALTH" != "200" ] && { echo "FAIL: v2 health check did not return 200 (got $V2_HEALTH)"; FAIL=1; }
 if [ "${#SKIPPED[@]}" -gt 0 ]; then
