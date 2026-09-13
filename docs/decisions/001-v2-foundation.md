@@ -13,7 +13,7 @@ The legacy Fargate proposal's CDK/service layout was not the implemented archite
 
 ## Decision
 
-- The private foundation root is `terraform/v2/foundation/`. Use Terraform with a partial S3 backend
+- This checkout's foundation root is `terraform/v2/foundation/`. Use Terraform with a partial S3 backend
   and `use_lockfile`; shared-infrastructure changes use a reviewed saved plan, never auto-approve.
   CDK is historical foundation infrastructure; target-account onboarding templates are separate.
 - Serve Next.js at `/` on arm64 Fargate. The web BFF handles authenticated requests and bounded reads;
