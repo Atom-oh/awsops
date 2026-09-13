@@ -1,9 +1,9 @@
-# v2 setup
+# Developer onboarding entry point
 
-Use [developer onboarding](../onboarding.md) and the
-[deployment runbook](../runbooks/deploy-new-version.md). These maintained documents
-replace the retired EC2/CDK and embedded-Steampipe installation instructions.
+Follow [developer onboarding](../onboarding.md) for environment setup, local
+development, and tests. Read [root CLAUDE.md](../../CLAUDE.md) for the current
+architecture, review boundaries, and authoritative commands.
 
-v2 uses `web/`, root `/api/*` routes, Aurora state and Terraform under
-`terraform/v2/foundation/`. Old v1 setup steps remain in git history; do not apply
-them to this checkout. Multilingual product guides are maintained in `docs-site/`.
+Deployment is a separate authorized operation: use root guidance and `make deploy`,
+not the legacy EC2/CDK runbook. Component details are in
+[implementation references](../reference/README.md).

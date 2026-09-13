@@ -36,7 +36,8 @@ network, but other foundation resources still have a plan and cost.
 
 [backend.tf](../../terraform/v2/foundation/backend.tf) defines version constraints
 and a partial S3 backend. Local `backend.hcl` supplies the state bucket/key and
-native S3 lock configuration; use the checked-in example and initialize with
+native S3 lock configuration; use
+[`backend.hcl.example`](../../terraform/v2/foundation/backend.hcl.example) and initialize with
 `-backend-config=backend.hcl`. [providers.tf](../../terraform/v2/foundation/providers.tf)
 selects the workload region and the `us-east-1` alias used for edge resources.
 

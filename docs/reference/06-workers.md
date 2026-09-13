@@ -19,10 +19,13 @@ Generic `/api/jobs` accepts its noop allowlist; domain jobs use routes that veri
 authorization and ownership. Trusted schedulers have separate internal enqueue paths.
 
 [dispatcher.py](../../scripts/v2/workers/dispatcher.py) has no DB access.
-Registered job types route through [handlers.py](../../scripts/v2/workers/handlers.py);
+For ordinary jobs, `handlers.is_allowed()` drops unknown/disallowed types before
+execution; the [handler registry](../../scripts/v2/workers/handlers.py) contains
+read/compute handlers, not mutating job types.
 `StartExecution(name=job_id)` deduplicates transport redelivery and partial batch
 failures retry only the affected SQS messages. Separate action/incident state-machine
-branches remain governed by their own configuration and product gates. Their
+branches are checked before that registry and remain governed by their own
+configuration and product gates. Their
 presence is not permission to enable frozen remediation.
 
 [sfn.asl.json](../../scripts/v2/workers/sfn.asl.json) selects Lambda or

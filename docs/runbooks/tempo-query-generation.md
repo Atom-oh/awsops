@@ -30,7 +30,7 @@ Inspect actual names/types in traces through **Grafana Explore** on the same dat
 
 The web app uses a pinned Grafana TraceQL parser, then checks observed custom
 attribute names, compatible literal types, and the requested status value for
-complete affirmative HTTP templates such as `HTTP 500 response spans`.
+complete affirmative HTTP templates such as `HTTP 500 spans`.
 
 - Every OR result branch must retain the requested value. Within an AND branch
   that references a standard HTTP-status attribute, a standard predicate must
@@ -43,15 +43,16 @@ complete affirmative HTTP templates such as `HTTP 500 response spans`.
   most two generations. A second invalid draft returns HTTP 502 without searching
   Tempo. `SCHEMA_REQUIRED`, unobserved names in a truncated name inventory, and
   missing HTTP-status evidence go directly to schema/manual-query guidance.
-- Recognized qualifiers such as `today`, `yesterday`, and `last hour/day/week`
-  preserve the status predicate only; they do not change execution time bounds.
-  Supported product-language equivalents remain part of the same runtime contract.
+- Recognized prefix/suffix qualifiers are `today` and `yesterday` in English or
+  Korean, plus `last hour`, `last day`, and `last week` in English only. They
+  preserve the status predicate; they do not change execution time bounds.
 
-- Check scopes, quoting, and operators. The pinned parser does not cover every server version; verify newer syntax through Grafana Explore on the same Tempo.
-- Verify the observation window, names, and types using the API procedure above, refreshing when needed. `.key` can match span/resource observations; event/link/instrumentation retain explicit scopes.
-- Preserve the requested status code when regenerating or manually enter reviewed TraceQL. `status = error` or `{}` does not preserve an HTTP 500 condition.
+- `TraceQL syntax error at character ...`: check scopes, quoting, and operators. The pinned parser does not cover every server version; verify newer syntax through Grafana Explore on the same Tempo.
+- `TraceQL schema mismatch`: verify the observation window, names, and types using the API procedure above, refreshing when needed. `.key` can match span/resource observations; event/link/instrumentation retain explicit scopes.
+- `TraceQL HTTP-status filter is missing or broadened`: preserve the requested status code when regenerating or manually enter reviewed TraceQL. `status = error` or `{}` does not preserve an HTTP 500 condition.
 
-After refresh, regenerate the request and check its actual attribute names/types.
+After refresh, regenerate `HTTP 500 spans` and check that the draft preserves 500
+using an observed HTTP-status attribute and compatible literal type.
 An `&&` query may validly combine service and HTTP conditions on separate spans.
 Successful generation does not guarantee server acceptance; review the draft and
 inspect the execution error/server version if Tempo still returns HTTP 400.

@@ -11,6 +11,11 @@ Cognito pool with `admin_only` account recovery. The public app client has no
 client secret, permits password authentication, and restricts writable attributes
 to `name`. Read access to verified email supports the ownership migration window.
 
+The checked-in pool has `mfa_configuration = "OFF"` and a minimum password length
+of eight, requiring uppercase, lowercase, and numbers but not symbols. This
+accepted residual risk remains: closed signup, admin-only recovery, and request
+checks do not provide a second factor against a compromised password.
+
 The self-hosted `/login` form submits to
 [POST /api/auth/login](../../web/app/api/auth/login/route.ts).
 [login.ts](../../web/lib/login.ts) calls unsigned Cognito `USER_PASSWORD_AUTH`,
@@ -25,6 +30,12 @@ checks RS256 against JWKS and validates issuer, audience, token use, and timesta
 The Hosted UI `/_callback` path retains OAuth state and PKCE as a fallback. Edge
 configuration is rendered by Terraform and attached via the published function
 version. Diagnose edge rejection separately from origin failures.
+
+The exact `/api/incidents/webhook` exception supports machine senders without a
+Cognito cookie; the route verifies SNS signatures and topic allowlists, or direct
+bearer/HMAC credentials. PWA manifest/icons must also load without a cookie.
+[`manifest.test.ts`](../../web/app/manifest.test.ts) keeps manifest assets, public
+files, and the edge allowlist in step; neither exception permits widening the allowlist.
 
 ## BFF checks and revocation
 
