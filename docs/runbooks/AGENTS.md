@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e6d4d1cac5b4 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 6bec5f53f031 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
@@ -16,7 +16,8 @@ legacy runbook's steps as the current operational path).
   backlog: convert a whole maintained document without losing operational facts.
   Do not require parallel Korean developer text; multilingual product guides remain.
 - Commands should be copy-paste ready; cite the related ADR number(s) at the bottom.
-- Do not let a runbook embed secrets, AWS account IDs, ARNs, or live domains.
+- Credential/example handling follows `../CLAUDE.md`: no credentials in docs; use
+  placeholders for deployment identifiers. Identifiers alone are not secrets.
 
 ## Known false-positives
 - A runbook marked **v1 (legacy)** describing a procedure that no longer matches v2's
