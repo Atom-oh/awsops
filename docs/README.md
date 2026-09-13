@@ -15,7 +15,7 @@ remain under `docs-site/`. Read only the sources relevant to the changed behavio
 | Developer setup | [Onboarding](onboarding.md) |
 | Testing and troubleshooting | [Guides](guides/) |
 | Generated architecture visuals | [Diagrams](diagrams/) |
-| API routes | [API reference](api-reference.md), verified against `web/app/api/**/route.ts` |
+| API routes | [API reference](api-reference.md), check actual handlers under `web/app/api/**/route.ts` |
 | Operations | [Runbook index](runbooks/CLAUDE.md) |
 | Merge and AI-review checks | [Verification](v2-merge-verification.md) |
 | UI design conventions | [Design](../DESIGN.md) |

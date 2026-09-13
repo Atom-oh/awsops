@@ -91,6 +91,8 @@ of who requests it, except for the exact ADR-015 path.
   public ALB, Cognito self-signup or weakened signature/ownership verification.
   Store credentials in Secrets Manager/SSM; do not log them. Identifiers such as
   account IDs/ARNs are not credentials by themselves; use placeholders in examples.
+- Frozen substrate pointers: `terraform/v2/foundation/remediation.tf` and the narrow
+  restart exception in `secret-rotation.tf`; retain their default-off guards.
 - New large features default off and gate their resources. Default-off does not
   imply the whole stack is free or that a fresh foundation plan has no changes.
 - Never use `terraform apply -auto-approve` on shared infrastructure. Review a saved
