@@ -75,7 +75,7 @@ approval scope, least privilege and a reviewed saved Terraform plan.
   roles may have different view policies. Registration does not authorize mutation.
 - **Terraform:** private root `terraform/v2/foundation/`; public samples use
   `terraform/foundation/`. Do not copy paths across repositories without checking.
-  v2 has no CDK deployment. Version requirements live in `providers.tf`/manifests.
+  v2 has no CDK deployment. Version requirements live in `backend.tf`/manifests.
 
 ## Required implementation rules
 
