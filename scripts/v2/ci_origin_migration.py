@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Run bundled migrations in private Fargate; CI never reads database credentials.
+"""Run bundled migrations in private Fargate; the designed path keeps credentials there.
 
 AWSOPS_MIGRATION_CONFIG_JSON is the nonsecret, operator-exported Terraform output.
+The IAM holder still has the residual executor authority documented in the
+access contract; this controller's fixed behavior does not narrow that authority.
 CI_MIGRATION_RECEIPT must name a private file outside the checkout. Build
 Dockerfile.origin-migration for ARM64 with SOURCE_COMMIT=$CI_COMMIT_SHA, push
 migration-$CI_COMMIT_SHA, then pass the build action's digest to run. This module

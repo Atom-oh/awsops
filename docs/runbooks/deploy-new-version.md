@@ -24,7 +24,9 @@ configuration and remain untracked. Do not dump credentials into logs.
 `make migrate` validates the committed RDS certificate chain and hostname. A
 missing/malformed trust bundle fails closed. The optional
 [private CI executor](private-ci-migrations.md) exports the reviewed commit's
-inputs and runs migrations inside Fargate; CI never receives a DB password.
+inputs and runs migrations inside Fargate. The designed path keeps DB passwords
+inside the task; the access contract documents the controller credential holder's
+broader [residual authority](../reference/github-actions-access.md#optional-private-migration-authority).
 
 ## Release boundaries
 

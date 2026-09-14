@@ -35,6 +35,19 @@ latest-HEAD review/CI procedure govern deployment; additional environment
 reviewers are an explicit team choice. These GitHub settings are not managed
 by this Terraform module.
 
+**Dated deployment decision — 2026-09-14:** this operator-authorized CI work uses
+an explicit production `workflow_dispatch` against reviewed `main`, with the
+latest-HEAD AI-review/fix/CI/merge procedure as its source gate. A second
+environment-reviewer approval is not configured, avoiding a duplicate approval
+step after an authorized deployment request. This does not authorize unattended
+production pushes or arbitrary future dispatches: each production release still
+needs operator authorization, and changing that operating model requires its
+own review. The environment must remain restricted to `main`; repository and
+environment administrators are trusted deployment principals. The stronger
+database authority added by private migrations is accepted for this operator
+deployment purpose and is explicitly described below; it is not a product
+autonomy exception.
+
 ## Permission surface and limits
 
 The role has no S3 or Terraform-state access. A state object's read permission
