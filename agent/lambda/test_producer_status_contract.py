@@ -236,3 +236,55 @@ def test_cost_dimension_actual_producer_drops_continuation_but_receipt_stays_par
         out = cost.lambda_handler({"tool_name": "get_dimension_values", "arguments": {}}, None)
     client.get_dimension_values.assert_called_once()
     assert receipt("get_dimension_values", out) == "partial"
+
+
+@pytest.mark.parametrize("module,tool", [(prom, "prometheus_query"), (prom, "prometheus_query_range"),
+                                          (mimir, "mimir_query"), (mimir, "mimir_query_range")])
+@pytest.mark.parametrize("populated", [False, True])
+@pytest.mark.parametrize("mode", ["clean", "warnings", "malformed_warnings", "missing_status", "missing_data", "pending", "capped"])
+def test_metric_query_warnings_survive_upstream_projection(module, tool, populated, mode):
+    row = {"metric": {"job": "PRIVATE"}, "value": [1, "2"]}
+    rows = [row] if populated else []
+    upstream = {"status": "success", "data": {"resultType": "vector", "result": rows}}
+    expected = "success" if populated else "empty"
+    if mode == "warnings":
+        upstream["warnings"] = ["UPSTREAM_SECRET partial remote read"]
+        expected = "partial"
+    elif mode == "malformed_warnings":
+        upstream["warnings"] = None
+        expected = "unverified"
+    elif mode == "missing_status":
+        del upstream["status"]
+        expected = "unverified"
+    elif mode == "missing_data":
+        del upstream["data"]
+        expected = "unverified"
+    elif mode == "pending":
+        upstream["status"] = "running"
+        expected = "error"
+    elif mode == "capped":
+        upstream["data"]["result"] = [row] * 51
+        expected = "partial"
+    with patch.object(module, "_ds", return_value={"endpoint": "https://fixture.invalid"}), \
+            patch.object(module, "http_json", return_value=(200, upstream)) as http:
+        out = module.lambda_handler({"tool_name": tool, "arguments": {"query": "PRIVATE query"}}, None)
+    http.assert_called_once()
+    assert receipt(tool, out) == expected
+    if out["statusCode"] == 200:
+        body = json.loads(out["body"])
+        assert body["collectionStatus"] in ("ok", "empty", "partial", "unknown")
+        assert "UPSTREAM_SECRET" not in json.dumps(body)
+        if mode not in ("missing_data", "capped"):
+            assert body["result"] == rows
+
+
+@pytest.mark.parametrize("module,tool", [(prom, "prometheus_labels"), (mimir, "mimir_labels")])
+def test_shared_metric_api_status_also_preserves_named_list_warnings(module, tool):
+    with patch.object(module, "_ds", return_value={"endpoint": "https://fixture.invalid"}), \
+            patch.object(module, "http_json", return_value=(200, {
+                "status": "success", "data": [], "warnings": ["UPSTREAM_SECRET incomplete"],
+            })) as http:
+        out = module.lambda_handler({"tool_name": tool, "arguments": {}}, None)
+    http.assert_called_once()
+    assert receipt(tool, out) == "partial"
+    assert "UPSTREAM_SECRET" not in out["body"]

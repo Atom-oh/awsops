@@ -69,7 +69,11 @@ def _get(creds, path, params, http_timeout=None, *, with_status=False):
     if isinstance(data, dict) and data.get("status") and data.get("status") != "success":
         raise _ApiError(f"Mimir query failed ({data.get('errorType', 'error')}): {data.get('error', 'unknown')}")
     result = data.get("data") if isinstance(data, dict) else data
-    return (result, isinstance(data, dict) and data.get("status") == "success") if with_status else result
+    source_status = "unknown"
+    if isinstance(data, dict) and data.get("status") == "success":
+        warnings = data.get("warnings", [])
+        source_status = "unknown" if not isinstance(warnings, list) else "partial" if warnings else "ok"
+    return (result, source_status) if with_status else result
 
 
 def _bound(data):
@@ -91,6 +95,20 @@ def _bound(data):
             budget -= len(s["values"])
         out.append(s)
     return {"resultType": data.get("resultType"), "result": out}, truncated
+
+
+def _query_result(observed):
+    data, source_status = observed
+    bounded, truncated = _bound(data)
+    state = source_status
+    if state == "ok":
+        state = ("unknown" if not isinstance(bounded, dict)
+                 or bounded.get("resultType") not in ("vector", "matrix")
+                 or not isinstance(bounded.get("result"), list) else
+                 "partial" if truncated else "ok" if bounded["result"] else "empty")
+    return ok({"truncated": truncated,
+               **(bounded if isinstance(bounded, dict) else {"result": bounded}),
+               "collectionStatus": state})
 
 
 def _timeout_param(v):
@@ -115,9 +133,7 @@ def mimir_query(args):
     timeout = _timeout_param(args.get("timeout"))
     if timeout:
         params["timeout"] = timeout
-    data = _get(_ds(), f"{BASE}/query", params)
-    bounded, tr = _bound(data)
-    return ok({"truncated": tr, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
+    return _query_result(_get(_ds(), f"{BASE}/query", params, with_status=True))
 
 
 def mimir_query_range(args):
@@ -129,17 +145,15 @@ def mimir_query_range(args):
     timeout = _timeout_param(args.get("timeout"))
     if timeout:
         params["timeout"] = timeout
-    data = _get(_ds(), f"{BASE}/query_range", params)
-    bounded, tr = _bound(data)
-    return ok({"truncated": tr, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
+    return _query_result(_get(_ds(), f"{BASE}/query_range", params, with_status=True))
 
 
 def _list_result(observed, field, limit, kind):
-    data, status_ok = observed
+    data, source_status = observed
     rows = data[:limit] if isinstance(data, list) else []
     truncated = isinstance(data, list) and len(data) > limit
-    state = ("unknown" if not status_ok or not isinstance(data, list) else
-             "partial" if truncated or not all(isinstance(row, kind) for row in rows) else
+    state = ("unknown" if source_status == "unknown" or not isinstance(data, list) else
+             "partial" if source_status == "partial" or truncated or not all(isinstance(row, kind) for row in rows) else
              "ok" if rows else "empty")
     return ok({field: rows, "truncated": truncated, "collectionStatus": state})
 
