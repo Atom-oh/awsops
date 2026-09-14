@@ -11,6 +11,13 @@ resources: the release IAM role, its inline policy, and Secrets Manager metadata
 for a verifier. It also reads the existing GitHub OIDC provider. It does not
 manage that provider, create KMS keys, or put any credential value in Terraform.
 
+Use the separate [deployment verifier bootstrap](../runbooks/deployment-verifier.md)
+to populate the credential. Its non-admin Cognito user retains standard dashboard
+session authority, including billable chat/diagnosis/worker operations. A secret
+reader can exercise that authority; fixed read-only probe requests do not make
+the account read-only. The runbook specifies reader/writer restrictions,
+serialization and coordinated recovery.
+
 ## Trust and existing provider
 
 Bootstrap looks up the account's existing
