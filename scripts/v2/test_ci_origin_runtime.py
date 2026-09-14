@@ -292,7 +292,7 @@ class FakeCLI:
                 result = {"task": self.task}
             else:
                 raise AssertionError(action)
-        elif (service, action) == ("states", "describe-state-machine"):
+        elif (service, action) == ("stepfunctions", "describe-state-machine"):
             c = self.meta["components"]["worker"]
             network = c["network"]["awsvpcConfiguration"]
             result = {"stateMachineArn": c["state_machine_arn"], "status": "ACTIVE",
