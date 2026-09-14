@@ -37,6 +37,9 @@ python3 -B -m unittest discover -s scripts/v2 -p test_evaluate_diagnosis.py -v
 
 ## Migrations and rollout
 
+- `01M2FV44NER7VC3CTX2ZMT9FZG_topology_inventory_evidence.sql`: the current collection-state
+  projection with bounded flow/infra source clocks, scope, producer status and saved-source
+  provenance; no raw provider JSON or new grants.
 - `01M279W0J9HNG1QT0MAS60KV8K_topology_graph_collection_state.sql`: collection attempts,
   evidence counts and explicitly projected SQL-reader views.
 - `01M27AQXZKQQ5J611R01BEFHPD_worker_jobs_lifecycle_timestamps.sql`: first start and terminal
@@ -67,6 +70,20 @@ Terraform operator flow; zero retains the 15-minute freshness floor, and failure
 
 Datasource reindexing upgrades graph queries to catalog v3, preserving optional span metadata
 and metric scope labels. Earlier cached queries can supply less evidence until reindexed.
+
+## Inventory freshness and retained evidence
+
+`inventory_stale_after_minutes` binds `INVENTORY_STALE_AFTER_MINUTES` in both the web
+workload and inventory-reader Lambda (default 30, integer 1–1440). It independently
+gates flow/infra source freshness; the graph-cadence threshold gates saved publication
+age. A recent publication cannot make old or incomplete source evidence fresh.
+Environment/source integration does not establish an applied rollout.
+
+Hard input/graph budgets and failed collection preserve last-good evidence. Repeated
+retentions never authorize an empty publication or unproven sweep. A job-level aggregate
+zero does not prove an unobserved member participated. Missing or unsupported evidence
+remains explicit. The shared request/publication transaction helper requires PostgreSQL
+17 for `transaction_timeout`.
 
 ## Interpretation limits
 

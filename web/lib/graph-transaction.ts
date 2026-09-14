@@ -36,4 +36,3 @@ export async function graphTransaction<T>(pool: Pool, readOnly: boolean, fn: (cl
     finally { client.removeListener('error', onError); }
   }
 }
-
