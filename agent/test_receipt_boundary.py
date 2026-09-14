@@ -83,6 +83,19 @@ class EvidenceBoundaryTest(unittest.TestCase):
                 self.assertEqual(self.receipt(tool, {**body, "collectionStatus": "partial"})["outcome"], "partial")
                 self.assertEqual(self.receipt(tool, {**body, "collectionStatus": "unknown"})["outcome"], "unverified")
 
+    def test_inventory_field_limited_types_do_not_certify_full_evidence(self):
+        for resource_type in ("ecs", "ec2", "future_type"):
+            for n in (0, 1):
+                body = {"resource_type": resource_type, "resources": [{}] * n, "count": n,
+                        "freshness": helpers.inventory_row(count=n, resource_type=resource_type),
+                        "note": "field-level detail is limited by the sql_reader view security boundary"}
+                with self.subTest(resource_type=resource_type, count=n):
+                    receipt = self.receipt("query_inventory", body)
+                    self.assertEqual(receipt["outcome"], "partial")
+                    self.assertTrue(receipt["quality"]["unknown"])
+                    self.assertEqual(receipt["quality"]["collection"]["status"], "partial")
+                    self.assertNotIn("security boundary", json.dumps(receipt))
+
     def test_unknown_or_forged_source_status_cannot_certify_positive_data(self):
         for status in (None, {}, "future", "unknown"):
             self.assertEqual(self.receipt("prometheus_labels", {

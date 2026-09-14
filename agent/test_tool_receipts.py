@@ -246,15 +246,15 @@ class ProducerReceiptTest(unittest.TestCase):
             ("unavailable", 0, "unverified"), ("unavailable", 1, "partial"),
         ]:
             with self.subTest(freshness=freshness, count=count):
-                row = inventory_row(freshness, count)
+                row = inventory_row(freshness, count, resource_type="ebs")
                 if freshness == "unavailable":
                     row.update(status=None, last_success_at=None, latest_success_at=None)
-                body = {"resource_type": "ec2", "resources": [{"id": "PRIVATE"}] * count,
+                body = {"resource_type": "ebs", "resources": [{"id": "PRIVATE"}] * count,
                         "count": count, "freshness": row}
                 receipt = self.receipt("query_inventory", body)
                 self.assertEqual(receipt["outcome"], expected)
                 source = receipt["quality"]["collection"]["sources"][0]
-                self.assertEqual(source["sourceId"], "inventory:ec2")
+                self.assertEqual(source["sourceId"], "inventory:ebs")
                 self.assertEqual(source["itemCount"], count)
                 self.assertEqual(receipt["quality"]["collection"].get("stale", False), freshness == "stale")
 
