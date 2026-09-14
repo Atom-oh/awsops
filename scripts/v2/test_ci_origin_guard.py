@@ -234,6 +234,101 @@ class ReleaseGuardTests(unittest.TestCase):
         with self.assertRaises(guard.GuardError):
             guard.verify_release(self.env, self.fetch)
 
+    def test_submitted_review_body_blocks_without_inline_comments(self):
+        for body in ("MAJOR: deployment broken", "Context.\n**Severity**: Critical",
+                     "- Findings\n    - **MAJOR:** rollback broken"):
+            with self.subTest(body=body):
+                self.reviews = [
+                    {"id": 1, "user": {"login": "reviewer"}, "state": "COMMENTED", "body": body},
+                ]
+                with self.assertRaisesRegex(guard.GuardError, "^unresolved_blocking_review$"):
+                    guard.verify_release(self.env, self.fetch)
+
+    def test_minor_comment_or_other_reviewer_cannot_clear_submitted_finding(self):
+        self.reviews = [
+            {"id": 1, "user": {"login": "reviewer"}, "state": "COMMENTED", "body": "Major: broken"},
+            {"id": 2, "user": {"login": "reviewer"}, "state": "COMMENTED", "body": "Minor: wording"},
+            {"id": 3, "user": {"login": "someone-else"}, "state": "APPROVED", "body": ""},
+        ]
+        with self.assertRaisesRegex(guard.GuardError, "^unresolved_blocking_review$"):
+            guard.verify_release(self.env, self.fetch)
+
+    def test_later_same_author_approval_or_dismissal_clears_submitted_finding(self):
+        for state in ("APPROVED", "DISMISSED"):
+            with self.subTest(state=state):
+                # Deliberately reverse API order: review IDs establish event order.
+                self.reviews = [
+                    {"id": 2, "user": {"login": "reviewer"}, "state": state, "body": ""},
+                    {"id": 1, "user": {"login": "reviewer"}, "state": "COMMENTED", "body": "Major: broken"},
+                ]
+                self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
+
+    def test_new_finding_after_approval_blocks_again(self):
+        for state in ("COMMENTED", "APPROVED"):
+            with self.subTest(state=state):
+                self.reviews = [
+                    {"id": 1, "user": {"login": "reviewer"}, "state": "APPROVED", "body": ""},
+                    {"id": 2, "user": {"login": "reviewer"}, "state": state, "body": "Major: new failure"},
+                ]
+                with self.assertRaisesRegex(guard.GuardError, "^unresolved_blocking_review$"):
+                    guard.verify_release(self.env, self.fetch)
+
+    def test_unsubmitted_dismissed_and_nonblocking_review_bodies_do_not_block(self):
+        for state, body in (
+            ("PENDING", "Major: unpublished draft"),
+            ("DISMISSED", "Major: dismissed finding"),
+            ("COMMENTED", "Minor: mentions a MAJOR release"),
+            ("COMMENTED", "Info: CRITICAL terminology"),
+            ("COMMENTED", "> Major: quoted example"),
+            ("COMMENTED", "```text\nMajor: code example\n```"),
+        ):
+            with self.subTest(state=state, body=body):
+                self.reviews = [{"id": 1, "user": {"login": "reviewer"}, "state": state, "body": body}]
+                self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
+
+    def test_nested_list_findings_and_continuations_block(self):
+        self.inline = [{"id": 1}]
+        self.threads = [{
+            "isResolved": False, "isOutdated": False,
+            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": ""}]},
+        }]
+        for body in (
+            "- Findings\n    - **MAJOR:** rollback broken",
+            "- Findings\n\t- **MAJOR:** rollback broken",
+            "1. Findings\n    1. **Severity**: Major",
+            "- Findings\n\n    - Finding 1 (MINOR): wording\n    - Finding 2 (MAJOR): broken",
+            "- Findings\n    - Runtime\n        - **CRITICAL:** broken",
+            "- Findings\n    - Runtime\n      **Severity:** Major",
+        ):
+            with self.subTest(body=body):
+                self.threads[0]["comments"]["nodes"][0]["body"] = body
+                with self.assertRaisesRegex(guard.GuardError, "^unresolved_blocking_thread$"):
+                    guard.verify_release(self.env, self.fetch)
+
+    def test_nested_lists_preserve_code_quotes_and_nonblocking_prose(self):
+        self.inline = [{"id": 1}]
+        self.threads = [{
+            "isResolved": False, "isOutdated": False,
+            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": ""}]},
+        }]
+        for body in (
+            "- Findings\n    - Minor: wording\n    - Info: examples",
+            "    - **MAJOR:** standalone indented code",
+            "\t- **MAJOR:** standalone indented code",
+            "- Examples\n\n      - **MAJOR:** indented code within a list",
+            "- Examples\n    - Nested example\n\n          **MAJOR:** indented code",
+            "- Examples\n    ```text\n    - **MAJOR:** fenced code\n    ```",
+            "- ```text\n  **MAJOR:** fenced code\n  ```",
+            "- Examples\n    > **MAJOR:** quoted example",
+            "- > **MAJOR:** quoted example",
+            "- Examples\n    - > **MAJOR:** nested quoted example",
+            "> - Findings\n>     - **MAJOR:** quoted list",
+            "- Context\n\nOutside the list.\n\n    - **MAJOR:** indented code",
+        ):
+            with self.subTest(body=body):
+                self.threads[0]["comments"]["nodes"][0]["body"] = body
+                self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
+
     def test_heading_numbered_and_emphasized_blocking_threads_are_rejected(self):
         self.inline = [{"id": 1}]
         self.threads = [{

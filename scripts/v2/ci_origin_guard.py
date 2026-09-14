@@ -44,18 +44,42 @@ def pages(fetch, endpoint, field=None):
 
 
 def visible_lines(body):
+    """Ignore code/quotes while retaining list items and their visible content."""
     fence = None
+    list_indents = []
     for raw in body.splitlines():
-        line = raw.strip()
-        if line.startswith(("```", "~~~")):
-            marker = line[:3]
-            if fence is None:
-                fence = marker
-            elif fence == marker:
+        raw = raw.expandtabs(4)
+        line = raw.lstrip()
+        if not line:
+            continue
+        indent = len(raw) - len(line)
+        while list_indents and indent < list_indents[-1]:
+            list_indents.pop()
+        container_indent = list_indents[-1] if list_indents else 0
+        if fence and indent < fence[2]:
+            fence = None  # Outdenting ends a fence's enclosing list item.
+        if fence:
+            if indent - container_indent < 4 and re.fullmatch(
+                    re.escape(fence[0]) + "{" + str(fence[1]) + r",}\s*", line):
                 fence = None
             continue
-        if fence is None and not raw.startswith(("    ", "\t")) and not line.startswith(">"):
-            yield line
+        # Four spaces are code only relative to the enclosing list's content.
+        if indent - container_indent >= 4:
+            continue
+        while match := re.match(r"([-+*]|\d{1,9}[.)])( +)", line):
+            # More than four spaces after a marker starts indented list code.
+            padding = len(match[2]) if len(match[2]) <= 4 else 1
+            consumed = len(match[1]) + padding
+            indent += consumed
+            list_indents.append(indent)
+            line = line[consumed:]
+        if line.startswith(("    ", ">")):
+            continue
+        marker = re.match(r"(`{3,}|~{3,})(.*)", line)
+        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            fence = (marker[1][0], len(marker[1]), list_indents[-1] if list_indents else 0)
+            continue
+        yield line.strip()
 
 
 def configured_cells():
@@ -91,6 +115,31 @@ def blocking_line(line):
 
 def blocking_comment(body):
     return any(blocking_line(line) for line in visible_lines(body) if line)
+
+
+def verify_submitted_reviews(reviews):
+    """Only the same reviewer's approval/dismissal clears earlier blockers."""
+    changes, findings = set(), set()
+    for review in sorted(reviews, key=lambda item: item.get("id", 0)):
+        state = review.get("state")
+        if state == "PENDING":
+            continue
+        require(state in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"},
+                "invalid_review_state")
+        author = (review.get("user") or {}).get("login")
+        require(isinstance(author, str) and author, "review_author_missing")
+        if state in {"APPROVED", "DISMISSED"}:
+            changes.discard(author)
+            findings.discard(author)
+        if state == "DISMISSED":
+            continue
+        if state == "CHANGES_REQUESTED":
+            changes.add(author)
+        # An approval clears earlier findings, not a new finding in its own body.
+        if blocking_comment(review.get("body") or ""):
+            findings.add(author)
+    require(not changes, "active_change_request")
+    require(not findings, "unresolved_blocking_review")
 
 
 def verify_merged_tree(fetch, prefix, commit, head):
@@ -182,12 +231,7 @@ def verify_release(env, fetch):
                 and execution.get("head_sha") == head and execution.get("status") == "completed"
                 and execution.get("conclusion") == "success", "required_check_workflow_mismatch")
     comment_id = verify_ai_comment(pages(fetch, f"{prefix}/issues/{number}/comments"), head)
-    reviews = pages(fetch, f"{prefix}/pulls/{number}/reviews")
-    latest = {}
-    for review in sorted(reviews, key=lambda item: item.get("id", 0)):
-        if review.get("state") in {"APPROVED", "CHANGES_REQUESTED"}:
-            latest[review.get("user", {}).get("login")] = review["state"]
-    require("CHANGES_REQUESTED" not in latest.values(), "active_change_request")
+    verify_submitted_reviews(pages(fetch, f"{prefix}/pulls/{number}/reviews"))
     inline = pages(fetch, f"{prefix}/pulls/{number}/comments")
     if inline:
         data = fetch(f"review-threads/{number}")
