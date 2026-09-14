@@ -188,9 +188,9 @@ async function rebuildInventory(pool: Pool, cls: GraphClass, lock: number, runId
       const previousTypes = Array.isArray(previousSources) ? previousSources.flatMap(source =>
         typeof source?.sourceId === 'string' && /^inventory:[a-z][a-z0-9_]{0,63}$/.test(source.sourceId)
           ? [source.sourceId.slice(10)] : []) : [];
-      // Aggregate host types with no member rows are not member coverage. Carry previously used
-      // types forward so disappearing member rows require their own successful-empty evidence.
-      const accountTypes = account === 'self' ? required
+      // Aggregate host types with no member rows are not member coverage. Every account carries
+      // previously published types forward until successful-empty evidence confirms their absence.
+      const accountTypes = account === 'self' ? [...new Set([...required, ...previousTypes])]
         : [...new Set([...directTypes, ...rows.map(row => row.resource_type), ...previousTypes])];
       const attempt = inventoryAttempt(rows, runs, accountTypes, attemptedAt, account);
       attempts.set(account, attempt);

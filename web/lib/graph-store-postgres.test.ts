@@ -82,6 +82,50 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
       captured_at: previous.captured_at, publishedSources: previous.publishedSources });
     expect((await pool.query('SELECT count(*)::int AS n FROM topology_nodes WHERE class=$1', [cls])).rows[0].n).toBeGreaterThan(0);
   });
+  it('retains a vanished host infra source until explicit successful-empty evidence arrives', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    await pool.query('DELETE FROM inventory_sync_runs');
+    await pool.query(`INSERT INTO inventory_resources(resource_type, resource_id, data, captured_at) VALUES
+      ('vpc','vpc-kept','{}',$1), ('subnet','subnet-lost','{"vpc_id":"vpc-kept"}',$1)`, [recent]);
+    await pool.query(`INSERT INTO inventory_sync_runs
+      (resource_type, status, started_at, finished_at, last_success_at, row_count, unknown_attribute_count)
+      SELECT t, 'succeeded', $1, $1, $1, 1, 0 FROM unnest(ARRAY['vpc','subnet']) t`, [recent]);
+    await build('infra');
+    const previous = await state('infra');
+    const nodes = (await pool.query("SELECT * FROM topology_nodes WHERE account_id='self' AND class='infra' ORDER BY id")).rows;
+    expect(nodes.map(node => node.id)).toEqual(['subnet:subnet-lost', 'vpc:vpc-kept']);
+    expect(previous).toMatchObject({ status: 'ok', stale: false, retainedPrevious: false });
+    expect(previous.publishedSources).toHaveLength(2);
+
+    await pool.query(`DELETE FROM inventory_resources WHERE resource_type='subnet';
+      DELETE FROM inventory_sync_runs WHERE resource_type='subnet';`);
+    for (const offset of [1_000, 2_000]) {
+      clock.mockReturnValue(now + offset);
+      await build('infra');
+      expect((await pool.query("SELECT * FROM topology_nodes WHERE account_id='self' AND class='infra' ORDER BY id")).rows).toEqual(nodes);
+      const result = await state('infra');
+      expect(result).toMatchObject({ status: 'unavailable', stale: true, retainedPrevious: true,
+        captured_at: previous.captured_at, publishedSources: previous.publishedSources });
+      expect(new Date(result.attempted_at).getTime()).toBe(now + offset);
+      expect(result.sources).toContainEqual(expect.objectContaining({
+        sourceId: 'inventory:subnet', status: 'unavailable', producerStatus: 'unknown', reasons: ['missing_ledger'],
+      }));
+    }
+
+    await pool.query(`INSERT INTO inventory_sync_runs
+      (resource_type, status, started_at, finished_at, last_success_at, row_count, unknown_attribute_count)
+      VALUES ('subnet', 'succeeded', $1, $1, $1, 0, 0)`, [recent]);
+    clock.mockReturnValue(now + 3_000);
+    await build('infra');
+    const confirmed = await state('infra');
+    expect(confirmed).toMatchObject({ status: 'ok', stale: false, retainedPrevious: false });
+    expect(new Date(confirmed.captured_at).getTime()).toBeGreaterThan(new Date(previous.captured_at).getTime());
+    expect(confirmed.publishedSources).toContainEqual(expect.objectContaining({
+      sourceId: 'inventory:subnet', status: 'empty', producerStatus: 'succeeded', itemCount: 0, reasons: [],
+    }));
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE account_id='self' AND class='infra' ORDER BY id")).rows)
+      .toEqual([{ id: 'vpc:vpc-kept' }]);
+  });
   it.each(['flow', 'infra'])('%s publishes a confirmed successful zero and sweeps the old graph', async cls => {
     await seed(cls);
     await build(cls);

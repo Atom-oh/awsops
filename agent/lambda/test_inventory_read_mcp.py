@@ -1029,6 +1029,64 @@ class TestTopologySelectionSQL(unittest.TestCase):
         self.assertIn("collection", isolated["warning"])
         self.assertEqual(self._read("absent")["selection"]["status"], "not_found")
 
+    def test_scoped_inventory_availability_distinguishes_unknown_from_confirmed_empty(self):
+        miss_warning = "Requested resource_id was not found in this host's selected graph class."
+        collection_warning = (
+            "Graph collection evidence is incomplete or stale; inspect collection before "
+            "treating nodes or edges as current."
+        )
+        for cls in ("flow", "infra"):
+            for mode, status, stale in (
+                ("missing_relation", "unknown", True),
+                ("missing_row", "unknown", True),
+                ("successful_empty", "empty", False),
+            ):
+                with self.subTest(cls=cls, mode=mode):
+                    self._psql("TRUNCATE public.topology_graph_state;")
+                    if mode == "missing_relation":
+                        self._psql("ALTER VIEW sql_reader.topology_graph_state "
+                                   "RENAME TO topology_graph_state_unavailable;")
+                    elif mode == "successful_empty":
+                        source_id = "inventory:alb" if cls == "flow" else "inventory:vpc"
+                        self._psql(f"""
+                            WITH evidence AS (
+                                SELECT jsonb_build_array(jsonb_build_object(
+                                    'sourceId', '{source_id}', 'status', 'empty', 'scope', 'aggregate',
+                                    'producerStatus', 'succeeded', 'itemCount', 0, 'capturedAtMs', NULL,
+                                    'lastSuccessAtMs', (extract(epoch FROM now() - interval '1 minute') * 1000)::bigint,
+                                    'reasons', '[]'::jsonb
+                                )) AS sources
+                            )
+                            INSERT INTO public.topology_graph_state
+                                (account_id, class, status, attempted_at, captured_at, details)
+                            SELECT 'self', '{cls}', 'empty', now(), now(),
+                                jsonb_build_object('sources', sources, 'publishedSources', sources,
+                                                   'retainedPrevious', false)
+                            FROM evidence;
+                        """)
+                    try:
+                        body = self._read("absent", cls=cls)
+                        self.assertEqual(body["class"], cls)
+                        self.assertEqual(body["from"], "absent")
+                        self.assertEqual(body["nodes"], [])
+                        self.assertEqual(body["edges"], [])
+                        self.assertEqual((body["node_count"], body["edge_count"]), (0, 0))
+                        self.assertEqual(body["selection"], {
+                            "status": "not_found", "requested_id": "absent", "resolved_id": None,
+                        })
+                        self.assertEqual(body["truncation"], {
+                            "nodes": False, "edges": False, "node_limit": 500, "edge_limit": 1000,
+                        })
+                        self.assertEqual(body["collection"]["status"], status)
+                        self.assertEqual(body["collection"]["stale"], stale)
+                        self.assertEqual(body["captured_at"] is None, mode != "successful_empty")
+                        self.assertEqual(body["warning"],
+                                         f"{collection_warning} {miss_warning}" if stale else miss_warning)
+                    finally:
+                        if mode == "missing_relation":
+                            self._psql("ALTER VIEW sql_reader.topology_graph_state_unavailable "
+                                       "RENAME TO topology_graph_state;")
+
     def test_reader_boundary_hides_metadata_and_other_accounts_and_classes(self):
         self._seed(["lambda:host", "sg:foreign-endpoint"],
                    [("lambda:host", "sg:foreign-endpoint", "wrong-account")], account="222222222222")
