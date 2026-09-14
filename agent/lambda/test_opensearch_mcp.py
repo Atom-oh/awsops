@@ -177,6 +177,7 @@ class TestSchema(_Base):
                     mock.patch.object(om, "_signed_request", return_value=response):
                 body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
                 self.assertEqual(body["domains"][0]["collectionStatus"], "error")
+                self.assertEqual(body["domains"][0]["error"], "index_collection_failed")
                 self.assertEqual(body["collectionStatus"], "ok")
                 self.assertNotIn("PRIVATE", json.dumps(body))
                 self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
@@ -214,6 +215,8 @@ class TestSchema(_Base):
                 self.assertEqual(len(body["domains"]), 20)
                 self.assertTrue(body["truncated"])
                 self.assertTrue(all(d["collectionStatus"] == "error" for d in body["domains"]))
+                self.assertTrue(all(d.get("error") in ("domain_description_failed", "index_collection_failed")
+                                    for d in body["domains"]))
                 self.assertLessEqual(calls.call_count, 20)
                 self.assertNotIn("PRIVATE", json.dumps(body))
                 self.assertEqual(terminal({"status": "success", "content": [{"json": body}]}, tool=tool)[0], "partial")

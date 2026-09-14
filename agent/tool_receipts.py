@@ -466,6 +466,9 @@ def trusted_advisor_evidence(body, q):
     if len(checks) > 15 or q.get("truncated"):
         q["truncated"] = True
         return "partial"
+    if len(checks) == 15 and "truncated" not in body:
+        q["unknown"] = True  # legacy producers silently sliced the full check list at 15
+        return "partial"
     return combined(outcomes) if checks else "empty"
 
 

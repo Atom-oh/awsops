@@ -104,7 +104,7 @@ def list_opensearch_domains(args, region, target_account_id):
                         "endpoint": st.get("Endpoint") or (st.get("Endpoints") or {}).get("vpc"),
                         "engineVersion": st.get("EngineVersion")})
         except Exception:  # noqa: BLE001 — retain collection failure without upstream messages
-            out.append({"name": n, "collectionStatus": "error"})
+            out.append({"name": n, "collectionStatus": "error", "error": "domain_description_failed"})
     return ok({"domains": out, "collectionStatus": "ok", "truncated": truncated})
 
 
@@ -159,7 +159,8 @@ def opensearch_schema(args, region, target_account_id):
             domains.append({"name": n, "indices": idx, "truncated": len(data) > 100,
                             "collectionStatus": "ok" if idx else "empty"})
         except Exception:  # noqa: BLE001 — same typed failure for HTTP and transport errors
-            domains.append({"name": n, "indices": [], "truncated": False, "collectionStatus": "error"})
+            domains.append({"name": n, "indices": [], "truncated": False,
+                            "collectionStatus": "error", "error": "index_collection_failed"})
     return ok({"domains": domains, "collectionStatus": "ok" if names else "empty", "truncated": truncated})
 
 

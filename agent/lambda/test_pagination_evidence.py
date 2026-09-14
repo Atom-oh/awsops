@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import aws_iam_mcp as iam
 import aws_dynamodb_mcp as ddb
+import aws_finops_mcp as finops
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tool_receipts import terminal
 
@@ -84,4 +85,39 @@ def test_dynamodb_key_query_preserves_continuation_without_a_second_request():
     resource.Table.return_value.query.assert_called_once()
     resource.Table.return_value.scan.assert_not_called()
     assert body["truncated"] is True
+    assert "PRIVATE" not in json.dumps(body)
+
+
+@pytest.mark.parametrize("size", [0, 1, 15, 16])
+def test_trusted_advisor_discloses_the_existing_check_cap(size):
+    client = MagicMock()
+    client.describe_trusted_advisor_checks.return_value = {
+        "checks": [{"id": str(i), "name": "fixture", "category": "cost_optimizing"} for i in range(size)],
+    }
+    client.describe_trusted_advisor_check_result.return_value = {"result": {
+        "status": "ok", "flaggedResources": [], "resourcesSummary": {},
+    }}
+    with patch.object(finops, "get_client", return_value=client):
+        body = json.loads(finops.lambda_handler({
+            "tool_name": "get_trusted_advisor_cost_checks", "arguments": {},
+        }, None)["body"])
+    assert body["truncated"] is (size > 15)
+    assert body["totalEstimatedMonthlySavings"] == (None if size > 15 else 0)
+    assert client.describe_trusted_advisor_check_result.call_count == min(size, 15)
+    assert terminal({"status": "success", "content": [{"json": body}]},
+                    tool="get_trusted_advisor_cost_checks")[0] == (
+        "partial" if size > 15 else "success" if size else "empty")
+
+
+def test_trusted_advisor_failed_checks_do_not_return_a_zero_savings_total():
+    client = MagicMock()
+    client.describe_trusted_advisor_checks.return_value = {
+        "checks": [{"id": "fixture", "category": "cost_optimizing"}],
+    }
+    client.describe_trusted_advisor_check_result.side_effect = PermissionError("PRIVATE")
+    with patch.object(finops, "get_client", return_value=client):
+        body = json.loads(finops.lambda_handler({
+            "tool_name": "get_trusted_advisor_cost_checks", "arguments": {},
+        }, None)["body"])
+    assert body["totalEstimatedMonthlySavings"] is None
     assert "PRIVATE" not in json.dumps(body)

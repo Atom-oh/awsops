@@ -511,6 +511,13 @@ class ProducerReceiptTest(unittest.TestCase):
             self.assertEqual(self.receipt(tool, {field: [], "truncated": False})["outcome"], "empty")
             self.assertEqual(self.receipt(tool, {field: [], "truncated": True})["outcome"], "partial")
 
+    def test_legacy_trusted_advisor_at_the_check_cap_has_unknown_remaining_coverage(self):
+        receipt = self.receipt("get_trusted_advisor_cost_checks", {
+            "checks": [{"status": "ok"}] * 15, "totalChecks": 15,
+        })
+        self.assertEqual(receipt["outcome"], "partial")
+        self.assertTrue(receipt["quality"]["unknown"])
+
 
 class BoundedProducerReceiptTest(unittest.TestCase):
     receipt = ProducerReceiptTest.receipt
