@@ -121,3 +121,18 @@ def test_trusted_advisor_failed_checks_do_not_return_a_zero_savings_total():
         }, None)["body"])
     assert body["totalEstimatedMonthlySavings"] is None
     assert "PRIVATE" not in json.dumps(body)
+
+
+def test_trusted_advisor_unavailable_status_does_not_return_zero_savings():
+    client = MagicMock()
+    client.describe_trusted_advisor_checks.return_value = {
+        "checks": [{"id": "fixture", "category": "cost_optimizing"}],
+    }
+    client.describe_trusted_advisor_check_result.return_value = {"result": {"status": "not_available"}}
+    with patch.object(finops, "get_client", return_value=client):
+        body = json.loads(finops.lambda_handler({
+            "tool_name": "get_trusted_advisor_cost_checks", "arguments": {},
+        }, None)["body"])
+    assert body["totalEstimatedMonthlySavings"] is None
+    assert terminal({"status": "success", "content": [{"json": body}]},
+                    tool="get_trusted_advisor_cost_checks")[0] == "unverified"

@@ -1,4 +1,5 @@
 [
+  {"name": "trusted advisor not available", "tool": "finops___get_trusted_advisor_cost_checks", "content": [{"json": {"checks": [{"status": "not_available"}], "totalChecks": 1, "truncated": false}}], "outcome": "unverified", "marker": "unknown"},
   {"name":"real find_ip_address empty", "tool":"network___find_ip_address", "content":[{"json":{"ip":"192.0.2.1","enis":[],"count":0}}], "outcome":"empty"},
   {"name":"empty ENIs with incomplete read", "content":[{"json":{"enis":[],"count":0,"partial":true}}], "outcome":"partial"},
   {"name":"malformed partial", "content":[{"json":{"eniId":"eni-0123","partial":"unknown"}}], "outcome":"partial", "marker":"invalid"},

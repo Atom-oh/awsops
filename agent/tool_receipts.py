@@ -461,6 +461,9 @@ def trusted_advisor_evidence(body, q):
         elif failed is None or not isinstance(check.get("status"), str) or not check["status"]:
             q["invalid"] = True
             outcomes.append("unverified")
+        elif check["status"] not in ("ok", "warning", "error"):
+            q["unknown"] = True  # includes Support's explicit not_available assessment state
+            outcomes.append("unverified")
         else:
             outcomes.append("success")  # warning/error health findings are valid retrieved evidence
     if len(checks) > 15 or q.get("truncated"):

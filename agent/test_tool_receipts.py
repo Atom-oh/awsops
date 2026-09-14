@@ -518,6 +518,14 @@ class ProducerReceiptTest(unittest.TestCase):
         self.assertEqual(receipt["outcome"], "partial")
         self.assertTrue(receipt["quality"]["unknown"])
 
+    def test_trusted_advisor_unavailable_check_is_not_a_completed_assessment(self):
+        for status in ("not_available", "future"):
+            receipt = self.receipt("get_trusted_advisor_cost_checks", {
+                "checks": [{"status": status}], "totalChecks": 1, "truncated": False,
+            })
+            self.assertEqual(receipt["outcome"], "unverified")
+            self.assertTrue(receipt["quality"]["unknown"])
+
 
 class BoundedProducerReceiptTest(unittest.TestCase):
     receipt = ProducerReceiptTest.receipt
