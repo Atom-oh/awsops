@@ -242,11 +242,16 @@ def test_build_context_contains_only_committed_inputs_even_when_sql_is_gitignore
     monkeypatch.setattr(subject, "ROOT", repository)
     monkeypatch.setattr(subject, "command", lambda argv, **kwargs: git(*argv[1:]))
     migration = subject.Migration()
-    context = migration.prepare_build()
+    previous_umask = os.umask(0o077)
+    try:
+        context = migration.prepare_build()
+    finally:
+        os.umask(previous_umask)
     assert (context / "terraform/v2/foundation/migrations/01ARZ3NDEKTSV4RRFFQ69G5FAV_reviewed.sql").read_text() == "reviewed input\n"
     assert not (context / "terraform/v2/foundation/migrations/local.sql").exists()
     assert not (context / ".git").exists()
     assert (context / "scripts/v2/migrate.mjs").stat().st_mode & 0o777 == 0o644
+    assert (context / "terraform/v2/foundation/migrations").stat().st_mode & 0o777 == 0o755
     with pytest.raises(subject.ReleaseError, match="migration_build_context_exists"):
         migration.prepare_build()
 

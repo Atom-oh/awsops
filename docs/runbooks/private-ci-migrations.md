@@ -31,7 +31,8 @@ build/read permissions.
 
 ## Execution contract
 
-First run `ci_origin_migration.py prepare-build`. It rejects untracked migration
+From the repository root, run `python3 scripts/v2/ci_origin_migration.py prepare-build`.
+It rejects untracked migration
 inputs and exports the allowlisted files from `git archive <reviewed SHA>` into
 the private receipt directory's `migration-build` child. Even gitignored SQL is
 excluded. In Actions, `GITHUB_OUTPUT` receives the `context` path. Build the
@@ -51,17 +52,27 @@ validated RDS TLS.
 
 Success requires the owned task to stop with exit zero, the exact running
 image digest, and a structured success log bound to the source, operation and
-random nonce. `ci_origin_migration.py verify --mode apply` rechecks the owned
+random nonce. `python3 scripts/v2/ci_origin_migration.py verify --mode apply` rechecks the owned
 database and running-task evidence before a consumer may promote an image.
 Preview receipts never authorize an apply/release. Missing,
-foreign or mismatched evidence fails closed. Task logs contain only static
-failure text or the structured success receipt; inspect a failure using an
-authorized operator with the same reviewed source, not by dumping credentials
-or SQL to Actions.
+foreign or mismatched evidence fails closed. The private CloudWatch stream also
+retains safe migration progress, stable row IDs from the report-schedule
+deduplication, reader/hardening outcomes, and a failure class/file identifier.
+User identities, arbitrary notices, raw SQL and driver/CLI errors are excluded.
+Unrecognized notices are explicitly counted as redacted; new audit notice forms
+need a safe projection before adopting them in CI. Failed runs mark row outcomes
+unconfirmed and nontransactional partial-state metadata unknown when unavailable.
+Do not treat a failed run's notices as proof that its transaction committed.
+
+The image uses Node 22, and the required migration suites run on that same major.
+The ledger must already use TEXT migration IDs. An INTEGER legacy ledger returns
+`bootstrap_required`; its one-time `BOOTSTRAP=1 make migrate` remains an explicitly
+authorized quiet-window operator action, not a CI override.
 
 ## Cleanup and residual authority
 
-Always invoke `cleanup` before deleting private workflow files. IAM permits
+From the repository root, invoke `python3 scripts/v2/ci_origin_migration.py cleanup`
+before deleting private workflow files. IAM permits
 StopTask only for the project/Purpose-tagged CI migration tasks; task tagging is
 permitted only at RunTask creation, not on existing web/worker/inventory tasks.
 The controller additionally stops

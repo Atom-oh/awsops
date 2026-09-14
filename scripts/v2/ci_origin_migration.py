@@ -113,6 +113,9 @@ class Migration:
                         with output.open("xb") as stream:
                             shutil.copyfileobj(source, stream)
                         output.chmod(0o644)  # Source is public code, readable by the image's nonroot user.
+            for directory in target.rglob("*"):
+                if directory.is_dir():
+                    directory.chmod(0o755)
             self.source()
             github_output = os.environ.get("GITHUB_OUTPUT")
             if github_output:

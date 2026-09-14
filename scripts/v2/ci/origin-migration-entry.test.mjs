@@ -48,7 +48,8 @@ child.spawnSync = function(binary, args, options) {
   return {
     status: process.env.TEST_CHILD_STATUS === 'null' ? null : Number(process.env.TEST_CHILD_STATUS),
     error: process.env.TEST_CHILD_ERROR ? new Error('SYNTHETIC_PASSWORD_DO_NOT_LOG') : undefined,
-    stdout: 'SYNTHETIC_PASSWORD_DO_NOT_LOG', stderr: 'SYNTHETIC_PASSWORD_DO_NOT_LOG',
+    stdout: process.env.TEST_CHILD_STDOUT || 'SYNTHETIC_PASSWORD_DO_NOT_LOG',
+    stderr: process.env.TEST_CHILD_STDERR || 'SYNTHETIC_PASSWORD_DO_NOT_LOG',
   };
 };
 syncBuiltinESMExports();
@@ -175,7 +176,8 @@ for (const [name, changes] of [
     const result = execute(changes);
     assert.equal(result.status, 1);
     assert.notEqual(result.child, null);
-    assert.equal(result.stdout, '');
+    assert.equal(JSON.parse(result.stdout).type, 'awsops-migration-audit');
+    assert.equal(JSON.parse(result.stdout).event, 'failed');
     assert.equal(result.stderr.trim(), 'origin migration failed; no successful receipt');
   });
 }
@@ -219,4 +221,38 @@ test('Docker packages the runner import closure, SQL, metadata, dependencies and
   assert.match(docker, /ARG SOURCE_COMMIT/);
   assert.match(docker, /test "\$\{#SOURCE_COMMIT\}" = 40/);
   assert.match(docker, /chmod 444 \.migration-source/);
+});
+
+test('preserves irreversible row IDs and progress without user identity or raw notices', () => {
+  const file = '01KZ3C7Q5SH0ZY5W7X1D2EFGKM_report_schedules_one_active_per_user.sql';
+  const result = execute({ TEST_CHILD_STDOUT: [
+    'pending (1): ignored opaque details',
+    `  [db] one-active de-dup: disabled report_schedules id=17 user_sub=${sentinel} type=weekly (details)`,
+    `  [db] unrecognized credential-bearing notice ${sentinel}`,
+    `  ✓ ${file}`,
+  ].join('\n') });
+  const events = result.stdout.trim().split('\n').map(JSON.parse);
+  assert.ok(events.some(e => e.event === 'schedule_disabled' && e.row_id === '17' && e.outcome === 'committed'));
+  assert.ok(events.some(e => e.event === 'applied' && e.migration === file));
+  assert.ok(events.some(e => e.event === 'notice_redacted' && e.count === 1));
+  assert.equal(events.at(-1).type, 'awsops-migration');
+  assert.equal(events.at(-1).status, 'succeeded');
+});
+
+test('failed migrations retain the safe file identity and disclose uncertain partial state', () => {
+  const file = '01KZ3C7Q5SH0ZY5W7X1D2EFGKM_report_schedules_one_active_per_user.sql';
+  const result = execute({ TEST_CHILD_STATUS: '1',
+    TEST_CHILD_STDOUT: `  [db] one-active de-dup: disabled report_schedules id=19 user_sub=${sentinel} type=weekly`,
+    TEST_CHILD_STDERR: `✗ migration ${file} failed (rolled back): ${sentinel}` });
+  const events = result.stdout.trim().split('\n').map(JSON.parse);
+  assert.ok(events.some(e => e.event === 'schedule_disabled' && e.outcome === 'unconfirmed'));
+  assert.ok(events.some(e => e.event === 'failed' && e.code === 'sql_failed' &&
+    e.migration === file && e.partial_state_possible === null));
+  assert.ok(events.every(e => e.type !== 'awsops-migration'));
+});
+
+test('integer ledger failures retain the bootstrap-required diagnostic', () => {
+  const result = execute({ TEST_CHILD_STATUS: '1',
+    TEST_CHILD_STDERR: 'schema_migrations.version is INTEGER but ULID migrations are pending.' });
+  assert.equal(JSON.parse(result.stdout).code, 'bootstrap_required');
 });

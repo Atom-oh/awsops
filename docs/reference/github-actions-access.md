@@ -35,7 +35,7 @@ latest-HEAD review/CI procedure govern deployment; additional environment
 reviewers are an explicit team choice. These GitHub settings are not managed
 by this Terraform module.
 
-**Dated deployment decision — 2026-09-14:** this operator-authorized CI work uses
+**Deployment decision — owner Junseok Oh (Atom-oh), 2026-09-14:** this owner-directed CI work uses
 an explicit production `workflow_dispatch` against reviewed `main`, with the
 latest-HEAD AI-review/fix/CI/merge procedure as its source gate. A second
 environment-reviewer approval is not configured, avoiding a duplicate approval
