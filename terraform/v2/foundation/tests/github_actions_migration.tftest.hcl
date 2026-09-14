@@ -148,6 +148,33 @@ run "scoped_private_migration" {
     error_message = "Launching and lost-response reconciliation require permissions in only the owned cluster."
   }
   assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_policy.controller[0].policy).Statement :
+      try(statement.Condition.StringEquals["aws:ResourceTag/Project"] == var.project, false) &&
+      try(statement.Condition.StringEquals["aws:ResourceTag/Purpose"] == "ci-migration", false)
+      if contains(statement.Action, "ecs:StopTask")
+    ])
+    error_message = "StopTask must not authorize web, inventory or worker tasks in the shared cluster."
+  }
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_policy.controller[0].policy).Statement :
+      try(statement.Condition.StringEquals["ecs:CreateAction"] == "RunTask", false) &&
+      try(statement.Condition.StringEquals["aws:RequestTag/Purpose"] == "ci-migration", false)
+      if contains(statement.Action, "ecs:TagResource") && endswith(statement.Resource, "/awsops-v2/*")
+    ])
+    error_message = "Task tags may be set only while creating a migration task, never on an existing workload."
+  }
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_policy.controller[0].policy).Statement :
+      try(statement.Condition.StringEquals["aws:RequestTag/Project"] == var.project, false) &&
+      try(statement.Condition.StringEquals["aws:RequestTag/Purpose"] == "ci-migration", false)
+      if contains(statement.Action, "ecs:RunTask")
+    ])
+    error_message = "Migration launches must carry the tags required for bounded cleanup permission."
+  }
+  assert {
     condition = (
       toset(keys(output.execution_config)) == toset([
         "version", "account", "region", "project", "subnets", "security_group",

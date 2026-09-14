@@ -133,6 +133,8 @@ resource "aws_iam_policy" "controller" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Current action-specific authority: https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html
+        # RegisterTaskDefinition supports task-definition ARN scope; Describe/Deregister do not.
         Effect    = "Allow", Action = ["ecs:RegisterTaskDefinition"], Resource = "${local.ecs}:task-definition/${local.family}:*"
         Condition = { StringEquals = { "aws:RequestedRegion" = var.region, "aws:RequestTag/Project" = var.project } }
       },
@@ -141,14 +143,32 @@ resource "aws_iam_policy" "controller" {
         Condition = { StringEquals = { "ecs:CreateAction" = "RegisterTaskDefinition", "aws:RequestTag/Project" = var.project } }
       },
       {
-        Effect    = "Allow", Action = ["ecs:RunTask"], Resource = "${local.ecs}:task-definition/${local.family}:*"
+        Effect = "Allow", Action = ["ecs:RunTask"], Resource = "${local.ecs}:task-definition/${local.family}:*"
+        Condition = {
+          ArnEquals    = { "ecs:cluster" = local.cluster }
+          StringEquals = { "aws:RequestTag/Project" = var.project, "aws:RequestTag/Purpose" = "ci-migration" }
+        }
+      },
+      {
+        Effect = "Allow", Action = ["ecs:TagResource"], Resource = "${local.ecs}:task/${var.project}/*"
+        Condition = {
+          StringEquals = {
+            "ecs:CreateAction"       = "RunTask", "aws:RequestTag/Project" = var.project,
+            "aws:RequestTag/Purpose" = "ci-migration"
+          }
+        }
+      },
+      {
+        Effect    = "Allow", Action = ["ecs:DescribeTasks"], Resource = "${local.ecs}:task/${var.project}/*"
         Condition = { ArnEquals = { "ecs:cluster" = local.cluster } }
       },
       {
-        Effect    = "Allow", Action = ["ecs:DescribeTasks", "ecs:StopTask"], Resource = "${local.ecs}:task/${var.project}/*"
-        Condition = { ArnEquals = { "ecs:cluster" = local.cluster } }
+        Effect = "Allow", Action = ["ecs:StopTask"], Resource = "${local.ecs}:task/${var.project}/*"
+        Condition = {
+          ArnEquals    = { "ecs:cluster" = local.cluster }
+          StringEquals = { "aws:ResourceTag/Project" = var.project, "aws:ResourceTag/Purpose" = "ci-migration" }
+        }
       },
-      { Effect = "Allow", Action = ["ecs:DescribeTaskDefinition"], Resource = "*", Condition = local.region_only },
       {
         Effect    = "Allow", Action = ["ecs:ListTasks"], Resource = "*"
         Condition = { ArnEquals = { "ecs:cluster" = local.cluster } }

@@ -31,8 +31,12 @@ build/read permissions.
 
 ## Execution contract
 
-Build `scripts/v2/ci/Dockerfile.origin-migration` from the repository root for
-`linux/arm64`, passing `SOURCE_COMMIT` equal to the reviewed source SHA.
+First run `ci_origin_migration.py prepare-build`. It rejects untracked migration
+inputs and exports the allowlisted files from `git archive <reviewed SHA>` into
+the private receipt directory's `migration-build` child. Even gitignored SQL is
+excluded. In Actions, `GITHUB_OUTPUT` receives the `context` path. Build the
+Dockerfile inside that exported context for `linux/arm64`, passing `SOURCE_COMMIT`
+equal to the reviewed source SHA. Do not build from the mutable checkout.
 Use a single platform manifest (`provenance=false`, `sbom=false`) and publish
 `migration-<SHA>`. The release workflow passes the build result digest directly
 to `ci_origin_migration.py`; a tag alone cannot establish build provenance.
@@ -47,7 +51,9 @@ validated RDS TLS.
 
 Success requires the owned task to stop with exit zero, the exact running
 image digest, and a structured success log bound to the source, operation and
-random nonce. Preview receipts never authorize an apply/release. Missing,
+random nonce. `ci_origin_migration.py verify --mode apply` rechecks the owned
+database and running-task evidence before a consumer may promote an image.
+Preview receipts never authorize an apply/release. Missing,
 foreign or mismatched evidence fails closed. Task logs contain only static
 failure text or the structured success receipt; inspect a failure using an
 authorized operator with the same reviewed source, not by dumping credentials
@@ -55,7 +61,10 @@ or SQL to Actions.
 
 ## Cleanup and residual authority
 
-Always invoke `cleanup` before deleting private workflow files. Cleanup stops
+Always invoke `cleanup` before deleting private workflow files. IAM permits
+StopTask only for the project/Purpose-tagged CI migration tasks; task tagging is
+permitted only at RunTask creation, not on existing web/worker/inventory tasks.
+The controller additionally stops
 only a task whose cluster, definition, nonce and task ARN match this run,
 including discovery after a lost launch response. A cleanup timeout is an
 operator follow-up, not successful completion.
@@ -69,4 +78,6 @@ Publishing migration code and executing it under the dedicated task role is
 database-administration authority. Main review/CI and production environment
 protection govern that authority. This capability does not establish schema
 compatibility for rolling back a web image; that remains a separate reviewed
-operator decision.
+operator decision. See the access contract's
+[residual executor authority](../reference/github-actions-access.md#optional-private-migration-authority);
+fixed controller parameters cannot narrow what stolen role credentials permit.

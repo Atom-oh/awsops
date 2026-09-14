@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -56,6 +57,7 @@ class FakeCommands:
         self.stopped = False
         self.source = COMMIT
         self.dirty = ""
+        self.untracked = ""
         self.database = copy.deepcopy(DATABASE)
         self.manifest = json.dumps({
             "schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
@@ -90,6 +92,9 @@ class FakeCommands:
             return self.source
         if argv == ["git", "status", "--porcelain", "--untracked-files=no"]:
             return self.dirty
+        if argv[:5] == ["git", "ls-files", "--others", "--exclude-standard", "--"]:
+            assert tuple(argv[5:]) == subject.BUILD_INPUTS
+            return self.untracked
         assert argv[0] == "aws", f"Unexpected command: {argv}"
         assert 0 < timeout <= 60
         assert argv[argv.index("--region") + 1] == REGION
@@ -195,12 +200,55 @@ def test_success_binds_source_private_target_digest_nonce_and_runtime(rig, mode)
     assert run["taskDefinition"] == DEFINITION and run["count"] == 1
     assert run["clientToken"] == run["startedBy"] == NONCE
     assert run["enableExecuteCommand"] is False
+    assert run["tags"] == [{"key": "Project", "value": PROJECT},
+                           {"key": "Purpose", "value": "ci-migration"}]
     assert run["networkConfiguration"]["awsvpcConfiguration"] == {
         "subnets": CONFIG["subnets"], "securityGroups": [CONFIG["security_group"]],
         "assignPublicIp": "DISABLED",
     }
     assert "overrides" not in run
     assert not any(service == "secretsmanager" for service, _ in rig.operations())
+
+
+def test_untracked_sql_cannot_receive_reviewed_source_identity(rig):
+    rig.untracked = "terraform/v2/foundation/migrations/01ARZ3NDEKTSV4RRFFQ69G5FAV_unreviewed.sql"
+    with pytest.raises(subject.ReleaseError, match="untracked_migration_input"):
+        subject.Migration()
+    assert rig.calls == []
+
+
+def test_build_context_contains_only_committed_inputs_even_when_sql_is_gitignored(rig, monkeypatch, tmp_path):
+    repository = tmp_path / "source"
+    repository.mkdir()
+    env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
+               GIT_AUTHOR_NAME="Fixture", GIT_COMMITTER_NAME="Fixture",
+               GIT_AUTHOR_EMAIL="fixture@example.invalid", GIT_COMMITTER_EMAIL="fixture@example.invalid")
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=repository, env=env,
+                                       stderr=subprocess.DEVNULL, text=True).strip()
+    git("init", "-q")
+    for path in subject.BUILD_INPUTS:
+        destination = repository / path
+        if path.endswith("/migrations"):
+            destination = destination / "01ARZ3NDEKTSV4RRFFQ69G5FAV_reviewed.sql"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("reviewed input\n")
+    (repository / ".gitignore").write_text("**/local.sql\n")
+    git("add", ".")
+    git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+    commit = git("rev-parse", "HEAD")
+    (repository / "terraform/v2/foundation/migrations/local.sql").write_text("unreviewed SQL\n")
+    monkeypatch.setenv("CI_COMMIT_SHA", commit)
+    monkeypatch.setattr(subject, "ROOT", repository)
+    monkeypatch.setattr(subject, "command", lambda argv, **kwargs: git(*argv[1:]))
+    migration = subject.Migration()
+    context = migration.prepare_build()
+    assert (context / "terraform/v2/foundation/migrations/01ARZ3NDEKTSV4RRFFQ69G5FAV_reviewed.sql").read_text() == "reviewed input\n"
+    assert not (context / "terraform/v2/foundation/migrations/local.sql").exists()
+    assert not (context / ".git").exists()
+    assert (context / "scripts/v2/migrate.mjs").stat().st_mode & 0o777 == 0o644
+    with pytest.raises(subject.ReleaseError, match="migration_build_context_exists"):
+        migration.prepare_build()
 
 
 @pytest.mark.parametrize("key,value", [

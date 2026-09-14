@@ -9,16 +9,31 @@ is shared by web and AgentCore release workflows.
 """
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import tarfile
 import tempfile
 import time
 import uuid
 
 from ci_origin_common import (
     ROOT, ReleaseError, command, decode_json, private_bytes, require, sha256_digest,
+)
+
+BUILD_INPUTS = (
+    "scripts/v2/ci/Dockerfile.origin-migration",
+    "scripts/v2/ci/Dockerfile.origin-migration.dockerignore",
+    "scripts/v2/ci/origin-migration-entry.mjs",
+    "scripts/v2/package.json", "scripts/v2/package-lock.json",
+    "scripts/v2/migrate.mjs", "scripts/v2/migrate-core.mjs",
+    "scripts/v2/migrate-tls.mjs", "scripts/v2/migration-context.mjs",
+    "scripts/v2/eks/rds-ca-bundle.pem", "terraform/v2/foundation/migrations",
+    "web/package.json",
 )
 
 
@@ -57,7 +72,8 @@ class Migration:
                 and self.config["log_group"] == "/ecs/" + self.family, "migration_network_scope")
         self.path = Path(os.environ.get("CI_MIGRATION_RECEIPT", ""))
         require(self.path.is_absolute() and self.path.parent.is_dir()
-                and not self.path.resolve().is_relative_to(ROOT), "invalid_migration_receipt")
+                and not self.path.resolve().is_relative_to(ROOT)
+                and not any(c in str(self.path) for c in "\r\n"), "invalid_migration_receipt")
         self.deadline = None
         self.source()
 
@@ -65,6 +81,48 @@ class Migration:
         require(command(["git", "rev-parse", "HEAD"]) == self.context["commit"]
                 and not command(["git", "status", "--porcelain", "--untracked-files=no"]),
                 "migration_source_changed")
+        require(not command(["git", "ls-files", "--others", "--exclude-standard", "--", *BUILD_INPUTS]),
+                "untracked_migration_input")
+
+    def prepare_build(self):
+        """Export only committed inputs; ignored/untracked SQL can never enter the image."""
+        self.source()
+        target = self.path.parent / "migration-build"
+        require(not target.exists() and not target.is_symlink(), "migration_build_context_exists")
+        try:
+            result = subprocess.run(
+                ["git", "archive", "--format=tar", self.context["commit"], "--", *BUILD_INPUTS],
+                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=True,
+            )
+            require(0 < len(result.stdout) <= 16 * 1024 * 1024, "migration_build_context_size")
+            target.mkdir(mode=0o700)
+            with tarfile.open(fileobj=io.BytesIO(result.stdout)) as archive:
+                for member in archive.getmembers():
+                    path = Path(member.name)
+                    require(not path.is_absolute() and ".." not in path.parts
+                            and (member.isdir() or member.isfile()), "migration_archive_entry")
+                    output = target / path
+                    if member.isdir():
+                        output.mkdir(parents=True, exist_ok=True)
+                    else:
+                        output.parent.mkdir(parents=True, exist_ok=True)
+                        source = archive.extractfile(member)
+                        require(source is not None, "migration_archive_entry")
+                        with output.open("xb") as stream:
+                            shutil.copyfileobj(source, stream)
+                        output.chmod(0o644)  # Source is public code, readable by the image's nonroot user.
+            self.source()
+            github_output = os.environ.get("GITHUB_OUTPUT")
+            if github_output:
+                with open(github_output, "a") as stream:
+                    stream.write(f"context={target}\n")
+            return target
+        except (ReleaseError, OSError, subprocess.SubprocessError, tarfile.TarError) as error:
+            if target.is_dir():
+                shutil.rmtree(target)
+            if isinstance(error, ReleaseError):
+                raise
+            raise ReleaseError("migration_build_context_failed") from None
 
     def aws(self, service, operation, **params):
         timeout = 60 if self.deadline is None else min(60, self.deadline - time.monotonic())
@@ -204,6 +262,8 @@ class Migration:
         self.source()
         params = dict(cluster=self.cluster, taskDefinition=arn, launchType="FARGATE", count=1,
                       clientToken=nonce, startedBy=nonce, enableExecuteCommand=False,
+                      tags=[{"key": "Project", "value": self.context["project"]},
+                            {"key": "Purpose", "value": "ci-migration"}],
                       networkConfiguration={"awsvpcConfiguration": {
                           "subnets": config["subnets"], "securityGroups": [config["security_group"]],
                           "assignPublicIp": "DISABLED"}})
@@ -313,7 +373,7 @@ class Migration:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["check", "run", "cleanup"])
+    parser.add_argument("operation", choices=["check", "prepare-build", "run", "verify", "cleanup"])
     parser.add_argument("--digest")
     parser.add_argument("--mode", choices=["preview", "apply"], default="preview")
     args = parser.parse_args()
@@ -321,6 +381,10 @@ def main():
         migration = Migration()
         if args.operation == "run":
             migration.run(args.digest, args.mode)
+        elif args.operation == "prepare-build":
+            migration.prepare_build()
+        elif args.operation == "verify":
+            migration.verify_receipt(migration.target(), args.mode)
         elif args.operation == "cleanup":
             migration.cleanup()
         else:
