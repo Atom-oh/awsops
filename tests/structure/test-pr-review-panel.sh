@@ -113,6 +113,24 @@ assert_grep_match "both preflights pass" 'Kiro preflight passed: kiro-gpt' "$OUT
 assert_eq "healthy run leaves no flags" "0" "$(count_flags)"
 assert_file_absent "runtime agent copy is removed after the run" ".kiro/agents/pr-review-readonly.json"
 
+# 1b. The copy is also removed when the run is cancelled mid-flight (SIGTERM, as with
+# cancel-in-progress) — the EXIT trap, not only the happy path after `wait`, owns the cleanup.
+write_kiro_stub <<'EOF'
+is_preflight && { echo "> PONG"; exit 0; }
+sleep 20
+frame "no findings"
+EOF
+# setsid gives the panel its own process group so the stub cells can be terminated with it.
+PATH="$T_STUB:$PATH" PANEL_TIMEOUT=30 KIRO_PANEL_TIMEOUT=30 PANEL_RETRIES=1 KIRO_PREFLIGHT_TIMEOUT=30 \
+  setsid bash "$PANEL" "$T_STUB/diff.txt" "$T_STUB/lenses" "$T_STUB/work" >/dev/null 2>&1 &
+PANEL_PID=$!
+for _ in $(seq 1 100); do [ -f .kiro/agents/pr-review-readonly.json ] && break; sleep 0.1; done
+assert_file_exists "agent copy is installed while cells run" ".kiro/agents/pr-review-readonly.json"
+PANEL_PGID=$(ps -o pgid= -p "$PANEL_PID" 2>/dev/null | tr -d ' ')
+kill -TERM "$PANEL_PID" 2>/dev/null; wait "$PANEL_PID" 2>/dev/null
+[ -n "$PANEL_PGID" ] && kill -TERM -- "-$PANEL_PGID" 2>/dev/null
+assert_file_absent "cancelled run removes the runtime agent copy" ".kiro/agents/pr-review-readonly.json"
+
 # 2. v2 quota (stderr message, rc=0, empty stdout) in review cells: no retry, flag, cause named.
 write_kiro_stub <<'EOF'
 is_preflight && { echo "> PONG"; exit 0; }
@@ -183,6 +201,44 @@ assert_file_absent "quota during preflight prevents every Kiro review" "$T_STUB/
 assert_grep_match "preflight quota is reported with the reset date" \
   '::error::Kiro monthly request quota exhausted for KIRO_API_KEY \(preflight kiro-opus\).*reset on 10/01' "$OUT"
 assert_file_exists "preflight quota leaves kiro-quota.flag" "$T_STUB/work/kiro-quota.flag"
+assert_grep_match "skip lines name the preflight quota as the reason" \
+  '\[skip\] kiro-gpt/L5 \(monthly quota exhausted at preflight\)' "$OUT"
+
+# 6b. Preflight PONG is an exact comparison after stripping decoration — a refusal that merely
+# contains the token, or extra text, must not release PR input; prefix/footer/blank lines are fine.
+write_kiro_stub <<'EOF'
+is_preflight && { echo "> I cannot reply with only PONG without more context."; exit 0; }
+touch "$0.review-started"
+frame "no findings"
+EOF
+OUT=$(run_panel)
+assert_file_absent "a reply merely containing PONG cannot release PR input" "$T_STUB/kiro-cli.review-started"
+assert_grep_match "non-PONG reply is reported as a preflight failure" '::error::Kiro preflight failed for kiro-opus \(exit 0\)' "$OUT"
+write_kiro_stub <<'EOF'
+is_preflight && { printf '\033[38;5;141m> \033[0mPONG\n\n\xe2\x96\xb8 Credits: 0.01 \xe2\x80\xa2 Time: 1.2s\n'; exit 0; }
+frame "no findings"
+EOF
+OUT=$(run_panel)
+assert_grep_match "PONG with ANSI prefix, blank line and usage footer passes" 'Panel responded \(12 / 12 cells\)' "$OUT"
+
+# 6c. The JSON-invalid fallback signature is anchored on this repo's agent file: another broken
+# kiro-cli config on the runner is not mistaken for `--agent` being ignored.
+write_kiro_stub <<'EOF'
+is_preflight && { echo "> PONG"; exit 0; }
+echo "Json supplied at /home/runner/.kiro/settings/mcp.json is invalid" >&2
+frame "no findings"
+EOF
+OUT=$(run_panel)
+assert_grep_match "unrelated invalid-JSON stderr keeps the cell" 'Panel responded \(12 / 12 cells\)' "$OUT"
+assert_eq "unrelated invalid-JSON stderr leaves no flags" "0" "$(count_flags)"
+write_kiro_stub <<'EOF'
+is_preflight && { echo "> PONG"; exit 0; }
+echo "Json supplied at $PWD/.kiro/agents/pr-review-readonly.json is invalid" >&2
+frame "no findings"
+EOF
+OUT=$(run_panel)
+assert_grep_match "invalid agent JSON on stderr is treated as fallback" '\[agent-fallback\] kiro-opus-L2' "$OUT"
+assert_file_exists "invalid agent JSON on stderr raises kiro-agent-fallback.flag" "$T_STUB/work/kiro-agent-fallback.flag"
 
 # 7. Preflight with rc!=0 or a non-PONG reply withholds PR input; a later healthy run clears flags.
 write_kiro_stub <<'EOF'

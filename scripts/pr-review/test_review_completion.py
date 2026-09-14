@@ -91,14 +91,18 @@ if cli == "kiro-cli":
         assert "DIFF_DATA_ONLY" not in prompt and sys.stdin.read() == ""
         key = model + "-preflight"
         countfile = state / (key + ".count")
-        countfile.write_text(str(int(countfile.read_text()) + 1 if countfile.exists() else 1))
-        mode = json.loads((state / "plan.json").read_text()).get(key, ["success"])[0]
+        count = int(countfile.read_text()) + 1 if countfile.exists() else 1
+        countfile.write_text(str(count))
+        modes = json.loads((state / "plan.json").read_text()).get(key, ["success"])
+        mode = modes[min(count - 1, len(modes) - 1)]  # same per-attempt convention as review cells
         if mode == "fallback":
             print("Error: no agent with name pr-review-readonly found. Falling back to user specified default", file=sys.stderr)
         if mode == "quota":
             print("Monthly request limit reached\nThe limits reset on 10/01.", file=sys.stderr); sys.exit(0)
         if mode == "silent":
             sys.exit(0)
+        if mode == "refusal":
+            print("> I cannot reply with only PONG without more context."); sys.exit(0)
         print("\x1b[38;5;141m> \x1b[0mPONG"); sys.exit(0)
 if cli == "claude":
     key = "chair-primary" if "fable" in os.environ["ANTHROPIC_MODEL"] else "chair-fallback"
@@ -547,6 +551,14 @@ class ReviewCompletion(unittest.TestCase):
         self.assertTrue((self.work / "kiro-preflight.flag").exists())
         self.assertFalse((self.work / "kiro-quota.flag").exists())
         self.assertFalse((self.work / "kiro-agent-fallback.flag").exists())
+
+    def test_preflight_reply_must_be_exactly_pong(self):
+        self.plan({"kiro-gpt-preflight": ["refusal"]})
+        result = self.panel()
+        self.assertEqual(self.kiro_review_calls(), [])
+        self.assertIn("::error::Kiro preflight failed for kiro-gpt (exit 0)", result.stderr)
+        self.assertTrue((self.work / "kiro-preflight.flag").exists())
+        self.assertIn("[skip] kiro-opus/L2 (preflight failed)", result.stderr)
 
     def test_quota_exhausted_cell_is_not_retried_and_names_the_cause(self):
         self.plan({"kiro-gpt-L3": ["quota"]})
