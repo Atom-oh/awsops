@@ -163,6 +163,13 @@ last-success/pruning. Other transiently incomplete SDK records are skipped to re
 Unreachable expected accounts preserve last-good rows and do not advance success. A failed base
 query fails the type and skips pruning. Hydrate fallback itself does not override later partial/DB failures.
 
+An empty Steampipe scan probes the same per-account connection through
+`aws_<account_id>.aws_sts_caller_identity`, the table supplied by the pinned AWS plugin.
+Only exactly one row matching that account verifies an empty result. A missing, mismatched or
+duplicate identity, or a connection/query/close error, leaves the account unverified: the run
+remains partial and retains its previous inventory. Apply the sync Lambda update through a
+reviewed saved plan; rebuilding only the web image does not deploy this correction.
+
 Run these queries through an already verified Aurora connection:
 
 ```sql
