@@ -43,7 +43,9 @@ jobs:
     needs: [guard]
     if: github.repository == 'Atom-oh/awsops' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     name: Verify and release reviewed main
-    runs-on: awsops-claude-arm
+    # The review-only ARC image has a Docker CLI but no daemon. Builds need the
+    # standard ARM64 VM; database execution remains inside private Fargate.
+    runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 45
     permissions:

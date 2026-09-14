@@ -23,8 +23,10 @@ through a reviewed saved operator plan. Keep
 `github_actions_migration_secret_arns=[]` on the web role. Provision the separate
 [private migration executor](private-ci-migrations.md) with existing private
 subnets and the web service security group. Only that Fargate task receives
-master-secret/CMK access. The `awsops-claude-arm` runner needs AWS API access;
-it does not need a network route to Aurora or access to its password.
+master-secret/CMK access. The release job uses the GitHub-hosted
+`ubuntu-24.04-arm` VM, which provides Docker/Buildx. It needs only AWS API and
+HTTPS application access; database execution remains in private Fargate.
+The review-only ARC image has no Docker daemon and is not a build runner.
 
 Create the non-admin [deployment verifier](deployment-verifier.md) and store its
 value in the provisioned Secrets Manager secret. Do not place application
