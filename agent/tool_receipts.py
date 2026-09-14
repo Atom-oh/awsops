@@ -47,74 +47,99 @@ def number(value):
 
 
 def quality(body):
-    """Explicit quality only. Publication and original-source clocks keep producer names."""
+    """Explicit quality only. Invalid present fields taint; absent fields stay absent."""
     out = {}
-    for key in ("partial",):
-        if type(body.get(key)) is bool:
-            out[key] = body[key]
+
+    def fields(src, dest, rules):
+        for key, valid in rules.items():
+            if key in src:
+                if valid(src[key]):
+                    dest[key] = src[key]
+                else:
+                    out["invalid"] = True
+
+    def one_of(values):
+        return lambda v: isinstance(v, str) and v in values
+
+    boolean = lambda v: type(v) is bool
+    clock = lambda v: v is None or matching(v, r"\d{4}-\d\d-\d\d[T ][0-9:.+-]+Z?", 40)
+    fields(body, out, {"partial": boolean})
     if "unknown" in body:
-        out["unknown"] = bool(body["unknown"])
-    selection = body.get("selection")
-    if isinstance(selection, dict) and selection.get("status") in {"all", "resolved", "not_found", "ambiguous"}:
-        out["selection"] = selection["status"]
-    route = body.get("routeSelection")
-    if isinstance(route, dict):
-        out["routeSelection"] = {"status": "selected" if route.get("status") == "selected" else "unknown"}
-        if route.get("basis") in ("explicit", "main"):
-            out["routeSelection"]["basis"] = route["basis"]
-        if isinstance(route.get("reason"), str) and route["reason"] in REASONS:
-            out["routeSelection"]["reason"] = route["reason"]
-    trunc = body.get("truncation")
-    if isinstance(trunc, dict):
-        out["truncation"] = {k: trunc[k] for k in ("nodes", "edges") if type(trunc.get(k)) is bool}
-        for k in ("node_limit", "edge_limit"):
-            if number(trunc.get(k)):
-                out["truncation"][k] = trunc[k]
-    coll = body.get("collection")
-    if isinstance(coll, dict):
-        c = {"status": coll.get("status") if coll.get("status") in STATUS else "unknown"}
-        for k in ("stale", "retainedPrevious", "snapshotConsistent"):
-            if type(coll.get(k)) is bool:
-                c[k] = coll[k]
-        for k in ("captured_at", "attempted_at"):
-            if coll.get(k) is None or matching(coll.get(k), r"\d{4}-\d\d-\d\d[T ][0-9:.+-]+Z?", 40):
-                c[k] = coll.get(k)
-        if coll.get("evidenceKind") in ("inventory", "trace"):
-            c["evidenceKind"] = coll["evidenceKind"]
-        for key in ("sources", "publishedSources"):
-            if key not in coll:
-                continue
-            raw = coll[key]
-            c[key] = []
-            if not isinstance(raw, list):
-                out["truncated"] = True
-                continue
-            if len(raw) > 8:
-                out["truncated"] = True
-            for source in raw[:8]:
-                if not isinstance(source, dict):
-                    out["truncated"] = True
+        if type(body["unknown"]) is bool or isinstance(body["unknown"], list):
+            out["unknown"] = bool(body["unknown"])
+        else:
+            out["invalid"] = True
+    for key in ("selection", "routeSelection", "truncation", "collection"):
+        if key not in body:
+            continue
+        value = body[key]
+        if not isinstance(value, dict):
+            out["invalid"] = True
+            continue
+        if key == "selection":
+            if one_of({"all", "resolved", "not_found", "ambiguous"})(value.get("status")):
+                out[key] = value["status"]
+            else:
+                out["invalid"] = True
+        elif key == "routeSelection":
+            out[key] = {"status": "selected" if value.get("status") == "selected" else "unknown"}
+            if not one_of({"selected", "unknown"})(value.get("status")):
+                out["invalid"] = True
+            fields(value, out[key], {"basis": lambda v: v is None or one_of({"explicit", "main"})(v),
+                                     "reason": one_of(REASONS)})
+        elif key == "truncation":
+            out[key] = {}
+            if value.keys() - {"nodes", "edges", "node_limit", "edge_limit"}:
+                out["unsupported"] = True
+            fields(value, out[key], {"nodes": boolean, "edges": boolean,
+                                     "node_limit": number, "edge_limit": number})
+        else:
+            c = {"status": value["status"] if one_of(STATUS)(value.get("status")) else "unknown"}
+            if c["status"] == "unknown":
+                out["invalid"] = True
+            fields(value, c, {"stale": boolean, "retainedPrevious": boolean, "snapshotConsistent": boolean,
+                              "captured_at": clock, "attempted_at": clock,
+                              "evidenceKind": one_of({"inventory", "trace"})})
+            for name in ("sources", "publishedSources"):
+                if name not in value:
                     continue
-                s = {"status": source.get("status") if source.get("status") in STATUS else "unknown"}
-                if matching(source.get("sourceId"), r"(?:inventory:)?[a-z][a-z0-9_-]*", 80):
-                    s["sourceId"] = source["sourceId"]
-                if source.get("scope") in ("account", "aggregate"):
-                    s["scope"] = source["scope"]
-                if source.get("producerStatus") in ("succeeded", "failed", "partial", "running", "unknown"):
-                    s["producerStatus"] = source["producerStatus"]
-                for k in ("capturedAtMs", "lastSuccessAtMs", "attemptedAtMs", "finishedAtMs", "itemCount"):
-                    if source.get(k) is None or number(source.get(k)):
-                        s[k] = source.get(k)
-                if isinstance(source.get("reasons"), list):
-                    s["reasons"] = [r for r in source["reasons"][:6] if isinstance(r, str) and r in REASONS]
-                c[key].append(s)
-        out["collection"] = c
+                raw = value[name]
+                c[name] = []
+                if not isinstance(raw, list):
+                    out["invalid"] = True
+                    continue
+                if len(raw) > 8:
+                    out["truncated"] = True
+                for source in raw[:8]:
+                    if not isinstance(source, dict):
+                        out["invalid"] = True
+                        continue
+                    record = {"status": source["status"] if one_of(STATUS)(source.get("status")) else "unknown"}
+                    if record["status"] == "unknown":
+                        out["invalid"] = True
+                    fields(source, record, {
+                        "sourceId": lambda v: matching(v, r"(?:inventory:)?[a-z][a-z0-9_-]*", 80),
+                        "scope": one_of({"account", "aggregate"}),
+                        "producerStatus": one_of({"succeeded", "failed", "partial", "running", "unknown"}),
+                        **{k: lambda v: v is None or number(v) for k in
+                           ("capturedAtMs", "lastSuccessAtMs", "attemptedAtMs", "finishedAtMs", "itemCount")},
+                    })
+                    if "reasons" in source:
+                        raw_reasons = source["reasons"]
+                        if not isinstance(raw_reasons, list):
+                            out["invalid"] = True
+                        else:
+                            record["reasons"] = [r for r in raw_reasons[:6] if one_of(REASONS)(r)]
+                            if len(record["reasons"]) != len(raw_reasons):
+                                out["truncated"] = True
+                    c[name].append(record)
+            out[key] = c
     return out
 
 
 def incomplete(q):
     coll = q.get("collection", {})
-    return (q.get("partial") or q.get("unknown") or q.get("truncated")
+    return (q.get("partial") or q.get("unknown") or q.get("truncated") or q.get("invalid") or q.get("unsupported")
             or q.get("selection") in ("not_found", "ambiguous")
             or q.get("routeSelection", {}).get("status") == "unknown"
             or any(q.get("truncation", {}).get(k) is True for k in ("nodes", "edges"))
@@ -138,18 +163,22 @@ def terminal(result, ignored_texts=()):
     if result.get("status") != "success":
         return "unverified", {}, {}
     content = result.get("content")
-    if not isinstance(content, list) or not content:
+    if not isinstance(content, list):
+        return "unverified", {"invalid": True}, {}
+    if not content:
         return "empty", {}, {}
     outcomes, q, observed = [], {}, {}
     # Scan bounded content; language-hook reminders are non-JSON and not evidence.
     for block in content[:16]:
-        if not isinstance(block, dict):
+        if not isinstance(block, dict) or len(block) != 1 or not ({"json", "text"} & block.keys()):
+            q["unsupported"] = True
+            outcomes.append("unverified")
             continue
         raw = block.get("json", block.get("text"))
-        if isinstance(raw, str) and raw in ignored_texts:
+        if "text" in block and isinstance(raw, str) and raw in ignored_texts:
             continue  # the existing language hook's fixed reminder, not tool evidence
         try:
-            body = decode(raw)
+            body = raw if "json" in block else decode(raw)
             if isinstance(body, dict) and "statusCode" in body:
                 if type(body["statusCode"]) is not int:
                     outcomes.append("unverified")
@@ -162,21 +191,30 @@ def terminal(result, ignored_texts=()):
                     continue
                 body = decode(body.get("body"))
             if isinstance(body, dict):
-                q.update(quality(body))
+                projected = quality(body)
+                for key in ("partial", "unknown", "truncated", "invalid", "unsupported"):
+                    if q.get(key) is True:
+                        projected[key] = True
+                q.update(projected)
                 observed.update(scope(body.get("observedScope")))  # never infer from request/account defaults
                 if body.get("error") or body.get("isError") is True:
                     outcomes.append("error")
                 elif incomplete(q):
                     outcomes.append("partial")
                 elif (not body or body.get("collection", {}).get("status") == "empty"
+                      or (body.get("enis") == [] and type(body.get("count")) is int and body["count"] == 0)
                       or any(body.get(k) == [] for k in ("items", "data", "rows", "results"))):
                     outcomes.append("empty")
                 else:
                     outcomes.append("success")
             elif isinstance(body, list):
                 outcomes.append("success" if body else "empty")
+            else:
+                q["unsupported"] = True
+                outcomes.append("unverified")
         except (ValueError, TypeError, AttributeError, RecursionError):
             # Unknown oversized/malformed data is never successful evidence.
+            q["invalid"] = True
             outcomes.append("unverified")
     if len(content) > 16:
         q["truncated"] = True
@@ -242,8 +280,11 @@ class ReceiptTracker:
                 outcome = "unverified"
             receipt.update(outcome=outcome, terminalObservedAt=now, quality=q, observedScope=observed)
 
-    def frames(self):
+    def frames(self, completed=False):
         for receipt in self.calls.values():
             yield {"receipt": receipt}
         if self.truncated:
             yield {"evidenceTruncated": True}
+        if completed:
+            # Receipt-set delivery only; this does not certify successful tools or source freshness.
+            yield {"completion": {"version": 1, "receiptCount": len(self.calls)}}

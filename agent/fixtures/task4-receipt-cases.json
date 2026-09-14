@@ -1,0 +1,17 @@
+[
+  {"name":"real find_ip_address empty", "tool":"network___find_ip_address", "content":[{"json":{"ip":"192.0.2.1","enis":[],"count":0}}], "outcome":"empty"},
+  {"name":"empty ENIs with incomplete read", "content":[{"json":{"enis":[],"count":0,"partial":true}}], "outcome":"partial"},
+  {"name":"malformed partial", "content":[{"json":{"eniId":"eni-0123","partial":"unknown"}}], "outcome":"partial", "marker":"invalid"},
+  {"name":"malformed unknown", "content":[{"json":{"eniId":"eni-0123","unknown":"unknown"}}], "outcome":"partial", "marker":"invalid"},
+  {"name":"malformed truncation", "content":[{"json":{"eniId":"eni-0123","truncation":{"nodes":"true"}}}], "outcome":"partial", "marker":"invalid"},
+  {"name":"malformed collection", "content":[{"json":{"eniId":"eni-0123","collection":null}}], "outcome":"partial", "marker":"invalid"},
+  {"name":"malformed source clock", "content":[{"json":{"collection":{"status":"ok","sources":[{"status":"ok","capturedAtMs":"unknown"}]}}}], "outcome":"partial", "marker":"invalid"},
+  {"name":"successful object and image", "content":[{"json":{"eniId":"eni-0123"}},{"image":{"format":"png","source":{"bytes":"PRIVATE"}}}], "outcome":"partial", "marker":"unsupported"},
+  {"name":"successful object and document", "content":[{"json":{"eniId":"eni-0123"}},{"document":{"format":"txt","name":"PRIVATE","source":{"text":"PRIVATE"}}}], "outcome":"partial", "marker":"unsupported"},
+  {"name":"successful object and scalar", "content":[{"json":{"eniId":"eni-0123"}},{"json":"PRIVATE"}], "outcome":"partial", "marker":"unsupported"},
+  {"name":"scalar only", "content":[{"json":12}], "outcome":"unverified", "marker":"unsupported"},
+  {"name":"malformed block", "content":[{"json":{"eniId":"eni-0123"}},null], "outcome":"partial", "marker":"unsupported"},
+  {"name":"taint survives later valid quality", "content":[{"json":{"partial":true}},{"json":{"partial":false}}], "outcome":"partial"},
+  {"name":"unsupported truncation field", "content":[{"json":{"eniId":"eni-0123","truncation":{"futureLimit":true}}}], "outcome":"partial", "marker":"unsupported"},
+  {"name":"absent quality remains valid", "content":[{"json":{"eniId":"eni-0123"}}], "outcome":"success"}
+]

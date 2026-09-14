@@ -145,3 +145,44 @@ class ToolReceiptTest(unittest.TestCase):
         many = collect([use(f"call-{i}") for i in range(100)])
         self.assertLessEqual(len([f for f in many if "receipt" in f]), 32)
         self.assertTrue(any(f.get("evidenceTruncated") for f in many))
+
+
+class ReviewReceiptTest(unittest.TestCase):
+    def test_public_result_contract_variants(self):
+        cases = json.loads((Path(__file__).parent / "fixtures/task4-receipt-cases.json").read_text())
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                start = use("a")
+                start["message"]["content"][0]["toolUse"]["name"] = case.get("tool", "network___inspect")
+                end = result("a", {})
+                end["message"]["content"][0]["toolResult"]["content"] = case["content"]
+                frames = collect([start, end, {"data": "answer"}])
+                receipt = next(f["receipt"] for f in frames if "receipt" in f)
+                self.assertEqual(receipt["outcome"], case["outcome"])
+                if case.get("marker"):
+                    self.assertTrue(receipt["quality"].get(case["marker"]))
+                self.assertNotIn("PRIVATE", json.dumps(frames))
+
+    def test_completion_follows_all_same_tool_receipts_including_unfinished(self):
+        frames = collect([use("a"), use("b"), result("a", {"id": "eni-0123"})])
+        self.assertEqual(frames[-1], {"completion": {"version": 1, "receiptCount": 2}})
+        self.assertEqual([f["receipt"]["outcome"] for f in frames if "receipt" in f], ["success", "unfinished"])
+
+    def test_failed_invocation_retains_receipts_but_has_no_completion(self):
+        class Interrupted:
+            async def stream_async(self, _):
+                yield use("a")
+                yield use("b")
+                yield result("a", {"id": "eni-0123"})
+                raise RuntimeError("PRIVATE")
+        frames = []
+
+        async def run():
+            with self.assertRaises(RuntimeError):
+                async for frame in agent._stream_text(Interrupted(), "inspect"):
+                    frames.append(frame)
+        asyncio.run(run())
+        self.assertFalse(any("completion" in f for f in frames))
+        self.assertEqual(frames[-1], {"runtimeOutcome": "error"})
+        self.assertEqual([f["receipt"]["outcome"] for f in frames if "receipt" in f], ["success", "unfinished"])
+        self.assertNotIn("PRIVATE", json.dumps(frames))

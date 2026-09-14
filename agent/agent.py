@@ -1005,7 +1005,7 @@ async def _stream_text(agent, user_input):
         frame = flush_tool_input(cur_tid)
         if frame:
             yield frame
-    for frame in receipts.frames():
+    for frame in receipts.frames(completed=True):
         yield frame
 
 
