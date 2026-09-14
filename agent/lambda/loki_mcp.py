@@ -62,14 +62,15 @@ def _ds():
     return creds
 
 
-def _get(creds, path, params):
+def _get(creds, path, params, *, with_status=False):
     url = creds["endpoint"].rstrip("/") + path + ("?" + urlencode(params, doseq=True) if params else "")
     status, data = http_json("GET", url, headers=_headers(creds))
     if status >= 400:
         raise _ApiError(f"Loki HTTP {status}: {str(data.get('raw') or data.get('error') or data)[:300]}")
     if isinstance(data, dict) and data.get("status") and data.get("status") != "success":
         raise _ApiError(f"Loki query failed: {data.get('error', 'unknown')}")
-    return data.get("data") if isinstance(data, dict) else data
+    result = data.get("data") if isinstance(data, dict) else data
+    return (result, isinstance(data, dict) and data.get("status") == "success") if with_status else result
 
 
 def _bound(data):
@@ -132,19 +133,26 @@ def loki_query(args):
     return ok({"truncated": tr, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
 
 
+def _list_result(observed, field):
+    data, status_ok = observed
+    rows = data[:1000] if isinstance(data, list) else []
+    truncated = isinstance(data, list) and len(data) > 1000
+    state = ("unknown" if not status_ok or not isinstance(data, list) else
+             "partial" if truncated or not all(isinstance(row, str) for row in rows) else
+             "ok" if rows else "empty")
+    return ok({field: rows, "truncated": truncated, "collectionStatus": state})
+
+
 def loki_labels(args):
-    data = _get(_ds(), "/loki/api/v1/labels", {})
-    names = data if isinstance(data, list) else []
-    return ok({"labels": names[:1000], "truncated": len(names) > 1000})
+    return _list_result(_get(_ds(), "/loki/api/v1/labels", {}, with_status=True), "labels")
 
 
 def loki_label_values(args):
     label = (args.get("label") or "").strip()
     if not label:
         return err("label required")
-    data = _get(_ds(), f"/loki/api/v1/label/{quote(label, safe='')}/values", {})
-    values = data if isinstance(data, list) else []
-    return ok({"values": values[:1000], "truncated": len(values) > 1000})
+    return _list_result(_get(_ds(), f"/loki/api/v1/label/{quote(label, safe='')}/values", {},
+                            with_status=True), "values")
 
 
 def loki_schema(args):

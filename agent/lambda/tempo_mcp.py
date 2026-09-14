@@ -100,12 +100,17 @@ def tempo_search(args):
     if args.get("limit"):
         params["limit"] = str(args["limit"])
     data = _get(_ds(), "/api/search", params)
-    traces = data.get("traces", []) if isinstance(data, dict) else []
-    truncated = len(traces) > MAX_TRACES
-    payload, btr = _byte_bound({"traces": traces[:MAX_TRACES], "metrics": data.get("metrics") if isinstance(data, dict) else None})
+    raw = data.get("traces") if isinstance(data, dict) else None
+    traces = raw[:MAX_TRACES] if isinstance(raw, list) else []
+    truncated = isinstance(raw, list) and len(raw) > MAX_TRACES
+    state = ("unknown" if not isinstance(raw, list) else
+             "partial" if truncated or not all(isinstance(t, dict) and isinstance(t.get("traceID"), str)
+                                                and _HEX.fullmatch(t["traceID"]) for t in traces) else
+             "ok" if traces else "empty")
+    payload, btr = _byte_bound({"traces": traces, "metrics": data.get("metrics") if isinstance(data, dict) else None})
     if btr:
-        return ok(payload)
-    return ok({"truncated": truncated, **payload})
+        return ok({**payload, "collectionStatus": "unknown" if state == "unknown" else "partial"})
+    return ok({"truncated": truncated, **payload, "collectionStatus": state})
 
 
 def tempo_get_trace(args):

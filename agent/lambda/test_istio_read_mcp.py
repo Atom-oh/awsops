@@ -7,6 +7,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import istio_read_mcp as im  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from tool_receipts import terminal
 
 
 # canned k8s API responses keyed by request path
@@ -68,6 +70,48 @@ class TestOverview(_Base):
         self.assertIn("bookinfo", body["injected_namespaces"])
         self.assertNotIn("kube-system", body["injected_namespaces"])
         self.assertNotIn("legacy", body["injected_namespaces"])  # istio-injection: disabled → not injected
+
+    def test_namespace_status_separates_confirmed_empty_from_failed_collection(self):
+        for fail, expected in [(False, "empty"), (True, "error")]:
+            def get(_endpoint, path, _token, _ctx):
+                if path == "/api/v1/namespaces" and fail:
+                    raise PermissionError("PRIVATE")
+                return {"items": []}
+            with self.subTest(fail=fail), mock.patch.object(im, "_k8s_get", side_effect=get):
+                _, body = self._call("mesh_overview")
+                self.assertEqual(body["namespaceCollectionStatus"], expected)
+                self.assertEqual(body["injected_namespaces"], [])
+                self.assertTrue(all(n == 0 for n in body["counts"].values()))
+                self.assertNotIn("PRIVATE", json.dumps(body))
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
+                                          tool="mesh_overview")[0], "partial" if fail else "empty")
+
+    def test_count_errors_and_malformed_namespace_response_do_not_become_empty_success(self):
+        def get(_endpoint, path, _token, _ctx):
+            if path == "/api/v1/namespaces":
+                return {"items": None, "error": "PRIVATE"}
+            raise PermissionError("PRIVATE")
+        with mock.patch.object(im, "_k8s_get", side_effect=get):
+            _, body = self._call("mesh_overview")
+            self.assertEqual(body["namespaceCollectionStatus"], "error")
+            self.assertTrue(all(n is None for n in body["counts"].values()))
+            self.assertNotIn("PRIVATE", json.dumps(body))
+            self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
+                                      tool="mesh_overview")[0], "error")
+
+    def test_successful_namespace_collection_always_has_status(self):
+        _, body = self._call("mesh_overview")
+        self.assertEqual(body["namespaceCollectionStatus"], "ok")
+
+    def test_malformed_crd_list_is_unknown_not_zero(self):
+        for malformed in ({}, {"items": None}, {"items": False}):
+            def get(_endpoint, path, _token, _ctx):
+                return {"items": []} if path == "/api/v1/namespaces" else malformed
+            with self.subTest(malformed=malformed), mock.patch.object(im, "_k8s_get", side_effect=get):
+                _, body = self._call("mesh_overview")
+                self.assertTrue(all(n is None for n in body["counts"].values()))
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
+                                          tool="mesh_overview")[0], "partial")
 
 
 class TestGuards(_Base):
