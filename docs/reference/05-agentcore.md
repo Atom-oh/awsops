@@ -84,7 +84,7 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | ENI lookup/configuration | The current IPv4 lookup's typed identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
 | Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
 | Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |
-| Prometheus/Mimir | Existing bounded vector/matrix envelopes; named labels/series also require upstream-derived `collectionStatus` |
+| Prometheus/Mimir | Bounded vector/matrix envelopes and named labels/series require upstream-derived `collectionStatus`; upstream query warnings remain partial |
 | Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
 | Loki | Validated streams/vector/matrix query envelopes and named label/value collections require upstream-derived `collectionStatus`; hitting a query's line limit remains partial |
 
