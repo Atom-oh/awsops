@@ -288,3 +288,27 @@ def test_shared_metric_api_status_also_preserves_named_list_warnings(module, too
     http.assert_called_once()
     assert receipt(tool, out) == "partial"
     assert "UPSTREAM_SECRET" not in out["body"]
+
+
+@pytest.mark.parametrize("resource_type", ["target_group", "alb", "nlb", "cloudfront", "ebs", "ec2", "ecs"])
+@pytest.mark.parametrize("n", [0, 1])
+def test_inventory_actual_projection_disclosure_restricts_receipt(resource_type, n):
+    import inventory_read_mcp as inventory
+    stamp = "2026-09-14 00:00:00"
+    freshness = {"resource_type": resource_type, "freshness": "healthy", "current_count": n,
+                 "status": "succeeded", "row_count": n, "last_success_row_count": n,
+                 "unknown_attribute_count": 0, "latest_success_at": stamp,
+                 "last_success_at": stamp, "finished_at": stamp}
+    rows = [{key: "PRIVATE" for key in inventory.PROJECTIONS.get(resource_type, [])}] * n
+    with patch.object(inventory, "_fetch_one_type", return_value=rows) as fetch, \
+            patch.object(inventory, "_freshness_for_type", return_value=freshness) as ledger:
+        out = inventory.lambda_handler({"tool_name": "query_inventory", "arguments": {"resource_type": resource_type}}, None)
+    fetch.assert_called_once()
+    ledger.assert_called_once()
+    body = json.loads(out["body"])
+    expected = ("success" if n else "empty") if resource_type in inventory.PROJECTIONS else "partial"
+    assert receipt("query_inventory", out) == expected
+    if resource_type not in inventory.PROJECTIONS:
+        assert "limited by the sql_reader" in body["note"]
+        del body["note"]  # Classification uses the type contract, not free-form prose.
+        assert receipt("query_inventory", {"statusCode": 200, "body": json.dumps(body)}) == "partial"
