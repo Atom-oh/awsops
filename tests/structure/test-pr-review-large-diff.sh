@@ -36,7 +36,7 @@ fi
 
 # Must still fetch the PR head SHA explicitly — the base-only checkout (M1 security boundary)
 # has no head objects locally without this.
-if echo "$DIFF_STEP" | grep -q "pull_request.head.sha"; then
+if echo "$DIFF_STEP" | grep -q "steps.scope.outputs.head"; then
   pass "diff step fetches the PR head sha"
 else
   fail "diff step fetches the PR head sha"

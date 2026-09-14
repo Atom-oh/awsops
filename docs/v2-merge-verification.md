@@ -8,6 +8,7 @@
 | S2 | Gateway-routed sections align across AgentCore catalog, web sections, route rules, and the `observability` to `external-obs` alias; v1 `/awsops/` route literals do not leak into v2 web sources. | ADR-004, ADR-003 | `web/lib/merge-invariants.test.ts`, `web/lib/merge-invariants.ts` | `cd web && npx vitest run lib/merge-invariants.test.ts` |
 | S3 | The local runner executes isolated Python/web tests and advisory Terraform checks; CI additionally requires pinned, backend-free runtime IAM mock plans. | Current merge runner and workflow | `scripts/v2/merge-verify.sh`, `.github/workflows/merge-verify.yml` | `bash scripts/v2/merge-verify.sh` |
 | S4 | Every configured model/lens cell requires a successful CLI exit and nonce-bound final report frames; only decoded, scrubbed reports reach the chair. | PR-review execution protocol | `scripts/pr-review/test_report_frame.py`, `scripts/pr-review/test_review_completion.py`, `scripts/pr-review/test_aws_preflight.py` | `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v` |
+| S5 | Publication requires unchanged review scope, complete input and all configured reports; bounded previews cannot hide the full sanitized reports from the chair. | Trusted scope and report binding | `scripts/pr-review/review_scope.py`, `scripts/pr-review/test_review_scope.py`, `tests/structure/test-pr-review-chair-input-caps.sh` | The offline review command above and `bash tests/structure/test-pr-review-chair-input-caps.sh` |
 
 ## Structural gate limitation
 
@@ -59,10 +60,12 @@ The `merge-verify` job in `.github/workflows/merge-verify.yml` runs on pull requ
 and manual dispatch. It checks out the selected revision,
 sets up Node.js 20, Python 3.12 and Terraform 1.15.7, installs web dependencies with `cd web && npm ci`, installs
 `pytest` plus the v2 Python subsystem requirements, and executes `bash scripts/v2/merge-verify.sh`.
-It also runs the offline PR-review regressions in a separate step:
+It also runs the offline PR-review regressions and selected structure checks in a separate step:
 
 ```bash
 python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+bash tests/structure/test-pr-review-chair-input-caps.sh
+bash tests/structure/test-pr-review-large-diff.sh
 ```
 
 For the local full suite (hooks, structure, offline PR review, and agent tests), run:
@@ -74,14 +77,23 @@ bash tests/run-all.sh
 This full-suite command is not a step in `merge-verify.yml`.
 The workflow also has a separate `deck-verify` job: it installs `docs-site` dependencies
 and runs `docs-site/scripts/verify-deck.sh` against the committed presentation. This does not
-run a docs-site build or the local hook/structure suite.
+run a docs-site build or the full local hook/structure suite; the two selected
+structure checks above run explicitly in `merge-verify`.
 
 These fixtures cover every required model/lens report, strict final JSON frames and nonces,
 quoted/plain/fenced tool strings and static marker examples, numeric Kiro footers,
 discarded nonzero/timed-out output, chair CLI exit status, retries, hard kills and decoded
 session-token redaction. Captured L2/L4 bodies are historical roundtrip fixtures; they do
 not approve the current parser or establish completion of the old runs. The fake matrix
-checks all decoded reports reach the chair without chatter or truncation below the existing caps.
+checks that decoded reports reach the chair without tool chatter. Full sanitized reports
+remain in a private directory with read-only files and a manifest of paths, sizes and hashes.
+The chair receives bounded previews and must read each capped report in full. The gate
+binds the manifest, trusted prompt and chair input, then rechecks them before publication.
+The trusted prompt names the actual report directory and exact authorized report records;
+descriptor-like text in the patch or report bodies cannot extend that list. Neither retained
+bytes nor a hash proves semantic completeness: exactly one `COVERAGE: COMPLETE` line and
+one terminal `VERDICT: PASS` are also required. Missing, changed, duplicated or symlinked
+report records fail closed. Fixtures cover both configured specialists and legacy matrix mode.
 Cell scrubber failure is tested behaviorally. Chair scrubber PID capture/waits remain
 structural checks, without an injected chair-scrubber failure fixture.
 No fixture calls live AWS or AI services or dumps the full environment.
@@ -134,8 +146,20 @@ cd web && npm run build
 
 ## Reviewer context
 
-The AI workflow checks out the trusted base and treats the PR patch as untrusted
-data. Reviewers must account for the patch when checking symbols and policy; the
+The AI workflow first preserves its complete control bundle from the immutable
+workflow revision, then selects and checks out an authenticated review base. An open
+PR uses the current target ref and its merge-base with the exact event HEAD. Manual
+replay accepts only a same-repository merged PR with two verified parents and a merge
+tree equal to its HEAD tree; squash and other unmatched merge shapes are refused.
+Controls stay outside the selected checkout so an older base cannot remove required
+helpers or substitute its own review engine. PR head is never checked out or executed.
+
+Before publication the controller rechecks the PR identity, selected base, diff bytes,
+configured roles and full report evidence. A changed scope cannot publish a passing
+result. Both review-phase steps must have succeeded; complete-looking files left by
+an interrupted or failed phase cannot establish a passing review. Failure reporting
+does not overwrite a newer HEAD's canonical review.
+Reviewers must account for the patch when checking symbols and policy; the
 base alone is not the resulting implementation. Root `AGENTS.md` and
 `docs/decisions/BASELINE.md` provide current rules. Consolidated ADR filenames are
 `NNN-*.md`, not `ADR-*.md`; legacy references need ADR-MAPPING.md. Historical plans
@@ -145,8 +169,10 @@ Developer docs are English-only; multilingual product guides remain. Review
 concrete broken contracts/commands and operational impact, not invented README
 sections, bilingual parity or hand-maintained counts.
 
-The panel currently receives at most 3,000 diff lines. Keep PRs within that complete
-review scope; a PASSED label with truncated content is not sufficient to merge.
+The review controller allows at most 3,000 diff lines. Oversized scopes and omitted
+content are rejected before model calls, with instructions to split or reformat the
+change. There is no partial-review override or absence-claim downgrade that permits
+a pass. Keep PRs within the complete review scope.
 All required cells and the chair must finish successfully at the latest HEAD.
 Changing documentation does not authorize disabling coverage or severity gates.
 

@@ -79,7 +79,7 @@ if cli == "aws":
 prompt = args[args.index("-p") + 1] if cli == "claude" else args[1] if cli == "kiro-cli" else args[-1]
 if cli == "claude":
     key = "chair-primary" if "fable" in os.environ["ANTHROPIC_MODEL"] else "chair-fallback"
-    body = "Summary: reviewed the diff and all lens reports.\nVERDICT: PASS\n"
+    body = "Summary: reviewed the diff and all configured reports.\nCOVERAGE: COMPLETE\nVERDICT: PASS\n"
     assert "--strict-mcp-config" in args
     assert args[args.index("--allowedTools") + 1] == "Read Grep Glob"
 else:
@@ -624,16 +624,29 @@ class WorkflowContract(unittest.TestCase):
         self.assertEqual(int(value("timeout-minutes")), 90)
         self.assertLess(panel + chair + 10 * 60, 90 * 60)
         self.assertNotIn("AWS_SESSION_MIN_TTL", workflow)
-        preflights = [m.start() for m in re.finditer("python3 scripts/pr-review/preflight-aws-session.py", workflow)]
+        preflight_command = 'python3 "$REVIEW_CONTROL/preflight-aws-session.py"'
+        preflights = [m.start() for m in re.finditer(re.escape(preflight_command), workflow)]
         self.assertEqual(len(preflights), 2)
-        self.assertLess(preflights[0], workflow.index("bash scripts/pr-review/run-panel.sh"))
-        self.assertLess(workflow.index("bash scripts/pr-review/run-panel.sh"), preflights[1])
-        self.assertLess(preflights[1], workflow.index("bash scripts/pr-review/synthesize.sh"))
+        panel_command = 'bash "$REVIEW_CONTROL/run-panel.sh"'
+        chair_command = 'bash "$REVIEW_CONTROL/synthesize.sh"'
+        self.assertLess(preflights[0], workflow.index(panel_command))
+        self.assertLess(workflow.index(panel_command), preflights[1])
+        self.assertLess(preflights[1], workflow.index(chair_command))
         self.assertEqual(value("AWS_REGION"), "ap-northeast-2")
         self.assertEqual(value("ANTHROPIC_BEDROCK_BASE_URL"), "https://bedrock-runtime.ap-northeast-2.amazonaws.com")
         self.assertEqual(value("CLAUDE_CODE_USE_BEDROCK"), "1")
-        self.assertIn("ref: ${{ github.event.pull_request.base.sha }}", workflow)
-        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("ref: ${{ github.workflow_sha }}", workflow)
+        self.assertIn("ref: ${{ steps.scope.outputs.base }}", workflow)
+        self.assertNotIn("ref: ${{ steps.scope.outputs.head }}", workflow)
+        self.assertNotIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
+        self.assertEqual(workflow.count("uses: actions/checkout@v4"), 2)
+        self.assertEqual(len(re.findall(r"^\s+persist-credentials: false$", workflow, re.M)), 2)
+        self.assertIn("id: panel", workflow)
+        self.assertIn("id: synthesize", workflow)
+        self.assertIn(
+            "REVIEW_PHASES_SUCCEEDED: ${{ steps.panel.outcome == 'success' && steps.synthesize.outcome == 'success' }}",
+            workflow,
+        )
         self.assertNotIn("id-token: write", workflow)
         self.assertNotIn("role-to-assume:", workflow)
 

@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -31,7 +33,10 @@ jobs:
           terraform_wrapper: false
 
       - name: Offline AI review reliability regressions
-        run: python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+        run: |
+          python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+          bash tests/structure/test-pr-review-chair-input-caps.sh
+          bash tests/structure/test-pr-review-large-diff.sh
 
       - name: Install web dependencies
         run: cd web && npm ci

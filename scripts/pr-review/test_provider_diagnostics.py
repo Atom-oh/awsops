@@ -17,7 +17,7 @@ ECHO = "+ " + MODEL_ERROR + "\n> " + FALLBACK + "\n```text\n" + QUOTA + "\n```\n
 DIFF_CONTEXT = "diff --git a/README.md b/README.md\n@@ -1 +1 @@\n " + QUOTA + "\n"
 DIFF_FENCE = "diff --git a/README.md b/README.md\n@@ -1 +1 @@\n-```text\n+```bash\n ```\n"
 ECHO += "\n" + DIFF_CONTEXT
-REPORT = "## Summary\nComplete review.\n## Issues\n### CRITICAL\nNone.\n### MAJOR\nNone.\n### MINOR\nNone.\n## Verdict\nVERDICT: PASS\n"
+REPORT = "## Summary\nComplete review.\n## Issues\n### CRITICAL\nNone.\n### MAJOR\nNone.\n### MINOR\nNone.\n## Verdict\nCOVERAGE: COMPLETE\nVERDICT: PASS\n"
 CLI = r'''#!/usr/bin/env python3
 import json, os, pathlib, re, sys
 state = pathlib.Path(STATE)
