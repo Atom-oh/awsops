@@ -51,6 +51,7 @@ plan = json.loads((state/"plan.json").read_text())
 entry = plan.get(key, "") if count == 1 else ""
 message = entry.get("stderr", "") if isinstance(entry, dict) else entry
 exit_code = entry.get("exit", 0) if isinstance(entry, dict) else 0
+if isinstance(entry, dict) and "stdout" in entry: body = entry["stdout"]
 if message: print(message, file=sys.stderr)
 tool_output = entry.get("tool_output", "") if isinstance(entry, dict) else ""
 event_error = entry.get("event_error", "") if isinstance(entry, dict) else ""
@@ -103,6 +104,17 @@ class ProviderDiagnostics(unittest.TestCase):
                                 cwd=root,env=env,text=True,capture_output=True,timeout=25)
         self.assertEqual(result.returncode,0,result.stderr)
         return root
+
+    def panel_then_chair(self, plan):
+        """Run the panel and then synthesize on the same work dir (banners need both)."""
+        root, env = self.setup_fixture(plan)
+        result = subprocess.run(['bash',str(ROOT/'scripts/pr-review/run-panel.sh'),str(root/'diff'),str(root/'lenses'),str(root/'work')],
+                                cwd=root,env=env,text=True,capture_output=True,timeout=25)
+        self.assertEqual(result.returncode,0,result.stderr)
+        chair = subprocess.run(['bash',str(ROOT/'scripts/pr-review/synthesize.sh'),str(root/'diff'),str(root/'work'),'1','fixture',str(root/'report.md')],
+                               cwd=root,env=env,text=True,capture_output=True,timeout=25)
+        self.assertEqual(chair.returncode,0,chair.stderr)
+        return root, result.stderr, (root/'report.md').read_text()
 
     def chair(self, plan):
         root, env = self.setup_fixture(plan)
@@ -209,6 +221,108 @@ class ProviderDiagnostics(unittest.TestCase):
         self.assertTrue((root/'report.md').read_text().rstrip().endswith('VERDICT: PASS'))
         self.assertEqual((root/'chair-primary.count').read_text(), '1')
         self.assertFalse((root/'chair-fallback.count').exists())
+
+    # --- Kiro startup/banner contract (docs/runbooks/pr-review-panel.md) -------------------
+
+    def test_kiro_cli_version_is_the_first_panel_stderr_line(self):
+        root, stderr, _ = self.panel_then_chair({})
+        self.assertTrue(stderr.startswith("run-panel.sh: fixture\n"), stderr[:200])
+
+    def test_preflight_reply_must_be_exactly_pong(self):
+        for reply in ("I cannot reply with only PONG without more context.", "PONG.", "PONG\nPONG", "pong"):
+            with self.subTest(reply=reply):
+                root, stderr, report = self.panel_then_chair({'preflight-kiro-opus': {"stdout": reply}})
+                self.assertFalse((root/'kiro-opus.count').exists())
+                self.assertFalse((root/'kiro-gpt.count').exists())
+                self.assertTrue((root/'work/kiro-preflight.flag').exists())
+                self.assertIn("::error::Kiro preflight failed for kiro-opus (exit 0)", stderr)
+                self.assertIn("[skip] kiro-opus/L3 (preflight failed)", stderr)
+                self.assertIn("[skip] kiro-gpt/L4 (preflight failed)", stderr)
+                self.assertIn("**Kiro preflight failed**", report)
+                self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
+        # Transport decoration around the token is fine: ANSI prefix, blank line, usage footer.
+        decorated = "\x1b[38;5;141m> \x1b[0mPONG\n\n\x1b[90m ▸ Credits: 0.01 • Time: 1.2s\x1b[0m"
+        root, stderr, report = self.panel_then_chair({'preflight-kiro-opus': {"stdout": decorated}})
+        self.assertEqual(len((root/'work/responded.txt').read_text().splitlines()), 3)
+        self.assertFalse((root/'work/kiro-preflight.flag').exists())
+
+    def test_preflight_quota_names_the_cause_in_skip_lines_and_review_banner(self):
+        root, stderr, report = self.panel_then_chair({'preflight-kiro-gpt': "Monthly request limit reached\nThe limits reset on 10/01."})
+        self.assertFalse((root/'kiro-opus.count').exists())
+        self.assertFalse((root/'kiro-gpt.count').exists())
+        self.assertTrue((root/'work/kiro-quota.flag').exists())
+        self.assertIn("[skip] kiro-opus/L3 (monthly quota exhausted at preflight)", stderr)
+        self.assertIn("**Kiro monthly request quota exhausted**", report)
+        self.assertIn("Monthly request limit reached", report)
+        self.assertNotIn("usage_limit\t", report)  # the classifier kind prefix is not shown
+        self.assertIn("**Kiro preflight failed**", report)
+        self.assertNotIn("Kiro agent contract broken", report)
+        self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
+
+    def test_agent_fallback_signature_is_anchored_on_the_review_agent(self):
+        # Another malformed kiro-cli config on the runner is not evidence that --agent was ignored.
+        root, stderr, report = self.panel_then_chair({'kiro-opus': "Json supplied at /home/runner/.kiro/settings/mcp.json is invalid"})
+        self.assertIn("kiro-opus/L3", (root/'work/responded.txt').read_text())
+        self.assertFalse((root/'work/kiro-agent-fallback.flag').exists())
+        self.assertFalse((root/'work/coverage-severe.flag').exists())
+        self.assertNotIn("Kiro agent contract broken", report)
+        # The review agent's own file being rejected is a fallback: discarded, flagged, bannered.
+        for line in ("Json supplied at /w/.kiro/agents/pr-review-readonly.json is invalid",
+                     "Error: no agent with name pr-review-readonly found. Falling back to user specified default"):
+            with self.subTest(line=line):
+                root, stderr, report = self.panel_then_chair({'kiro-opus': line})
+                self.assertNotIn("kiro-opus/", (root/'work/responded.txt').read_text())
+                self.assertEqual((root/'kiro-opus.count').read_text(), "1")
+                self.assertTrue((root/'work/kiro-agent-fallback.flag').exists())
+                self.assertIn("::error::[provider-failure] kiro-opus-L3 attempt=1: agent_fallback", stderr)
+                self.assertIn("**Kiro agent contract broken**", report)
+                self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
+
+    def test_mid_run_quota_banner_without_preflight_banner(self):
+        root, stderr, report = self.panel_then_chair({'kiro-gpt': "Monthly request limit reached\nThe limits reset on 10/01."})
+        self.assertIn("kiro-opus/L3", (root/'work/responded.txt').read_text())
+        self.assertNotIn("kiro-gpt/", (root/'work/responded.txt').read_text())
+        self.assertIn("::error::[provider-failure] kiro-gpt-L4 attempt=1: usage_limit", stderr)
+        self.assertIn("**Kiro monthly request quota exhausted**", report)
+        self.assertNotIn("**Kiro preflight failed**", report)
+        self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
+
+    def test_codex_usage_limit_is_not_diagnosed_as_kiro_quota(self):
+        for diagnostic in (QUOTA, OVERAGE):
+            with self.subTest(diagnostic=diagnostic):
+                root, stderr, report = self.panel_then_chair({'codex': diagnostic})
+                self.assertNotIn("codex/", (root/'work/responded.txt').read_text())
+                self.assertIn("::error::[provider-failure] codex-L2 attempt=1: usage_limit", stderr)
+                self.assertTrue((root/'work/coverage-severe.flag').exists())
+                self.assertFalse((root/'work/kiro-quota.flag').exists())
+                self.assertNotIn("Kiro monthly request quota exhausted", report)
+                self.assertNotIn("Kiro agent contract broken", report)
+                self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
+        # A Codex fallback-style line is likewise not a Kiro agent-contract breach.
+        root, stderr, report = self.panel_then_chair({'codex': FALLBACK})
+        self.assertFalse((root/'work/kiro-agent-fallback.flag').exists())
+        self.assertNotIn("Kiro agent contract broken", report)
+
+    def test_banner_detail_is_bounded_and_code_span_safe(self):
+        long_tail = "Monthly request limit reached `x` " + "A" * 900
+        root, stderr, report = self.panel_then_chair({'kiro-gpt': long_tail})
+        banner = next(line for line in report.splitlines() if "Kiro monthly request quota exhausted" in line)
+        self.assertLess(len(banner), 900)
+        self.assertNotIn("`x`", banner)
+        self.assertNotIn("MONTHLY_REQUEST_COUNT", banner)  # cause is not asserted beyond the diagnostic
+        self.assertNotIn("/demo-platform/", banner)         # secret-store coordinates stay in the runbook
+
+    def test_agent_fallback_json_signature_tolerates_quoted_paths(self):
+        root, stderr, report = self.panel_then_chair({'kiro-opus': 'Json supplied at "/w/.kiro/agents/pr-review-readonly.json" is invalid'})
+        self.assertTrue((root/'work/kiro-agent-fallback.flag').exists())
+        self.assertIn("**Kiro agent contract broken**", report)
+
+    def test_healthy_run_renders_no_kiro_banner(self):
+        root, stderr, report = self.panel_then_chair({})
+        for banner in ("Kiro preflight failed", "Kiro monthly request quota exhausted", "Kiro agent contract broken"):
+            self.assertNotIn(banner, report)
+        self.assertTrue(report.rstrip().endswith("VERDICT: PASS"))
+        self.assertFalse((root/'.kiro/agents/pr-review-readonly.json').exists())
 
 
 if __name__ == '__main__':

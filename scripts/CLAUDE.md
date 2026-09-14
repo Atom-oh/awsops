@@ -41,7 +41,10 @@ required review coverage and the completion protocol. Every required cell must
 complete for the reviewed HEAD. Preserve nonce-bound final JSON report frames,
 redaction, retry/time limits, and fail-closed coverage/chair validation.
 `preflight-aws-session.py` checks ambient Pod Identity without changing providers
-or signing settings. The chair retains `--strict-mcp-config`.
+or signing settings. The chair retains `--strict-mcp-config`. `kiro-safety.sh` pins
+the read-only Kiro agent (`agents/pr-review-readonly.json`) and the exact-`PONG`
+startup check; classified quota/agent-fallback failures are not retried and get
+their own review banners. Operator procedure: `docs/runbooks/pr-review-panel.md`.
 
 Offline checks: `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v`.
 Read those tests for protocol details rather than copying model rosters or frame

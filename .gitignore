@@ -133,6 +133,8 @@ graphify-out/
 .headroom/
 # Kiro CLI local machine settings (co-agent panel artifact); .kiro/AGENT.md, rules.md, docs/, steering/ stay tracked
 .kiro/settings/
+# Runtime copy installed by scripts/pr-review/run-panel.sh for the Kiro review cells (removed after the run)
+.kiro/agents/pr-review-readonly.json
 tfplan*
 terraform/v2/foundation/tfplan*
 

@@ -1,11 +1,12 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f35d2541dd1b · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 9a23eef878a4 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > Reviewer context distilled from CLAUDE.md and shared across AI reviewers.
 
 # Runbook review
 
 Use English-only developer procedures; product user guides remain multilingual.
-`CLAUDE.md` indexes current v2 runbooks. Verify commands against the actual code,
+`CLAUDE.md` indexes current v2 runbooks, including the AI PR-review panel runbook
+for Kiro cell failure modes. Verify commands against the actual code,
 working directory, deployment surface and migration dependency. Use configured
 variables/placeholders and never expose credentials.
 

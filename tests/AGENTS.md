@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 11995d0b7940 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 834d16c57046 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > Reviewer context distilled from this module’s CLAUDE.md; shared by Kiro, Codex, and Agy.
 
@@ -21,6 +21,7 @@ shell assertions remain advisory.
   non-secret settings only; never capture a full environment.
 - Keep these tests offline using fixtures/fake CLIs. Preserve completion,
   nonce-bound framing, required coverage, retry, redaction, and ambient-provider
-  contracts in `scripts/pr-review/test_*.py`.
+  contracts in `scripts/pr-review/test_*.py`; `structure/test-pr-review-panel.sh`
+  pins the read-only Kiro agent, startup-check and cause-banner contract.
 - Captured historical review reports are test inputs, not current findings or
   approval. Do not bypass a failing hook or count a skipped check as a pass.

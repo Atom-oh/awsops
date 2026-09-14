@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read/grep profile and no-PR-input startup check, retained from the safety branch.
-KIRO_QUOTA_RE='Monthly request limit reached|MONTHLY_REQUEST_COUNT|UsageLimitReachedError'
-KIRO_AGENT_FALLBACK_RE='no agent with name|Falling back to user specified default|Json supplied at .* is invalid'
+# Quota / agent-fallback classification lives in lib.sh's provider_diagnostic (anchored on the
+# agent name); this file owns the profile install, the startup check and the skip reason.
 KIRO_AGENT_NAME="pr-review-readonly"
 KIRO_AGENT_SRC="$DIR/agents/$KIRO_AGENT_NAME.json"
 KIRO_AGENT_TOOLS='["read", "grep"]'
@@ -55,6 +55,19 @@ KIRO_PREFLIGHT_OK=0
 KIRO_PREFLIGHT_PASSED=0
 KIRO_PREFLIGHT_TIMEOUT="${KIRO_PREFLIGHT_TIMEOUT:-120}"
 KIRO_PREFLIGHT_PROMPT="Kiro startup check for the PR-review panel. Reply with exactly PONG and nothing else. Do not use any tools."
+# The reply must be exactly one line `PONG` once transport decoration is stripped (ANSI, the `> `
+# assistant prefix, blank lines, the numeric usage footer — same shape as report_frame.py's
+# KIRO_FOOTER). A substring match would accept "I cannot reply with only PONG".
+preflight_reply_is_pong() {
+  [ "$(strip_controls < "$1" \
+        | sed -E 's/^[[:space:]]*>[[:space:]]?//; s/^[[:space:]]+//; s/[[:space:]]+$//' \
+        | grep -v '^$' \
+        | grep -vE '^▸ (Credits: [0-9]+(\.[0-9]+)? • )?Time: ([0-9]+m )?[0-9]+(\.[0-9]+)?s$' \
+        | tr '\n' '|')" = 'PONG|' ]
+}
+# Reason printed on every withheld Kiro cell's `[skip]` line (see docs/runbooks/pr-review-panel.md).
+KIRO_SKIP_REASON="preflight failed"
+command -v kiro-cli >/dev/null 2>&1 || KIRO_SKIP_REASON="kiro-cli binary absent"
 if command -v kiro-cli >/dev/null 2>&1; then
   PREFLIGHT_DIR="$WORK/kiro-preflight"
   rm -rf "$PREFLIGHT_DIR" && mkdir -p "$PREFLIGHT_DIR" \
@@ -68,7 +81,7 @@ if command -v kiro-cli >/dev/null 2>&1; then
     PREFLIGHT_RC=$?
     PREFLIGHT_DIAGNOSTIC="$(provider_diagnostic "$PREFLIGHT_ERR")" || PREFLIGHT_DIAGNOSTIC=$'diagnostic_read_error\tDiagnostic parser failed'
     if [ "$PREFLIGHT_RC" -eq 0 ] && [ -z "$PREFLIGHT_DIAGNOSTIC" ] \
-        && strip_controls < "$PREFLIGHT_OUT" | sed 's/^[[:space:]]*> \{0,1\}//' | grep -qw 'PONG'; then
+        && preflight_reply_is_pong "$PREFLIGHT_OUT"; then
       KIRO_PREFLIGHT_PASSED=$((KIRO_PREFLIGHT_PASSED + 1))
       echo "Kiro preflight passed: $tag (agent $KIRO_AGENT_NAME loaded, no PR input)" >&2
       continue
@@ -78,11 +91,12 @@ if command -v kiro-cli >/dev/null 2>&1; then
     if [ -n "$PREFLIGHT_DIAGNOSTIC" ]; then
       printf '%s\n' "$PREFLIGHT_DIAGNOSTIC" | scrub_secrets > "$WORK/provider-failure.flag"
       case "$PREFLIGHT_DIAGNOSTIC" in
-        usage_limit$'\t'*) cp "$WORK/provider-failure.flag" "$WORK/kiro-quota.flag" ;;
-        agent_fallback$'\t'*) cp "$WORK/provider-failure.flag" "$WORK/kiro-agent-fallback.flag" ;;
+        usage_limit$'\t'*) cp "$WORK/provider-failure.flag" "$WORK/kiro-quota.flag"; KIRO_SKIP_REASON="monthly quota exhausted at preflight" ;;
+        agent_fallback$'\t'*) cp "$WORK/provider-failure.flag" "$WORK/kiro-agent-fallback.flag"; KIRO_SKIP_REASON="agent fallback at preflight" ;;
+        *) KIRO_SKIP_REASON="preflight failed: ${PREFLIGHT_DIAGNOSTIC%%$'\t'*}" ;;
       esac
     fi
-    echo "::error::Kiro preflight failed for $tag (exit $PREFLIGHT_RC); no PR input sent to Kiro (see docs/runbooks/pr-review-specialists.md)" >&2
+    echo "::error::Kiro preflight failed for $tag (exit $PREFLIGHT_RC); no PR input sent to Kiro (see docs/runbooks/pr-review-panel.md)" >&2
     tail -25 "$PREFLIGHT_ERR" | strip_controls | scrub_secrets >&2
     break
   done

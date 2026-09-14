@@ -56,7 +56,7 @@ record_result() {
 }
 
 # 자격증명 패턴 스크럽 — 마지막 방어선(last line of defense), 예방이 아님. Kiro 는 이 repo에서
-# read/grep/fs_read 로 base 체크아웃 전체를 읽을 수 있어(BASE CONTEXT 검증 목적, 의도된 동작),
+# read/grep(`--agent pr-review-readonly`)으로 base 체크아웃 전체를 읽을 수 있어(BASE CONTEXT 검증 목적, 의도된 동작),
 # diff 인젝션이 절대경로/레포 밖 크리덴셜을 읽게 유도하면 셀 출력에 그 값이 노출될 잔여 위험이
 # 있다. 셀 출력을 체어에 넘기기 전 흔한 크리덴셜 포맷을 정규식으로 치환한다. 패턴은 co-agent 의
 # `consensus_hooks.py::_SECRET_RE`(AWS/GitHub/Slack/OpenAI·Anthropic/Google + generic
@@ -103,7 +103,9 @@ def classify(line):
         return "model_selection"
     if re.match(r"failed to set model\b|(?:invalid|unknown|unsupported)\s+model\b|model\s+.{0,100}\s+(?:not found|not available|unsupported)\b", body, re.I):
         return "model_selection"
-    if re.match(r"no agent with name\b|Json supplied at .* is invalid\b", body, re.I):
+    # Anchored on this repo's agent file: another malformed kiro-cli config on the runner
+    # ("Json supplied at <other>.json is invalid") is not evidence that --agent was ignored.
+    if re.match(r"no agent with name\b|Json supplied at .*pr-review-readonly\.json.* is invalid\b", body, re.I):
         return "agent_fallback"
     if re.match(r"(?:falling back|using (?:a )?fallback|fallback model)\b", body, re.I):
         return "agent_fallback" if re.search(r"agent|user specified default", body, re.I) else "model_fallback"

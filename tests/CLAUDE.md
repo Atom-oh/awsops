@@ -23,5 +23,7 @@ some historical shell assertions are advisory. A skipped check is not a pass.
   required coverage, retries, redaction, and ambient credential preflight.
   Read `scripts/pr-review/test_*.py` for current cases; historical captured review
   reports are roundtrip inputs, not approval or evidence about current code.
+  `structure/test-pr-review-panel.sh` pins the read-only Kiro agent, startup-check
+  and cause-banner contract statically; `test_provider_diagnostics.py` exercises it.
 - Tests here remain offline: use fixtures/mocks, not live AWS/AI/AgentCore calls.
   Do not disable required checks or bypass hooks to obtain a passing result.

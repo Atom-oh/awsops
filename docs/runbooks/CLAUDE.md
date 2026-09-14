@@ -26,6 +26,8 @@ and saved-plan review; they are distinct from application autonomy under ADR-005
 | [source-sync-observability.md](source-sync-observability.md) | Recorded backport contracts and deployment dependencies |
 | [v1-decommission.md](v1-decommission.md) | Cognito operator credentials, dated teardown evidence, and remaining verification |
 | [v1-to-v2-aurora-backfill.md](v1-to-v2-aurora-backfill.md) | Legacy history migration |
+| [pr-review-specialists.md](pr-review-specialists.md) | Specialist PR-review panel contract: required roles, model pins, frame protocol and diagnostics |
+| [pr-review-panel.md](pr-review-panel.md) | AI PR-review panel Kiro cells: quota, agent-fallback and preflight symptoms, causes and operator actions |
 
 Current policy: `../decisions/BASELINE.md`. Use consolidated ADR numbers and qualify
 legacy references. Preserve exact dated evidence in operational records; absence of

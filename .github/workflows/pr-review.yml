@@ -82,7 +82,7 @@ jobs:
       # never checked out (its code never runs).
       # persist-credentials: false — the default (true) leaves GH_TOKEN in .git/config's
       # http.<host>.extraheader (AUTHORIZATION: basic <base64>). Kiro is deliberately
-      # allowed to read/grep/fs_read the entire base checkout (for BASE CONTEXT
+      # allowed to read/grep the entire base checkout (`--agent pr-review-readonly`, for BASE CONTEXT
       # verification), so a diff-injection that steers Kiro into reading .git/config and
       # echoing that value into a cell's output would leak the pull-requests:write token
       # verbatim (lib.sh's scrub_secrets rule for this token format was added in the same

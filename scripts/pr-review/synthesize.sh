@@ -481,7 +481,44 @@ fi
 # Surface model diagnostics; any missing cell now forces FAIL via coverage-severe.flag.
 if [ -s "$WORK/degraded-models.txt" ]; then
   DEGRADED="$(tr '\n' ',' < "$WORK/degraded-models.txt" | sed 's/,$//; s/,/, /g')"
-  { echo "⚠️ **Coverage degraded**: model(s) [$DEGRADED] had no response across every lens (invalid flag/missing binary/auth failure, etc.) — the review below was synthesized without them."
+  { echo "⚠️ **Coverage degraded**: model(s) [$DEGRADED] had no response across every lens (missing binary, authentication failure, timeouts, …; Kiro-specific causes such as quota exhaustion, preflight failure or agent fallback are named in their own banners — see docs/runbooks/pr-review-panel.md) — the review below was synthesized without them."
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro preflight (kiro-safety.sh's kiro-preflight.flag) — the fixed no-diff startup check did not
+# establish the read-only agent contract, so no PR input was sent to any Kiro cell.
+# Banner detail: already scrubbed by the writer; keep it single-line, backtick-free and bounded
+# before it is interpolated into the published comment.
+banner_detail() { cut -f2- "$1" | tr -d '\r`' | tr '\n' ' ' | sed 's/ *$//' | head -c 500; }
+if [ -s "$WORK/kiro-preflight.flag" ]; then
+  PREFLIGHT_DETAIL="$(banner_detail "$WORK/kiro-preflight.flag")"
+  { echo "🛑 **Kiro preflight failed**: $PREFLIGHT_DETAIL The read-only agent contract could not be confirmed, so no Kiro review was started (Codex cells ran). Procedure: docs/runbooks/pr-review-panel.md"
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro monthly quota exhausted (run-panel.sh / kiro-safety.sh's kiro-quota.flag, a copy of the
+# scrubbed `usage_limit<TAB>diagnostic` line) — replaces the degraded banner's list of guesses with
+# the actual cause. Not a code/flag problem: the KIRO_API_KEY account hit MONTHLY_REQUEST_COUNT, so
+# the operator action (enable overages or rotate the key) is readable directly from the comment.
+if [ -s "$WORK/kiro-quota.flag" ]; then
+  QUOTA_DETAIL="$(banner_detail "$WORK/kiro-quota.flag")"
+  { echo "🚫 **Kiro monthly request quota exhausted**: the Kiro account behind the panel's API key reported a usage limit (\`$QUOTA_DETAIL\`), so the affected Kiro cell(s) returned nothing — not a kiro-cli headless-flag failure. Repeats on every run until the account-side limit is lifted or the key is rotated. Procedure: docs/runbooks/pr-review-panel.md"
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro agent fallback (run-panel.sh / kiro-safety.sh's kiro-agent-fallback.flag, a copy of the
+# scrubbed `agent_fallback<TAB>diagnostic` line) — the runner's kiro-cli ignored
+# `--agent pr-review-readonly` and ran with the default agent. Those responses were already
+# discarded and coverage-severe forces FAIL; this makes the "why FAIL" readable in the comment.
+if [ -s "$WORK/kiro-agent-fallback.flag" ]; then
+  AGENTFAIL_DETAIL="$(banner_detail "$WORK/kiro-agent-fallback.flag")"
+  { echo "🔓 **Kiro agent contract broken**: kiro-cli ignored \`--agent pr-review-readonly\` and ran with the default agent (\`$AGENTFAIL_DETAIL\`) — affected cell responses discarded, forced FAIL. Check the runner image's kiro-cli version / agent schema (docs/runbooks/pr-review-panel.md)."
     echo ""
     cat "$OUT"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
