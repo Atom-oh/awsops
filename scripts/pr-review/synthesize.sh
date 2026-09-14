@@ -489,8 +489,11 @@ fi
 
 # Kiro preflight (kiro-safety.sh's kiro-preflight.flag) — the fixed no-diff startup check did not
 # establish the read-only agent contract, so no PR input was sent to any Kiro cell.
+# Banner detail: already scrubbed by the writer; keep it single-line, backtick-free and bounded
+# before it is interpolated into the published comment.
+banner_detail() { cut -f2- "$1" | tr -d '\r`' | tr '\n' ' ' | sed 's/ *$//' | head -c 500; }
 if [ -s "$WORK/kiro-preflight.flag" ]; then
-  PREFLIGHT_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-preflight.flag" | sed 's/ *$//')"
+  PREFLIGHT_DETAIL="$(banner_detail "$WORK/kiro-preflight.flag")"
   { echo "🛑 **Kiro preflight failed**: $PREFLIGHT_DETAIL The read-only agent contract could not be confirmed, so no Kiro review was started (Codex cells ran). Procedure: docs/runbooks/pr-review-panel.md"
     echo ""
     cat "$OUT"
@@ -502,8 +505,8 @@ fi
 # the actual cause. Not a code/flag problem: the KIRO_API_KEY account hit MONTHLY_REQUEST_COUNT, so
 # the operator action (enable overages or rotate the key) is readable directly from the comment.
 if [ -s "$WORK/kiro-quota.flag" ]; then
-  QUOTA_DETAIL="$(cut -f2- "$WORK/kiro-quota.flag" | tr '\n' ' ' | sed 's/ *$//')"
-  { echo "🚫 **Kiro monthly request quota exhausted**: the KIRO_API_KEY account reached its MONTHLY_REQUEST_COUNT limit, so Kiro cells returned nothing (\`$QUOTA_DETAIL\`) — not a kiro-cli headless-flag failure. Repeats on every run until overages are enabled or KIRO_API_KEY in \`/demo-platform/actions/AI-key\` is rotated. Procedure: docs/runbooks/pr-review-panel.md"
+  QUOTA_DETAIL="$(banner_detail "$WORK/kiro-quota.flag")"
+  { echo "🚫 **Kiro monthly request quota exhausted**: the Kiro account behind the panel's API key reported a usage limit (\`$QUOTA_DETAIL\`), so the affected Kiro cell(s) returned nothing — not a kiro-cli headless-flag failure. Repeats on every run until the account-side limit is lifted or the key is rotated. Procedure: docs/runbooks/pr-review-panel.md"
     echo ""
     cat "$OUT"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
@@ -514,7 +517,7 @@ fi
 # `--agent pr-review-readonly` and ran with the default agent. Those responses were already
 # discarded and coverage-severe forces FAIL; this makes the "why FAIL" readable in the comment.
 if [ -s "$WORK/kiro-agent-fallback.flag" ]; then
-  AGENTFAIL_DETAIL="$(cut -f2- "$WORK/kiro-agent-fallback.flag" | tr '\n' ' ' | sed 's/ *$//')"
+  AGENTFAIL_DETAIL="$(banner_detail "$WORK/kiro-agent-fallback.flag")"
   { echo "🔓 **Kiro agent contract broken**: kiro-cli ignored \`--agent pr-review-readonly\` and ran with the default agent (\`$AGENTFAIL_DETAIL\`) — affected cell responses discarded, forced FAIL. Check the runner image's kiro-cli version / agent schema (docs/runbooks/pr-review-panel.md)."
     echo ""
     cat "$OUT"

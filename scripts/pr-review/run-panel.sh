@@ -68,12 +68,17 @@ try_panel() {
       if provider_diagnostic_terminal "$diagnostic"; then
         : > "$slot"; rc=1
         printf '%s\n' "$diagnostic" | scrub_secrets > "$slot.provider-failure"
-        echo "[provider-failure] $(basename "$slot" .md) attempt=$a: $(cut -f1 "$slot.provider-failure" | head -1) — terminal, not retrying (see docs/runbooks/pr-review-panel.md)" >&2
+        echo "::error::[provider-failure] $(basename "$slot" .md) attempt=$a: $(cut -f1 "$slot.provider-failure" | head -1) — terminal, not retrying (see docs/runbooks/pr-review-panel.md)" >&2
         cp "$slot.provider-failure" "$WORK/provider-failure.flag"
         : > "$WORK/coverage-severe.flag"
-        case "$diagnostic" in
-          agent_fallback$'\t'*) cp "$slot.provider-failure" "$WORK/kiro-agent-fallback.flag" ;;
-          usage_limit$'\t'*) cp "$slot.provider-failure" "$WORK/kiro-quota.flag" ;;
+        # The kiro-* flags drive Kiro-specific banners/runbook steps (KIRO_API_KEY): only a Kiro
+        # slot may raise them. A Codex credit/overage failure is still terminal and forces FAIL,
+        # but must not be diagnosed as Kiro quota exhaustion.
+        case "$(basename "$slot")" in kiro-*)
+          case "$diagnostic" in
+            agent_fallback$'\t'*) cp "$slot.provider-failure" "$WORK/kiro-agent-fallback.flag" ;;
+            usage_limit$'\t'*) cp "$slot.provider-failure" "$WORK/kiro-quota.flag" ;;
+          esac ;;
         esac
         return 1
       fi

@@ -105,7 +105,7 @@ def classify(line):
         return "model_selection"
     # Anchored on this repo's agent file: another malformed kiro-cli config on the runner
     # ("Json supplied at <other>.json is invalid") is not evidence that --agent was ignored.
-    if re.match(r"no agent with name\b|Json supplied at \S*pr-review-readonly\.json is invalid\b", body, re.I):
+    if re.match(r"no agent with name\b|Json supplied at .*pr-review-readonly\.json.* is invalid\b", body, re.I):
         return "agent_fallback"
     if re.match(r"(?:falling back|using (?:a )?fallback|fallback model)\b", body, re.I):
         return "agent_fallback" if re.search(r"agent|user specified default", body, re.I) else "model_fallback"

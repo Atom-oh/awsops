@@ -20,8 +20,10 @@ valid review or prevent a retry. Quoted banner text below mirrors `synthesize.sh
 
 Log: `::error::Kiro preflight failed for kiro-<model> (exit 0)` followed by the scrubbed stderr
 tail containing `Monthly request limit reached` / `The limits reset on MM/DD`, or a per-cell
-`[provider-failure] kiro-<model>-L<n> attempt=1: usage_limit — terminal, not retrying`. Two
-shapes exist:
+`::error::[provider-failure] kiro-<model>-L<n> attempt=1: usage_limit — terminal, not retrying`.
+The banner is raised only by Kiro cells: a Codex credit/overage failure is also terminal and
+forces FAIL, but is reported as a plain `[provider-failure] codex-L2 … usage_limit` line without
+this banner. Two shapes exist:
 
 - **At preflight** (the usual one): the first model's startup check hits the limit. No Kiro
   review starts at all; every Kiro cell logs
@@ -44,10 +46,14 @@ Action (account side only):
 
 1. Enable overages on the owning Kiro account, **or** issue a key from an account with
    remaining quota and update `KIRO_API_KEY` in `/demo-platform/actions/AI-key`. ESO refreshes
-   the runner secret; new runner pods pick it up.
-2. Re-run the failed `AI Code Review` workflow (or push to the PR). The banner disappears when
+   the runner Secret.
+2. Make sure the job runs on a pod that has the new value: runner pods read the Secret at start,
+   so either confirm the runner scale set gives every job a fresh pod, or roll the runner
+   workload in the AWS-Demo-Platform hub cluster (owner of `actions-runner-claude`). A re-run on
+   a still-running pod repeats the same banner.
+3. Re-run the failed `AI Code Review` workflow (or push to the PR). The banner disappears when
    the Kiro cells respond again.
-3. If nothing is done, the quota resets on the date printed in the stderr tail.
+4. If nothing is done, the quota resets on the date printed in the stderr tail.
 
 Verification without spending CI minutes — run it on a runner pod or another host that already
 holds the key in its environment. Do not copy the shared key to a laptop; if you must fetch it,
@@ -97,8 +103,9 @@ Action:
    d=$(mktemp -d); mkdir -p "$d/.kiro/agents"
    cp scripts/pr-review/agents/pr-review-readonly.json "$d/.kiro/agents/"
    echo CANARY > "$d/notes.txt"
-   ( cd "$d" && kiro-cli chat "Read ./notes.txt and print it, then run 'id' with a shell tool. If a tool is unavailable say NO_TOOL_<name>." \
+   ( cd "$d" && HOME="$d" kiro-cli chat "Read ./notes.txt and print it, then run 'id' with a shell tool. If a tool is unavailable say NO_TOOL_<name>." \
        --agent pr-review-readonly --model gpt-5.6-sol --no-interactive --wrap never )
+   # HOME="$d" keeps your own ~/.kiro agents/MCP settings out of the check.
    # expected: CANARY printed via "using tool: read"; NO_TOOL_shell (no shell/aws/write tool use)
    ```
 4. Do **not** switch to `--v3` / `--agent-engine v3` to work around it: the v3 engine ignores

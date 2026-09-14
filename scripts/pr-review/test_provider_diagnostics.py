@@ -274,7 +274,7 @@ class ProviderDiagnostics(unittest.TestCase):
                 self.assertNotIn("kiro-opus/", (root/'work/responded.txt').read_text())
                 self.assertEqual((root/'kiro-opus.count').read_text(), "1")
                 self.assertTrue((root/'work/kiro-agent-fallback.flag').exists())
-                self.assertIn("[provider-failure] kiro-opus-L3 attempt=1: agent_fallback", stderr)
+                self.assertIn("::error::[provider-failure] kiro-opus-L3 attempt=1: agent_fallback", stderr)
                 self.assertIn("**Kiro agent contract broken**", report)
                 self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
 
@@ -282,10 +282,40 @@ class ProviderDiagnostics(unittest.TestCase):
         root, stderr, report = self.panel_then_chair({'kiro-gpt': "Monthly request limit reached\nThe limits reset on 10/01."})
         self.assertIn("kiro-opus/L3", (root/'work/responded.txt').read_text())
         self.assertNotIn("kiro-gpt/", (root/'work/responded.txt').read_text())
-        self.assertIn("[provider-failure] kiro-gpt-L4 attempt=1: usage_limit", stderr)
+        self.assertIn("::error::[provider-failure] kiro-gpt-L4 attempt=1: usage_limit", stderr)
         self.assertIn("**Kiro monthly request quota exhausted**", report)
         self.assertNotIn("**Kiro preflight failed**", report)
         self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
+
+    def test_codex_usage_limit_is_not_diagnosed_as_kiro_quota(self):
+        for diagnostic in (QUOTA, OVERAGE):
+            with self.subTest(diagnostic=diagnostic):
+                root, stderr, report = self.panel_then_chair({'codex': diagnostic})
+                self.assertNotIn("codex/", (root/'work/responded.txt').read_text())
+                self.assertIn("::error::[provider-failure] codex-L2 attempt=1: usage_limit", stderr)
+                self.assertTrue((root/'work/coverage-severe.flag').exists())
+                self.assertFalse((root/'work/kiro-quota.flag').exists())
+                self.assertNotIn("Kiro monthly request quota exhausted", report)
+                self.assertNotIn("Kiro agent contract broken", report)
+                self.assertTrue(report.rstrip().endswith("VERDICT: FAIL"))
+        # A Codex fallback-style line is likewise not a Kiro agent-contract breach.
+        root, stderr, report = self.panel_then_chair({'codex': FALLBACK})
+        self.assertFalse((root/'work/kiro-agent-fallback.flag').exists())
+        self.assertNotIn("Kiro agent contract broken", report)
+
+    def test_banner_detail_is_bounded_and_code_span_safe(self):
+        long_tail = "Monthly request limit reached `x` " + "A" * 900
+        root, stderr, report = self.panel_then_chair({'kiro-gpt': long_tail})
+        banner = next(line for line in report.splitlines() if "Kiro monthly request quota exhausted" in line)
+        self.assertLess(len(banner), 900)
+        self.assertNotIn("`x`", banner)
+        self.assertNotIn("MONTHLY_REQUEST_COUNT", banner)  # cause is not asserted beyond the diagnostic
+        self.assertNotIn("/demo-platform/", banner)         # secret-store coordinates stay in the runbook
+
+    def test_agent_fallback_json_signature_tolerates_quoted_paths(self):
+        root, stderr, report = self.panel_then_chair({'kiro-opus': 'Json supplied at "/w/.kiro/agents/pr-review-readonly.json" is invalid'})
+        self.assertTrue((root/'work/kiro-agent-fallback.flag').exists())
+        self.assertIn("**Kiro agent contract broken**", report)
 
     def test_healthy_run_renders_no_kiro_banner(self):
         root, stderr, report = self.panel_then_chair({})

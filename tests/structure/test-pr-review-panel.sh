@@ -47,7 +47,10 @@ assert_grep_match "role mode does not use the --v3 engine or --mode (v3-only)" \
 assert_grep_no_match "no cell uses the --v3 engine or --mode (v3-only, ignores the agent's tools)" \
   'kiro-cli -{2}v3|-{2}agent-engine|-{2}mode default' "$PANEL_SRC"
 assert_grep_match "withheld Kiro cells print a [skip] reason" '\[skip\] \$tag/\$lens \(\$KIRO_SKIP_REASON\)' "$PANEL_SRC"
-assert_grep_match "terminal provider failures are logged per cell" '\[provider-failure\]' "$PANEL_SRC"
+assert_grep_match "terminal provider failures are annotated per cell" '::error::\[provider-failure\]' "$PANEL_SRC"
+assert_grep_match "only kiro-* slots raise the Kiro quota/agent-fallback flags" 'case "\$\(basename "\$slot"\)" in kiro-\*\)' "$PANEL_SRC"
+assert_grep_match "synthesize.sh bounds banner detail" 'head -c 500' "$SYNTH_SRC"
+assert_grep_no_match "quota banner does not embed secret-store coordinates" 'Kiro monthly request quota exhausted.*/demo-platform/' "$SYNTH_SRC"
 
 assert_grep_match "kiro-safety.sh installs the agent into the workspace .kiro/agents/" \
   'cp "\$KIRO_AGENT_SRC" "\$KIRO_AGENT_DST"' "$SAFETY_SRC"
@@ -60,7 +63,7 @@ assert_grep_match "preflight failure points at the runbook" 'pr-review-panel\.md
 assert_grep_no_match "kiro-safety.sh carries no unused unanchored signature regex" 'KIRO_(QUOTA|AGENT_FALLBACK)_RE=' "$SAFETY_SRC"
 
 assert_grep_match "agent-fallback JSON signature is anchored on the review agent file" \
-  'Json supplied at \\S\*pr-review-readonly\\\.json is invalid' "$(cat "$LIB")"
+  'Json supplied at \.\*pr-review-readonly\\\.json\.\* is invalid' "$(cat "$LIB")"
 assert_grep_no_match "agent-fallback JSON signature is not the unanchored form" \
   'Json supplied at \.\* is invalid' "$(cat "$LIB")"
 assert_grep_match "quota classifier keeps MONTHLY_REQUEST_COUNT" 'MONTHLY_REQUEST_COUNT' "$(cat "$LIB")"
