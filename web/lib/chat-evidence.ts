@@ -256,6 +256,11 @@ export function normalizeEvidence(value: unknown): ChatEvidence | undefined {
   return evidence;
 }
 
+export const evidenceSuccessRateLabels: Record<ChatLang, string> = {
+  ko: '근거 확인 성공률', en: 'Evidence-confirmed success rate',
+  zh: '证据确认成功率', ja: '根拠確認済み成功率',
+};
+
 export const evidenceLabels: Record<ChatLang, Record<Outcome | 'unfinished', string>> = {
   en: { success: 'Tool evidence received', partial: 'Incomplete evidence', error: 'Failed', empty: 'No results',
     unverified: 'Unverified — no confirmed tool evidence', unfinished: 'No terminal result' },

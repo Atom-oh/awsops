@@ -71,13 +71,21 @@ export interface ChatInvokeStats {
 }
 
 /** Details stay in owner-checked chat metadata. Also projects historical receipt-bearing rows. */
-function coarseOutcome(payload: { evidence?: unknown; status?: unknown; success?: unknown; evidenceOmitted?: unknown } | null | undefined):
+function coarseOutcome(payload: { evidence?: unknown; status?: unknown; success?: unknown; evidenceOmitted?: unknown } | null | undefined,
+  historical = false):
   { status: Outcome; evidenceOmitted: boolean } {
   const evidence = normalizeEvidence(payload?.evidence);
   const invalidEvidence = payload?.evidence !== undefined && !evidence;
   const storedStatus = typeof payload?.status === 'string' && ['success', 'error', 'empty', 'partial', 'unverified'].includes(payload.status)
     ? payload.status as Outcome : payload?.success === false ? 'error' : 'unverified';
-  const status = evidence?.status ?? (invalidEvidence && !['error', 'partial'].includes(storedStatus) ? 'unverified' : storedStatus);
+  let status = evidence?.status ?? (invalidEvidence && !['error', 'partial'].includes(storedStatus) ? 'unverified' : storedStatus);
+  if (historical && payload?.evidence !== undefined) {
+    // Match the aggregate CASE: historical detailed rows never certify success.
+    const rawStatus = payload.evidence && typeof payload.evidence === 'object' && 'status' in payload.evidence
+      ? payload.evidence.status : undefined;
+    status = payload.status === 'error' || payload.status === 'partial' ? payload.status
+      : rawStatus === 'error' || rawStatus === 'partial' ? rawStatus : 'unverified';
+  }
   const evidenceOmitted = invalidEvidence || payload?.evidenceOmitted === true || !!(evidence?.truncated || evidence?.invalid
     || evidence?.domains.some(d => d.truncated || d.invalid || d.receipts.some(r => r.quality?.truncated || r.quality?.invalid || r.quality?.unsupported)));
   return { status, evidenceOmitted };
@@ -130,7 +138,7 @@ export async function getChatInvokeStats(days = 7, recentLimit = 20): Promise<Ch
     return {
       totalCalls, successRate, avgElapsedMs, byGateway, unverifiedCalls: totalCalls - assessedCalls,
       recent: recent.rows.map((r) => {
-        const { status, evidenceOmitted } = coarseOutcome(r.payload);
+        const { status, evidenceOmitted } = coarseOutcome(r.payload, true);
         return {
         gateway: r.gateway as string,
         success: status === 'unverified' ? null : status === 'success', status, ...(evidenceOmitted ? { evidenceOmitted } : {}),

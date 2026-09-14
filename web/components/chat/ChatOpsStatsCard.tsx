@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { sectionByKey } from '@/lib/sections';
 import type { ChatInvokeStats } from '@/lib/trace';
 import { useI18n } from '@/components/shell/LanguageProvider';
-import { evidenceLabels } from '@/lib/chat-evidence';
+import { evidenceLabels, evidenceSuccessRateLabels } from '@/lib/chat-evidence';
 
 // v1-parity AI-call ops stats (v1 /agentcore page): call volume / success rate / avg latency per
 // gateway + recent calls, from /api/chat/stats. Self-contained card for the Bedrock usage page.
@@ -39,7 +39,7 @@ export default function ChatOpsStatsCard() {
           <div className="mt-1 text-[20px] font-semibold tabular-nums text-ink-800">{s.totalCalls.toLocaleString()}</div>
         </div>
         <div className="rounded-lg border border-ink-100 bg-card p-4">
-          <div className="text-[11px] text-ink-400">{tt('성공률')}</div>
+          <div className="text-[11px] text-ink-400">{evidenceSuccessRateLabels[lang]}</div>
           <div className={`mt-1 text-[20px] font-semibold tabular-nums ${rateColor}`}>{rate === null ? '—' : `${Math.round(rate * 100)}%`}</div>
           {s.unverifiedCalls > 0 ? <div className="text-[11px] text-ink-400">{evidenceLabels[lang].unverified}: {s.unverifiedCalls}</div> : null}
         </div>

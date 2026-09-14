@@ -115,14 +115,24 @@ print(json.dumps([connection.execute('SELECT '+expression+' FROM (SELECT ? AS pa
 `;
   const payloads = [
     { status: 'success', evidence: { version: 1, status: 'success', domains: [] } },
+    { status: 'success', evidence: { version: 1, status: 'success', domains: [{
+      gateway: 'network', status: 'success', completion: { version: 1, receiptCount: 1 },
+      receipts: [{ version: 1, callId: 'old', tool: 'inspect', observedAt: 1, terminalObservedAt: 2,
+        outcome: 'success', requestedScope: {}, observedScope: {}, inputs: {} }],
+    }] } },
     { status: 'success', evidence: { version: 99 } },
     { status: 'success', evidence: null },
     { status: 'partial', evidence: { version: 1, status: 'partial' } },
     { status: 'error', evidence: { version: 1, status: 'error' } },
+    { status: 'success', evidence: { status: 'error' } },
     { status: 'success' }, { status: 'unverified' },
   ];
   const actual = JSON.parse(execFileSync('python3', ['-B', '-c', script], {
     input: JSON.stringify([expression, payloads]), encoding: 'utf8',
   }));
-  expect(actual).toEqual(['unverified', 'unverified', 'unverified', 'partial', 'error', 'success', 'unverified']);
+  expect(actual).toEqual(['unverified', 'unverified', 'unverified', 'unverified', 'partial', 'error', 'error', 'success', 'unverified']);
+  query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: payloads.map(payload => ({
+    gateway: 'network', occurred_at: '2026-09-14T00:00:00Z', payload,
+  })) });
+  expect((await getChatInvokeStats()).recent.map(row => row.status)).toEqual(actual);
 });

@@ -16,6 +16,7 @@ import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
 import ChatOpsStatsCard from '@/components/chat/ChatOpsStatsCard';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { evidenceSuccessRateLabels } from '@/lib/chat-evidence';
 
 interface CostBreakdown { inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number; total: number; cacheSavings: number }
 
@@ -51,7 +52,7 @@ async function loadAllAccounts(range: string): Promise<BedrockData> {
 }
 
 export default function BedrockPage() {
-  const { tt } = useI18n();
+  const { tt, lang } = useI18n();
   const [range, setRange] = useState('24h');
   const [d, setD] = useState<BedrockData | null>(null);
   const [err, setErr] = useState('');
@@ -84,7 +85,7 @@ export default function BedrockPage() {
   useEffect(() => { load(); }, [load]);
 
   const [picked, setPicked] = useState<string | null>(null);
-  const [appStats, setAppStats] = useState<{ totalCalls: number; successRate: number; avgElapsedMs: number } | null>(null);
+  const [appStats, setAppStats] = useState<{ totalCalls: number; successRate: number | null; avgElapsedMs: number | null } | null>(null);
   useEffect(() => {
     let alive = true;
     fetch('/api/chat/stats')
@@ -228,10 +229,10 @@ export default function BedrockPage() {
                       <dd className="tabular mt-0.5 text-[22px] font-semibold text-ink-800">{totalInvocations.toLocaleString()}</dd></div>
                     <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">{tt('AWSops 앱 호출 (기록 누계)')}</dt>
                       <dd className="tabular mt-0.5 text-[22px] font-semibold text-ink-800">{appStats ? appStats.totalCalls.toLocaleString() : DASH}</dd></div>
-                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">{tt('앱 성공률')}</dt>
-                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{appStats ? `${(appStats.successRate * 100).toFixed(0)}%` : DASH}</dd></div>
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">{evidenceSuccessRateLabels[lang]}</dt>
+                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{appStats?.successRate == null ? DASH : `${(appStats.successRate * 100).toFixed(0)}%`}</dd></div>
                     <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">{tt('앱 평균 응답')}</dt>
-                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{appStats ? `${(appStats.avgElapsedMs / 1000).toFixed(1)}s` : DASH}</dd></div>
+                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{appStats?.avgElapsedMs == null ? DASH : `${(appStats.avgElapsedMs / 1000).toFixed(1)}s`}</dd></div>
                   </dl>
                   <p className="mt-3 text-[11px] text-ink-400">{tt('계정 전체는 CloudWatch(선택 기간), 앱은 어시스턴트 호출 기록 — 집계 창이 다릅니다.')}</p>
                 </Card>

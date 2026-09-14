@@ -3,18 +3,18 @@ import { evidenceLabels, type ChatEvidence, type SourceStatus } from '@/lib/chat
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 const labels = {
-  ko: { receipts: '도구 호출 근거', requested: '요청 범위', observed: '관측 범위', unknown: '알 수 없음',
+  ko: { receipts: '도구 호출 근거', requested: '요청 범위', observed: '도구가 보고한 범위', unknown: '알 수 없음',
     publication: '그래프 게시 시각', sources: '최근 시도 입력', published: '마지막 게시 입력', stale: '오래되거나 불완전한 원본',
-    bounded: '일부 근거 생략', timing: '시각은 스트림 관측 시점이며 실행 시간이 아닙니다.' },
-  en: { receipts: 'Tool call evidence', requested: 'Requested scope', observed: 'Observed scope', unknown: 'Unknown',
+    bounded: '일부 근거 생략', timing: '시각은 스트림 관측 시점이며 실행 시간이 아닙니다. 원본 범위와 시점은 도구의 보고값입니다.' },
+  en: { receipts: 'Tool call evidence', requested: 'Requested scope', observed: 'Tool-reported scope', unknown: 'Unknown',
     publication: 'Graph publication time', sources: 'Latest attempted input', published: 'Last published input', stale: 'Stale or incomplete sources',
-    bounded: 'Some evidence omitted', timing: 'Times are stream observations, not execution durations.' },
-  zh: { receipts: '工具调用证据', requested: '请求范围', observed: '观测范围', unknown: '未知',
+    bounded: 'Some evidence omitted', timing: 'Times are stream observations, not execution durations. Scope and source times are reported by the tool.' },
+  zh: { receipts: '工具调用证据', requested: '请求范围', observed: '工具报告的范围', unknown: '未知',
     publication: '图发布时刻', sources: '最近尝试的输入', published: '最后发布的输入', stale: '来源过期或不完整',
-    bounded: '部分证据已省略', timing: '时间为流观测时刻，并非执行时长。' },
-  ja: { receipts: 'ツール呼び出しの根拠', requested: '要求範囲', observed: '観測範囲', unknown: '不明',
+    bounded: '部分证据已省略', timing: '时间为流观测时刻，并非执行时长。范围和来源时间由工具报告。' },
+  ja: { receipts: 'ツール呼び出しの根拠', requested: '要求範囲', observed: 'ツールが報告した範囲', unknown: '不明',
     publication: 'グラフ公開時刻', sources: '最新の試行入力', published: '最終公開の入力', stale: '古い、または不完全なソース',
-    bounded: '一部の根拠を省略', timing: '時刻はストリーム観測時点であり、実行時間ではありません。' },
+    bounded: '一部の根拠を省略', timing: '時刻はストリーム観測時点であり、実行時間ではありません。範囲とソース時刻はツールの報告値です。' },
 };
 
 const sourceLabels: Record<keyof typeof labels, Record<SourceStatus, string>> = {

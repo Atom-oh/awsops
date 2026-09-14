@@ -40,8 +40,8 @@ describe('saved evidence boundaries', () => {
     } }, inputs: { query: 'SECRET', url: 'https://u:SECRET@host', region: 'us-east-1' } });
     expect(r?.outcome).toBe('partial');
     expect(r?.observedScope).toEqual({});
-    expect(r?.quality?.collection.sources[0].capturedAtMs).toBe(1000);
-    expect(r?.quality?.collection.publishedSources[0].capturedAtMs).toBe(500);
+    expect(r?.quality?.collection?.sources?.[0]?.capturedAtMs).toBe(1000);
+    expect(r?.quality?.collection?.publishedSources?.[0]?.capturedAtMs).toBe(500);
     expect(JSON.stringify(r)).not.toContain('SECRET');
   });
   it('does not certify metadata with malformed quality and no terminal observation', () => {
