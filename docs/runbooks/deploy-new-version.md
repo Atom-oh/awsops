@@ -10,6 +10,13 @@ Required CI and latest-HEAD AI review must be complete, with no unresolved
 Critical/Major findings. Check migrations and the changed deployment surfaces below.
 A docs-only change does not itself require an ECS or Terraform deployment.
 
+For an origin web release through GitHub Actions, use the
+[production Actions runbook](production-actions.md). Its default `check` mode
+performs read-only validation; `deploy` requires the reviewed current main
+snapshot, migration completion, exact running-image verification and
+authenticated smoke checks. The manual commands below remain operator entry
+points for the other release surfaces and recovery.
+
 ```bash
 git status --short
 git rev-parse HEAD
@@ -20,6 +27,13 @@ make help
 Private Terraform root: `terraform/v2/foundation/`. Do not substitute the public
 sample's `terraform/foundation/` path. Generated backend/tfvars contain environment
 configuration and remain untracked. Do not dump credentials into logs.
+
+`make migrate` validates the committed RDS certificate chain and hostname. A
+missing/malformed trust bundle fails closed. The optional
+[private CI executor](private-ci-migrations.md) exports the reviewed commit's
+inputs and runs migrations inside Fargate. The designed path keeps DB passwords
+inside the task; the access contract documents the controller credential holder's
+broader [residual authority](../reference/github-actions-access.md#optional-private-migration-authority).
 
 ## Release boundaries
 

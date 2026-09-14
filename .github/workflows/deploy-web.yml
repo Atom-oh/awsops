@@ -1,0 +1,225 @@
+name: Production Web Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check: metadata and authenticated smoke; preview: private DB preview task; deploy: release reviewed main"
+        required: true
+        type: choice
+        default: check
+        options: [check, preview, deploy]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: origin-production-web-release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Validate production release request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require this repository, main branch and an explicit operation
+        env:
+          RELEASE_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REPOSITORY" = "Atom-oh/awsops" ] &&
+          [ "$GITHUB_REF" = "refs/heads/main" ] &&
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || {
+            echo "::error::Only an origin main dispatch can release production"; exit 1;
+          }
+          case "$RELEASE_MODE" in
+            check|preview|deploy) ;;
+            *) echo "::error::Unsupported release operation"; exit 1 ;;
+          esac
+
+  release:
+    needs: [guard]
+    if: github.repository == 'Atom-oh/awsops' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    name: Verify and release reviewed main
+    runs-on: awsops-claude-arm
+    environment: production
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ${{ vars.AWSOPS_REGION }}
+      AWS_PAGER: ""
+      TF_ROOT: terraform/v2/foundation
+      CI_COMMIT_SHA: ${{ github.sha }}
+      CI_EXPECTED_ACCOUNT_ID: ${{ vars.AWSOPS_ACCOUNT_ID }}
+      CI_EXPECTED_PROJECT: ${{ vars.AWSOPS_PROJECT }}
+      CI_EXPECTED_URL: ${{ vars.AWSOPS_PUBLIC_URL }}
+      CI_ROLE_ARN: ${{ vars.AWSOPS_RELEASE_ROLE_ARN }}
+      CI_SQL_READER_SECRET_ARN: ${{ vars.AWSOPS_SQL_READER_SECRET_ARN }}
+      CI_SMOKE_SECRET_ARN: ${{ vars.AWSOPS_SMOKE_SECRET_ARN }}
+      AWSOPS_MIGRATION_CONFIG_JSON: ${{ vars.AWSOPS_MIGRATION_CONFIG_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: scripts/v2/package-lock.json
+
+      - name: Require completed review and CI for this main snapshot
+        run: python3 scripts/v2/ci_origin_guard.py
+
+      - name: Prepare private paths and validate target configuration
+        run: python3 scripts/v2/ci_origin_workflow.py prepare
+
+      - name: Obtain scoped production credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWSOPS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWSOPS_REGION }}
+          role-duration-seconds: 3600
+          role-session-name: awsops-release-${{ github.run_id }}
+          unset-current-credentials: true
+
+      - name: Verify the actual production account and role
+        run: python3 scripts/v2/ci_origin_workflow.py verify-caller
+
+      - name: Verify account, project, service and current deployment
+        id: target
+        run: python3 scripts/v2/ci_origin_release.py preflight
+
+      - name: Read verifier credentials into a private file
+        run: python3 scripts/v2/ci_origin_workflow.py fetch-smoke-secret
+
+      - name: Verify private migration target metadata
+        run: python3 scripts/v2/ci_origin_release.py check-executor
+
+      - name: Read-only authenticated preflight
+        if: inputs.mode != 'deploy'
+        run: python3 scripts/v2/ci_origin_release.py check-smoke
+
+      - name: Prepare the reviewed application build context
+        if: inputs.mode == 'deploy'
+        run: cp CHANGELOG.md web/CHANGELOG.md
+
+      - uses: docker/setup-buildx-action@v3
+        if: inputs.mode != 'check'
+
+      - name: Log in to production ECR
+        if: inputs.mode != 'check'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Export committed migration build inputs
+        if: inputs.mode != 'check'
+        id: migration_context
+        run: python3 scripts/v2/ci_origin_migration.py prepare-build
+
+      - name: Build the reviewed private migration image
+        if: inputs.mode != 'check'
+        id: migration_image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.migration_context.outputs.context }}
+          file: ${{ steps.migration_context.outputs.context }}/scripts/v2/ci/Dockerfile.origin-migration
+          build-args: SOURCE_COMMIT=${{ github.sha }}
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.target.outputs.repository_uri }}:migration-${{ github.sha }}
+
+      - name: Preview migrations inside the private database network
+        if: inputs.mode == 'preview'
+        env:
+          MIGRATION_DIGEST: ${{ steps.migration_image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 scripts/v2/ci_origin_release.py check-executor
+          python3 scripts/v2/ci_origin_migration.py run --digest "$MIGRATION_DIGEST" --mode preview
+
+      - name: Verify the private migration preview receipt
+        if: inputs.mode == 'preview'
+        run: python3 scripts/v2/ci_origin_release.py preview-migrations
+
+      - name: Build immutable ARM64 image
+        if: inputs.mode == 'deploy'
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.target.outputs.repository_uri }}:web-${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Bind the registry image to this commit
+        if: inputs.mode == 'deploy'
+        env:
+          BUILT_DIGEST: ${{ steps.image.outputs.digest }}
+        run: python3 scripts/v2/ci_origin_release.py record-build --digest "$BUILT_DIGEST"
+
+      - name: Refresh credentials after the image build
+        if: inputs.mode == 'deploy'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWSOPS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWSOPS_REGION }}
+          role-duration-seconds: 3600
+          role-session-name: awsops-rollout-${{ github.run_id }}
+          unset-current-credentials: true
+
+      - name: Verify refreshed production credentials
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_workflow.py verify-caller
+
+      - name: Recheck source before production writes
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_guard.py
+
+      - name: Apply required migrations in private Fargate
+        if: inputs.mode == 'deploy'
+        env:
+          MIGRATION_DIGEST: ${{ steps.migration_image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 scripts/v2/ci_origin_release.py check-executor
+          python3 scripts/v2/ci_origin_migration.py run --digest "$MIGRATION_DIGEST" --mode apply
+
+      - name: Require the successful migration task receipt
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_release.py migrate
+
+      - name: Promote the verified image and start its deployment
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_release.py roll-web
+
+      - name: Verify the exact deployment and healthy running image
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_release.py verify-web
+
+      - name: Verify authenticated application and database responses
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_release.py smoke
+
+      - name: Stop any remaining migration task owned by this run
+        if: always() && inputs.mode != 'check' && env.CI_MIGRATION_RECEIPT != ''
+        run: python3 scripts/v2/ci_origin_migration.py cleanup
+
+      - name: Remove private configuration and credentials
+        if: always()
+        run: python3 scripts/v2/ci_origin_workflow.py cleanup

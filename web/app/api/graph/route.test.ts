@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => vi.fn());
 const query = vi.hoisted(() => vi.fn());
@@ -6,6 +6,7 @@ vi.mock('@/lib/auth', () => ({ verifyUser: auth }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query, connect: async () => ({ query, release() {} }) }) }));
 import { GET } from './route';
 import claimCases from '../../../lib/fixtures/trace-queue-claims.json';
+afterEach(() => vi.restoreAllMocks());
 
 describe('graph collection evidence API', () => {
   beforeEach(() => {
@@ -63,8 +64,9 @@ describe('graph collection evidence API', () => {
   });
 
   it('retains readable graph with a safe state-read failure', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     query.mockImplementation(async (sql: string) => {
-      if (sql.includes('FROM topology_graph_state')) throw new Error('credential=secret');
+      if (sql.includes('FROM topology_graph_state')) throw Object.assign(new Error('credential=secret'), { code: '42501' });
       return { rows: sql.includes('FROM topology_nodes') ? [{ id: 'retained', kind: 'vpc' }] : [] };
     });
     const response = await GET(new Request('http://localhost/api/graph?class=infra'));
@@ -73,6 +75,15 @@ describe('graph collection evidence API', () => {
     expect(body.collection).toMatchObject({ status: 'error', stale: true, failureReason: 'state_read_failed' });
     expect(body.nodes).toHaveLength(1);
     expect(JSON.stringify(body)).not.toContain('credential');
+    expect(log).toHaveBeenCalledWith('[graph-read] failed {"stage":"graph_state","code":"42501"}');
+  });
+  it('logs bounded read diagnostics while keeping errors out of the HTTP body', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    query.mockRejectedValue(Object.assign(new Error('credential=secret'), { code: 'credential=secret' }));
+    const response = await GET(new Request('http://localhost/api/graph'));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ status: 'error', message: 'Graph read failed' });
+    expect(log).toHaveBeenCalledWith('[graph-read] failed {"stage":"graph_read","code":"unknown"}');
   });
 });
 

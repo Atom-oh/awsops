@@ -2,8 +2,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { Pool } from 'pg';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { rebuildGraph, rebuildInfraGraph } from './graph-store';
+import { spawnSync } from 'node:child_process';
+import { rebuildGraph, rebuildInfraGraph, rebuildTraceGraph } from './graph-store';
+import { inventorySnapshot } from './graph-inventory';
 import { readGraphState, writeGraphState } from './graph-state';
+import type { ServiceGraphCall, SourceRead } from './trace-source';
 const api = vi.hoisted(() => ({ pool: null as unknown }));
 vi.mock('@/lib/auth', () => ({ verifyUser: async () => ({ sub: 'fixture' }) }));
 vi.mock('@/lib/db', () => ({ getPool: () => api.pool }));
@@ -22,6 +25,12 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
   const old = new Date(now - 3_600_000).toISOString();
   beforeAll(async () => {
     const admin = new Pool({ host: socket, user: 'postgres', database: 'awsops' });
+    const sentinel = await admin.query("SELECT shobj_description(oid,'pg_database') AS marker FROM pg_database WHERE datname=current_database()");
+    if (sentinel.rows[0]?.marker !== 'awsops-disposable-graph-test') {
+      await admin.end();
+      throw new Error('Refusing graph fixtures without disposable database sentinel');
+    }
+    expect((await admin.query('SHOW server_version')).rows[0].server_version).toMatch(/^17\./);
     if (!(await admin.query("SELECT 1 FROM pg_database WHERE datname='awsops_graph_task3'")).rowCount)
       await admin.query('CREATE DATABASE awsops_graph_task3');
     await admin.end();
@@ -43,7 +52,9 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
     vi.restoreAllMocks();
     api.pool = pool;
     await pool.query(`TRUNCATE inventory_resources, inventory_sync_runs, topology_nodes, topology_edges, topology_graph_state;
-      DROP TRIGGER IF EXISTS reject_publication ON topology_nodes;`);
+      DROP TRIGGER IF EXISTS reject_publication ON topology_nodes;
+      DROP TRIGGER IF EXISTS reject_publication ON topology_edges;
+      DROP TRIGGER IF EXISTS reject_publication ON topology_graph_state;`);
     await pool.query(`INSERT INTO inventory_sync_runs
       (resource_type, status, started_at, finished_at, last_success_at, row_count, unknown_attribute_count)
       SELECT t, 'succeeded', $2, $2, $2, 0, 0 FROM unnest($1::text[]) t`, [flowTypes, recent]);
@@ -59,7 +70,331 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
   }
   const build = (cls: string) => cls === 'flow' ? rebuildGraph(pool) : rebuildInfraGraph(pool);
   const state = (cls: string, account = 'self') => readGraphState(pool, account, cls as never);
+  const trace = (items: ServiceGraphCall[] = [{ client: 'api', server: 'db', count: 7 }],
+    status: SourceRead<ServiceGraphCall>['status'] = 'ok', target = pool) =>
+    rebuildTraceGraph(target, [], undefined, [{
+      available: async () => true,
+      calls: async (mins, endMs = Date.now()) => ({ sourceId: 'metrics:test', items, status,
+        reasons: [], windowStartMs: endMs - mins * 60_000, windowEndMs: endMs }),
+    }]);
 
+  it.each(['flow', 'infra'])('%s confirms host empty from a succeeded aggregate with member-only rows', async cls => {
+    await seed(cls, recent, '111122223333');
+    await build(cls);
+    const result = await state(cls);
+    expect(result).toMatchObject({ status: 'empty', retainedPrevious: false, stale: false });
+    expect(result.sources).toContainEqual(expect.objectContaining({
+      sourceId: `inventory:${cls === 'flow' ? 'alb' : 'vpc'}`, itemCount: 0, status: 'empty',
+    }));
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE account_id='111122223333'")).rowCount).toBeGreaterThan(0);
+  });
+  it.each([1, null])('publishes succeeded enumeration with unknown attributes %s after pruning', async unknown => {
+    await seed('infra');
+    await build('infra');
+    await pool.query("UPDATE inventory_resources SET resource_id='replacement'");
+    await pool.query("UPDATE inventory_sync_runs SET unknown_attribute_count=$1 WHERE resource_type='vpc'", [unknown]);
+    const result = await build('infra');
+    expect(result).toMatchObject({ published: 1, retained: 0, degraded: 1 });
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: false, stale: true });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows)
+      .toEqual([{ id: 'vpc:replacement' }]);
+    await pool.query('DELETE FROM inventory_resources; UPDATE inventory_sync_runs SET row_count=0');
+    await build('infra');
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: false });
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='infra'")).rows).toEqual([]);
+  });
+  it('ignores unrelated failed inventory sources without dropping contributing failure guards', async () => {
+    await seed('infra');
+    await pool.query(`INSERT INTO inventory_sync_runs(resource_type,status) VALUES ('iam_role','failed')`);
+    expect((await build('infra')).nodes).toBeGreaterThan(0);
+    expect(await state('infra')).toMatchObject({ status: 'ok', retainedPrevious: false });
+    await pool.query(`UPDATE inventory_sync_runs SET status='failed' WHERE resource_type='vpc'`);
+    expect(await build('infra')).toMatchObject({ published: 0, retained: 1 });
+    expect(await state('infra')).toMatchObject({ status: 'error', retainedPrevious: true });
+  });
+  it.each(['flow', 'infra'].flatMap(cls => ['failed', 'partial', 'running'].map(status => [cls, status])))(
+    '%s member first publication includes aggregate %s with no member rows/history for that type', async (cls, status) => {
+      await seed(cls, recent, '111122223333');
+      await pool.query("UPDATE inventory_sync_runs SET status=$1 WHERE resource_type='lambda'", [status]);
+      await build(cls);
+      const result = await state(cls, '111122223333');
+      expect(result).toMatchObject({ stale: true, retainedPrevious: true, captured_at: null });
+      expect(result.sources).toContainEqual(expect.objectContaining({
+        sourceId: 'inventory:lambda', scope: 'aggregate', producerStatus: status, itemCount: 0,
+        status: status === 'failed' ? 'error' : 'unavailable',
+      }));
+      expect((await pool.query("SELECT * FROM topology_nodes WHERE account_id='111122223333'")).rowCount).toBe(0);
+    });
+  it('skips a contended publication without holding a pool connection in a lock wait', async () => {
+    await seed('infra');
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT pg_advisory_xact_lock($1)', [0x696e6672]);
+    try {
+      const result = await Promise.race([build('infra'), new Promise(resolve => setTimeout(() => resolve('waited'), 800))]);
+      expect(result).toMatchObject({ published: 0, skipped: 1, reasons: ['publication_busy'] });
+      expect((await pool.query('SELECT * FROM topology_nodes')).rowCount).toBe(0);
+    } finally { await holder.query('ROLLBACK'); holder.release(); }
+  });
+  it('bounds an account snapshot and retains its graph with explicit truncation', async () => {
+    await seed('infra');
+    await build('infra');
+    await pool.query(`INSERT INTO inventory_resources(resource_type,resource_id,data,captured_at)
+      SELECT 'vpc', 'vpc-'||n, '{}', $1 FROM generate_series(1,2000) n`, [recent]);
+    expect(await build('infra')).toMatchObject({ published: 0, retained: 1, reasons: ['snapshot_limit'] });
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: true, inputTruncated: true });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+  });
+  it('reads ledger and rows in one snapshot, then releases that connection before publication', async () => {
+    await seed('infra');
+    let changed = false;
+    const wrapped = { connect: async () => {
+      const client = await pool.connect();
+      const query = client.query.bind(client);
+      return { on: client.on.bind(client), removeListener: client.removeListener.bind(client),
+        release: client.release.bind(client), query: async (sql: string, args?: unknown[]) => {
+        const result = await query(sql, args);
+        if (sql.includes('FROM inventory_sync_runs') && !sql.includes('UNION') && !changed) {
+          changed = true;
+          const freeLock = await pool.query('SELECT pg_try_advisory_xact_lock($1) AS acquired', [0x696e6672]);
+          expect(freeLock.rows[0].acquired).toBe(true);
+          await pool.query(`DELETE FROM inventory_resources; UPDATE inventory_sync_runs SET row_count=0`);
+        }
+        return result;
+      } };
+    }, query: pool.query.bind(pool) };
+    await rebuildInfraGraph(wrapped as never);
+    expect(changed).toBe(true);
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+    expect(await state('infra')).toMatchObject({ status: 'ok', retainedPrevious: false });
+  });
+  it('does not leave trace publication waiting on a class lock in the web pool', async () => {
+    await trace();
+    const previous = await state('trace');
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT pg_advisory_xact_lock($1)', [0x74726163]);
+    try {
+      expect(await Promise.race([trace([]),
+        new Promise(resolve => setTimeout(() => resolve('waited'), 800))]))
+        .toMatchObject({ published: 0, skipped: 1, reasons: ['publication_busy'], nodes: 0, edges: 0 });
+      expect(await state('trace')).toEqual(previous);
+      expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace'")).rowCount).toBe(2);
+    } finally { await holder.query('ROLLBACK'); holder.release(); }
+  });
+  it('publishes a cap-sized trace in bounded batches with edge metadata and scoped sweeps', async () => {
+    const items = Array.from({ length: 500 }, (_, i) => ({ client: `svc-${i % 200}`,
+      server: `svc-${(i % 200 + 1 + Math.floor(i / 200)) % 200}`, count: 7 }));
+    await seed('infra');
+    await build('infra');
+    let statements = 0;
+    const delayed = { query: pool.query.bind(pool), connect: async () => {
+      const client = await pool.connect();
+      return { on: client.on.bind(client), removeListener: client.removeListener.bind(client),
+        release: client.release.bind(client), query: async (sql: string, args?: unknown[]) => {
+        statements++;
+        await new Promise(resolve => setTimeout(resolve, 8));
+        return client.query(sql, args);
+      } };
+    } } as unknown as Pool;
+    const start = performance.now();
+    const result = await trace(items, 'ok', delayed);
+    console.info('trace-cap', JSON.stringify({ nodes: result.nodes, edges: result.edges, statements,
+      elapsedMs: Math.round(performance.now() - start), delayPerStatementMs: 8 }));
+    expect(result).toMatchObject({ published: 1, retained: 0, skipped: 0, degraded: 0, nodes: 200, edges: 500 });
+    expect(statements).toBeLessThan(20);
+    expect(performance.now() - start).toBeLessThan(4000);
+    expect((await pool.query("SELECT count(*)::int AS n FROM topology_nodes WHERE class='trace'")).rows[0].n).toBe(200);
+    expect((await pool.query("SELECT count(*)::int AS n FROM topology_edges WHERE class='trace' AND meta='{\"spanCount\":0,\"metricCount\":7}'")).rows[0].n).toBe(500);
+    await trace(items.map(item => ({ ...item, count: 9 })));
+    expect((await pool.query("SELECT count(*)::int AS n FROM topology_edges WHERE class='trace' AND meta->>'metricCount'='9'")).rows[0].n).toBe(500);
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='infra'")).rowCount).toBe(1);
+    expect(await trace([...items, { client: 'extra', server: 'svc-0', count: 1 }]))
+      .toMatchObject({ published: 1, degraded: 1, nodes: 200, edges: 500 });
+    expect(await state('trace')).toMatchObject({ status: 'partial', nodeDrops: 1, edgeDrops: 1, retainedPrevious: false });
+  }, 10_000);
+  it.each(['error', 'unavailable', 'partial'] as const)('trace %s retains its prior graph and reports no publication', async status => {
+    await trace();
+    const previous = await state('trace');
+    expect(await trace([], status)).toMatchObject({ published: 0, retained: 1, skipped: 0, nodes: 0, edges: 0 });
+    expect(await state('trace')).toMatchObject({ status, stale: true, retainedPrevious: true, captured_at: previous.captured_at });
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace'")).rowCount).toBe(2);
+  });
+  it('trace publishes degraded evidence and confirmed empty with distinct outcomes', async () => {
+    expect(await trace(undefined, 'partial')).toMatchObject({ published: 1, degraded: 1, nodes: 2, edges: 1 });
+    expect(await state('trace')).toMatchObject({ status: 'partial', retainedPrevious: false });
+    expect(await trace([])).toMatchObject({ published: 1, degraded: 0, retained: 0, skipped: 0, nodes: 0, edges: 0 });
+    expect(await state('trace')).toMatchObject({ status: 'empty', stale: false });
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace'")).rowCount).toBe(0);
+  });
+  it.each([0, -1000])('trace discloses superseded attempts (%s ms) without changing graph or state', async offset => {
+    await trace();
+    const previous = await state('trace');
+    vi.spyOn(Date, 'now').mockReturnValue(new Date(previous.attempted_at).getTime() + offset);
+    expect(await trace([])).toMatchObject({ published: 0, skipped: 1, reasons: ['superseded'] });
+    expect(await state('trace')).toEqual(previous);
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace'")).rowCount).toBe(2);
+  });
+  it.each(['raise', 'timeout'])('trace rolls back an edge write %s and records failure without renewing publication', async mode => {
+    await trace();
+    const previous = await state('trace');
+    const nodes = (await pool.query("SELECT * FROM topology_nodes WHERE class='trace' ORDER BY id")).rows;
+    const edges = (await pool.query("SELECT * FROM topology_edges WHERE class='trace' ORDER BY id")).rows;
+    await pool.query(`CREATE OR REPLACE FUNCTION reject_graph() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN ${mode === 'timeout' ? 'PERFORM pg_sleep(2.1); RETURN NEW;' : "RAISE EXCEPTION 'credential=do-not-expose';"} END $$;
+      CREATE TRIGGER reject_publication BEFORE INSERT OR UPDATE ON topology_edges FOR EACH ROW EXECUTE FUNCTION reject_graph();`);
+    await expect(trace([{ client: 'new', server: 'other', count: 3 }])).rejects.toThrow();
+    expect(await state('trace')).toMatchObject({ status: 'error', stale: true, retainedPrevious: true,
+      failureReason: 'publication_failed', captured_at: previous.captured_at });
+    expect(JSON.stringify(await state('trace'))).not.toContain('credential');
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace' ORDER BY id")).rows).toEqual(nodes);
+    expect((await pool.query("SELECT * FROM topology_edges WHERE class='trace' ORDER BY id")).rows).toEqual(edges);
+  }, 10_000);
+  it.each([
+    ['helper', 'available'], ['helper', 'fatal'], ['idle', 'available'], ['idle-query', 'available'], ['rollback', 'available'],
+    ...['cli', 'timer'].flatMap(mode => ['available', 'sql-error', 'fatal', 'connect-error'].map(recording => [mode, recording])),
+  ])('fatal PG recovery through %s with %s failure recording survives in an isolated child', async (mode, recording) => {
+    await trace();
+    const previous = await state('trace');
+    const nodes = (await pool.query("SELECT * FROM topology_nodes WHERE class='trace' ORDER BY id")).rows;
+    const edges = (await pool.query("SELECT * FROM topology_edges WHERE class='trace' ORDER BY id")).rows;
+    const child = spawnSync(process.execPath, ['--experimental-vm-modules', 'lib/fixtures/graph-fatal-child.mjs', mode, recording],
+      { encoding: 'utf8', timeout: 15_000, env: process.env });
+    expect(child.status, child.stderr).toBe(0);
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.stderr).not.toMatch(/Unhandled|credential=|Connection terminated|uncaught/i);
+    const result = JSON.parse(child.stdout);
+    expect(result.removed).toBeGreaterThanOrEqual(recording === 'fatal' ? 2 : 1);
+    const afterFailure = mode === 'timer' ? result.afterFailure : await state('trace');
+    if (mode.startsWith('idle') || mode === 'rollback' || recording !== 'available') {
+      expect(JSON.parse(JSON.stringify(afterFailure))).toEqual(JSON.parse(JSON.stringify(previous)));
+    } else {
+      expect(afterFailure).toMatchObject({ status: 'error', stale: true, retainedPrevious: true,
+        failureReason: 'publication_failed' });
+      expect(new Date(afterFailure.captured_at).getTime()).toBe(new Date(previous.captured_at).getTime());
+    }
+    if (mode === 'timer') {
+      expect(result.scheduled).toEqual([['timeout', 60000], ['interval', 60000]]);
+      expect(result.logs).toHaveLength(5); // first cycle fails at trace; overlap skips; next cycle succeeds
+      expect(result.logs.at(-1)).toContain('"published":1');
+      expect(result.closed).toBe(0); // timer keeps the shared pool open for the next cycle
+      expect(await state('trace')).toMatchObject({ status: 'ok', retainedPrevious: false });
+    } else {
+      expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace' ORDER BY id")).rows).toEqual(nodes);
+      expect((await pool.query("SELECT * FROM topology_edges WHERE class='trace' ORDER BY id")).rows).toEqual(edges);
+    }
+    if (mode === 'cli') expect(result).toMatchObject({ code: 1, closed: 1 });
+    if (!mode.startsWith('idle') && mode !== 'rollback')
+      expect(result).toMatchObject({ originalCode: '25P04', failureAttempts: 1 });
+  }, 20_000);
+  it('trace still rejects if even its failure state cannot be recorded', async () => {
+    await trace();
+    const previous = await state('trace');
+    await pool.query(`CREATE OR REPLACE FUNCTION reject_graph() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'credential=do-not-expose'; END $$;
+      CREATE TRIGGER reject_publication BEFORE INSERT OR UPDATE ON topology_graph_state FOR EACH ROW EXECUTE FUNCTION reject_graph();`);
+    await expect(trace([])).rejects.toThrow();
+    expect(await state('trace')).toEqual(previous);
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace'")).rowCount).toBe(2);
+  });
+  it('sends neither oversized flow payloads nor oversized identifiers to the web process', async () => {
+    await seed('flow');
+    await pool.query(`UPDATE inventory_resources SET resource_id=repeat('x',100000),
+      data=jsonb_build_object('name', repeat('p',100000))`);
+    const snapshot = await inventorySnapshot(pool, 'flow', 'self', ['alb']);
+    expect(snapshot.truncated).toBe(true);
+    expect(JSON.stringify(snapshot.rows).length).toBeLessThan(2048);
+  });
+  it('does not transfer irrelevant infra raw payloads or confuse them with missing required attributes', async () => {
+    await seed('infra');
+    await pool.query(`UPDATE inventory_resources SET data=jsonb_build_object(
+      'name','fixture','raw_unused',repeat('x',1000000))`);
+    const snapshot = await inventorySnapshot(pool, 'infra', 'self', ['vpc']);
+    expect(snapshot.truncated).toBe(false);
+    expect(snapshot.rows[0].data).toEqual({ name: 'fixture' });
+    expect((await build('infra')).published).toBe(1);
+  });
+  it('retains every row when aggregate projected input exceeds the byte budget', async () => {
+    await seed('infra');
+    await build('infra');
+    await pool.query(`INSERT INTO inventory_resources(resource_type,resource_id,data,captured_at)
+      SELECT 'vpc','vpc-'||n,jsonb_build_object('name', repeat('a',60000)),$1
+      FROM generate_series(1,150) n`, [recent]);
+    const snapshot = await inventorySnapshot(pool, 'infra', 'self', ['vpc']);
+    expect(snapshot.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(snapshot.rows))).toBeLessThan(8 * 1024 * 1024 + 100000);
+    expect(await build('infra')).toMatchObject({ retained: 1, reasons: ['snapshot_limit'] });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+  });
+  it('continues a small account after retaining an oversized account', async () => {
+    await pool.query(`INSERT INTO inventory_resources(resource_type,account_id,resource_id,data,captured_at)
+      SELECT 'vpc','self','vpc-'||n,'{}',$1 FROM generate_series(1,2001) n`, [recent]);
+    await seed('infra', recent, '111122223333');
+    expect(await build('infra')).toMatchObject({ published: 1, retained: 1, reasons: ['snapshot_limit'] });
+    expect(await state('infra', '111122223333')).toMatchObject({ retainedPrevious: false, status: 'ok' });
+  });
+  it('uses one per-pool rebuild admission slot and leaves request reads available', async () => {
+    await seed('infra');
+    let unblock!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>(resolve => { unblock = resolve; });
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    let once = false;
+    const wrapped = { connect: async () => {
+      const client = await pool.connect();
+      const query = client.query.bind(client);
+      return { on: client.on.bind(client), removeListener: client.removeListener.bind(client),
+        release: client.release.bind(client), query: async (sql: string, args?: unknown[]) => {
+        const result = await query(sql, args);
+        if (sql.includes('FROM inventory_sync_runs') && !once) {
+          once = true; entered(); await blocked;
+        }
+        return result;
+      } };
+    } };
+    const first = rebuildInfraGraph(wrapped as never);
+    await ready;
+    try {
+      expect(await rebuildInfraGraph(wrapped as never)).toMatchObject({ skipped: 1, reasons: ['rebuild_busy'] });
+      expect((await pool.query('SELECT 42 AS value')).rows[0].value).toBe(42);
+    } finally { unblock(); await first; }
+  });
+  it('discloses undiscovered accounts when the bounded account budget is exceeded', async () => {
+    await pool.query(`INSERT INTO inventory_sync_runs(resource_type,account_id,status,last_success_at,row_count,unknown_attribute_count)
+      SELECT 'vpc', lpad(n::text,12,'0'), 'succeeded', now(), 0, 0 FROM generate_series(1,102) n`);
+    const result = await build('infra');
+    expect(result).toMatchObject({ published: 100, skipped: 1, accountsTruncated: true, reasons: ['account_limit'] });
+    expect((await pool.query('SELECT count(*)::int AS n FROM topology_graph_state')).rows[0].n).toBe(100);
+  });
+  it('rolls back graph expansion beyond its budget and discloses the retained snapshot', async () => {
+    await seed('infra');
+    await build('infra');
+    await pool.query(`INSERT INTO inventory_resources(resource_type,resource_id,data,captured_at)
+      SELECT 'ec2','instance-'||n,jsonb_build_object('security_group_ids',
+        (SELECT jsonb_agg('sg-'||n||'-'||m) FROM generate_series(1,500) m)), $1
+      FROM generate_series(1,9) n`, [recent]);
+    expect(await build('infra')).toMatchObject({ retained: 1, reasons: ['graph_limit'] });
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: true, graphTruncated: true });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+  });
+  it('bounds relation-lock waits and records a failed collection without sweeping', async () => {
+    await seed('infra');
+    await build('infra');
+    const previous = await state('infra');
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('LOCK TABLE inventory_resources IN ACCESS EXCLUSIVE MODE');
+    try {
+      const outcome = await Promise.race([
+        build('infra').then(() => 'unexpected success', () => 'failed'),
+        new Promise(resolve => setTimeout(() => resolve('waited'), 800)),
+      ]);
+      expect(outcome).toBe('failed');
+      expect(await state('infra')).toMatchObject({ status: 'error', captured_at: previous.captured_at,
+        retainedPrevious: true, failureReason: 'source_read_failed' });
+    } finally { await holder.query('ROLLBACK'); holder.release(); }
+  });
   it.each(['flow', 'infra'])('%s does not renew stale source data with a fresh publication', async cls => {
     await seed(cls, old);
     expect((await build(cls)).nodes).toBeGreaterThan(0);

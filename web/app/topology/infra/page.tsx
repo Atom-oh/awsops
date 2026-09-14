@@ -128,8 +128,8 @@ function GraphView({ q }: { q: string }) {
         {graph?.captured_at && <span>{tt('그래프 시점:')} {new Date(graph.captured_at).toLocaleString()}</span>}
         {graph && graph.nodes.length === 0 && !busy && <span>{tt('표시할 그래프 노드가 없습니다. 수집 상태를 확인하세요.')}</span>}
       </div>
-      {!busy && !err && graph ? <div className="px-4"><GraphCollectionStatus collection={graph.collection} /></div> : null}
-      <div className="min-h-0 flex-1">
+      {!busy && !err && graph ? <div className="shrink-0 px-4"><GraphCollectionStatus collection={graph.collection} /></div> : null}
+      <div className="min-h-[240px] flex-1">
         <ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.15 }} minZoom={0.05} proOptions={{ hideAttribution: true }}>
           <Background />
           <Controls />

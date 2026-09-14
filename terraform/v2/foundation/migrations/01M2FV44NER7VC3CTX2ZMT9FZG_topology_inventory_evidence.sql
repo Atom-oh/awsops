@@ -10,7 +10,8 @@ SELECT account_id, class, status, attempted_at, captured_at,
     WHERE (k = ANY(ARRAY['windowStartMs','windowEndMs','nodeDrops','edgeDrops',
                         'orphanSpans','invalidSpans','unresolvedMessaging'])
            AND jsonb_typeof(v) = 'number')
-       OR (k = ANY(ARRAY['retainedPrevious','infraUnavailable']) AND jsonb_typeof(v) = 'boolean')
+       OR (k = ANY(ARRAY['retainedPrevious','infraUnavailable','inputTruncated','graphTruncated'])
+           AND jsonb_typeof(v) = 'boolean')
        OR (k = 'failureReason' AND v #>> '{}' = ANY(ARRAY['publication_failed','source_read_failed']))
   ) || (
     SELECT jsonb_object_agg(name, sanitized)

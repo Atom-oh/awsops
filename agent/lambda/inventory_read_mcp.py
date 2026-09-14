@@ -667,9 +667,6 @@ def lambda_handler(event, context):
             selection_warning = "Topology response is truncated; inspect truncation before inferring full coverage."
         if selection_warning:
             result["warning"] = " ".join(filter(None, [result.get("warning"), selection_warning]))
-        elif collection is None and not nodes:
-            result["warning"] = ("Graph not materialized yet — run scripts/v2/graph-rebuild.mjs "
-                                 "(or the post-sync worker job) to populate topology_nodes/edges.")
         return _ok(result)
 
     if tool_name == "query_inventory":

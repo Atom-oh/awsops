@@ -10,24 +10,50 @@ import time
 from botocore.exceptions import BotoCoreError, ClientError
 from cross_account import get_client, get_role_arn, resolve_tool_name
 
+_ENI_ERROR_CODES = frozenset((
+    "InvalidNetworkInterfaceID.NotFound", "InvalidNetworkInterfaceID.Malformed",
+    "UnauthorizedOperation", "AccessDenied", "AccessDeniedException", "AuthFailure",
+    "RequestLimitExceeded", "Throttling", "ThrottlingException",
+    "EndpointConnectionError", "ConnectionClosedError", "ConnectTimeoutError",
+    "ReadTimeoutError", "SSLError",
+))
+_ENI_GROUP_ROWS = 200
 
-def _eni_read(read, key, unknown, component, **kwargs):
+
+def _eni_read(read, key, unknown, component, *, resource_id=None, **kwargs):
     """One bounded describe call; failed/truncated evidence must not look complete."""
+    scope = {"component": component}
+    if resource_id is not None:
+        scope["resourceId"] = resource_id
     try:
         response = read(**kwargs)
     except (ClientError, BotoCoreError) as exc:
         code = (exc.response.get("Error", {}).get("Code") if isinstance(exc, ClientError)
                 else type(exc).__name__)
-        unknown.append({"component": component, "reason": "read_failed", "errorCode": code})
+        code = code if isinstance(code, str) and code in _ENI_ERROR_CODES else "ReadError"
+        unknown.append({**scope, "reason": "read_failed", "errorCode": code})
         return [], "read_failed"
     rows = response.get(key)
     if not isinstance(rows, list):
-        unknown.append({"component": component, "reason": "response_missing"})
+        unknown.append({**scope, "reason": "response_missing"})
         return [], "response_missing"
     if response.get("NextToken"):
-        unknown.append({"component": component, "reason": "truncated"})
+        unknown.append({**scope, "reason": "truncated"})
         return rows, "truncated"
     return rows, None
+
+
+def _eni_list(resource, key, unknown, component, resource_id):
+    """A missing collection is unassessed; only an actual empty list is empty evidence."""
+    rows = resource.get(key)
+    if not isinstance(rows, list):
+        unknown.append({"component": component, "resourceId": resource_id,
+                        "field": key, "reason": "response_missing"})
+        return []
+    if any(not isinstance(row, dict) for row in rows):
+        unknown.append({"component": component, "resourceId": resource_id,
+                        "field": key, "reason": "response_invalid"})
+    return [row for row in rows if isinstance(row, dict)]
 
 
 def _eni_route_table(ec2, subnet_id, vpc_id, unknown):
@@ -62,7 +88,10 @@ def _eni_route_table(ec2, subnet_id, vpc_id, unknown):
                 reason = "identity_mismatch"
             elif not associations:
                 reason = "association_missing"
-            elif any(a.get("AssociationState", {}).get("State") not in (None, "associated")
+            elif any(not isinstance(a.get("AssociationState"), dict)
+                     or not a["AssociationState"].get("State") for a in associations):
+                reason = "association_state_unknown"
+            elif any(a["AssociationState"]["State"] != "associated"
                      for a in associations):
                 reason = "association_not_established"
             else:
@@ -73,30 +102,63 @@ def _eni_route_table(ec2, subnet_id, vpc_id, unknown):
         return None, selection
 
 
-def _eni_permissions(rules, peer_key, sg_id, unknown):
-    """Keep legacy rule fields, emitting one row per peer, including its full metadata."""
+def _eni_permissions(rules, peer_key, sg_id, unknown, limit):
+    """Bound per-group fan-out and retain explicit peer metadata with visible gaps."""
     rows = []
+    def gap(reason, field=None):
+        item = {"component": "securityGroups", "resourceId": sg_id, "reason": reason}
+        if field:
+            item["field"] = field
+        if item not in unknown:
+            unknown.append(item)
+
     for rule in rules:
         base = {"proto": rule.get("IpProtocol"),
                 "ports": "{}-{}".format(rule.get("FromPort", ""), rule.get("ToPort", ""))}
         if str(rule.get("IpProtocol")) in ("icmp", "1", "icmpv6", "58"):
             base.update(icmpType=rule.get("FromPort"), icmpCode=rule.get("ToPort"))
-        peers = []
+        has_peer = False
         for field, value_key, peer_type in (
             ("IpRanges", "CidrIp", "ipv4"),
             ("Ipv6Ranges", "CidrIpv6", "ipv6"),
             ("UserIdGroupPairs", "GroupId", "securityGroup"),
             ("PrefixListIds", "PrefixListId", "prefixList"),
         ):
-            for peer in rule.get(field) or []:
-                peers.append({**base, peer_key: peer.get(value_key),
-                              "peerType": peer_type, "peer": peer})
-        if not peers:
-            peers.append({**base, peer_key: None, "peerType": "unknown", "peer": {}})
-        if any(p[peer_key] is None for p in peers):
-            unknown.append({"component": "securityGroups", "resourceId": sg_id,
-                            "reason": "peer_missing"})
-        rows.extend(peers)
+            values = rule.get(field, [])
+            if not isinstance(values, list):
+                gap("response_invalid", field)
+                continue
+            for peer in values:
+                if len(rows) >= limit:
+                    gap("truncated")
+                    return rows
+                if not isinstance(peer, dict):
+                    gap("response_invalid", field)
+                    continue
+                projected = {}
+                for key in ("CidrIp", "CidrIpv6", "GroupId", "GroupName", "UserId", "VpcId",
+                            "VpcPeeringConnectionId", "PeeringStatus", "PrefixListId", "Description"):
+                    if key not in peer:
+                        continue
+                    value = peer[key]
+                    if not isinstance(value, str) or (key != "Description" and len(value) > 256):
+                        gap("response_invalid", field)
+                        continue
+                    if key == "Description" and len(value) > 100:
+                        gap("truncated", "Description")
+                        value = value[:100]
+                    projected[key] = value
+                value = projected.get(value_key)
+                if value is None:
+                    gap("peer_missing")
+                rows.append({**base, peer_key: value, "peerType": peer_type, "peer": projected})
+                has_peer = True
+        if not has_peer:
+            if len(rows) >= limit:
+                gap("truncated")
+                return rows
+            gap("peer_missing")
+            rows.append({**base, peer_key: None, "peerType": "unknown", "peer": {}})
     return rows
 
 
@@ -122,30 +184,44 @@ def _eni_route(route, unknown):
 def _get_eni_details(ec2, eni_id):
     if not eni_id:
         return err("eni_id required")
-    enis = ec2.describe_network_interfaces(NetworkInterfaceIds=[eni_id]).get("NetworkInterfaces") or []
+    unknown = []
+    enis, reason = _eni_read(ec2.describe_network_interfaces, "NetworkInterfaces",
+                            unknown, "eni", resource_id=eni_id, NetworkInterfaceIds=[eni_id])
+    if reason:
+        # Entry and component reads share the same fixed diagnostic-code boundary.
+        return {"statusCode": 400, "body": json.dumps({
+            "error": "ENI lookup unavailable; configuration unassessed",
+            "eniId": eni_id, "partial": True, "unknown": unknown,
+        })}
     if len(enis) != 1:
         return err(f"ENI {eni_id}: expected one interface, found {len(enis)}")
     eni = enis[0]
     subnet_id, vpc_id = eni.get("SubnetId"), eni.get("VpcId")
-    unknown, sgs, nacl_rules = [], [], []
-    for sg in eni.get("Groups") or []:
+    sgs, nacl_rules = [], []
+    for sg in _eni_list(eni, "Groups", unknown, "securityGroups", eni_id):
         sg_id = sg.get("GroupId")
-        projected = {"id": sg_id, "name": sg.get("GroupName"), "inbound": [], "outbound": []}
+        projected = {"id": sg_id, "name": sg.get("GroupName"), "inbound": [], "outbound": [],
+                     "partial": True}
         sgs.append(projected)
         if not sg_id:
             unknown.append({"component": "securityGroups", "reason": "identity_missing"})
             continue
         groups, reason = _eni_read(ec2.describe_security_groups, "SecurityGroups",
-                                   unknown, "securityGroups", GroupIds=[sg_id])
+                                   unknown, "securityGroups", resource_id=sg_id, GroupIds=[sg_id])
         if reason:
             continue
         if len(groups) != 1 or groups[0].get("GroupId") != sg_id:
             unknown.append({"component": "securityGroups", "resourceId": sg_id,
                             "reason": "missing" if not groups else "ambiguous"})
             continue
+        unknown_before_rules = len(unknown)
         for key, side, peer_key in (("IpPermissions", "inbound", "source"),
                                     ("IpPermissionsEgress", "outbound", "dest")):
-            projected[side] = _eni_permissions(groups[0].get(key) or [], peer_key, sg_id, unknown)
+            rules = _eni_list(groups[0], key, unknown, "securityGroups", sg_id)
+            remaining = _ENI_GROUP_ROWS - len(projected["inbound"]) - len(projected["outbound"])
+            projected[side] = _eni_permissions(rules, peer_key, sg_id, unknown, remaining)
+        # Completeness is local to this group, including any missing rule peers.
+        projected["partial"] = len(unknown) != unknown_before_rules
 
     nacl_id = None
     if subnet_id:
@@ -155,7 +231,7 @@ def _get_eni_details(ec2, eni_id):
             unknown.append({"component": "nacl", "reason": "ambiguous" if nacls else "missing"})
         elif not reason:
             nacl_id = nacls[0].get("NetworkAclId")
-            for entry in nacls[0].get("Entries") or []:
+            for entry in _eni_list(nacls[0], "Entries", unknown, "nacl", nacl_id):
                 ports = entry.get("PortRange") or {}
                 icmp = entry.get("IcmpTypeCode") or {}
                 nacl_rules.append({
@@ -169,7 +245,9 @@ def _get_eni_details(ec2, eni_id):
     else:
         unknown.append({"component": "nacl", "reason": "scope_missing"})
     table, selection = _eni_route_table(ec2, subnet_id, vpc_id, unknown)
-    routes = [_eni_route(r, unknown) for r in (table or {}).get("Routes") or []]
+    route_rows = (_eni_list(table, "Routes", unknown, "routes", table.get("RouteTableId"))
+                  if table is not None else [])
+    routes = [_eni_route(r, unknown) for r in route_rows]
     return ok({"eniId": eni_id, "privateIp": eni.get("PrivateIpAddress"), "vpcId": vpc_id,
                "subnetId": subnet_id, "az": eni.get("AvailabilityZone"),
                "securityGroups": sgs, "nacl": nacl_rules, "routes": routes,

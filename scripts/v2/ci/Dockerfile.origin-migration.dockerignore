@@ -1,0 +1,21 @@
+# Only migration inputs reach the builder; no state, tfvars, credentials or git data.
+**
+!scripts/
+!scripts/v2/
+!scripts/v2/package.json
+!scripts/v2/package-lock.json
+!scripts/v2/migrate.mjs
+!scripts/v2/migrate-core.mjs
+!scripts/v2/migrate-tls.mjs
+!scripts/v2/migration-context.mjs
+!scripts/v2/ci/
+!scripts/v2/ci/origin-migration-entry.mjs
+!scripts/v2/eks/
+!scripts/v2/eks/rds-ca-bundle.pem
+!terraform/
+!terraform/v2/
+!terraform/v2/foundation/
+!terraform/v2/foundation/migrations/
+!terraform/v2/foundation/migrations/*.sql
+!web/
+!web/package.json

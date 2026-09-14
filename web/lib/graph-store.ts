@@ -6,6 +6,7 @@ import type { TraceSource, TraceSpan, ServiceGraphCall, SourceRead } from './tra
 import { buildTraceGraph, type InfraNodeLike } from './trace-graph';
 import { writeGraphState, type GraphAttempt, type GraphClass } from './graph-state';
 import { currentAccountId } from './account';
+import { graphTransaction, inventoryAccounts, inventorySnapshot, inventoryAttempt, INFRA_TYPES, type InventoryRow } from './graph-inventory';
 export { resolveInfraRef } from './trace-graph';
 
 /** Structural (duck-typed) interface for a Prometheus/Mimir service-graph metrics source — matches
@@ -16,14 +17,9 @@ interface MetricsCallsSourceLike {
   calls(windowMins: number, endMs?: number): Promise<SourceRead<ServiceGraphCall>>;
 }
 
-// ADR-043 materializer: read synced inventory from Aurora → reuse the SAME builders the UI uses
-// (no rule duplication) → upsert the derived graph into topology_nodes/edges under one
-// advisory-locked transaction with class-scoped mark-sweep. Runs OFF the BFF request path
-// (thin-BFF mandate) — invoked by scripts/v2/graph-rebuild.mjs (and the post-sync worker job).
-// Step 1 = traffic-flow (class='flow', buildFlowGraph). Step 2 = resource-relationship
-// (class='infra', buildInfraGraph). The two classes share the tables but are key-distinct
-// (class is in the node PK + edge UNIQUE), so each rebuild mark-sweeps ONLY its own class.
-// EKS pods are live in-cluster, not synced → not materialized here (the UI resolves them live).
+// Inventory materialization runs in the gated web instrumentation timer or manual runner.
+// Read/build per account with explicit budgets; only publication holds the class lock.
+// EKS pods remain live-only. No worker job or cloud-side scheduling is introduced here.
 
 // Exclude 'ipResolved' (a Record, not a Row[]) so input[key] narrows to Row[] for the push below.
 const TYPE_TO_KEY: Record<string, Exclude<keyof FlowInput, 'ipResolved'>> = {
@@ -59,169 +55,112 @@ function relFor(sk: FlowKind | undefined, tk: FlowKind | undefined): string {
 interface GNode { id: string; kind: string; label: string; meta?: Record<string, unknown> }
 interface GEdge { source: string; target: string; rel: string; confidence: string; meta?: object }
 
-// Trace keeps its existing attempt/window defaults; inventory uses rebuildInventory below.
-// Both paths share the same class/account-scoped row replacement inside their transaction.
-async function writeGraph(pool: Pool, cls: string, lockKey: number, accountId: string, nodes: GNode[], edges: GEdge[], runId: string, allowEmpty = false, attempt?: GraphAttempt) {
-  if (nodes.length === 0 && !allowEmpty) return { nodes: 0, edges: 0 };
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
-    if (attempt) {
-      const current = await writeGraphState(client, accountId, attempt);
-      if (!current || !attempt.publish) {
-        await client.query('COMMIT');
-        return { nodes: 0, edges: 0 };
-      }
-    }
+export interface GraphRebuildResult {
+  nodes: number; edges: number; published: number; retained: number; skipped: number;
+  degraded: number; reasons: string[]; accountsTruncated?: boolean;
+}
+const emptyResult = (): GraphRebuildResult =>
+  ({ nodes: 0, edges: 0, published: 0, retained: 0, skipped: 0, degraded: 0, reasons: [] });
+
+// All classes share atomic state/row publication, bounded batches and nonwaiting locks.
+async function writeGraph(pool: Pool, cls: GraphClass, lockKey: number, accountId: string,
+  nodes: GNode[], edges: GEdge[], runId: string, attempt: GraphAttempt): Promise<GraphRebuildResult> {
+  const publish = (value: GraphAttempt) => graphTransaction(pool, false, async client => {
+    const locked = await client.query('SELECT pg_try_advisory_xact_lock($1) AS acquired', [lockKey]);
+    if (!locked.rows[0]?.acquired) return { ...emptyResult(), skipped: 1, reasons: ['publication_busy'] };
+    if (!await writeGraphState(client, accountId, value, cls))
+      return { ...emptyResult(), skipped: 1, reasons: ['superseded'] };
+    if (!value.publish) return { ...emptyResult(), retained: 1,
+      reasons: cls === 'trace' ? [`collection_${value.status}`] : [] };
     await replaceGraph(client, cls, accountId, nodes, edges, runId);
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-  return { nodes: nodes.length, edges: edges.length };
-}
-
-// Only called while the class lock and transaction are held.
-async function replaceGraph(client: PoolClient, cls: string, accountId: string, nodes: GNode[], edges: GEdge[], runId: string) {
-  for (const n of nodes) {
-    await client.query(
-      `INSERT INTO topology_nodes (account_id, id, kind, label, meta, run_id, class)
-       VALUES ($7, $1, $2, $3, $4, $5, $6)
-       ON CONFLICT (account_id, id, class) DO UPDATE
-         SET kind = EXCLUDED.kind, label = EXCLUDED.label, meta = EXCLUDED.meta,
-             run_id = EXCLUDED.run_id, captured_at = now()`,
-      [n.id, n.kind, n.label, JSON.stringify(n.meta ?? {}), runId, cls, accountId],
-    );
-  }
-  for (const e of edges) {
-    const hasMetadata = e.meta !== undefined;
-    await client.query(
-      `INSERT INTO topology_edges (account_id, source, target, rel, confidence, run_id, class${hasMetadata ? ', meta' : ''})
-       VALUES ($7, $1, $2, $3, $4, $5, $6${hasMetadata ? ', $8::jsonb' : ''})
-       ON CONFLICT (account_id, source, target, rel, class) DO UPDATE
-         SET confidence = EXCLUDED.confidence, run_id = EXCLUDED.run_id, captured_at = now()
-             ${hasMetadata ? ', meta = EXCLUDED.meta' : ''}`,
-      [e.source, e.target, e.rel, e.confidence, runId, cls, accountId,
-        ...(hasMetadata ? [JSON.stringify(e.meta)] : [])],
-    );
-  }
-  // class+account-scoped mark-sweep: drop only THIS class+account's rows not written by this run.
-  await client.query(`DELETE FROM topology_edges WHERE account_id = $3 AND class = $1 AND run_id <> $2`, [cls, runId, accountId]);
-  await client.query(`DELETE FROM topology_nodes WHERE account_id = $3 AND class = $1 AND run_id <> $2`, [cls, runId, accountId]);
-}
-
-type InventoryRow = Row & { resource_type: string; captured_at?: unknown; account_id: string };
-const stamp = (value: unknown): number | null => {
-  const ms = typeof value === 'string' || value instanceof Date ? new Date(value).getTime() : NaN;
-  return Number.isFinite(ms) && ms > 0 ? ms : null;
-};
-
-function inventoryAttempt(rows: InventoryRow[], runs: Record<string, any>[], types: string[], attemptedAt: string, account: string): GraphAttempt {
-  const sources = types.slice(0, 128).map(type => {
-    const items = rows.filter(row => row.resource_type === type);
-    const direct = runs.find(row => row.resource_type === type && row.account_id === account);
-    const run = direct ?? runs.find(row => row.resource_type === type && row.account_id === 'self');
-    const unknownScope = account !== 'self' && !direct && !items.length;
-    const captures = items.map(row => stamp(row.captured_at));
-    const capturedAtMs = captures.length && captures.every(value => value !== null)
-      ? captures.reduce<number>((oldest, value) => Math.min(oldest, value!), Infinity) : null;
-    const lastSuccessAtMs = stamp(run?.last_success_at);
-    const producerStatus = ['succeeded', 'failed', 'partial', 'running'].includes(run?.status) ? run!.status : 'unknown';
-    const unknownAttributes = !Number.isSafeInteger(run?.unknown_attribute_count) || run!.unknown_attribute_count < 0
-      || run!.unknown_attribute_count > 0;
-    const reasons = !run ? ['missing_ledger'] : unknownScope ? ['unknown_account_coverage'] : producerStatus === 'failed' ? ['source_failed']
-      : producerStatus !== 'succeeded' ? ['incomplete_collection'] : unknownAttributes ? ['unknown_attributes']
-      : !items.length && run.row_count !== 0 ? ['empty_not_confirmed']
-      : !lastSuccessAtMs || (items.length > 0 && capturedAtMs === null) ? ['unknown_capture'] : [];
-    const status = producerStatus === 'failed' ? 'error' : producerStatus === 'unknown' || !lastSuccessAtMs || unknownScope ? 'unavailable'
-      : reasons.length ? 'partial' : items.length ? 'ok' : 'empty';
-    return { sourceId: `inventory:${type}`, scope: direct && account !== 'self' ? 'account' : 'aggregate', status, producerStatus, reasons,
-      itemCount: items.length, capturedAtMs, lastSuccessAtMs,
-      attemptedAtMs: stamp(run?.started_at), finishedAtMs: stamp(run?.finished_at) };
+    return { ...emptyResult(), nodes: nodes.length, edges: edges.length,
+      published: 1, degraded: value.status === 'partial' ? 1 : 0 };
   });
-  const status = sources.some(s => s.status === 'error') ? 'error'
-    : !sources.length || sources.some(s => s.status === 'unavailable') ? 'unavailable'
-    : types.length > 128 || sources.some(s => s.status === 'partial') ? 'partial' : rows.length ? 'ok' : 'empty';
-  const publish = status === 'ok' || status === 'empty';
-  return { status, attemptedAt, publish, details: { sources, retainedPrevious: !publish } };
+  try { return await publish(attempt); }
+  catch (error) {
+    // The failed transaction rolled back BOTH state and rows. Best-effort failure evidence
+    // uses a fresh bounded transaction; a newer attempt still wins. Always propagate failure.
+    await publish({ ...attempt, status: 'error', publish: false,
+      details: { ...attempt.details, retainedPrevious: true, failureReason: 'publication_failed' } }).catch(() => {});
+    throw error;
+  }
 }
 
-/** The producer ledger is aggregate, keyed by self. Read it and the original rows in ONE
- * statement snapshot. The class lock serializes state + graph publication, including failures.
- * Include previously materialized accounts so a failed/zero refresh cannot strand old graphs. */
+// One inventory rebuild at a time per request-serving pool; concurrent callers skip, not queue.
+const inventoryBusy = new WeakSet<Pool>();
+
+async function replaceGraph(client: PoolClient, cls: GraphClass, account: string,
+  nodes: GNode[], edges: GEdge[], runId: string) {
+  // Batched writes keep the publication lock brief even at the bounded input limit.
+  for (let offset = 0; offset < nodes.length; offset += 200) {
+    await client.query(`INSERT INTO topology_nodes(account_id,id,kind,label,meta,run_id,class)
+      SELECT $1,n.id,n.kind,n.label,coalesce(n.meta,'{}'::jsonb),$3,$2
+      FROM jsonb_to_recordset($4::jsonb) AS n(id text,kind text,label text,meta jsonb)
+      ON CONFLICT(account_id,id,class) DO UPDATE SET kind=EXCLUDED.kind,label=EXCLUDED.label,
+        meta=EXCLUDED.meta,run_id=EXCLUDED.run_id,captured_at=now()`,
+    [account, cls, runId, JSON.stringify(nodes.slice(offset, offset + 200))]);
+  }
+  const trace = cls === 'trace'; // Inventory preserves existing edge metadata and schema compatibility.
+  for (let offset = 0; offset < edges.length; offset += 200) {
+    await client.query(`INSERT INTO topology_edges(account_id,source,target,rel,confidence,run_id,class${trace ? ',meta' : ''})
+      SELECT $1,e.source,e.target,e.rel,e.confidence,$3,$2${trace ? ",coalesce(e.meta,'{}'::jsonb)" : ''}
+      FROM jsonb_to_recordset($4::jsonb) AS e(source text,target text,rel text,confidence text,meta jsonb)
+      ON CONFLICT(account_id,source,target,rel,class) DO UPDATE SET confidence=EXCLUDED.confidence,
+        run_id=EXCLUDED.run_id,captured_at=now()${trace ? ',meta=EXCLUDED.meta' : ''}`,
+    [account, cls, runId, JSON.stringify(edges.slice(offset, offset + 200))]);
+  }
+  await client.query('DELETE FROM topology_edges WHERE account_id=$1 AND class=$2 AND run_id<>$3', [account, cls, runId]);
+  await client.query('DELETE FROM topology_nodes WHERE account_id=$1 AND class=$2 AND run_id<>$3', [account, cls, runId]);
+}
+
 async function rebuildInventory(pool: Pool, cls: GraphClass, lock: number, runId: string,
-  types: string[] | null, build: (rows: InventoryRow[]) => { nodes: GNode[]; edges: GEdge[] }) {
+  types: string[], build: (rows: InventoryRow[]) => { nodes: GNode[]; edges: GEdge[] }): Promise<GraphRebuildResult> {
+  const totals = emptyResult();
+  const reason = (value: string) => { if (!totals.reasons.includes(value)) totals.reasons.push(value); };
+  if (inventoryBusy.has(pool)) return { ...totals, skipped: 1, reasons: ['rebuild_busy'] };
+  inventoryBusy.add(pool);
   const attemptedAt = new Date(Date.now()).toISOString();
-  const totals = { nodes: 0, edges: 0 };
-  const schema = await pool.query(`SELECT to_regclass('public.topology_graph_state') IS NOT NULL AS ready`);
-  if (schema.rows[0]?.ready !== true) return totals;
-  const client = await pool.connect();
-  const attempts = new Map<string, GraphAttempt>();
-  let accounts = ['self'];
+  const deadline = performance.now() + 30_000;
+  let account = 'self';
+  let attempt: GraphAttempt | undefined;
+  let publishing = false;
   try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock($1)', [lock]);
-    const existing = await client.query(`SELECT DISTINCT account_id FROM topology_nodes WHERE class=$1
-      UNION SELECT account_id FROM topology_graph_state WHERE class=$1`, [cls]);
-    const prior = await client.query(`SELECT account_id, details->'publishedSources' AS sources
-      FROM topology_graph_state WHERE class=$1`, [cls]);
-    accounts = [...new Set(['self', ...existing.rows.map(row => row.account_id)])];
-    const snapshot = await client.query(`SELECT
-      (SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM
-        (SELECT account_id, resource_type, resource_id, region, data, captured_at FROM inventory_resources
-         WHERE ($1::text[] IS NULL OR resource_type = ANY($1))) r) AS inventory,
-      (SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM
-        (SELECT account_id, resource_type, status, started_at, finished_at, last_success_at, row_count, unknown_attribute_count
-         FROM inventory_sync_runs WHERE ($1::text[] IS NULL OR resource_type = ANY($1))) r) AS runs`, [types]);
-    const inventory: InventoryRow[] = snapshot.rows[0].inventory;
-    const runs: Record<string, any>[] = snapshot.rows[0].runs;
-    accounts = [...new Set([...accounts, ...inventory.map(row => row.account_id), ...runs.map(row => row.account_id)])];
-    const required = types ?? [...new Set([...runs.map(row => row.resource_type), ...inventory.map(row => row.resource_type)])];
-    for (const account of accounts) {
-      const rows = inventory.filter(row => row.account_id === account);
-      const directTypes = runs.filter(row => row.account_id === account).map(row => row.resource_type);
-      const previousSources = prior.rows.find(row => row.account_id === account)?.sources;
-      const previousTypes = Array.isArray(previousSources) ? previousSources.flatMap(source =>
-        typeof source?.sourceId === 'string' && /^inventory:[a-z][a-z0-9_]{0,63}$/.test(source.sourceId)
-          ? [source.sourceId.slice(10)] : []) : [];
-      // Aggregate host types with no member rows are not member coverage. Every account carries
-      // previously published types forward until successful-empty evidence confirms their absence.
-      const accountTypes = account === 'self' ? [...new Set([...required, ...previousTypes])]
-        : [...new Set([...directTypes, ...rows.map(row => row.resource_type), ...previousTypes])];
-      const attempt = inventoryAttempt(rows, runs, accountTypes, attemptedAt, account);
-      attempts.set(account, attempt);
-      const graph = attempt.publish ? build(rows) : { nodes: [], edges: [] };
-      if (attempt.publish) attempt.status = graph.nodes.length ? 'ok' : 'empty';
-      if (await writeGraphState(client, account, attempt, cls) && attempt.publish) {
-        await replaceGraph(client, cls, account, graph.nodes, graph.edges, runId);
-        totals.nodes += graph.nodes.length; totals.edges += graph.edges.length;
+    const accounts = await inventoryAccounts(pool, cls, types);
+    if (!accounts) return { ...totals, skipped: 1, reasons: ['state_schema_missing'] };
+    if (accounts.length > 100) { totals.skipped++; totals.accountsTruncated = true; reason('account_limit'); }
+    for (const [index, current] of accounts.slice(0, 100).entries()) {
+      if (performance.now() >= deadline) {
+        totals.skipped += Math.min(accounts.length, 100) - index; reason('time_limit'); break;
       }
+      account = current; attempt = undefined; publishing = false;
+      const snapshot = await inventorySnapshot(pool, cls, account, types);
+      attempt = inventoryAttempt(snapshot, types, cls, account, attemptedAt);
+      if (snapshot.truncated) reason('snapshot_limit');
+      const graph = attempt.publish ? build(snapshot.rows) : { nodes: [], edges: [] };
+      if (graph.nodes.length > 4000 || graph.edges.length > 8000
+        || Buffer.byteLength(JSON.stringify(graph)) > 8 * 1024 * 1024) {
+        attempt.publish = false; attempt.status = 'partial';
+        attempt.details = { ...attempt.details, retainedPrevious: true, graphTruncated: true };
+        reason('graph_limit');
+      } else if (attempt.publish && attempt.status !== 'partial') {
+        attempt.status = graph.nodes.length ? 'ok' : 'empty';
+      }
+      publishing = true;
+      const outcome = await writeGraph(pool, cls, lock, account, graph.nodes, graph.edges, runId, attempt);
+      for (const key of ['nodes', 'edges', 'published', 'retained', 'skipped', 'degraded'] as const) totals[key] += outcome[key];
+      outcome.reasons.forEach(reason);
+      // Yield between accounts, with no pool connection or lock held.
+      await new Promise<void>(resolve => setImmediate(resolve));
     }
-    await client.query('COMMIT');
     return totals;
   } catch (error) {
-    await client.query('ROLLBACK');
-    // The failed transaction cannot leave a success ledger. Record the failed attempt separately,
-    // under the same lock/order guard; another newer publisher may already have won this race.
-    try {
-      await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock($1)', [lock]);
-      for (const account of accounts) {
-        await writeGraphState(client, account, { attemptedAt, status: 'error', publish: false,
-          details: { sources: attempts.get(account)?.details.sources ?? [], retainedPrevious: true,
-            failureReason: attempts.has(account) ? 'publication_failed' : 'source_read_failed' } }, cls);
-      }
-      await client.query('COMMIT');
-    } catch {
-      await client.query('ROLLBACK');
-      // No false success when even failure recording is unavailable; surface failure to the worker.
-    }
+    // Failed publication rolls back rows AND state. Record only a bounded safe category;
+    // preserve previous sources/clocks. A newer publication still wins the ordering guard.
+    if (!publishing) await writeGraph(pool, cls, lock, account, [], [], runId, { attemptedAt, status: 'error', publish: false,
+      details: { sources: attempt?.details.sources ?? [], retainedPrevious: true,
+        failureReason: attempt ? 'publication_failed' : 'source_read_failed' } }).catch(() => {});
     throw error;
-  } finally { client.release(); }
+  } finally { inventoryBusy.delete(pool); }
 }
 
 export async function rebuildGraph(pool: Pool, runId: string = randomUUID()) {
@@ -240,7 +179,7 @@ export async function rebuildGraph(pool: Pool, runId: string = randomUUID()) {
 }
 
 export async function rebuildInfraGraph(pool: Pool, runId: string = randomUUID()) {
-  return rebuildInventory(pool, 'infra', INFRA_LOCK, runId, null, rows => {
+  return rebuildInventory(pool, 'infra', INFRA_LOCK, runId, INFRA_TYPES, rows => {
     const graph = buildInfraGraph({
       resources: rows.filter(row => !NET_TYPES.includes(row.resource_type)),
       vpcs: rows.filter(row => row.resource_type === 'vpc'),
@@ -258,11 +197,11 @@ export async function rebuildTraceGraph(
   sources: TraceSource[],
   runId: string = randomUUID(),
   metricsSources: MetricsCallsSourceLike[] = [],
-): Promise<{ nodes: number; edges: number }> {
+): Promise<GraphRebuildResult> {
   const schema = await pool.query(
     `SELECT to_regclass('public.topology_graph_state') IS NOT NULL AS ready`,
   );
-  if (schema.rows[0]?.ready !== true) return { nodes: 0, edges: 0 };
+  if (schema.rows[0]?.ready !== true) return { ...emptyResult(), skipped: 1, reasons: ['state_schema_missing'] };
   const endMs = Date.now();
   const startMs = endMs - TRACE_WINDOW_MINS * 60_000;
   const failed = <T>(sourceId: string): SourceRead<T> => ({
@@ -294,7 +233,7 @@ export async function rebuildTraceGraph(
   if (!reads.length || hasFailure || (partial && !spans.length && !calls.length)) {
     const status = reads.some((read) => read.status === 'error') ? 'error'
       : partial ? 'partial' : 'unavailable';
-    return writeGraph(pool, 'trace', TRACE_LOCK, 'self', [], [], runId, true, {
+    return writeGraph(pool, 'trace', TRACE_LOCK, 'self', [], [], runId, {
       status, attemptedAt: new Date(endMs).toISOString(), publish: false,
       details: { sources: sourceDetails, retainedPrevious: true, windowStartMs: startMs, windowEndMs: endMs },
     });
@@ -321,7 +260,7 @@ export async function rebuildTraceGraph(
   const incomplete = partial || infraUnavailable || nodeDrops > 0 || edgeDrops > 0
     || graph.orphanSpans > 0 || graph.invalidSpans > 0 || graph.unresolvedMessaging > 0;
   const status = incomplete ? 'partial' : nodes.length ? 'ok' : 'empty';
-  return writeGraph(pool, 'trace', TRACE_LOCK, 'self', nodes, edges, runId, true, {
+  return writeGraph(pool, 'trace', TRACE_LOCK, 'self', nodes, edges, runId, {
     status, attemptedAt: new Date(endMs).toISOString(), publish: true,
     details: {
       sources: sourceDetails, retainedPrevious: false, windowStartMs: startMs, windowEndMs: endMs,

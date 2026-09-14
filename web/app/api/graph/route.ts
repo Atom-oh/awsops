@@ -1,7 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { downstream, upstream, FANOUT_CAP } from '@/lib/graph-query';
-import { readGraphState, type GraphClass } from '@/lib/graph-state';
+import { readGraphState, graphDiagnostic, type GraphClass } from '@/lib/graph-state';
 import type { Pool, PoolClient } from 'pg';
 import { queueClaimMeta } from '@/lib/trace-evidence';
 
@@ -61,7 +61,8 @@ export async function GET(request: Request) {
     await client.query('SAVEPOINT collection_read');
     let collection;
     try { collection = await readGraphState(pool, account, cls); }
-    catch {
+    catch (error) {
+      console.error(`[graph-read] failed ${graphDiagnostic('graph_state', error)}`);
       collection = { status: 'error', stale: true, captured_at: null, attempted_at: null,
         sources: [], failureReason: 'state_read_failed' };
     }
@@ -104,8 +105,9 @@ export async function GET(request: Request) {
     await client.query('COMMIT');
     return Response.json({ class: cls, account, nodes: evidenceNodes(nodes.rows, cls), edges: evidenceEdges(edges.rows, cls),
       captured_at: collection.captured_at, collection });
-  } catch {
+  } catch (error) {
     await client?.query('ROLLBACK').catch(() => {});
+    console.error(`[graph-read] failed ${graphDiagnostic('graph_read', error)}`);
     return Response.json({ status: 'error', message: 'Graph read failed' }, { status: 500 });
   } finally { client?.release(); }
 }

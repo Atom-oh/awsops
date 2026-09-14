@@ -9,6 +9,15 @@ export interface GraphAttempt {
   details: Record<string, unknown>;
 }
 
+/** Caller stages and SQLSTATE only; never serialize provider/DB messages or arbitrary codes. */
+export function graphDiagnostic(stage: string, error: unknown): string {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  return JSON.stringify({
+    stage: ['flow', 'infra', 'trace_sources', 'trace', 'graph_state', 'graph_read'].includes(stage) ? stage : 'unknown',
+    code: typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : 'unknown',
+  });
+}
+
 /** Caller holds the class advisory lock and publishes rows in this same transaction.
  * captured_at is the successful publication; source clocks belong to publishedSources.
  * Failed attempts preserve both. Trace keeps its existing window-end timestamp default. */

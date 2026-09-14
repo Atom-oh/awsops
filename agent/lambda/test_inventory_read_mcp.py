@@ -762,7 +762,7 @@ def _graph_cadence_expressions():
     return {"reader": binding[1].strip(), "web": web[1].strip()}
 
 
-@unittest.skipUnless(os.environ.get("INVENTORY_TEST_POSTGRES_CONTAINER"),
+@unittest.skipUnless(os.environ.get("INVENTORY_TEST_POSTGRES_CONTAINER") or os.environ.get("GRAPH_TEST_POSTGRES_SOCKET"),
                      "Set INVENTORY_TEST_POSTGRES_CONTAINER to an isolated PostgreSQL 17 container")
 class TestTopologySelectionSQL(unittest.TestCase):
     """Execute the reader's actual SQL under view-only grants, not a fake SQL interpreter.
@@ -774,6 +774,21 @@ class TestTopologySelectionSQL(unittest.TestCase):
 
     @classmethod
     def _psql(cls, sql, reader=False):
+        if os.environ.get("GRAPH_TEST_POSTGRES_SOCKET"):
+            import pg8000.native
+            connection = pg8000.native.Connection(
+                user="awsops_sql_reader" if reader else "postgres", database="awsops",
+                unix_sock=os.path.join(os.environ["GRAPH_TEST_POSTGRES_SOCKET"], ".s.PGSQL.5432"),
+                timeout=20,
+            )
+            try:
+                rows = connection.run(sql)
+                return "\n".join(json.dumps(row[0]) if isinstance(row[0], (dict, list))
+                                 else str(row[0]) for row in (rows or []))
+            except pg8000.native.DatabaseError as error:
+                raise AssertionError(str(error)) from error
+            finally:
+                connection.close()
         result = subprocess.run([
             "docker", "run", "--pull", "never", "--rm", "-i", "--network",
             "container:" + os.environ["INVENTORY_TEST_POSTGRES_CONTAINER"],
@@ -787,6 +802,12 @@ class TestTopologySelectionSQL(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # Destructive opt-in fixtures require an explicit disposable-database sentinel.
+        sentinel = cls._psql("SELECT shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()")
+        if sentinel != "awsops-disposable-graph-test":
+            raise RuntimeError("Refusing graph fixture writes without disposable database sentinel")
+        if not cls._psql("SHOW server_version").startswith("17."):
+            raise RuntimeError("Graph SQL fixtures require PostgreSQL 17")
         migrations = Path(__file__).resolve().parents[2] / "terraform/v2/foundation/migrations"
         cls._psql("""
             DO $$ BEGIN
@@ -822,6 +843,7 @@ class TestTopologySelectionSQL(unittest.TestCase):
                   "reasons": ["unknown_capture", "credential=secret"],
                   "error": "password=secret", "data": {"token": "secret"}}
         details = {"sources": [source, 123, None], "publishedSources": [source],
+                   "inputTruncated": True, "graphTruncated": False,
                    "failureReason": "publication_failed", "raw": {"credential": "secret"}}
         payload = json.dumps(details).replace("'", "''")
         self._psql("INSERT INTO public.topology_graph_state VALUES "
@@ -835,6 +857,8 @@ class TestTopologySelectionSQL(unittest.TestCase):
         self.assertEqual(len(safe["sources"]), 1)
         self.assertNotIn("secret", json.dumps(safe))
         self.assertEqual(safe["failureReason"], "publication_failed")
+        self.assertTrue(safe["inputTruncated"])
+        self.assertFalse(safe["graphTruncated"])
         permissions = self._execute("SELECT has_table_privilege(current_user, 'public.topology_graph_state', 'SELECT') AS base_read")
         self.assertFalse(permissions[0]["base_read"])
 
