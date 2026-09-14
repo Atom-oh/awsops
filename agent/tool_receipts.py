@@ -476,6 +476,12 @@ def trusted_advisor_evidence(body, q):
             q["unknown"] = True  # includes Support's explicit not_available assessment state
             outcomes.append("unverified")
         else:
+            if "flaggedCount" in check or "flaggedResources" in check:
+                total, resources = check.get("flaggedCount"), check.get("flaggedResources")
+                if not count(total) or not isinstance(resources, list) or total < len(resources):
+                    q["invalid"] = True
+                elif total > len(resources) or len(resources) > 10:
+                    q["truncated"] = True
             outcomes.append("success")  # warning/error health findings are valid retrieved evidence
     if len(checks) > 15 or q.get("truncated"):
         q["truncated"] = True

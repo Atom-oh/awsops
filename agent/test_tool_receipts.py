@@ -550,7 +550,7 @@ class BoundedProducerReceiptTest(unittest.TestCase):
     def test_trusted_advisor_errors_are_not_negative_health_findings(self):
         for checks, expected in [
             ([{"name": "PRIVATE", "error": "PRIVATE"}], "error"),
-            ([{"status": "error", "flaggedResources": ["PRIVATE"]}], "success"),
+            ([{"status": "error", "flaggedCount": 1, "flaggedResources": ["PRIVATE"]}], "success"),
             ([{"status": "warning"}, {"error": "PRIVATE"}], "partial"),
             ([], "empty"), ([{"error": "PRIVATE"}] * 16, "partial"),
         ]:
@@ -567,6 +567,27 @@ class BoundedProducerReceiptTest(unittest.TestCase):
             self.assertTrue(r["quality"].get("invalid"))
         r = self.receipt("get_trusted_advisor_cost_checks", {"checks": [{"error": "PRIVATE"}], "truncated": True})
         self.assertEqual(r["outcome"], "partial")
+
+    def test_trusted_advisor_flagged_detail_counts_are_bounded_and_not_health_errors(self):
+        for total, size, expected in [(0, 0, "success"), (1, 1, "success"), (10, 10, "success"),
+                                      (11, 10, "partial"), (1, 0, "partial"),
+                                      (None, 0, "partial"), (True, 1, "partial"), (0, 1, "partial")]:
+            with self.subTest(total=total, size=size):
+                r = self.receipt("get_trusted_advisor_cost_checks", {"truncated": False, "checks": [{
+                    "status": "error", "flaggedCount": total, "flaggedResources": ["PRIVATE"] * size,
+                }]})
+                self.assertEqual(r["outcome"], expected)
+                if isinstance(total, int) and not isinstance(total, bool) and total > size:
+                    self.assertTrue(r["quality"]["truncated"])
+        from tool_receipts import terminal
+        class Unwalkable(list):
+            def __iter__(self):
+                raise AssertionError("resource details must not be traversed")
+        body = {"checks": [{"status": "warning", "flaggedCount": 11, "flaggedResources": Unwalkable(["PRIVATE"] * 10)}]}
+        outcome, quality, _ = terminal({"status": "success", "content": [{"json": body}]},
+                                       tool="get_trusted_advisor_cost_checks")
+        self.assertEqual(outcome, "partial")
+        self.assertNotIn("PRIVATE", json.dumps(quality))
 
     def test_opensearch_typed_collection_and_legacy_absence(self):
         failed = {"name": "PRIVATE", "collectionStatus": "error", "indices": []}
