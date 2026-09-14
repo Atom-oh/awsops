@@ -1,0 +1,11 @@
+[
+  {"name":"all unverified retains useful answer","text":"Useful analysis remains available.","status":"unverified","outcomes":["unverified","unverified"],"calls":[
+    {"tool":"future_reader","body":{"results":[]}},{"tool":"future_reader","body":{"id":"resource"}}]},
+  {"name":"known and unknown evidence is partial","text":"Confirmed measurements with an unverified supplement.","status":"partial","outcomes":["success","unverified"],"calls":[
+    {"tool":"prometheus_query","body":{"resultType":"vector","result":[{"metric":{},"value":[1,"1"]}],"truncated":false,"collectionStatus":"ok"}},
+    {"tool":"future_reader","body":{"status":"Complete","results":[]}}]},
+  {"name":"explicit failure survives useful text","text":"The failed source could not be assessed.","status":"error","outcomes":["error"],"calls":[
+    {"tool":"future_reader","body":{"error":"fixture failure"}}]},
+  {"name":"validated empty remains empty","text":"","status":"empty","outcomes":["empty"],"calls":[
+    {"tool":"prometheus_query","body":{"resultType":"vector","result":[],"truncated":false,"collectionStatus":"empty"}}]}
+]

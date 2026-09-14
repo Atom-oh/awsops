@@ -54,6 +54,74 @@ Either policy or agent-catalog failure denies custom candidates, while built-in 
 usable. Explicit custom pins receive an unavailable response; automatic fallback is visibly
 identified and persisted as a built-in answer. Confirmed no-row policies retain Phase-1 behavior.
 
+## Optional stream evidence
+
+The Runtime adds metadata frames alongside existing text frames:
+
+| Field | Contract |
+| --- | --- |
+| `receipt` | Version 1, one bounded record per call ID, with tool identity, delivery clocks, safe requested/tool-reported scope and outcome. |
+| `evidenceTruncated` | Some call evidence was omitted; consumers must not certify complete coverage. |
+| `completion` | Version 1 and `receiptCount`, emitted after receipts. This closes delivery of the receipt set, not successful collection. |
+| `runtimeOutcome` | `error` when the stream fails; preceding useful text does not erase that failure. |
+
+Receipt outcomes distinguish success, confirmed empty, partial, error, unverified and unfinished
+calls. Async query submission or pending status is not a completed result. Known producer freshness,
+continuation and child-error signals restrict the conclusion; missing metadata does not establish
+independently verified scope. Source clocks remain distinct from stream delivery clocks.
+
+Strands success, HTTP 2xx and parseable JSON certify neither complete collection nor a confirmed
+empty result. Unknown objects, arrays (including empty arrays), and empty result content default to
+`unverified`. Explicit errors and recognized incompleteness still constrain the outcome. A valid but
+unrecognized payload is not automatically malformed. Useful model text and raw tool data remain
+unchanged; this classification governs only evidence metadata.
+
+Positive outcomes require a recognized tool and its validated producer envelope:
+
+| Coverage | Required evidence |
+|---|---|
+| Existing explicit handlers | Async terminal-query results, inventory freshness, rightsizing and the bounded shallow producer contracts |
+| ENI lookup/configuration | The current IPv4 lookup's typed identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
+| Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
+| Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |
+| Prometheus/Mimir | Bounded vector/matrix envelopes and named labels/series require upstream-derived `collectionStatus`; upstream query warnings remain partial |
+| Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
+| Loki | Validated streams/vector/matrix query envelopes and named label/value collections require upstream-derived `collectionStatus`; hitting a query's line limit remains partial |
+
+`query_inventory` also follows the producer's registered field projections. Other resource types
+retain partial outcomes with unknown field coverage, even when their count and freshness are healthy.
+
+The source contract requires affected producers to emit typed collection status (`ok`, `empty`, `partial`, `unknown`, or a
+component `error`) before coercion can erase upstream evidence. Missing or non-list collections
+cannot become confirmed empty lists. Named Prometheus/Mimir/Loki lists also require an upstream
+success status. Tempo search treats an omitted protobuf-style `traces` field as unknown, while
+retaining returned metrics and bounded trace data.
+
+OpenSearch search must retain nullable `timedOut` and `failedShards` fields plus `collectionStatus`;
+absent or malformed flags are unknown, never false/zero. Timeouts, failed shards and omitted hits
+prevent a complete result. Notion must independently record page and block collection: valid page
+metadata remains useful when block retrieval fails or its results/pagination fields are absent.
+Legacy responses without required source markers remain unverified or partial according to the handler;
+explicit errors and disclosed incompleteness retain their restrictive outcomes. These markers require
+matching payload structure before success or confirmed empty can be granted.
+
+These are finite envelope checks, not recursive validation of resource health, metric values, span
+attributes or document contents. Other tool responses, introspection formats and future encodings
+remain unverified until explicitly supported; positive-looking quality fields alone do not enable
+them. Bounded omission remains partial, including ENI lookups at the legacy ten-match cap.
+
+Deploy the corresponding Lambda producer updates before expecting positive outcomes that require
+these new source markers. Runtime handling alone does not upgrade a legacy producer's evidence.
+
+The web consumer ships separately. The existing web parser ignores these optional frames; newer consumers
+must preserve useful text but treat absent, malformed or incomplete evidence as unverified/partial.
+Detailed receipts belong only in ownership-checked conversation metadata. Global invocation
+statistics retain coarse outcomes, never raw outputs, queries, credentials or pagination tokens.
+Compatible consumers must retain unverified answers and mark mixed confirmed/unverified evidence partial.
+They must exclude unverified calls from the evidence-confirmed success-rate denominator. Expanding or
+tightening producer coverage can therefore change that rate without a change in operational health;
+compare it alongside assessed/unverified counts and the coverage policy in effect.
+
 ## Custom tool policy and registration
 
 `web/lib/gateway-tool-catalog.json` maps approved target names to `{gateway, tools}`.
