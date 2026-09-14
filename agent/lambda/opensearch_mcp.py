@@ -83,9 +83,10 @@ def _signed_request(method, url, body_bytes, region, target_account_id):
 
 # ---- Tools (read-only) ----
 def _domain_names(client):
-    rows = client.list_domain_names().get("DomainNames", [])
+    response = client.list_domain_names()
+    rows = response.get("DomainNames") if isinstance(response, dict) else None
     if not isinstance(rows, list):
-        raise ValueError("Invalid domain enumeration")
+        return None, False
     return [d["DomainName"] for d in rows[:20]], len(rows) > 20
 
 
@@ -93,13 +94,19 @@ def list_opensearch_domains(args, region, target_account_id):
     role_arn = get_role_arn(target_account_id) if target_account_id else None
     c = get_client("opensearch", region, role_arn)
     names, truncated = _domain_names(c)
+    if names is None:
+        return ok({"domains": [], "collectionStatus": "unknown", "truncated": False})
     if not names:
         return ok({"domains": [], "collectionStatus": "empty", "truncated": False,
                    "message": "no OpenSearch domains in this account/region"})
     out = []
     for n in names:
         try:
-            st = c.describe_domain(DomainName=n).get("DomainStatus", {})
+            response = c.describe_domain(DomainName=n)
+            st = response.get("DomainStatus") if isinstance(response, dict) else None
+            if not isinstance(st, dict) or not isinstance(st.get("DomainName"), str) or st["DomainName"] != n:
+                out.append({"name": n, "collectionStatus": "unknown"})
+                continue
             out.append({"name": n, "collectionStatus": "ok",
                         "endpoint": st.get("Endpoint") or (st.get("Endpoints") or {}).get("vpc"),
                         "engineVersion": st.get("EngineVersion")})
@@ -162,6 +169,8 @@ def opensearch_schema(args, region, target_account_id):
     role_arn = get_role_arn(target_account_id) if target_account_id else None
     c = get_client("opensearch", region, role_arn)
     names, truncated = _domain_names(c)
+    if names is None:
+        return ok({"domains": [], "collectionStatus": "unknown", "truncated": False})
     domains = []
     for n in names:
         try:

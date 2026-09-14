@@ -29,7 +29,7 @@ def result(call_id, body, status="success"):
 
 
 def metric_body():
-    return {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}], "truncated": False}
+    return {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}], "truncated": False, "collectionStatus": "ok"}
 
 
 def known_use(call_id, tool="prometheus_query"):
@@ -109,7 +109,7 @@ class ToolReceiptTest(unittest.TestCase):
             result("b", {"statusCode": 403, "body": "Bearer SECRET"}),
             result("a", {"id": "eni-fixture", "partial": True, "unknown": [{"reason": "SECRET"}]}),
             result("c", {"error": "SECRET"}, status="error"),
-            result("d", {**metric_body(), "result": []}),
+            result("d", {**metric_body(), "result": [], "collectionStatus": "empty"}),
         ])
         receipts = {f["receipt"]["callId"]: f["receipt"] for f in frames if "receipt" in f}
         self.assertEqual({k: v["outcome"] for k, v in receipts.items()},
@@ -246,15 +246,15 @@ class ProducerReceiptTest(unittest.TestCase):
             ("unavailable", 0, "unverified"), ("unavailable", 1, "partial"),
         ]:
             with self.subTest(freshness=freshness, count=count):
-                row = inventory_row(freshness, count)
+                row = inventory_row(freshness, count, resource_type="ebs")
                 if freshness == "unavailable":
                     row.update(status=None, last_success_at=None, latest_success_at=None)
-                body = {"resource_type": "ec2", "resources": [{"id": "PRIVATE"}] * count,
+                body = {"resource_type": "ebs", "resources": [{"id": "PRIVATE"}] * count,
                         "count": count, "freshness": row}
                 receipt = self.receipt("query_inventory", body)
                 self.assertEqual(receipt["outcome"], expected)
                 source = receipt["quality"]["collection"]["sources"][0]
-                self.assertEqual(source["sourceId"], "inventory:ec2")
+                self.assertEqual(source["sourceId"], "inventory:ebs")
                 self.assertEqual(source["itemCount"], count)
                 self.assertEqual(receipt["quality"]["collection"].get("stale", False), freshness == "stale")
 
@@ -439,6 +439,18 @@ class ProducerReceiptTest(unittest.TestCase):
             self.assertIn(outcome, ("success", "partial"))
             self.assertNotIn("PRIVATE", json.dumps(q))
 
+    def test_inventory_data_api_naive_timestamps_are_utc(self):
+        for stamp in ("2026-09-14 00:00:00", "2026-09-14 00:00:00.123456", "2026-09-14T00:00:00.123456"):
+            for n in (0, 1):
+                with self.subTest(stamp=stamp, current_count=n):
+                    clocks = ("latest_success_at", "last_success_at", "finished_at")
+                    naive = inventory_row(count=n, **dict.fromkeys(clocks, stamp))
+                    aware = inventory_row(count=n, **dict.fromkeys(clocks, stamp + "+00:00"))
+                    receipt = self.receipt("inventory_summary", {"sync": [naive]})
+                    expected = self.receipt("inventory_summary", {"sync": [aware]})
+                    self.assertEqual(receipt["outcome"], "success" if n else "empty")
+                    self.assertEqual(receipt["quality"], expected["quality"])
+
     def test_inventory_source_clocks_are_not_latest_attempt_clocks(self):
         row = inventory_row("degraded", count=1, status="failed",
                             finished_at="2026-09-14T02:00:00Z",
@@ -454,7 +466,7 @@ class ProducerReceiptTest(unittest.TestCase):
     def test_confirmed_empty_and_failed_content_blocks_are_partial(self):
         from tool_receipts import terminal
         outcome, _, _ = terminal({"status": "success", "content": [
-            {"json": {**metric_body(), "result": []}}, {"json": {"error": "PRIVATE"}},
+            {"json": {**metric_body(), "result": [], "collectionStatus": "empty"}}, {"json": {"error": "PRIVATE"}},
         ]}, tool="prometheus_query")
         self.assertEqual(outcome, "partial")
 
@@ -523,8 +535,7 @@ class ProducerReceiptTest(unittest.TestCase):
         for tool, field in (("prometheus_query", "result"), ("mimir_query_range", "result"),
                             ("tempo_search", "traces")):
             body = {field: [], "truncated": False, **({"resultType": "vector"} if field == "result" else {})}
-            if tool == "tempo_search":
-                body["collectionStatus"] = "empty"
+            body["collectionStatus"] = "empty"
             self.assertEqual(self.receipt(tool, body)["outcome"], "empty")
             self.assertEqual(self.receipt(tool, {**body, "truncated": True})["outcome"], "partial")
 
@@ -697,7 +708,9 @@ class BoundedProducerReceiptTest(unittest.TestCase):
         ]:
             self.assertEqual(self.receipt("get_item", body)["outcome"], expected)
         for tool in ("loki_query", "loki_query_range"):
-            self.assertEqual(self.receipt(tool, {"result": [], "truncated": False})["outcome"], "empty")
+            self.assertEqual(self.receipt(tool, {"result": [], "truncated": False})["outcome"], "unverified")
+            self.assertEqual(self.receipt(tool, {"resultType": "streams", "result": [],
+                                                "truncated": False, "collectionStatus": "empty"})["outcome"], "empty")
             self.assertEqual(self.receipt(tool, {"result": [], "truncated": True})["outcome"], "partial")
             self.assertEqual(self.receipt(tool, {"result": None})["outcome"], "unverified")
 

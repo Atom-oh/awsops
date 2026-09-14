@@ -108,6 +108,48 @@ def _bound(data):
     return {"resultType": data.get("resultType"), "result": out}, truncated
 
 
+def _query_result(observed, limit):
+    data, status_ok = observed
+    bounded, truncated = _bound(data)
+    state = "unknown"
+    if (status_ok and isinstance(data, dict) and isinstance(data.get("result"), list)
+            and data.get("resultType") in ("streams", "vector", "matrix")):
+        rows = data["result"]
+        state = "partial" if truncated else "ok" if rows else "empty"
+        if not truncated and data["resultType"] == "streams":
+            # Validate before _bound's compatibility coercion can hide malformed lines.
+            line_count = 0
+            for row in rows:
+                values = row.get("values") if isinstance(row, dict) else None
+                if (not isinstance(row, dict) or not isinstance(row.get("stream"), dict)
+                        or not isinstance(values, list) or not values
+                        or not all(isinstance(v, list) and len(v) == 2
+                        and isinstance(v[0], str) and re.fullmatch(r"\d{1,20}", v[0])
+                        and isinstance(v[1], str) for v in values)):
+                    state = "unknown"
+                    break
+                line_count += len(values)
+            try:
+                requested = int(limit)
+            except (TypeError, ValueError):
+                requested = 0
+            if requested <= 0:
+                state = "unknown"
+            elif state != "unknown" and line_count >= requested:
+                state = "partial"  # Loki's server-side line limit has no continuation marker.
+        elif not truncated:
+            for row in rows:
+                values = ([row.get("value")] if data["resultType"] == "vector" else row.get("values")) if isinstance(row, dict) else None
+                if (not isinstance(row, dict) or not isinstance(row.get("metric"), dict)
+                        or not isinstance(values, list) or not all(isinstance(v, list) and len(v) == 2
+                        and type(v[0]) in (int, float) and isinstance(v[1], str) for v in values)):
+                    state = "unknown"
+                    break
+    return ok({"truncated": truncated,
+               **(bounded if isinstance(bounded, dict) else {"result": bounded}),
+               "collectionStatus": state})
+
+
 def loki_query_range(args):
     query = (args.get("query") or "").strip()
     if not query:
@@ -116,9 +158,7 @@ def loki_query_range(args):
               "limit": str(args.get("limit") or DEFAULT_LIMIT), "direction": args.get("direction") or "backward"}
     if args.get("step"):
         params["step"] = str(args["step"])
-    data = _get(_ds(), "/loki/api/v1/query_range", params)
-    bounded, tr = _bound(data)
-    return ok({"truncated": tr, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
+    return _query_result(_get(_ds(), "/loki/api/v1/query_range", params, with_status=True), params["limit"])
 
 
 def loki_query(args):
@@ -128,9 +168,7 @@ def loki_query(args):
     params = {"query": query, "limit": str(args.get("limit") or DEFAULT_LIMIT)}
     if args.get("time"):
         params["time"] = _parse_time_ns(args.get("time"))
-    data = _get(_ds(), "/loki/api/v1/query", params)
-    bounded, tr = _bound(data)
-    return ok({"truncated": tr, **(bounded if isinstance(bounded, dict) else {"result": bounded})})
+    return _query_result(_get(_ds(), "/loki/api/v1/query", params, with_status=True), params["limit"])
 
 
 def _list_result(observed, field):

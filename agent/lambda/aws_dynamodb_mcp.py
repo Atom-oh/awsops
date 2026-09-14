@@ -10,8 +10,10 @@ def _page_quality(response, token_key, rows, limit):
     token = response.get(token_key)
     token_type = str if token_key == "LastEvaluatedTableName" else dict
     valid = token is None or isinstance(token, token_type)
+    collection_key = "TableNames" if token_key == "LastEvaluatedTableName" else "Items"
+    observed = isinstance(response.get(collection_key), list)
     return {"truncated": len(rows) > limit or (valid and bool(token)),
-            **({"unknown": True} if not valid else {})}
+            **({"unknown": True} if not valid or not observed else {})}
 
 
 def lambda_handler(event, context):
@@ -39,7 +41,8 @@ def lambda_handler(event, context):
         if t == "list_tables":
             # Fetch table names and describe each / 테이블 이름 조회 후 각 테이블 상세 조회
             response = ddb.list_tables()
-            tables = response.get("TableNames", [])
+            tables = response.get("TableNames")
+            tables = tables if isinstance(tables, list) else []
             result = []
             for tn in tables[:20]:
                 desc = ddb.describe_table(TableName=tn)["Table"]
@@ -75,7 +78,8 @@ def lambda_handler(event, context):
             if args.get("limit"): kwargs["Limit"] = args["limit"]
             # Execute query or fallback to scan / 쿼리 실행 또는 스캔으로 폴백
             resp = table.query(**kwargs) if kwargs.get("KeyConditionExpression") else table.scan(Limit=args.get("limit", 20))
-            items = resp.get("Items", [])
+            items = resp.get("Items")
+            items = items if isinstance(items, list) else []
             return ok({"items": items[:50], "count": resp.get("Count", 0), "scannedCount": resp.get("ScannedCount", 0),
                        **_page_quality(resp, "LastEvaluatedKey", items, 50)})
 
@@ -92,7 +96,8 @@ def lambda_handler(event, context):
             kwargs = {"Limit": args.get("limit", 20)}
             if args.get("filter_expression"): kwargs["FilterExpression"] = args["filter_expression"]
             resp = table.scan(**kwargs)
-            items = resp.get("Items", [])
+            items = resp.get("Items")
+            items = items if isinstance(items, list) else []
             return ok({"items": items[:50], "count": resp.get("Count", 0),
                        **_page_quality(resp, "LastEvaluatedKey", items, 50)})
 

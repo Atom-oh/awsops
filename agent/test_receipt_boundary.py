@@ -36,6 +36,66 @@ class EvidenceBoundaryTest(unittest.TestCase):
             with self.subTest(tool=tool):
                 self.assertEqual(self.receipt(tool, body)["outcome"], "unverified")
 
+    def test_loki_requires_source_status_shape_and_observed_completeness(self):
+        row = {"stream": {"job": "PRIVATE"}, "values": [["1700000000000000000", "PRIVATE log"]]}
+        for tool in ("loki_query", "loki_query_range"):
+            for body, expected in [
+                ({"resultType": "streams", "result": [], "truncated": False}, "unverified"),
+                ({"resultType": "streams", "result": [row], "truncated": False}, "unverified"),
+                ({"resultType": None, "result": [], "truncated": False, "collectionStatus": "empty"}, "unverified"),
+                ({"resultType": "streams", "result": [], "truncated": False, "collectionStatus": "empty"}, "empty"),
+                ({"resultType": "streams", "result": [row], "truncated": False, "collectionStatus": "ok"}, "success"),
+                ({"resultType": "streams", "result": [row], "truncated": False, "collectionStatus": "partial"}, "partial"),
+                ({"resultType": "streams", "result": [row], "truncated": False, "collectionStatus": "unknown"}, "unverified"),
+                ({"resultType": "streams", "result": [{}], "truncated": False, "collectionStatus": "ok"}, "unverified"),
+                ({"resultType": "streams", "result": [{**row, "values": [[True, "line"]]}], "truncated": False, "collectionStatus": "ok"}, "unverified"),
+                ({"resultType": "streams", "result": [], "truncated": False, "collectionStatus": "ok"}, "unverified"),
+                ({"resultType": "vector", "result": [{"metric": {}, "value": [1, "2"]}], "truncated": False, "collectionStatus": "ok"}, "success"),
+                ({"resultType": "matrix", "result": [{"metric": {}, "values": [[1, "2"]]}], "truncated": False, "collectionStatus": "ok"}, "success"),
+            ]:
+                with self.subTest(tool=tool, body=body):
+                    receipt = self.receipt(tool, body)
+                    self.assertEqual(receipt["outcome"], expected)
+                    self.assertNotIn("PRIVATE", json.dumps(receipt))
+
+    def test_cost_dimension_values_without_continuation_evidence_are_partial(self):
+        # The real producer returns page-local count and discards NextPageToken.
+        for rows in ([], ["PRIVATE service"]):
+            receipt = self.receipt("get_dimension_values", {"dimension": "SERVICE", "values": rows, "count": len(rows)})
+            self.assertEqual(receipt["outcome"], "partial")
+            self.assertTrue(receipt["quality"]["unknown"])
+
+    def test_known_failures_survive_unverified_content_and_child_results(self):
+        for blocks in ([{"json": {"error": "PRIVATE"}}, {"json": {}}],
+                       [{"json": {}}, {"json": {"error": "PRIVATE"}}]):
+            outcome, quality, _ = terminal({"status": "success", "content": blocks}, tool="future_producer")
+            self.assertEqual(outcome, "partial")
+            self.assertNotIn("PRIVATE", json.dumps(quality))
+        self.assertEqual(self.receipt("get_trusted_advisor_cost_checks", {
+            "checks": [{"error": "PRIVATE"}, {"status": "not_available"}],
+        })["outcome"], "partial")
+
+    def test_metric_queries_require_upstream_collection_markers(self):
+        for tool in ("prometheus_query", "prometheus_query_range", "mimir_query", "mimir_query_range"):
+            for rows in ([], [{"metric": {}, "value": [1, "1"]}]):
+                body = {"resultType": "vector", "result": rows, "truncated": False}
+                self.assertEqual(self.receipt(tool, body)["outcome"], "unverified")
+                self.assertEqual(self.receipt(tool, {**body, "collectionStatus": "partial"})["outcome"], "partial")
+                self.assertEqual(self.receipt(tool, {**body, "collectionStatus": "unknown"})["outcome"], "unverified")
+
+    def test_inventory_field_limited_types_do_not_certify_full_evidence(self):
+        for resource_type in ("ecs", "ec2", "future_type"):
+            for n in (0, 1):
+                body = {"resource_type": resource_type, "resources": [{}] * n, "count": n,
+                        "freshness": helpers.inventory_row(count=n, resource_type=resource_type),
+                        "note": "field-level detail is limited by the sql_reader view security boundary"}
+                with self.subTest(resource_type=resource_type, count=n):
+                    receipt = self.receipt("query_inventory", body)
+                    self.assertEqual(receipt["outcome"], "partial")
+                    self.assertTrue(receipt["quality"]["unknown"])
+                    self.assertEqual(receipt["quality"]["collection"]["status"], "partial")
+                    self.assertNotIn("security boundary", json.dumps(receipt))
+
     def test_unknown_or_forged_source_status_cannot_certify_positive_data(self):
         for status in (None, {}, "future", "unknown"):
             self.assertEqual(self.receipt("prometheus_labels", {
@@ -114,7 +174,7 @@ class EvidenceBoundaryTest(unittest.TestCase):
     def test_prometheus_mimir_and_tempo_need_real_envelopes(self):
         for tool in ("prometheus_query", "prometheus_query_range", "mimir_query", "mimir_query_range"):
             self.assertEqual(self.receipt(tool, metric_body())["outcome"], "success")
-            matrix = {"resultType": "matrix", "result": [{"metric": {}, "values": [[1, "0"]]}], "truncated": False}
+            matrix = {"resultType": "matrix", "result": [{"metric": {}, "values": [[1, "0"]]}], "truncated": False, "collectionStatus": "ok"}
             self.assertEqual(self.receipt(tool, matrix)["outcome"], "success")
             for body in ({}, {"result": []}, {"resultType": "future", "result": [], "truncated": False},
                          {"resultType": "vector", "result": [{}], "truncated": False}):

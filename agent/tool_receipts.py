@@ -7,11 +7,13 @@ import json
 import math
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from ipaddress import ip_address
 
 MAX_CALLS = 32
 MAX_RESULT = 262144
+# Registered field projections in inventory_read_mcp.PROJECTIONS; other types disclose limited fields.
+INVENTORY_PROJECTED_TYPES = {"target_group", "alb", "nlb", "cloudfront", "ebs"}
 ASYNC_QUERY_TOOLS = {
     "execute_log_insights_query", "get_logs_insight_query_results",
     "lake_query", "get_query_status", "get_query_results",
@@ -23,19 +25,19 @@ COUNTED_LISTS = {
     "search_opensearch_logs": ("hits", "total"), "get_dimension_values": ("values", "count"),
     "list_tables": ("tables", "count"), "query_table": ("items", "count"), "scan_table": ("items", "count"),
 }
-PAGINATED_TOOLS = set(IAM_LISTS) | {"list_tables", "query_table", "scan_table"}
+PAGINATED_TOOLS = set(IAM_LISTS) | {"list_tables", "query_table", "scan_table", "get_dimension_values"}
 SHALLOW_TOOLS = set(COUNTED_LISTS) | set(IAM_LISTS) | {
     "get_trusted_advisor_cost_checks", "list_opensearch_domains", "opensearch_schema",
     "mesh_overview", "check_cloudformation_template_compliance", "describe_network", "get_item",
-    "loki_query", "loki_query_range",
 }
 METRIC_QUERIES = {"prometheus_query", "prometheus_query_range", "mimir_query", "mimir_query_range"}
+LOKI_QUERIES = {"loki_query", "loki_query_range"}
 NAMED_LISTS = {
     "prometheus_labels": ("labels", 1000, str), "mimir_labels": ("labels", 1000, str),
     "prometheus_series": ("series", 50, dict), "mimir_series": ("series", 50, dict),
     "loki_labels": ("labels", 1000, str), "loki_label_values": ("values", 1000, str),
 }
-POSITIVE_TOOLS = METRIC_QUERIES | set(NAMED_LISTS) | {
+POSITIVE_TOOLS = METRIC_QUERIES | LOKI_QUERIES | set(NAMED_LISTS) | {
     "get_eni_details", "find_ip_address", "get_topology", "notion_search",
     "notion_query_database", "notion_fetch_page", "tempo_search", "tempo_get_trace",
 }
@@ -204,8 +206,8 @@ def combined(outcomes):
         if states & {"error", "unverified"}:
             return "partial"
         return "success" if "success" in states else "empty"
-    if states == {"error"}:
-        return "error"
+    if "error" in states:
+        return "error" if states == {"error"} else "partial"
     return "unverified"
 
 
@@ -269,7 +271,7 @@ def inventory_source(row, q):
                 raise ValueError("invalid clock")
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if parsed.tzinfo is None:
-                raise ValueError("clock without timezone")
+                parsed = parsed.replace(tzinfo=timezone.utc)  # RDS Data API's timezone-less UTC format.
             stamp = int(parsed.timestamp() * 1000)
             if not number(stamp):
                 raise ValueError("invalid clock")
@@ -320,6 +322,10 @@ def inventory_evidence(body, tool, q):
         if not isinstance(resources, list) or not count(body.get("count")) or body["count"] != len(resources):
             q["invalid"] = True
             return "unverified"
+        if body.get("resource_type") not in INVENTORY_PROJECTED_TYPES:
+            q["unknown"] = True
+            if outcome in ("success", "empty"):
+                outcome = coll["status"] = "partial"
         current = coll["sources"][0].get("itemCount")
         if current is not None and len(resources) > current:
             q["invalid"] = True
@@ -816,7 +822,7 @@ def notion_evidence(body, tool, q):
 
 
 def metric_trace_evidence(body, tool, q):
-    if tool in NAMED_LISTS or tool == "tempo_search":
+    if tool in NAMED_LISTS or tool in METRIC_QUERIES | LOKI_QUERIES or tool == "tempo_search":
         verdict = source_collection(body, q)
         if verdict is not None:
             return verdict
@@ -830,13 +836,29 @@ def metric_trace_evidence(body, tool, q):
                 return "unverified"
             return "success" if rows else "empty"
         return None
-    if tool in METRIC_QUERIES:
+    if tool in METRIC_QUERIES | LOKI_QUERIES:
         rows = bounded_list(body.get("result"), 50, q)
         kind = body.get("resultType")
-        if rows is None or kind not in ("vector", "matrix"):
+        allowed = ("streams", "vector", "matrix") if tool in LOKI_QUERIES else ("vector", "matrix")
+        if rows is None or kind not in allowed:
             return None
+        if (body["collectionStatus"] == "empty") != (not rows):
+            return "unverified"
         samples = 0
         for row in rows:
+            if kind == "streams":
+                labels = row.get("stream") if isinstance(row, dict) else None
+                values = bounded_list(row.get("values"), 200, q) if isinstance(row, dict) else None
+                if (not isinstance(labels, dict) or not all(isinstance(v, str) for v in labels.values())
+                        or not values or not all(isinstance(v, list) and len(v) == 2
+                        and matching(v[0], r"\d{1,20}") and isinstance(v[1], str)
+                        and len(v[1].encode("utf-8")) <= 4096 for v in values)):
+                    return None
+                samples += len(values)
+                if samples > 5000:
+                    q["truncated"] = True
+                    return None
+                continue
             if not isinstance(row, dict) or not isinstance(row.get("metric"), dict):
                 return None
             values = [row.get("value")] if kind == "vector" else bounded_list(row.get("values"), 500, q)
@@ -904,7 +926,7 @@ def producer_evidence(body, tool, q):
         return topology_evidence(body, q)
     if name in ("notion_search", "notion_query_database", "notion_fetch_page"):
         return notion_evidence(body, name, q)
-    if name in METRIC_QUERIES | set(NAMED_LISTS) | {"tempo_search", "tempo_get_trace"}:
+    if name in METRIC_QUERIES | LOKI_QUERIES | set(NAMED_LISTS) | {"tempo_search", "tempo_get_trace"}:
         return metric_trace_evidence(body, name, q)
     return None
 

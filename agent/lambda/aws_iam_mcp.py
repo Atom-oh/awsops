@@ -6,9 +6,10 @@ import json
 from cross_account import get_client, get_role_arn, resolve_tool_name
 
 
-def _page_quality(response):
+def _page_quality(response, collection_key):
     flag = response.get("IsTruncated")
-    return {"truncated": flag is True, **({"unknown": True} if type(flag) is not bool else {})}
+    observed = isinstance(response.get(collection_key), list)
+    return {"truncated": flag is True, **({"unknown": True} if type(flag) is not bool or not observed else {})}
 
 
 def lambda_handler(event, context):
@@ -43,11 +44,12 @@ def lambda_handler(event, context):
             if args.get("path_prefix"): kwargs["PathPrefix"] = args["path_prefix"]
             # Retrieve IAM users list / IAM 사용자 목록 조회
             response = iam.list_users(**kwargs)
-            users = response.get("Users", [])
+            users = response.get("Users")
+            users = users if isinstance(users, list) else []
             return ok({"users": [{"userName": u["UserName"], "userId": u["UserId"],
                 "arn": u["Arn"], "createDate": str(u.get("CreateDate", "")),
                 "passwordLastUsed": str(u.get("PasswordLastUsed", "never"))}
-                for u in users], **_page_quality(response)})
+                for u in users], **_page_quality(response, "Users")})
 
         # Get detailed user info including policies, groups, keys, MFA / 사용자 상세 정보 조회 (정책, 그룹, 키, MFA 포함)
         elif t == "get_user":
@@ -76,12 +78,13 @@ def lambda_handler(event, context):
             if args.get("path_prefix"): kwargs["PathPrefix"] = args["path_prefix"]
             # Retrieve IAM roles list / IAM 역할 목록 조회
             response = iam.list_roles(**kwargs)
-            roles = response.get("Roles", [])
+            roles = response.get("Roles")
+            roles = roles if isinstance(roles, list) else []
             return ok({"roles": [{"roleName": r["RoleName"], "arn": r["Arn"],
                 "createDate": str(r.get("CreateDate", "")),
                 "description": r.get("Description", "")[:100],
                 "maxSessionDuration": r.get("MaxSessionDuration", 3600)}
-                for r in roles], **_page_quality(response)})
+                for r in roles], **_page_quality(response, "Roles")})
 
         # Get role details with trust policy and attached policies / 역할 상세 조회 (신뢰 정책, 연결 정책 포함)
         elif t == "get_role_details":
@@ -114,9 +117,10 @@ def lambda_handler(event, context):
             kwargs = {"MaxItems": args.get("max_items", 50)}
             if args.get("path_prefix"): kwargs["PathPrefix"] = args["path_prefix"]
             response = iam.list_groups(**kwargs)
-            groups = response.get("Groups", [])
+            groups = response.get("Groups")
+            groups = groups if isinstance(groups, list) else []
             return ok({"groups": [{"name": g["GroupName"], "arn": g["Arn"],
-                "createDate": str(g.get("CreateDate", ""))} for g in groups], **_page_quality(response)})
+                "createDate": str(g.get("CreateDate", ""))} for g in groups], **_page_quality(response, "Groups")})
 
         # Get group details with members and policies / 그룹 상세 조회 (멤버, 정책 포함)
         elif t == "get_group":
@@ -138,11 +142,12 @@ def lambda_handler(event, context):
                 "OnlyAttached": args.get("only_attached", False)}
             if args.get("path_prefix"): kwargs["PathPrefix"] = args["path_prefix"]
             response = iam.list_policies(**kwargs)
-            policies = response.get("Policies", [])
+            policies = response.get("Policies")
+            policies = policies if isinstance(policies, list) else []
             return ok({"policies": [{"name": p["PolicyName"], "arn": p["Arn"],
                 "attachmentCount": p.get("AttachmentCount", 0),
                 "isAttachable": p.get("IsAttachable", True),
-                "createDate": str(p.get("CreateDate", ""))} for p in policies], **_page_quality(response)})
+                "createDate": str(p.get("CreateDate", ""))} for p in policies], **_page_quality(response, "Policies")})
 
         # List inline and managed policies for a user / 사용자의 인라인·관리형 정책 조회
         elif t == "list_user_policies":
