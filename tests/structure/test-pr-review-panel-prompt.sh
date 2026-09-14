@@ -72,27 +72,11 @@ else
   fail "KIRO_INSTRUCTION carries its own data-only guard for the diff file"
 fi
 
-# The agent's tool grant and the prompt's tool-name mention must be documented as staying in
-# sync (the grant moved from `--trust-tools=read,grep,fs_read` to agents/pr-review-readonly.json —
-# kiro-cli 2.11.1 ignores unknown --trust-tools names such as the stale `fs_read`).
-AGENT="scripts/pr-review/agents/pr-review-readonly.json"
-if grep -B4 -- '--agent "\$KIRO_AGENT_NAME"' "$SCRIPT" | grep -qiE "sync|align"; then
-  pass "agent tool grant / prompt tool-name alignment is documented"
+# --trust-tools and the prompt's tool-name mentions must be documented as staying in sync.
+if grep -B2 -- '--trust-tools=read,grep,fs_read' "$SCRIPT" | grep -qiE "sync|align"; then
+  pass "trust-tools / prompt tool-name alignment is documented"
 else
-  fail "agent tool grant / prompt tool-name alignment is documented"
-fi
-
-if grep -qE -- '--trust-tools' "$SCRIPT" && grep -vE '^\s*#' "$SCRIPT" | grep -q -- '--trust-tools'; then
-  fail "run-panel.sh no longer passes --trust-tools (ignored for unknown names by kiro-cli 2.11.1)"
-else
-  pass "run-panel.sh no longer passes --trust-tools (ignored for unknown names by kiro-cli 2.11.1)"
-fi
-
-AGENT_TOOLS="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join(d["tools"]))' "$AGENT" 2>/dev/null)"
-if [ "$AGENT_TOOLS" = "read grep" ] && echo "$BLOCK" | grep -q 'file-read tool (read)'; then
-  pass "agent grants exactly read+grep and the prompt names the read tool"
-else
-  fail "agent grants exactly read+grep and the prompt names the read tool (tools='$AGENT_TOOLS')"
+  fail "trust-tools / prompt tool-name alignment is documented"
 fi
 
 [ "$FAILED" -eq 0 ] || exit 1

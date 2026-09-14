@@ -6,7 +6,7 @@
 | --- | --- | --- | --- | --- |
 | S1 | Frozen and gated Terraform resources stay default-off, gated by `count` or `for_each`, and tracked tfvars do not enable gated flags. | `docs/decisions/BASELINE.md`, ADR-005, ADR-006, ADR-007 | `scripts/v2/test_merge_invariants.py`, `scripts/v2/merge_invariants.py` | `python3 -m pytest scripts/v2/test_merge_invariants.py -q` |
 | S2 | Gateway-routed sections align across AgentCore catalog, web sections, route rules, and the `observability` to `external-obs` alias; v1 `/awsops/` route literals do not leak into v2 web sources. | ADR-004, ADR-003 | `web/lib/merge-invariants.test.ts`, `web/lib/merge-invariants.ts` | `cd web && npx vitest run lib/merge-invariants.test.ts` |
-| S3 | The local runner executes isolated Python tests, web Vitest, and opportunistic Terraform checks; the CI workflow invokes that runner. | Current merge runner and workflow | `scripts/v2/merge-verify.sh`, `.github/workflows/merge-verify.yml` | `bash scripts/v2/merge-verify.sh` |
+| S3 | The local runner executes isolated Python/web tests and advisory Terraform checks; CI additionally requires pinned, backend-free runtime IAM mock plans. | Current merge runner and workflow | `scripts/v2/merge-verify.sh`, `.github/workflows/merge-verify.yml` | `bash scripts/v2/merge-verify.sh` |
 | S4 | Every configured model/lens cell requires a successful CLI exit and nonce-bound final report frames; only decoded, scrubbed reports reach the chair. | PR-review execution protocol | `scripts/pr-review/test_report_frame.py`, `scripts/pr-review/test_review_completion.py`, `scripts/pr-review/test_aws_preflight.py` | `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v` |
 
 ## Structural gate limitation
@@ -41,6 +41,10 @@ web vitest stage.
 The Terraform stage runs `terraform -chdir=terraform/v2/foundation fmt -check` when the binary is
 available, and also runs `validate` when `terraform/v2/foundation/.terraform` exists. Missing
 Terraform tooling is reported as `SKIP`; Terraform diagnostics are non-blocking in this runner.
+CI separately pins Terraform 1.15.7 and requires backend-free init, validate and
+`terraform test -filter=tests/runtime_iam.tftest.hcl`. Providers are mocked, credentials are
+not supplied, and the lock records Linux amd64/arm64 checksums. These required checks cannot
+be skipped by the local advisory stage.
 
 ## Pytest Isolation
 
@@ -53,7 +57,7 @@ each `test_*.py` file in its own pytest process preserves isolation and avoids c
 
 The `merge-verify` job in `.github/workflows/merge-verify.yml` runs on pull requests targeting `main`
 and manual dispatch. It checks out the selected revision,
-sets up Node.js 20 and Python 3.12, installs web dependencies with `cd web && npm ci`, installs
+sets up Node.js 20, Python 3.12 and Terraform 1.15.7, installs web dependencies with `cd web && npm ci`, installs
 `pytest` plus the v2 Python subsystem requirements, and executes `bash scripts/v2/merge-verify.sh`.
 It also runs the offline PR-review regressions in a separate step:
 
@@ -145,3 +149,6 @@ The panel currently receives at most 3,000 diff lines. Keep PRs within that comp
 review scope; a PASSED label with truncated content is not sufficient to merge.
 All required cells and the chair must finish successfully at the latest HEAD.
 Changing documentation does not authorize disabling coverage or severity gates.
+
+The generic S1 scan collects `*_enabled` defaults; `inventory_host_only` is instead
+checked explicitly by the runtime IAM mock fixture. Neither scanner proves live access.

@@ -152,6 +152,38 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         self.assertEqual(inventory_params, [{"name": "rt", "value": {"stringValue": "alb"}}])
         self.assertNotIn("alb", inventory_sql)
 
+    def test_cloudfront_identity_lookup_finds_beyond_bulk_limit_without_large_details(self):
+        fleet = [{"id": f"E{i:08d}", "origins": ["large-detail" * 1000]} for i in range(601)]
+        expected = fleet[-1]["id"]
+        def fake(sql, params=None):
+            values = {p["name"]: p["value"]["stringValue"] for p in params}
+            if "rid" not in values:
+                return [{"data": row} for row in fleet[:500]]
+            self.assertIn("resource_id = :rid", sql)
+            self.assertIn("LIMIT 1", sql)
+            self.assertIn("account_id = 'self'", sql)
+            self.assertNotIn(expected, sql)
+            self.assertNotIn("origins", sql)
+            return [{"data": {"id": row["id"]}} for row in fleet if row["id"] == values["rid"]]
+        inv._execute_override = fake
+        with mock.patch.object(inv, "_freshness_for_type", return_value={}):
+            result = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {
+                "resource_type": "cloudfront", "resource_id": expected, "limit": 500}}, None)
+        body = json.loads(result["body"])
+        self.assertEqual(body["resources"], [{"id": expected}])
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["projection"], "identity_only")
+        self.assertEqual(body["resource_id"], expected)
+
+    def test_identity_lookup_rejects_other_types_and_invalid_ids_before_sql(self):
+        with mock.patch.object(inv, "_execute") as execute:
+            for resource_type, identifier in (("ec2", "E123EXAMPLE"), ("cloudfront", "' OR 1=1"),
+                                               ("cloudfront", 123), ("cloudfront", "")):
+                result = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {
+                    "resource_type": resource_type, "resource_id": identifier}}, None)
+                self.assertEqual(result["statusCode"], 400)
+            execute.assert_not_called()
+
     def test_query_inventory_discloses_bound_per_type_freshness(self):
         calls = []
 
@@ -378,7 +410,7 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
                     "unknown_attribute_count": None,
                     "oldest_captured_at": "2026-08-31T00:25:00+00:00",
                     "latest_success_at": "2026-08-31T00:25:00+00:00",
-                    "freshness": "healthy",
+                    "freshness": "degraded",
                     "age_minutes": 2,
                     "stale_after_minutes": 30,
                 },
@@ -388,22 +420,24 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         rows = inv._sync_freshness()
 
         by_type = {row["resource_type"]: row for row in rows}
-        # blind attribute reads degrade the DISCLOSED freshness; an explicit 0/None stays healthy
+        # Unknown attribute coverage stays unknown/degraded; only an explicit zero can be healthy.
         self.assertEqual(by_type["s3_public_access"]["freshness"], "degraded")
         self.assertEqual(by_type["s3_public_access"]["unknown_attribute_count"], 2)
         self.assertEqual(by_type["s3"]["freshness"], "healthy")
-        self.assertEqual(by_type["alb"]["freshness"], "healthy")
+        self.assertEqual(by_type["alb"]["freshness"], "degraded")
+        self.assertIsNone(by_type["alb"]["unknown_attribute_count"])
         freshness_sql = calls[0][0]
         self.assertIn("runs.unknown_attribute_count", freshness_sql)
+        self.assertNotIn("COALESCE(unknown_attribute_count, 0)", freshness_sql)
         self.assertIn(
-            "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 "
+            "WHEN status = 'succeeded' AND (unknown_attribute_count IS NULL OR unknown_attribute_count > 0) "
             "THEN 'degraded'",
             freshness_sql,
         )
         # the unknown-attribute arm must precede the plain succeeded->healthy arm
         self.assertLess(
             freshness_sql.index(
-                "WHEN status = 'succeeded' AND COALESCE(unknown_attribute_count, 0) > 0 "
+                "WHEN status = 'succeeded' AND (unknown_attribute_count IS NULL OR unknown_attribute_count > 0) "
                 "THEN 'degraded'"
             ),
             freshness_sql.index("WHEN status = 'succeeded' THEN 'healthy'"),

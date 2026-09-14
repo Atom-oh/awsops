@@ -429,7 +429,7 @@ resource "aws_ecs_task_definition" "web" {
         # alone leaves the Cognito session live). APP_DOMAIN matches auth.tf logout_urls.
         { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
         { name = "APP_DOMAIN", value = var.domain_name },
-        { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
+        { name = "SSM_RUNTIME_ARN_PARAM", value = var.agentcore_enabled ? "/ops/${var.project}/agentcore/runtime_arn" : "" },
         # v1-parity Code Interpreter chat route: the BFF reads the provisioned interpreter id from
         # SSM (fail-open — absent/pending ⇒ the code route no-ops and normal routing runs).
         { name = "SSM_INTERPRETER_ID_PARAM", value = "/ops/${var.project}/agentcore/interpreter_id" },
@@ -447,7 +447,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "HOST_ACCOUNT_ID", value = data.aws_caller_identity.current.account_id },
         # AI Diagnosis (Task 1b): the diagnosis POST route reads process.env.AWS_ACCOUNT_ID.
         { name = "AWS_ACCOUNT_ID", value = data.aws_caller_identity.current.account_id },
-        ], var.workers_enabled ? [
+        ], var.inventory_host_only ? [
+        { name = "INVENTORY_HOST_ONLY", value = "true" }
+        ] : [], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
         ] : [], var.remediation_enabled ? [
         # ADR-029+036: the web execute route reads the kill-switch param name + remediation SM ARN.

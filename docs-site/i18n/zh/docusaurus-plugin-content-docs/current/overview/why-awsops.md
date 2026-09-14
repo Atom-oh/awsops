@@ -157,5 +157,5 @@ EC2·Lambda·ECS/ECR·EKS（Pod/Node/Deployment/Service/Explorer）·VPC·CloudF
 ## 更多内容
 
 - [仪表板概览](./dashboard) · [AI 助手](./ai-assistant) · [AgentCore 详解](./agentcore) · [账户管理](./accounts)
-- [AI 综合诊断](../monitoring/ai-diagnosis) · [EKS 容器成本](../compute/eks-container-cost) · [外部数据源](../monitoring/datasources)
+- [AI 综合诊断](../monitoring/ai-diagnosis) · [EKS 容器成本](../compute/eks-container-cost) · [外部数据源](../observability/datasources)
 - [AWSops 介绍（完整架构）](../intro)

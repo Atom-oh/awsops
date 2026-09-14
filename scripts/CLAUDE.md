@@ -6,6 +6,11 @@ points from the repository root through the `Makefile`.
 
 ## Operational entry points
 
+- `v2/steampipe/gen_spc_entrypoint.py` verifies STS and the enabled host registry
+  before rendering when `INVENTORY_HOST_ONLY=true`. An invalid initial scope prevents
+  startup; a scope failure observed by the watchdog stops the service. Host collection
+  keeps all enabled regions. Terraform controls the associated role grants.
+
 - `make deps` installs `scripts/v2/package.json` dependencies. `make configure`
   writes local config for `terraform/v2/foundation/`.
 - `make deploy` runs migrations, builds/pushes the arm64 web image, rolls ECS,
@@ -36,11 +41,10 @@ required review coverage and the completion protocol. Every required cell must
 complete for the reviewed HEAD. Preserve nonce-bound final JSON report frames,
 redaction, retry/time limits, and fail-closed coverage/chair validation.
 `preflight-aws-session.py` checks ambient Pod Identity without changing providers
-or signing settings. The chair retains `--strict-mcp-config`. Kiro cells run under
-the pinned read-only agent `pr-review/agents/pr-review-readonly.json` (`--agent`)
-behind a per-model preflight; agent fallback and monthly quota exhaustion are
-non-retried failures with their own review banners. Procedure and failure modes:
-`docs/runbooks/pr-review-panel.md`; behaviour: `tests/structure/test-pr-review-panel.sh`.
+or signing settings. The chair retains `--strict-mcp-config`. `kiro-safety.sh` pins
+the read-only Kiro agent (`agents/pr-review-readonly.json`) and the exact-`PONG`
+startup check; classified quota/agent-fallback failures are not retried and get
+their own review banners. Operator procedure: `docs/runbooks/pr-review-panel.md`.
 
 Offline checks: `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v`.
 Read those tests for protocol details rather than copying model rosters or frame

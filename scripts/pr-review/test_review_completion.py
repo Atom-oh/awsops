@@ -76,34 +76,7 @@ cli = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 if cli == "aws":
     sys.exit("AWS calls are forbidden in panel/chair fixtures")
-if cli == "kiro-cli" and args == ["--version"]:
-    print("kiro-cli 0.0.0-fixture"); sys.exit(0)
 prompt = args[args.index("-p") + 1] if cli == "claude" else args[1] if cli == "kiro-cli" else args[-1]
-if cli == "kiro-cli":
-    # Agent contract: --agent pr-review-readonly (installed at <cwd>/.kiro/agents), no --trust-tools.
-    assert args[args.index("--agent") + 1] == "pr-review-readonly" and "--no-interactive" in args
-    assert not any(a.startswith("--trust-tools") for a in args), args
-    assert args[args.index("--wrap") + 1] == "never"
-    assert pathlib.Path(".kiro/agents/pr-review-readonly.json").is_file()
-    model = {"claude-opus-5": "kiro-opus", "gpt-5.6-terra": "kiro-gpt"}[args[args.index("--model") + 1]]
-    if prompt.startswith("Kiro startup check"):
-        # Preflight: no diff anywhere, fixed prompt. Modes: fallback / quota / silent.
-        assert "DIFF_DATA_ONLY" not in prompt and sys.stdin.read() == ""
-        key = model + "-preflight"
-        countfile = state / (key + ".count")
-        count = int(countfile.read_text()) + 1 if countfile.exists() else 1
-        countfile.write_text(str(count))
-        modes = json.loads((state / "plan.json").read_text()).get(key, ["success"])
-        mode = modes[min(count - 1, len(modes) - 1)]  # same per-attempt convention as review cells
-        if mode == "fallback":
-            print("Error: no agent with name pr-review-readonly found. Falling back to user specified default", file=sys.stderr)
-        if mode == "quota":
-            print("Monthly request limit reached\nThe limits reset on 10/01.", file=sys.stderr); sys.exit(0)
-        if mode == "silent":
-            sys.exit(0)
-        if mode == "refusal":
-            print("> I cannot reply with only PONG without more context."); sys.exit(0)
-        print("\x1b[38;5;141m> \x1b[0mPONG"); sys.exit(0)
 if cli == "claude":
     key = "chair-primary" if "fable" in os.environ["ANTHROPIC_MODEL"] else "chair-fallback"
     body = "Summary: reviewed the diff and all lens reports.\nVERDICT: PASS\n"
@@ -114,12 +87,14 @@ else:
     nonce_match = (re.search(r"^Cell nonce: ([0-9a-f]{32})$", prompt, re.M)
                    or re.search(r"REVIEW_COMPLETE: " + lens + r" ([0-9a-f]{32}) ", prompt))
     nonce = nonce_match.group(1)
-    model = "codex" if cli == "codex" else model
+    model = "codex" if cli == "codex" else {"claude-opus-5": "kiro-opus", "gpt-5.6-sol": "kiro-gpt"}[args[args.index("--model") + 1]]
     key = model + "-" + lens
     def frame(report):
         return "REVIEW_COMPLETE: " + lens + " " + nonce + " " + json.dumps({"report": report}) + "\n"
     body = frame("No findings after reviewing this lens.\n")
     if cli == "kiro-cli":
+        assert "--trust-tools=read,grep,fs_read" in args and "--no-interactive" in args
+        assert args[args.index("--wrap") + 1] == "never"
         diff_path = re.search(r"saved at this file path: (.*?) \(already", prompt).group(1)
         assert pathlib.Path(diff_path).read_text() == "DIFF_DATA_ONLY\n"
         assert "DIFF_DATA_ONLY" not in prompt
@@ -133,18 +108,6 @@ plan = json.loads((state / "plan.json").read_text())
 modes = plan.get(key, ["success"])
 mode = modes[min(count - 1, len(modes) - 1)]
 (state / (key + ".prompt")).write_text(prompt)
-if mode == "quota":
-    # kiro-cli 2.11.1 v2 engine: monthly quota exhausted -> stderr message, rc=0, empty stdout.
-    assert cli == "kiro-cli"
-    print("Monthly request limit reached\nThe limits reset on 10/01.", file=sys.stderr); sys.exit(0)
-if mode == "agent-fallback":
-    # kiro-cli 2.11.1: unknown/invalid --agent -> stderr line, rc=0, default agent answers.
-    assert cli == "kiro-cli"
-    print("Error: no agent with name pr-review-readonly found. Falling back to user specified default", file=sys.stderr)
-if mode == "quoted-kiro-errors":
-    # Codex echoes its input to stderr; quoted Kiro signatures there must not be interpreted.
-    assert cli == "codex"
-    print("Monthly request limit reached / no agent with name pr-review-readonly found", file=sys.stderr)
 if mode in ("echo-template", "echo-filled-template", "quote-template"):
     template = re.search(r"^REVIEW_COMPLETE: .+$", prompt, re.M).group(0) + "\n"
     if mode == "echo-filled-template":
@@ -180,7 +143,15 @@ if mode in ("nonzero", "nonzero-report"):
 if cli == "kiro-cli":
     # Observed assistant prefix; the synthetic footer exercises accepted numeric syntax.
     body = "\x1b[38;5;141m> \x1b[0m" + body + "\n\x1b[90m ▸ Credits: 0.03 • Time: 6s\x1b[0m\n"
-print(body, end="", flush=True)
+if cli == "codex" and "--json" in args:
+    for event in (
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "reply", "type": "agent_message", "text": body}},
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}},
+    ):
+        print(json.dumps(event), flush=True)
+else:
+    print(body, end="", flush=True)
 if mode in ("timeout", "hardkill"):
     if mode == "hardkill":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -346,6 +317,21 @@ class ReviewCompletion(unittest.TestCase):
         self.assertEqual(len({path.read_text() for path in (self.work / "slot").glob("*.nonce")}), 12)
         self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
 
+    def test_kiro_prompt_matches_noninteractive_read_only_tool_permissions(self):
+        result = self.panel()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_matrix()
+        for model in ("kiro-opus", "kiro-gpt"):
+            for lens in LENSES:
+                prompt = (self.work / f"{model}-{lens}.prompt").read_text()
+                self.assertIn("PERMITTED TOOLS: read, grep, fs_read.", prompt)
+                self.assertIn("Do not call execute_bash", prompt)
+                self.assertIn("Do not run builds or tests", prompt)
+                self.assertIn("separate CI jobs", prompt)
+                self.assertIn("state validation limits", prompt)
+        # Codex retains its own read-only sandbox contract, including safe shell reads.
+        self.assertNotIn("PERMITTED TOOLS:", (self.work / "codex-L2.prompt").read_text())
+
     def test_missing_required_lens_cannot_shrink_matrix(self):
         (self.work / "missing-cells.txt").write_text("kiro-opus/L2\n")
         (self.lenses / "L5.txt").unlink()
@@ -497,142 +483,6 @@ class ReviewCompletion(unittest.TestCase):
         self.assertTrue(self.chair().rstrip().endswith("VERDICT: FAIL"))
         self.assertEqual(self.count("chair-primary"), 1)
         self.assertEqual(self.count("chair-fallback"), 1)
-
-    def kiro_review_calls(self):
-        return sorted(p.name for p in self.work.glob("kiro-*-L*.count"))
-
-    def test_preflight_runs_both_models_before_any_kiro_review_and_installs_agent(self):
-        result = self.panel()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_matrix()
-        self.assertEqual(result.stderr.splitlines()[0], "run-panel.sh: kiro-cli 0.0.0-fixture")
-        self.assertEqual(self.count("kiro-opus-preflight"), 1)
-        self.assertEqual(self.count("kiro-gpt-preflight"), 1)
-        self.assertIn("Kiro preflight passed: kiro-opus", result.stderr)
-        self.assertIn("Kiro preflight passed: kiro-gpt", result.stderr)
-        self.assertFalse((self.work / "kiro-preflight.flag").exists())
-        # The runtime copy of the agent is removed again once the cells have finished.
-        self.assertFalse((ROOT / ".kiro/agents/pr-review-readonly.json").exists())
-        self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
-
-    def test_preflight_agent_fallback_withholds_diff_from_every_kiro_cell(self):
-        self.plan({"kiro-opus-preflight": ["fallback"]})
-        result = self.panel()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.kiro_review_calls(), [])
-        self.assertEqual(self.count("kiro-opus-preflight"), 1)
-        self.assertFalse((self.work / "kiro-gpt-preflight.count").exists())
-        self.assertIn("::error::kiro-cli ignored --agent pr-review-readonly during preflight (kiro-opus)", result.stderr)
-        self.assertIn("::error::Kiro preflight failed for kiro-opus", result.stderr)
-        self.assert_matrix([f"{model}/{lens}" for model in ("kiro-opus", "kiro-gpt") for lens in LENSES])
-        for flag in ("kiro-preflight.flag", "kiro-agent-fallback.flag", "coverage-severe.flag"):
-            self.assertTrue((self.work / flag).exists(), flag)
-        review = self.chair()
-        self.assertIn("Kiro preflight failed", review)
-        self.assertIn("Kiro agent contract broken", review)
-        self.assertTrue(review.rstrip().endswith("VERDICT: FAIL"))
-
-    def test_preflight_quota_reports_cause_without_sending_diff(self):
-        self.plan({"kiro-gpt-preflight": ["quota"]})
-        result = self.panel()
-        self.assertEqual(self.kiro_review_calls(), [])
-        self.assertIn("::error::Kiro monthly request quota exhausted for KIRO_API_KEY (preflight kiro-gpt)", result.stderr)
-        self.assertIn("reset on 10/01", result.stderr)
-        self.assertTrue((self.work / "kiro-quota.flag").exists())
-        self.assertTrue((self.work / "kiro-preflight.flag").exists())
-        review = self.chair()
-        self.assertIn("Kiro monthly request quota exhausted", review)
-        self.assertTrue(review.rstrip().endswith("VERDICT: FAIL"))
-
-    def test_preflight_silent_model_withholds_diff(self):
-        self.plan({"kiro-opus-preflight": ["silent"]})
-        self.panel()
-        self.assertEqual(self.kiro_review_calls(), [])
-        self.assertTrue((self.work / "kiro-preflight.flag").exists())
-        self.assertFalse((self.work / "kiro-quota.flag").exists())
-        self.assertFalse((self.work / "kiro-agent-fallback.flag").exists())
-
-    def test_preflight_reply_must_be_exactly_pong(self):
-        self.plan({"kiro-gpt-preflight": ["refusal"]})
-        result = self.panel()
-        self.assertEqual(self.kiro_review_calls(), [])
-        self.assertIn("::error::Kiro preflight failed for kiro-gpt (exit 0)", result.stderr)
-        self.assertTrue((self.work / "kiro-preflight.flag").exists())
-        self.assertIn("[skip] kiro-opus/L2 (preflight failed)", result.stderr)
-
-    def test_quota_exhausted_cell_is_not_retried_and_names_the_cause(self):
-        self.plan({"kiro-gpt-L3": ["quota"]})
-        result = self.panel()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.count("kiro-gpt-L3"), 1)
-        self.assertIn("[quota] kiro-gpt-L3 — monthly request limit reached, not retrying", result.stderr)
-        self.assertNotIn("[retry 1/2] kiro-gpt-L3", result.stderr)
-        self.assertIn("::error::Kiro monthly request quota exhausted for KIRO_API_KEY — 1 cell(s) [kiro-gpt-L3]", result.stderr)
-        self.assertIn("reset on 10/01", result.stderr)
-        self.assert_matrix(["kiro-gpt/L3"])
-        self.assertTrue((self.work / "kiro-quota.flag").exists())
-        self.assertFalse(list((self.work / "slot").glob("*.quota")))
-        review = self.chair()
-        self.assertIn("Kiro monthly request quota exhausted", review)
-        self.assertIn("reset on 10/01", review)
-        self.assertTrue(review.rstrip().endswith("VERDICT: FAIL"))
-
-    def test_agent_fallback_cell_response_is_discarded_and_forces_fail(self):
-        self.plan({"kiro-opus-L2": ["agent-fallback"]})
-        result = self.panel()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.count("kiro-opus-L2"), 1)
-        self.assertIn("[agent-fallback] kiro-opus-L2", result.stderr)
-        self.assertIn("::error::kiro-cli ignored --agent pr-review-readonly (fell back to the default agent) in 1 cell(s) [kiro-opus-L2]", result.stderr)
-        self.assert_matrix(["kiro-opus/L2"])
-        self.assertEqual((self.work / "slot/kiro-opus-L2.md").read_text(), "")
-        self.assertTrue((self.work / "kiro-agent-fallback.flag").exists())
-        self.assertFalse((self.work / "kiro-quota.flag").exists())
-        review = self.chair()
-        self.assertIn("Kiro agent contract broken", review)
-        # The discarded response never reaches the chair (empty slots are skipped by synthesize.sh).
-        self.assertNotIn("=== PANEL: kiro-opus-L2 ===", (self.work / "synth-stdin.txt").read_text())
-        self.assertTrue(review.rstrip().endswith("VERDICT: FAIL"))
-
-    def test_codex_quoting_kiro_signatures_on_stderr_is_not_a_kiro_failure(self):
-        self.plan({"codex-L4": ["quoted-kiro-errors"]})
-        result = self.panel()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_matrix()
-        for flag in ("kiro-quota.flag", "kiro-agent-fallback.flag", "kiro-preflight.flag"):
-            self.assertFalse((self.work / flag).exists(), flag)
-        self.assertTrue(self.chair().rstrip().endswith("VERDICT: PASS"))
-
-    def test_invalid_agent_config_aborts_before_any_model_call(self):
-        fixture = self.work / "fixture"
-        (fixture / "agents").mkdir(parents=True)
-        for name in ("run-panel.sh", "lib.sh", "report_frame.py"):
-            (fixture / name).write_text((SCRIPTS / name).read_text())
-        cases = {
-            "duplicate-key": '{"name":"pr-review-readonly","tools":["read","grep"],"tools":["read","grep","shell"],'
-                             '"allowedTools":["read","grep"],"mcpServers":{},"useLegacyMcpJson":false,"resources":[]}',
-            "extra-tool": '{"name":"pr-review-readonly","tools":["read","grep","shell"],"allowedTools":["read","grep","shell"],'
-                          '"mcpServers":{},"useLegacyMcpJson":false,"resources":[]}',
-            "hooks": '{"name":"pr-review-readonly","tools":["read","grep"],"allowedTools":["read","grep"],'
-                     '"mcpServers":{},"useLegacyMcpJson":false,"resources":[],"hooks":{"agentSpawn":[{"command":"id"}]}}',
-            "wrong-name": '{"name":"default","tools":["read","grep"],"allowedTools":["read","grep"],'
-                          '"mcpServers":{},"useLegacyMcpJson":false,"resources":[]}',
-        }
-        for case, text in cases.items():
-            with self.subTest(case=case):
-                (fixture / "agents/pr-review-readonly.json").write_text(text)
-                proc = subprocess.run(["bash", str(fixture / "run-panel.sh"), str(self.diff), str(self.lenses), str(self.work)],
-                                      cwd=ROOT, env=self.env, capture_output=True, text=True, timeout=10)
-                self.assertEqual(proc.returncode, 1, proc.stderr)
-                self.assertIn("invalid read-only agent configuration", proc.stderr)
-                self.assertFalse(list(self.work.glob("*.count")))
-                self.assertTrue((self.work / "coverage-severe.flag").exists())
-        (fixture / "agents/pr-review-readonly.json").unlink()
-        proc = subprocess.run(["bash", str(fixture / "run-panel.sh"), str(self.diff), str(self.lenses), str(self.work)],
-                              cwd=ROOT, env=self.env, capture_output=True, text=True, timeout=10)
-        self.assertEqual(proc.returncode, 1, proc.stderr)
-        self.assertIn("kiro agent config missing", proc.stderr)
-        self.assertFalse(list(self.work.glob("*.count")))
 
     def test_kiro_footer_parser_accepts_only_cosmetic_suffix_after_completed_report(self):
         report = "\x1b[38;5;141m> \x1b[0m" + report_frame("No findings.\n").replace("\n", "\r\n")

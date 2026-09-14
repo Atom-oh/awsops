@@ -158,5 +158,5 @@ AWS 데이터에 더해 기존 관측성 스택을 **데이터소스로 연동**
 ## 더 보기
 
 - [대시보드 개요](./dashboard) · [AI 어시스턴트](./ai-assistant) · [AgentCore 상세](./agentcore) · [계정 관리](./accounts)
-- [AI 종합 진단](../monitoring/ai-diagnosis) · [EKS 컨테이너 비용](../compute/eks-container-cost) · [외부 데이터소스](../monitoring/datasources)
+- [AI 종합 진단](../monitoring/ai-diagnosis) · [EKS 컨테이너 비용](../compute/eks-container-cost) · [외부 데이터소스](../observability/datasources)
 - [AWSops 소개(아키텍처 전체)](../intro)

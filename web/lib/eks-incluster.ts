@@ -4,7 +4,7 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import { EKSClient, DescribeClusterCommand } from '@aws-sdk/client-eks';
-import { parseCpuCores, parseMem, type NodeRow, type PodRow } from './eks-resources';
+import { parseCpuCores, parseCpuUsage, parseMem, parseMemUsage, type NodeRow, type PodRow } from './eks-resources';
 
 // Re-export the client-safe row types so existing importers keep resolving them here.
 export type { NodeRow, PodRow } from './eks-resources';
@@ -301,6 +301,9 @@ export function normalizeNode(it: K8sItem): NodeRow {
     cpuAllocatable: parseCpuCores(alloc.cpu),
     memCapacity: parseMem(cap.memory),
     memAllocatable: parseMem(alloc.memory),
+    cpuUsage: null,
+    memUsage: null,
+    usageTimestamp: null,
     diskCapacity: parseMem(cap['ephemeral-storage']),
     diskAllocatable: parseMem(alloc['ephemeral-storage']),
     ...(Object.keys(labels).length ? { labels } : {}),
@@ -537,8 +540,15 @@ function k8sGet(endpoint: string, path: string, token: string, caPem: Buffer): P
       },
       (res) => {
         const chunks: Buffer[] = [];
+        let ended = false;
+        res.on('error', reject);
+        res.on('aborted', () => reject(new Error('k8s response aborted')));
+        res.on('close', () => {
+          if (!ended) reject(new Error('k8s response closed before completion'));
+        });
         res.on('data', (d) => chunks.push(d as Buffer));
         res.on('end', () => {
+          ended = true;
           const body = Buffer.concat(chunks).toString('utf8');
           const status = res.statusCode ?? 0;
           if (status < 200 || status >= 300) {
@@ -609,11 +619,60 @@ export async function describeInCluster(
   return obj;
 }
 
+const NODE_METRICS_PATH = '/apis/metrics.k8s.io/v1beta1/nodes';
+const NODE_METRICS_MAX_AGE_MS = 5 * 60_000;
+const NODE_METRICS_CLOCK_SKEW_MS = 60_000;
+type NodeUsage = Pick<NodeRow, 'cpuUsage' | 'memUsage' | 'usageTimestamp'>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Optional measurements must never make an otherwise successful nodes read fail. */
+function parseNodeMetrics(body: string | null): Map<string, NodeUsage> {
+  const byName = new Map<string, NodeUsage>();
+  if (body === null) return byName;
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return byName; }
+  if (!isRecord(parsed) || !Array.isArray(parsed.items)) return byName;
+  const now = Date.now();
+  for (const item of parsed.items) {
+    if (!isRecord(item) || !isRecord(item.metadata) || !isRecord(item.usage)) continue;
+    const name = item.metadata.name;
+    const timestamp = item.timestamp;
+    if (typeof name !== 'string' || !name || typeof timestamp !== 'string') continue;
+    // Require a timezone-bearing RFC3339 sample, not Date.parse's permissive local/date-only forms.
+    if (!/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(timestamp)) continue;
+    const elapsed = now - Date.parse(timestamp);
+    if (!Number.isFinite(elapsed) || elapsed > NODE_METRICS_MAX_AGE_MS || elapsed < -NODE_METRICS_CLOCK_SKEW_MS) continue;
+    // Date.parse normalizes impossible days (e.g. February 30); those are not valid samples.
+    const day = timestamp.slice(0, 10);
+    if (new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day) continue;
+    const cpuUsage = parseCpuUsage(item.usage.cpu);
+    const memUsage = parseMemUsage(item.usage.memory);
+    if (cpuUsage !== null || memUsage !== null) {
+      byName.set(name, { cpuUsage, memUsage, usageTimestamp: timestamp });
+    }
+  }
+  return byName;
+}
+
 export async function listInCluster(cluster: string, kind: Kind): Promise<InClusterRow[]> {
   const { endpoint, caPem } = await clusterConn(cluster);
   const token = await eksToken(cluster, REGION);
-  const body = await k8sGet(endpoint, KIND_PATH[kind], token, caPem);
+  // Only nodes get the optional fixed-path read; reuse the same credentials/CA, in parallel.
+  const [body, metricsBody] = await Promise.all([
+    k8sGet(endpoint, KIND_PATH[kind], token, caPem),
+    kind === 'nodes' ? k8sGet(endpoint, NODE_METRICS_PATH, token, caPem).catch(() => null) : null,
+  ]);
   const parsed = JSON.parse(body) as K8sList;
+  if (kind === 'nodes') {
+    const usage = parseNodeMetrics(metricsBody);
+    return (parsed.items ?? []).map((item) => {
+      const node = normalizeNode(item);
+      return { ...node, ...usage.get(node.name) };
+    });
+  }
   const norm = NORMALIZERS[kind];
   return (parsed.items ?? []).map(norm);
 }

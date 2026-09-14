@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: bd8365c80b56 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d46f0e1b6b8d · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > Reviewer context distilled from this module’s CLAUDE.md; shared by Kiro, Codex, and Agy.
 
@@ -10,10 +10,15 @@ Use root [CLAUDE.md](../CLAUDE.md) and
 - `agent.py` runs gateway selection and streaming. Live tools come from
   `scripts/v2/agentcore/catalog.py`, `provision.py`, and
   `terraform/v2/foundation/ai.tf`; inspect those rather than copied counts.
+- `readiness.py` requires DEPLOYMENT_READINESS_ENABLED=true (default off, applied output
+  rather than caller payload). Its deployment_readiness branch checks STS account,
+  curated Ops gateway inventory tools, a known fresh CloudFront record and a bounded
+  model call. Return nonce/account-bound evidence, exclude inventory from the model
+  prompt and never fall through to normal chat on readiness failures.
 - Preserve the `observability`/`external-obs` alias and canonical/`v2-` gateway
   compatibility. Host requests use execution credentials through
   `account_utils.py` and `lambda/cross_account.py`, not self-assume.
-- Tool-less fallback applies before output begins; do not replay a partial
+- Normal chat tool-less fallback applies before output begins; do not replay a partial
   response. BFF fan-out requires both hybrid-routing and synthesis flags.
 - Keep runtime tool allowlists, server-controlled gates, and arm64 images.
   AWS mutation/autonomy and arbitrary BYO-MCP stay FROZEN; governed external-data
@@ -23,7 +28,7 @@ Use root [CLAUDE.md](../CLAUDE.md) and
 From the repository root:
 
 ```bash
-cd agent && python3 -m pytest test_agent.py -q
+cd agent && python3 -m pytest test_agent.py test_readiness.py -q
 ```
 
 Run other affected Python suites in isolation, following

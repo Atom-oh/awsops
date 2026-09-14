@@ -158,3 +158,11 @@ resource "aws_lambda_function" "edge" {
   memory_size      = 128
   publish          = true
 }
+
+# Optional app capability only; private operators manage membership separately.
+resource "aws_cognito_user_group" "deployment_verifiers" {
+  count        = var.ci_readiness_enabled ? 1 : 0
+  name         = "deployment-verifiers"
+  user_pool_id = aws_cognito_user_pool.main.id
+  description  = "May invoke the bounded deployment readiness probe"
+}

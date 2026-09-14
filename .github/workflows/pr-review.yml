@@ -9,7 +9,7 @@ name: AI Code Review
 #  it reads it via its own trusted file tool; feeding a large diff directly via argv hits the
 #  kernel argv length limit — see run-panel.sh.)
 #   - pull_request_target base-ref checkout (M1): PR head code never executes, diff is data only
-#   - matrix fan-out: scripts/pr-review/run-panel.sh (3 models x 4 lenses = 12 cells) -> synthesize.sh
+#   - matrix fan-out: scripts/pr-review/run-panel.sh (3 models, one specialist role each) -> synthesize.sh
 #   - auth: EKS Pod Identity (ci-runner) SigV4 + ai-panel-keys (KIRO)
 #   - region: Claude Fable 5.1 is a global inference profile, but the "global." prefix only
 #     affects Bedrock's post-landing routing, not the SigV4 signing region — AWS_REGION must
@@ -45,6 +45,7 @@ jobs:
       pull-requests: write
       contents: read
     env:
+      ROLE_REVIEW: "1"
       # claude-fable-5-1 is a global inference profile. Its "global." prefix only affects
       # Bedrock's internal routing after the request lands, NOT the SigV4 signing region:
       # AWS_REGION must still match ANTHROPIC_BEDROCK_BASE_URL's endpoint or signing fails
@@ -407,7 +408,7 @@ jobs:
       - name: Preflight existing runner Pod Identity before panel
         run: python3 scripts/pr-review/preflight-aws-session.py
 
-      - name: Run panel (12 required model/lens reports)
+      - name: Run panel (3 required specialist reports)
         run: |
           set -euo pipefail
           bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
@@ -460,7 +461,7 @@ jobs:
             # (synthesize.sh's chair-failed.flag -> chair_failed).
             STATUS_BADGE="**Status: BLOCKED** — review generation failed (model timeout/error) — not a code problem, re-run the workflow"
           elif [ "$GATE_RESULT" = "fail" ] && [ "${panel_incomplete:-0}" = "1" ]; then
-            STATUS_BADGE="**Status: BLOCKED** — incomplete AI review coverage; all 12 model/lens reports must complete"
+            STATUS_BADGE="**Status: BLOCKED** — incomplete AI review coverage; all 3 specialist reports must complete"
           elif [ "$GATE_RESULT" = "fail" ]; then
             STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
           else
@@ -469,7 +470,7 @@ jobs:
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## 🤖 AI Code Review (${chair_used:-Claude Fable 5} chair · lens×model matrix)"
+            echo "## 🤖 AI Code Review (${chair_used:-Claude Fable 5} chair · specialist roles)"
             echo ""
             echo "_Cells (model/lens): ${panel_responded:-solo}_"
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
