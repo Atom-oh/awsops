@@ -136,3 +136,50 @@ def test_trusted_advisor_unavailable_status_does_not_return_zero_savings():
     assert body["totalEstimatedMonthlySavings"] is None
     assert terminal({"status": "success", "content": [{"json": body}]},
                     tool="get_trusted_advisor_cost_checks")[0] == "unverified"
+
+
+@pytest.mark.parametrize("tool,key", [("list_users", "Users"), ("list_roles", "Roles"),
+                                       ("list_groups", "Groups"), ("list_policies", "Policies")])
+@pytest.mark.parametrize("mode", ["missing", "null", "object", "string", "empty"])
+def test_iam_collection_must_be_observed_before_confirming_empty(tool, key, mode):
+    response = {"IsTruncated": False}
+    if mode != "missing":
+        response[key] = {"null": None, "object": {}, "string": "PRIVATE", "empty": []}[mode]
+    client = MagicMock()
+    getattr(client, tool).return_value = response
+    with patch.object(iam, "get_client", return_value=client):
+        out = iam.lambda_handler({"tool_name": tool, "arguments": {}}, None)
+    getattr(client, tool).assert_called_once()
+    body = json.loads(out["body"])
+    assert out["statusCode"] == 200
+    assert body.get("unknown", False) is (mode != "empty")
+    assert terminal({"status": "success", "content": [{"json": body}]}, tool=tool)[0] == (
+        "empty" if mode == "empty" else "partial")
+    assert "PRIVATE" not in json.dumps(body)
+
+
+@pytest.mark.parametrize("tool", ["list_tables", "query_table", "scan_table"])
+@pytest.mark.parametrize("mode", ["missing", "null", "object", "string", "empty"])
+def test_dynamodb_collection_must_be_observed_before_confirming_empty(tool, mode):
+    response = {"Count": 0}
+    key = "TableNames" if tool == "list_tables" else "Items"
+    if mode != "missing":
+        response[key] = {"null": None, "object": {}, "string": "PRIVATE", "empty": []}[mode]
+    client, resource = MagicMock(), MagicMock()
+    client.list_tables.return_value = response
+    resource.Table.return_value.scan.return_value = response
+    resource.Table.return_value.query.return_value = response
+    args = {"table_name": "fixture"}
+    if tool == "query_table":
+        args["key_condition"] = {"key": "id", "value": "fixture"}
+    with patch.object(ddb, "get_client", return_value=client), patch.object(ddb, "get_resource", return_value=resource):
+        out = ddb.lambda_handler({"tool_name": tool, "arguments": args}, None)
+    (client.list_tables if tool == "list_tables" else resource.Table.return_value.query
+     if tool == "query_table" else resource.Table.return_value.scan).assert_called_once()
+    client.describe_table.assert_not_called()
+    body = json.loads(out["body"])
+    assert out["statusCode"] == 200
+    assert body.get("unknown", False) is (mode != "empty")
+    assert terminal({"status": "success", "content": [{"json": body}]}, tool=tool)[0] == (
+        "empty" if mode == "empty" else "partial")
+    assert "PRIVATE" not in json.dumps(body)
