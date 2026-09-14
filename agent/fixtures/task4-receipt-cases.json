@@ -63,7 +63,7 @@
   {"name": "iam continuation empty", "tool": "iam___list_users", "content": [{"json": {"users": [], "truncated": true}}], "outcome": "partial", "marker": "truncated"},
   {"name": "iam confirmed empty", "tool": "iam___list_users", "content": [{"json": {"users": [], "truncated": false}}], "outcome": "empty"},
   {"name": "dynamodb known missing item", "tool": "dynamodb___get_item", "content": [{"json": {"item": null, "found": false}}], "outcome": "empty"},
-  {"name": "loki confirmed empty", "tool": "loki___loki_query_range", "content": [{"json": {"resultType": "streams", "result": [], "truncated": false}}], "outcome": "empty"},
+  {"name": "loki confirmed empty", "tool": "loki___loki_query_range", "content": [{"json": {"resultType": "streams", "result": [], "truncated": false, "collectionStatus": "empty"}}], "outcome": "empty"},
   {"name":"unknown empty results are not confirmed empty","tool":"future___reader","content":[{"json":{"results":[]}}],"outcome":"unverified"},
   {"name":"unknown list is not confirmed evidence","tool":"future___reader","content":[{"json":[{"id":"PRIVATE"}]}],"outcome":"unverified"},
   {"name":"unknown positive quality is insufficient","tool":"future___reader","content":[{"json":{"collection":{"status":"ok","stale":false,"sources":[]},"nodes":[]}}],"outcome":"unverified"},
