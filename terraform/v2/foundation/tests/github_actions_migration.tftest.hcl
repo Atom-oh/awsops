@@ -114,6 +114,17 @@ run "scoped_private_migration" {
   }
   assert {
     condition = anytrue([
+      for statement in jsondecode(aws_iam_role_policy.execution[0].policy).Statement :
+      contains(statement.Action, "ecr:BatchGetImage") &&
+      toset(flatten([statement.Resource])) == toset([
+        "arn:aws:ecr:ap-northeast-2:123456789012:repository/awsops-v2-web",
+        "arn:aws:ecr:ap-northeast-2:914738172881:repository/aws-guardduty-agent-fargate",
+      ])
+    ])
+    error_message = "Image pull permission must include only the app repository and AWS's regional GuardDuty repository."
+  }
+  assert {
+    condition = anytrue([
       for statement in jsondecode(aws_iam_policy.controller[0].policy).Statement :
       contains(statement.Action, "iam:PassRole") &&
       toset(flatten([statement.Resource])) == toset([

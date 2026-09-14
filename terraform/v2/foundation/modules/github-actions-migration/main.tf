@@ -38,15 +38,21 @@ variable "region" {
 }
 
 locals {
-  count       = var.config == null ? 0 : 1
-  ecs         = "arn:aws:ecs:${var.region}:${var.account_id}"
-  cluster     = "${local.ecs}:cluster/${var.project}"
-  repository  = "arn:aws:ecr:${var.region}:${var.account_id}:repository/${var.project}-web"
-  secret_base = "arn:aws:secretsmanager:${var.region}:${var.account_id}:secret:"
-  secrets     = var.config == null ? [] : compact([var.config.master_secret_arn, var.config.sql_reader_secret_arn])
-  family      = "${var.project}-ci-migration"
-  logs        = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/ecs/${local.family}:*"
-  region_only = { StringEquals = { "aws:RequestedRegion" = var.region } }
+  count      = var.config == null ? 0 : 1
+  ecs        = "arn:aws:ecs:${var.region}:${var.account_id}"
+  cluster    = "${local.ecs}:cluster/${var.project}"
+  repository = "arn:aws:ecr:${var.region}:${var.account_id}:repository/${var.project}-web"
+  # AWS-owned repository identities, not customer accounts. GuardDuty injects
+  # its sidecar without adding it to the submitted task definition.
+  # Source: https://docs.aws.amazon.com/guardduty/latest/ug/ecs-runtime-agent-ecr-image-uri.html
+  guardduty_accounts   = jsondecode(file("${path.module}/guardduty-ecr-accounts.json"))
+  guardduty_account    = lookup(local.guardduty_accounts, var.region, null)
+  guardduty_repository = local.guardduty_account == null ? null : "arn:aws:ecr:${var.region}:${local.guardduty_account}:repository/aws-guardduty-agent-fargate"
+  secret_base          = "arn:aws:secretsmanager:${var.region}:${var.account_id}:secret:"
+  secrets              = var.config == null ? [] : compact([var.config.master_secret_arn, var.config.sql_reader_secret_arn])
+  family               = "${var.project}-ci-migration"
+  logs                 = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/ecs/${local.family}:*"
+  region_only          = { StringEquals = { "aws:RequestedRegion" = var.region } }
   task_trust = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -121,7 +127,7 @@ resource "aws_iam_role_policy" "execution" {
     Version = "2012-10-17"
     Statement = [
       { Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = "*", Condition = local.region_only },
-      { Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = local.repository },
+      { Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = compact([local.repository, local.guardduty_repository]) },
       { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = local.logs }
     ]
   })
