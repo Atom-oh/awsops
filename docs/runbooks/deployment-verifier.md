@@ -2,9 +2,24 @@
 
 ## Verifier identity
 
-`scripts/v2/ci_origin_verifier.py` bootstraps a dedicated Cognito identity whose
-only purpose is authenticated read-only deployment verification. It defaults to
-a read-only plan; `--apply` is an explicit operator action.
+`scripts/v2/ci_origin_verifier.py` bootstraps a dedicated non-admin Cognito
+identity used by deployment verification. The helper defaults to a read-only
+plan; `--apply` is an explicit operator action.
+
+This is a standard authenticated dashboard identity, **not a read-only
+application account**. Its session can use normal chat, diagnosis and worker
+routes, including billable model/worker operations. Reading its credential
+secret is equivalent to obtaining that session authority. The probe's fixed
+read-only requests constrain the probe code, not other holders of the password.
+Restrict Secret read access to the reviewed release role and approved operators,
+and restrict writes to the designated bootstrap/recovery operator. Do not enable
+automatic Secrets Manager rotation independently of the Cognito password.
+
+The containment is non-admin scope: this foundation provisions no Cognito
+identity pool, the helper grants no IAM role, and it rejects all groups except
+`deployment-verifiers` with no `RoleArn`. Keep the verifier out of the SSM
+administrator allowlist as well. Protect the production environment and main
+merge access because the release role can read this credential.
 
 The supplied AWS account, region, project, user pool and secret must agree. The
 pool name must be `<project>-pool`; the existing Secrets Manager metadata must
@@ -12,6 +27,11 @@ be named `<project>/ci/deployment-verifier`. The deployment owner must provision
 and govern that metadata and its reader scope separately. The helper neither
 creates it nor infers its manager from the ARN/name. It grants no IAM role and
 uses the operator's configured AWS credentials.
+
+Use an operator Python environment with the project's boto3/botocore
+dependencies, for example `python3 -m pip install -r scripts/v2/workers/requirements.txt`
+from the repository root. Serialize bootstrap and credential-recovery operations;
+the secret pre-check is not a compare-and-set lock.
 
 ```bash
 python3 scripts/v2/ci_origin_verifier.py \
@@ -67,7 +87,7 @@ from Secrets Manager; the context is not a credential carrier.
 The CI executor must set `CI_COMMIT_SHA`, `CI_EXPECTED_ACCOUNT_ID`,
 `CI_EXPECTED_PROJECT`, `AWS_REGION`, and the absolute `CI_MIGRATION_CONTEXT` path.
 Install the context as a regular file owned by the migration user with mode
-0600. These values guard configuration mistakes; the AWS cluster read supplies
+0600 inside a directory accessible only to that user. These values guard configuration mistakes; the AWS cluster read supplies
 the resource-ownership confirmation.
 
 If an existing user has no credential secret, restore the known governed secret

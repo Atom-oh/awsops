@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time operator bootstrap of an unprivileged Cognito smoke-test principal.
+"""One-time operator bootstrap of a non-admin Cognito smoke-test principal.
 
 Required: --account --region --project --user-pool-id --secret-arn
 Default is a read-only plan. --apply explicitly enables creation. The deployment
@@ -13,6 +13,8 @@ enabled user with a valid value is reused without resetting either credential.
 
 Run with an operator AWS session, not the CI deployment role. A later authenticated
 smoke check verifies login; bootstrap does not authenticate or obtain user tokens.
+The resulting user has standard dashboard session authority, including billable
+chat/diagnosis routes. It is not a read-only application identity.
 Serialize operator bootstraps; Cognito creation has no idempotency token. An
 ambiguous create result cannot establish ownership for cleanup and is preserved.
 """
