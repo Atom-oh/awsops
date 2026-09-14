@@ -204,8 +204,8 @@ def combined(outcomes):
         if states & {"error", "unverified"}:
             return "partial"
         return "success" if "success" in states else "empty"
-    if states == {"error"}:
-        return "error"
+    if "error" in states:
+        return "error" if states == {"error"} else "partial"
     return "unverified"
 
 
@@ -816,7 +816,7 @@ def notion_evidence(body, tool, q):
 
 
 def metric_trace_evidence(body, tool, q):
-    if tool in NAMED_LISTS or tool in LOKI_QUERIES or tool == "tempo_search":
+    if tool in NAMED_LISTS or tool in METRIC_QUERIES | LOKI_QUERIES or tool == "tempo_search":
         verdict = source_collection(body, q)
         if verdict is not None:
             return verdict
@@ -836,7 +836,7 @@ def metric_trace_evidence(body, tool, q):
         allowed = ("streams", "vector", "matrix") if tool in LOKI_QUERIES else ("vector", "matrix")
         if rows is None or kind not in allowed:
             return None
-        if tool in LOKI_QUERIES and (body["collectionStatus"] == "empty") != (not rows):
+        if (body["collectionStatus"] == "empty") != (not rows):
             return "unverified"
         samples = 0
         for row in rows:

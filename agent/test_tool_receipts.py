@@ -29,7 +29,7 @@ def result(call_id, body, status="success"):
 
 
 def metric_body():
-    return {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}], "truncated": False}
+    return {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}], "truncated": False, "collectionStatus": "ok"}
 
 
 def known_use(call_id, tool="prometheus_query"):
@@ -109,7 +109,7 @@ class ToolReceiptTest(unittest.TestCase):
             result("b", {"statusCode": 403, "body": "Bearer SECRET"}),
             result("a", {"id": "eni-fixture", "partial": True, "unknown": [{"reason": "SECRET"}]}),
             result("c", {"error": "SECRET"}, status="error"),
-            result("d", {**metric_body(), "result": []}),
+            result("d", {**metric_body(), "result": [], "collectionStatus": "empty"}),
         ])
         receipts = {f["receipt"]["callId"]: f["receipt"] for f in frames if "receipt" in f}
         self.assertEqual({k: v["outcome"] for k, v in receipts.items()},
@@ -454,7 +454,7 @@ class ProducerReceiptTest(unittest.TestCase):
     def test_confirmed_empty_and_failed_content_blocks_are_partial(self):
         from tool_receipts import terminal
         outcome, _, _ = terminal({"status": "success", "content": [
-            {"json": {**metric_body(), "result": []}}, {"json": {"error": "PRIVATE"}},
+            {"json": {**metric_body(), "result": [], "collectionStatus": "empty"}}, {"json": {"error": "PRIVATE"}},
         ]}, tool="prometheus_query")
         self.assertEqual(outcome, "partial")
 
@@ -523,8 +523,7 @@ class ProducerReceiptTest(unittest.TestCase):
         for tool, field in (("prometheus_query", "result"), ("mimir_query_range", "result"),
                             ("tempo_search", "traces")):
             body = {field: [], "truncated": False, **({"resultType": "vector"} if field == "result" else {})}
-            if tool == "tempo_search":
-                body["collectionStatus"] = "empty"
+            body["collectionStatus"] = "empty"
             self.assertEqual(self.receipt(tool, body)["outcome"], "empty")
             self.assertEqual(self.receipt(tool, {**body, "truncated": True})["outcome"], "partial")
 

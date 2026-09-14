@@ -65,6 +65,24 @@ class EvidenceBoundaryTest(unittest.TestCase):
             self.assertEqual(receipt["outcome"], "partial")
             self.assertTrue(receipt["quality"]["unknown"])
 
+    def test_known_failures_survive_unverified_content_and_child_results(self):
+        for blocks in ([{"json": {"error": "PRIVATE"}}, {"json": {}}],
+                       [{"json": {}}, {"json": {"error": "PRIVATE"}}]):
+            outcome, quality, _ = terminal({"status": "success", "content": blocks}, tool="future_producer")
+            self.assertEqual(outcome, "partial")
+            self.assertNotIn("PRIVATE", json.dumps(quality))
+        self.assertEqual(self.receipt("get_trusted_advisor_cost_checks", {
+            "checks": [{"error": "PRIVATE"}, {"status": "not_available"}],
+        })["outcome"], "partial")
+
+    def test_metric_queries_require_upstream_collection_markers(self):
+        for tool in ("prometheus_query", "prometheus_query_range", "mimir_query", "mimir_query_range"):
+            for rows in ([], [{"metric": {}, "value": [1, "1"]}]):
+                body = {"resultType": "vector", "result": rows, "truncated": False}
+                self.assertEqual(self.receipt(tool, body)["outcome"], "unverified")
+                self.assertEqual(self.receipt(tool, {**body, "collectionStatus": "partial"})["outcome"], "partial")
+                self.assertEqual(self.receipt(tool, {**body, "collectionStatus": "unknown"})["outcome"], "unverified")
+
     def test_unknown_or_forged_source_status_cannot_certify_positive_data(self):
         for status in (None, {}, "future", "unknown"):
             self.assertEqual(self.receipt("prometheus_labels", {
@@ -143,7 +161,7 @@ class EvidenceBoundaryTest(unittest.TestCase):
     def test_prometheus_mimir_and_tempo_need_real_envelopes(self):
         for tool in ("prometheus_query", "prometheus_query_range", "mimir_query", "mimir_query_range"):
             self.assertEqual(self.receipt(tool, metric_body())["outcome"], "success")
-            matrix = {"resultType": "matrix", "result": [{"metric": {}, "values": [[1, "0"]]}], "truncated": False}
+            matrix = {"resultType": "matrix", "result": [{"metric": {}, "values": [[1, "0"]]}], "truncated": False, "collectionStatus": "ok"}
             self.assertEqual(self.receipt(tool, matrix)["outcome"], "success")
             for body in ({}, {"result": []}, {"resultType": "future", "result": [], "truncated": False},
                          {"resultType": "vector", "result": [{}], "truncated": False}):
