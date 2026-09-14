@@ -681,7 +681,7 @@ export async function POST(request: Request) {
           : domainOutcome(fanGateways[i], '', [], false, true));
         const evidence = answerEvidence(domains);
         const survivors = settled.flatMap((r, i) =>
-          r.status === 'fulfilled' && r.value.text.trim() && !['empty', 'error'].includes(domains[i].status)
+          r.status === 'fulfilled' && r.value.text.trim() && domains[i].status !== 'error'
             ? [{ gateway: fanGateways[i], text: r.value.text }] : []);
         const footer = () => ({ evidence, elapsedMs: Date.now() - tf0,
           tools: [...new Set(domains.flatMap(d => d.receipts.map(r => r.tool)))] });
@@ -846,7 +846,7 @@ export async function POST(request: Request) {
       const evidence = answerEvidence([domainOutcome(spec.gateway, failedWithoutAnswer ? '' : text, receipts.receipts, receipts.truncated, runtimeError, receipts.completion, runtimeUnverified)]);
       const disclosure = evidence.status === 'unverified' ? '' : evidenceDisclosure(evidence, lang);
       text += disclosure;
-      if (evidence.status === 'error' || evidence.status === 'empty') {
+      if (evidence.status === 'error') {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: text })}\n\n`));
       } else if (disclosure) controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: disclosure })}\n\n`));
       const footerMeta = {

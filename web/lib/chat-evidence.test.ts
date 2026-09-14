@@ -15,6 +15,10 @@ describe('saved evidence boundaries', () => {
   });
   it.each([
     [['success', 'error'], 'partial'],
+    [['success', 'empty'], 'success'],
+    [['empty', 'error'], 'partial'],
+    [['empty', 'empty'], 'empty'],
+    [['empty', 'unverified'], 'partial'],
     [['error'], 'error'],
     [['empty'], 'empty'],
     [['success', 'unfinished'], 'partial'],
@@ -23,6 +27,11 @@ describe('saved evidence boundaries', () => {
     const domain = domainOutcome('network', 'answer', (states as string[]).map((s, i) => receipt(`call-${i}`, s)), false, false, { version: 1, receiptCount: states.length });
     expect(domain.status).toBe(expected);
     expect(normalizeEvidence(answerEvidence([domain]))?.domains[0].status).toBe(expected);
+    const domains = (states as string[]).map((s, i) => domainOutcome(`domain-${i}`, 'answer',
+      [receipt(`call-${i}`, s)], false, false, { version: 1, receiptCount: 1 }));
+    const answer = answerEvidence(domains);
+    expect(answer.status).toBe(expected);
+    expect(normalizeEvidence(normalizeEvidence(answer))?.status).toBe(expected);
   });
   it('bounds repeated-call evidence and refuses a contradictory replay', () => {
     const b = new ReceiptBuffer();
@@ -32,6 +41,16 @@ describe('saved evidence boundaries', () => {
     expect(b.truncated).toBe(true);
     expect(domainOutcome('network', 'answer', b.receipts, b.truncated).status).toBe('partial');
   });
+  it.each(['missing', 'mismatch', 'truncated', 'unknown-source'])(
+    'confirmed-empty aggregation cannot bypass %s evidence', mode => {
+      const empty = { ...receipt('empty', 'empty'), ...(mode === 'unknown-source' ? { quality: {
+        collection: { status: 'ok', sources: [{ sourceId: 'inventory:ec2', status: 'unknown' }] },
+      } } : {}) };
+      const completion = mode === 'missing' ? undefined : { version: 1 as const, receiptCount: mode === 'mismatch' ? 1 : 2 };
+      const domain = domainOutcome('network', 'answer', [receipt('success'), empty], mode === 'truncated', false, completion);
+      expect(domain.status).toBe('partial');
+      expect(normalizeEvidence(answerEvidence([domain]))?.status).toBe('partial');
+    });
   it('keeps missing observed scope unknown and projects both source clocks without raw payloads', () => {
     const r = normalizeReceipt({ ...receipt('a'), quality: { collection: {
       status: 'error', stale: true, retainedPrevious: true, captured_at: '2026-09-14T00:00:00Z',

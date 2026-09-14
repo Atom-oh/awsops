@@ -182,11 +182,14 @@ export class ReceiptBuffer {
 }
 
 function aggregate(states: Outcome[]): Outcome {
-  if (!states.length || states.every(s => s === 'unverified')) return 'unverified';
-  if (states.every(s => s === 'success')) return 'success';
-  if (states.every(s => s === 'empty')) return 'empty';
-  if (states.every(s => s === 'empty' || s === 'error')) return 'error';
-  return 'partial';
+  // Match the producer's combined(): confirmed absence is assessed evidence.
+  if (states.includes('partial')) return 'partial';
+  if (states.some(s => s === 'success' || s === 'empty')) {
+    if (states.some(s => s === 'error' || s === 'unverified')) return 'partial';
+    return states.includes('success') ? 'success' : 'empty';
+  }
+  if (states.includes('error')) return states.every(s => s === 'error') ? 'error' : 'partial';
+  return 'unverified';
 }
 
 export function normalizeCompletion(value: unknown): InvocationCompletion | undefined {
