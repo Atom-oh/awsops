@@ -307,7 +307,9 @@ def lambda_handler(event, context):
                     results.append({"name": check.get("name", ""), "error": "Could not fetch"})
 
             truncated = len(cost_checks) > len(results)
-            complete = not truncated and not any(r.get("error") for r in results)
+            complete = not truncated and not any(
+                r.get("error") or r.get("status") not in ("ok", "warning", "error") for r in results
+            )
             total_savings = sum(float(r.get("estimatedMonthlySavings", 0) or 0) for r in results) if complete else None
             return ok({
                 "category": category,

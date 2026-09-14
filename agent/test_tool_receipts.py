@@ -28,6 +28,16 @@ def result(call_id, body, status="success"):
     ]}}
 
 
+def metric_body():
+    return {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}], "truncated": False}
+
+
+def known_use(call_id, tool="prometheus_query"):
+    event = use(call_id)
+    event["message"]["content"][0]["toolUse"]["name"] = "producer___" + tool
+    return event
+
+
 class ToolReceiptTest(unittest.TestCase):
     def test_complete_model_message_preserves_legacy_tool_event_without_streamed_fragments(self):
         frames = collect([use("a", eni_id="eni-0123"), result("a", {"id": "eni-0123"})])
@@ -36,26 +46,28 @@ class ToolReceiptTest(unittest.TestCase):
     def test_successful_transport_does_not_certify_unknown_collection_or_empty_items(self):
         for body, expected in [
             ({"securityGroups": [], "routes": [], "partial": True, "unknown": [{"reason": "read_failed"}]}, "partial"),
-            ({"items": [], "count": 0}, "empty"),
+            ({"items": [], "count": 0}, "unverified"),
             ({"statusCode": 302, "body": "{}"}, "unverified"),
-            ({"partial": False, "data": []}, "empty"),
+            ({"partial": False, "data": []}, "unverified"),
         ]:
             receipts = [f["receipt"] for f in collect([use("a"), result("a", body)]) if "receipt" in f]
             self.assertEqual(receipts[0]["outcome"], expected)
 
     def test_selected_eni_route_is_successful_and_preserves_safe_basis(self):
         body = {"eniId": "eni-0123", "securityGroups": [], "routes": [], "partial": False,
+                "vpcId": "vpc-fixture", "subnetId": "subnet-fixture", "privateIp": "192.0.2.1",
+                "nacl": [], "naclId": "acl-fixture", "routeTableId": "rtb-fixture",
                 "unknown": [], "routeSelection": {"status": "selected", "basis": "main", "associations": ["SECRET"]}}
-        receipts = [f["receipt"] for f in collect([use("a"), result("a", body)]) if "receipt" in f]
+        receipts = [f["receipt"] for f in collect([known_use("a", "get_eni_details"), result("a", body)]) if "receipt" in f]
         self.assertEqual(receipts[0]["outcome"], "success")
         self.assertEqual(receipts[0]["quality"]["routeSelection"], {"status": "selected", "basis": "main"})
         self.assertNotIn("SECRET", json.dumps(receipts))
 
     def test_language_hook_reminder_is_not_evidence_but_unparsed_result_is_incomplete(self):
         for text, expected in [(agent.LANG_TOOL_REMINDER["en"], "success"), ("SECRET" * 60000, "partial")]:
-            event = result("a", {"id": "eni-fixture"})
+            event = result("a", metric_body())
             event["message"]["content"][0]["toolResult"]["content"].append({"text": text})
-            receipt = [f["receipt"] for f in collect([use("a"), event]) if "receipt" in f][0]
+            receipt = [f["receipt"] for f in collect([known_use("a"), event]) if "receipt" in f][0]
             self.assertEqual(receipt["outcome"], expected)
 
     def test_malformed_quality_never_crashes_or_certifies_evidence(self):
@@ -68,11 +80,11 @@ class ToolReceiptTest(unittest.TestCase):
         self.assertNotIn("SECRET", json.dumps(receipts))
 
     def test_truncated_content_cannot_hide_a_failure_after_a_success(self):
-        event = result("a", {"id": "eni-fixture"})
+        event = result("a", metric_body())
         event["message"]["content"][0]["toolResult"]["content"] += [
             {"text": json.dumps({"statusCode": 500, "body": "SECRET"})}
         ] * 17
-        receipts = [f["receipt"] for f in collect([use("a"), event]) if "receipt" in f]
+        receipts = [f["receipt"] for f in collect([known_use("a"), event]) if "receipt" in f]
         self.assertEqual(receipts[0]["outcome"], "partial")
 
     def test_actual_public_fixture_correlates_repeated_names_without_private_events(self):
@@ -80,7 +92,9 @@ class ToolReceiptTest(unittest.TestCase):
         frames = collect(events)
         receipts = [f["receipt"] for f in frames if "receipt" in f]
         self.assertEqual([r["callId"] for r in receipts], ["call-0", "call-1"])
-        self.assertEqual([r["outcome"] for r in receipts], ["success", "success"])
+        # The real SDK fixture proves delivery/correlation, not the semantics of scoped_read.
+        self.assertEqual([r["outcome"] for r in receipts], ["unverified", "unverified"])
+        self.assertEqual("".join(f.get("delta", "") for f in frames), "Synthetic result.")
         self.assertEqual([r["inputs"] for r in receipts], [
             {"resource_id": "eni-fixture-one"}, {"resource_id": "eni-fixture-two"}])
         for receipt in receipts:
@@ -91,11 +105,11 @@ class ToolReceiptTest(unittest.TestCase):
 
     def test_terminal_failure_partial_and_unfinished_do_not_become_success(self):
         frames = collect([
-            use("a"), use("b"), use("c"), use("d"), use("e"),
+            use("a"), use("b"), use("c"), known_use("d"), use("e"),
             result("b", {"statusCode": 403, "body": "Bearer SECRET"}),
             result("a", {"id": "eni-fixture", "partial": True, "unknown": [{"reason": "SECRET"}]}),
             result("c", {"error": "SECRET"}, status="error"),
-            result("d", []),
+            result("d", {**metric_body(), "result": []}),
         ])
         receipts = {f["receipt"]["callId"]: f["receipt"] for f in frames if "receipt" in f}
         self.assertEqual({k: v["outcome"] for k, v in receipts.items()},
@@ -169,16 +183,16 @@ class ReviewReceiptTest(unittest.TestCase):
                 self.assertNotIn("PRIVATE", json.dumps(frames))
 
     def test_completion_follows_all_same_tool_receipts_including_unfinished(self):
-        frames = collect([use("a"), use("b"), result("a", {"id": "eni-0123"})])
+        frames = collect([known_use("a"), use("b"), result("a", metric_body())])
         self.assertEqual(frames[-1], {"completion": {"version": 1, "receiptCount": 2}})
         self.assertEqual([f["receipt"]["outcome"] for f in frames if "receipt" in f], ["success", "unfinished"])
 
     def test_failed_invocation_retains_receipts_but_has_no_completion(self):
         class Interrupted:
             async def stream_async(self, _):
-                yield use("a")
+                yield known_use("a")
                 yield use("b")
-                yield result("a", {"id": "eni-0123"})
+                yield result("a", metric_body())
                 raise RuntimeError("PRIVATE")
         frames = []
 
@@ -440,8 +454,8 @@ class ProducerReceiptTest(unittest.TestCase):
     def test_confirmed_empty_and_failed_content_blocks_are_partial(self):
         from tool_receipts import terminal
         outcome, _, _ = terminal({"status": "success", "content": [
-            {"json": []}, {"json": {"error": "PRIVATE"}},
-        ]})
+            {"json": {**metric_body(), "result": []}}, {"json": {"error": "PRIVATE"}},
+        ]}, tool="prometheus_query")
         self.assertEqual(outcome, "partial")
 
     def test_known_producers_require_their_object_envelope_to_confirm_empty(self):
@@ -508,8 +522,9 @@ class ProducerReceiptTest(unittest.TestCase):
     def test_metric_and_trace_empty_collections_remain_distinct(self):
         for tool, field in (("prometheus_query", "result"), ("mimir_query_range", "result"),
                             ("tempo_search", "traces")):
-            self.assertEqual(self.receipt(tool, {field: [], "truncated": False})["outcome"], "empty")
-            self.assertEqual(self.receipt(tool, {field: [], "truncated": True})["outcome"], "partial")
+            body = {field: [], "truncated": False, **({"resultType": "vector"} if field == "result" else {})}
+            self.assertEqual(self.receipt(tool, body)["outcome"], "empty")
+            self.assertEqual(self.receipt(tool, {**body, "truncated": True})["outcome"], "partial")
 
     def test_legacy_trusted_advisor_at_the_check_cap_has_unknown_remaining_coverage(self):
         receipt = self.receipt("get_trusted_advisor_cost_checks", {
@@ -517,6 +532,14 @@ class ProducerReceiptTest(unittest.TestCase):
         })
         self.assertEqual(receipt["outcome"], "partial")
         self.assertTrue(receipt["quality"]["unknown"])
+
+    def test_trusted_advisor_unavailable_check_is_not_a_completed_assessment(self):
+        for status in ("not_available", "future"):
+            receipt = self.receipt("get_trusted_advisor_cost_checks", {
+                "checks": [{"status": status}], "totalChecks": 1, "truncated": False,
+            })
+            self.assertEqual(receipt["outcome"], "unverified")
+            self.assertTrue(receipt["quality"]["unknown"])
 
 
 class BoundedProducerReceiptTest(unittest.TestCase):
@@ -527,7 +550,7 @@ class BoundedProducerReceiptTest(unittest.TestCase):
     def test_trusted_advisor_errors_are_not_negative_health_findings(self):
         for checks, expected in [
             ([{"name": "PRIVATE", "error": "PRIVATE"}], "error"),
-            ([{"status": "error", "flaggedResources": ["PRIVATE"]}], "success"),
+            ([{"status": "error", "flaggedCount": 1, "flaggedResources": ["PRIVATE"]}], "success"),
             ([{"status": "warning"}, {"error": "PRIVATE"}], "partial"),
             ([], "empty"), ([{"error": "PRIVATE"}] * 16, "partial"),
         ]:
@@ -544,6 +567,27 @@ class BoundedProducerReceiptTest(unittest.TestCase):
             self.assertTrue(r["quality"].get("invalid"))
         r = self.receipt("get_trusted_advisor_cost_checks", {"checks": [{"error": "PRIVATE"}], "truncated": True})
         self.assertEqual(r["outcome"], "partial")
+
+    def test_trusted_advisor_flagged_detail_counts_are_bounded_and_not_health_errors(self):
+        for total, size, expected in [(0, 0, "success"), (1, 1, "success"), (10, 10, "success"),
+                                      (11, 10, "partial"), (1, 0, "partial"),
+                                      (None, 0, "partial"), (True, 1, "partial"), (0, 1, "partial")]:
+            with self.subTest(total=total, size=size):
+                r = self.receipt("get_trusted_advisor_cost_checks", {"truncated": False, "checks": [{
+                    "status": "error", "flaggedCount": total, "flaggedResources": ["PRIVATE"] * size,
+                }]})
+                self.assertEqual(r["outcome"], expected)
+                if isinstance(total, int) and not isinstance(total, bool) and total > size:
+                    self.assertTrue(r["quality"]["truncated"])
+        from tool_receipts import terminal
+        class Unwalkable(list):
+            def __iter__(self):
+                raise AssertionError("resource details must not be traversed")
+        body = {"checks": [{"status": "warning", "flaggedCount": 11, "flaggedResources": Unwalkable(["PRIVATE"] * 10)}]}
+        outcome, quality, _ = terminal({"status": "success", "content": [{"json": body}]},
+                                       tool="get_trusted_advisor_cost_checks")
+        self.assertEqual(outcome, "partial")
+        self.assertNotIn("PRIVATE", json.dumps(quality))
 
     def test_opensearch_typed_collection_and_legacy_absence(self):
         failed = {"name": "PRIVATE", "collectionStatus": "error", "indices": []}
