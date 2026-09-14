@@ -424,7 +424,7 @@ print(json.dumps(cases))
 `;
   // This executes only the offline public-message adapter; test_agent stubs AWS/Strands clients.
   const cases = JSON.parse(execFileSync('python3', ['-B', '-c', script, dir], { encoding: 'utf8' }).trim().split('\n').at(-1)!);
-  it.each(cases)('$name survives Python production, SSE and restoration', async ({ frames, outcome, marker }) => {
+  it.each(cases)('$name survives Python production, SSE and restoration', async ({ frames, outcome, marker, expectedSourceId, expectedWindow }) => {
     vi.resetModules();
     ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
     acSend.mockResolvedValue(eventStreamOf(frames.map((f: unknown) => JSON.stringify(f)), 73));
@@ -435,7 +435,12 @@ print(json.dumps(cases))
     expect(a.receipts?.[0].outcome).toBe(outcome);
     if (marker) expect(a.receipts?.[0].quality?.[marker]).toBe(true);
     expect(d.status).toBe(outcome);
-    expect(normalizeEvidence(normalizeEvidence(answerEvidence([d])))?.status).toBe(outcome);
+    const restored = normalizeEvidence(normalizeEvidence(answerEvidence([d])));
+    expect(restored?.status).toBe(outcome);
+    if (expectedSourceId) expect(restored?.domains[0].receipts[0].quality?.collection).toMatchObject({
+      windowStartMs: expectedWindow[0], windowEndMs: expectedWindow[1],
+      sources: [{ sourceId: expectedSourceId, windowStartMs: expectedWindow[0], windowEndMs: expectedWindow[1] }],
+    });
     expect(JSON.stringify(a)).not.toContain('PRIVATE');
   });
   it.each(['short-tail', 'missing-completion', 'mismatch', 'unsupported', 'late-receipt', 'runtime-unverified', 'complete'])(

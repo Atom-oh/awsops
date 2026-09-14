@@ -50,7 +50,9 @@ def quality(body):
     """Explicit quality only. Invalid present fields taint; absent fields stay absent."""
     out = {}
 
-    def fields(src, dest, rules):
+    def fields(src, dest, rules, other_keys=None):
+        if other_keys is not None and src.keys() - rules.keys() - set(other_keys):
+            out["unsupported"] = True
         for key, valid in rules.items():
             if key in src:
                 if valid(src[key]):
@@ -99,7 +101,11 @@ def quality(body):
                 out["invalid"] = True
             fields(value, c, {"stale": boolean, "retainedPrevious": boolean, "snapshotConsistent": boolean,
                               "captured_at": clock, "attempted_at": clock,
-                              "evidenceKind": one_of({"inventory", "trace"})})
+                              "evidenceKind": one_of({"inventory", "trace"}),
+                              **{k: boolean for k in ("infraUnavailable", "inputTruncated", "graphTruncated")},
+                              **{k: number for k in ("windowStartMs", "windowEndMs", "nodeDrops", "edgeDrops",
+                                                      "orphanSpans", "invalidSpans", "unresolvedMessaging")}},
+                   ("status", "sources", "publishedSources"))
             for name in ("sources", "publishedSources"):
                 if name not in value:
                     continue
@@ -118,12 +124,13 @@ def quality(body):
                     if record["status"] == "unknown":
                         out["invalid"] = True
                     fields(source, record, {
-                        "sourceId": lambda v: matching(v, r"(?:inventory:)?[a-z][a-z0-9_-]*", 80),
+                        "sourceId": lambda v: matching(v, r"(?:inventory:[a-z][a-z0-9_-]*|[a-z][a-z0-9_-]*(?::(?:\d+|default))?)", 80),
                         "scope": one_of({"account", "aggregate"}),
                         "producerStatus": one_of({"succeeded", "failed", "partial", "running", "unknown"}),
                         **{k: lambda v: v is None or number(v) for k in
-                           ("capturedAtMs", "lastSuccessAtMs", "attemptedAtMs", "finishedAtMs", "itemCount")},
-                    })
+                           ("capturedAtMs", "lastSuccessAtMs", "attemptedAtMs", "finishedAtMs", "itemCount",
+                            "windowStartMs", "windowEndMs")},
+                    }, ("status", "reasons"))
                     if "reasons" in source:
                         raw_reasons = source["reasons"]
                         if not isinstance(raw_reasons, list):
@@ -144,6 +151,8 @@ def incomplete(q):
             or q.get("routeSelection", {}).get("status") == "unknown"
             or any(q.get("truncation", {}).get(k) is True for k in ("nodes", "edges"))
             or coll.get("stale") or coll.get("retainedPrevious") or coll.get("snapshotConsistent") is False
+            or any(coll.get(k) is True for k in ("infraUnavailable", "inputTruncated", "graphTruncated"))
+            or any(coll.get(k, 0) > 0 for k in ("nodeDrops", "edgeDrops", "orphanSpans", "invalidSpans", "unresolvedMessaging"))
             or (bool(coll) and coll.get("status") not in ("ok", "empty"))
             or any(s["status"] not in ("ok", "empty")
                    for key in ("sources", "publishedSources") for s in coll.get(key, [])))

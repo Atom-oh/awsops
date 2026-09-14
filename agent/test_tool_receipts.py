@@ -161,6 +161,10 @@ class ReviewReceiptTest(unittest.TestCase):
                 self.assertEqual(receipt["outcome"], case["outcome"])
                 if case.get("marker"):
                     self.assertTrue(receipt["quality"].get(case["marker"]))
+                if case.get("expectedSourceId"):
+                    collection = receipt["quality"]["collection"]
+                    self.assertEqual(collection["sources"][0]["sourceId"], case["expectedSourceId"])
+                    self.assertEqual([collection["windowStartMs"], collection["windowEndMs"]], case["expectedWindow"])
                 self.assertNotIn("PRIVATE", json.dumps(frames))
 
     def test_completion_follows_all_same_tool_receipts_including_unfinished(self):

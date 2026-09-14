@@ -8,6 +8,7 @@ export interface SourceQuality {
   producerStatus?: 'succeeded' | 'failed' | 'partial' | 'running' | 'unknown';
   capturedAtMs?: number | null; lastSuccessAtMs?: number | null; attemptedAtMs?: number | null;
   finishedAtMs?: number | null; itemCount?: number | null; reasons?: string[];
+  windowStartMs?: number | null; windowEndMs?: number | null;
 }
 export interface ReceiptQuality {
   partial?: boolean; unknown?: boolean; truncated?: boolean; invalid?: boolean; unsupported?: boolean;
@@ -16,6 +17,9 @@ export interface ReceiptQuality {
   truncation?: { nodes?: boolean; edges?: boolean; node_limit?: number; edge_limit?: number };
   collection?: { status: SourceStatus; stale?: boolean; retainedPrevious?: boolean; snapshotConsistent?: boolean;
     captured_at?: string | null; attempted_at?: string | null; evidenceKind?: 'inventory' | 'trace';
+    windowStartMs?: number; windowEndMs?: number; nodeDrops?: number; edgeDrops?: number;
+    orphanSpans?: number; invalidSpans?: number; unresolvedMessaging?: number;
+    infraUnavailable?: boolean; inputTruncated?: boolean; graphTruncated?: boolean;
     sources?: SourceQuality[]; publishedSources?: SourceQuality[] };
 }
 /** Last Runtime frame after all receipts. Count is logical call IDs, never deduplicated tool names. */
@@ -86,7 +90,10 @@ function quality(value: unknown): ReceiptQuality {
       const c: NonNullable<ReceiptQuality['collection']> = { status: statuses.includes(v.status) ? v.status : 'unknown' };
       if (!statuses.includes(v.status)) q.invalid = true;
       fields(v, c, { stale: boolean, retainedPrevious: boolean, snapshotConsistent: boolean,
-        captured_at: clock, attempted_at: clock, evidenceKind: oneOf(['inventory', 'trace']) }, ['status', 'sources', 'publishedSources']);
+        captured_at: clock, attempted_at: clock, evidenceKind: oneOf(['inventory', 'trace']),
+        ...Object.fromEntries(['infraUnavailable', 'inputTruncated', 'graphTruncated'].map(k => [k, boolean])),
+        ...Object.fromEntries(['windowStartMs', 'windowEndMs', 'nodeDrops', 'edgeDrops', 'orphanSpans', 'invalidSpans', 'unresolvedMessaging'].map(k => [k, num])),
+      }, ['status', 'sources', 'publishedSources']);
       for (const name of ['sources', 'publishedSources'] as const) {
         if (!(name in v)) continue;
         c[name] = [];
@@ -97,9 +104,9 @@ function quality(value: unknown): ReceiptQuality {
           if (source !== raw) { q.invalid = true; continue; }
           const record: SourceQuality = { status: statuses.includes(source.status) ? source.status : 'unknown' };
           if (!statuses.includes(source.status)) q.invalid = true;
-          fields(source, record, { sourceId: x => match(x, /^(?:inventory:)?[a-z][a-z0-9_-]*$/, 80),
+          fields(source, record, { sourceId: x => match(x, /^(?:inventory:[a-z][a-z0-9_-]*|[a-z][a-z0-9_-]*(?::(?:\d+|default))?)$/, 80),
             scope: oneOf(['account', 'aggregate']), producerStatus: oneOf(['succeeded', 'failed', 'partial', 'running', 'unknown']),
-            ...Object.fromEntries(['capturedAtMs', 'lastSuccessAtMs', 'attemptedAtMs', 'finishedAtMs', 'itemCount'].map(k => [k, (x: unknown) => x === null || num(x)])) }, ['status', 'reasons']);
+            ...Object.fromEntries(['capturedAtMs', 'lastSuccessAtMs', 'attemptedAtMs', 'finishedAtMs', 'itemCount', 'windowStartMs', 'windowEndMs'].map(k => [k, (x: unknown) => x === null || num(x)])) }, ['status', 'reasons']);
           if ('reasons' in source) {
             if (!Array.isArray(source.reasons)) q.invalid = true;
             else {
@@ -121,6 +128,8 @@ function incomplete(q: ReceiptQuality): boolean {
   return !!(q.partial || q.unknown || q.truncated || q.invalid || q.unsupported || ['not_found', 'ambiguous'].includes(q.selection ?? '')
     || q.routeSelection?.status === 'unknown' || q.truncation?.nodes || q.truncation?.edges
     || (c && (c.stale || c.retainedPrevious || c.snapshotConsistent === false || !['ok', 'empty'].includes(c.status)
+      || c.infraUnavailable || c.inputTruncated || c.graphTruncated
+      || [c.nodeDrops, c.edgeDrops, c.orphanSpans, c.invalidSpans, c.unresolvedMessaging].some(n => typeof n === 'number' && n > 0)
       || [c.sources, c.publishedSources].some(sources => sources?.some(s => !['ok', 'empty'].includes(s.status))))));
 }
 

@@ -13,5 +13,11 @@
   {"name":"malformed block", "content":[{"json":{"eniId":"eni-0123"}},null], "outcome":"partial", "marker":"unsupported"},
   {"name":"taint survives later valid quality", "content":[{"json":{"partial":true}},{"json":{"partial":false}}], "outcome":"partial"},
   {"name":"unsupported truncation field", "content":[{"json":{"eniId":"eni-0123","truncation":{"futureLimit":true}}}], "outcome":"partial", "marker":"unsupported"},
-  {"name":"absent quality remains valid", "content":[{"json":{"eniId":"eni-0123"}}], "outcome":"success"}
+  {"name":"absent quality remains valid", "content":[{"json":{"eniId":"eni-0123"}}], "outcome":"success"},
+  {"name": "unsupported collection extension", "content": [{"json": {"nodes": [{"id": "eni-0123"}], "collection": {"status": "ok", "futureCompleteness": false}}}], "outcome": "partial", "marker": "unsupported"},
+  {"name": "unsupported source extension", "content": [{"json": {"nodes": [{"id": "eni-0123"}], "collection": {"status": "ok", "sources": [{"status": "ok", "futureCompleteness": false}]}}}], "outcome": "partial", "marker": "unsupported"},
+  {"name": "known trace source identity and window", "content": [{"json": {"nodes": [{"id": "service-a"}], "collection": {"status": "ok", "windowStartMs": 1000, "windowEndMs": 2000, "sources": [{"sourceId": "clickhouse:7", "status": "ok", "itemCount": 1, "windowStartMs": 1000, "windowEndMs": 2000}]}}}], "outcome": "success", "expectedSourceId": "clickhouse:7", "expectedWindow": [1000, 2000]},
+  {"name": "explicit source truncation despite ok status", "content": [{"json": {"collection": {"status": "ok", "inputTruncated": true}}}], "outcome": "partial"},
+  {"name": "trace drops despite ok status", "content": [{"json": {"collection": {"status": "ok", "nodeDrops": 1}}}], "outcome": "partial"},
+  {"name": "malformed source truncation", "content": [{"json": {"collection": {"status": "ok", "graphTruncated": "false"}}}], "outcome": "partial", "marker": "invalid"}
 ]
