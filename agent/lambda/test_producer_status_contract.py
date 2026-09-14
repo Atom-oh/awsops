@@ -312,3 +312,30 @@ def test_inventory_actual_projection_disclosure_restricts_receipt(resource_type,
         assert "limited by the sql_reader" in body["note"]
         del body["note"]  # Classification uses the type contract, not free-form prose.
         assert receipt("query_inventory", {"statusCode": 200, "body": json.dumps(body)}) == "partial"
+
+
+@pytest.mark.parametrize("limit,n,metrics,expected", [
+    (None, 20, {}, "partial"), (None, 19, {}, "success"), (None, 0, {}, "empty"),
+    (1, 1, {}, "partial"), (2, 1, {}, "success"),
+    (2, 0, {"completedJobs": 1, "totalJobs": 2}, "partial"),
+    (2, 1, {"completedJobs": 1, "totalJobs": 2}, "partial"),
+    (2, 0, {"completedJobs": 2, "totalJobs": 2}, "empty"),
+    (2, 0, {"inspectedBytes": 17}, "empty"),
+    ("invalid", 0, {}, "unverified"),
+])
+def test_tempo_effective_search_limit_and_incomplete_jobs(limit, n, metrics, expected):
+    from urllib.parse import parse_qs, urlparse
+    args = {"query": "PRIVATE query"}
+    if limit is not None:
+        args["limit"] = limit
+    data = {"traces": [{"traceID": "a1"}] * n, "metrics": metrics}
+    with patch.object(tempo, "_ds", return_value={"endpoint": "https://fixture.invalid"}), \
+            patch.object(tempo, "http_json", return_value=(200, data)) as http:
+        out = tempo.lambda_handler({"tool_name": "tempo_search", "arguments": args}, None)
+    http.assert_called_once()
+    params = parse_qs(urlparse(http.call_args.args[1]).query)
+    assert params["limit"] == [str(limit if limit is not None else 20)]
+    assert receipt("tempo_search", out) == expected
+    body = json.loads(out["body"])
+    assert body["traces"] == data["traces"]
+    assert body["metrics"] == metrics

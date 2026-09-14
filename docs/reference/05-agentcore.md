@@ -85,7 +85,7 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
 | Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |
 | Prometheus/Mimir | Bounded vector/matrix envelopes and named labels/series require upstream-derived `collectionStatus`; upstream query warnings remain partial |
-| Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
+| Tempo | Trace search requires an observed list and `collectionStatus`; hitting the explicit request limit (default 20) or reported unfinished jobs remains partial; existing OTLP `batches` handling remains separate |
 | Loki | Validated streams/vector/matrix query envelopes and named label/value collections require upstream-derived `collectionStatus`; hitting a query's line limit remains partial |
 
 `query_inventory` also follows the producer's registered field projections. Other resource types
