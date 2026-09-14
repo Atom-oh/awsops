@@ -20,7 +20,7 @@ infrastructure. `backend.hcl` is local partial S3 configuration. Keep credential
 state, plans, and sensitive tfvars out of commits; use the example configs.
 Version constraints are declared in `backend.tf`; selections are in the lockfile.
 Merge Verify pins Terraform 1.15.7 and requires `tests/runtime_iam.tftest.hcl`
-and `tests/github_actions_release.tftest.hcl`
+and `tests/github_actions_release.tftest.hcl`, plus `tests/github_actions_migration.tftest.hcl`,
 with mocked providers and `init -backend=false`; no AWS credentials are supplied.
 
 ## Review boundaries

@@ -1,10 +1,11 @@
 # GitHub Actions access bootstrap
 
 The optional `github_actions_release` Terraform module prepares operator access
-for `Atom-oh/awsops`. This change is bootstrap-only: it provides IAM and verifier
-secret metadata, not a release workflow, migration executor, or deployment
-verification modes. Consumers require separate implementation and review. It
-does not grant product/agent remediation authority or change ADR-005.
+for `Atom-oh/awsops`. The core module provides IAM and verifier-secret metadata.
+The separately configured `github_actions_migration` module adds a private
+migration executor and its scoped task permissions. Release workflows remain
+separate consumers. Neither module grants product/agent remediation authority
+or changes ADR-005.
 
 `github_actions_enabled` defaults to `false`. Enablement creates three managed
 resources: the release IAM role, its inline policy, and Secrets Manager metadata
@@ -29,9 +30,23 @@ that provider; the new release role receives no IAM management permission.
 The role trusts only audience `sts.amazonaws.com` and subject
 `repo:Atom-oh/awsops:environment:production`. The environment subject does not
 itself bind a branch. Before enablement, the repository owner must restrict the
-`production` environment to `main` and configure its required reviewers.
-Those GitHub protection settings are operator prerequisites, not resources
-managed by this module.
+`production` environment to `main`. The operator's manual release dispatch and
+latest-HEAD review/CI procedure govern deployment; additional environment
+reviewers are an explicit team choice. These GitHub settings are not managed
+by this Terraform module.
+
+**Deployment decision — owner Junseok Oh (Atom-oh), 2026-09-14:** this owner-directed CI work uses
+an explicit production `workflow_dispatch` against reviewed `main`, with the
+latest-HEAD AI-review/fix/CI/merge procedure as its source gate. A second
+environment-reviewer approval is not configured, avoiding a duplicate approval
+step after an authorized deployment request. This does not authorize unattended
+production pushes or arbitrary future dispatches: each production release still
+needs operator authorization, and changing that operating model requires its
+own review. The environment must remain restricted to `main`; repository and
+environment administrators are trusted deployment principals. The stronger
+database authority added by private migrations is accepted for this operator
+deployment purpose and is explicitly described below; it is not a product
+autonomy exception.
 
 ## Permission surface and limits
 
@@ -54,14 +69,49 @@ scoped service APIs instead of `terraform output` under this role.
 - Secrets Manager Get/Describe access names the verifier secret plus only the
   explicitly supplied optional migration secret ARNs. An empty migration list
   grants no existing Aurora master/reader credential access.
-- No CloudFront API, `iam:PassRole`, task execution, IAM editing, AgentCore
-  provisioning or infrastructure-apply permission is added.
+- The core module adds no CloudFront API, task execution, IAM editing, AgentCore
+  provisioning or infrastructure apply. The optional private migration attachment
+  adds the task registration/execution and two-role PassRole surface below.
 
 **Residual UpdateService authority:** IAM restricts the service target, not the
 operation to `forceNewDeployment`. Changes to desired count, network configuration
 and other permitted deployment fields remain possible. A consumer's restart-only
 checks do not narrow this IAM authority. Review that residual privilege when
-approving the role; absence of `iam:PassRole` does not make it restart-only.
+approving the role. ECR publication plus service updates also permits arbitrary
+image code under the existing web task role; a restart-only consumer does not
+remove that residual authority.
+
+## Optional private migration authority
+
+`github_actions_migration=null` creates nothing. A non-null configuration creates
+the dedicated roles/policies and log group independently; attachment to the web
+CI role additionally requires `github_actions_enabled=true`. It grants:
+
+- `RegisterTaskDefinition` and `RunTask` only for the project migration family,
+  with launch restricted to the project cluster and required Project/Purpose tags.
+- `iam:PassRole` only for the two dedicated migration roles, to ECS tasks.
+- Read-only task discovery in the cluster. `StopTask` additionally requires the
+  project's `Purpose=ci-migration` tags. The controller checks the exact nonce,
+  definition and task ARN; IAM permits cleanup of other tagged migration tasks,
+  but not untagged web, inventory or worker tasks.
+- Task tags only as part of `RunTask`; the CI role cannot retag an existing
+  application task to obtain stop permission.
+
+The current action-specific [ECS Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-RegisterTaskDefinition)
+lists a required `task-definition` resource for `RegisterTaskDefinition`.
+The same service's `DescribeTaskDefinition` and `DeregisterTaskDefinition` actions
+do not support that scope. Generic task-definition examples using `Resource:"*"`
+do not override the current per-action table; this module keeps family scoping.
+
+**Residual executor authority:** ECR image publication, task registration,
+PassRole and RunTask together permit arbitrary code inside the approved private
+network with the migration task's database-master secret access. The controller's
+fixed command, count and resource settings are code restrictions, not an IAM
+guarantee against a compromised credential holder using supported overrides.
+Main review, explicit operator deployment and environment access govern this
+database-administration authority. This is external operator CI, not a
+product-reachable remediation/autonomy path. See the
+[private executor runbook](../runbooks/private-ci-migrations.md).
 
 `github_actions_secret_kms_key_arns` defaults to an empty list. Existing key ARNs
 add only `kms:Decrypt` on those keys, restricted by `aws:RequestedRegion`,
@@ -82,11 +132,12 @@ github_actions_migration_secret_arns = []
 github_actions_secret_kms_key_arns   = []
 ```
 
-Add migration secret ARNs only after identifying a reviewed executor that can
-reach private Aurora, including its network path and verified-TLS authentication.
-Possessing a master-secret ARN or password does not make a GitHub-hosted runner
-able to connect. This bootstrap supplies neither that executor nor network access.
-The optional SQL-reader secret is a separate explicit identifier; omit it when
+When using the private Fargate executor, keep
+`github_actions_migration_secret_arns=[]` on the CI role. Supply database secret
+and key metadata through `github_actions_migration`; only the dedicated task role
+gets those credentials. The legacy direct-secret inputs remain available only
+for a separately reviewed direct executor with verified private connectivity;
+they are not prerequisites for the Fargate path. Omit the reader identifier when
 that capability is disabled. Do not grant a master credential without a consumer.
 
 For approved secrets using customer-managed keys, resolve identifiers using the

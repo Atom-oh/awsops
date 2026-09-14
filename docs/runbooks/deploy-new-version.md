@@ -21,6 +21,13 @@ Private Terraform root: `terraform/v2/foundation/`. Do not substitute the public
 sample's `terraform/foundation/` path. Generated backend/tfvars contain environment
 configuration and remain untracked. Do not dump credentials into logs.
 
+`make migrate` validates the committed RDS certificate chain and hostname. A
+missing/malformed trust bundle fails closed. The optional
+[private CI executor](private-ci-migrations.md) exports the reviewed commit's
+inputs and runs migrations inside Fargate. The designed path keeps DB passwords
+inside the task; the access contract documents the controller credential holder's
+broader [residual authority](../reference/github-actions-access.md#optional-private-migration-authority).
+
 ## Release boundaries
 
 | Changed surface | Release operation |

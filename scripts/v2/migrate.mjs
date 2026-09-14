@@ -38,7 +38,9 @@ function migrationContext() {
   if (!ciLoaded) {
     if (process.env.CI_MIGRATION_CONTEXT !== undefined) {
       if (!process.env.CI_MIGRATION_CONTEXT) throw new Error('CI migration context path is empty');
-      const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+      const commit = process.env.CI_MIGRATION_IMAGE === '1'
+        ? readFileSync(join(ROOT, '.migration-source'), 'utf8').trim()
+        : execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
       if (commit !== process.env.CI_COMMIT_SHA) throw new Error('CI migration source changed');
       ciMetadata = readMigrationContext(process.env.CI_MIGRATION_CONTEXT, {
         commit, account: process.env.CI_EXPECTED_ACCOUNT_ID,

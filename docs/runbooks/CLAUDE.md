@@ -9,6 +9,7 @@ and saved-plan review; they are distinct from application autonomy under ADR-005
 | Runbook | Scope |
 | --- | --- |
 | [deploy-new-version.md](deploy-new-version.md) | Current v2 web/agent/worker/Lambda release boundaries and migration ordering |
+| [private-ci-migrations.md](private-ci-migrations.md) | Private Fargate migration execution, source/digest receipts and recovery |
 | [deployment-verifier.md](deployment-verifier.md) | Non-admin verifier credentials, residual session authority and migration TLS |
 | [start-services.md](start-services.md) | Local development; production uses ECS |
 | [add-new-page.md](add-new-page.md) | v2 page/data/auth/test conventions |
