@@ -23,6 +23,7 @@ for (const path of ['/topology/infra', '/topology/resource/vpc%3Aone']) {
           edges: [], captured_at: '2026-09-14T12:00:00Z',
           collection: { status: 'partial', stale: true, retainedPrevious: true,
             nodeDrops: 2, edgeDrops: 3, infraUnavailable: true,
+            orphanSpans: 1, invalidSpans: 2, unresolvedMessaging: 3,
             attempted_at: '2026-09-14T12:05:00Z', captured_at: '2026-09-14T12:00:00Z',
             sources, publishedSources: sources, evidenceKind: 'inventory' },
         } : { accounts: [], rows: [], clusters: [] } });
@@ -35,6 +36,7 @@ for (const path of ['/topology/infra', '/topology/resource/vpc%3Aone']) {
       await expect(panel).toBeVisible();
       await expect(panel.getByText('Nodes omitted: 2')).toBeVisible();
       await expect(panel.getByText('Inventory context unavailable')).toBeVisible();
+      await expect(panel.getByText('Invalid spans: 2')).toBeVisible();
       // This assertion reproduces the original zero-height canvas before the details fix.
       expect((await canvas.boundingBox())!.height).toBeGreaterThanOrEqual(240);
       const details = panel.locator('details');

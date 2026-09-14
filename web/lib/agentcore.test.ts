@@ -86,9 +86,14 @@ print(json.dumps(collect(events)))
     const { invokeAgentDetailed } = await import('./agentcore');
     const answer = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
     expect(answer.text).toBe('Synthetic result.');
+    // The public SDK fixture proves delivery/correlation, not a recognized producer envelope.
     expect(answer.receipts?.map(r => [r.callId, r.tool, r.outcome])).toEqual([
-      ['call-0', 'scoped_read', 'success'], ['call-1', 'scoped_read', 'success'],
+      ['call-0', 'scoped_read', 'unverified'], ['call-1', 'scoped_read', 'unverified'],
     ]);
+    expect(answer.completion).toEqual({ version: 1, receiptCount: 2 });
+    const { domainOutcome } = await import('./chat-evidence');
+    expect(domainOutcome('network', answer.text, answer.receipts ?? [], !!answer.evidenceTruncated,
+      answer.runtimeError, answer.completion, answer.runtimeUnverified).status).toBe('unverified');
     expect(answer.receipts?.every(r => Object.keys(r.observedScope).length === 0)).toBe(true);
   });
   it('cancels a pending runtime read when the caller aborts', async () => {
