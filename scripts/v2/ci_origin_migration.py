@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -22,6 +23,7 @@ import tarfile
 import tempfile
 import time
 import uuid
+from datetime import datetime
 
 from ci_origin_common import (
     ROOT, ReleaseError, command, decode_json, private_bytes, require, sha256_digest,
@@ -37,6 +39,7 @@ BUILD_INPUTS = (
     "scripts/v2/eks/rds-ca-bundle.pem", "terraform/v2/foundation/migrations",
     "web/package.json",
 )
+GUARDDUTY_ACCOUNTS = ROOT / "terraform/v2/foundation/modules/github-actions-migration/guardduty-ecr-accounts.json"
 
 
 class Migration:
@@ -234,6 +237,95 @@ class Migration:
                 and self.owned(response["tasks"][0], record), "migration_task_ownership")
         return response["tasks"][0]
 
+    def guardduty_agent(self, task, record, agent):
+        """Accept only a successful AWS-injected agent, never an arbitrary extra."""
+        require(isinstance(agent.get("name"), str)
+                and re.fullmatch(r"aws-guardduty-agent-[A-Za-z0-9]{5,32}", agent["name"]),
+                "migration_unexpected_container")
+        # GuardDuty injects outside the immutable customer task definition.
+        # A similarly named customer-defined sidecar is not AWS provenance.
+        response = self.aws("ecs", "describe-task-definition", taskDefinition=record["definition"])
+        definition = response.get("taskDefinition") if isinstance(response, dict) else None
+        require(isinstance(definition, dict), "migration_guardduty_definition_mismatch")
+        declared = definition.get("containerDefinitions")
+        require(definition.get("taskDefinitionArn") == record["definition"]
+                and definition.get("family") == self.family
+                and definition.get("taskRoleArn") == self.config["task_role_arn"]
+                and definition.get("executionRoleArn") == self.config["execution_role_arn"]
+                and definition.get("networkMode") == "awsvpc"
+                and definition.get("requiresCompatibilities") == ["FARGATE"]
+                and definition.get("runtimePlatform") == {
+                    "cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX"}
+                and isinstance(declared, list) and len(declared) == 1
+                and isinstance(declared[0], dict) and declared[0].get("name") == "migration"
+                and declared[0].get("essential") is True
+                and declared[0].get("image") == self.repo + "@" + record["digest"]
+                and not declared[0].get("command") and not declared[0].get("entryPoint"),
+                "migration_guardduty_definition_mismatch")
+        overrides = task.get("overrides", {})
+        require(isinstance(overrides, dict) and all(
+            key not in overrides or overrides[key] == self.config[config_key]
+            for key, config_key in (("taskRoleArn", "task_role_arn"), ("executionRoleArn", "execution_role_arn"))),
+            "migration_guardduty_definition_mismatch")
+        container_overrides = overrides.get("containerOverrides", [])
+        require(isinstance(container_overrides, list), "migration_guardduty_definition_mismatch")
+        for override in container_overrides:
+            require(isinstance(override, dict) and override.get("name") in ("migration", agent["name"])
+                    and (override["name"] != "migration" or not any(override.get(k)
+                         for k in ("command", "environment", "environmentFiles"))),
+                    "migration_guardduty_definition_mismatch")
+        try:
+            accounts = decode_json(GUARDDUTY_ACCOUNTS.read_text())
+        except (OSError, ReleaseError):
+            raise ReleaseError("migration_guardduty_registry_unavailable") from None
+        account = accounts.get(self.context["region"]) if isinstance(accounts, dict) else None
+        require(isinstance(account, str) and re.fullmatch(r"\d{12}", account),
+                "migration_guardduty_registry_unavailable")
+        repository = f'{account}.dkr.ecr.{self.context["region"]}.amazonaws.com/aws-guardduty-agent-fargate'
+        if "image" in agent:
+            require(isinstance(agent["image"], str) and re.fullmatch(
+                re.escape(repository) + r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[a-f0-9]{64})?",
+                agent["image"]), "migration_guardduty_image_mismatch")
+        if "imageDigest" in agent:
+            require(sha256_digest(agent["imageDigest"]), "migration_guardduty_image_mismatch")
+            if "@" in agent.get("image", ""):
+                require(agent["image"].split("@", 1)[1] == agent["imageDigest"],
+                        "migration_guardduty_image_mismatch")
+        started = task.get("startedAt")
+        if isinstance(started, str):
+            try:
+                value = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                started = value.timestamp() if value.utcoffset() is not None else None
+            except (ValueError, OverflowError):
+                started = None
+        # Runtime IDs can exist even after a pull failure (the captured ECR 403).
+        # Require process exit evidence too. ECS shutdown uses SIGTERM (143);
+        # reject 137 because it cannot distinguish forced shutdown from OOM.
+        # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_StopTask.html
+        require(type(started) in (int, float) and 0 < started < 10**12 and math.isfinite(started)
+                and isinstance(agent.get("runtimeId"), str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}", agent["runtimeId"])
+                and agent.get("lastStatus") == "STOPPED"
+                and type(agent.get("exitCode")) is int and agent["exitCode"] in (0, 143)
+                and agent.get("reason") in (None, "")
+                and agent.get("healthStatus") in (None, "UNKNOWN", "HEALTHY"),
+                "migration_guardduty_agent_failed")
+
+    def stopped_task(self, task, record, error):
+        containers = task.get("containers") if isinstance(task, dict) else None
+        require(isinstance(task, dict) and task.get("lastStatus") == "STOPPED"
+                and task.get("stopCode") == "EssentialContainerExited"
+                and isinstance(containers, list) and 1 <= len(containers) <= 2
+                and all(isinstance(c, dict) for c in containers), error)
+        migration = [c for c in containers if c.get("name") == "migration"]
+        require(len(migration) == 1 and type(migration[0].get("exitCode")) is int
+                and migration[0]["exitCode"] == 0
+                and migration[0].get("image") == self.repo + "@" + record["digest"]
+                and migration[0].get("imageDigest") == record["digest"], error)
+        for extra in containers:
+            if extra is not migration[0]:
+                self.guardduty_agent(task, record, extra)
+
     def run(self, digest, mode, timeout=1200, poll=10):
         require(mode in ("apply", "preview") and 0 < timeout <= 1200 and 0 < poll <= 10,
                 "invalid_migration_run")
@@ -285,11 +377,7 @@ class Migration:
                 break
             require(time.monotonic() + poll < self.deadline, "migration_timeout")
             time.sleep(poll)
-        containers = task.get("containers", [])
-        require(task.get("stopCode") == "EssentialContainerExited" and len(containers) == 1
-                and containers[0].get("name") == "migration" and containers[0].get("exitCode") == 0
-                and containers[0].get("image") == image and containers[0].get("imageDigest") == digest,
-                "migration_exit_or_digest_failed")
+        self.stopped_task(task, record, "migration_exit_or_digest_failed")
         expected = {"type": "awsops-migration", "version": 1, "commit": self.context["commit"],
                     "mode": mode, "nonce": nonce, "status": "succeeded"}
         proved = False
@@ -365,14 +453,7 @@ class Migration:
                     "mode": mode, "nonce": record["nonce"], "status": "succeeded"},
                 "migration_success_receipt_required")
         task = self.task(record)
-        containers = task.get("containers", []) if task else []
-        require(task and task.get("lastStatus") == "STOPPED"
-                and task.get("stopCode") == "EssentialContainerExited"
-                and len(containers) == 1 and containers[0].get("name") == "migration"
-                and containers[0].get("exitCode") == 0
-                and containers[0].get("imageDigest") == record["digest"]
-                and containers[0].get("image") == self.repo + "@" + record["digest"],
-                "migration_receipt_runtime_mismatch")
+        self.stopped_task(task, record, "migration_receipt_runtime_mismatch")
         return record
 
 
