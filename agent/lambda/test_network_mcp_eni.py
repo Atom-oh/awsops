@@ -7,7 +7,10 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError, ConnectionClosedError, ConnectTimeoutError, EndpointConnectionError,
+    ReadTimeoutError, SSLError,
+)
 
 sys.path.insert(0, os.path.dirname(__file__))
 import cross_account as ca
@@ -68,14 +71,14 @@ class Ec2Evidence:
         self.omitted = set()
         self.route_calls = []
 
-    def response(self, key, rows, scope):
-        if scope in self.errors:
+    def response(self, key, rows, scope, resource_id=None):
+        if scope in self.errors or resource_id in self.errors:
             raise ClientError({"Error": {"Code": "UnauthorizedOperation",
                                          "Message": "fixture read denied"}}, scope)
         result = {key: copy.deepcopy(rows)}
-        if scope in self.omitted:
+        if scope in self.omitted or resource_id in self.omitted:
             result.pop(key)
-        if scope in self.tokens:
+        if scope in self.tokens or resource_id in self.tokens:
             result["NextToken"] = "more-fixture-evidence"
         return result
 
@@ -84,8 +87,10 @@ class Ec2Evidence:
         return self.response("NetworkInterfaces", self.enis, "eni")
 
     def describe_security_groups(self, **kwargs):
-        assert kwargs == {"GroupIds": ["sg-test"]}
-        return self.response("SecurityGroups", self.groups, "securityGroups")
+        assert kwargs in ({"GroupIds": [sg["GroupId"]]} for sg in self.enis[0]["Groups"])
+        sg_id = kwargs["GroupIds"][0]
+        groups = [sg for sg in self.groups if sg["GroupId"] == sg_id]
+        return self.response("SecurityGroups", groups, "securityGroups", sg_id)
 
     def describe_network_acls(self, **kwargs):
         assert kwargs == {"Filters": [{"Name": "association.subnet-id", "Values": ["subnet-test"]}]}
@@ -126,6 +131,21 @@ def ec2(monkeypatch):
     monkeypatch.setattr(network, "get_client", get_client)
     yield client
     ca._host_account_id.cache_clear()
+
+
+@pytest.fixture
+def multi_sg_ec2(ec2):
+    ec2.groups.extend([
+        {**copy.deepcopy(ec2.groups[0]), "GroupId": "sg-unassessed", "GroupName": "unassessed"},
+        {"GroupId": "sg-ruleless", "GroupName": "ruleless", "VpcId": "vpc-test",
+         "IpPermissions": [], "IpPermissionsEgress": []},
+        {"GroupId": "sg-after", "GroupName": "after", "VpcId": "vpc-test",
+         "IpPermissions": [permission(IpRanges=[{"CidrIp": "192.0.2.0/24"}])],
+         "IpPermissionsEgress": [permission(Ipv6Ranges=[{"CidrIpv6": "2001:db8::/64"}])]},
+    ])
+    ec2.enis[0]["Groups"] = [
+        {"GroupId": sg["GroupId"], "GroupName": sg["GroupName"]} for sg in ec2.groups]
+    return ec2
 
 
 def call_eni(**args):
@@ -278,6 +298,7 @@ def test_peerless_rule_is_unknown_not_a_crash_or_silent_omission(ec2):
     assert row["source"] is None
     assert row["peerType"] == "unknown"
     assert_unknown(body, "securityGroups", "peer_missing")
+    assert body["securityGroups"][0].get("partial") is True
 
 
 def test_ipv6_nacl_keeps_icmp_details_and_rule_order(ec2):
@@ -355,6 +376,93 @@ def test_component_read_failure_preserves_other_eni_evidence(ec2, scope):
         assert body["routes"][0]["target"] == "nat-main"
 
 
+@pytest.mark.parametrize("failure,reason", [
+    ("errors", "read_failed"), ("tokens", "truncated"), ("omitted", "response_missing")])
+def test_multi_sg_read_unknown_identifies_only_affected_group(multi_sg_ec2, failure, reason):
+    getattr(multi_sg_ec2, failure).add("sg-unassessed")
+    body = call_eni()
+    expected = {"component": "securityGroups", "resourceId": "sg-unassessed", "reason": reason}
+    if reason == "read_failed":
+        expected["errorCode"] = "UnauthorizedOperation"
+    assert body["partial"] is True
+    assert body["unknown"] == [expected]
+
+
+@pytest.mark.parametrize("failure", ["errors", "tokens", "omitted"])
+def test_multi_sg_incomplete_read_differs_from_confirmed_ruleless_group(multi_sg_ec2, failure):
+    getattr(multi_sg_ec2, failure).add("sg-unassessed")
+    body = call_eni()
+    groups = {sg["id"]: sg for sg in body["securityGroups"]}
+    assert {sg_id: sg.get("partial") for sg_id, sg in groups.items()} == {
+        "sg-test": False, "sg-unassessed": True, "sg-ruleless": False, "sg-after": False,
+    }
+    assert groups["sg-unassessed"]["inbound"] == groups["sg-ruleless"]["inbound"] == []
+    assert groups["sg-unassessed"]["outbound"] == groups["sg-ruleless"]["outbound"] == []
+    assert [row["source"] for row in groups["sg-test"]["inbound"]] == ["10.0.0.0/16"]
+    assert [row["dest"] for row in groups["sg-test"]["outbound"]] == ["0.0.0.0/0"]
+    assert [row["source"] for row in groups["sg-after"]["inbound"]] == ["192.0.2.0/24"]
+    assert [row["dest"] for row in groups["sg-after"]["outbound"]] == ["2001:db8::/64"]
+    assert body["naclId"] == "acl-test"
+    assert body["routes"][0]["target"] == "nat-main"
+
+
+@pytest.mark.parametrize("field", ["IpPermissions", "IpPermissionsEgress"])
+@pytest.mark.parametrize("value", ["missing", None, {}, "invalid"])
+def test_missing_nested_sg_rules_cannot_confirm_ruleless(multi_sg_ec2, field, value):
+    group = multi_sg_ec2.groups[1]
+    if value == "missing":
+        group.pop(field)
+    else:
+        group[field] = value
+    body = call_eni()
+    groups = {sg["id"]: sg for sg in body["securityGroups"]}
+    assert body["partial"] is True
+    assert groups["sg-unassessed"]["partial"] is True
+    assert groups["sg-ruleless"]["partial"] is False
+    assert groups["sg-after"]["partial"] is False
+    assert any(gap.get("resourceId") == "sg-unassessed" and gap.get("field") == field
+               for gap in body["unknown"])
+    retained_side = "outbound" if field == "IpPermissions" else "inbound"
+    assert groups["sg-unassessed"][retained_side]
+    assert body["nacl"] and body["routes"]
+
+
+@pytest.mark.parametrize("attribute,field,component,resource_id", [
+    ("enis", "Groups", "securityGroups", "eni-test"),
+    ("nacls", "Entries", "nacl", "acl-test"),
+    ("tables", "Routes", "routes", "rtb-main"),
+])
+@pytest.mark.parametrize("value", ["missing", None, {}, "invalid", []])
+def test_nested_configuration_lists_distinguish_absent_from_empty(
+        ec2, attribute, field, component, resource_id, value):
+    row = getattr(ec2, attribute)[0]
+    if value == "missing":
+        row.pop(field)
+    else:
+        row[field] = value
+    body = call_eni()
+    assert body["partial"] is (value != [])
+    gaps = [gap for gap in body["unknown"] if gap["component"] == component]
+    if value == []:
+        assert gaps == []
+    else:
+        assert any(gap.get("resourceId") == resource_id and gap.get("field") == field
+                   for gap in gaps)
+    if field != "Groups":
+        assert body["securityGroups"][0]["partial"] is False
+
+
+def test_invalid_nested_rule_keeps_valid_rules_and_marks_only_affected_group(multi_sg_ec2):
+    multi_sg_ec2.groups[1]["IpPermissions"].append(None)
+    body = call_eni()
+    groups = {sg["id"]: sg for sg in body["securityGroups"]}
+    assert groups["sg-unassessed"]["partial"] is True
+    assert groups["sg-unassessed"]["inbound"][0]["source"] == "10.0.0.0/16"
+    assert groups["sg-ruleless"]["partial"] is False
+    assert any(gap.get("reason") == "response_invalid" and gap.get("field") == "IpPermissions"
+               for gap in body["unknown"])
+
+
 @pytest.mark.parametrize("attribute,component", [("groups", "securityGroups"), ("nacls", "nacl")])
 def test_empty_component_response_is_unknown(ec2, attribute, component):
     setattr(ec2, attribute, [])
@@ -376,7 +484,95 @@ def test_omitted_result_list_is_not_evidence_of_absence(ec2, scope):
         assert len(ec2.route_calls) == 1
 
 
-def test_empty_eni_response_returns_deliberate_error(ec2):
+@pytest.mark.parametrize("failure,error_code", [
+    *[
+        pytest.param(
+            ClientError({
+                "Error": {
+                    "Code": code,
+                    "Message": "fixture-private-detail arn:aws:iam::123456789012:role/private "
+                               + "x" * 4096,
+                },
+                "ResponseMetadata": {"HTTPStatusCode": 400, "RequestId": "private-request-id"},
+            }, "DescribeNetworkInterfaces"),
+            code,
+            id=code,
+        )
+        for code in ("InvalidNetworkInterfaceID.NotFound", "UnauthorizedOperation",
+                     "AccessDenied", "AccessDeniedException", "AuthFailure",
+                     "RequestLimitExceeded", "Throttling", "ThrottlingException")
+    ],
+    *[
+        pytest.param(
+            error_type(endpoint_url="https://fixture-private-detail.example.test/private",
+                       error="fixture-private-detail"),
+            error_type.__name__,
+            id=error_type.__name__,
+        )
+        for error_type in (EndpointConnectionError, ConnectionClosedError, ConnectTimeoutError,
+                           ReadTimeoutError, SSLError)
+    ],
+    pytest.param(
+        ClientError({"Error": {
+            "Code": "fixture-private-detail arn:aws:iam::123456789012:role/private " + "x" * 4096,
+            "Message": "fixture-private-detail",
+        }}, "DescribeNetworkInterfaces"),
+        "ReadError",
+        id="unrecognized-service-code",
+    ),
+])
+def test_entry_sdk_failure_returns_sanitized_non_success_without_followup_reads(
+        ec2, monkeypatch, failure, error_code):
+    reads = []
+
+    def fail_entry(**kwargs):
+        reads.append("eni")
+        assert kwargs == {"NetworkInterfaceIds": ["eni-test"]}
+        raise failure
+
+    def unexpected_read(**kwargs):
+        reads.append("configuration")
+        raise AssertionError("Configuration must not be read after an ENI lookup failure")
+
+    monkeypatch.setattr(ec2, "describe_network_interfaces", fail_entry)
+    for method in ("describe_security_groups", "describe_network_acls", "describe_route_tables"):
+        monkeypatch.setattr(ec2, method, unexpected_read)
+
+    result = network.lambda_handler(
+        {"tool_name": "get_eni_details", "arguments": {"eni_id": "eni-test"}}, None)
+    assert 400 <= result["statusCode"] < 600
+    body = json.loads(result["body"])
+    assert body.get("error")
+    assert body.get("eniId") == "eni-test"
+    assert body.get("partial") is True
+    assert body.get("unknown") == [{
+        "component": "eni", "resourceId": "eni-test",
+        "reason": "read_failed", "errorCode": error_code,
+    }]
+    assert not {"securityGroups", "nacl", "routes", "routeSelection"} & body.keys()
+    assert len(result["body"]) < 1024
+    assert all(value not in result["body"] for value in (
+        "fixture-private-detail", "arn:aws:", "private-request-id", "https://"))
+    assert reads == ["eni"]
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("tokens", "truncated"), ("omitted", "response_missing")])
+def test_incomplete_entry_response_cannot_become_successful_configuration(ec2, failure, reason):
+    getattr(ec2, failure).add("eni")
+    result = network.lambda_handler({"eni_id": "eni-test"}, None)
+    assert 400 <= result["statusCode"] < 600
+    body = json.loads(result["body"])
+    assert body.get("partial") is True
+    assert body.get("unknown") == [{
+        "component": "eni", "resourceId": "eni-test", "reason": reason,
+    }]
+    assert not {"securityGroups", "nacl", "routes", "routeSelection"} & body.keys()
+    assert ec2.route_calls == []
+
+
+def test_defensive_empty_eni_response_returns_deliberate_error(ec2):
+    # Defensive malformed/empty response coverage, not a live EC2 not-found simulation.
     ec2.enis = []
     result = network.lambda_handler({"eni_id": "eni-test"}, None)
     assert result["statusCode"] == 400

@@ -47,3 +47,10 @@ primary boundary; `sql_readonly_guard.py` adds defense in depth.
 
 Run affected `test_*.py` files from this directory. Schema grants live in
 `terraform/v2/foundation/migrations/`; preserve merged migration checksums.
+
+## ENI configuration evidence
+
+`get_eni_details` reports configuration, not connectivity. Missing or malformed `Groups`,
+`IpPermissions`, `IpPermissionsEgress`, `Entries` or `Routes` is partial evidence, with the
+affected resource and field in `unknown`. Actual empty lists remain distinct. Per-group
+completeness includes both rule lists and their peers; preserve other returned evidence.
