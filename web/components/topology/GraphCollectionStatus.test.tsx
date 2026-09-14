@@ -28,6 +28,29 @@ describe('graph collection status', () => {
     render(<GraphCollectionStatus collection={{ status: 'ok', stale: true }} />);
     expect(screen.getByRole('alert').textContent).toContain('Stale');
   });
+
+  it('shows inventory capture, successful source sweep, attempt and publication as different clocks', () => {
+    const { container } = render(<GraphCollectionStatus collection={{
+      status: 'error', stale: true, retainedPrevious: true, evidenceKind: 'inventory',
+      attempted_at: '2026-09-14T12:00:00Z', captured_at: '2026-09-14T11:00:00Z',
+      sources: [{ sourceId: 'inventory:alb', status: 'error', scope: 'aggregate',
+        capturedAtMs: Date.parse('2026-09-14T09:00:00Z'), lastSuccessAtMs: Date.parse('2026-09-14T10:00:00Z') }],
+    }} />);
+    expect(container.querySelectorAll('time')).toHaveLength(4);
+    expect(screen.getByRole('alert').textContent).toContain('Source capture');
+    expect(screen.getByRole('alert').textContent).toContain('Last successful sweep');
+    expect(screen.getByRole('alert').textContent).toContain('aggregate');
+  });
+  it('keeps saved source capture visible when the latest attempt returned no rows', () => {
+    const { container } = render(<GraphCollectionStatus collection={{
+      status: 'error', stale: true, evidenceKind: 'inventory', retainedPrevious: true,
+      sources: [{ sourceId: 'inventory:alb', status: 'error', itemCount: 0 }],
+      publishedSources: [{ sourceId: 'inventory:alb', status: 'ok', itemCount: 1,
+        capturedAtMs: Date.parse('2026-09-14T09:00:00Z') }],
+    }} />);
+    expect(container.querySelector('time')?.dateTime).toBe('2026-09-14T09:00:00.000Z');
+    expect(screen.getByRole('alert').textContent).toContain('Sources used by saved graph');
+  });
 });
 
 describe('GraphCollectionStatus', () => {

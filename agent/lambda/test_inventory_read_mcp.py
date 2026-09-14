@@ -643,7 +643,9 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         Actual neighbourhood selection is exercised by TestTopologySelectionSQL.
         """
         root = "alb:arn:example:quoted'value"
-        with mock.patch.object(inv, "_execute", side_effect=[
+        with mock.patch.object(inv, "_inventory_graph_collection", return_value={
+            "status": "unknown", "stale": True, "captured_at": None,
+        }), mock.patch.object(inv, "_execute", side_effect=[
             [{"id": root}],
             [{"id": root, "kind": "alb", "label": "selected", "meta": {}}],
             [],
@@ -676,7 +678,7 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
                 execute.assert_not_called()
 
     def test_get_topology_empty_graph_returns_warning(self):
-        """Empty topology_nodes → warning with actionable hint (graph not materialized)."""
+        """Absent state and nodes do not establish a successful empty collection."""
         inv._execute_override = lambda sql, params=None: []
         import json as _j
         out = inv.lambda_handler({"tool_name": "get_topology"}, None)
@@ -685,7 +687,8 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         self.assertEqual(body["nodes"], [])
         self.assertEqual(body["edges"], [])
         self.assertIn("warning", body)
-        self.assertIn("graph-rebuild", body["warning"])
+        self.assertEqual(body["collection"]["status"], "unknown")
+        self.assertIn("stale", body["warning"])
 
     def test_get_topology_class_infra_forwarded(self):
         """class='infra' must be passed as the :cls parameter to both topology queries."""
@@ -808,6 +811,45 @@ class TestTopologySelectionSQL(unittest.TestCase):
                      "01KVAQ9MQNR5R97T5AXX4JVN6Q_topology_class.sql",
                      "01M279W0J9HNG1QT0MAS60KV8K_topology_graph_collection_state.sql"):
             cls._psql((migrations / name).read_text())
+        for path in sorted(migrations.glob("*_topology_inventory_evidence.sql")):
+            cls._psql(path.read_text())
+
+    def test_source_projection_preserves_clocks_but_excludes_unsafe_payloads(self):
+        source = {"sourceId": "inventory:alb", "status": "ok", "scope": "aggregate",
+                  "producerStatus": "succeeded", "capturedAtMs": 1789376400000,
+                  "lastSuccessAtMs": 1789380000000, "attemptedAtMs": 1789380000000,
+                  "finishedAtMs": 1789380000000, "itemCount": 1,
+                  "reasons": ["unknown_capture", "credential=secret"],
+                  "error": "password=secret", "data": {"token": "secret"}}
+        details = {"sources": [source, 123, None], "publishedSources": [source],
+                   "failureReason": "publication_failed", "raw": {"credential": "secret"}}
+        payload = json.dumps(details).replace("'", "''")
+        self._psql("INSERT INTO public.topology_graph_state VALUES "
+                   "('self','infra','error',now(),now(),'" + payload + "'::jsonb);")
+        rows = self._execute("SELECT details FROM topology_graph_state WHERE class='infra'")
+        safe = rows[0]["details"]
+        self.assertEqual(safe["sources"][0]["capturedAtMs"], 1789376400000)
+        self.assertEqual(safe["publishedSources"][0]["lastSuccessAtMs"], 1789380000000)
+        self.assertEqual(safe["sources"][0]["scope"], "aggregate")
+        self.assertEqual(safe["sources"][0]["reasons"], ["unknown_capture"])
+        self.assertEqual(len(safe["sources"]), 1)
+        self.assertNotIn("secret", json.dumps(safe))
+        self.assertEqual(safe["failureReason"], "publication_failed")
+        permissions = self._execute("SELECT has_table_privilege(current_user, 'public.topology_graph_state', 'SELECT') AS base_read")
+        self.assertFalse(permissions[0]["base_read"])
+
+    def test_source_projection_bounds_arrays_and_handles_malformed_details(self):
+        details = {"sources": [{"sourceId": "inventory:alb", "status": "password=secret",
+                               "scope": {"secret": 1}, "capturedAtMs": {"secret": 1},
+                               "lastSuccessAtMs": "secret", "producerStatus": "secret"}] * 150,
+                   "publishedSources": "secret", "failureReason": "secret"}
+        payload = json.dumps(details).replace("'", "''")
+        self._psql("INSERT INTO public.topology_graph_state VALUES "
+                   "('self','flow','partial',now(),now(),'" + payload + "'::jsonb),"
+                   "('member','flow','partial',now(),now(),'null'::jsonb);")
+        rows = self._execute("SELECT details FROM topology_graph_state ORDER BY account_id")
+        self.assertLessEqual(len(rows[1]["details"]["sources"]), 128)
+        self.assertNotIn("secret", json.dumps(rows))
 
     def setUp(self):
         self._psql("TRUNCATE public.topology_nodes, public.topology_edges, public.topology_graph_state;")
@@ -951,7 +993,8 @@ class TestTopologySelectionSQL(unittest.TestCase):
         self.assertTrue(body.get("truncation", {}).get("edges"))
         self.assertFalse(body["truncation"]["nodes"])
         # Every Data API result query is bounded, including the selected edge fetch.
-        self.assertTrue(all("LIMIT :" in sql for sql, _ in self.calls))
+        self.assertTrue(all("LIMIT :" in sql for sql, _ in self.calls
+                            if "topology_nodes" in sql or "topology_edges" in sql))
 
     def test_whole_graph_is_bounded_and_excludes_missing_or_capped_endpoints(self):
         ids = [f"ec2:i-{i:04}" for i in range(510)]
@@ -982,7 +1025,8 @@ class TestTopologySelectionSQL(unittest.TestCase):
         self.assertEqual([n["id"] for n in isolated["nodes"]], ["lambda:isolated"])
         self.assertEqual(isolated["edges"], [])
         self.assertEqual(isolated["selection"]["status"], "resolved")
-        self.assertNotIn("warning", isolated)
+        self.assertEqual(isolated["collection"]["status"], "unknown")
+        self.assertIn("collection", isolated["warning"])
         self.assertEqual(self._read("absent")["selection"]["status"], "not_found")
 
     def test_reader_boundary_hides_metadata_and_other_accounts_and_classes(self):
@@ -1382,18 +1426,73 @@ Promise.all(input.rows.map(row => context.exports.readGraphState({
         self.assertIn("LIMIT 1", next(sql for sql, _ in calls if "FROM topology_graph_state" in sql))
         self.assertEqual(body["truncation"]["node_limit"], 500)
 
-    def test_other_graph_classes_do_not_read_collection_or_change_edge_contract(self):
+    def test_inventory_fresh_publication_uses_oldest_original_source_clock(self):
+        source = {"sourceId": "inventory:alb", "status": "ok", "scope": "aggregate", "itemCount": 1,
+                  "capturedAtMs": 1789120800000, "lastSuccessAtMs": 1789127400000}
+        for cls in ("flow", "infra"):
+            body, _ = self._read(self._state(details={"sources": [source], "publishedSources": [source]}),
+                                 arguments={"class": cls})
+            self.assertTrue(body["collection"]["stale"])
+            self.assertEqual(body["collection"]["publishedSources"][0]["capturedAtMs"], 1789120800000)
+            self.assertEqual(body["collection"]["evidenceKind"], "inventory")
+
+    def test_inventory_old_projection_cannot_certify_fresh_sources(self):
+        body, _ = self._read(self._state(details={"sources": []}), arguments={"class": "infra"})
+        self.assertTrue(body["collection"]["stale"])
+
+    def test_inventory_successful_zero_is_fresh_without_a_row_capture(self):
+        source = {"sourceId": "inventory:alb", "status": "empty", "scope": "aggregate",
+                  "itemCount": 0, "lastSuccessAtMs": 1789127700000}
+        body, _ = self._read(self._state("empty", details={
+            "sources": [source], "publishedSources": [source],
+        }), nodes=[], arguments={"class": "infra"})
+        self.assertEqual(body["collection"]["status"], "empty")
+        self.assertFalse(body["collection"]["stale"])
+        self.assertNotIn("warning", body)
+
+    def test_inventory_clock_aging_during_read_is_not_a_publication_change(self):
+        before = {"status": "ok", "stale": False, "captured_at": self.CAPTURED}
+        with mock.patch.object(inv, "_inventory_graph_collection", side_effect=[
+            before, {**before, "stale": True},
+        ]):
+            body, _ = self._read(None, arguments={"class": "infra"})
+        self.assertTrue(body["collection"]["stale"])
+        self.assertNotIn("snapshotConsistent", body["collection"])
+
+    def test_inventory_failed_verification_keeps_safe_failure_and_readable_graph(self):
+        with mock.patch.object(inv, "_inventory_graph_collection", side_effect=[
+            {"status": "ok", "stale": False, "captured_at": self.CAPTURED},
+            {"status": "error", "stale": True, "captured_at": None,
+             "failureReason": "state_read_failed"},
+        ]):
+            body, _ = self._read(None, arguments={"class": "infra"})
+        self.assertEqual(body["collection"]["failureReason"], "state_read_failed")
+        self.assertFalse(body["collection"]["snapshotConsistent"])
+        self.assertEqual(body["node_count"], 1)
+
+    def test_inventory_publication_change_cannot_certify_selected_nodes(self):
+        with mock.patch.object(inv, "_inventory_graph_collection", side_effect=[
+            {"status": "ok", "stale": False, "captured_at": self.CAPTURED},
+            {"status": "empty", "stale": False, "captured_at": self.ATTEMPTED},
+        ]):
+            body, _ = self._read(None, arguments={"class": "infra"})
+        self.assertTrue(body["collection"]["stale"])
+        self.assertFalse(body["collection"]["snapshotConsistent"])
+        self.assertEqual(body["collection"]["failureReason"], "publication_changed")
+        self.assertEqual(body["selection"]["status"], "all")
+
+    def test_inventory_classes_add_collection_without_changing_edge_contract(self):
         for cls in ("flow", "infra"):
             with self.subTest(cls=cls):
                 body, calls = self._read(None, edges=[{
                     "source": "a", "target": "b", "rel": "routes", "confidence": "inferred",
                 }], arguments={"class": cls})
-                self.assertNotIn("collection", body)
-                self.assertNotIn("captured_at", body)
+                self.assertEqual(body["collection"]["status"], "unknown")
+                self.assertIsNone(body["captured_at"])
                 self.assertEqual(body["edges"][0], {
                     "source": "a", "target": "b", "rel": "routes", "confidence": "inferred",
                 })
-                self.assertFalse(any("topology_graph_state" in sql for sql, _ in calls))
+                self.assertTrue(any("topology_graph_state" in sql for sql, _ in calls))
 
 
 if __name__ == "__main__":

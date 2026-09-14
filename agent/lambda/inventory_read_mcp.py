@@ -318,8 +318,8 @@ def _fetch_topology_graph(resource_id=None, cls="flow", limit=500):
     return nodes, edges, metadata
 
 
-def _fetch_trace_collection():
-    """Mirror graph-state.ts's trace evidence/freshness contract through the sql_reader view.
+def _fetch_trace_collection(cls="trace"):
+    """Read graph-state evidence through the sanitized view; trace remains the default.
 
     DB/permission errors deliberately propagate, just like the topology reads. An absent relation
     or state row means unknown; a failed query must never certify a retained graph.
@@ -335,7 +335,7 @@ def _fetch_trace_collection():
     rows = _execute(
         "SELECT status, attempted_at, captured_at, details FROM topology_graph_state "
         "WHERE account_id = 'self' AND class = :cls LIMIT 1",
-        params=[{"name": "cls", "value": {"stringValue": "trace"}}],
+        params=[{"name": "cls", "value": {"stringValue": cls}}],
     )
     if not rows:
         return unknown
@@ -371,8 +371,36 @@ def _fetch_trace_collection():
         captured is None or time.time() - captured > max_age_minutes * 60
         or status in ("unknown", "error", "unavailable") or details.get("retainedPrevious") is True
     )
-    return {**details, "status": status, "stale": stale,
+    if cls != "trace":
+        details = {**details, "evidenceKind": "inventory"}
+        sources = details.get("publishedSources")
+        stale = stale or not isinstance(sources, list) or not sources
+        for source in sources if isinstance(sources, list) else []:
+            if not isinstance(source, dict):
+                stale = True
+                continue
+            if type(source.get("itemCount")) is not int or source["itemCount"] < 0:
+                stale = True
+                continue
+            clocks = [source.get("lastSuccessAtMs")]
+            if source["itemCount"] > 0:
+                clocks.append(source.get("capturedAtMs"))
+            stale = stale or source.get("status") not in ("ok", "empty") or any(
+                type(clock) not in (int, float) or not math.isfinite(clock) or clock <= 0
+                or clock > time.time() * 1000
+                or time.time() * 1000 - clock > _inventory_stale_after_minutes() * 60_000
+                for clock in clocks)
+    return {**details, "status": status, "stale": bool(stale),
             "attempted_at": row.get("attempted_at"), "captured_at": row.get("captured_at")}
+
+
+def _inventory_graph_collection(cls):
+    try:
+        return _fetch_trace_collection(cls)
+    except Exception:
+        # Preserve readable last-good rows without exposing SQL/provider/credential errors.
+        return {"status": "error", "stale": True, "attempted_at": None, "captured_at": None,
+                "sources": [], "failureReason": "state_read_failed"}
 
 
 # ── Aurora access via the RDS Data API (lazy + injectable; boto3 is in the Lambda runtime) ─────────
@@ -604,8 +632,18 @@ def lambda_handler(event, context):
             # (plan T7b: both read paths reject identically) (M4).
             return {"statusCode": 400, "body": json.dumps(
                 {"error": "invalid class: " + str(cls) + " (expected flow|infra|trace)"})}
-        collection = _fetch_trace_collection() if cls == "trace" else None
+        collection = _fetch_trace_collection() if cls == "trace" else _inventory_graph_collection(cls)
         nodes, edges, graph_metadata = _fetch_topology_graph(resource_id=resource_id, cls=cls)
+        if cls != "trace":
+            # Data API selections use multiple bounded reads. A publication between them cannot
+            # certify one coherent snapshot; disclose it without altering Task2 selection limits.
+            after = _inventory_graph_collection(cls)
+            changed = any(after.get(key) != collection.get(key) for key in (
+                "attempted_at", "captured_at", "status", "sources", "publishedSources", "failureReason"))
+            collection = after
+            if changed:
+                collection = {**after, "stale": True, "snapshotConsistent": False,
+                              "failureReason": after.get("failureReason") or "publication_changed"}
         result = {"class": cls, "nodes": nodes, "edges": edges, **graph_metadata,
                   "node_count": len(nodes), "edge_count": len(edges),
                   "note": TRACE_TOPOLOGY_NOTE if cls == "trace" else COVERAGE_NOTE}
@@ -616,7 +654,7 @@ def lambda_handler(event, context):
             result["captured_at"] = collection["captured_at"]
             if collection["stale"] or collection["status"] == "partial":
                 result["warning"] = (
-                    "Trace collection evidence is incomplete or stale; inspect collection before "
+                    ("Trace" if cls == "trace" else "Graph") + " collection evidence is incomplete or stale; inspect collection before "
                     "treating nodes or edges as current."
                 )
         selection_status = graph_metadata["selection"]["status"]

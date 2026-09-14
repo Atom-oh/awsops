@@ -41,12 +41,26 @@ describe('topology_class migration', () => {
 function mockPool(invRows: unknown[]) {
   const calls: string[] = [];
   const params: unknown[][] = [];
+  const resourceRows = (invRows as Record<string, unknown>[]).map(row => ({
+    ...row, account_id: 'self', captured_at: new Date().toISOString(),
+  }));
+  const types = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda',
+    'ecs_task', 's3', 'subnet', 'apigatewayv2_api', 'apigatewayv2_integration', 'cloudfront_vpc_origin',
+    ...resourceRows.map(row => (row as Record<string, unknown>).resource_type)];
+  const snapshot = { inventory: resourceRows, runs: invRows.length ? [...new Set(types)].map(type => ({
+    account_id: 'self', resource_type: type, status: 'succeeded', unknown_attribute_count: 0,
+    row_count: resourceRows.filter(row => (row as Record<string, unknown>).resource_type === type).length,
+    started_at: new Date().toISOString(), finished_at: new Date().toISOString(), last_success_at: new Date().toISOString(),
+  })) : [] };
   const client = {
-    query: vi.fn((sql: string, p?: unknown[]) => { calls.push(String(sql)); if (p) params.push(p); return Promise.resolve({ rows: [] }); }),
+    query: vi.fn((sql: string, p?: unknown[]) => {
+      calls.push(String(sql)); if (p) params.push(p);
+      return Promise.resolve({ rows: sql.includes('AS inventory') ? [snapshot] : [] });
+    }),
     release: vi.fn(),
   };
   const pool = {
-    query: vi.fn(() => Promise.resolve({ rows: invRows })), // inventory SELECT
+    query: vi.fn(() => Promise.resolve({ rows: [{ ready: true }] })),
     connect: vi.fn(() => Promise.resolve(client)),
   };
   return { pool, client, calls, params };
@@ -65,13 +79,7 @@ describe('rebuildGraph', () => {
       } },
       { resource_type: 'subnet', resource_id: 'subnet-b', region: 'us-east-1', data: { vpc_id: 'vpc-b' } },
     ];
-    const { pool, client } = mockPool([]);
-    pool.query.mockImplementation((...args: unknown[]) => {
-      const [sql, params] = args as [string, [string[], string]];
-      if (sql.includes('DISTINCT account_id')) return Promise.resolve({ rows: [{ account_id: 'self' }] });
-      expect(params[1]).toBe('self');
-      return Promise.resolve({ rows: inventory.filter(row => params[0].includes(row.resource_type)) });
-    });
+    const { pool, client } = mockPool(inventory);
     await rebuildGraph(pool as never, 'ECS_SCOPE');
     const write = client.query.mock.calls.find(([sql, params]) =>
       sql.includes('INSERT INTO topology_nodes') && params?.[1] === 'target',
@@ -122,9 +130,10 @@ describe('rebuildGraph', () => {
 
   it('rolls back on a write error and releases the client', async () => {
     const { pool, client } = mockPool(inv);
-    client.query.mockImplementation((sql: string) => {
+    const read = client.query.getMockImplementation()!;
+    client.query.mockImplementation((sql: string, p?: unknown[]) => {
       if (String(sql).includes('INSERT INTO topology_nodes')) return Promise.reject(new Error('boom'));
-      return Promise.resolve({ rows: [] });
+      return read(sql, p);
     });
     await expect(rebuildGraph(pool as never, 'RUN2')).rejects.toThrow('boom');
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('ROLLBACK'));

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const auth = vi.hoisted(() => vi.fn());
 const query = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth', () => ({ verifyUser: auth }));
-vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
+vi.mock('@/lib/db', () => ({ getPool: () => ({ query, connect: async () => ({ query, release() {} }) }) }));
 import { GET } from './route';
 import claimCases from '../../../lib/fixtures/trace-queue-claims.json';
 
@@ -45,6 +45,34 @@ describe('graph collection evidence API', () => {
     }));
     const response = await GET(new Request('http://localhost/api/graph?class=trace'));
     expect((await response.json()).edges[0].confidence).toBe('unknown');
+  });
+
+  it.each(['flow', 'infra'])('returns %s source failure without changing the selected graph', async cls => {
+    const response = await GET(new Request(`http://localhost/api/graph?class=${cls}`));
+    expect((await response.json()).collection).toMatchObject({ status: 'error', stale: true, retainedPrevious: true });
+    expect(query.mock.calls.find(([sql]) => sql.includes('FROM topology_graph_state'))?.[1]).toEqual(['self', cls]);
+  });
+
+  it('never presents host collection as union coverage or a node timestamp as source capture', async () => {
+    query.mockImplementation(async (sql: string) => ({ rows: sql.includes('FROM topology_nodes')
+      ? [{ id: 'one', kind: 'vpc', captured_at: '2026-09-14T10:00:00Z' }] : [] }));
+    const body = await (await GET(new Request('http://localhost/api/graph?class=infra&account=__all__'))).json();
+    expect(body.collection).toMatchObject({ status: 'unknown', stale: true, coverage: 'unknown' });
+    expect(body.captured_at).toBeNull();
+    expect(body.nodes).toHaveLength(1);
+  });
+
+  it('retains readable graph with a safe state-read failure', async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM topology_graph_state')) throw new Error('credential=secret');
+      return { rows: sql.includes('FROM topology_nodes') ? [{ id: 'retained', kind: 'vpc' }] : [] };
+    });
+    const response = await GET(new Request('http://localhost/api/graph?class=infra'));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.collection).toMatchObject({ status: 'error', stale: true, failureReason: 'state_read_failed' });
+    expect(body.nodes).toHaveLength(1);
+    expect(JSON.stringify(body)).not.toContain('credential');
   });
 });
 

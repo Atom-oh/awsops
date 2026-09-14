@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { buildFlowGraph, type FlowInput, type FlowKind } from './flow-topology';
 import { buildInfraGraph, type Row } from './infra-topology';
 import type { TraceSource, TraceSpan, ServiceGraphCall, SourceRead } from './trace-source';
 import { buildTraceGraph, type InfraNodeLike } from './trace-graph';
-import { writeGraphState, type GraphAttempt } from './graph-state';
+import { writeGraphState, type GraphAttempt, type GraphClass } from './graph-state';
 import { currentAccountId } from './account';
 export { resolveInfraRef } from './trace-graph';
 
@@ -59,12 +59,8 @@ function relFor(sk: FlowKind | undefined, tk: FlowKind | undefined): string {
 interface GNode { id: string; kind: string; label: string; meta?: Record<string, unknown> }
 interface GEdge { source: string; target: string; rel: string; confidence: string; meta?: object }
 
-// Shared writer: one advisory-locked tx, class+account-scoped upsert + mark-sweep. The empty-build
-// guard preserves the last-good graph when inventory is unsynced/failed (skip the destructive sweep) —
-// this is RIGHT for flow/infra (a transient empty fetch must not wipe a live graph). The trace layer is
-// the exception: an intentionally-empty build (source unavailable) MUST sweep its stale rows, so it
-// passes `allowEmpty = true`. Default false keeps the flow/infra guard verbatim (one writer, no
-// duplicate sweep). The sweep is ACCOUNT-scoped so one account's rebuild never wipes another's rows.
+// Trace keeps its existing attempt/window defaults; inventory uses rebuildInventory below.
+// Both paths share the same class/account-scoped row replacement inside their transaction.
 async function writeGraph(pool: Pool, cls: string, lockKey: number, accountId: string, nodes: GNode[], edges: GEdge[], runId: string, allowEmpty = false, attempt?: GraphAttempt) {
   if (nodes.length === 0 && !allowEmpty) return { nodes: 0, edges: 0 };
   const client = await pool.connect();
@@ -78,31 +74,7 @@ async function writeGraph(pool: Pool, cls: string, lockKey: number, accountId: s
         return { nodes: 0, edges: 0 };
       }
     }
-    for (const n of nodes) {
-      await client.query(
-        `INSERT INTO topology_nodes (account_id, id, kind, label, meta, run_id, class)
-         VALUES ($7, $1, $2, $3, $4, $5, $6)
-         ON CONFLICT (account_id, id, class) DO UPDATE
-           SET kind = EXCLUDED.kind, label = EXCLUDED.label, meta = EXCLUDED.meta,
-               run_id = EXCLUDED.run_id, captured_at = now()`,
-        [n.id, n.kind, n.label, JSON.stringify(n.meta ?? {}), runId, cls, accountId],
-      );
-    }
-    for (const e of edges) {
-      const hasMetadata = e.meta !== undefined;
-      await client.query(
-        `INSERT INTO topology_edges (account_id, source, target, rel, confidence, run_id, class${hasMetadata ? ', meta' : ''})
-         VALUES ($7, $1, $2, $3, $4, $5, $6${hasMetadata ? ', $8::jsonb' : ''})
-         ON CONFLICT (account_id, source, target, rel, class) DO UPDATE
-           SET confidence = EXCLUDED.confidence, run_id = EXCLUDED.run_id, captured_at = now()
-               ${hasMetadata ? ', meta = EXCLUDED.meta' : ''}`,
-        [e.source, e.target, e.rel, e.confidence, runId, cls, accountId,
-          ...(hasMetadata ? [JSON.stringify(e.meta)] : [])],
-      );
-    }
-    // class+account-scoped mark-sweep: drop only THIS class+account's rows not written by this run.
-    await client.query(`DELETE FROM topology_edges WHERE account_id = $3 AND class = $1 AND run_id <> $2`, [cls, runId, accountId]);
-    await client.query(`DELETE FROM topology_nodes WHERE account_id = $3 AND class = $1 AND run_id <> $2`, [cls, runId, accountId]);
+    await replaceGraph(client, cls, accountId, nodes, edges, runId);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -113,68 +85,171 @@ async function writeGraph(pool: Pool, cls: string, lockKey: number, accountId: s
   return { nodes: nodes.length, edges: edges.length };
 }
 
-// Accounts present in inventory for the given types (undefined = all types). The host account is
-// stored as the 'self' sentinel by sync_lambda; member accounts appear as their 12-digit ids —
-// each gets its own materialized graph (topology tables are account-keyed since ADR-043).
-async function inventoryAccounts(pool: Pool, types?: string[]): Promise<string[]> {
-  const r = types
-    ? await pool.query(`SELECT DISTINCT account_id FROM inventory_resources WHERE resource_type = ANY($1)`, [types])
-    : await pool.query(`SELECT DISTINCT account_id FROM inventory_resources`);
-  const accounts = (r.rows as { account_id: string }[]).map((x) => x.account_id);
-  return accounts.length > 0 ? accounts : ['self'];
+// Only called while the class lock and transaction are held.
+async function replaceGraph(client: PoolClient, cls: string, accountId: string, nodes: GNode[], edges: GEdge[], runId: string) {
+  for (const n of nodes) {
+    await client.query(
+      `INSERT INTO topology_nodes (account_id, id, kind, label, meta, run_id, class)
+       VALUES ($7, $1, $2, $3, $4, $5, $6)
+       ON CONFLICT (account_id, id, class) DO UPDATE
+         SET kind = EXCLUDED.kind, label = EXCLUDED.label, meta = EXCLUDED.meta,
+             run_id = EXCLUDED.run_id, captured_at = now()`,
+      [n.id, n.kind, n.label, JSON.stringify(n.meta ?? {}), runId, cls, accountId],
+    );
+  }
+  for (const e of edges) {
+    const hasMetadata = e.meta !== undefined;
+    await client.query(
+      `INSERT INTO topology_edges (account_id, source, target, rel, confidence, run_id, class${hasMetadata ? ', meta' : ''})
+       VALUES ($7, $1, $2, $3, $4, $5, $6${hasMetadata ? ', $8::jsonb' : ''})
+       ON CONFLICT (account_id, source, target, rel, class) DO UPDATE
+         SET confidence = EXCLUDED.confidence, run_id = EXCLUDED.run_id, captured_at = now()
+             ${hasMetadata ? ', meta = EXCLUDED.meta' : ''}`,
+      [e.source, e.target, e.rel, e.confidence, runId, cls, accountId,
+        ...(hasMetadata ? [JSON.stringify(e.meta)] : [])],
+    );
+  }
+  // class+account-scoped mark-sweep: drop only THIS class+account's rows not written by this run.
+  await client.query(`DELETE FROM topology_edges WHERE account_id = $3 AND class = $1 AND run_id <> $2`, [cls, runId, accountId]);
+  await client.query(`DELETE FROM topology_nodes WHERE account_id = $3 AND class = $1 AND run_id <> $2`, [cls, runId, accountId]);
 }
 
-// Step 1 — traffic-flow graph (class='flow'), materialized PER ACCOUNT (host = 'self' sentinel).
-export async function rebuildGraph(pool: Pool, runId: string = randomUUID()): Promise<{ nodes: number; edges: number }> {
+type InventoryRow = Row & { resource_type: string; captured_at?: unknown; account_id: string };
+const stamp = (value: unknown): number | null => {
+  const ms = typeof value === 'string' || value instanceof Date ? new Date(value).getTime() : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+};
+
+function inventoryAttempt(rows: InventoryRow[], runs: Record<string, any>[], types: string[], attemptedAt: string, account: string): GraphAttempt {
+  const sources = types.slice(0, 128).map(type => {
+    const items = rows.filter(row => row.resource_type === type);
+    const direct = runs.find(row => row.resource_type === type && row.account_id === account);
+    const run = direct ?? runs.find(row => row.resource_type === type && row.account_id === 'self');
+    const unknownScope = account !== 'self' && !direct && !items.length;
+    const captures = items.map(row => stamp(row.captured_at));
+    const capturedAtMs = captures.length && captures.every(value => value !== null)
+      ? captures.reduce<number>((oldest, value) => Math.min(oldest, value!), Infinity) : null;
+    const lastSuccessAtMs = stamp(run?.last_success_at);
+    const producerStatus = ['succeeded', 'failed', 'partial', 'running'].includes(run?.status) ? run!.status : 'unknown';
+    const unknownAttributes = !Number.isSafeInteger(run?.unknown_attribute_count) || run!.unknown_attribute_count < 0
+      || run!.unknown_attribute_count > 0;
+    const reasons = !run ? ['missing_ledger'] : unknownScope ? ['unknown_account_coverage'] : producerStatus === 'failed' ? ['source_failed']
+      : producerStatus !== 'succeeded' ? ['incomplete_collection'] : unknownAttributes ? ['unknown_attributes']
+      : !items.length && run.row_count !== 0 ? ['empty_not_confirmed']
+      : !lastSuccessAtMs || (items.length > 0 && capturedAtMs === null) ? ['unknown_capture'] : [];
+    const status = producerStatus === 'failed' ? 'error' : producerStatus === 'unknown' || !lastSuccessAtMs || unknownScope ? 'unavailable'
+      : reasons.length ? 'partial' : items.length ? 'ok' : 'empty';
+    return { sourceId: `inventory:${type}`, scope: direct && account !== 'self' ? 'account' : 'aggregate', status, producerStatus, reasons,
+      itemCount: items.length, capturedAtMs, lastSuccessAtMs,
+      attemptedAtMs: stamp(run?.started_at), finishedAtMs: stamp(run?.finished_at) };
+  });
+  const status = sources.some(s => s.status === 'error') ? 'error'
+    : !sources.length || sources.some(s => s.status === 'unavailable') ? 'unavailable'
+    : types.length > 128 || sources.some(s => s.status === 'partial') ? 'partial' : rows.length ? 'ok' : 'empty';
+  const publish = status === 'ok' || status === 'empty';
+  return { status, attemptedAt, publish, details: { sources, retainedPrevious: !publish } };
+}
+
+/** The producer ledger is aggregate, keyed by self. Read it and the original rows in ONE
+ * statement snapshot. The class lock serializes state + graph publication, including failures.
+ * Include previously materialized accounts so a failed/zero refresh cannot strand old graphs. */
+async function rebuildInventory(pool: Pool, cls: GraphClass, lock: number, runId: string,
+  types: string[] | null, build: (rows: InventoryRow[]) => { nodes: GNode[]; edges: GEdge[] }) {
+  const attemptedAt = new Date(Date.now()).toISOString();
   const totals = { nodes: 0, edges: 0 };
-  for (const account of await inventoryAccounts(pool, TYPES)) {
-    const inv = await pool.query(
-      `SELECT resource_type, resource_id, region, data FROM inventory_resources
-       WHERE account_id = $2 AND resource_type = ANY($1)`,
-      [TYPES, account],
-    );
-    const input: FlowInput = {};
-    for (const r of inv.rows as { resource_type: string; resource_id: unknown; region: unknown; data?: object }[]) {
-      const key = TYPE_TO_KEY[r.resource_type];
-      if (!key) continue;
-      (input[key] ??= []).push({ resource_id: r.resource_id, region: r.region, ...(r.data ?? {}) });
+  const schema = await pool.query(`SELECT to_regclass('public.topology_graph_state') IS NOT NULL AS ready`);
+  if (schema.rows[0]?.ready !== true) return totals;
+  const client = await pool.connect();
+  const attempts = new Map<string, GraphAttempt>();
+  let accounts = ['self'];
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [lock]);
+    const existing = await client.query(`SELECT DISTINCT account_id FROM topology_nodes WHERE class=$1
+      UNION SELECT account_id FROM topology_graph_state WHERE class=$1`, [cls]);
+    const prior = await client.query(`SELECT account_id, details->'publishedSources' AS sources
+      FROM topology_graph_state WHERE class=$1`, [cls]);
+    accounts = [...new Set(['self', ...existing.rows.map(row => row.account_id)])];
+    const snapshot = await client.query(`SELECT
+      (SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM
+        (SELECT account_id, resource_type, resource_id, region, data, captured_at FROM inventory_resources
+         WHERE ($1::text[] IS NULL OR resource_type = ANY($1))) r) AS inventory,
+      (SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM
+        (SELECT account_id, resource_type, status, started_at, finished_at, last_success_at, row_count, unknown_attribute_count
+         FROM inventory_sync_runs WHERE ($1::text[] IS NULL OR resource_type = ANY($1))) r) AS runs`, [types]);
+    const inventory: InventoryRow[] = snapshot.rows[0].inventory;
+    const runs: Record<string, any>[] = snapshot.rows[0].runs;
+    accounts = [...new Set([...accounts, ...inventory.map(row => row.account_id), ...runs.map(row => row.account_id)])];
+    const required = types ?? [...new Set([...runs.map(row => row.resource_type), ...inventory.map(row => row.resource_type)])];
+    for (const account of accounts) {
+      const rows = inventory.filter(row => row.account_id === account);
+      const directTypes = runs.filter(row => row.account_id === account).map(row => row.resource_type);
+      const previousSources = prior.rows.find(row => row.account_id === account)?.sources;
+      const previousTypes = Array.isArray(previousSources) ? previousSources.flatMap(source =>
+        typeof source?.sourceId === 'string' && /^inventory:[a-z][a-z0-9_]{0,63}$/.test(source.sourceId)
+          ? [source.sourceId.slice(10)] : []) : [];
+      // Aggregate host types with no member rows are not member coverage. Carry previously used
+      // types forward so disappearing member rows require their own successful-empty evidence.
+      const accountTypes = account === 'self' ? required
+        : [...new Set([...directTypes, ...rows.map(row => row.resource_type), ...previousTypes])];
+      const attempt = inventoryAttempt(rows, runs, accountTypes, attemptedAt, account);
+      attempts.set(account, attempt);
+      const graph = attempt.publish ? build(rows) : { nodes: [], edges: [] };
+      if (attempt.publish) attempt.status = graph.nodes.length ? 'ok' : 'empty';
+      if (await writeGraphState(client, account, attempt, cls) && attempt.publish) {
+        await replaceGraph(client, cls, account, graph.nodes, graph.edges, runId);
+        totals.nodes += graph.nodes.length; totals.edges += graph.edges.length;
+      }
     }
-    const g = buildFlowGraph(input);
-    const kindOf = new Map(g.nodes.map((n) => [n.id, n.kind]));
-    // NOTE: FlowEdge.label (L7 ALB path/host:port + API GW route_key) is intentionally NOT persisted —
-    // the materialized graph is a TRAVERSAL structure (topology_edges has no label column); the L7
-    // labels are a LIVE-only display feature rendered client-side on /topology from buildFlowGraph.
-    const edges: GEdge[] = g.edges.map((e) => ({
-      source: e.source, target: e.target,
-      rel: relFor(kindOf.get(e.source), kindOf.get(e.target)), confidence: e.confidence,
-    }));
-    const w = await writeGraph(pool, 'flow', FLOW_LOCK, account, g.nodes, edges, runId);
-    totals.nodes += w.nodes; totals.edges += w.edges;
-  }
-  return totals;
+    await client.query('COMMIT');
+    return totals;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    // The failed transaction cannot leave a success ledger. Record the failed attempt separately,
+    // under the same lock/order guard; another newer publisher may already have won this race.
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [lock]);
+      for (const account of accounts) {
+        await writeGraphState(client, account, { attemptedAt, status: 'error', publish: false,
+          details: { sources: attempts.get(account)?.details.sources ?? [], retainedPrevious: true,
+            failureReason: attempts.has(account) ? 'publication_failed' : 'source_read_failed' } }, cls);
+      }
+      await client.query('COMMIT');
+    } catch {
+      await client.query('ROLLBACK');
+      // No false success when even failure recording is unavailable; surface failure to the worker.
+    }
+    throw error;
+  } finally { client.release(); }
 }
 
-// Step 2 — resource-relationship graph (class='infra'), materialized PER ACCOUNT.
-export async function rebuildInfraGraph(pool: Pool, runId: string = randomUUID()): Promise<{ nodes: number; edges: number }> {
-  const totals = { nodes: 0, edges: 0 };
-  for (const account of await inventoryAccounts(pool)) {
-    const inv = await pool.query(
-      `SELECT resource_type, resource_id, region, data FROM inventory_resources WHERE account_id = $1`,
-      [account],
-    );
-    const rows = inv.rows as Row[];
-    const isNet = (t: unknown) => NET_TYPES.includes(String(t));
-    const g = buildInfraGraph({
-      resources: rows.filter((r) => !isNet(r.resource_type)),
-      vpcs: rows.filter((r) => r.resource_type === 'vpc'),
-      subnets: rows.filter((r) => r.resource_type === 'subnet'),
-      securityGroups: rows.filter((r) => r.resource_type === 'security_group'),
+export async function rebuildGraph(pool: Pool, runId: string = randomUUID()) {
+  return rebuildInventory(pool, 'flow', FLOW_LOCK, runId, TYPES, rows => {
+    const input: FlowInput = {};
+    for (const row of rows) {
+      const key = TYPE_TO_KEY[row.resource_type];
+      if (key) (input[key] ??= []).push({ resource_id: row.resource_id, region: row.region, ...(row.data as object ?? {}) });
+    }
+    const graph = buildFlowGraph(input);
+    const kinds = new Map(graph.nodes.map(node => [node.id, node.kind]));
+    // L7 display labels remain live-only; persisted edges keep the existing traversal contract.
+    return { nodes: graph.nodes, edges: graph.edges.map(edge => ({ source: edge.source, target: edge.target,
+      rel: relFor(kinds.get(edge.source), kinds.get(edge.target)), confidence: edge.confidence })) };
+  });
+}
+
+export async function rebuildInfraGraph(pool: Pool, runId: string = randomUUID()) {
+  return rebuildInventory(pool, 'infra', INFRA_LOCK, runId, null, rows => {
+    const graph = buildInfraGraph({
+      resources: rows.filter(row => !NET_TYPES.includes(row.resource_type)),
+      vpcs: rows.filter(row => row.resource_type === 'vpc'),
+      subnets: rows.filter(row => row.resource_type === 'subnet'),
+      securityGroups: rows.filter(row => row.resource_type === 'security_group'),
     });
-    const edges: GEdge[] = g.edges.map((e) => ({ source: e.source, target: e.target, rel: e.rel, confidence: 'observed' }));
-    const w = await writeGraph(pool, 'infra', INFRA_LOCK, account, g.nodes, edges, runId);
-    totals.nodes += w.nodes; totals.edges += w.edges;
-  }
-  return totals;
+    return { nodes: graph.nodes, edges: graph.edges.map(edge => ({ source: edge.source, target: edge.target,
+      rel: edge.rel, confidence: 'observed' })) };
+  });
 }
 
 // Trace collection and materialization share one explicit evidence window.
