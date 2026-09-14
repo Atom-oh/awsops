@@ -12,6 +12,8 @@ from ipaddress import ip_address
 
 MAX_CALLS = 32
 MAX_RESULT = 262144
+# Registered field projections in inventory_read_mcp.PROJECTIONS; other types disclose limited fields.
+INVENTORY_PROJECTED_TYPES = {"target_group", "alb", "nlb", "cloudfront", "ebs"}
 ASYNC_QUERY_TOOLS = {
     "execute_log_insights_query", "get_logs_insight_query_results",
     "lake_query", "get_query_status", "get_query_results",
@@ -320,6 +322,10 @@ def inventory_evidence(body, tool, q):
         if not isinstance(resources, list) or not count(body.get("count")) or body["count"] != len(resources):
             q["invalid"] = True
             return "unverified"
+        if body.get("resource_type") not in INVENTORY_PROJECTED_TYPES:
+            q["unknown"] = True
+            if outcome in ("success", "empty"):
+                outcome = coll["status"] = "partial"
         current = coll["sources"][0].get("itemCount")
         if current is not None and len(resources) > current:
             q["invalid"] = True

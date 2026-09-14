@@ -88,6 +88,9 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
 | Loki | Validated streams/vector/matrix query envelopes and named label/value collections require upstream-derived `collectionStatus`; hitting a query's line limit remains partial |
 
+`query_inventory` also follows the producer's registered field projections. Other resource types
+retain partial outcomes with unknown field coverage, even when their count and freshness are healthy.
+
 The source contract requires affected producers to emit typed collection status (`ok`, `empty`, `partial`, `unknown`, or a
 component `error`) before coercion can erase upstream evidence. Missing or non-list collections
 cannot become confirmed empty lists. Named Prometheus/Mimir/Loki lists also require an upstream
@@ -98,8 +101,8 @@ OpenSearch search must retain nullable `timedOut` and `failedShards` fields plus
 absent or malformed flags are unknown, never false/zero. Timeouts, failed shards and omitted hits
 prevent a complete result. Notion must independently record page and block collection: valid page
 metadata remains useful when block retrieval fails or its results/pagination fields are absent.
-Legacy clean responses without the required source markers remain unverified; explicit errors and
-already disclosed incompleteness retain their restrictive outcomes. These markers still require
+Legacy responses without required source markers remain unverified or partial according to the handler;
+explicit errors and disclosed incompleteness retain their restrictive outcomes. These markers require
 matching payload structure before success or confirmed empty can be granted.
 
 These are finite envelope checks, not recursive validation of resource health, metric values, span
