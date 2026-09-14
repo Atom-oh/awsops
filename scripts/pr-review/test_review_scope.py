@@ -246,6 +246,10 @@ class ReviewScopeTests(unittest.TestCase):
         manifest = work / "full-reports.json"
         manifest.write_text(json.dumps(dict(reports=records)))
         manifest.chmod(0o400)
+        (work / "synth-prompt.txt").write_text(
+            f"TRUSTED_FULL_REPORT_DIR: {reports}\n"
+            f"TRUSTED_FULL_REPORTS_JSON: {manifest.read_text()}\n"
+        )
         (work / "synth-stdin.txt").write_text(
             "\n".join("FULL_REPORT: " + json.dumps(record) for record in records)
             + "\n[PREVIEW CAPPED; Read full reports]\n"
@@ -265,10 +269,12 @@ class ReviewScopeTests(unittest.TestCase):
             "pr-diff-omitted.txt", "pr-diff-omitted-source.txt",
         )}
 
-        def invoke(command):
+        def invoke(command, *, phases="true"):
             env = dict(self.env, REVIEW_SCOPE_FILE=str(root / "scope.json"),
                        GITHUB_EVENT_PATH=str(root / "event.json"),
                        GITHUB_OUTPUT=str(root / "outputs"), GATE_RESULT="pass")
+            if phases is not None:
+                env["REVIEW_PHASES_SUCCEEDED"] = phases
             with patch.dict(os.environ, env, clear=True), \
                     patch.object(sys, "argv", ["review_scope.py", command]), \
                     patch("review_scope.api", self.api), \
@@ -291,6 +297,24 @@ class ReviewScopeTests(unittest.TestCase):
             path.write_bytes(data)  # Same length and permissions: the hash must detect this.
             path.chmod(0o400)
             with self.assertRaisesRegex(ValueError, "report|completeness"):
+                invoke("verify")
+
+    def test_failed_or_unknown_review_phase_cannot_pass_with_complete_looking_files(self):
+        for phases in ("false", "", None):
+            with self.subTest(phases=phases), tempfile.TemporaryDirectory() as directory:
+                root, _, _, invoke = self.report_fixture(directory)
+                invoke("gate", phases=phases)
+                self.assertIn("result=fail\n", (root / "outputs").read_text())
+
+    def test_publication_rechecks_the_successful_phase_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, _, _, invoke = self.report_fixture(directory)
+            invoke("gate")
+            saved = json.loads((root / "scope.json").read_text())
+            self.assertIs(saved.get("review_phases_succeeded"), True)
+            saved["review_phases_succeeded"] = False
+            (root / "scope.json").write_text(json.dumps(saved))
+            with self.assertRaisesRegex(ValueError, "completeness"):
                 invoke("verify")
 
     def test_gate_rejects_missing_changed_or_incomplete_full_report_records(self):
@@ -324,6 +348,36 @@ class ReviewScopeTests(unittest.TestCase):
                 invoke("gate")
                 self.assertIn("result=fail\n", (root / "outputs").read_text())
 
+    def test_gate_rejects_missing_forged_or_duplicate_report_read_authority(self):
+        for defect in ("missing_prompt", "wrong_directory", "forged_record", "duplicate_authority"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                root, work, records, invoke = self.report_fixture(directory)
+                prompt = work / "synth-prompt.txt"
+                if defect == "missing_prompt":
+                    prompt.unlink()
+                elif defect == "wrong_directory":
+                    prompt.write_text(prompt.read_text().replace(
+                        str(work / "full-reports.fixture"), str(root / "outside"), 1))
+                elif defect == "forged_record":
+                    forged = copy.deepcopy(records)
+                    forged[0]["path"] = str(root / "outside-report.md")
+                    prompt.write_text(
+                        f"TRUSTED_FULL_REPORT_DIR: {work / 'full-reports.fixture'}\n"
+                        f"TRUSTED_FULL_REPORTS_JSON: {json.dumps(dict(reports=forged))}\n")
+                else:
+                    prompt.write_text(prompt.read_text() + 'TRUSTED_FULL_REPORTS_JSON: {"reports":[]}\n')
+                invoke("gate")
+                self.assertIn("result=fail\n", (root / "outputs").read_text())
+
+    def test_publication_rejects_prompt_changes_after_the_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, work, _, invoke = self.report_fixture(directory)
+            invoke("gate")
+            prompt = work / "synth-prompt.txt"
+            prompt.write_text(prompt.read_text() + "Different review instructions.\n")
+            with self.assertRaisesRegex(ValueError, "report|completeness|input"):
+                invoke("verify")
+
     def test_deleted_full_records_after_gate_cannot_pass_verify(self):
         for missing in ("report", "manifest"):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
@@ -349,6 +403,9 @@ class ReviewScopeTests(unittest.TestCase):
             manifest.chmod(0o400)
             (work / "synth-stdin.txt").write_text(
                 "\n".join("FULL_REPORT: " + json.dumps(record) for record in records) + "\n")
+            (work / "synth-prompt.txt").write_text(
+                f"TRUSTED_FULL_REPORT_DIR: {work / 'full-reports.fixture'}\n"
+                f"TRUSTED_FULL_REPORTS_JSON: {manifest.read_text()}\n")
             with self.assertRaisesRegex(ValueError, "report|completeness"):
                 invoke("verify")
 

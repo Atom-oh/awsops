@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Read-only verification of an already merged, same-repository main PR"
+        description: "Re-review a merged same-repository main PR and publish the result"
         required: true
         type: string
 
@@ -110,7 +110,7 @@ jobs:
           rm -f /tmp/review.md /tmp/review-clean.md /tmp/review-provenance.md
           git archive --format=tar '${{ github.workflow_sha }}' scripts/pr-review |
             tar -x --strip-components=2 -C "$REVIEW_CONTROL"
-          chmod -R a-w "$REVIEW_CONTROL"
+          find "$REVIEW_CONTROL" -type f -exec chmod a-w {} +
           python3 "$REVIEW_HELPER" select
 
       - name: Checkout the selected immutable review base
@@ -180,7 +180,7 @@ jobs:
           git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- . ':(exclude)docs' > /tmp/pr-diff-namestatus.nul
           git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- docs/decisions docs/runbooks >> /tmp/pr-diff-namestatus.nul
           git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- docs ':(exclude)docs/decisions' ':(exclude)docs/runbooks' >> /tmp/pr-diff-namestatus.nul
-          python3 - <<'PYEOF'
+          python3 -I - <<'PYEOF'
           data = open('/tmp/pr-diff-namestatus.nul', 'rb').read().decode('utf-8', 'surrogateescape')
           parts = data.split('\0')
           if parts and parts[-1] == '':
@@ -369,6 +369,7 @@ jobs:
         run: python3 "$REVIEW_CONTROL/preflight-aws-session.py"
 
       - name: Run panel (all configured specialist reports)
+        id: panel
         run: |
           set -euo pipefail
           if [ "${panel_truncated:-0}" = 1 ] || [ -n "${omitted_paths:-}" ]; then
@@ -386,16 +387,19 @@ jobs:
         run: python3 "$REVIEW_CONTROL/preflight-aws-session.py"
 
       - name: Synthesize (Claude chair)
+        id: synthesize
         if: env.panel_truncated != '1' && env.omitted_paths == ''
         run: |
           set -euo pipefail
-          PR_TITLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["title"])' "$REVIEW_SCOPE_FILE")"
+          PR_TITLE="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["title"])' "$REVIEW_SCOPE_FILE")"
           bash "$REVIEW_CONTROL/synthesize.sh" /tmp/pr-diff-truncated.txt /tmp/pr-review \
             "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
 
       - name: Check for blocking issues
         id: gate
         if: always() && steps.scope.outcome == 'success'
+        env:
+          REVIEW_PHASES_SUCCEEDED: ${{ steps.panel.outcome == 'success' && steps.synthesize.outcome == 'success' }}
         run: |
           set -euo pipefail
           python3 "$REVIEW_HELPER" gate
@@ -474,7 +478,7 @@ jobs:
             /tmp/review-comments.json > /tmp/review-comment-ids.txt
           EXISTING=$(sed -n '1p' /tmp/review-comment-ids.txt)
           if [ -n "$EXISTING" ]; then
-            python3 -c 'import json; json.dump({"body":open("/tmp/comment.md").read()},open("/tmp/comment.json","w"))'
+            python3 -I -c 'import json; json.dump({"body":open("/tmp/comment.md").read()},open("/tmp/comment.json","w"))'
             gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH --input /tmp/comment.json
           else
             gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md

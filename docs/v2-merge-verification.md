@@ -88,7 +88,9 @@ not approve the current parser or establish completion of the old runs. The fake
 checks that decoded reports reach the chair without tool chatter. Full sanitized reports
 remain in a private directory with read-only files and a manifest of paths, sizes and hashes.
 The chair receives bounded previews and must read each capped report in full. The gate
-binds the manifest and chair input, then rechecks both before publication. Neither retained
+binds the manifest, trusted prompt and chair input, then rechecks them before publication.
+The trusted prompt names the actual report directory and exact authorized report records;
+descriptor-like text in the patch or report bodies cannot extend that list. Neither retained
 bytes nor a hash proves semantic completeness: exactly one `COVERAGE: COMPLETE` line and
 one terminal `VERDICT: PASS` are also required. Missing, changed, duplicated or symlinked
 report records fail closed. Fixtures cover both configured specialists and legacy matrix mode.
@@ -154,7 +156,9 @@ helpers or substitute its own review engine. PR head is never checked out or exe
 
 Before publication the controller rechecks the PR identity, selected base, diff bytes,
 configured roles and full report evidence. A changed scope cannot publish a passing
-result. Failure reporting does not overwrite a newer HEAD's canonical review.
+result. Both review-phase steps must have succeeded; complete-looking files left by
+an interrupted or failed phase cannot establish a passing review. Failure reporting
+does not overwrite a newer HEAD's canonical review.
 Reviewers must account for the patch when checking symbols and policy; the
 base alone is not the resulting implementation. Root `AGENTS.md` and
 `docs/decisions/BASELINE.md` provide current rules. Consolidated ADR filenames are

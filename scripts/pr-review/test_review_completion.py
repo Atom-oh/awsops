@@ -641,6 +641,12 @@ class WorkflowContract(unittest.TestCase):
         self.assertNotIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
         self.assertEqual(workflow.count("uses: actions/checkout@v4"), 2)
         self.assertEqual(len(re.findall(r"^\s+persist-credentials: false$", workflow, re.M)), 2)
+        self.assertIn("id: panel", workflow)
+        self.assertIn("id: synthesize", workflow)
+        self.assertIn(
+            "REVIEW_PHASES_SUCCEEDED: ${{ steps.panel.outcome == 'success' && steps.synthesize.outcome == 'success' }}",
+            workflow,
+        )
         self.assertNotIn("id-token: write", workflow)
         self.assertNotIn("role-to-assume:", workflow)
 

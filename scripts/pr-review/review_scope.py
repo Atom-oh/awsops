@@ -89,11 +89,13 @@ def decision(review, full, panel, responded, *, partial=False, omitted=False, fa
     expected = expected_cells()
     if set(cells) != expected or len(cells) != len(expected):
         return "fail", f"Incomplete panel coverage: all {len(expected)} configured reports are required"
+    if failed:
+        return "fail", "Review phases did not complete successfully"
     # A nonempty Kiro transcript is not evidence of a completed findings report.
     if re.findall(r"^COVERAGE:.*$", review, re.M) != ["COVERAGE: COMPLETE"]:
         return "fail", "Semantic cell coverage incomplete or unverified by chair"
-    if failed or re.findall(r"^VERDICT:.*$", review, re.M) != ["VERDICT: PASS"] or not review.rstrip().endswith("VERDICT: PASS"):
-        return "fail", "Chair failed, blocked, or returned an invalid verdict"
+    if re.findall(r"^VERDICT:.*$", review, re.M) != ["VERDICT: PASS"] or not review.rstrip().endswith("VERDICT: PASS"):
+        return "fail", "Chair blocked or returned an invalid verdict"
     return "pass", "Complete diff and all configured reports with chair-confirmed coverage; no blocking issues"
 
 
@@ -109,10 +111,22 @@ def full_reports_snapshot(work):
     expected = expected_cells()
     require(isinstance(records, list) and len(records) == len(expected), "All configured full reports required")
     require({record["cell"] for record in records} == expected, "Full report cell mismatch")
-    stdin = (work / "synth-stdin.txt").read_bytes()
+    prompt_path, stdin_path = work / "synth-prompt.txt", work / "synth-stdin.txt"
+    require(prompt_path.is_file() and not prompt_path.is_symlink(), "Missing trusted chair prompt")
+    require(stdin_path.is_file() and not stdin_path.is_symlink(), "Missing bound chair input")
+    prompt = prompt_path.read_bytes()
+    prompt_lines = prompt.decode("utf-8").splitlines()
+    directories = [line[len("TRUSTED_FULL_REPORT_DIR: "):] for line in prompt_lines
+                   if line.startswith("TRUSTED_FULL_REPORT_DIR: ")]
+    authorities = [line[len("TRUSTED_FULL_REPORTS_JSON: "):] for line in prompt_lines
+                   if line.startswith("TRUSTED_FULL_REPORTS_JSON: ")]
+    require(len(directories) == 1 and len(authorities) == 1
+            and authorities[0].encode("utf-8") == raw, "Unbound full report read authority")
+    allowed_directory = Path(directories[0])
+    stdin = stdin_path.read_bytes()
     for record in records:
         path = Path(record["path"])
-        require(path.is_absolute() and path.parent.parent == work
+        require(path.is_absolute() and path.parent == allowed_directory and path.parent.parent == work
                 and path.parent.name.startswith("full-reports.")
                 and path.name == record["cell"].replace("/", "-") + ".md"
                 and not path.parent.is_symlink() and not path.is_symlink(),
@@ -126,7 +140,8 @@ def full_reports_snapshot(work):
         marker = ("FULL_REPORT: " + json.dumps(record) + "\n").encode()
         require(marker in stdin, "Full report was not exposed to the chair")
     return dict(manifest_sha256=hashlib.sha256(raw).hexdigest(),
-                stdin_sha256=hashlib.sha256(stdin).hexdigest())
+                stdin_sha256=hashlib.sha256(stdin).hexdigest(),
+                prompt_sha256=hashlib.sha256(prompt).hexdigest())
 
 
 def api(endpoint):
@@ -168,12 +183,17 @@ def main():
         return
     require(scope["diff_sha256"] == digest, "Reviewed diff changed")
     require(scope["required_cells"] == sorted(expected_cells(env)), "Required review roles changed")
+    phases_succeeded = (
+        env.get("REVIEW_PHASES_SUCCEEDED") == "true"
+        if command == "gate" else scope.get("review_phases_succeeded") is True
+    )
     read = lambda name: Path(name).read_text() if Path(name).is_file() else ""
     result, reason = decision(
         read("/tmp/review.md"), full, Path("/tmp/pr-diff-truncated.txt").read_bytes(),
         read("/tmp/pr-review/responded.txt"), partial=env.get("panel_truncated") == "1",
         omitted=bool(read("/tmp/pr-diff-omitted.txt") or read("/tmp/pr-diff-omitted-source.txt")),
-        failed=env.get("chair_failed") == "1" or Path("/tmp/pr-review/coverage-severe.flag").exists(),
+        failed=not phases_succeeded or env.get("chair_failed") == "1"
+        or Path("/tmp/pr-review/coverage-severe.flag").exists(),
     )
     reports = None
     try:
@@ -182,6 +202,7 @@ def main():
         if result == "pass":
             result, reason = "fail", "Full panel reports missing, changed or unbound"
     if command == "gate":
+        scope["review_phases_succeeded"] = phases_succeeded
         scope["full_reports"] = reports
         scope_file.write_text(json.dumps(scope))
         with open(env["GITHUB_OUTPUT"], "a") as output:
