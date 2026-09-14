@@ -108,6 +108,9 @@ Legacy responses without required source markers remain unverified or partial ac
 explicit errors and disclosed incompleteness retain their restrictive outcomes. These markers require
 matching payload structure before success or confirmed empty can be granted.
 
+Topology source adapters also honor the typed collection markers. Unknown or incomplete empty
+responses cannot authorize an empty graph publication; a genuinely observed empty response can.
+
 These are finite envelope checks, not recursive validation of resource health, metric values, span
 attributes or document contents. Other tool responses, introspection formats and future encodings
 remain unverified until explicitly supported; positive-looking quality fields alone do not enable

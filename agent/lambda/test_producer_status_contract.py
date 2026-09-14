@@ -364,3 +364,13 @@ def test_metric_pair_lists_are_not_certified_after_dict_coercion(module, tool, w
     http.assert_called_once()
     assert json.loads(out["body"])["collectionStatus"] == "unknown"
     assert receipt(tool, out) == "unverified"
+
+
+@pytest.mark.parametrize("case", json.loads((Path(__file__).resolve().parents[1] / "fixtures/tempo-topology-contract.json").read_text()), ids=lambda case: case["name"])
+def test_tempo_topology_shared_producer_contract(case):
+    with patch.object(tempo, "_ds", return_value={"endpoint": "https://fixture.invalid"}), \
+            patch.object(tempo, "http_json", return_value=(200, case["upstream"])) as http:
+        out = tempo.lambda_handler({"tool_name": "tempo_search", "arguments": {"query": "{}", "limit": 20}}, None)
+    http.assert_called_once()
+    assert out["statusCode"] == 200
+    assert json.loads(out["body"]) == case["body"]
