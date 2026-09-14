@@ -120,6 +120,7 @@ class FakeCLI:
         self.manifests = {DIGEST: IMAGE_RAW, OLD_DIGEST: OLD_RAW}
         self.deployment = "ecs-svc/1111111111111111111"
         self.task = None
+        self.task_responses = []
         self.probe_ok = True
         self.probe_log_ok = True
         self.roll_back = False
@@ -272,6 +273,11 @@ class FakeCLI:
             elif action == "list-tasks":
                 result = {"taskArns": [TASK]}
             elif action == "describe-tasks":
+                if self.task_responses:
+                    response = self.task_responses.pop(0)
+                    if isinstance(response, Exception):
+                        raise response
+                    return json.dumps(response)
                 task = self.task or {
                     "taskArn": TASK, "clusterArn": CLUSTER,
                     "taskDefinitionArn": self.meta["components"]["steampipe"]["task_definition_arn"],
@@ -328,6 +334,9 @@ class RuntimeTests(unittest.TestCase):
         patch.object(runtime, "command", side_effect=self.cli).start()
         patch.object(migration, "command", side_effect=self.cli).start()
         self.addCleanup(patch.stopall)
+        self.clock = [0]
+        patch.object(runtime.time, "monotonic", side_effect=lambda: self.clock[0]).start()
+        patch.object(runtime.time, "sleep", side_effect=lambda s: self.clock.__setitem__(0, self.clock[0] + s)).start()
         self.smoke_ok = True
         client = Mock()
         client.invoke_agent_runtime.side_effect = self.invoke_agent
@@ -479,6 +488,42 @@ class RuntimeTests(unittest.TestCase):
         self.call("deploy", ok=False)
         self.assertNotIn("release", self.state())
 
+    def test_worker_waits_for_task_visibility_during_deploy_and_cleanup(self):
+        self.build()
+        missing = {"tasks": [], "failures": [{"arn": TASK, "reason": "MISSING"}]}
+        self.cli.task_responses = [missing, {}, {"failures": missing["failures"]}, {"tasks": []}]
+        self.assertEqual(self.call("deploy")["status"], "complete")
+        self.assertEqual(self.clock[0], 20)
+        self.cli.task["lastStatus"] = "RUNNING"
+        self.cli.task_responses = [{"tasks": []}, missing]
+        self.assertEqual(self.call("cleanup")["status"], "cleaned")
+        for action in ("run-task", "stop-task"):
+            self.assertEqual(sum(a[1:3] == ["ecs", action] for a, _ in self.cli.calls), 1)
+
+    def test_missing_worker_task_times_out_without_discarding_its_receipt(self):
+        self.build()
+        self.cli.task_responses = [{"tasks": [], "failures": [{"arn": TASK, "reason": "MISSING"}]}] * 100
+        self.assertEqual(self.call("deploy", "worker", "--timeout-seconds", "10", ok=False)["error"], "runtime_timeout")
+        self.assertEqual(self.state()["probe"]["task_arn"], TASK)
+        self.assertNotIn("release", self.state())
+        self.assertEqual(self.call("cleanup", ok=False)["error"], "runtime_timeout")
+        self.assertEqual(self.clock[0], 70)
+        self.assertTrue(Path(os.environ["CI_RUNTIME_MANIFEST"]).exists())
+        self.assertFalse(any(a[1:3] == ["ecs", "stop-task"] for a, _ in self.cli.calls))
+
+    def test_worker_task_api_denials_and_malformed_failures_are_not_retried(self):
+        self.build()
+        self.call("deploy")
+        self.cli.task["lastStatus"] = "RUNNING"
+        for response in ({"tasks": None}, runtime.ReleaseError("command_failed"),
+                         {"tasks": [], "failures": [{"arn": TASK, "reason": "ACCESS_DENIED"}]},
+                         {"tasks": [], "failures": [{"arn": TASK + "other", "reason": "MISSING"}]}):
+            with self.subTest(response=response):
+                self.cli.task_responses = [response]
+                self.call("cleanup", ok=False)
+                self.assertEqual(self.clock[0], 0)
+                self.assertFalse(any(a[1:3] == ["ecs", "stop-task"] for a, _ in self.cli.calls))
+
     def test_unrelated_log_nonce_cannot_prove_worker_success(self):
         self.build()
         self.cli.probe_log_ok = False
@@ -512,7 +557,8 @@ class RuntimeTests(unittest.TestCase):
         self.call("deploy")
         self.cli.task["lastStatus"] = "RUNNING"
         self.cli.task["tags"] = []
-        self.call("cleanup", ok=False)
+        self.cli.task_responses = [{"tasks": [], "failures": [{"arn": TASK, "reason": "MISSING"}]}]
+        self.assertEqual(self.call("cleanup", ok=False)["error"], "probe_owner_mismatch")
         self.assertFalse(any(a[1:3] == ["ecs", "stop-task"] for a, _ in self.cli.calls))
 
     def test_worker_cleanup_stops_only_owned_probe(self):
@@ -767,7 +813,7 @@ class WorkflowTests(unittest.TestCase):
         production = [j for j in document["jobs"].values() if j.get("environment") == "production"]
         self.assertEqual(len(production), 1)
         job = production[0]
-        self.assertEqual(job["runs-on"], "awsops-claude-arm")
+        self.assertEqual(job["runs-on"], "ubuntu-24.04-arm")
         self.assertEqual(job["permissions"]["id-token"], "write")
         credentials = [s for s in job["steps"] if s.get("uses", "").startswith("aws-actions/configure-aws-credentials@")]
         self.assertTrue(credentials)

@@ -109,6 +109,9 @@ Protect the production environment, reviewed source and runner accordingly.
 
 ## Release behavior
 
+The production job uses GitHub-hosted `ubuntu-24.04-arm` for native ARM64 Docker
+builds and public AWS API access. Database execution stays inside private Fargate.
+
 Dispatch `deploy-runtime.yml` on origin/main. `mode=check` is the default and
 performs no publishing, provisioning, task launch, or model invocation.
 `mode=deploy` requires reviewed main/CI coverage, builds Linux ARM64, binds the

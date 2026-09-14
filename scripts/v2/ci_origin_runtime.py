@@ -571,9 +571,17 @@ class Runtime:
         arn = state["probe"]["task_arn"]
         require(re.fullmatch(re.escape(f"arn:aws:ecs:{self.region}:{self.account}:task/{self.project}/") +
                              r"[0-9a-f]{32}", arn), "probe_scope_mismatch")
-        result = self.aws("ecs", "describe-tasks", "--cluster", self.c["cluster_arn"], "--tasks", arn, "--include", "TAGS")
-        require(not result.get("failures") and len(result.get("tasks", [])) == 1, "probe_unavailable")
-        task = result["tasks"][0]
+        while True:
+            result = self.aws("ecs", "describe-tasks", "--cluster", self.c["cluster_arn"], "--tasks", arn, "--include", "TAGS")
+            tasks, failures = result.get("tasks", []), result.get("failures", [])
+            require(isinstance(tasks, list) and isinstance(failures, list), "probe_unavailable")
+            if tasks:
+                require(not failures and len(tasks) == 1 and isinstance(tasks[0], dict), "probe_unavailable")
+                break
+            require(len(failures) <= 1 and all(isinstance(f, dict) and f.get("arn") == arn
+                    and f.get("reason") == "MISSING" for f in failures), "probe_unavailable")
+            self.pause()  # Deployment and cleanup both supply a bounded deadline.
+        task = tasks[0]
         tags = {t["key"]: t["value"] for t in task.get("tags", [])}
         require(task.get("taskArn") == arn and task.get("clusterArn") == self.c["cluster_arn"]
                 and task.get("taskDefinitionArn") == self.c["task_definition_arn"]

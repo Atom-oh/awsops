@@ -49,7 +49,7 @@ jobs:
   release:
     needs: [guard]
     if: github.repository == 'Atom-oh/awsops' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
-    runs-on: awsops-claude-arm
+    runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 60
     permissions:
