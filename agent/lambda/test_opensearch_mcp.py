@@ -17,6 +17,8 @@ from botocore.credentials import Credentials
 sys.path.insert(0, os.path.dirname(__file__))
 import opensearch_mcp as om  # noqa: E402
 import cross_account as ca  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from tool_receipts import terminal
 
 FAKE_CREDS = Credentials(access_key="AKIAEXAMPLE", secret_key="secretkey", token="tok")
 
@@ -167,6 +169,54 @@ class TestSchema(_Base):
              mock.patch("opensearch_mcp.urllib.request.urlopen",side_effect=fake_urlopen):
             out=om.lambda_handler({"tool_name":"opensearch_schema","arguments":{}},None)
         b=json.loads(out["body"]); self.assertEqual(b["domains"][0]["name"],"logs"); self.assertIn("logs-2026",b["domains"][0]["indices"])
+
+    def test_source_failures_are_typed_and_do_not_disclose_error_text(self):
+        for response in [(403, {"error": "PRIVATE"}), (200, {"error": "PRIVATE"})]:
+            with self.subTest(response=response), mock.patch.object(om, "get_client", return_value=_FakeOS()), \
+                    mock.patch.object(om, "_resolve_endpoint", return_value="https://fixture.invalid"), \
+                    mock.patch.object(om, "_signed_request", return_value=response):
+                body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+                self.assertEqual(body["domains"][0]["collectionStatus"], "error")
+                self.assertEqual(body["collectionStatus"], "ok")
+                self.assertNotIn("PRIVATE", json.dumps(body))
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
+                                          tool="opensearch_schema")[0], "error")
+        with mock.patch.object(om, "get_client", return_value=_FakeOS()), \
+                mock.patch.object(om, "_resolve_endpoint", side_effect=RuntimeError("PRIVATE")):
+            body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+            self.assertEqual(body["domains"][0]["collectionStatus"], "error")
+            self.assertNotIn("PRIVATE", json.dumps(body))
+
+    def test_empty_and_bounded_schema_are_explicit(self):
+        for size in (0, 1, 100, 101):
+            with self.subTest(size=size), mock.patch.object(om, "get_client", return_value=_FakeOS()), \
+                    mock.patch.object(om, "_resolve_endpoint", return_value="https://fixture.invalid"), \
+                    mock.patch.object(om, "_signed_request", return_value=(200, [{"index": "fixture"}] * size)):
+                body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+                domain = body["domains"][0]
+                self.assertEqual(domain["collectionStatus"], "ok" if size else "empty")
+                self.assertEqual(domain["truncated"], size > 100)
+                self.assertLessEqual(len(domain["indices"]), 100)
+                expected = "partial" if size > 100 else "success" if size else "empty"
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
+                                          tool="opensearch_schema")[0], expected)
+        with mock.patch.object(om, "get_client", return_value=_FakeOS(domains=[])):
+            body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+            self.assertEqual(body["collectionStatus"], "empty")
+
+    def test_domain_enumeration_is_bounded_and_errors_are_typed(self):
+        client = _FakeOS(domains=[{"DomainName": f"domain{i}"} for i in range(21)])
+        for tool in ("opensearch_schema", "list_opensearch_domains"):
+            with self.subTest(tool=tool), mock.patch.object(om, "get_client", return_value=client), \
+                    mock.patch.object(client, "describe_domain", side_effect=RuntimeError("PRIVATE")) as calls, \
+                    mock.patch.object(om, "_resolve_endpoint", side_effect=RuntimeError("PRIVATE")):
+                body = json.loads(getattr(om, tool)({}, "ap-northeast-2", None)["body"])
+                self.assertEqual(len(body["domains"]), 20)
+                self.assertTrue(body["truncated"])
+                self.assertTrue(all(d["collectionStatus"] == "error" for d in body["domains"]))
+                self.assertLessEqual(calls.call_count, 20)
+                self.assertNotIn("PRIVATE", json.dumps(body))
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]}, tool=tool)[0], "partial")
 
 
 if __name__ == "__main__":

@@ -510,3 +510,168 @@ class ProducerReceiptTest(unittest.TestCase):
                             ("tempo_search", "traces")):
             self.assertEqual(self.receipt(tool, {field: [], "truncated": False})["outcome"], "empty")
             self.assertEqual(self.receipt(tool, {field: [], "truncated": True})["outcome"], "partial")
+
+
+class BoundedProducerReceiptTest(unittest.TestCase):
+    receipt = ProducerReceiptTest.receipt
+    CRDS = ("virtualservices", "destinationrules", "gateways", "serviceentries",
+            "authorizationpolicies", "peerauthentications")
+
+    def test_trusted_advisor_errors_are_not_negative_health_findings(self):
+        for checks, expected in [
+            ([{"name": "PRIVATE", "error": "PRIVATE"}], "error"),
+            ([{"status": "error", "flaggedResources": ["PRIVATE"]}], "success"),
+            ([{"status": "warning"}, {"error": "PRIVATE"}], "partial"),
+            ([], "empty"), ([{"error": "PRIVATE"}] * 16, "partial"),
+        ]:
+            with self.subTest(expected=expected, count=len(checks)):
+                r = self.receipt("get_trusted_advisor_cost_checks", {
+                    "checks": checks, "totalChecks": len(checks), "totalEstimatedMonthlySavings": 0,
+                })
+                self.assertEqual(r["outcome"], expected)
+                if len(checks) > 15:
+                    self.assertTrue(r["quality"]["truncated"])
+        for checks in (None, [{}], [{"error": None}], [{"error": {}}], [{"status": []}], [{"status": ""}]):
+            r = self.receipt("get_trusted_advisor_cost_checks", {"checks": checks})
+            self.assertNotIn(r["outcome"], ("success", "empty"))
+            self.assertTrue(r["quality"].get("invalid"))
+        r = self.receipt("get_trusted_advisor_cost_checks", {"checks": [{"error": "PRIVATE"}], "truncated": True})
+        self.assertEqual(r["outcome"], "partial")
+
+    def test_opensearch_typed_collection_and_legacy_absence(self):
+        failed = {"name": "PRIVATE", "collectionStatus": "error", "indices": []}
+        empty = {"name": "PRIVATE", "collectionStatus": "empty", "indices": [], "truncated": False}
+        populated = {"name": "PRIVATE", "collectionStatus": "ok", "indices": ["PRIVATE"], "truncated": False}
+        for domains, top, expected in [
+            ([failed], "ok", "error"), ([failed, empty], "ok", "partial"),
+            ([empty], "ok", "empty"), ([populated], "ok", "success"),
+            ([], "empty", "empty"), ([{**populated, "truncated": True}], "ok", "partial"),
+            ([failed] * 21, "ok", "partial"),
+        ]:
+            with self.subTest(expected=expected, size=len(domains)):
+                r = self.receipt("opensearch_schema", {"domains": domains, "collectionStatus": top})
+                self.assertEqual(r["outcome"], expected)
+                if len(domains) > 20:
+                    self.assertTrue(r["quality"]["truncated"])
+        for body in (
+            {"domains": []}, {"domains": [{"indices": []}]},
+            {"domains": [{"indices": ["PRIVATE"]}]},
+            {"domains": [empty], "collectionStatus": None},
+            {"domains": [{**empty, "collectionStatus": "ok"}], "collectionStatus": "ok"},
+            {"domains": [{**populated, "truncated": "false"}], "collectionStatus": "ok"},
+            {"domains": [{**populated, "collectionStatus": []}], "collectionStatus": "ok"},
+        ):
+            self.assertNotIn(self.receipt("opensearch_schema", body)["outcome"], ("success", "empty"))
+
+    def test_opensearch_domain_metadata_errors_and_successful_empty(self):
+        for domains, status, expected in [
+            ([], "empty", "empty"),
+            ([{"collectionStatus": "ok", "status": "RED", "endpoint": "PRIVATE"}], "ok", "success"),
+            ([{"collectionStatus": "error"}], "ok", "error"),
+            ([{"collectionStatus": "error"}, {"collectionStatus": "ok"}], "ok", "partial"),
+            ([{"error": "PRIVATE"}] * 21, "ok", "partial"),
+        ]:
+            with self.subTest(expected=expected):
+                self.assertEqual(self.receipt("list_opensearch_domains", {
+                    "domains": domains, "collectionStatus": status,
+                })["outcome"], expected)
+        self.assertNotIn(self.receipt("list_opensearch_domains", {"domains": []})["outcome"], ("success", "empty"))
+
+    def test_istio_namespace_collection_is_separate_from_crd_counts(self):
+        zeros = dict.fromkeys(self.CRDS, 0)
+        for counts, ns, status, expected in [
+            (zeros, [], "empty", "empty"), (zeros, ["PRIVATE"], "ok", "success"),
+            (zeros, [], "error", "partial"),
+            ({**zeros, "virtualservices": None}, [], "empty", "partial"),
+            (dict.fromkeys(self.CRDS, None), [], "error", "error"),
+            ({**zeros, "virtualservices": 1}, [], "empty", "success"),
+        ]:
+            with self.subTest(status=status, expected=expected):
+                self.assertEqual(self.receipt("mesh_overview", {
+                    "counts": counts, "injected_namespaces": ns, "namespaceCollectionStatus": status,
+                })["outcome"], expected)
+        for changes in [
+            {}, {"namespaceCollectionStatus": None}, {"namespaceCollectionStatus": []},
+            {"namespaceCollectionStatus": "ok"}, {"namespaceCollectionStatus": "empty", "counts": {}},
+            {"namespaceCollectionStatus": "empty", "counts": {**zeros, "gateways": True}},
+            {"namespaceCollectionStatus": "empty", "counts": {**zeros, "future": "PRIVATE"}},
+        ]:
+            r = self.receipt("mesh_overview", {"counts": zeros, "injected_namespaces": [], **changes})
+            self.assertNotIn(r["outcome"], ("success", "empty"))
+
+    def test_nested_validation_error_and_local_findings_have_distinct_meanings(self):
+        for validation, expected in [
+            ({"valid": False, "error": "PRIVATE"}, "partial"), ({"valid": True}, "success"),
+            (None, "unverified"), ({"valid": "false"}, "unverified"), ({"valid": False}, "unverified"),
+        ]:
+            for issues in ([], [{"severity": "HIGH", "message": "PRIVATE"}]):
+                with self.subTest(validation=validation, expected=expected):
+                    self.assertEqual(self.receipt("check_cloudformation_template_compliance", {
+                        "validation": validation, "compliance_issues": issues,
+                    })["outcome"], expected)
+
+    def test_network_pagination_is_not_resource_state(self):
+        for field in ("SecurityGroups", "NetworkAcls", "RouteTables", "Subnets", "Vpcs"):
+            for token, expected in [("PRIVATE", "partial"), (None, "empty"), ("", "empty"), (True, "partial")]:
+                r = self.receipt("describe_network", {field: [], "NextToken": token})
+                self.assertEqual(r["outcome"], expected)
+                self.assertTrue(r["quality"].get("truncated") if isinstance(token, str) and token else
+                                r["quality"].get("invalid") if token is True else True)
+        self.assertEqual(self.receipt("describe_network", {"Vpcs": [{"State": "pending"}]})["outcome"], "success")
+
+    def test_specific_returned_counts_not_dynamodb_scanned_count(self):
+        for tool, field, total in [
+            ("search_opensearch_logs", "hits", "total"), ("get_dimension_values", "values", "count"),
+            ("list_tables", "tables", "count"), ("query_table", "items", "count"),
+        ]:
+            for length, n, expected in [(0, 0, "empty"), (1, 1, "success"), (0, 3, "partial"),
+                                        (1, 3, "partial"), (1, 0, "unverified"), (0, None, "unverified"),
+                                        (0, True, "unverified")]:
+                with self.subTest(tool=tool, returned=length, total=n):
+                    r = self.receipt(tool, {field: ["PRIVATE"] * length, total: n, "truncated": False})
+                    self.assertEqual(r["outcome"], expected)
+                    if expected == "partial":
+                        self.assertTrue(r["quality"]["truncated"])
+        self.assertEqual(self.receipt("query_table", {"items": [], "count": 0, "scannedCount": 123, "truncated": False})["outcome"], "empty")
+
+    def test_get_item_and_loki_empty_and_malformed_envelopes(self):
+        for body, expected in [
+            ({"item": None, "found": False}, "empty"), ({"item": {"id": "PRIVATE"}, "found": True}, "success"),
+            ({"item": None, "found": True}, "unverified"), ({"item": {}, "found": False}, "unverified"),
+            ({"item": None, "found": "false"}, "unverified"),
+        ]:
+            self.assertEqual(self.receipt("get_item", body)["outcome"], expected)
+        for tool in ("loki_query", "loki_query_range"):
+            self.assertEqual(self.receipt(tool, {"result": [], "truncated": False})["outcome"], "empty")
+            self.assertEqual(self.receipt(tool, {"result": [], "truncated": True})["outcome"], "partial")
+            self.assertEqual(self.receipt(tool, {"result": None})["outcome"], "unverified")
+
+    def test_child_scans_stop_at_caps_without_reading_raw_payloads(self):
+        from tool_receipts import terminal
+        class Unreadable(dict):
+            def get(self, *args):
+                raise AssertionError("unbounded child read")
+        class Unwalkable(list):
+            def __iter__(self):
+                raise AssertionError("raw result traversal")
+        for tool, body in [
+            ("get_trusted_advisor_cost_checks", {"checks": [{"error": "PRIVATE"}] * 15 + [Unreadable()]}),
+            ("opensearch_schema", {"collectionStatus": "ok", "domains": [
+                {"collectionStatus": "error"}] * 20 + [Unreadable()]}),
+            ("mesh_overview", {"counts": dict.fromkeys(self.CRDS, 0), "namespaceCollectionStatus": "ok",
+                               "injected_namespaces": Unwalkable(["PRIVATE"])}),
+            ("query_table", {"items": Unwalkable(["PRIVATE"]), "count": 1, "scannedCount": 3, "truncated": False}),
+        ]:
+            outcome, q, _ = terminal({"status": "success", "content": [{"json": body}]}, tool=tool)
+            self.assertIn(outcome, ("success", "partial"))
+            self.assertNotIn("PRIVATE", json.dumps(q))
+
+    def test_list_pagination_requires_producer_evidence_and_preserves_empty(self):
+        for tool, field in [("list_users", "users"), ("list_roles", "roles"), ("list_groups", "groups"),
+                            ("list_policies", "policies"), ("list_tables", "tables"),
+                            ("query_table", "items"), ("scan_table", "items")]:
+            for marker, expected in [({"truncated": False}, "empty"), ({"truncated": True}, "partial"),
+                                     ({"truncated": False, "unknown": True}, "partial"),
+                                     ({"truncated": "false"}, "partial"), ({}, "partial")]:
+                with self.subTest(tool=tool, marker=marker):
+                    self.assertEqual(self.receipt(tool, {field: [], "count": 0, **marker})["outcome"], expected)

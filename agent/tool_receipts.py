@@ -15,6 +15,19 @@ ASYNC_QUERY_TOOLS = {
     "execute_log_insights_query", "get_logs_insight_query_results",
     "lake_query", "get_query_status", "get_query_results",
 }
+ISTIO_COUNTS = ("virtualservices", "destinationrules", "gateways", "serviceentries",
+                "authorizationpolicies", "peerauthentications")
+IAM_LISTS = {"list_users": "users", "list_roles": "roles", "list_groups": "groups", "list_policies": "policies"}
+COUNTED_LISTS = {
+    "search_opensearch_logs": ("hits", "total"), "get_dimension_values": ("values", "count"),
+    "list_tables": ("tables", "count"), "query_table": ("items", "count"), "scan_table": ("items", "count"),
+}
+PAGINATED_TOOLS = set(IAM_LISTS) | {"list_tables", "query_table", "scan_table"}
+SHALLOW_TOOLS = set(COUNTED_LISTS) | set(IAM_LISTS) | {
+    "get_trusted_advisor_cost_checks", "list_opensearch_domains", "opensearch_schema",
+    "mesh_overview", "check_cloudformation_template_compliance", "describe_network", "get_item",
+    "loki_query", "loki_query_range",
+}
 STATUS = {"ok", "empty", "partial", "unavailable", "error", "unknown"}
 REASONS = {
     "missing_ledger", "unknown_account_coverage", "source_failed", "incomplete_collection",
@@ -418,6 +431,195 @@ def query_evidence(body, tool, q):
     return "success" if rows else "empty"
 
 
+def reported_error(value, q):
+    """Only called on explicitly known producer objects; never search resource contents."""
+    if "error" not in value:
+        return False
+    if isinstance(value["error"], str) and value["error"]:
+        return True
+    q["invalid"] = True
+    return None
+
+
+def trusted_advisor_evidence(body, q):
+    checks = body.get("checks")
+    if not isinstance(checks, list):
+        q["invalid"] = True
+        return "unverified"
+    if "totalChecks" in body and (not count(body["totalChecks"]) or body["totalChecks"] != len(checks)):
+        q["invalid"] = True
+    outcomes = []
+    for check in checks[:15]:
+        if not isinstance(check, dict):
+            q["invalid"] = True
+            outcomes.append("unverified")
+            continue
+        failed = reported_error(check, q)
+        if failed:
+            q["unknown"] = True  # the zero savings aggregate did not assess this check
+            outcomes.append("error")
+        elif failed is None or not isinstance(check.get("status"), str) or not check["status"]:
+            q["invalid"] = True
+            outcomes.append("unverified")
+        else:
+            outcomes.append("success")  # warning/error health findings are valid retrieved evidence
+    if len(checks) > 15 or q.get("truncated"):
+        q["truncated"] = True
+        return "partial"
+    return combined(outcomes) if checks else "empty"
+
+
+def opensearch_evidence(body, tool, q):
+    domains = body.get("domains")
+    if not isinstance(domains, list):
+        q["invalid"] = True
+        return "unverified"
+    status = body.get("collectionStatus")
+    if "collectionStatus" not in body:
+        q["unknown"] = True
+    elif status not in ("ok", "empty") or (status == "empty") != (not domains):
+        q["invalid"] = True
+    outcomes = []
+    for domain in domains[:20]:
+        if not isinstance(domain, dict):
+            q["invalid"] = True
+            outcomes.append("unverified")
+            continue
+        failed = reported_error(domain, q)
+        status = domain.get("collectionStatus")
+        if "collectionStatus" not in domain:
+            q["unknown"] = True  # legacy empty indices may conceal an HTTP failure
+        elif status not in ("ok", "empty", "error"):
+            q["invalid"] = True
+            outcomes.append("unverified")
+            continue
+        if "truncated" in domain:
+            if type(domain["truncated"]) is not bool:
+                q["invalid"] = True
+            elif domain["truncated"]:
+                q["truncated"] = True
+        if failed or status == "error":
+            outcomes.append("error")
+        elif failed is None:
+            outcomes.append("unverified")
+        elif tool == "opensearch_schema":
+            indices = domain.get("indices")
+            if not isinstance(indices, list):
+                q["invalid"] = True
+                outcomes.append("unverified")
+            elif status is not None and (status == "empty") != (not indices):
+                q["invalid"] = True
+                outcomes.append("unverified")
+            else:
+                outcomes.append("success" if indices else "empty")
+        elif status == "empty":
+            q["invalid"] = True
+            outcomes.append("unverified")
+        else:
+            outcomes.append("success")
+    if len(domains) > 20:
+        q["truncated"] = True
+    if q.get("truncated"):
+        return "partial"  # omitted children could succeed; never certify all-failed from a prefix
+    return combined(outcomes) if domains else "empty"
+
+
+def mesh_evidence(body, q):
+    counts = body.get("counts")
+    namespaces = body.get("injected_namespaces")
+    if not isinstance(counts, dict) or not isinstance(namespaces, list):
+        q["invalid"] = True
+        return "unverified"
+    if len(counts) != sum(key in counts for key in ISTIO_COUNTS):
+        q["unsupported"] = True
+    outcomes = []
+    for key in ISTIO_COUNTS:
+        value = counts.get(key)
+        if key not in counts:
+            q["unknown"] = True
+            outcomes.append("unverified")
+        elif value is None:
+            q["unknown"] = True
+            outcomes.append("error")
+        elif not count(value):
+            q["invalid"] = True
+            outcomes.append("unverified")
+        else:
+            outcomes.append("success" if value else "empty")
+    status = body.get("namespaceCollectionStatus")
+    if "namespaceCollectionStatus" not in body:
+        q["unknown"] = True
+        outcomes.append("success" if namespaces else "unverified")
+    elif status == "error":
+        outcomes.append("partial" if namespaces else "error")
+    elif status not in ("ok", "empty") or (status == "empty") != (not namespaces):
+        q["invalid"] = True
+        outcomes.append("unverified")
+    else:
+        outcomes.append("success" if namespaces else "empty")
+    return combined(outcomes)
+
+
+def shallow_evidence(body, tool, q):
+    if tool == "get_trusted_advisor_cost_checks":
+        return trusted_advisor_evidence(body, q)
+    if tool in ("list_opensearch_domains", "opensearch_schema"):
+        return opensearch_evidence(body, tool, q)
+    if tool == "mesh_overview":
+        return mesh_evidence(body, q)
+    if tool == "check_cloudformation_template_compliance":
+        validation = body.get("validation")
+        if not isinstance(validation, dict) or type(validation.get("valid")) is not bool or not isinstance(body.get("compliance_issues"), list):
+            q["invalid"] = True
+            return "unverified"
+        failed = reported_error(validation, q)
+        if failed:
+            q["unknown"] = True
+            return "partial"  # local heuristic findings survive the failed remote validation
+        if failed is None or not validation["valid"]:
+            q["unknown"] = True
+            return "unverified"
+        return "success"
+    if tool == "get_item":
+        found, item = body.get("found"), body.get("item")
+        if type(found) is not bool or "item" not in body or (found and not isinstance(item, dict)) or (not found and item is not None):
+            q["invalid"] = True
+            return "unverified"
+        return "success" if found else "empty"
+    if tool in PAGINATED_TOOLS and "truncated" not in body:
+        q["unknown"] = True  # old producers dropped continuation markers
+    if tool == "describe_network":
+        keys = [k for k in ("SecurityGroups", "NetworkAcls", "RouteTables", "Subnets", "Vpcs") if k in body]
+        if len(keys) != 1:
+            q["invalid"] = True
+            return "unverified"
+        field = keys[0]
+        token = body.get("NextToken")
+        if token is not None and token != "":
+            if isinstance(token, str):
+                q["truncated"] = True
+            else:
+                q["invalid"] = True
+    else:
+        field = COUNTED_LISTS[tool][0] if tool in COUNTED_LISTS else IAM_LISTS.get(tool, "result")
+    rows = body.get(field)
+    if not isinstance(rows, list):
+        q["invalid"] = True
+        return "unverified"
+    if tool in COUNTED_LISTS:
+        total = body.get(COUNTED_LISTS[tool][1])
+        if not count(total) or total < len(rows):
+            q["invalid"] = True
+            return "unverified"
+        if total > len(rows):
+            q["truncated"] = True
+        if tool == "search_opensearch_logs" and "count" in body and (
+                not count(body["count"]) or body["count"] != len(rows)):
+            q["invalid"] = True
+            return "unverified"
+    return "success" if rows else "empty"
+
+
 def producer_evidence(body, tool, q):
     """Curated producer shapes only; no arbitrary nested error/key searching."""
     name = tool.rsplit("___", 1)[-1]
@@ -427,6 +629,8 @@ def producer_evidence(body, tool, q):
         return inventory_evidence(body, name, q)
     if name == "get_rightsizing_recommendations":
         return rightsizing_evidence(body, q)
+    if name in SHALLOW_TOOLS:
+        return shallow_evidence(body, name, q)
     if name in ("notion_search", "notion_query_database") and "has_more" in body:
         if type(body["has_more"]) is bool:
             if body["has_more"]:
@@ -449,7 +653,7 @@ def terminal(result, ignored_texts=(), tool=""):
     content = result.get("content")
     if not isinstance(content, list):
         return "unverified", {"invalid": True}, {}
-    object_producer = tool.rsplit("___", 1)[-1] in ASYNC_QUERY_TOOLS | {
+    object_producer = tool.rsplit("___", 1)[-1] in ASYNC_QUERY_TOOLS | SHALLOW_TOOLS | {
         "query_inventory", "inventory_summary", "get_rightsizing_recommendations",
     }
     if not content:
