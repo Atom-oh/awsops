@@ -439,6 +439,18 @@ class ProducerReceiptTest(unittest.TestCase):
             self.assertIn(outcome, ("success", "partial"))
             self.assertNotIn("PRIVATE", json.dumps(q))
 
+    def test_inventory_data_api_naive_timestamps_are_utc(self):
+        for stamp in ("2026-09-14 00:00:00", "2026-09-14 00:00:00.123456", "2026-09-14T00:00:00.123456"):
+            for n in (0, 1):
+                with self.subTest(stamp=stamp, current_count=n):
+                    clocks = ("latest_success_at", "last_success_at", "finished_at")
+                    naive = inventory_row(count=n, **dict.fromkeys(clocks, stamp))
+                    aware = inventory_row(count=n, **dict.fromkeys(clocks, stamp + "+00:00"))
+                    receipt = self.receipt("inventory_summary", {"sync": [naive]})
+                    expected = self.receipt("inventory_summary", {"sync": [aware]})
+                    self.assertEqual(receipt["outcome"], "success" if n else "empty")
+                    self.assertEqual(receipt["quality"], expected["quality"])
+
     def test_inventory_source_clocks_are_not_latest_attempt_clocks(self):
         row = inventory_row("degraded", count=1, status="failed",
                             finished_at="2026-09-14T02:00:00Z",

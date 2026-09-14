@@ -7,7 +7,7 @@ import json
 import math
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from ipaddress import ip_address
 
 MAX_CALLS = 32
@@ -269,7 +269,7 @@ def inventory_source(row, q):
                 raise ValueError("invalid clock")
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if parsed.tzinfo is None:
-                raise ValueError("clock without timezone")
+                parsed = parsed.replace(tzinfo=timezone.utc)  # RDS Data API's timezone-less UTC format.
             stamp = int(parsed.timestamp() * 1000)
             if not number(stamp):
                 raise ValueError("invalid clock")
