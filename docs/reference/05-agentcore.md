@@ -88,15 +88,15 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
 | Loki | Existing explicit query-result handling; named label/value collections require upstream-derived `collectionStatus` |
 
-The affected producers emit typed collection status (`ok`, `empty`, `partial`, `unknown`, or a
+The source contract requires affected producers to emit typed collection status (`ok`, `empty`, `partial`, `unknown`, or a
 component `error`) before coercion can erase upstream evidence. Missing or non-list collections
 cannot become confirmed empty lists. Named Prometheus/Mimir/Loki lists also require an upstream
 success status. Tempo search treats an omitted protobuf-style `traces` field as unknown, while
 retaining returned metrics and bounded trace data.
 
-OpenSearch search retains nullable `timedOut` and `failedShards` fields plus `collectionStatus`;
+OpenSearch search must retain nullable `timedOut` and `failedShards` fields plus `collectionStatus`;
 absent or malformed flags are unknown, never false/zero. Timeouts, failed shards and omitted hits
-prevent a complete result. Notion independently records page and block collection: valid page
+prevent a complete result. Notion must independently record page and block collection: valid page
 metadata remains useful when block retrieval fails or its results/pagination fields are absent.
 Legacy clean responses without the required source markers remain unverified; explicit errors and
 already disclosed incompleteness retain their restrictive outcomes. These markers still require
@@ -107,12 +107,15 @@ attributes or document contents. Other tool responses, introspection formats and
 remain unverified until explicitly supported; positive-looking quality fields alone do not enable
 them. Bounded omission remains partial, including ENI lookups at the legacy ten-match cap.
 
-The web consumer ships separately. Older consumers ignore these optional frames; newer consumers
+Deploy the corresponding Lambda producer updates before expecting positive outcomes that require
+these new source markers. Runtime handling alone does not upgrade a legacy producer's evidence.
+
+The web consumer ships separately. The existing web parser ignores these optional frames; newer consumers
 must preserve useful text but treat absent, malformed or incomplete evidence as unverified/partial.
 Detailed receipts belong only in ownership-checked conversation metadata. Global invocation
 statistics retain coarse outcomes, never raw outputs, queries, credentials or pagination tokens.
-Current readers retain unverified answers and mark mixed confirmed/unverified evidence partial.
-Unverified calls are excluded from the evidence-confirmed success-rate denominator. Expanding or
+Compatible consumers must retain unverified answers and mark mixed confirmed/unverified evidence partial.
+They must exclude unverified calls from the evidence-confirmed success-rate denominator. Expanding or
 tightening producer coverage can therefore change that rate without a change in operational health;
 compare it alongside assessed/unverified counts and the coverage policy in effect.
 
