@@ -801,7 +801,8 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
     const states = [first, second] as Array<'success' | 'empty' | 'error'>;
     const receipts = states.map((outcome, i) => ({ version: 1 as const, callId: `call-${i}`,
-      tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome }));
+      tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome,
+      inputs: {}, requestedScope: {}, observedScope: {} }));
     const explanation = (gateway: string, outcome: string) =>
       outcome === 'empty' ? `No ${gateway} matches found.` : `${gateway} inspection complete.`;
     if (mode === 'fanout') {
