@@ -160,6 +160,9 @@ export function assertDatasourceEndpointAllowed(urlString: string): void {
   if (urlString.includes('\\')) throw new Error('endpoint must not contain a backslash');
   let url: URL;
   try { url = new URL(urlString); } catch { throw new Error('endpoint must be a valid URL'); }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('use the API base URL without embedded credentials, query parameters or fragments');
+  }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`endpoint scheme ${url.protocol} not allowed (http/https only)`);
   }

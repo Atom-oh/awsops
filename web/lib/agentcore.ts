@@ -1,9 +1,10 @@
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { ResolvedIntegration } from '@/lib/agent-resolver';
+import { runtimeParameter, validRuntimeArn } from './agentcore-config';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
-const ARN_PARAM = process.env.SSM_RUNTIME_ARN_PARAM || '/ops/awsops-v2/agentcore/runtime_arn';
+const ARN_PARAM = runtimeParameter();
 const TTL_MS = 5 * 60 * 1000;
 
 let ssm: SSMClient | null = null;
@@ -11,11 +12,14 @@ let ac: BedrockAgentCoreClient | null = null;
 let arnCache: { value: string; at: number } | null = null;
 
 export async function getRuntimeArn(): Promise<string> {
+  if (ARN_PARAM === '') throw new Error('AgentCore disabled');
   if (arnCache && Date.now() - arnCache.at < TTL_MS) return arnCache.value;
   if (!ssm) ssm = new SSMClient({ region: REGION });
   const r = await ssm.send(new GetParameterCommand({ Name: ARN_PARAM }));
   const value = r.Parameter?.Value;
-  if (!value) throw new Error('runtime ARN not found in SSM');
+  if (!value || !validRuntimeArn(value, REGION, process.env.HOST_ACCOUNT_ID)) {
+    throw new Error('runtime ARN unavailable or invalid');
+  }
   arnCache = { value, at: Date.now() };
   return value;
 }
@@ -33,7 +37,7 @@ export interface InvokeInput {
   // passed through untouched, only a value already matching this exact own-namespaced shape
   // (pentest-remediation P3-1, PR #200 review).
   systemPromptOverride?: string; // ADR-031: resolved custom prompt
-  toolAllowlist?: string[];      // ADR-031 Phase 2: now the server-side-enforced set
+  toolAllowlist?: string[];      // undefined = legacy unrestricted; [] = explicit deny-all
   agentName?: string;            // ADR-031: traceability
   agentVersion?: number;
   skillHashes?: string[];
@@ -154,7 +158,13 @@ async function* streamEvents(resp: unknown): AsyncGenerator<AgentEvent> {
 function buildCommand(input: InvokeInput, arn: string): InvokeAgentRuntimeCommand {
   const body: Record<string, unknown> = { gateway: input.gateway, messages: input.messages };
   if (input.systemPromptOverride) body.systemPromptOverride = input.systemPromptOverride;
-  if (input.toolAllowlist) body.toolAllowlist = input.toolAllowlist;
+  // Old runtimes treat [] as unrestricted. This reserved nonempty token cannot be a
+  // Bedrock ToolSpecification name (pattern [a-zA-Z0-9_-]+), so exact-match old filters
+  // also deny all. Keep [] in the internal spec; encode only at the transport boundary.
+  // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolSpecification.html
+  if (input.toolAllowlist !== undefined) {
+    body.toolAllowlist = input.toolAllowlist.length ? input.toolAllowlist : ['!awsops-deny-all!'];
+  }
   if (input.agentName) body.agentName = input.agentName;
   if (input.agentVersion !== undefined) body.agentVersion = input.agentVersion;
   if (input.skillHashes) body.skillHashes = input.skillHashes;

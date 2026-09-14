@@ -1,6 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { parseSlash, matchCommands } from './slash';
 
+const CUSTOM = [{ key: 'sre-2', label: 'sre-2', icon: '', active: true }];
+it('recognizes only registered custom commands, including digits', () => {
+  expect(parseSlash('/sre-2 inspect errors', CUSTOM)).toEqual({ section: 'sre-2', prompt: 'inspect errors' });
+  expect(parseSlash('/sre-2 inspect errors')).toEqual({ section: null, prompt: '/sre-2 inspect errors' });
+  expect(matchCommands('sr', CUSTOM)).toEqual(CUSTOM);
+});
+it('custom entries cannot replace built-ins or introduce invalid or disabled commands', () => {
+  const extra = [...CUSTOM, { key: 'cost', label: 'override', icon: '', active: true },
+    { key: 'disabled', label: 'disabled', icon: '', active: false }];
+  expect(matchCommands('cost', extra)[0].label).not.toBe('override');
+  expect(parseSlash('/disabled hi', extra).section).toBeNull();
+});
+
 describe('parseSlash', () => {
   it('routes a leading /section command, body verbatim', () => {
     expect(parseSlash('/cost foo')).toEqual({ section: 'cost', prompt: 'foo' });

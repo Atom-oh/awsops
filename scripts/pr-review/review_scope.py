@@ -4,11 +4,20 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
 MAX_LINES = 3000
 CELLS = {f"{model}/L{lens}" for model in ("codex", "kiro-opus", "kiro-gpt") for lens in range(2, 6)}
+
+
+def expected_cells(env=None):
+    env = os.environ if env is None else env
+    if env.get("ROLE_REVIEW") == "1":
+        from specialist_roles import ROLES
+        return {f"{tag}/{role[0]}" for tag, role in ROLES.items()}
+    return CELLS
 
 
 def require(condition, message):
@@ -54,7 +63,8 @@ def select_scope(env, event, api):
         require(merge_tree == sha(head_commit["commit"]["tree"]["sha"]), "Merged tree differs from PR HEAD; replay refused")
         base = diff_base = sha(commit["parents"][0]["sha"])
     return dict(repo=repo, number=number, mode=mode, base=base, head=head, diff_base=diff_base,
-                merge=merge, merge_tree=merge_tree, title=pr["title"])
+                merge=merge, merge_tree=merge_tree, title=pr["title"],
+                required_cells=sorted(expected_cells(env)))
 
 
 def verify_scope(saved, env, event, api):
@@ -76,14 +86,47 @@ def decision(review, full, panel, responded, *, partial=False, omitted=False, fa
     if partial or len(full.splitlines()) > MAX_LINES or panel != full or omitted:
         return "fail", "Incomplete diff coverage (truncated, changed or omitted content)"
     cells = responded.split()
-    if set(cells) != CELLS or len(cells) != len(CELLS):
-        return "fail", "Incomplete panel coverage: all 12 cells are required"
+    expected = expected_cells()
+    if set(cells) != expected or len(cells) != len(expected):
+        return "fail", f"Incomplete panel coverage: all {len(expected)} configured reports are required"
     # A nonempty Kiro transcript is not evidence of a completed findings report.
     if re.findall(r"^COVERAGE:.*$", review, re.M) != ["COVERAGE: COMPLETE"]:
         return "fail", "Semantic cell coverage incomplete or unverified by chair"
     if failed or re.findall(r"^VERDICT:.*$", review, re.M) != ["VERDICT: PASS"] or not review.rstrip().endswith("VERDICT: PASS"):
         return "fail", "Chair failed, blocked, or returned an invalid verdict"
-    return "pass", "Complete diff, 12 responses and chair-confirmed semantic coverage; no blocking issues"
+    return "pass", "Complete diff and all configured reports with chair-confirmed coverage; no blocking issues"
+
+
+def full_reports_snapshot(work):
+    """Validate the chair's retained streams, not their semantic completeness."""
+    work = work.resolve()
+    manifest = work / "full-reports.json"
+    require(not manifest.is_symlink() and manifest.is_file(), "Missing full reports manifest")
+    require(not work.stat().st_mode & 0o077 and not manifest.stat().st_mode & 0o277,
+            "Full reports manifest must be protected and read-only")
+    raw = manifest.read_bytes()
+    records = json.loads(raw)["reports"]
+    expected = expected_cells()
+    require(isinstance(records, list) and len(records) == len(expected), "All configured full reports required")
+    require({record["cell"] for record in records} == expected, "Full report cell mismatch")
+    stdin = (work / "synth-stdin.txt").read_bytes()
+    for record in records:
+        path = Path(record["path"])
+        require(path.is_absolute() and path.parent.parent == work
+                and path.parent.name.startswith("full-reports.")
+                and path.name == record["cell"].replace("/", "-") + ".md"
+                and not path.parent.is_symlink() and not path.is_symlink(),
+                "Invalid full report path")
+        require(stat.S_ISREG(path.stat().st_mode) and not path.stat().st_mode & 0o277
+                and not path.parent.stat().st_mode & 0o077, "Full report must be protected and read-only")
+        data = path.read_bytes()
+        require(type(record["size"]) is int and record["size"] > 0
+                and len(data) == record["size"]
+                and hashlib.sha256(data).hexdigest() == record["sha256"], "Full report changed")
+        marker = ("FULL_REPORT: " + json.dumps(record) + "\n").encode()
+        require(marker in stdin, "Full report was not exposed to the chair")
+    return dict(manifest_sha256=hashlib.sha256(raw).hexdigest(),
+                stdin_sha256=hashlib.sha256(stdin).hexdigest())
 
 
 def api(endpoint):
@@ -95,10 +138,13 @@ def api(endpoint):
 
 
 def main():
+    command = sys.argv[1]
+    if command == "max-lines":
+        print(MAX_LINES)
+        return
     env = os.environ
     scope_file = Path(env["REVIEW_SCOPE_FILE"])
     event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())
-    command = sys.argv[1]
     if command == "select":
         scope = select_scope(env, event, api)
         scope_file.write_text(json.dumps(scope))
@@ -121,6 +167,7 @@ def main():
         scope_file.write_text(json.dumps(scope))
         return
     require(scope["diff_sha256"] == digest, "Reviewed diff changed")
+    require(scope["required_cells"] == sorted(expected_cells(env)), "Required review roles changed")
     read = lambda name: Path(name).read_text() if Path(name).is_file() else ""
     result, reason = decision(
         read("/tmp/review.md"), full, Path("/tmp/pr-diff-truncated.txt").read_bytes(),
@@ -128,13 +175,23 @@ def main():
         omitted=bool(read("/tmp/pr-diff-omitted.txt") or read("/tmp/pr-diff-omitted-source.txt")),
         failed=env.get("chair_failed") == "1" or Path("/tmp/pr-review/coverage-severe.flag").exists(),
     )
+    reports = None
+    try:
+        reports = full_reports_snapshot(Path("/tmp/pr-review"))
+    except (OSError, ValueError, KeyError, TypeError):
+        if result == "pass":
+            result, reason = "fail", "Full panel reports missing, changed or unbound"
     if command == "gate":
+        scope["full_reports"] = reports
+        scope_file.write_text(json.dumps(scope))
         with open(env["GITHUB_OUTPUT"], "a") as output:
             output.write(f"result={result}\nreason={reason}\n")
     elif command == "verify":
         verify_scope(scope, env, event, api)
         require(env.get("GATE_RESULT") in ("pass", "fail"), "Missing gate decision")
         require(env["GATE_RESULT"] != "pass" or result == "pass", "Review completeness changed")
+        require(env["GATE_RESULT"] != "pass" or reports == scope.get("full_reports"),
+                "Full reports or chair input changed since gate")
         print(f"_Review scope: `{scope['mode']}` · base `{scope['base']}` · diff base `{scope['diff_base']}` · head `{scope['head']}`"
               f" · merge `{scope['merge'] or 'n/a'}` · merge/head tree `{scope['merge_tree'] or 'n/a'}`"
               f" · filtered diff SHA-256 `{digest}` · {scope['lines']} lines._")

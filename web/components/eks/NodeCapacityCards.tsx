@@ -1,6 +1,7 @@
 'use client';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
+import NodeResourceMeters from './NodeResourceMeters';
 
 // v1 노드 상세 3분할 카드 (CPU / Memory / Pod Info) — 스택 바는 Capacity 기준
 // [Requested | Available(=Allocatable-Requested) | Reserved(=Capacity-Allocatable)] 3분할.
@@ -8,6 +9,7 @@ interface Props {
   // requested null = pods fetch failed — bars/rows read unknown, never a fabricated 0.
   cpuCapacity: number; cpuAllocatable: number; cpuRequest: number | null;
   memCapacityMiB: number; memAllocatableMiB: number; memRequestMiB: number | null;
+  cpuUsage?: number | null; memUsageMiB?: number | null; usageTimestamp?: string | null;
   podCIDR?: string; podCount: number; podRunning: number; podPending: number; podFailed: number;
   createdAt?: string;
 }
@@ -64,18 +66,18 @@ export default function NodeCapacityCards(raw: Props) {
   return (
     <div className="grid grid-cols-1 gap-3">
       <div className={card}>
-        <div className={h}>CPU</div>
+        <NodeResourceMeters resource="CPU" allocated={p.cpuRequest} usage={p.cpuUsage}
+          allocatable={p.cpuAllocatable} unit="cpu" usageTimestamp={p.usageTimestamp} />
         <Row label="Capacity" value={`${p.cpuCapacity.toFixed(1)} vCPU`} />
         <Row label="Allocatable" value={`${p.cpuAllocatable.toFixed(1)} (${p.cpuCapacity > 0 ? ((p.cpuAllocatable / p.cpuCapacity) * 100).toFixed(0) : 0}%)`} />
-        <Row label="Pod Requested" value={p.cpuRequest == null ? '—' : `${p.cpuRequest.toFixed(2)} (${p.cpuAllocatable > 0 ? ((p.cpuRequest / p.cpuAllocatable) * 100).toFixed(0) : 0}%)`} />
         <Row label="Available" value={cpuAvail == null ? '—' : `${cpuAvail.toFixed(2)} vCPU`} />
         <StackBar requested={p.cpuRequest} allocatable={p.cpuAllocatable} capacity={p.cpuCapacity} />
       </div>
       <div className={card}>
-        <div className={h}>Memory</div>
+        <NodeResourceMeters resource="Memory" allocated={p.memRequestMiB} usage={p.memUsageMiB}
+          allocatable={p.memAllocatableMiB} unit="memory" usageTimestamp={p.usageTimestamp} />
         <Row label="Capacity" value={gib(p.memCapacityMiB)} />
         <Row label="Allocatable" value={`${gib(p.memAllocatableMiB)} (${p.memCapacityMiB > 0 ? ((p.memAllocatableMiB / p.memCapacityMiB) * 100).toFixed(0) : 0}%)`} />
-        <Row label="Pod Requested" value={p.memRequestMiB == null ? '—' : `${gib(p.memRequestMiB)} (${p.memAllocatableMiB > 0 ? ((p.memRequestMiB / p.memAllocatableMiB) * 100).toFixed(0) : 0}%)`} />
         <Row label="Available" value={memAvail == null ? '—' : gib(memAvail)} />
         <StackBar requested={p.memRequestMiB} allocatable={p.memAllocatableMiB} capacity={p.memCapacityMiB} />
       </div>

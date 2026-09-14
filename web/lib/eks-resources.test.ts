@@ -6,6 +6,13 @@ describe('parseCpuCores', () => {
     expect(parseCpuCores('8')).toBe(8);
     expect(parseCpuCores('7910m')).toBeCloseTo(7.91);
     expect(parseCpuCores('250m')).toBeCloseTo(0.25);
+    expect(parseCpuCores('1001m')).toBe(1.001);
+  });
+  it('converts nanocores and microcores without rounding small usage to zero', () => {
+    expect(parseCpuCores('125000000n')).toBeCloseTo(0.125);
+    expect(parseCpuCores('125000u')).toBeCloseTo(0.125);
+    expect(parseCpuCores('1n')).toBe(1e-9);
+    expect(parseCpuCores('1u')).toBe(1e-6);
   });
   it('returns 0 for empty/null/garbage', () => {
     expect(parseCpuCores('')).toBe(0);
@@ -59,6 +66,31 @@ describe('aggregateNodeResources', () => {
     expect(n2.cpuRequest).toBe(0.5);
     expect(n2.podCount).toBe(1);
     expect(n2.cpuPct).toBe(25); // 0.5/2
+  });
+  it('carries each node usage sample independently of allocated requests', () => {
+    const agg = aggregateNodeResources([
+      { ...nodes[0], cpuUsage: 0.125, memUsage: 1536.5, usageTimestamp: '2026-09-13T12:00:00Z' },
+      { ...nodes[1], cpuUsage: 0, memUsage: null, usageTimestamp: '2026-09-13T11:59:45Z' },
+    ], pods);
+    expect(agg[0]).toMatchObject({
+      cpuUsage: 0.125, memUsage: 1536.5, usageTimestamp: '2026-09-13T12:00:00Z',
+      cpuRequest: 2, cpuPct: 50, memRequest: 4000, memPct: 50,
+      diskRequest: 10000, diskPct: 50, podCount: 2,
+    });
+    expect(agg[1]).toMatchObject({
+      cpuUsage: 0, memUsage: null, usageTimestamp: '2026-09-13T11:59:45Z',
+      cpuRequest: 0.5, memRequest: 1000,
+    });
+  });
+  it('keeps missing usage null, including nodes without scheduled pods', () => {
+    const agg = aggregateNodeResources(nodes, []);
+    expect(agg).toHaveLength(2);
+    for (const row of agg) {
+      expect(row).toMatchObject({
+        cpuUsage: null, memUsage: null, usageTimestamp: null,
+        cpuRequest: 0, memRequest: 0, podCount: 0,
+      });
+    }
   });
   it('sums per-node disk requests, carries instanceType + diskAllocatable, computes diskPct', () => {
     const agg = aggregateNodeResources(nodes, pods);

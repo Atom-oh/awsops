@@ -1,28 +1,27 @@
-# Tests Module
+# Repository Tests
 
-## Role
-Bash-based structure/hook test suite. Separate from the v2 app's own tests — `web/`'s vitest,
-`agent/`'s pytest/unittest — this validates repo-wide tooling/structure contracts.
+Read root [CLAUDE.md](../CLAUDE.md) and
+[BASELINE.md](../docs/decisions/BASELINE.md) for policy. These tests cover repo
+hooks, structure, and review tooling; web Vitest and agent/worker pytest have
+separate entry points.
 
-## Layout
-| Path | Covers | Runner |
-|------|--------|--------|
-| `tests/hooks/test-*.sh` | `.claude/hooks/` hook script behavior, secret patterns | `bash tests/run-all.sh` |
-| `tests/structure/test-*.sh` | Agent contracts, PR review workflow, Steampipe/ExternalId terraform wiring | `bash tests/run-all.sh` |
-| `tests/fixtures/` | Secret samples, false-positive samples | Loaded by hook/secret tests |
+From the repository root:
 
-`tests/run-all.sh` also drives `agent/`'s Python unittest (dark-path loop, account logic, etc.)
-alongside the hook/structure tests above.
-
-## Running
 ```bash
-bash tests/run-all.sh    # everything (TAP format: hooks + structure + agent)
+bash tests/run-all.sh
+python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
 ```
 
-## Rules
-- Output is TAP v13 — `ok N - desc` / `not ok N - desc`.
-- Adding a new hook requires a matching test file under `tests/hooks/` (`test-<hook>.sh`).
-- Secret-detection tests: add positive cases to `tests/fixtures/secret-samples.txt`, negative
-  cases to `false-positives.txt`.
-- Integration tests must never touch real Steampipe/AgentCore — use fixtures/mocks.
-- Never bypass a failing CI hook (`--no-verify` is forbidden) — fix the root cause.
+`run-all.sh` also invokes agent tests. Inspect its output and child exit codes;
+some historical shell assertions are advisory. A skipped check is not a pass.
+
+- Hook contracts live in `hooks/test-*.sh`; structure contracts in
+  `structure/test-*.sh`. New hooks need matching tests. Keep TAP-style output.
+- Secret-pattern tests need positive and false-positive fixtures. Fixtures may
+  record selected non-secret settings, never the full environment.
+- Review tooling uses fake CLIs for completion/failure, nonce-bound framing,
+  required coverage, retries, redaction, and ambient credential preflight.
+  Read `scripts/pr-review/test_*.py` for current cases; historical captured review
+  reports are roundtrip inputs, not approval or evidence about current code.
+- Tests here remain offline: use fixtures/mocks, not live AWS/AI/AgentCore calls.
+  Do not disable required checks or bypass hooks to obtain a passing result.

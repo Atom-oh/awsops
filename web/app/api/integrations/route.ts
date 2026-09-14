@@ -47,8 +47,9 @@ export async function POST(request: Request) {
   let body: Record<string, unknown>;
   try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
   catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'body must be an object' }, 400);
 
-  const v = validateIntegration(body as never);
+  const v = validateIntegration(body);
   if (!v.ok) return json({ error: 'invalid integration', detail: v.errors }, 400);
 
   const direction = String(body.direction);
@@ -95,8 +96,11 @@ export async function PUT(request: Request) {
   let body: Record<string, unknown>;
   try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
   catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'body must be an object' }, 400);
   if (body.op === 'enable' || body.op === 'disable') {
-    await setIntegrationEnabled(Number(body.id), body.op === 'enable'); // custom-only at the SQL level
+    if (typeof body.id !== 'number' || !Number.isSafeInteger(body.id) || body.id <= 0) return json({ error: 'positive integer id required' }, 400);
+    const changed = await setIntegrationEnabled(body.id, body.op === 'enable');
+    if (!changed) return json({ error: 'Integration is missing, built-in, or retired' }, 409);
     await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: String(body.op), objectType: 'integration', objectId: String(body.id) });
     return json({ ok: true }, 200);
   }

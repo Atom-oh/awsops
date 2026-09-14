@@ -1,98 +1,180 @@
-# AWSops v2 — Claude Context
+# AWSops v2
 
-> **The v2 architecture** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers) is live on `main`.
-> v1.8.0 (CDK/EC2/Steampipe, `/awsops` basePath) is **decommissioned per ADR-016 (2026-07-09)** — see `docs/runbooks/v1-decommission.md`. **Phase 5 (repo code cleanup — `src/`, `infra-cdk/`, etc.) is complete (2026-07-12)** — v1 app code is no longer in the tree (restore via git tag `v1-pre-code-removal-20260712`). **Phase 4.1–4.3 (CFN stack `AwsopsStack` deletion, ALB/SQS) is complete (2026-08-25).** **Phase 4.4/4.5 (orphan Lambdas, AgentCore gateways/Memory/Interpreter, deploy bucket) status is UNCONFIRMED as of 2026-08-27** — the 2026-08-25 "ALL CLEAR" run used a 19-name Lambda list later found to be missing 2 names (`awsops-istio-mcp`/`awsops-datasource-diag-mcp`, confirmed orphans via an `agent/lambda/create_targets.py` cross-check); whether they were live on 2026-08-25 is unverified. A re-run of `scripts/v2/teardown/v1-teardown-4.4-4.5.sh` with the corrected 21-name list is required before Phase 4 can be marked complete — see `docs/runbooks/v1-decommission.md` §Phase 4. Only Phase 6 (docs-site v1 content archival banners) remains open otherwise. v1 rules (especially the `/awsops` fetch prefix and the Steampipe pg Pool) **do not apply to v2.**
+AWS/Kubernetes operations dashboard and AI diagnosis. The integration branch for
+this checkout is `origin/main`; public samples have a separate release path. Read
+only relevant module instructions and implementation references.
 
-## Project Overview
-AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds v1's single-EC2 monolith as a **Terraform-based MSA**: private edge (CloudFront VPC Origin → internal ALB → Fargate), Cognito Lambda@Edge auth, Aurora persistent state, AgentCore section agents (live AWS queries), and an OOM-safe async worker tier.
+## Documentation authority
 
-## Commands (web/, day-to-day dev)
-All app code/tests live under `web/` — there is no root `package.json`. See `web/CLAUDE.md` for the `npm` build/test invocations.
+- Use exact existing ADR paths from the BASELINE index; do not derive filenames
+  from abbreviated titles. A missing path requires directory/index lookup, not
+  repeating the same failing read. ADR-005 is
+  `docs/decisions/005-aws-mutation-autonomy-frozen.md`.
+- `docs/decisions/BASELINE.md` is the current decision and gate register; linked
+  `docs/decisions/NNN-*.md` files supply rationale and dated amendments.
+- Source code, migrations and tests establish implemented behavior. If behavior
+  contradicts an accepted invariant, report the discrepancy; do not redefine the
+  invariant to match a bug.
+- `docs/architecture.md`, `docs/reference/` and `docs/runbooks/` describe current
+  implementation and operations. Plans, specs and historical reviews are design
+  evidence, not permission to enable features. Legacy ADR numbers require
+  `docs/decisions/ADR-MAPPING.md`; an unqualified number means a consolidated ADR.
+- New or rewritten developer/reviewer documentation is English-only. Convert a
+  maintained document as a whole when updating its language; retain its facts.
+  Existing untranslated bodies are a migration backlog, not a bilingual mandate.
+  Keep the multilingual
+  `docs-site` user guides and application translations. Do not require bilingual
+  developer docs or restore duplicate translations.
+- `CLAUDE.md` is the context source. Distill `AGENTS.md` with `/co-agent sync-context`
+  after editing it; Kiro steering references the same `AGENTS.md`. Keep scoped
+  instructions short and avoid duplicated policy, hand-maintained file counts,
+  transient release status and claims that a default-off feature is deployed.
+
+## Product boundaries
+
+| Area | Current rule |
+| --- | --- |
+| AWS mutation and autonomy | ADR-005 **FROZEN**: no automatic remediation, mutating tools or arbitrary BYO-MCP. Retained dark code is allowed; enabling it is a violation. Unfreezing requires a new ADR, multi-AI review and dated owner override. |
+| Secret-rotation restart | ADR-015 permits only `ecs:UpdateService(forceNewDeployment)` on the host web service after its own Aurora secret rotation, same image/task definition, one service ARN, secret-id fail-closed, default-off. |
+| Incident analysis | ADR-006 **GATED**, analysis-only: incident lifecycle, RCA write-back, K8sGPT. No autonomous mitigation. |
+| External data | ADR-007 governs curated external reads and writes separately from AWS-resource mutation. `integrations_write_enabled` is **GATED-OFF**, not FROZEN. `diagnosis_notify_enabled` is the narrowly governed SNS notification path. Neither classification authorizes broader writes. |
+| Curated MCP presets | ADR-017 **GATED**, vendor-hosted presets with fail-closed runtime tool allowlists; arbitrary `custom_mcp` and ClickHouse stdio embedding remain FROZEN. |
+| SG-rule activity | ADR-019 is an ordinary GATED read-only Athena query path, not another ADR-005 exception. |
+
+Operator-authorized deployments, account onboarding and teardown are operations
+outside the application's autonomy boundary (ADR-005, Consequences). They still require the task's
+approval scope, least privilege and a reviewed saved Terraform plan. Any AWS
+mutation reachable through the product UI, API or agent remains FROZEN regardless
+of who requests it, except for the exact ADR-015 path.
+
+## Architecture and code ownership
+
+- **Web:** `web/`, Next.js 14 App Router, standalone arm64, root `/` and `/api/*`.
+  Page components use default exports; preserve existing named shared-component
+  and helper contracts. No v1 `/awsops` basePath or JSON-file app state.
+- **Data:** Aurora via `web/lib/db.ts:getPool`. Schema is the frozen
+  `terraform/v2/foundation/data/schema.sql` **plus** ULID migrations under
+  `terraform/v2/foundation/migrations/`. Add migrations, not baseline edits.
+  A merged migration and its `-- since:` header are checksum-immutable.
+- **Edge:** CloudFront TLS -> VPC Origin HTTPS:443 -> internal ALB HTTPS:443 ->
+  web HTTP:3000. ALB ingress uses the CloudFront VPC Origins service SG.
+- **Auth:** Cognito closed signup and admin-only account recovery; Lambda@Edge
+  validates RS256/JWKS, issuer, audience and token use. `/login` uses the self-hosted
+  login BFF; Hosted UI PKCE is a fallback. The exact public-path allowlist lives in
+  `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl`; additions need review.
+  BFF data/billable routes use `verifyUser`, session revocation and ownership checks;
+  `/api/db`, `/api/stream` and separately authenticated `/api/incidents/webhook` are
+  the documented data-route exceptions. Login/signout/health are entry/health routes.
+- **Ownership:** immutable Cognito `sub`; `web/lib/admin.ts` defines admin authority.
+  `legacy_email_owner_match` defaults true during migration. Keep `matchesIdentity`
+  compatibility until an actual applied backfill confirms zero legacy owner rows.
+- **AI:** `agent/` and `agent/lambda/`, AgentCore Runtime plus section gateways.
+  SSM `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}` is runtime
+  configuration; no ECS `valueFrom` race. Live domain reads use MCP tools; the BFF
+  also has bounded service-specific reads. Models and gateway membership come from
+  configuration/catalog source, not prose inventories.
+- **Inventory:** `steampipe_enabled` gates the Steampipe FDW and batch sync into
+  Aurora. The Powerpipe CIS worker uses that FDW; the FinOps EBS rule instead
+  requires fresh persisted inventory evidence. Live
+  Steampipe SQL in `aws-data` and auto-collect handlers is deliberately disabled by
+  `steampipeAvailable()`. Those registered routing keys fall back to normal routing;
+  they are not active collectors. Never replace this hard-disable with a check of
+  `steampipe_enabled`. ADR-010/021 define partial/freshness semantics.
+- **Jobs:** heavy work uses ownership-checked domain routes (`/api/diagnosis`,
+  `/api/compliance/run`) -> `worker_jobs` + SQS -> dispatcher -> Step Functions ->
+  Lambda/Fargate worker. Generic `POST /api/jobs` accepts only the noop allowlist.
+  Workers record running/succeeded; catch handler and reaper reconcile failures.
+- **EKS:** the web-role Access Entry uses `AmazonEKSAdminViewPolicy`; tool-specific
+  roles may have different view policies. Registration does not authorize mutation.
+- **Terraform:** origin root `terraform/v2/foundation/`; public samples use
+  `terraform/foundation/`. Do not copy paths across repositories without checking.
+  v2 has no CDK deployment. Version requirements live in `backend.tf`/manifests.
+
+## Required implementation rules
+
+- No world-open ingress, unscoped IAM wildcard principals/actions, hardcoded secrets,
+  public ALB, Cognito self-signup or weakened signature/ownership verification.
+  Store credentials in Secrets Manager/SSM; do not log them. Identifiers such as
+  account IDs/ARNs are not credentials by themselves; use placeholders in examples.
+- Frozen substrate pointers: `terraform/v2/foundation/remediation.tf` and the narrow
+  restart exception in `secret-rotation.tf`; retain their default-off guards.
+- New large features default off and gate their resources. Default-off does not
+  imply the whole stack is free or that a fresh foundation plan has no changes.
+- Never use `terraform apply -auto-approve` on shared infrastructure. Review a saved
+  `tfplan`; the controller executes that exact plan. Keep SG `description` unchanged
+  to avoid replacement of attached groups.
+- Build web/agent/worker images for arm64. Set `HOSTNAME=0.0.0.0` in the web task's
+  runtime environment; image ENV alone is insufficient. Health path: `/api/health`.
+- Fargate worker Dockerfiles use `CMD`, not exec-form `ENTRYPOINT`, so Step Functions
+  command overrides do not append duplicated arguments.
+- ECS secret injection needs execution-role permissions. Application API access
+  belongs to the task role; do not confuse the two.
+- Preserve gateway canonical/`v2-` key fallback in `_resolve_gateway_key` and the
+  host-account `get_role_arn() -> None` behavior. They prevent silent wrong-gateway
+  routing and self-assumption of a target-only role.
+
+## Commands (repository root)
+
+```bash
+npm ci --prefix web
+(cd web && npm run build)
+(cd web && npx vitest run)
+(cd agent && python3 -m pytest test_agent.py -q)
+python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+bash scripts/v2/merge-verify.sh
+bash tests/run-all.sh
 ```
-npx vitest run lib/anfw.test.ts          # a single test file
-npx vitest run -t "test name substring"  # filter by test name
-npx tsc --noEmit -p .                    # typecheck — no npm script wraps this; run directly
+
+There is no root package.json and no web lint script. The merge runner isolates each
+Python test file; do not replace it with aggregate pytest discovery. Its Terraform
+checks are opportunistic/non-blocking; see `docs/v2-merge-verification.md` for actual
+CI stages. Database integration tests `scripts/v2/*.itest.mjs` use disposable Docker
+PostgreSQL, not live Aurora. Select checks relevant to the change and required CI.
+
+```bash
+make configure
+terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
+terraform -chdir=terraform/v2/foundation validate
+terraform -chdir=terraform/v2/foundation plan -out tfplan
+# Review the plan before the controller runs: terraform ... apply tfplan
+make migrate
+make deploy
+make agentcore
+make workers
 ```
-No lint script/config exists (no ESLint) — don't go looking for one. Integration tests for the migration/backfill scripts live outside `web/` as `scripts/v2/*.itest.mjs`, run directly with `node scripts/v2/<name>.itest.mjs` — each spins up a disposable `postgres:17` container via `sudo docker` (skips cleanly if Docker is unreachable), not the live Aurora instance.
 
-## Architecture (v2)
-- **IaC**: **Terraform** (CDK retired). Single root at `terraform/v2/foundation/`, **partial S3 backend** (`backend.hcl`, `awsops-v2-tfstate`, `use_lockfile` — no DynamoDB). TF ≥1.15, provider `~>6.0`.
-- **Edge**: CloudFront (TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** The ALB SG allows 443 only from the CloudFront-managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only causes a 504).
-- **Auth**: Cognito User Pool + **Lambda@Edge** (`us-east-1`, python3.12, viewer-request). **RS256 JWKS signature verification** + iss/aud/token_use + OAuth `state` + **PKCE public client** (no secret). Domain `a-ops-v2-auth-*` (`aws` is a reserved Cognito prefix). **Login = a self-hosted `/login` form** (ADR-002[legacy 042]) — the BFF's `POST /api/auth/login` calls the unsigned public `InitiateAuth(USER_PASSWORD_AUTH)` and issues `awsops_token` (id_token, 12h). Unauthenticated requests are redirected by the edge to `/login`; **the Hosted-UI PKCE flow (`/_callback`) is preserved as a dark fallback**. Signout deletes the cookie → `/login` (no round trip to the Hosted-UI `/logout`). **The public-path allowlist** (`edge-lambda/cognito_edge.py.tftpl`) is 11 exact matches (`/api/health`, `/api/auth/signout`, `/login`, `/api/auth/login`, `/icon.svg`, `/api/incidents/webhook` [ADR-013's machine-ingress alternate-auth carve-out, HMAC-SHA256/SNS-verified], and the PWA assets `/manifest.webmanifest`, `/apple-touch-icon.png`, `/icon-192.png`, `/icon-512.png`, `/icon-512-maskable.png` [iOS fetches these without the auth cookie — lockstep-verified by `web/app/manifest.test.ts`]) + 1 prefix (`/_next/static/*`) — adding any new path outside this list is itself review-worthy.
-- **Web**: **Next.js 14 thin-BFF** (`web/`, standalone **arm64**, **root path — no basePath**). Routes: `/api/health` (public), `/api/stream` (SSE), `/api/db` (Aurora ping), `/api/jobs` (+`/[id]`, P2 async jobs). Heavy work is never handled inline — it's **enqueued to the worker queue** (the generic `/api/jobs` accepts only allowlisted job types — `report`/`compliance` etc. go only through ownership-checked dedicated routes, ADR-009).
-- **Data**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-managed master secret). **Schema based on ADR-001[legacy 030] (baseline v9 frozen + migrations/*.sql — never hand-edit the frozen schema.sql, add a new ULID migration file)** + P2's `worker_jobs`. The app accesses it via **node-pg** (`web/lib/db.ts`). **A flag-gated Steampipe inventory sync exists (D1, `steampipe_enabled`)** — live queries are still handled by the AgentCore MCP Lambda tools.
-- **AI (AgentCore)**: Bedrock Sonnet 5 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime (Strands, reuses `agent/agent.py`) + **9 section gateways** (8 AWS-domain gateways `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway` + **external-obs**; external-obs is a routing section hosting external observability connectors [Prometheus·ClickHouse] — **ADR-004 amended 2026-06-24: 9 provisioned / 9 routed**, the chat key `observability` aliases to external-obs; Loki/Tempo/Mimir stay on monitoring) + Memory + Code Interpreter. **Design: 9 section agents + 1 incident orchestrator.** The fleet is deployed — all 9 gateways have READY MCP targets, **all 16 chat-section keys are registered** (completed 2026-08-02 by enabling container/iac; the fleet is defined in `ai.tf`'s `local.agent_lambdas` — 30 slices: 21 gated by `agentcore_enabled` + 9 gated by `integrations_enabled`). Chat also has **local web-BFF routes** (not via an AgentCore gateway): **aws-data** (LLM-generated Steampipe SQL, `web/lib/aws-data.ts`) + **6 auto-collect collectors** (idle-scan · eks-optimize · db-optimize · msk-optimize · trace-analyze · incident, `web/lib/collectors/` registry) — these 7 **keys remain selectable as routing targets**, but the moment one is selected, its own logic (SQL generation/execution, collector collection) **never runs at all**: `steampipeAvailable()` (`web/lib/aws-data.ts`) unconditionally returns `false` (ADR-001/010 prohibit any live Steampipe query path in v2 — live AWS reads go through the AgentCore MCP tools instead). All 7 callers fail-open on that `false`, emitting a single informational status frame and resetting the routing key to `ops` — it's not "only the Steampipe step is skipped while the rest of the aws-data/collector logic continues"; the aws-data/collector logic itself depends entirely on Steampipe, so from that point on none of that code runs at all (even a collector like `eks-optimize` that also touches CloudWatch gets its cluster list only via Steampipe, no exception). What happens to the request next is decided not by aws-data/collectors but by the same routing logic every other request goes through at that point (`resolveAgent`, inactive-section handling, and whether the `MULTI_ROUTE_SYNTHESIS_ENABLED` [default off] gate fans out to multiple domains) — it could resolve to the `ops` gateway alone, the product-help assistant fallback, or a multi-domain fan-out if that flag is on. The SELECT-only guard/200-row cap/`SQL_GEN_PROMPT` are retained as dark code. `steampipe_enabled` is a flag **exclusively for the batch inventory sync** — re-gating this path on it would reopen the prohibited path → 16 keys = 9 gateways + aws-data + 6 collectors. **Config source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
-- **Async workers (P2)**: web `POST /api/jobs` → `worker_jobs` (queued) + SQS → **ESM (kill-switch)** → dispatcher Lambda (idempotent on job_id) → **Step Functions Standard**'s `$.runtime` Choice → RunLambda (short) **or** `ecs:runTask.sync` Fargate (long/OOM-risk) → the worker itself records running/succeeded → on Catch the status_updater Lambda sets failed (SFN can't write to VPC Aurora) → a reaper (EventBridge, every 5 min) reconciles stale jobs.
-- **EKS onboarding**: multi-select in `configure.mjs` → `eks.tf` grants the web task role an **Access Entry + AmazonEKSAdminViewPolicy** (cluster-scoped). Manual cluster registration/lookup is live at `/eks` + `POST/DELETE /api/eks/[cluster]/register` (register/unregister, auth stored in Aurora); a separate CloudTrail-driven auto-registration path (see `eks_auto_register_enabled` below) observes out-of-band Access Entries independently of this UI.
+These deployment targets are separate operations, not an unconditional sequence.
+`make deploy` runs migrations before the arm64 build/ECR push/ECS rollout/health smoke.
+`make agentcore` requires Terraform apply **and** `make migrate` first; it does not
+ship MCP Lambda code (Terraform does). `make workers` publishes the worker image
+and requires worker infrastructure. See `make help` and the deployment runbook.
 
-## Status (by phase)
-| Phase | Contents | Status |
-|------|------|------|
-| P1a | S3 backend + foundation + private edge (CloudFront VPC Origin → internal ALB → Fargate) | ✅ GREEN |
-| P1b | Cognito + Lambda@Edge auth | ✅ |
-| P1c | Aurora Serverless v2 (schema based on ADR-001[legacy 030] — baseline v9 frozen + migrations/*.sql) | ✅ |
-| P1d | web thin-BFF + dual-tier ECR + `make deploy` + hardened RS256 auth | ✅ |
-| P1e | EKS onboarding (Access Entry + AdminView policy) | ✅ |
-| P1f | AgentCore idempotent provisioner (9 GW + Memory + Interpreter + Runtime) | ✅ |
-| P2 | Async worker backbone (SQS+SFN+Lambda/Fargate, `worker_jobs`) | ✅ W9 GREEN |
-| **P3** | Agent fleet + chat UI + EKS lookup (read-only). ~~OpenCost install button (legacy ADR-029 mutating → ADR-005 FROZEN)~~ → **only the install button was dropped — the read-only cost panel/bundle download is live** | 🟡 Partial (read-only part deployed; mutating part reversed) |
-| **P4** | Incident/ChatOps lifecycle + DevOps Agent federation | 🔜 Backlog |
+## Review and completion
 
-Live environment: account `180294183052`, domain `awsops-v2.atomai.click`, reusing mgmt-vpc (`vpc-06801144309cad7dc`, 10.254.0.0/16).
+Review the latest PR HEAD and its diff against the intended base. Read the relevant
+base files and account for additions/removals in the patch before declaring a symbol,
+permission, migration or feature missing. Use current decisions, not retired plans,
+old test descriptions or a different repository's paths. Cite a concrete changed
+behavior and evidence for each finding; disagreement in documentation is not proof
+that the implementation violates policy. Documentation can itself have a serious
+operational/security defect; calibrate severity to its demonstrated effect.
 
-## Required Rules (v2)
+Fix verified Critical/Major findings, run relevant tests and required CI, push and
+obtain a fresh AI review. Missing, failed, truncated or incomplete review is not a
+clean review. Merge only when the latest HEAD is reviewed, no Critical/Major remains,
+required checks pass and the base/integration path is correct. Do not bypass checks.
 
-### Paths / Web
-- **Serves at the root path (`/`) — no basePath.** v2 uses a dedicated domain. The v1 `/awsops/api/*` prefix rule **does not apply** → fetch uses `/api/*`.
-- web is a **thin-BFF**: heavy/long/OOM-risk work must be enqueued to the worker queue, never executed directly. The generic `POST /api/jobs` accepts **only allowlisted job types** (the `noop` family) — domain jobs like `report`/`compliance` must go through their dedicated ownership-checking routes (`/api/diagnosis`, `/api/compliance/run`) instead (IDOR prevention, PR #195/ADR-009).
-- All components use `export default`, targeting a production (standalone) build.
+Changelog: one bullet per feature/category, amend net behavior instead of adding
+review-round or PR-number entries. No new bullet is required when an existing one
+already describes the change. Keep release provenance and version ordering intact;
+`web/lib/changelog.ts` falls back per whole version, not per bullet. The maintained
+CHANGELOG is now English-only, so Korean readers receive the full English version
+body; legacy bilingual input is still supported by the parser.
 
-### Terraform Discipline
-- Make changes in `terraform/v2/foundation/`. **`-auto-approve` is forbidden on shared infrastructure** — a saved tfplan (`apply tfplan`) is what passes the automated gate. Long applies (CloudFront, SG) are **run by the controller** (subagents idle-timeout).
-- New large features are gated by a **count/flag**: `agentcore_enabled`, `workers_enabled`, `steampipe_enabled` (inventory sync), `hybrid_routing_enabled` (ADR-003[legacy 038] chat routing), `finops_baseline_enabled` (ADR-020 FinOps baseline-recommendations engine) — all default to false → `plan` = No changes, $0. Default off before toggling.
-- **SG `description` is immutable** — changing it makes the SG replace hang on the ALB dependency. Change ingress in-place; leave the description untouched.
-- **arm64 is required** (web/agent/worker images all use `buildx --platform linux/arm64`).
-
-### Data / Config
-- App state lives in **Aurora** (node-pg). Not `data/*.json` (the v1 pattern). Schema = `terraform/v2/foundation/data/schema.sql` + `schema_migrations`.
-- ECS `secrets` valueFrom (Aurora secret) requires **execution-role** permissions (not the task role) — otherwise `ResourceInitializationError`.
-- AgentCore config's **source of truth is SSM** (provision.py writes it → the web BFF reads it at runtime). No valueFrom (avoids a race).
-
-### Containers / Deployment
-- **When deploying a Next.js standalone build as a container, set `HOSTNAME=0.0.0.0` as a runtime env** (task-def `environment`) — an image-level ENV is not enough (ECS overwrites HOSTNAME with the ENI IP, causing an unbound 0.0.0.0/loopback bind and healthCheck UNHEALTHY).
-- **Fargate worker Dockerfiles must use `CMD` (never ENTRYPOINT)** — SFN's `containerOverrides.command` replaces CMD, but it appends to an exec-form ENTRYPOINT, doubling argv and breaking argparse.
-- The container and TG health-check paths must match the app's (`/api/health`) — a mismatch causes a circuit-breaker loop.
-
-### Operational Notes
-- **Concurrent sessions frequently switch branches** (docs-site deploys, etc). Check `git branch --show-current` before working. Uncommitted changes can be lost to an external reset/checkout, so **commit small units immediately**.
-- **`CHANGELOG.md` entries**: one bullet per feature per category, describing net user-visible behavior — never a PR number, CI-review-round number, or iteration count (those belong in git history/PR threads). A fix that supersedes an existing `[Unreleased]` entry amends that entry in place; it does not append a new one. This applies to both the `# English` and `# 한국어` sections (kept 1:1 — `web/lib/changelog.ts` falls back to the English body when a version's Korean section is missing). A cross-feature infra/schema bullet (e.g. a shared migration list) is exempt from the one-bullet-per-feature part. For review: don't flag a PR for not adding a new bullet/PR-number/round-number when an existing feature-level entry already covers the net behavior — but DO flag a PR that reintroduces a PR/round number or iteration count, or that appends a duplicate bullet instead of amending the existing one.
-
-## Gated files worth knowing
-- `remediation.tf` — remediation substrate (`remediation_enabled`·`integrations_write_enabled`) — **ADR-005 FROZEN, do-not-enable**
-- `secret-rotation.tf` — web self-restart on Aurora secret rotation (`secret_rotation_redeploy_enabled`) — **the sole ADR-015 owner-override exception**, default-off
-
-## Deployment
-`/deploy`, or the `make` targets. **`make migrate` is required before `make agentcore`** — agentcore doesn't run it, and skipping it makes `execute_sql`/inventory-read fail Data API auth (`docs/runbooks/agent-sql-reader.md`).
-
-## Known Issues / Lessons (key reusable knowledge)
-- **Edge 504→200**: CF→ALB is TLS end-to-end (VPC Origin `https-only` + origin domain = public FQDN so SNI matches), the ALB is HTTPS:443 + regional ACM, and the ALB SG allows 443 from `CloudFront-VPCOrigins-Service-SG`. The VPC Origin protocol can't be changed in-place → use `create_before_destroy` + `-replace`.
-- **Aurora major upgrade (15→17.9)**: in `variables.tf`, pin the exact minor (`17.9`) and apply first with `allow_major_version_upgrade` + `apply_immediately` (the upgrade) → **then** add `lifecycle{ignore_changes=[engine_version]}` to both the cluster and the instance (to absorb future automatic minor upgrades). Pinning just "17" misbehaves on `aws_rds_cluster`.
-- **SG description is immutable** (see Terraform Discipline above) / **ECS secrets need the execution-role** / **`HOSTNAME=0.0.0.0` runtime env** / **Fargate worker uses CMD (never ENTRYPOINT)**.
-- **AgentCore**: Gateway Targets go through boto3 (`mcp.lambda` + `credentialProviderConfigurations`); if a freshly created GW isn't READY yet, the first target creation throws `ValidationException` — resolved by re-running (the provisioner is idempotent). Code Interpreter/Memory names allow only underscores, and Memory's `eventExpiryDuration` must be ≤365.
-- **SSM reserved words**: paths starting with `/aws...` are rejected as a reserved prefix → use `/ops/${project}/...`.
-- **Agent cross-account self-assume trap**: v2 is single-account, but if the chat picks the host account (`180294183052`), `agent.py` forces `target_account_id=<host>` → tools then try to self-assume `arn:...:role/AWSopsReadOnlyRole` (which only exists in v1 *target* accounts, not the host) → AccessDenied, which the agent **misdiagnoses** as "cross-account blocked." Fix: `cross_account.get_role_arn()` returns `None` when the target is the host (use the exec role directly), and `agent.py`'s `effective_account_id()` treats the host like `__all__` (blank, defense-in-depth). Host detection = the `AWSOPS_HOST_ACCOUNT_ID` env, falling back to a cached STS `GetCallerIdentity`. The path for assuming a genuinely *different* account is unchanged. No impact on v1 (a separate function, `awsops-*-mcp` py3.12, vs v2's `awsops-v2-agent-*` py3.11).
-
-## ADRs / Decisions
-**Current source of truth for decisions = [`docs/decisions/BASELINE.md`](docs/decisions/BASELINE.md)** — the north star (WA 6-pillar goals) + invariants + gate/freeze register + an index of **21 consolidated ADRs** (`docs/decisions/0NN-*.md`). Start there.
-- The bodies of the old ADRs 001–046 are **no longer in the tree** — preserved at git tag `adr-legacy-2026-06-22`, mapping in `docs/decisions/ADR-MAPPING.md`. **Do not read the old bodies (via the tag) without an explicit request.**
-- **AWS resource mutation and autonomy = FROZEN (ADR-005, do-not-enable).** Relaxing this is *not* a docs cleanup — it requires a new ADR + multi-AI panel + a dated owner-override, as a separate product decision. External DATA read/write is governed separately (ADR-007).
-  - **First exception: ADR-015** (operational self-healing) — allowed by Junseok Oh's owner-override (2026-07-01) for **exactly one** action: `ecs:UpdateService force-new-deployment` on its own web service (a restart — image/task-def unchanged, not a code deploy), limited to Aurora secret-rotation events, one IAM ARN, secret-id fail-closed, default-off. Everything else under ADR-005 (code deploys, remediation, mutating tools) remains FROZEN.
-  - **Not a second exception:** ADR-019's SG-rules Athena activity pipeline (`sg_rule_activity_enabled`, `AWSopsSgRuleAthenaRole`) does NOT relax ADR-005 — ADR-019 §Decision explicitly concludes it needs "neither an ADR-005 relaxation nor an ADR-007-tier classification," and registers it in BASELINE §2 as an **ordinary GATED** entry, not an owner-override carve-out. Don't cite it alongside ADR-015 as a FROZEN exception.
-- A new ADR = highest number + 1 (currently **021**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules in `docs/decisions/CLAUDE.md`.
-
-
-## Implementation References
-<!-- AUTO-MANAGED:references — managed by the /project-init sync; do not hand-edit inside the markers. -->
-Per-layer implementation references live under `docs/reference/` (index: [README](docs/reference/README.md)) — [01 Edge Network](docs/reference/01-edge-network.md) · [02 Auth](docs/reference/02-auth.md) · [03 Aurora Data](docs/reference/03-data-aurora.md) · [04 Web BFF](docs/reference/04-web-bff.md) · [05 AgentCore](docs/reference/05-agentcore.md) · [06 Workers](docs/reference/06-workers.md) · [07 EKS](docs/reference/07-eks.md).
-Full overview: [docs/architecture.md](docs/architecture.md) (bilingual + mermaid) · New joiners: [docs/onboarding.md](docs/onboarding.md) · Full API index (99 routes): [docs/api-reference.md](docs/api-reference.md) · Operations: [docs/runbooks/](docs/runbooks/).
+<!-- AUTO-MANAGED:references — managed by project-init sync; do not hand-edit this region. -->
+Implementation reference index: [docs/reference/README.md](docs/reference/README.md).
 <!-- /AUTO-MANAGED:references -->
+
+Start with `docs/README.md` for documentation scope and navigation. v1 code is retained
+in git history (`v1-pre-code-removal-20260712`), not a source of v2 rules. Teardown
+status belongs in its dated runbook, not in every context file.

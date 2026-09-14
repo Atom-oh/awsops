@@ -41,6 +41,7 @@ export interface AgentWithSkills {
   // ADR-039 frontier-agent fields — optional so existing call sites/fixtures stay valid;
   // listAgentsWithSkills always populates them (with defaults) from the new columns.
   agentType?: string; gateways?: string[]; responseLanguage?: string | null;
+  toolPolicyConfigured?: boolean; // includes disabled bindings so revocation cannot restore unrestricted mode
 }
 
 /** SHA-256 over canonical JSON of integrity-relevant fields. Order-independent on toolAllowlist. */
@@ -102,12 +103,29 @@ export async function upsertAgent(a: AgentInput): Promise<number> {
   return rows[0].id;
 }
 
-export async function attachSkill(agentId: number, skillId: number, ord = 0): Promise<void> {
-  await getPool().query(
-    `INSERT INTO agent_skills (agent_id, skill_id, ord) VALUES ($1,$2,$3)
-     ON CONFLICT (agent_id, skill_id) DO UPDATE SET ord = EXCLUDED.ord`,
-    [agentId, skillId, ord],
-  );
+export async function attachSkill(agentId: number, skillId: number): Promise<number> {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+    // Separate statements matter: after waiting for the parent-row lock, MAX sees
+    // the preceding attachment's committed row. Include disabled skill bindings.
+    const parent = await client.query("SELECT id FROM agents WHERE id = $1 AND tier = 'custom' FOR UPDATE", [agentId]);
+    if (!parent.rows.length) throw new Error('Custom agent not found');
+    const { rows } = await client.query(
+      `INSERT INTO agent_skills (agent_id, skill_id, ord)
+       SELECT $1, $2, COALESCE(MAX(ord), -1) + 1 FROM agent_skills WHERE agent_id = $1
+       ON CONFLICT (agent_id, skill_id) DO UPDATE SET ord = agent_skills.ord
+       RETURNING ord`,
+      [agentId, skillId],
+    );
+    await client.query('COMMIT');
+    return Number(rows[0].ord);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function setEnabled(kind: 'skill' | 'agent', id: number, enabled: boolean): Promise<void> {
@@ -132,13 +150,14 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
   const { rows } = await getPool().query(
     `SELECT a.id, a.name, a.description, a.persona, a.gateway, a.tier, a.version, a.enabled,
             a.routing_keywords, a.agent_type, a.gateways, a.response_language,
+            COALESCE(bool_or(jsonb_array_length(s.tool_allowlist) > 0), false) AS tool_policy_configured,
             COALESCE(json_agg(json_build_object(
               'name', s.name, 'instructions', s.instructions, 'content_hash', s.content_hash,
               'ord', ags.ord, 'tool_allowlist', s.tool_allowlist
-            ) ORDER BY ags.ord) FILTER (WHERE s.id IS NOT NULL), '[]') AS skills
+             ) ORDER BY ags.ord) FILTER (WHERE s.id IS NOT NULL AND s.enabled = true), '[]') AS skills
      FROM agents a
      LEFT JOIN agent_skills ags ON ags.agent_id = a.id
-     LEFT JOIN skills s ON s.id = ags.skill_id AND s.enabled = true
+      LEFT JOIN skills s ON s.id = ags.skill_id
      ${where}
      GROUP BY a.id
      ORDER BY a.name`,
@@ -151,6 +170,7 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
     agentType: (r.agent_type as string) ?? 'generic',
     gateways: (r.gateways as string[]) ?? [],
     responseLanguage: (r.response_language as string) ?? null,
+    toolPolicyConfigured: r.tool_policy_configured === true,
     skills: ((r.skills as Array<Record<string, unknown>>) ?? []).map((sk) => ({
       name: sk.name as string, instructions: sk.instructions as string,
       contentHash: sk.content_hash as string, ord: sk.ord as number,
@@ -162,9 +182,8 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
 /**
  * ADR-031/ADR-039 fail-closed revocation. Authoritative (un-cached) check that a custom agent
  * is still enabled, used on the chat hot path BEFORE routing to a keyword-picked custom agent.
- * The catalog-source cache (30s TTL) can let `pickCustomAgent` *propose* a just-disabled agent;
- * this re-check reads Aurora (the single source of truth) on whichever Fargate task serves the
- * request, so a disable is effective immediately on every instance. Returns false (deny, never
+ * This re-check also catches a disable committed after the fresh catalog read on whichever
+ * Fargate task serves the request. Returns false (deny, never
  * grant) for missing / disabled / builtin rows and on ANY query error.
  */
 export async function isCustomAgentEnabled(name: string): Promise<boolean> {

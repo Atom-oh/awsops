@@ -16,7 +16,7 @@
 //   → `terraform -chdir=terraform/v2/foundation output -raw …` (mirrors migrate.mjs).
 // The DSN/credentials are NEVER printed. --dry-run parses + counts with NO DB connection.
 //
-// Spec:  docs/superpowers/specs/2026-06-12-v1-to-v2-aurora-backfill-design.md
+// Spec:  docs/history/specs/2026-06-12-v1-to-v2-aurora-backfill-design.md
 // Mapping is in backfill-core.mjs (derived from src/lib/db/*-writer.ts).
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';

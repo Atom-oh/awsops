@@ -4,11 +4,13 @@ import { createHash } from 'crypto';
 const verifyUser = vi.fn();
 const invokeAgent = vi.fn();
 const pickGateway = vi.fn();
-const getEnabledCustomAgents = vi.fn();
+const listAgentsWithSkills = vi.fn();
 const pickCustomAgent = vi.fn();
 const resolveAgent = vi.fn();
 const isCustomAgentEnabled = vi.fn();
 const recordCustomAgentTrace = vi.fn();
+const getAgentSpace = vi.fn();
+vi.mock('@/lib/agent-space', () => ({ getAgentSpace: (...a: unknown[]) => getAgentSpace(...a) }));
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 // container/iac가 2026-08-02 활성화됨(게이트웨이+READY 타깃) — 이 파일의 🔒/degrade 픽스처는
 // 'container 비활성'을 전제하므로 여기서만 container를 비활성으로 강제해, 미래의 비활성
@@ -67,12 +69,14 @@ vi.mock('@/lib/classifier', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/classifier')>()),
   classifyPrompt: (...a: unknown[]) => classifyPrompt(...a),
 }));
-vi.mock('@/lib/catalog-source', () => ({ getEnabledCustomAgents: (...a: unknown[]) => getEnabledCustomAgents(...a) }));
 vi.mock('@/lib/agent-resolver', () => ({
   pickCustomAgent: (...a: unknown[]) => pickCustomAgent(...a),
   resolveAgent: (...a: unknown[]) => resolveAgent(...a),
 }));
-vi.mock('@/lib/catalog', () => ({ isCustomAgentEnabled: (...a: unknown[]) => isCustomAgentEnabled(...a) }));
+vi.mock('@/lib/catalog', () => ({
+  isCustomAgentEnabled: (...a: unknown[]) => isCustomAgentEnabled(...a),
+  listAgentsWithSkills: (...a: unknown[]) => listAgentsWithSkills(...a),
+}));
 const getEnabledIntegrations = vi.fn();
 vi.mock('@/lib/integrations', () => ({ getEnabledIntegrations: (...a: unknown[]) => getEnabledIntegrations(...a) }));
 vi.mock('@/lib/trace', () => ({
@@ -110,6 +114,11 @@ vi.mock('@/lib/assistant', () => ({
   isProductHelpIntent: (...a: unknown[]) => isProductHelpIntent(...a),
 }));
 
+function catalogAgent(name: string) {
+  return { id: 1, name, tier: 'custom', enabled: true, gateway: 'security', persona: 'Private custom persona',
+    description: 'd', version: 1, routingKeywords: ['custom-run'], skills: [] };
+}
+
 function req(body: unknown, cookie = 'awsops_token=t', signal?: AbortSignal) {
   return new Request('http://x/api/chat', {
     method: 'POST',
@@ -131,17 +140,19 @@ async function readStream(res: Response): Promise<string> {
 }
 
 beforeEach(() => {
+  process.env.AURORA_ENDPOINT = 'fixture';
+  getAgentSpace.mockReset().mockResolvedValue(null);
   verifyUser.mockReset();
   invokeAgent.mockReset();
   pickGateway.mockReset();
-  getEnabledCustomAgents.mockReset();
+  listAgentsWithSkills.mockReset();
   pickCustomAgent.mockReset();
   resolveAgent.mockReset();
   isCustomAgentEnabled.mockReset();
   getEnabledIntegrations.mockReset();
   recordCustomAgentTrace.mockReset();
   // default to the built-in no-op shape
-  getEnabledCustomAgents.mockResolvedValue([]);
+  listAgentsWithSkills.mockResolvedValue([]);
   pickCustomAgent.mockReturnValue(null);
   isCustomAgentEnabled.mockResolvedValue(true); // ADR-039: authoritative re-check passes by default
   getEnabledIntegrations.mockResolvedValue([]); // ADR-039 P2: no integrations by default
@@ -167,9 +178,63 @@ beforeEach(() => {
   streamDetailedGenerator = null;
 });
 
-afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; });
+afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; delete process.env.AURORA_ENDPOINT; });
 
 describe('POST /api/chat', () => {
+  for (const failure of ['space', 'agents'] as const) {
+    it.each(['automatic', 'builtin-pin', 'custom-pin', 'help'])(`keeps the %s path honest when ${failure} cannot be read`, async (path) => {
+      process.env.HYBRID_ROUTING_ENABLED = 'true';
+      verifyUser.mockResolvedValue({ sub: 'u' });
+      const real = await vi.importActual<typeof import('@/lib/agent-resolver')>('@/lib/agent-resolver');
+      pickCustomAgent.mockImplementation(real.pickCustomAgent);
+      resolveAgent.mockImplementation(real.resolveAgent);
+      listAgentsWithSkills.mockResolvedValue([catalogAgent('sre-2')]);
+      if (failure === 'space') getAgentSpace.mockRejectedValue(new Error('private DB error'));
+      else listAgentsWithSkills.mockRejectedValue(new Error('private DB error'));
+      classifyRoute.mockResolvedValue({ primary: 'cost', ranked: [{ key: 'cost', score: 1, active: true }], method: path === 'builtin-pin' ? 'pin' : 'regex' });
+      isProductHelpIntent.mockReturnValue(path === 'help');
+      invokeAgent.mockResolvedValue('Built-in answer');
+      const { POST } = await import('./route');
+      const res = await POST(req({ prompt: 'custom-run cost question', lang: 'en',
+        section: path === 'custom-pin' ? 'sre-2' : path === 'builtin-pin' ? 'cost' : undefined }));
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).not.toContain('private DB error');
+      expect(body).not.toContain('Private custom persona');
+      expect(getAgentSpace).toHaveBeenCalledTimes(1);
+      expect(listAgentsWithSkills).toHaveBeenCalledTimes(failure === 'space' ? 0 : 1);
+      if (path === 'custom-pin') {
+        expect(invokeAgent).not.toHaveBeenCalled();
+        expect(body).toContain('temporarily unavailable');
+      } else if (path === 'help') {
+        expect(invokeAgent).not.toHaveBeenCalled();
+        expect(assistantAnswer).toHaveBeenCalledTimes(1);
+        expect(body).toContain('AWSops Assistant');
+      } else {
+        expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'cost', systemPromptOverride: undefined }));
+        expect(body).toContain('"tier":"builtin"');
+        expect(body).toContain('"agentName":"cost"');
+        if (path === 'automatic') {
+          expect(body).toContain('using built-in routing');
+          expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({ assistantContent: expect.stringContaining('using built-in routing') }));
+        }
+      }
+    });
+  }
+  it('preserves Phase-1 custom routing after a confirmed no-row policy read', async () => {
+    process.env.AURORA_ENDPOINT = 'fixture';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    listAgentsWithSkills.mockResolvedValue([catalogAgent('legacy-agent')]);
+    pickCustomAgent.mockReturnValue('legacy-agent');
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', agentName: 'legacy-agent', skillHashes: [] });
+    invokeAgent.mockResolvedValue('Allowed legacy answer');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'Inspect IAM users' }));
+    expect(await res.text()).toContain('Allowed legacy answer');
+    expect(res.status).toBe(200);
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+  });
   it('401 when unauthenticated', async () => {
     verifyUser.mockResolvedValue(null);
     const { POST } = await import('./route');
@@ -220,20 +285,24 @@ describe('POST /api/chat', () => {
     const body = await readStream(res);
     expect(body).toContain('"error"');
   });
-  it('resolves a custom agent and forwards systemPromptOverride', async () => {
+  it('forwards the custom prompt and discloses a zero-tool policy in live and saved replies', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     pickGateway.mockReturnValue('security');
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
+    listAgentsWithSkills.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
     pickCustomAgent.mockReturnValue('compliance');
-    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', agentVersion: 2, skillHashes: ['h1'] });
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', agentVersion: 2, skillHashes: ['h1'], toolAllowlist: [] });
     invokeAgent.mockResolvedValue('ok');
     const { POST } = await import('./route');
-    const res = await POST(req({ prompt: 'cis check', section: 'security', sessionId: 's'.repeat(36) }));
+    const res = await POST(req({ prompt: 'cis check', lang: 'en', section: 'security', sessionId: 's'.repeat(36) }));
     expect(res.status).toBe(200);
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ systemPromptOverride: 'OVR', agentName: 'compliance' }));
     const body = await readStream(res);
     expect(body).toContain('"agentName":"compliance"');
+    expect(body).toContain('configured tool policy permits zero tools');
+    expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({ assistantContent: expect.stringContaining('configured tool policy permits zero tools') }));
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ toolAllowlist: [] }));
   });
+
   it('forwards each agent delta as its own SSE frame as it arrives (real streaming, not buffered-then-rechunked)', async () => {
     // Regression: the route used to await the FULL answer (invokeAgentDetailed) before writing
     // anything, then re-split it into word chunks and enqueue them all in one tick — the user sees
@@ -378,7 +447,7 @@ describe('hybrid routing (ADR-038)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     classifyRoute.mockResolvedValue({ primary: 'security', ranked: [{ key: 'security', score: 1, active: true }], method: 'pin' });
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]);
+    listAgentsWithSkills.mockResolvedValue([catalogAgent('compliance')]);
     pickCustomAgent.mockReturnValue('compliance'); // custom WOULD match...
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
     invokeAgent.mockResolvedValue('ok');
@@ -408,7 +477,7 @@ describe('hybrid routing (ADR-038)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     classifyRoute.mockResolvedValue({ primary: 'security', ranked: [{ key: 'security', score: 1, active: true }], method: 'regex' });
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]);
+    listAgentsWithSkills.mockResolvedValue([catalogAgent('compliance')]);
     pickCustomAgent.mockReturnValue('compliance');
     resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', agentName: 'compliance', skillHashes: ['h'] });
     invokeAgent.mockResolvedValue('ok');
@@ -421,7 +490,7 @@ describe('hybrid routing (ADR-038)', () => {
     delete process.env.HYBRID_ROUTING_ENABLED;            // hybrid off → gateway = pickGateway
     verifyUser.mockResolvedValue({ sub: 'u' });
     pickGateway.mockReturnValue('security');
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]); // 30s-stale cache still lists it
+    listAgentsWithSkills.mockResolvedValue([catalogAgent('compliance')]); // disable raced the fresh catalog read
     pickCustomAgent.mockReturnValue('compliance');
     isCustomAgentEnabled.mockResolvedValue(false);        // authoritative Aurora check: revoked
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
@@ -539,7 +608,7 @@ describe('ADR-031 Phase 2 — per-account space wiring', () => {
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'status', sessionId: 's'.repeat(36) })));
     // account resolves to the single-account default ('self') with no HOST_ACCOUNT_ID set.
-    expect(getEnabledCustomAgents).toHaveBeenCalledWith('self');
+    expect(getAgentSpace).toHaveBeenCalledWith('self');
     // no AURORA_ENDPOINT ⇒ getAgentSpace returns null ⇒ resolver gets null (Phase-1 behavior).
     expect(resolveAgent).toHaveBeenCalledWith('ops', expect.anything(), null, [], []);
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'self' }));
@@ -561,7 +630,7 @@ describe('ADR-031 Phase 2 — per-account space wiring', () => {
   it('custom path surfaces spaceVersion in meta and the trace (when the resolver carries one)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     pickGateway.mockReturnValue('security');
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
+    listAgentsWithSkills.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
     pickCustomAgent.mockReturnValue('compliance');
     resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', agentVersion: 2, skillHashes: ['h1'], spaceVersion: 7 });
     invokeAgent.mockResolvedValue('ok');
@@ -747,7 +816,7 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     classifyRoute.mockResolvedValue(multiRoute);
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
+    listAgentsWithSkills.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
     pickCustomAgent.mockReturnValue('compliance');
     resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', skillHashes: [] });
     invokeAgent.mockResolvedValue('custom answer');
@@ -798,7 +867,7 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
-    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: [], skills: [] }]);
+    listAgentsWithSkills.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: [], skills: [] }]);
     isCustomAgentEnabled.mockResolvedValue(true);
     // classifier would pick something else, and there is no keyword match — the pin must still win
     classifyRoute.mockResolvedValue({ primary: 'network', ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }], method: 'llm', multiDomain: true, selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }] });
@@ -816,7 +885,7 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
   it('explicit pin to a DISABLED/absent custom agent ⇒ honest message, no silent fallback (ADR-044 §2)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
-    getEnabledCustomAgents.mockResolvedValue([]); // 'ghost' is not an enabled agent in this space
+    listAgentsWithSkills.mockResolvedValue([]); // 'ghost' is not an enabled agent in this space
     const { POST } = await import('./route');
     const body = await readStream(await POST(req({ prompt: '아무거나', section: 'ghost', sessionId: 's'.repeat(36) })));
     expect(invokeAgent).not.toHaveBeenCalled();      // no silent fallback to keyword/classifier
@@ -1097,4 +1166,3 @@ describe('chat sessionId — bound to the caller, never client-trusted', () => {
     expect(used2.startsWith('awsops-u-5-')).toBe(true);
   });
 });
-

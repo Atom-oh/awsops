@@ -20,6 +20,7 @@ import CostPanel from './CostPanel';
 import NodeEniSection from '@/components/eks/NodeEniSection';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import NodeCapacityCards from '@/components/eks/NodeCapacityCards';
+import NodeCapacityList from '@/components/eks/NodeCapacityList';
 import NodePodsSection from '@/components/eks/NodePodsSection';
 import EksDiagnosis from '@/components/eks/EksDiagnosis';
 
@@ -197,7 +198,7 @@ export default function EksClusterPage() {
           setNodePods(pd.rows);
           setNodeAgg(aggregateNodeResources((d.rows ?? []) as NodeRow[], pd.rows));
         } else {
-          setNodePods([]);
+          setNodePods(null);
           setNodePodsErr(pd.error || 'pod list unavailable');
         }
       }
@@ -423,29 +424,19 @@ export default function EksClusterPage() {
                   );
                 })()}
 
-                {tab === 'nodes' && nodeAgg && nodeAgg.length > 0 && (
-                  <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리 MiB)">
-                    <div className="flex flex-col gap-3">
-                      {nodeAgg.map((n) => (
-                        <div key={n.name} className="grid grid-cols-1 gap-1 sm:grid-cols-[1fr_auto_auto] sm:items-center sm:gap-6 text-[12px]">
-                          <span className="min-w-0 truncate font-mono text-ink-700" title={n.name}>
-                            {n.name}
-                            <span className="ml-2 text-ink-400">{n.podCount} pods</span>
-                          </span>
-                          <span className="flex items-center gap-2 text-ink-500">
-                            <span className="w-8">CPU</span>
-                            <Meter value={n.cpuPct} />
-                            <span className="tabular text-ink-400">{n.cpuRequest.toFixed(1)}/{n.cpuAllocatable.toFixed(1)}</span>
-                          </span>
-                          <span className="flex items-center gap-2 text-ink-500">
-                            <span className="w-8">Mem</span>
-                            <Meter value={n.memPct} />
-                            <span className="tabular text-ink-400">{Math.round(n.memRequest)}/{Math.round(n.memAllocatable)}</span>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </Card>
+                {tab === 'nodes' && filteredRows.length > 0 && (
+                  <NodeCapacityList requestsPending={nodePods == null && !nodePodsErr} rows={filteredRows.map((row) => {
+                    const n = row as unknown as NodeRow;
+                    const agg = nodeAgg?.find((entry) => entry.name === n.name);
+                    return {
+                      cluster, name: n.name,
+                      cpuCapacity: n.cpuCapacity || 0, cpuAllocatable: n.cpuAllocatable || 0,
+                      cpuRequest: agg?.cpuRequest ?? null, cpuUsage: n.cpuUsage,
+                      memCapacityMiB: n.memCapacity || 0, memAllocatableMiB: n.memAllocatable || 0,
+                      memRequestMiB: agg?.memRequest ?? null, memUsageMiB: n.memUsage,
+                      usageTimestamp: n.usageTimestamp,
+                    };
+                  })} />
                 )}
                 <DataTable
                   columns={COLUMNS[tab as Exclude<Tab, 'diagnosis' | 'cost'>]}
@@ -473,10 +464,13 @@ export default function EksClusterPage() {
           <NodeCapacityCards
             cpuCapacity={selectedNode.cpuCapacity}
             cpuAllocatable={selectedNode.cpuAllocatable}
-            cpuRequest={selectedNodeAgg?.cpuRequest ?? 0}
+            cpuRequest={selectedNodeAgg?.cpuRequest ?? null}
             memCapacityMiB={selectedNode.memCapacity}
             memAllocatableMiB={selectedNode.memAllocatable}
-            memRequestMiB={selectedNodeAgg?.memRequest ?? 0}
+            memRequestMiB={selectedNodeAgg?.memRequest ?? null}
+            cpuUsage={selectedNode.cpuUsage}
+            memUsageMiB={selectedNode.memUsage}
+            usageTimestamp={selectedNode.usageTimestamp}
             podCIDR={selectedNode.podCIDR}
             podCount={selectedNodePods?.length ?? 0}
             podRunning={(selectedNodePods ?? []).filter((x) => x.status === 'Running').length}

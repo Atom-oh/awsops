@@ -1,49 +1,51 @@
-# ADR-011: 멀티 어카운트 지원 (STS AssumeRole, read-only) / Multi-Account Support (STS AssumeRole, read-only)
+# ADR-011: Multi-Account Read-Only Federation
 
-## Status / 상태
-**Accepted (2026-06-22) — consolidated.** consolidates: 008. **Amended 2026-06-26: ExternalId optional for 1st-party (host-ARN-pinned trust), required for 3rd-party.** **Amended 2026-08-25 (CI review, round-22, PR #237): `AWSopsReadOnlyRole`'s trust policy (`infra/cfn/awsops-target-account-role.yaml`) gains a SECOND, OPTIONAL assumable principal — the worker Fargate task role, via an additive `WorkerTaskRoleArn` template parameter (default empty; an existing target-account stack's trust is unchanged until an operator explicitly sets it on a re-deploy). Needed because the Network Path Check's `resolve_live_identity()`/`fetch_live_topology()` and the pre-existing SG Rules & Usage worker (`sg_rule_scan.py`'s EC2/ENI-inventory reads, not the isolated Athena broker role — ADR-019 Role A/B separation is untouched) both assume `AWSopsReadOnlyRole` from the WORKER task role, a different principal from the host WEB task role this ADR originally scoped. ExternalId semantics are unchanged for either principal (1st-party ARN-pin vs. 3rd-party required, per the 2026-06-26 amendment) — this widens WHO can be trusted, not HOW trust is established. **Least-privilege trade-off, made explicit (CI review round 24):** granting the worker task role's assume also grants it `AWSopsReadOnlyRole`'s FULL `ReadOnlyAccess` surface in the target account (this feature only needs `eks:DescribeCluster`+`ec2:DescribeInstances`, plus the sg-rules worker's own ENI describes), and that task role is shared by EVERY worker job type, not scoped to this feature alone. This is a DELIBERATE trade-off, not an oversight: it reuses the exact same broad-but-ARN-pinned shape this ADR already accepted for the web task role (no new trust MODEL, only a second principal under the identical model), avoids provisioning a second per-feature IAM role per target account (an ongoing per-account onboarding/CFN-maintenance cost), and the confused-deputy protection (ARN pin or ExternalId) is unchanged. A dedicated, narrower target-account role scoped to only the workers' actual Describe calls remains open as a future tightening, but is not required by this amendment.**
+## Status
 
-## Context / 컨텍스트
+Accepted **2026-06-22**, consolidating legacy ADR-008.
+Amended **2026-06-26**: ExternalId optional only with exact first-party principal pinning.
+Amended **2026-08-25**: optional worker principal in target-account trust.
+Repository evidence checked **2026-09-13**.
 
-여러 AWS 계정을 운영하는 조직은 계정별 별도 인스턴스 배포 없이, 단일 AWSops에서 통합 대시보드와 계정별 뷰가 필요하다. v2는 단일 계정 호스트(`123456789012`)에서 ECS Fargate로 동작하며, 대상 계정의 리소스를 **read-only**로만 조회한다(AWS-리소스 변경·자율은 영구 동결 — 프로젝트 read-only 원칙). 계정 추가/제거는 코드 변경 없이 런타임 구성으로 처리되어야 하고, 단일 계정 동작은 그대로 호환되어야 한다.
+## Context
 
-Organizations running multiple AWS accounts need a unified dashboard and per-account views from a single AWSops, without per-account deployments. v2 runs on a single host account (`123456789012`) on ECS Fargate and only queries target-account resources **read-only** (AWS-resource mutation and autonomy stay permanently frozen — the project's read-only principle). Adding/removing accounts must be a runtime config operation with no code change, and single-account operation must remain backwards compatible.
+v2 runs in a host account and **implements multi-account reads**. Target accounts should be registered
+without a code change, with single-account behavior retained. One host deployment does not mean
+"single-account only."
 
-## Decision / 결정
+## Decision
 
-계정 레지스트리 + STS AssumeRole 기반 read-only 페더레이션을 채택한다. 현행 net(deployed) 구성:
+- Store registered targets in Aurora `accounts`, seed the host lazily, and provide admin-managed
+  account registration. Use the account selector for per-account views and explicit all-account fan-out.
+- Assume the target `AWSopsReadOnlyRole`. For first-party trust pinned to the exact host task-role ARN,
+  ExternalId is optional. Third-party/shared trust requires ExternalId. This distinction is enforced
+  by the target trust policy and operator configuration, not inferred automatically by application code.
+- `infra/cfn/awsops-target-account-role.yaml` supports the host web principal and an optional
+  `WorkerTaskRoleArn` (default empty). Existing target stacks do not gain worker trust until an operator
+  updates them. The same ExternalId rules apply to each principal.
+- Accepted tradeoff of the **2026-08-25** amendment: the shared worker role can assume the target's
+  full `ReadOnlyAccess` surface, not only the Describe calls used by Network Path/SG inventory.
+  This reuses the existing onboarding model and avoids another per-feature target role. A narrower
+  role remains optional future hardening, not a retroactive requirement to approve this pattern.
+- When the requested account is the host, `cross_account.get_role_arn()` returns `None` and uses
+  the execution role directly. Do not reintroduce a target-only-role self-assume or diagnose its
+  expected absence as broken cross-account trust.
+- ADR-019's Athena broker role is separate: it has stricter explicit-principal **and ExternalId**
+  requirements and must not be merged into `AWSopsReadOnlyRole` or assumed by the shared worker role.
 
-- **accounts 레지스트리 (Aurora)**: 등록된 대상 계정을 Aurora 테이블에 보관. 호스트 계정은 lazy seed.
-- **STS AssumeRole**: 대상 계정의 `AWSopsReadOnlyRole`을 host 실행 역할(task role)이 assume. **ExternalId**: 대상 trust 정책이 **AWSops task-role ARN을 정확히 핀**하는 **1st-party** 계정에선 선택(생략 가능); **3rd-party/공유/와일드카드 principal**엔 **필수**(confused-deputy 방어). 1st/3rd 구분은 **trust 정책으로 강제되는 운영적 구분**이며 코드가 강제하지 않는다. **(2026-08-25 개정)** 이 role은 이제 **두 개**의 assume 가능한 principal을 신뢰할 수 있다 — host **web** task role(원래 범위)과, 선택적으로 host **worker** task role(`WorkerTaskRoleArn`, 추가적/기본 미설정). Network Path Check와 SG Rules & Usage 워커가 이 role을 워커 task role로 assume하기 때문이며, ExternalId 규칙은 두 principal 모두 동일하게 적용된다.
-- **/accounts admin UI**: 인증된 admin이 대상 계정을 등록/관리. CFN으로 대상 계정에 read-only role 배포.
-- **글로벌 셀렉터 + per-account fan-out**: 전역 계정 선택기로 단일 계정 스코프; `__all__` 선택 시 전 계정 fan-out(bedrock/cost 등 per-account 집계).
-- **호스트 계정 self-assume 함정 방어**: target == host인 경우 `cross_account.get_role_arn()`이 `None`을 반환해 host 실행 역할을 직접 사용(대상 계정 전용 role을 호스트에서 self-assume → AccessDenied 오진 방지). 진짜 다른 계정 assume 경로는 불변.
+## Consequences
 
-Account registry + STS-AssumeRole read-only federation. Current deployed net:
+One deployment can show registered target accounts, with fan-out latency/quota cost proportional to
+scope. Target-role installation remains an operator action. Shared read-only trust is intentionally
+broad; no mutation or autonomous mitigation follows from account onboarding.
 
-- **accounts registry (Aurora)** — registered target accounts in an Aurora table; host account seeds lazily.
-- **STS AssumeRole** — the host task role assumes the target account's `AWSopsReadOnlyRole`. **ExternalId** is **optional** for **1st-party** accounts whose target trust policy **pins the exact AWSops task-role ARN** (never account-root/org/wildcard), and **required** for **3rd-party/shared/wildcard** principals (confused-deputy mitigation). The 1st/3rd-party distinction is **administrative — enforced by the target trust policy, not by code**. Trust-policy variants: 1st-party omits the `sts:ExternalId` condition and trusts only the task-role ARN; 3rd-party adds the `sts:ExternalId` `StringEquals` condition. **(Amended 2026-08-25)** This role now trusts **two** assumable principals — the host **web** task role (the original scope) and, optionally, the host **worker** task role (`WorkerTaskRoleArn`, additive, unset by default). The Network Path Check and the SG Rules & Usage worker (its own EC2/ENI-inventory reads, not the isolated Athena broker role — ADR-019's Role A/B separation is untouched) both assume this role FROM the worker task role, a different principal than the web task role this ADR originally scoped; the same ExternalId rules apply to either.
-- **/accounts admin UI** — an authenticated admin registers/manages target accounts; a CFN template deploys the read-only role in each target account.
-- **Global selector + per-account fan-out** — a global account selector scopes to one account; `__all__` fans out across all accounts (per-account aggregation for bedrock/cost, etc.).
-- **Host self-assume guard** — when target == host, `cross_account.get_role_arn()` returns `None` so the host execution role is used directly (prevents self-assuming a target-only role on the host → AccessDenied misdiagnosis). The genuine other-account assume path is unchanged.
+## Six Pillars
 
-## Consequences / 결과
+Security: explicit trust and credential scoping. Reliability: direct host access and durable registry.
+Operational Excellence: runtime registration. Performance/Cost/Sustainability: scoped queries and
+one host rather than a deployment per account.
 
-### Positive / 긍정
-- 단일 배포로 다수 AWS 계정 모니터링; 계정 추가 = CFN 배포 + /accounts 등록(코드 변경 없음).
-- UI는 계정별 / 전체 집계 뷰 제공; 단일 계정 배포는 호환 유지.
-- 3rd-party는 ExternalId required로 confused-deputy 차단; 1st-party(task-role ARN 핀)는 ExternalId 생략 가능 — v1 온보딩 단순성 회복.
+## Evidence
 
-### Negative / Trade-offs
-- `__all__` fan-out은 계정 수에 비례해 지연·집계 비용 증가(per-account 순차/병렬 호출).
-- 대상 계정마다 CFN role 선행 배포 필요.
-- read-only 한정 — 대상 계정 변경 작업은 범위 밖(영구 동결).
-
-## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
-
-- **Security**: 대상 계정 role은 read-only(ReadOnlyAccess); trust condition = **3rd-party는 ExternalId required, 1st-party는 task-role ARN 핀(ExternalId 생략 가능)** — 두 경우 모두 confused-deputy 방어(ARN 핀 또는 ExternalId); 자격증명은 메모리에만(디스크 미기록); host self-assume 가드로 권한 오용·오진 차단; admin-gated /accounts 등록(인증 경유).
-- **Reliability**: target == host 분기로 단일 계정에서도 fail-safe; registry는 Aurora 영속 + host lazy seed.
-- **Performance Efficiency**: 단일 계정 스코프는 직접 assume 1회; `__all__`만 fan-out 비용 발생.
-- **Cost Optimization**: per-account 집계는 선택 시에만 실행; 상시 폴링 없음.
-- **Operational Excellence**: 계정 lifecycle = CFN + /accounts UI(코드 변경 없음); 멱등 등록.
-- **Sustainability**: 단일 호스트가 다계정을 커버 — 계정별 인스턴스 중복 제거.
+`web/lib/accounts.ts`, `agent/lambda/cross_account.py`, `infra/cfn/awsops-target-account-role.yaml`,
+`terraform/v2/foundation/{workload,network-path,sg-rules}.tf`, and ADR-019.

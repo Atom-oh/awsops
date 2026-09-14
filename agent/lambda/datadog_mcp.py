@@ -101,12 +101,24 @@ def datadog_schema(args):
 
 
 def datadog_health(args):
-    """Key validation probe: GET /api/v1/validate (API key), then a 1-metric list (app key scope)."""
+    """Validate the API key and the same metric-query access used by Explore.
+
+    /validate alone does not validate the application key. The second, one-minute
+    aggregate query checks both the application key and its query permission.
+    An empty series is valid connectivity, not evidence of workload health.
+    """
     creds = load_datasource(SLUG)
     assert_host_allowed(creds["endpoint"])
     try:
         v = _get(creds, "/api/v1/validate")
-        return ok({"ok": bool(isinstance(v, dict) and v.get("valid"))})
+        if not isinstance(v, dict) or v.get("valid") is not True:
+            return ok({"ok": False, "error": "Datadog API key validation failed"})
+        now = int(time.time())
+        metrics = _get(creds, "/api/v1/query", {
+            "query": "avg:system.cpu.user{*}", "from": str(now - 60), "to": str(now),
+        })
+        valid = isinstance(metrics, dict) and metrics.get("status") == "ok" and isinstance(metrics.get("series"), list)
+        return ok({"ok": valid, **({} if valid else {"error": "Datadog metric query validation failed"})})
     except _ApiError as e:
         return ok({"ok": False, "error": str(e)})
 

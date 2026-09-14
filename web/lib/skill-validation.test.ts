@@ -3,6 +3,20 @@ import { describe, it, expect } from 'vitest';
 import { validateSkill, validateAgent, KNOWN_GATEWAYS, AGENT_TYPES } from './skill-validation';
 
 describe('skill-validation', () => {
+  it.each(['ops', 'security', 'observability', 'aws-data', 'idle-scan', 'auto', 'code'])('rejects the reserved custom-agent command name %s', (name) => {
+    expect(validateAgent({ name, description: 'd', persona: 'p', gateway: 'ops', routingKeywords: [] }).ok).toBe(false);
+    expect(validateSkill({ name, description: 'd', instructions: 'Inspect', toolAllowlist: [] }).ok).toBe(true);
+  });
+  it('rejects malformed JSON fields without throwing', () => {
+    const skill = { name: 'safe-skill', description: 'd', instructions: 'Inspect evidence.', toolAllowlist: [] };
+    const agent = { name: 'safe-agent', description: 'd', gateway: 'ops', routingKeywords: [] };
+    for (const input of [null, [], { ...skill, name: 42 }, { ...skill, description: 42 }, { ...skill, instructions: ' \n ' }]) {
+      expect(validateSkill(input as never).ok).toBe(false);
+    }
+    for (const input of [null, [], { ...agent, description: {} }, { ...agent, persona: {} }, { ...agent, routingKeywords: [' '] }]) {
+      expect(validateAgent(input as never).ok).toBe(false);
+    }
+  });
   it('accepts a well-formed skill', () => {
     expect(validateSkill({ name: 'cis-pack', description: 'CIS checks', instructions: 'do CIS', toolAllowlist: [] }).ok).toBe(true);
   });

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, within, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, within, fireEvent, waitFor, act } from '@testing-library/react';
 import DiagnosisView from './DiagnosisView';
+import { LanguageProvider } from '@/components/shell/LanguageProvider';
 
 afterEach(cleanup);
+afterEach(() => localStorage.removeItem('awsops-lang'));
 
 function mockCapture(reports: Array<Record<string, unknown>> = []) {
   const posts: any[] = [];
@@ -179,7 +181,140 @@ describe('DiagnosisView — export menu + generation date', () => {
   });
 });
 
+describe('DiagnosisView — invariant assessment coverage', () => {
+  it.each([
+    ['zh', '不变量评估覆盖范围', '通过 2'],
+    ['ja', '不変条件の評価範囲', '合格 2'],
+  ])('uses assessment-specific passed labels in %s', async (lang, region, passed) => {
+    localStorage.setItem('awsops-lang', lang);
+    mockList([{ id: 71, tier: 'mid', status: 'succeeded', created_at: 't',
+      summary: { drift: [], unassessed: [],
+        invariant_coverage: { total: 2, assessed: 2, passed: 2, failed: 0, unassessed: 0 } } }]);
+    render(<LanguageProvider><DiagnosisView /></LanguageProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /#71/ }));
+    expect(within(await screen.findByRole('region', { name: region })).getByText(passed)).toBeTruthy();
+  });
+
+  async function openSummary(summary: Record<string, unknown>) {
+    mockList([{ id: 71, tier: 'mid', status: 'succeeded', created_at: 't', summary }]);
+    const view = render(<DiagnosisView />);
+    fireEvent.click(await screen.findByRole('button', { name: /#71/ }));
+    const panel = await screen.findByRole('region', { name: '불변식 평가 범위' });
+    return { panel, ...view };
+  }
+
+  it('keeps an all-unassessed report visible with reasons instead of hiding zero drift', async () => {
+    const { panel } = await openSummary({
+      drift: [], unassessed: [{ id: 1, kind: 'expected_edge', observed: 'unknown: service map unavailable' }],
+      invariant_coverage: { total: 1, assessed: 0, passed: 0, failed: 0, unassessed: 1 },
+    });
+    expect(within(panel).getByText('평가 완료 0 / 1')).toBeTruthy();
+    expect(within(panel).getByText('미평가 1')).toBeTruthy();
+    expect(within(panel).getByText('unknown: service map unavailable')).toBeTruthy();
+    expect(within(panel).getByText('미평가 결과는 정상 또는 개선을 뜻하지 않습니다.')).toBeTruthy();
+  });
+
+  it('shows assessed, failed and unassessed counts separately for mixed evidence', async () => {
+    const { panel } = await openSummary({
+      drift: [{ id: 2, kind: 'forbidden_edge', observed: 'edge observed', severity: 'critical' }],
+      unassessed: [{ id: 3, kind: 'encryption_required', observed: 'unknown: aggregate missing' }],
+      invariant_coverage: { total: 3, assessed: 2, passed: 1, failed: 1, unassessed: 1 },
+    });
+    expect(within(panel).getByText('평가 완료 2 / 3')).toBeTruthy();
+    expect(within(panel).getByText('불변식 통과 1')).toBeTruthy();
+    expect(within(panel).getByText('위반 1')).toBeTruthy();
+    expect(within(panel).getByText('unknown: aggregate missing')).toBeTruthy();
+    expect(screen.getByText('forbidden_edge')).toBeTruthy();
+  });
+
+  it('distinguishes no active invariants from an evaluated pass', async () => {
+    const { panel } = await openSummary({
+      drift: [], unassessed: [],
+      invariant_coverage: { total: 0, assessed: 0, passed: 0, failed: 0, unassessed: 0 },
+    });
+    expect(within(panel).getByText('활성 불변식 없음')).toBeTruthy();
+    expect(within(panel).queryByText('불변식 통과 0')).toBeNull();
+  });
+
+  it('discloses missing coverage for historical reports', async () => {
+    const { panel } = await openSummary({ drift: [], diff: { regressions: [], improvements: [] } });
+    expect(within(panel).getByText('불변식 평가 정보 없음')).toBeTruthy();
+    expect(within(panel).getByText('이 보고서에는 유효한 불변식 평가 범위가 기록되지 않았습니다.')).toBeTruthy();
+  });
+
+  it('does not trust inconsistent coverage or non-array legacy fields', async () => {
+    const { panel } = await openSummary({
+      drift: null, unassessed: 'not an array',
+      invariant_coverage: { total: 2, assessed: 2, passed: 2, failed: 0, unassessed: 1 },
+    });
+    expect(within(panel).getByText('불변식 평가 정보 없음')).toBeTruthy();
+  });
+
+  it('shows explicit full assessment without an unassessed warning', async () => {
+    const { panel } = await openSummary({
+      drift: [], unassessed: [],
+      invariant_coverage: { total: 2, assessed: 2, passed: 2, failed: 0, unassessed: 0 },
+    });
+    expect(within(panel).getByText('평가 완료 2 / 2')).toBeTruthy();
+    expect(within(panel).getByText('불변식 통과 2')).toBeTruthy();
+    expect(within(panel).queryByText('미평가 결과는 정상 또는 개선을 뜻하지 않습니다.')).toBeNull();
+  });
+
+  it('renders unassessed evidence as text, not markup', async () => {
+    const reason = '<img src=x onerror=alert(1)>';
+    const { panel, container } = await openSummary({
+      drift: [], unassessed: [{ id: 1, kind: 'expected_edge', observed: reason }],
+      invariant_coverage: { total: 1, assessed: 0, passed: 0, failed: 0, unassessed: 1 },
+    });
+    expect(within(panel).getByText(reason)).toBeTruthy();
+    expect(container.querySelector('img[src="x"]')).toBeNull();
+  });
+});
+
 describe('DiagnosisView — title / tags / soft delete', () => {
+  it.each(['patch', 'refresh'])('keeps report B and its draft selected when report A has a late %s response', async (stage) => {
+    const reports = [1, 2].map(id => ({ id, tier: 'mid', status: 'succeeded', created_at: 't',
+      title: `Report ${id === 1 ? 'A' : 'B'}`, tags: [], can_edit: true }));
+    const detail = (id: number) => ({
+      report: reports[id - 1], markdown: `## Executive Summary\nBody ${id === 1 ? 'A' : 'B'}`,
+      handoff: { notices: [], drafts: [{ target: 'notion', label: 'Notion', text: `Draft ${id}`, filename: `${id}.md` }] },
+    });
+    let finishPatch!: (r: Response) => void;
+    let finishRefresh!: (r: Response) => void;
+    let aReads = 0;
+    let listReads = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/diagnosis') { listReads++; return resp({ reports }); }
+      if (url === '/api/diagnosis/1' && init?.method === 'PATCH') return new Promise<Response>(resolve => { finishPatch = resolve; });
+      if (url === '/api/diagnosis/1') {
+        aReads++;
+        if (stage === 'refresh' && aReads === 2) return new Promise<Response>(resolve => { finishRefresh = resolve; });
+        return resp(detail(1));
+      }
+      if (url === '/api/diagnosis/2') return resp(detail(2));
+      return resp({}, 404);
+    }));
+    render(<DiagnosisView />);
+    await screen.findByText('Body A');
+    fireEvent.click(screen.getByRole('button', { name: /제목 수정/ }));
+    fireEvent.change(screen.getByLabelText('제목'), { target: { value: 'Updated A' } });
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
+    await waitFor(() => expect(finishPatch).toBeTypeOf('function'));
+    if (stage === 'refresh') {
+      await act(async () => { finishPatch(resp({ ok: true })); });
+      await waitFor(() => expect(aReads).toBe(2));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Report B/ }));
+    await screen.findByText('Body B');
+    await act(async () => {
+      if (stage === 'patch') finishPatch(resp({ ok: true }));
+      else finishRefresh(resp(detail(1)));
+    });
+    await waitFor(() => expect(listReads).toBe(2));
+    expect(screen.getByText('Body B')).toBeTruthy();
+    expect((screen.getByLabelText('초안 미리보기') as HTMLTextAreaElement).value).toBe('Draft 2');
+    expect(aReads).toBe(stage === 'patch' ? 1 : 2);
+  });
   function mockMeta(rows: Array<Record<string, unknown>>, calls: any[]) {
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET';

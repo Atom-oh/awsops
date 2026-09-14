@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { parseChangelog } from './changelog';
 
 const FIXTURE = `# Changelog
@@ -58,6 +59,18 @@ Intro line.
 `;
 
 describe('parseChangelog', () => {
+  it('keeps imported upstream 0.9.0 under local Unreleased rather than the deployed-version chip', () => {
+    const c = parseChangelog(readFileSync(new URL('../../CHANGELOG.md', import.meta.url), 'utf8'));
+    expect(c.latest).toBe('0.8.0');
+    expect(c.versions.some(v => v.version === '0.9.0')).toBe(false);
+    const pending = c.versions.find(v => v.version === 'Unreleased')!;
+    expect(pending.en).toContain('v0.9.0');
+    expect(pending.ko).toContain('v0.9.0');
+    expect(pending.en).toContain('topology diagram + resilience assessment');
+    expect(pending.ko).toBe(pending.en);
+    expect(c.versions.every(v => v.ko === v.en)).toBe(true);
+  });
+
   it('latest = 첫 번째 non-Unreleased 버전 (사이드바 칩과 CHANGELOG 일치의 근거)', () => {
     const c = parseChangelog(FIXTURE);
     expect(c.latest).toBe('0.5.0');

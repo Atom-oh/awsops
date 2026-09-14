@@ -1,12 +1,14 @@
 // web/lib/k8sgpt-adapter.ts
-// ADR-035 Rule 7 — the VERSIONED ADAPTER is the stable abstraction between K8sGPT's
+// Legacy ADR-035 Rule 7 — the VERSIONED ADAPTER is the stable abstraction between K8sGPT's
 // native Result CRD schema and OUR durable MCP/tool contract. Pin the operator generation;
 // a CI schema-compat test (k8sgpt-adapter.test.ts) gates upgrades. If K8sGPT is archived or
 // its schema diverges, swap the analyzer behind THIS contract — callers never change.
 import { createHash } from 'crypto';
 
-/** The K8sGPT operator CRD generation this adapter is verified against (Rule 7 pin).
- *  MUST match the PINNED_OPERATOR_VERSION in docs/runbooks/k8sgpt-operator-install.md. */
+/** Result CRD generation covered by this adapter's compatibility fixtures.
+ *  The repository has no approved installable chart/image pin while ADR-006 §5 is unresolved.
+ *  An approved upgrade must record that pair in the runbook and update this constant/fixtures
+ *  together; this schema-generation value does not authorize an operator installation. */
 export const ADAPTER_K8SGPT_VERSION = '0.4.x/result.core.k8sgpt.ai/v1';
 
 // --- K8sGPT native Result CRD (only the fields we read; tolerate the rest) ---

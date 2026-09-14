@@ -1,24 +1,28 @@
-# Components Module
+# Components
 
-## Role
-110 client components across 14 subdirectories: `ui` (shared primitives), `shell` (AppShell, Sidebar, LanguageProvider, AccountSelector, etc.), `charts`, `chat`, `inventory` (+`metrics/`), `eks`, `diagnosis`, `datasources`, `finops`, `graph`, `insights`, `nfm`, `overview`, `topology`.
+Use root [CLAUDE.md](../../CLAUDE.md),
+[BASELINE.md](../../docs/decisions/BASELINE.md), and [web context](../CLAUDE.md).
+Reuse current `ui/` primitives and inspect their prop types before adding variants.
 
-## Key Files
-- `ui/DataTable.tsx` + `ui/DetailPanel.tsx` — the default list+detail combo. DetailPanel renders the full data the row already holds (plus a handful of type-specific fetching sections: RDS metrics/trends/SG rules, EBS related, live metrics, S3 IAM access) — if the spec (`InvType`) has `sections`, it renders grouped sections; otherwise a flat key list (backward-compat). New inventory types must define `sections`.
-- `inventory/metrics/MetricTable.tsx` — a declarative `MetricCol` model (`{value, render?, danger?, facet?, facetValues?, type}`) gets you sort, global search, facet filters, and a "problems only" toggle for free. Per-service tables (Ec2/Rds/Alb/...) are written purely as column definitions. Opt-in props: `facetValues` (multi-value facet — an exact-match on the joined display string drops multi-value rows), `maxRender`+`capKeep` (render-stage row cap — a data-stage cut silently zeroes an exact search), `rowClass` (per-row class hook).
-- `inventory/metrics/guides.tsx` + `guides.{en,zh,ja}.tsx` — per-language diagnosis-guide bodies. i18n lockstep — update all four files together.
-- `nfm/FlowHopPath.tsx` — end-to-end hop stepper (local endpoint → traversedConstructs → remote endpoint). Each kind has its own glyph and color — never rely on color alone to identify a kind.
-- `eks/NodeCapacityCards.tsx` — node capacity 3-split cards; also exports the shared `StackBar` (named export) reused by `NodeCapacityList` on the nodes fleet page — a deliberate exception to the default-export-per-page convention.
-- `eks/NodeDrilldownPanel.tsx` — node drilldown (capacity cards + Pod/ENI sections, with its own live nodes+pods query). Shared by the EKS overview and the `/eks/nodes` fleet page (`FleetKindPage`).
-- `chat/MessageList.tsx` + `chat/useChat.ts` — streaming smoothing: throttles markdown-parse input at ~180ms via `useThrottled` (avoids O(n²) full reparse per token) and balances incomplete code fences (MessageList); a typewriter buffer batches deltas and emits proportionally to backlog every 24ms (min 3 chars), flushing immediately on completion (useChat).
-- `shell/LanguageProvider.tsx` — the `useI18n()` hook (`t`/`tt`/lang context).
-- `shell/Sidebar.tsx` — navigation; where new pages register.
-- `shell/ChangelogVersion.tsx` — sidebar footer version chip + changelog modal (`/api/changelog`). **The sidebar's transform becomes the containing block for fixed descendants** — modals rendered inside the sidebar must portal to `body` via `createPortal`.
-- `ui/StatCard.tsx` — an alias re-export of `StatTile`. New code should import `StatTile` directly.
+- Page-facing components normally export default. Shared utilities/hooks and
+  components such as `StackBar` in `eks/NodeCapacityCards.tsx` also have named
+  exports; preserve these public interfaces.
+- `ui/StatCard.tsx` aliases `StatTile`; new code should use `StatTile`. Follow its
+  typed variants and compatibility props, not the deleted StatsCard color rules.
+  Theme tokens come from the current web styles/configuration.
+- `ui/DataTable.tsx` and `ui/DetailPanel.tsx` provide list/detail primitives.
+  New inventory types define grouped `sections` in `lib/inventory-types.ts`.
+  `inventory/metrics/MetricTable.tsx` supplies declarative sorting/filtering;
+  preserve full search data when applying render caps.
+- `shell/LanguageProvider.tsx` exposes `useI18n()` (`t`, `tt`, `lang`). Existing
+  Korean-source UI prose and translation maps stay intact. Technical table
+  headers and inventory column/facet/section identifiers intentionally stay
+  English. Update affected guide translations together when changing guide content.
+- Preserve chat stream buffering and completion flushing in `chat/useChat.ts`
+  and `MessageList.tsx`. Modals inside the transformed sidebar portal to `body`
+  (`shell/ChangelogVersion.tsx`).
+- Keep loading, error, empty, and partial-data states distinct. Do not present
+  missing measurements as zero or rely on color alone to convey status.
 
-## Rules
-- i18n carve-out: table COLUMN headers and `InvType` spec labels (column/facet/section names) deliberately stay English in every locale — they are technical identifiers kept in one canonical form. UI prose, buttons, captions, and titles go through `tt()` (Korean source literal).
-- Components consumed by pages use `export default`. Shared utility modules (`metrics/shared.tsx`, `guides.*.tsx`, `LanguageProvider.tsx`, etc.) use named exports as an established pattern — do not change this arbitrarily.
-- Prefer reusing `ui/` primitives (Badge, StatePill, Card, PageHeader, StatTile, etc.) over adding new ones — don't proliferate primitives.
-- User-facing display strings are Korean literals passed through `tt()` (unregistered strings pass through safely, so this is zero-risk).
-- Tests are colocated with components as `*.test.tsx` (vitest).
+Run affected colocated `*.test.tsx` tests and the production web build when
+relevant. English-only documentation does not change app i18n.

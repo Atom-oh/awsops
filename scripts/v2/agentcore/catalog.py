@@ -1,17 +1,13 @@
-"""AWSops v2 P1f — AgentCore skeleton catalog (MID-minus).
+"""Current AWSops v2 AgentCore gateway and target catalog.
 
-GATEWAYS: 9 domain gateway short-keys. provision.py provisions each as
-'awsops-v2-<key>-gateway' (v2-namespaced to avoid colliding with v1 'awsops-*' in a
-shared account); the agent runtime receives the {key: url} map via GATEWAYS_JSON, so
-these short keys (not the gateway names) are what payload.gateway selects. 'external-obs'
-is the NEW §4 #7 split, left EMPTY in P1f (plugin datasource registry + OTLP + datasource-diag
-re-home are P3).
-
-TARGETS: the representative read-only slice proving every provisioner code path:
-  - iam-mcp (14 tools, cross-account, largest schema) -> security gateway
-  - flow-monitor (1 tool, single-tool, proves for_each>=2) -> network gateway
-Schemas are copied verbatim from agent/lambda/create_targets.py. provision.py injects
-target_account_id into every tool inputSchema (cross-account), exactly like v1.
+GATEWAYS contains canonical section keys; provision.py names gateways
+awsops-v2-<key>-gateway and supplies canonical GATEWAYS_JSON mappings.
+TARGETS defines the Lambda-backed tool contracts, including external-obs.
+The provisioner injects target_account_id into every Lambda-backed tool schema.
+Handlers interpret it differently: execute_sql rejects foreign accounts;
+inventory_read_mcp ignores it and reads the configured host scope.
+Inspect each target's contract and provisioner path rather than
+assuming the retired P1f skeleton or v1 create_targets.py is authoritative.
 """
 
 # short-key -> domain. provision.py builds the gateway name 'awsops-v2-<key>-gateway'.
@@ -93,7 +89,7 @@ TARGETS = {
         "tools": [
             {"name": "find_unused_resources", "description": "Find unused/orphaned resources from the synced inventory: orphan target groups (no LB / 0 healthy), empty CloudFront origins, dead/idle load balancers, unattached EBS volumes", "inputSchema": {"type": "object", "properties": {"category": _p("string", "Optional category filter, e.g. 'TargetGroup' or 'CloudFront'")}}},
             {"name": "get_topology", "description": "Return the materialized topology graph (nodes + edges) from Aurora topology_nodes/edges — matches the /api/graph contract. class='flow' (default) for traffic-path graph (CF→LB→TG→target); class='infra' for resource-relationship graph. Optionally scope to a node's 1-hop neighbourhood via resource_id.", "inputSchema": {"type": "object", "properties": {"resource_id": _p("string", "Optional node id (e.g. CloudFront id, ALB ARN) to scope to its 1-hop neighbourhood"), "class": _p("string", "Graph class: 'flow' (traffic path, default) or 'infra' (resource relationships)")}}},
-            {"name": "query_inventory", "description": "List synced resources of one type (alb, nlb, target_group, cloudfront, ec2, ebs, security_group, route53, lambda, ecs_task, ecs_service, s3); the response includes a freshness block (healthy|degraded|stale|unavailable, from durable last-success + oldest-capture)", "inputSchema": {"type": "object", "properties": {"resource_type": _p("string", "Resource type to list"), "limit": _p("integer", "Max rows (default 200, cap 500)")}, "required": ["resource_type"]}},
+            {"name": "query_inventory", "description": "List synced resources of one type (alb, nlb, target_group, cloudfront, ec2, ebs, security_group, route53, lambda, ecs_task, ecs_service, s3); the response includes a freshness block (healthy|degraded|stale|unavailable, from durable last-success + oldest-capture)", "inputSchema": {"type": "object", "properties": {"resource_type": _p("string", "Resource type to list"), "limit": _p("integer", "Max rows (default 200, cap 500)"), "resource_id": _p("string", "Optional exact CloudFront ID; returns only matching identity (id), at most one row")}, "required": ["resource_type"]}},
             {"name": "inventory_summary", "description": "Per-type host/self-scoped current_count from Aurora inventory resources, plus last-run row_count and per-type freshness (healthy|degraded|stale|unavailable; degraded includes attribute blind spots)", "inputSchema": {"type": "object", "properties": {}}},
         ],
     },

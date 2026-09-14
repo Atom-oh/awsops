@@ -1,29 +1,24 @@
-# Auto-redeploy services that inject the Aurora master secret via ECS secrets/valueFrom (the web
-# BFF) when that secret ROTATES. RDS manages + rotates the master password (default every 7 days);
-# a long-running task keeps the password injected at start, so after a rotation Aurora auth fails
-# (`password authentication failed for user "awsops_admin"`) until the task restarts. This wires
-# EventBridge(Secrets Manager RotationSucceeded) -> Lambda -> ecs:UpdateService force-new-deployment.
-# Gated; default false -> 0 resources / $0. Worker/sync LAMBDAS are unaffected (they fetch the
-# secret per invocation), so only valueFrom-at-start services need this.
+# Retained, default-off restart for the host web service on its own Aurora master-secret rotation:
+# EventBridge(Secrets Manager RotationSucceeded) -> Lambda -> ecs:UpdateService(forceNewDeployment).
+# ADR-015 records the historical task-start password-injection failure. The current web BFF uses
+# per-connection IAM DB authentication as awsops_web; it no longer injects that master password.
+# The historical outage is not a recommendation to enable this feature for the current web service.
+# Disabled means no resources for this feature, not a cost-free shared foundation.
 #
-# POSTURE — ratified by ADR-015 (operational self-healing; see docs/decisions/015-* + BASELINE §2).
-# This triggers an automatic `ecs:UpdateService --force-new-deployment` on the host's OWN web service
-# to recover from Aurora master-secret rotation. ADR-015 scopes this as a category DISTINCT from the
-# ADR-005 frozen mutation/autonomy substrate (which stays frozen): own-service-only, force-new-
-# deployment-only, IAM scoped to one service ARN, secret-id fail-closed, default-off. NOT AWS-resource
-# mutation of managed/customer infra. (The governance record is the ADR, not this comment.)
+# POSTURE: ADR-015 is the explicit, dated exception to ADR-005; it is not a separate mutation category.
+# Only the own web service may restart, with unchanged image/task definition and fail-closed secret
+# matching. IAM scopes UpdateService to one service ARN; Lambda enforces restart-only arguments.
+# All other AWS-resource mutation/autonomy remains frozen. The ADR and BASELINE govern this boundary.
 
 variable "secret_rotation_redeploy_enabled" {
   type        = bool
   default     = false
-  description = "Redeploy valueFrom-at-start services (web) when the Aurora master secret rotates, so they pick up the new password. false (default) = 0 resources, $0."
+  description = "ADR-015 exception: restart only the host web service on its own Aurora master-secret rotation. Default off; the current web BFF uses IAM DB auth."
 }
 
 locals {
   srr = var.secret_rotation_redeploy_enabled ? 1 : 0
-  # services that inject the Aurora master secret at task start (web today; steampipe joins when
-  # the multi-account inventory fan-out PR lands and gives the steampipe task AURORA_SECRET).
-  # Modeled as a list from the start so adding a service is a one-line append, not a type change.
+  # The list shape does not authorize expansion: ADR-015 permits exactly the host web service.
   srr_services = [aws_ecs_service.web.name]
 }
 

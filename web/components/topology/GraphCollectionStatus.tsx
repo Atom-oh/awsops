@@ -2,9 +2,16 @@
 
 import { useI18n } from '@/components/shell/LanguageProvider';
 
+export interface GraphCollection {
+  status: string;
+  stale: boolean;
+  retainedPrevious?: boolean;
+  sources?: { sourceId: string; status: string; reasons?: string[]; itemCount?: number }[];
+}
+
 // Defensive compatibility with producers that supply collection metadata.
-// The current private /api/graph returns only a snapshot, so absent metadata is
-// neutral unknown, not evidence of a collector failure.
+// Snapshot-only producers remain supported: absent metadata is neutral unknown,
+// not evidence of a collector failure.
 const COPY = {
   ko: {
     ok: '최근 수집 성공', empty: '조회한 시간 범위에 관측값 없음', partial: '부분 수집 — 전체 상태를 확정할 수 없음',

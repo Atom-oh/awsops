@@ -2,6 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { pickGateway, classifyRoute, matchedSections, ACTIVE_FALLBACK } from './route';
 
 describe('pickGateway', () => {
+  it('routes Notion knowledge requests to the gateway that owns its read tools', async () => {
+    for (const prompt of ['Notion database runbooks', '노션에서 운영 정책 검색']) {
+      expect(pickGateway(prompt)).toBe('observability');
+      expect((await classifyRoute(prompt, undefined, { llmEnabled: false })).primary).toBe('observability');
+    }
+  });
   it('honors an explicit pin over keywords', () => {
     expect(pickGateway('이번 달 비용 알려줘', 'security')).toBe('security');
   });
@@ -38,13 +44,9 @@ describe('pickGateway', () => {
     expect(pickGateway('splunk 로그 검색')).toBe('ops');                // no signal left → catch-all
     expect(pickGateway('jaeger 트레이스 이상한지 봐줘')).toBe('monitoring'); // 트레이스 routes by domain
   });
-  // Regression (2026-07-31 round-3 review MAJOR): round-2 moved tempo/trace to observability to
-  // avoid a POST-cutover dead-end, but official_mcp_enabled defaults to false, so that just made
-  // the dead-end the DEFAULT state for every deployment that never opts into ADR-017 presets.
-  // route.ts has no runtime signal to pick dynamically, so it routes to the legacy target's home
-  // (monitoring) — the actual default/most-common state — and the cutover playbook (ADR-017) must
-  // move this keyword when official_mcp_enabled is actually flipped for tempo.
-  it('routes tempo/trace to monitoring (matches the default/pre-cutover state; legacy tempo-mcp-target lives there)', () => {
+  // Tempo uses the existing monitoring Lambda target. The hosted-preset catalog has no Tempo
+  // entry, so enabling its supported vendor presets does not move these keywords (ADR-017).
+  it('routes tempo/trace to the existing monitoring gateway target', () => {
     expect(pickGateway('tempo trace 조회')).toBe('monitoring');
     expect(pickGateway('트레이스 검색')).toBe('monitoring');
   });

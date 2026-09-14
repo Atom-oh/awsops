@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import IntegrationsTabs from './IntegrationsTabs';
 
-vi.mock('next/link', () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
+vi.mock('next/link', () => ({ default: ({ href, children, onClick }: { href: string; children: React.ReactNode; onClick?: React.MouseEventHandler<HTMLAnchorElement> }) => <a href={href} onClick={onClick}>{children}</a> }));
 
 beforeEach(() => {
   global.fetch = vi.fn(async (url: string) => ({
@@ -37,5 +37,18 @@ describe('IntegrationsTabs', () => {
   it('falls back to Datasources for an unknown tab', () => {
     render(<IntegrationsTabs initialTab="bogus" canManage />);
     expect(screen.getByRole('tab', { name: 'Datasources' }).getAttribute('aria-selected')).toBe('true');
+  });
+  it('follows navigation to a new tab on the same mounted page', async () => {
+    const { rerender } = render(<IntegrationsTabs initialTab="connectors" />);
+    rerender(<IntegrationsTabs initialTab="datasources" />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Datasources' }).getAttribute('aria-selected')).toBe('true'));
+  });
+  it('switches from connector links repeatedly even when the server prop stays unchanged', async () => {
+    render(<IntegrationsTabs initialTab="connectors" />);
+    for (let i = 0; i < 3; i++) {
+      fireEvent.click(screen.getAllByText('메트릭 조회용 API 연결은 Datasources에서 등록 →')[0]);
+      expect(screen.getByRole('tab', { name: 'Datasources' }).getAttribute('aria-selected')).toBe('true');
+      fireEvent.click(screen.getByRole('tab', { name: 'Connectors' }));
+    }
   });
 });

@@ -2,45 +2,51 @@
 import { useEffect, useState } from 'react';
 import PageHeader from '@/components/ui/PageHeader';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { KNOWN_GATEWAYS, isReservedAgentName } from '@/lib/skill-validation';
+import { CUSTOMIZATION_COPY } from './copy';
 import { INTEGRATION_KINDS_EGRESS, INTEGRATION_KINDS_INGRESS, INTEGRATION_TRANSPORTS } from '@/lib/integration-validation';
 
-interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; agentType?: string; gateways?: string[]; }
+interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string; ord: number }>; agentType?: string; gateways?: string[]; }
 interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
 interface SpaceState { enabledAgentIds: number[]; enabledSkillIds: number[]; enabledIntegrationIds: number[]; toolAllowlist: string[]; version?: number }
 interface IntegrationRow { id: number; name: string; kind: string; direction: string; capability: string; enabled: boolean; tier: string; receivePath?: string | null; }
-
-const GATEWAYS = ['network', 'container', 'iac', 'data', 'security', 'monitoring', 'cost', 'ops'];
-// ADR-039 agent-type lifecycle roles (mirrors web/lib/skill-validation.ts AGENT_TYPES).
-const AGENT_TYPES = ['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'evaluation'];
 // ADR-039 P2 — integration kinds. Imported (not re-hardcoded) so this dropdown can't drift from the
 // migration's integrations_kind_check like it did before (missing clickhouse/mimir/loki/tempo/
 // jaeger/dynatrace) — see web/lib/integration-validation.ts for the source of truth.
-const INTEG_KINDS_EGRESS = INTEGRATION_KINDS_EGRESS;
+const INTEG_KINDS_EGRESS = INTEGRATION_KINDS_EGRESS.filter(kind => kind !== 'custom_mcp');
 const INTEG_KINDS_INGRESS = INTEGRATION_KINDS_INGRESS;
 const INTEG_TRANSPORTS = INTEGRATION_TRANSPORTS;
+
+
 // NOTE: curated read connectors (Prometheus/Loki/…/Notion credential cards) moved to the Integrations
 // hub (/integrations) — Datasources tab + Connectors tab. This page keeps Agents/Skills/Agent-Space +
 // the advanced custom-integration registration.
 
 export default function CustomizationPage() {
-  const { tt } = useI18n();
+  const { tt, lang } = useI18n();
+  const copy = CUSTOMIZATION_COPY[lang];
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [skills, setSkills] = useState<SkillRow[]>([]);
   const [denied, setDenied] = useState(false);
   const [noAurora, setNoAurora] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [msg, setMsg] = useState('');
-  const [agentForm, setAgentForm] = useState({ name: '', description: '', persona: '', gateway: 'ops', routingKeywords: '', agentType: 'generic', model: '', responseLanguage: '', gateways: [] as string[] });
-  const [skillForm, setSkillForm] = useState({ name: '', description: '', instructions: '', agentTypes: ['generic'] as string[] });
+  const [agentForm, setAgentForm] = useState({ name: '', description: '', persona: '', gateway: 'ops', routingKeywords: '' });
+  const [skillForm, setSkillForm] = useState({ name: '', description: '', instructions: '' });
+  const [selectedSkills, setSelectedSkills] = useState<Record<number, string>>({});
+  const [attaching, setAttaching] = useState<number | null>(null);
   const [accountId, setAccountId] = useState('self');
   const [space, setSpace] = useState<SpaceState | null>(null);
   const [allowlistText, setAllowlistText] = useState('');
   const [integrations, setIntegrations] = useState<IntegrationRow[]>([]);
   const [integForm, setIntegForm] = useState({ direction: 'egress', name: '', kind: 'grafana', endpoint: '', transport: 'api_key', capability: 'read', authMode: 'hmac', sourceAllowlist: '', triggerTarget: 'incident' });
 
-  async function load() {
+  async function load(preserveContent = false) {
     const r = await fetch('/api/customization');
     if (r.status === 401 || r.status === 403) { setDenied(true); return; }
     if (r.status === 400) { setNoAurora(true); return; }
+    if (!r.ok) { if (!preserveContent) setLoadError(true); return false; }
+    setLoadError(false);
     const d = await r.json();
     setAgents(d.agents || []); setSkills(d.skills || []);
     setAccountId(d.accountId || 'self');
@@ -51,9 +57,9 @@ export default function CustomizationPage() {
     } : null);
     setAllowlistText((d.space?.toolAllowlist || []).join(', '));
     const ir = await fetch('/api/integrations');
-    if (ir.ok) setIntegrations((await ir.json()).integrations || []);
+    if (ir.ok) setIntegrations(((await ir.json()).integrations || []).filter((i: IntegrationRow) => i.kind !== 'custom_mcp'));
+    return ir.ok;
   }
-
   async function createIntegration() {
     const isEgress = integForm.direction === 'egress';
     const body = isEgress
@@ -71,13 +77,12 @@ export default function CustomizationPage() {
   useEffect(() => { load(); }, []);
 
   async function createAgent() {
+    if (isReservedAgentName(agentForm.name)) { setMsg(copy.reservedAgentName); return; }
     const res = await fetch('/api/customization', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         kind: 'agent', name: agentForm.name, description: agentForm.description, persona: agentForm.persona,
-        gateway: agentForm.gateway, agentType: agentForm.agentType,
-        model: agentForm.model || undefined, responseLanguage: agentForm.responseLanguage || undefined,
-        gateways: agentForm.gateways.length ? agentForm.gateways : undefined,
+        gateway: agentForm.gateway,
         routingKeywords: agentForm.routingKeywords.split(',').map((s) => s.trim()).filter(Boolean),
       }),
     });
@@ -90,15 +95,38 @@ export default function CustomizationPage() {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         kind: 'skill', name: skillForm.name, description: skillForm.description, instructions: skillForm.instructions,
-        toolAllowlist: [], agentTypes: skillForm.agentTypes,
+        toolAllowlist: [],
       }),
     });
     const d = await res.json();
     setMsg(res.ok ? `Created skill #${d.id} — disabled; enable below` : `Error: ${JSON.stringify(d.detail || d.error)}`);
     if (res.ok) load();
   }
-  function toggleInArray(arr: string[], v: string): string[] {
-    return arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
+  async function attachSkill(agent: AgentRow) {
+    const skillId = Number(selectedSkills[agent.id]);
+    if (!skillId || attaching !== null) return;
+    setAttaching(agent.id);
+    let saved = false;
+    try {
+      const res = await fetch('/api/customization', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'attach', agentId: agent.id, skillId }),
+      });
+      if (!res.ok) {
+        setMsg(res.status === 409 ? copy.skillDisabled : res.status === 403 ? copy.attachmentForbidden :
+          res.status === 404 ? copy.attachmentMissing : copy.attachmentFailed);
+        return;
+      }
+      setSelectedSkills((current) => ({ ...current, [agent.id]: '' }));
+      setMsg(copy.attached.replace('{agent}', agent.name));
+      saved = true;
+    } catch { setMsg(copy.attachmentFailed); }
+    finally {
+      if (saved && !(await load(true).catch(() => false))) {
+        setMsg(copy.attachedRefreshFailed.replace('{agent}', agent.name));
+      }
+      setAttaching(null);
+    }
   }
   async function toggle(kind: 'agent' | 'skill', id: number, enabled: boolean) {
     await fetch('/api/customization', {
@@ -135,6 +163,7 @@ export default function CustomizationPage() {
 
   if (denied) return <div className="p-6 text-[13px] text-ink-500">Admin access required (ADR-031).</div>;
   if (noAurora) return <div className="p-6 text-[13px] text-ink-500">Aurora is not configured — custom agents are unavailable.</div>;
+  if (loadError) return <div className="p-6 text-[13px] text-ink-500">{copy.catalogUnavailable}</div>;
 
   return (
     <div className="text-ink-800">
@@ -144,30 +173,14 @@ export default function CustomizationPage() {
 
       <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
         <h2 className="text-[13px] font-semibold">New Agent</h2>
+        <p className="text-[12px] text-ink-500">{copy.agentHint}</p>
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} />
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="description" value={agentForm.description} onChange={(e) => setAgentForm({ ...agentForm, description: e.target.value })} />
         <textarea className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="persona (system prompt)" value={agentForm.persona} onChange={(e) => setAgentForm({ ...agentForm, persona: e.target.value })} />
         <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={agentForm.gateway} onChange={(e) => setAgentForm({ ...agentForm, gateway: e.target.value })}>
-          {GATEWAYS.map((g) => <option key={g} value={g}>{g}</option>)}
+          {KNOWN_GATEWAYS.map((g) => <option key={g} value={g}>{g}</option>)}
         </select>
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="routing keywords (comma-separated)" value={agentForm.routingKeywords} onChange={(e) => setAgentForm({ ...agentForm, routingKeywords: e.target.value })} />
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-[11px] text-ink-500">agent type</label>
-          <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={agentForm.agentType} onChange={(e) => setAgentForm({ ...agentForm, agentType: e.target.value })}>
-            {AGENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="model (optional)" value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })} />
-          <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="response language (optional)" value={agentForm.responseLanguage} onChange={(e) => setAgentForm({ ...agentForm, responseLanguage: e.target.value })} />
-        </div>
-        <div className="text-[11px] text-ink-500">
-          <span className="mr-2">gateways (multi — defaults to the primary above)</span>
-          {GATEWAYS.map((g) => (
-            <label key={g} className="mr-2 inline-flex items-center gap-1">
-              <input type="checkbox" checked={agentForm.gateways.includes(g)} onChange={() => setAgentForm({ ...agentForm, gateways: toggleInArray(agentForm.gateways, g) })} />
-              {g}
-            </label>
-          ))}
-        </div>
         <button onClick={createAgent} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Create</button>
       </section>
 
@@ -176,26 +189,32 @@ export default function CustomizationPage() {
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} />
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="description (≥100 chars recommended — describes when to use)" value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} />
         <textarea className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" rows={4} placeholder="instructions (Markdown)" value={skillForm.instructions} onChange={(e) => setSkillForm({ ...skillForm, instructions: e.target.value })} />
-        <div className="text-[11px] text-ink-500">
-          <span className="mr-2">agent types (targeting)</span>
-          {AGENT_TYPES.map((t) => (
-            <label key={t} className="mr-2 inline-flex items-center gap-1">
-              <input type="checkbox" checked={skillForm.agentTypes.includes(t)} onChange={() => setSkillForm({ ...skillForm, agentTypes: toggleInArray(skillForm.agentTypes, t) })} />
-              {t}
-            </label>
-          ))}
-        </div>
+        <p className="text-[12px] text-ink-500">{copy.skillHint}</p>
         <button onClick={createSkill} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Create Skill</button>
       </section>
 
       <section className="space-y-2">
         <h2 className="text-[13px] font-semibold">Agents</h2>
         {agents.map((a) => (
-          <div key={a.id} className="flex items-center justify-between rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
+          <div key={a.id} className="flex flex-wrap items-center justify-between gap-3 rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
             <div>
               <span className="font-semibold">{a.name}</span>{' '}
-              <span className="text-ink-400">({a.tier}, {a.agentType || 'generic'}, gw={(a.gateways && a.gateways.length ? a.gateways.join('+') : a.gateway)}, v{a.version}, skills={a.skills.length})</span>
+              <span className="text-ink-400">({a.tier}, gw={a.gateway}, v{a.version}, skills={a.skills.length})</span>
               <div className="text-ink-500">{a.description}</div>
+              <div className="text-ink-500">{copy.skills}: {a.skills.map((s) => s.name).join(', ') || '—'}</div>
+              {a.tier === 'custom' && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <select aria-label={copy.skillFor.replace('{agent}', a.name)} className="max-w-full rounded border border-ink-100 bg-paper px-2 py-1"
+                    value={selectedSkills[a.id] || ''} onChange={(e) => setSelectedSkills((current) => ({ ...current, [a.id]: e.target.value }))}>
+                    <option value="">{copy.selectSkill}</option>
+                    {skills.filter((s) => s.enabled && !a.skills.some((attached) => attached.name === s.name)).map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  <button aria-label={copy.attachTo.replace('{agent}', a.name)} disabled={!selectedSkills[a.id] || attaching !== null}
+                    onClick={() => attachSkill(a)} className="rounded border border-ink-100 px-2 py-1 disabled:opacity-40">{copy.attach}</button>
+                </div>
+              )}
             </div>
             {a.tier === 'custom'
               ? <button onClick={() => toggle('agent', a.id, a.enabled)} className={`rounded border px-2 py-1 text-[12px] ${a.enabled ? 'border-emerald-300 text-emerald-600' : 'border-ink-100 text-ink-400'}`}>{a.enabled ? 'Enabled' : 'Disabled'}</button>
@@ -218,7 +237,7 @@ export default function CustomizationPage() {
         <div>
           <h2 className="text-[13px] font-semibold">Integrations (advanced)</h2>
           <p className="text-[11px] text-ink-400">
-            {tt('데이터소스(Prometheus·Loki·…)와 커넥터(Notion)는 이제')} <a href="/integrations" className="text-brand-600 underline">{tt('연동 허브')}</a>{tt('에서 관리합니다.')} {tt('아래는 고급 — 임의 egress/ingress 통합 등록입니다.')}
+            {tt('데이터소스(Prometheus·Loki·…)와 커넥터(Notion)는 이제')} <a href="/integrations" className="text-brand-600 underline">{tt('연동 허브')}</a>{tt('에서 관리합니다.')} {copy.integrationHint}
           </p>
         </div>
 
@@ -301,9 +320,9 @@ export default function CustomizationPage() {
         <div className="text-[12px]">
           <div className="mb-1 font-medium">Tool allowlist (account cap, comma-separated)</div>
           <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
-                 placeholder="e.g. simulate_principal_policy, get_account_authorization_details"
+                 placeholder="e.g. iam-mcp-target___list_users"
                  value={allowlistText} onChange={(e) => setAllowlistText(e.target.value)} />
-          <div className="mt-1 text-ink-400">Empty = no account cap (Phase-1 advisory). A non-empty list can only REMOVE tools a skill declared — it never grants new tools.</div>
+          <div className="mt-1 text-ink-400">{copy.toolCapHint}</div>
         </div>
         <button onClick={saveSpace} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Save Agent Space</button>
       </section>

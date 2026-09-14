@@ -1,41 +1,26 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 24621c391e97 · generated-at: 2026-09-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f1a96df2de8d · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
-> You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
+> Reviewer context distilled from CLAUDE.md; shared across AI reviewers.
 
-# Documentation — Reviewer Context
+# Documentation review
 
-Project docs organized by purpose; each subdirectory has its own `CLAUDE.md`.
-`decisions/BASELINE.md` is the decision single source of truth (+ consolidated ADRs 001–021).
-`reference/` is current v2 design, one file per component. `plans/`, `superpowers/plans|specs`,
-and `history/` mix current, frozen, and superseded material — never treat them as live guidance
-on their own; anything about mutation/autonomy is settled by ADR-005 FROZEN regardless of what
-an old plan says.
+New/rewritten developer/reviewer docs are English-only. Existing bilingual bodies
+are a migration backlog; convert whole maintained documents while retaining facts.
+Keep multilingual docs-site user guides
+and app translations. Historical records retain their language/evidence.
 
-## Conventions
-- New documents are bilingual Korean/English, with two exceptions: **all `CLAUDE.md`-type files
-  are English-only regardless of directory** (they're context files Claude Code auto-loads —
-  the goal is context-size savings), and implementation-facing design specs under
-  `docs/superpowers/specs/` are English-only. "Stays bilingual" is about a directory's body
-  content, never its `CLAUDE.md`.
-- New ADR = consolidated-ADR highest number + 1 (currently 021); update `BASELINE.md` in the
-  same PR.
-- Don't mix current truth (`decisions/BASELINE.md` + `reference/`) with old plans/history when
-  citing what's live.
+Current decisions: `decisions/BASELINE.md` plus consolidated `NNN-*.md` ADRs.
+Current implementation references: `architecture.md`, `reference/`, `runbooks/`.
+Plans/specs/review records under `plans/`, `specs/`, `reviews/`, `superpowers/` and
+`history/` do not authorize features or prove deployment. In particular,
+`superpowers/reference/` is not the maintained `reference/` tree.
 
-## Review checklist
-1. A CLAUDE.md-type file added in Korean (or bilingual) anywhere in the repo is a convention
-   violation — flag it.
-2. A new ADR without a same-PR `BASELINE.md` update is "not live" (anti-drift) — flag it.
-3. Content sourced from `superpowers/plans|specs` or `history/` cited as current behavior
-   should be cross-checked against `decisions/BASELINE.md` before trusting it.
+Verify paths and commands against this checkout. Source/migrations/tests establish
+behavior; accepted decisions establish allowed behavior. Resolve contradictions
+with evidence, not a silent policy reversal. New ADRs update BASELINE; use
+ADR-MAPPING.md for legacy references. Do not invent required README sections,
+bilingual parity, counts, or a new changelog bullet for an already covered feature.
 
-## Known false-positives
-- `docs/plans/`, `docs/superpowers/plans|specs`, and `docs/history/` containing frozen-era or
-  superseded material is expected — that's their purpose, not drift to clean up.
-- `docs/superpowers/reference/` (a separate, stale planning-era copy) existing alongside the
-  current-truth `docs/reference/` is expected, not a duplicate to merge — don't cite the
-  `superpowers/` copy as current truth.
-
-## Additional rule
-- Docs tree only — no application logic. Watch for secrets/credentials in committed docs
-  (account IDs, ARNs, live domains, tokens) and reject them.
+Keep contexts concise and regenerate AGENTS after its CLAUDE source changes.
+Do not commit credentials; use placeholders in examples. Account IDs/ARNs are
+identifiers, not automatically credentials. Navigation: `README.md`.

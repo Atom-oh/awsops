@@ -17,6 +17,9 @@ export interface AgentSpace {
 }
 
 /**
+ * Legacy unqualified catalog/helper retained for compatibility. Live chat enforcement uses
+ * agent-resolver.ts and gateway-tool-catalog.json; this map cannot authorize new runtime tools.
+ *
  * Known-tool catalog, keyed by gateway. Pragmatic: the web tier does NOT hold the
  * full per-tool inventory of each gateway (that lives in the AgentCore gateway Lambdas
  * and is discovered live by agent.py). A `null` value = "inventory unknown here" → the
@@ -84,7 +87,7 @@ export async function getAgentSpace(accountId: string): Promise<AgentSpace | nul
       version: r.version as number,
     };
   } catch {
-    return null; // degrade to Phase-1; never break chat
+    throw new Error('Agent Space policy unavailable'); // unavailable is never an absent policy
   }
 }
 

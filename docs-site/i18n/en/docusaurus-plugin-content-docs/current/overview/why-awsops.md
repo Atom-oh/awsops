@@ -158,5 +158,5 @@ No need to memorize a different query language per tool — **one line of natura
 ## See also
 
 - [Dashboard overview](./dashboard) · [AI assistant](./ai-assistant) · [AgentCore details](./agentcore) · [Account management](./accounts)
-- [AI diagnosis](../monitoring/ai-diagnosis) · [EKS container cost](../compute/eks-container-cost) · [External datasources](../monitoring/datasources)
+- [AI diagnosis](../monitoring/ai-diagnosis) · [EKS container cost](../compute/eks-container-cost) · [External datasources](../observability/datasources)
 - [AWSops introduction (full architecture)](../intro)

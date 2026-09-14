@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@/lib/auth', () => ({ verifyUser: vi.fn() }));
+vi.mock('@aws-sdk/client-s3', () => ({
+  S3Client: vi.fn(() => ({ send: vi.fn(async () => ({ Body: { transformToString: async () =>
+    '## Executive Summary\nService latency increased.\npassword: private_value' } })) })),
+  GetObjectCommand: vi.fn(),
+}));
 vi.mock('@/lib/diagnosis', () => ({
   getReport: vi.fn(async (id: number) =>
     id === 1 ? { id: 1, tier: 'mid', status: 'succeeded', artifact_uri: null, requested_by: 'u@x.io' } : null,
@@ -11,7 +16,8 @@ vi.mock('@/lib/diagnosis', () => ({
 }));
 
 import { verifyUser } from '@/lib/auth';
-import { canMutateReport, updateReportMeta, softDeleteReport } from '@/lib/diagnosis';
+import { getReport, canMutateReport, updateReportMeta, softDeleteReport } from '@/lib/diagnosis';
+import { S3Client } from '@aws-sdk/client-s3';
 import { GET, PATCH, DELETE } from './route';
 
 // PATCH now reads the body via readJsonBounded (pentest-remediation P0-2), which streams
@@ -52,6 +58,22 @@ describe('GET /api/diagnosis/[id]', () => {
   it('403 for a non-owner, non-admin (read path is now gated, not just can_edit)', async () => {
     (canMutateReport as any).mockResolvedValue(false);
     expect((await GET(req(), { params: { id: '1' } })).status).toBe(403);
+    expect(S3Client).not.toHaveBeenCalled();
+  });
+  it('adds six sanitized manual drafts after the report access check', async () => {
+    vi.mocked(getReport).mockResolvedValueOnce({
+      id: 1, tier: 'deep', status: 'succeeded', artifact_uri: 's3://bucket/diagnosis/1.md',
+      requested_by: 'u', created_at: '2026-09-13T00:00:00Z', summary: {},
+    } as never);
+    const response = await GET(req(), { params: { id: '1' } });
+    const body = await response.json();
+    expect(body.handoff.drafts).toHaveLength(6);
+    expect(JSON.stringify(body.handoff)).not.toContain('private_value');
+    expect(body.handoff.drafts[0].text).toContain('/ai-diagnosis?report=1');
+    expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+  it('returns an unavailable handoff for a missing artifact', async () => {
+    expect((await (await GET(req(), { params: { id: '1' } })).json()).handoff).toBeNull();
   });
 });
 

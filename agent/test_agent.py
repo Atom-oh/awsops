@@ -11,6 +11,7 @@ import asyncio
 import sys
 import types
 import unittest
+from unittest.mock import AsyncMock, patch
 
 
 def _install_stubs():
@@ -44,7 +45,23 @@ def _install_stubs():
 
 
 _install_stubs()
-import agent  # noqa: E402  (import after stubs are installed)
+# Gateway discovery shells out at import time; an offline unit suite must never
+# discover resources using the developer/runner's ambient AWS credentials.
+with patch("subprocess.run", return_value=types.SimpleNamespace(stdout='{"items":[]}')):
+    import agent  # noqa: E402  (import after stubs are installed)
+
+
+class ReadinessEntrypointTest(unittest.TestCase):
+    def test_failure_is_one_structured_event_and_never_chat_fallback(self):
+        import readiness
+        payload = {"mode": "deployment_readiness"}
+        failure = {"status": "not_ready", "reason": "inventory_unavailable"}
+        async def consume():
+            return [event async for event in agent.handler(payload)]
+        with patch.object(readiness, "handle_readiness", new=AsyncMock(return_value=failure)) as probe, \
+                patch.object(agent, "build_conversation", side_effect=AssertionError("chat fallback")):
+            self.assertEqual(asyncio.run(consume()), [failure])
+            probe.assert_awaited_once()
 
 
 class FakeTool:
@@ -61,10 +78,26 @@ class FilterToolsTest(unittest.TestCase):
         tools = [FakeTool('a'), FakeTool('b')]
         self.assertIs(agent._filter_tools(tools, None), tools)
 
-    def test_empty_allowlist_returns_all_unchanged_not_deny_all(self):
-        # [] means "no restriction" (the resolver omits the key when empty), NOT deny-all.
+    def test_empty_allowlist_denies_all(self):
         tools = [FakeTool('a'), FakeTool('b')]
-        self.assertIs(agent._filter_tools(tools, []), tools)
+        self.assertEqual(agent._filter_tools(tools, []), [])
+
+    def test_qualified_names_never_authorize_other_targets_with_the_same_short_name(self):
+        tools = [FakeTool('first___query'), FakeTool('second___query')]
+        self.assertEqual(agent._filter_tools(tools, ['query']), [])
+        self.assertEqual(names(agent._filter_tools(tools, ['second___query'])), ['second___query'])
+
+    def test_duplicate_identities_are_denied_before_deduplication(self):
+        tools = [FakeTool('same'), FakeTool('same'), FakeTool('unique')]
+        self.assertEqual(names(agent._filter_tools(tools, ['same', 'unique'])), ['unique'])
+
+    def test_malformed_allowlists_fail_closed(self):
+        for allow in ('a', {}, [None], [1]):
+            self.assertEqual(agent._filter_tools([FakeTool('a')], allow), [])
+
+    def test_reserved_wire_deny_all_wins_even_if_advertised_or_mixed_with_a_tool(self):
+        tools = [FakeTool('!awsops-deny-all!'), FakeTool('a')]
+        self.assertEqual(agent._filter_tools(tools, ['!awsops-deny-all!', 'a']), [])
 
     def test_filters_to_allowlist_preserving_tool_order(self):
         tools = [FakeTool('a'), FakeTool('b'), FakeTool('c')]
@@ -429,6 +462,27 @@ class HandlerRoutingTest(unittest.TestCase):
         out = self._drain({})
         self.assertEqual(self.calls["run"], 0)
         self.assertEqual(out, [{"delta": "No input provided."}])
+
+    def test_strands_denies_empty_and_ambiguous_tool_sets_before_agent_construction(self):
+        self._al._use = False
+        from contextlib import nullcontext
+        seen = []
+
+        async def stream(_agent, _input):
+            yield {"delta": "ok"}
+
+        def make_agent(**kwargs):
+            seen.append(names(kwargs.get("tools", [])))
+            return object()
+
+        with patch.object(agent, 'MCPClient', return_value=nullcontext()), \
+             patch.object(agent, 'get_all_tools', return_value=[FakeTool('same'), FakeTool('same'), FakeTool('unique')]), \
+             patch.object(agent, 'Agent', side_effect=make_agent), \
+             patch.object(agent, '_stream_text', stream):
+            for allow in ([], ['same', 'unique']):
+                self.assertEqual(self._drain({'gateway': 'ops', 'prompt': 'inspect', 'toolAllowlist': allow}),
+                                 [{'delta': 'ok'}])
+        self.assertEqual(seen, [[], ['unique']])
 
     def test_rca_mode_wins_over_anthropic(self):
         self._al._use = True

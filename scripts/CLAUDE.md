@@ -1,58 +1,48 @@
 # Scripts
 
-## Role
-Deployment/ops automation behind the Makefile targets (`v2/`), plus the PR review panel
-(`pr-review/`). Node deps live in `scripts/v2/package.json` (pg, @inquirer/prompts,
-secrets-manager) — installed by `make deps`.
+Read root [CLAUDE.md](../CLAUDE.md) and
+[BASELINE.md](../docs/decisions/BASELINE.md) for policy. Run operational entry
+points from the repository root through the `Makefile`.
 
-## Key Files
-- `v2/configure.mjs` — `make configure`: interactive TUI → `terraform.tfvars` + `backend.hcl`.
-  AWS access shells out to the `aws` CLI, not the SDK.
-- `v2/deploy.mjs` — `make deploy` (runs migrate first): arm64 build → ECR push →
-  ECS force-new-deployment → wait stable → smoke `/api/health`. The `DOCKER` env defaults to
-  `sudo docker`.
-- `v2/workers.mjs` — `make workers`: builds and pushes the worker image **only**. The Fargate
-  worker is not an ECS service — SFN `RunTask` pulls `:worker-latest` at job time. Short jobs
-  deploy as Lambda zips and need no image. Run after applying with `workers_enabled=true`.
-- `v2/migrate.mjs` + `migrate-core.mjs` — `make migrate`: advisory-lock, checksum, stamps the
-  release version from the `-- since:` header. `DRY_RUN=1` previews; `--status` gives an
-  offline summary. Credentials come from `terraform output aurora_secret_arn` → Secrets
-  Manager (collision-free, fail-loud migration runner).
-- `v2/agentcore.mjs` + `agentcore/` — `make agentcore`: arm64 agent image + idempotent
-  provisioner, writes to SSM.
-- `v2/*.itest.mjs` — migration integration tests against a disposable PostgreSQL 17 container.
-- `v2/upgrade.sh` — `make upgrade`: RDS snapshot → migrate → deploy. Previews unless
-  `CONFIRM=go`.
-- `pr-review/` — lens×model review panel: `run-panel.sh` (parallel fan-out, one `*.txt` prompt
-  per lens), `synthesize.sh` (chair synthesis), `lib.sh` (slot/credential scrubbing).
-  `review_scope.py` is the trusted controller: `select` pins current-base or verified
-  merge-parent scope, `bind` records the diff hash, `gate` requires complete content and
-  all model findings, and `verify` rechecks scope before publication. `failure-context`
-  permits an explicit blocked report without replacing a newer HEAD's review.
-  `REVIEW_SCOPE_FILE`, `REVIEW_CONTROL` and `REVIEW_HELPER` stay outside the reviewed
-  checkout; control code comes from the workflow SHA, never PR head. The unit suite
-  `test_review_scope.py` runs through `merge-verify.sh`.
-  To audit a previously merged PR, dispatch `pr-review.yml` from `main` with
-  `pr_number`. The PR must be a same-repository `main` merge with exactly two parents;
-  the second parent and merged tree must match its recorded HEAD. Other merge forms
-  fail closed. A moved scope publishes BLOCKED and requires a re-run; a newer HEAD
-  keeps its canonical review, with the old run reported separately.
-  - **The chair call MUST pass `--strict-mcp-config`.** A user-scope MCP server (e.g. github)
-    loads at session init; if its auth is broken, `claude -p` waits silently for the tool until
-    `CHAIR_TIMEOUT` (currently 900s) with no error — killing both primary and fallback chairs
-    and failing the gate regardless of the diff (observed: PR #194/#197/#202/#203).
-    `--allowedTools` is a permission allowlist and does not stop MCP loading, so it is not a
-    substitute.
+## Operational entry points
 
-## Migration Filename Rule
-- `terraform/v2/foundation/migrations/<ULID>_<snake_name>.sql`
-- ULID = 26-char Crockford base32 — **no I, L, O, U** (`/^[0-9A-HJKMNP-TV-Z]{26}$/i`).
-  Hand-numbered (integer) ids are rejected by the runner; only ULID filenames are accepted.
-- Duplicate ids fail loud before connecting; sort order is lexical (which is also time order
-  for ULIDs).
+- `v2/steampipe/gen_spc_entrypoint.py` verifies STS and the enabled host registry
+  before rendering when `INVENTORY_HOST_ONLY=true`. An invalid initial scope prevents
+  startup; a scope failure observed by the watchdog stops the service. Host collection
+  keeps all enabled regions. Terraform controls the associated role grants.
 
-## Rules
-- Scripts assume they run from the repo root (they resolve resource addresses via
-  `terraform -chdir=terraform/v2/foundation output`) — prefer the Makefile targets over running
-  scripts directly.
-- For the emergency IAM `put-role-policy` convention, see `terraform/CLAUDE.md`.
+- `make deps` installs `scripts/v2/package.json` dependencies. `make configure`
+  writes local config for `terraform/v2/foundation/`.
+- `make deploy` runs migrations, builds/pushes the arm64 web image, rolls ECS,
+  waits for stability, and checks `/api/health`.
+- `make agentcore` builds/pushes the arm64 runtime and runs the idempotent
+  provisioner. Run `make migrate` first; it creates/synchronizes the SQL reader.
+  MCP Lambda changes ship through Terraform.
+- `make workers` builds/pushes the Fargate worker image. Step Functions starts
+  worker tasks on demand; there is no worker ECS service to restart.
+- `make upgrade` previews unless `CONFIRM=go`. Follow existing operator
+  authorization; shared Terraform applies belong to the controller.
+
+## Migrations
+
+`v2/migrate.mjs` and `migrate-core.mjs` enforce ULID filenames, checksums, and an
+advisory lock. Add `terraform/v2/foundation/migrations/<ULID>_<name>.sql`; preserve
+merged contents, including `-- since:` headers. `make migrate-status` is offline;
+`DRY_RUN=1 make migrate` compares against the live ledger without applying SQL.
+Migration integration tests (`v2/*.itest.mjs`) use disposable PostgreSQL containers.
+
+`make backfill-owner-sub` only plans. Disable legacy email ownership only after a
+successful apply confirms zero remaining legacy rows, per BASELINE.
+
+## Review tooling
+
+`pr-review/run-panel.sh`, `report_frame.py`, `lib.sh`, and `synthesize.sh` define
+required review coverage and the completion protocol. Every required cell must
+complete for the reviewed HEAD. Preserve nonce-bound final JSON report frames,
+redaction, retry/time limits, and fail-closed coverage/chair validation.
+`preflight-aws-session.py` checks ambient Pod Identity without changing providers
+or signing settings. The chair retains `--strict-mcp-config`.
+
+Offline checks: `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v`.
+Read those tests for protocol details rather than copying model rosters or frame
+examples into context docs. Never bypass required checks or expose full environments.

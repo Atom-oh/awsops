@@ -4,6 +4,7 @@ import { ArrowUp, X } from 'lucide-react';
 import { parseSlash, matchCommands, SLASH_COMMANDS, type SlashCommand } from '@/lib/slash';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import SlashMenu from './SlashMenu';
+import { getActiveAccount } from '@/lib/account-context';
 
 const MENU_ID = 'slash-menu';
 
@@ -24,6 +25,33 @@ export default function Composer({
   const [target, setTarget] = useState<SlashCommand | null>(null);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [customCommands, setCustomCommands] = useState<SlashCommand[]>([]);
+
+  useEffect(() => {
+    let disposed = false;
+    let controller: AbortController | undefined;
+    const refresh = () => {
+      controller?.abort();
+      controller = new AbortController();
+      const signal = controller.signal;
+      setCustomCommands([]);
+      setTarget(current => current && !SLASH_COMMANDS.some(c => c.key === current.key) ? null : current);
+      void fetch(`/api/chat/agents?accountId=${encodeURIComponent(getActiveAccount())}`, { signal })
+        .then(async response => {
+          const body = response.ok ? await response.json() : null;
+          if (!disposed && !signal.aborted && body?.enabled === true && Array.isArray(body.agents)) {
+            setCustomCommands(body.agents.filter((c: Partial<SlashCommand>) =>
+              c && typeof c.key === 'string' && typeof c.label === 'string' && typeof c.icon === 'string' && c.active === true));
+          }
+        }).catch(() => { /* no stale custom commands after a failed refresh */ });
+    };
+    refresh();
+    window.addEventListener('awsops:scopechange', refresh);
+    return () => {
+      disposed = true; controller?.abort();
+      window.removeEventListener('awsops:scopechange', refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (seed?.text) { setTarget(null); setText(seed.text); inputRef.current?.focus(); }
@@ -38,8 +66,8 @@ export default function Composer({
   }, [text]);
 
   // Menu shows while the field is a bare leading-slash fragment (no space yet) and no chip is set.
-  const menuOpen = !target && /^\/[a-z-]*$/.test(text);
-  const commands = menuOpen ? matchCommands(text.slice(1)) : [];
+  const menuOpen = !target && /^\/[a-z0-9-]*$/.test(text);
+  const commands = menuOpen ? matchCommands(text.slice(1), customCommands) : [];
   const activeIdx = commands.length ? Math.min(active, commands.length - 1) : 0;
 
   function pick(c: SlashCommand) {
@@ -57,10 +85,10 @@ export default function Composer({
       setText(''); setTarget(null);
       return;
     }
-    const { section, prompt } = parseSlash(text);
+    const { section, prompt } = parseSlash(text, customCommands);
     if (section && !prompt.trim()) {
       // a bare "/network " typed directly (menu already closed by the space) → set the chip, wait
-      const cmd = SLASH_COMMANDS.find((c) => c.key === section);
+      const cmd = matchCommands('', customCommands).find((c) => c.key === section);
       if (cmd) { setTarget(cmd); setText(''); return; }
     }
     if (!prompt.trim()) return;
