@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useActiveAccount, accountParam } from '@/lib/account-context';
+import { fetchGraph } from '@/lib/graph-fetch';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { Background, Controls, Position, type Node, type Edge } from '@xyflow/react';
@@ -41,14 +42,15 @@ export default function ResourceTopologyPage({ params }: { params: { id: string 
 
   useEffect(() => {
     let live = true;
+    const controller = new AbortController();
     setBusy(true);
     setGraph(null);
-    fetch(`/api/graph?class=infra&from=${encodeURIComponent(fromId)}&depth=${depth}&${accountParam(activeAccount) || 'account=self'}`)
+    fetchGraph(`/api/graph?class=infra&from=${encodeURIComponent(fromId)}&depth=${depth}&${accountParam(activeAccount) || 'account=self'}`, controller.signal)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (live) { setGraph(d); setErr(''); } })
       .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); })
       .finally(() => { if (live) setBusy(false); });
-    return () => { live = false; };
+    return () => { live = false; controller.abort(); };
   }, [fromId, depth, activeAccount]);
 
   const { nodes, edges } = useMemo(() => {

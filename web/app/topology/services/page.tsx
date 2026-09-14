@@ -10,6 +10,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import { layoutFlow } from '@/lib/flow-layout';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import GraphCollectionStatus from '@/components/topology/GraphCollectionStatus';
+import { fetchGraph } from '@/lib/graph-fetch';
 
 // ReactFlow touches the DOM on mount — client-only.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
@@ -56,13 +57,14 @@ export default function ServiceMapPage() {
 
   useEffect(() => {
     let live = true;
+    const controller = new AbortController();
     setBusy(true);
-    fetch('/api/graph?class=trace')
+    fetchGraph('/api/graph?class=trace', controller.signal)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (live) { setGraph(d); setErr(''); } })
       .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); })
       .finally(() => { if (live) setBusy(false); });
-    return () => { live = false; };
+    return () => { live = false; controller.abort(); };
   }, [revision]);
 
   const environments = useMemo(() => [...new Set((graph?.nodes ?? [])

@@ -14,6 +14,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import E2eGraphCanvas from './E2eGraphCanvas';
 import GraphCollectionStatus from './GraphCollectionStatus';
+import { fetchGraph } from '@/lib/graph-fetch';
 
 export interface ConfigurationCollection {
   type: string;
@@ -68,8 +69,8 @@ const validTime = (value: unknown): value is string => typeof value === 'string'
 const emptySource = <T,>(loading: boolean): Source<T> => ({ loading, data: null, error: '', checkedAt: null });
 const errorText = (error: unknown): string => error instanceof Error ? error.message : '소스를 불러오지 못했습니다.';
 
-async function readSource(url: string, signal: AbortSignal): Promise<Record<string, unknown>> {
-  const response = await fetch(url, { signal });
+async function readSource(url: string, signal: AbortSignal, graph = false): Promise<Record<string, unknown>> {
+  const response = await (graph ? fetchGraph(url, signal) : fetch(url, { signal }));
   const body: unknown = await response.json().catch(() => null);
   const message = object(body) ? body.message ?? body.error : undefined;
   if (!response.ok) throw new Error(`HTTP ${response.status}${nonempty(message) ? ` · ${message}` : ''}`);
@@ -164,7 +165,7 @@ function ScopedServiceNetworkTopology({ configured, account, configuration, onBa
       }).catch((error: unknown) => {
         if (!signal.aborted) setMonitors({ ...emptySource<MonitorStatus>(false), error: errorText(error) });
       }),
-      readSource('/api/graph?class=trace', signal).then(readServices).then((data) => {
+      readSource('/api/graph?class=trace', signal, true).then(readServices).then((data) => {
         if (!signal.aborted) setServices({ loading: false, data, error: '', checkedAt: new Date().toISOString() });
       }).catch((error: unknown) => {
         if (!signal.aborted) setServices({ ...emptySource<ServiceSnapshot>(false), error: errorText(error) });

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useActiveAccount, accountParam } from '@/lib/account-context';
+import { fetchGraph } from '@/lib/graph-fetch';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { Background, Controls, Position, type Node, type Edge } from '@xyflow/react';
@@ -49,14 +50,15 @@ function GraphView({ q }: { q: string }) {
 
   useEffect(() => {
     let live = true;
+    const controller = new AbortController();
     setBusy(true);
     setGraph(null);
-    fetch(`/api/graph?class=infra&${accountParam(activeAccount) || 'account=self'}`)
+    fetchGraph(`/api/graph?class=infra&${accountParam(activeAccount) || 'account=self'}`, controller.signal)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (live) { setGraph(d); setErr(''); } })
       .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); })
       .finally(() => { if (live) setBusy(false); });
-    return () => { live = false; };
+    return () => { live = false; controller.abort(); };
   }, [activeAccount]);
 
   // Multi-match search highlight (v1 parity): id/label/kind/meta substring, case-insensitive.
