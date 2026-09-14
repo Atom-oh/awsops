@@ -376,7 +376,8 @@ class VerifierTests(unittest.TestCase):
             lambda: self.aws.profile.update(UserStatus="FORCE_CHANGE_PASSWORD"),
             lambda: self.aws.profile.update(UserStatus="EXTERNAL_PROVIDER"),
             lambda: setattr(self.aws, "groups", [{"Groups": [{"GroupName": "admins"}]}]),
-            lambda: setattr(self.aws, "groups", [{"Groups": []}, {"Groups": [{"GroupName": "deployment-verifiers"}]}]),
+            lambda: setattr(self.aws, "groups", [{"Groups": [{"GroupName": "deployment-verifiers",
+                                                            "RoleArn": f"arn:aws:iam::{ACCOUNT}:role/privileged"}]}]),
             lambda: self.aws.profile["UserAttributes"][1].update(Value="someone@example.test"),
             lambda: self.aws.profile["UserAttributes"][2].update(Value="false"),
         ]
@@ -388,6 +389,12 @@ class VerifierTests(unittest.TestCase):
                 self.invoke(apply=True, ok=False)
                 self.assertEqual(self.aws.writes(), [])
                 self.assertIsNotNone(self.aws.profile)
+
+    def test_existing_readiness_group_is_allowed_without_rotation_or_new_grants(self):
+        self.aws.existing()
+        self.aws.groups = [{"Groups": [{"GroupName": "deployment-verifiers"}]}]
+        self.invoke(apply=True)
+        self.assertEqual(self.aws.writes(), [])
 
     def test_new_user_receiving_unexpected_group_privileges_is_not_published(self):
         self.aws.after["admin_create_user"] = lambda: setattr(self.aws, "groups", [

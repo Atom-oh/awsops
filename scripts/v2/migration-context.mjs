@@ -33,9 +33,10 @@ export function readMigrationContext(path, expected) {
         || value[key] !== expected[key]) invalid();
   }
   if (typeof value.endpoint !== 'string' || !/^[a-z0-9][a-z0-9.-]+$/.test(value.endpoint)
+      || !value.endpoint.startsWith(`${expected.project}-aurora.cluster-`)
       || !value.endpoint.endsWith(`.${expected.region}.rds.amazonaws.com`)) invalid();
   const prefix = `arn:aws:secretsmanager:${expected.region}:${expected.account}:secret:`;
-  if (typeof value.secret_arn !== 'string' || !value.secret_arn.startsWith(prefix)
+  if (typeof value.secret_arn !== 'string' || !value.secret_arn.startsWith(prefix + 'rds!cluster-')
       || !/^[A-Za-z0-9/_+=.@!-]+-[A-Za-z0-9]{6}$/.test(value.secret_arn.slice(prefix.length))) invalid();
   if (value.sql_reader_secret_arn !== null) {
     const readerPrefix = `${prefix}ops/${expected.project}/agent/sql-reader-`;
@@ -44,4 +45,17 @@ export function readMigrationContext(path, expected) {
         || !/^[A-Za-z0-9]{6}$/.test(value.sql_reader_secret_arn.slice(readerPrefix.length))) invalid();
   }
   return value;
+}
+
+/** Reconfirm file metadata against the owned cluster, not only its DNS suffix. */
+export function validateMigrationDatabase(context, response) {
+  const clusters = response?.DBClusters;
+  if (!Array.isArray(clusters) || clusters.length !== 1) invalid();
+  const db = clusters[0];
+  const arn = `arn:aws:rds:${context.region}:${context.account}:cluster:${context.project}-aurora`;
+  if (db.DBClusterArn !== arn || db.DBClusterIdentifier !== `${context.project}-aurora`
+      || db.Endpoint !== context.endpoint || db.DatabaseName !== context.database
+      || db.Status !== 'available' || db.MasterUserSecret?.SecretArn !== context.secret_arn
+      || db.MasterUserSecret?.SecretStatus !== 'active') invalid();
+  return context;
 }

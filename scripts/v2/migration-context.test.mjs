@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readMigrationContext } from './migration-context.mjs';
+import { readMigrationContext, validateMigrationDatabase } from './migration-context.mjs';
 
 const expected = {
   commit: 'a'.repeat(40), account: '123456789012', region: 'ap-northeast-2', project: 'awsops-fixture',
@@ -41,6 +41,7 @@ test('rejects stale source, foreign targets, injected hosts and credential paylo
     { commit: 'b'.repeat(40) }, { account: '999999999999' },
     { region: 'us-east-1' }, { project: 'foreign' }, { database: 'postgres' },
     { endpoint: 'attacker.example.test' },
+    { endpoint: 'foreign-aurora.cluster-example.ap-northeast-2.rds.amazonaws.com' },
     { secret_arn: context.secret_arn.replace('123456789012', '999999999999') },
     { sql_reader_secret_arn: context.sql_reader_secret_arn.replace('awsops-fixture', 'foreign') },
     { password: 'must-not-be-in-metadata' },
@@ -49,6 +50,25 @@ test('rejects stale source, foreign targets, injected hosts and credential paylo
     assert.throws(() => readMigrationContext(path, expected));
   }
 }));
+
+test('live owned-cluster metadata binds the endpoint and exact managed secret', () => {
+  const db = {
+    DBClusterArn: `arn:aws:rds:${expected.region}:${expected.account}:cluster:${expected.project}-aurora`,
+    DBClusterIdentifier: `${expected.project}-aurora`, Endpoint: context.endpoint,
+    DatabaseName: 'awsops', Status: 'available',
+    MasterUserSecret: { SecretArn: context.secret_arn, SecretStatus: 'active' },
+  };
+  assert.deepEqual(validateMigrationDatabase(context, { DBClusters: [db] }), context);
+  for (const changed of [
+    { DBClusterArn: db.DBClusterArn.replace(expected.account, '999999999999') },
+    { DBClusterIdentifier: 'foreign-aurora' },
+    { Endpoint: context.endpoint.replace('cluster-example', 'cluster-foreign') },
+    { MasterUserSecret: { SecretArn: context.secret_arn.replace('example', 'foreign'), SecretStatus: 'active' } },
+  ]) {
+    assert.throws(() => validateMigrationDatabase(context, { DBClusters: [{ ...db, ...changed }] }));
+  }
+  assert.throws(() => validateMigrationDatabase(context, { DBClusters: [] }));
+});
 
 test('rejects public files and missing independent expectations', () => fixture((path) => {
   chmodSync(path, 0o644);

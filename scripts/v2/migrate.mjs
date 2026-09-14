@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import pg from 'pg';
 import { migrationTls } from './migrate-tls.mjs';
-import { readMigrationContext } from './migration-context.mjs';
+import { readMigrationContext, validateMigrationDatabase } from './migration-context.mjs';
 import {
   parseMigrationFile, computePending, sha256, findDuplicateIds, hasNoTxnFlag,
   parseSinceHeader, resolveAppVersion,
@@ -44,6 +44,11 @@ function migrationContext() {
         commit, account: process.env.CI_EXPECTED_ACCOUNT_ID,
         project: process.env.CI_EXPECTED_PROJECT, region: REGION,
       });
+      const database = JSON.parse(execFileSync('aws', [
+        'rds', 'describe-db-clusters', '--db-cluster-identifier', `${ciMetadata.project}-aurora`,
+        '--region', REGION, '--output', 'json', '--no-cli-pager',
+      ], { cwd: ROOT, encoding: 'utf8' }));
+      validateMigrationDatabase(ciMetadata, database);
     }
     ciLoaded = true;
   }

@@ -2,8 +2,8 @@
 """One-time operator bootstrap of an unprivileged Cognito smoke-test principal.
 
 Required: --account --region --project --user-pool-id --secret-arn
-Default is a read-only plan. --apply explicitly enables creation. Terraform must
-already own the Secrets Manager metadata resource; this helper never creates or
+Default is a read-only plan. --apply explicitly enables creation. The deployment
+owner must supply existing governed Secrets Manager metadata; this helper never creates or
 changes that resource, groups, policies, app clients or existing users.
 
 The pool Name must exactly equal <project>-pool. The secret name must be
@@ -174,7 +174,7 @@ class Bootstrap:
                     "user_mfa_requires_interaction")
         return sub
 
-    def no_groups(self, sub):
+    def safe_groups(self, sub):
         paginator = self.cognito.get_paginator("admin_list_groups_for_user")
         seen = 0
         for page in paginator.paginate(UserPoolId=self.args.user_pool_id, Username=sub,
@@ -182,13 +182,15 @@ class Bootstrap:
             seen += 1
             require(seen <= 5, "group_check_incomplete")
             require(isinstance(page.get("Groups"), list), "group_check_incomplete")
-            require(not page["Groups"], "user_has_group_privileges")
+            require(all(isinstance(group, dict) and group.get("GroupName") == "deployment-verifiers"
+                        and not group.get("RoleArn") for group in page["Groups"]),
+                    "user_has_group_privileges")
         require(seen > 0, "group_check_incomplete")
 
     def check_created(self, *, ready):
         sub = self.identity(self.get_user(self.created_sub), ready=ready)
         require(sub == self.created_sub, "created_user_identity_changed")
-        self.no_groups(sub)
+        self.safe_groups(sub)
 
     def generate_password(self):
         groups = (string.ascii_lowercase, string.ascii_uppercase, string.digits, SYMBOLS)
@@ -204,7 +206,7 @@ class Bootstrap:
         profile = self.get_user()
         if profile is not None:
             sub = self.identity(profile, ready=True)
-            self.no_groups(sub)
+            self.safe_groups(sub)
             require(stored is not None, "existing_user_without_secret")
             return "reuse_existing"
 
