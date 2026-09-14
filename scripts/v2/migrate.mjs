@@ -8,11 +8,13 @@
 //   `-- since: <semver>` header if present, else APP_VERSION env, else web/package.json "version".
 // Creds from `terraform output -raw aurora_secret_arn` → Secrets Manager (mirrors scripts/13-deploy-aurora.sh).
 // pg is resolved from scripts/v2/node_modules (also a web/ dep, separately). Requires PostgreSQL DDL transactionality.
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import pg from 'pg';
+import { migrationTls } from './migrate-tls.mjs';
+import { readMigrationContext } from './migration-context.mjs';
 import {
   parseMigrationFile, computePending, sha256, findDuplicateIds, hasNoTxnFlag,
   parseSinceHeader, resolveAppVersion,
@@ -30,8 +32,40 @@ const STATUS = process.argv.includes('--status') || process.env.STATUS === '1';
 const PKG_JSON = (() => { try { return readFileSync(join(ROOT, 'web', 'package.json'), 'utf8'); } catch { return ''; } })();
 const APP_VERSION = resolveAppVersion(process.env.APP_VERSION, PKG_JSON);
 
-const tf = (out) => execSync(`terraform -chdir=${TF} output -raw ${out}`, { cwd: ROOT, encoding: 'utf8' }).trim();
-const tfOptional = (out) => { try { return tf(out); } catch { return ''; } };
+let ciLoaded = false;
+let ciMetadata = null;
+function migrationContext() {
+  if (!ciLoaded) {
+    if (process.env.CI_MIGRATION_CONTEXT !== undefined) {
+      if (!process.env.CI_MIGRATION_CONTEXT) throw new Error('CI migration context path is empty');
+      const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+      if (commit !== process.env.CI_COMMIT_SHA) throw new Error('CI migration source changed');
+      ciMetadata = readMigrationContext(process.env.CI_MIGRATION_CONTEXT, {
+        commit, account: process.env.CI_EXPECTED_ACCOUNT_ID,
+        project: process.env.CI_EXPECTED_PROJECT, region: REGION,
+      });
+    }
+    ciLoaded = true;
+  }
+  return ciMetadata;
+}
+const tf = (out) => {
+  const context = migrationContext();
+  if (context) {
+    const fields = {
+      aurora_secret_arn: 'secret_arn', aurora_endpoint: 'endpoint',
+      agent_sql_reader_secret_arn: 'sql_reader_secret_arn',
+    };
+    if (!Object.hasOwn(fields, out)) throw new Error('Unsupported CI migration metadata field');
+    return context[fields[out]] ?? '';
+  }
+  return execSync(`terraform -chdir=${TF} output -raw ${out}`, { cwd: ROOT, encoding: 'utf8' }).trim();
+};
+const tfOptional = (out) => {
+  // An invalid/incomplete CI context must never fall back to Terraform or skip a reader check.
+  if (process.env.CI_MIGRATION_CONTEXT !== undefined) return tf(out);
+  try { return tf(out); } catch { return ''; }
+};
 const die = (msg) => { console.error(`\n✗ ${msg}`); process.exit(1); };
 
 // 1. Load migration files + fail-loud duplicate-id precheck (before connecting).
@@ -68,11 +102,12 @@ if (migrations.length === 0) { console.log('migrate: no migration files — noth
 function loadCreds() {
   const secretArn = tf('aurora_secret_arn');
   const endpoint = tf('aurora_endpoint');
+  const ssl = migrationTls(endpoint);
   const secret = JSON.parse(execSync(
     `aws secretsmanager get-secret-value --region ${REGION} --secret-id ${secretArn} --query SecretString --output text`,
     { cwd: ROOT, encoding: 'utf8' },
   ));
-  return { host: endpoint, user: secret.username, password: secret.password, database: 'awsops', port: 5432, ssl: { rejectUnauthorized: false } };
+  return { host: endpoint, user: secret.username, password: secret.password, database: 'awsops', port: 5432, ssl };
 }
 
 // Sync the Terraform-generated password for the least-privilege `awsops_sql_reader` role (see the
@@ -99,7 +134,12 @@ async function syncSqlReaderPassword(client) {
     `aws secretsmanager get-secret-value --region ${REGION} --secret-id ${arn} --query SecretString --output text`,
     { cwd: ROOT, encoding: 'utf8' },
   ));
-  if (!secret.password) die('sql-reader secret has no password field');
+  if (typeof secret.password !== 'string' || !secret.password) die('sql-reader secret has no password field');
+  const context = migrationContext();
+  if (context && (secret.username !== 'awsops_sql_reader'
+      || (secret.host && secret.host !== context.endpoint))) {
+    die('sql-reader secret does not match the CI database context');
+  }
   // ALTER ROLE ... PASSWORD takes no bind parameters — escape via pg's own literal escaper.
   await client.query(`ALTER ROLE awsops_sql_reader WITH PASSWORD ${client.escapeLiteral(secret.password)}`);
   console.log('sql-reader: password synced from Secrets Manager');
