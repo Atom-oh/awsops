@@ -49,6 +49,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from ci_edge_http import EdgeHTTPSHandler, cloudfront_domain
 
 
 from ci_origin_common import (
@@ -113,6 +114,7 @@ class Controller:
         require(re.fullmatch(r"(af|ap|ca|eu|il|me|mx|sa|us)-(central|east|north|northeast|northwest|south|southeast|southwest|west)-[1-9][0-9]*", c["region"]),
                 "invalid_region")
         c["url"] = origin(c["url"])
+        c["cloudfront_domain"] = cloudfront_domain(os.environ.get("CI_CLOUDFRONT_DOMAIN", ""))
         require(urllib.parse.urlsplit(os.environ["CI_EXPECTED_URL"]).path in ("", "/"), "invalid_origin")
         require(os.environ.get("TF_ROOT", TF_ROOT) in (TF_ROOT, str(ROOT / TF_ROOT)), "invalid_tf_root")
         c["tf_root"] = TF_ROOT
@@ -672,7 +674,14 @@ class Controller:
         require(isinstance(email, str) and 0 < len(email) <= 254
                 and isinstance(password, str) and 0 < len(password) <= 256, "invalid_smoke_credentials")
         jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(RejectRedirects(), urllib.request.HTTPCookieProcessor(jar))
+        handlers = [RejectRedirects(), urllib.request.HTTPCookieProcessor(jar)]
+        if self.context["cloudfront_domain"]:
+            handlers.extend([
+                urllib.request.ProxyHandler({}),
+                EdgeHTTPSHandler(urllib.parse.urlsplit(self.context["url"]).hostname,
+                                 self.context["cloudfront_domain"]),
+            ])
+        opener = urllib.request.build_opener(*handlers)
 
         def request(path, payload=None):
             headers = {"Accept": "application/json", "Cache-Control": "no-cache"}

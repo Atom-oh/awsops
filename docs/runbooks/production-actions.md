@@ -38,6 +38,7 @@ Configure these **metadata-only** repository or production-environment variables
 | `AWSOPS_REGION` | Foundation region |
 | `AWSOPS_PROJECT` | Foundation project |
 | `AWSOPS_PUBLIC_URL` | HTTPS service origin; must match the existing web task's `APP_DOMAIN` |
+| `AWSOPS_CLOUDFRONT_DOMAIN` | Optional owned distribution `DomainName`, verified by an operator to carry the service alias; use when runner DNS cannot resolve the service domain |
 | `AWSOPS_RELEASE_ROLE_ARN` | `github_actions_release_role_arn` |
 | `AWSOPS_SMOKE_SECRET_ARN` | `github_actions_smoke_secret_arn` |
 | `AWSOPS_SQL_READER_SECRET_ARN` | Existing `agent_sql_reader_secret_arn`, or explicit `disabled` when that capability is absent |
@@ -104,6 +105,13 @@ An ECS rollback to another image is a failed release, even if the service
 becomes healthy again. A changed source, service, tag or image also fails.
 Private manifests and verifier credentials are cleaned on success or failure;
 credentials and raw Terraform state are not uploaded as artifacts.
+
+If the runner cannot resolve the service alias, the optional CloudFront domain
+changes only the DNS/TCP destination. The original service URL remains the HTTP
+Host, TLS SNI/certificate hostname, cookie domain and redirect boundary. The edge
+path remains CloudFront; certificate verification is never disabled. When this
+explicit route is used, ambient HTTP proxies are not used. A missing optional
+variable preserves normal DNS resolution.
 The promoted `web-latest` tag is not automatically restored after a failed
 verification. Investigate a failure that reached rollout before re-dispatching:
 workflow cleanup removes the per-run journals, so a new dispatch is a new release
