@@ -8,11 +8,16 @@ terraform {
   }
 }
 
+# Read the existing provider during bootstrap; never create or update it.
+data "aws_iam_openid_connect_provider" "github" {
+  count = var.enabled ? 1 : 0
+  arn   = "arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"
+}
+
 # Construct existing resource identities from metadata rather than depending on
 # the foundation's ECR, ECS, database or global OIDC-provider resources.
 locals {
-  ecs_cluster_arn  = "arn:aws:ecs:${var.region}:${var.account_id}:cluster/${var.project}"
-  state_bucket_arn = "arn:aws:s3:::${coalesce(var.state_bucket, "unconfigured")}"
+  ecs_cluster_arn = "arn:aws:ecs:${var.region}:${var.account_id}:cluster/${var.project}"
   release_secret_arns = concat(
     var.migration_secret_arns, aws_secretsmanager_secret.verifier[*].arn,
   )
@@ -30,7 +35,7 @@ resource "aws_iam_role" "release" {
       Effect = "Allow"
       Action = "sts:AssumeRoleWithWebIdentity"
       Principal = {
-        Federated = "arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"
+        Federated = data.aws_iam_openid_connect_provider.github[0].arn
       }
       Condition = {
         StringEquals = {
@@ -40,6 +45,20 @@ resource "aws_iam_role" "release" {
       }
     }]
   })
+
+  lifecycle {
+    precondition {
+      condition     = contains(data.aws_iam_openid_connect_provider.github[0].client_id_list, "sts.amazonaws.com")
+      error_message = "The existing GitHub OIDC provider must already include the sts.amazonaws.com audience."
+    }
+    precondition {
+      condition = contains([
+        "https://token.actions.githubusercontent.com",
+        "token.actions.githubusercontent.com",
+      ], data.aws_iam_openid_connect_provider.github[0].url)
+      error_message = "The existing OIDC provider must use the exact GitHub Actions issuer URL."
+    }
+  }
 }
 
 # Only metadata is managed. The operator supplies the verifier value separately.
@@ -71,27 +90,17 @@ resource "aws_iam_role_policy" "release" {
           "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage",
           "ecr:GetDownloadUrlForLayer", "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
+          "ecr:DescribeRepositories",
         ]
         Resource  = "arn:aws:ecr:${var.region}:${var.account_id}:repository/${var.project}-web"
         Condition = local.region_condition
       },
       {
-        Sid      = "BackendBucketMetadata"
-        Effect   = "Allow"
-        Action   = ["s3:GetBucketLocation", "s3:ListBucket"]
-        Resource = local.state_bucket_arn
-        Condition = {
-          StringEquals = { "s3:ResourceAccount" = var.account_id }
-        }
-      },
-      {
-        Sid      = "BackendStateRead"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = "${local.state_bucket_arn}/${coalesce(var.state_key, "unconfigured")}"
-        Condition = {
-          StringEquals = { "s3:ResourceAccount" = var.account_id }
-        }
+        Sid       = "OwnDatabaseMetadata"
+        Effect    = "Allow"
+        Action    = ["rds:DescribeDBClusters"]
+        Resource  = "arn:aws:rds:${var.region}:${var.account_id}:cluster:${var.project}-aurora"
+        Condition = local.region_condition
       },
       {
         Sid       = "ExplicitReleaseSecrets"
@@ -101,6 +110,9 @@ resource "aws_iam_role_policy" "release" {
         Condition = local.region_condition
       },
       {
+        # IAM scopes the target service, not UpdateService's fields. Desired
+        # count/network/deployment changes remain possible; restart-only behavior
+        # must be enforced by a separately reviewed consumer, not claimed by IAM.
         Sid       = "WebService"
         Effect    = "Allow"
         Action    = ["ecs:UpdateService", "ecs:DescribeServices"]

@@ -7,23 +7,11 @@ variable "github_actions_enabled" {
   description = "Opt in to the origin production GitHub Actions web-release role and verifier-secret metadata."
 }
 
-variable "github_actions_state_bucket" {
-  type        = string
-  default     = null
-  description = "Existing backend bucket name, not credentials; required when GitHub Actions is enabled."
-}
-
-variable "github_actions_state_key" {
-  type        = string
-  default     = null
-  description = "Exact existing backend state object key; grants read access only."
-}
-
 variable "github_actions_migration_secret_arns" {
   type        = list(string)
   default     = []
   nullable    = false
-  description = "Explicit existing same-account/region Aurora master and reader secret ARNs, never secret values."
+  description = "Optional existing migration secret ARNs; grant only for an identified reachable private executor. No values."
 }
 
 variable "github_actions_secret_kms_key_arns" {
@@ -42,8 +30,6 @@ module "github_actions_release" {
   region                = var.region
   repository            = "Atom-oh/awsops"
   environment           = "production"
-  state_bucket          = var.github_actions_state_bucket
-  state_key             = var.github_actions_state_key
   migration_secret_arns = var.github_actions_migration_secret_arns
   secret_kms_key_arns   = var.github_actions_secret_kms_key_arns
 }

@@ -2,6 +2,12 @@
 # The alternate module avoids planning unrelated foundation infrastructure.
 mock_provider "aws" {
   override_during = plan
+  mock_data "aws_iam_openid_connect_provider" {
+    defaults = {
+      client_id_list = ["sts.amazonaws.com"]
+      url            = "https://token.actions.githubusercontent.com"
+    }
+  }
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::123456789012:role/awsops-fixture-ci-release" }
   }
@@ -27,7 +33,7 @@ run "default_off_without_backend_or_secret_inputs" {
   }
 
   assert {
-    condition     = !var.enabled && length(aws_iam_role.release) == 0 && length(aws_iam_role_policy.release) == 0 && length(aws_secretsmanager_secret.verifier) == 0
+    condition     = !var.enabled && length(data.aws_iam_openid_connect_provider.github) == 0 && length(aws_iam_role.release) == 0 && length(aws_iam_role_policy.release) == 0 && length(aws_secretsmanager_secret.verifier) == 0
     error_message = "The default must create no CI role, policy or verifier secret."
   }
   assert {
@@ -46,9 +52,7 @@ run "enabled_release_is_exactly_scoped" {
     source = "./modules/github-actions-release"
   }
   variables {
-    enabled      = true
-    state_bucket = "awsops-fixture-tfstate"
-    state_key    = "production/foundation.tfstate"
+    enabled = true
     migration_secret_arns = [
       "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:rds!cluster-11111111-1111-1111-1111-111111111111-AbCd12",
       "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:ops/awsops-fixture/agent/sql-reader-EfGh34",
@@ -94,7 +98,7 @@ run "enabled_release_is_exactly_scoped" {
       "ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage",
       "ecr:GetDownloadUrlForLayer", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
       "ecr:CompleteLayerUpload", "ecr:PutImage",
-      "s3:GetBucketLocation", "s3:ListBucket", "s3:GetObject",
+      "ecr:DescribeRepositories", "rds:DescribeDBClusters",
       "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret",
       "ecs:UpdateService", "ecs:DescribeServices", "ecs:DescribeTasks",
       "ecs:ListTasks", "ecs:DescribeTaskDefinition",
@@ -147,17 +151,29 @@ run "enabled_release_is_exactly_scoped" {
   }
   assert {
     condition = alltrue([
-      for s in jsondecode(aws_iam_role_policy.release[0].policy).Statement :
-      s.Resource == "arn:aws:s3:::awsops-fixture-tfstate/production/foundation.tfstate" &&
-      try(s.Condition.StringEquals["s3:ResourceAccount"] == "123456789012", false)
-      if contains(s.Action, "s3:GetObject")
-      ]) && alltrue([
-      for s in jsondecode(aws_iam_role_policy.release[0].policy).Statement :
-      s.Resource == "arn:aws:s3:::awsops-fixture-tfstate" &&
-      try(s.Condition.StringEquals["s3:ResourceAccount"] == "123456789012", false)
-      if contains(s.Action, "s3:ListBucket") || contains(s.Action, "s3:GetBucketLocation")
+      for statement in jsondecode(aws_iam_role_policy.release[0].policy).Statement :
+      alltrue([for action in statement.Action : !startswith(action, "s3:")]) &&
+      alltrue([for resource in flatten([statement.Resource]) : !startswith(resource, "arn:aws:s3:")])
     ])
-    error_message = "Backend access must stay read-only, use the exact bucket/key, and constrain bucket ownership."
+    error_message = "The CI role must have no S3/backend access, including reads of secret-bearing Terraform state."
+  }
+  assert {
+    condition = jsonencode([
+      for statement in jsondecode(aws_iam_role_policy.release[0].policy).Statement : statement
+      if anytrue([for action in statement.Action : startswith(action, "rds:")])
+      ]) == jsonencode([{
+        Sid       = "OwnDatabaseMetadata", Effect = "Allow", Action = ["rds:DescribeDBClusters"],
+        Resource  = "arn:aws:rds:ap-northeast-2:123456789012:cluster:awsops-fixture-aurora",
+        Condition = { StringEquals = { "aws:RequestedRegion" = "ap-northeast-2" } }
+    }])
+    error_message = "RDS discovery must only describe the own regional Aurora cluster."
+  }
+
+  assert {
+    condition = (length(data.aws_iam_openid_connect_provider.github) == 1 &&
+      data.aws_iam_openid_connect_provider.github[0].arn == "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+    )
+    error_message = "Bootstrap must look up the existing provider, never manage or replace it."
   }
   assert {
     condition = alltrue([
@@ -220,43 +236,6 @@ run "reject_wildcard_project" {
   module { source = "./modules/github-actions-release" }
   variables { project = "awsops-*" }
   expect_failures = [var.project]
-}
-
-run "reject_missing_enabled_backend" {
-  command = plan
-  module { source = "./modules/github-actions-release" }
-  variables {
-    enabled = true
-    migration_secret_arns = [
-      "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:master-AbCd12",
-    ]
-  }
-  expect_failures = [var.state_bucket, var.state_key]
-}
-
-run "reject_empty_enabled_secret_allowlist" {
-  command = plan
-  module { source = "./modules/github-actions-release" }
-  variables {
-    enabled      = true
-    state_bucket = "awsops-fixture-tfstate"
-    state_key    = "production/foundation.tfstate"
-  }
-  expect_failures = [var.migration_secret_arns]
-}
-
-run "reject_wildcard_state_bucket" {
-  command = plan
-  module { source = "./modules/github-actions-release" }
-  variables { state_bucket = "awsops-*" }
-  expect_failures = [var.state_bucket]
-}
-
-run "reject_wildcard_state_key" {
-  command = plan
-  module { source = "./modules/github-actions-release" }
-  variables { state_key = "production/*" }
-  expect_failures = [var.state_key]
 }
 
 run "reject_foreign_account_secret" {
@@ -322,13 +301,6 @@ run "reject_duplicate_secret_arns" {
   expect_failures = [var.migration_secret_arns]
 }
 
-run "reject_ambiguous_state_key" {
-  command = plan
-  module { source = "./modules/github-actions-release" }
-  variables { state_key = "production/../foundation.tfstate" }
-  expect_failures = [var.state_key]
-}
-
 run "reject_malformed_region" {
   command = plan
   module { source = "./modules/github-actions-release" }
@@ -340,9 +312,7 @@ run "decrypt_only_explicit_keys_via_approved_secrets" {
   command = plan
   module { source = "./modules/github-actions-release" }
   variables {
-    enabled      = true
-    state_bucket = "awsops-fixture-tfstate"
-    state_key    = "production/foundation.tfstate"
+    enabled = true
     migration_secret_arns = [
       "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:rds!cluster-11111111-1111-1111-1111-111111111111-AbCd12",
       "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:ops/awsops-fixture/agent/sql-reader-EfGh34",
@@ -485,4 +455,53 @@ run "reject_duplicate_key_arns" {
     ]
   }
   expect_failures = [var.secret_kms_key_arns]
+}
+
+run "release_only_needs_no_migration_credentials" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables { enabled = true }
+  assert {
+    condition = length(var.migration_secret_arns) == 0 && alltrue([
+      for statement in jsondecode(aws_iam_role_policy.release[0].policy).Statement :
+      try(toset(statement.Resource) == toset([output.smoke_secret_arn]), false)
+      if contains(statement.Action, "secretsmanager:GetSecretValue")
+    ])
+    error_message = "Release-only bootstrap must not require or grant an Aurora master/reader secret."
+  }
+  assert {
+    condition = !anytrue(flatten([
+      for statement in jsondecode(aws_iam_role_policy.release[0].policy).Statement :
+      [for action in statement.Action : startswith(action, "cloudfront:") || startswith(action, "s3:")]
+    ]))
+    error_message = "The release role must grant neither CloudFront nor backend access."
+  }
+}
+
+run "reject_provider_without_sts_audience" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables { enabled = true }
+  override_data {
+    target = data.aws_iam_openid_connect_provider.github[0]
+    values = {
+      client_id_list = ["different-audience"]
+      url            = "https://token.actions.githubusercontent.com"
+    }
+  }
+  expect_failures = [aws_iam_role.release]
+}
+
+run "reject_wrong_provider_url" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables { enabled = true }
+  override_data {
+    target = data.aws_iam_openid_connect_provider.github[0]
+    values = {
+      client_id_list = ["sts.amazonaws.com"]
+      url            = "https://token.actions.githubusercontent.com.untrusted.example"
+    }
+  }
+  expect_failures = [aws_iam_role.release]
 }
