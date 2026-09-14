@@ -36,6 +36,35 @@ class EvidenceBoundaryTest(unittest.TestCase):
             with self.subTest(tool=tool):
                 self.assertEqual(self.receipt(tool, body)["outcome"], "unverified")
 
+    def test_loki_requires_source_status_shape_and_observed_completeness(self):
+        row = {"stream": {"job": "PRIVATE"}, "values": [["1700000000000000000", "PRIVATE log"]]}
+        for tool in ("loki_query", "loki_query_range"):
+            for body, expected in [
+                ({"resultType": "streams", "result": [], "truncated": False}, "unverified"),
+                ({"resultType": "streams", "result": [row], "truncated": False}, "unverified"),
+                ({"resultType": None, "result": [], "truncated": False, "collectionStatus": "empty"}, "unverified"),
+                ({"resultType": "streams", "result": [], "truncated": False, "collectionStatus": "empty"}, "empty"),
+                ({"resultType": "streams", "result": [row], "truncated": False, "collectionStatus": "ok"}, "success"),
+                ({"resultType": "streams", "result": [row], "truncated": False, "collectionStatus": "partial"}, "partial"),
+                ({"resultType": "streams", "result": [row], "truncated": False, "collectionStatus": "unknown"}, "unverified"),
+                ({"resultType": "streams", "result": [{}], "truncated": False, "collectionStatus": "ok"}, "unverified"),
+                ({"resultType": "streams", "result": [{**row, "values": [[True, "line"]]}], "truncated": False, "collectionStatus": "ok"}, "unverified"),
+                ({"resultType": "streams", "result": [], "truncated": False, "collectionStatus": "ok"}, "unverified"),
+                ({"resultType": "vector", "result": [{"metric": {}, "value": [1, "2"]}], "truncated": False, "collectionStatus": "ok"}, "success"),
+                ({"resultType": "matrix", "result": [{"metric": {}, "values": [[1, "2"]]}], "truncated": False, "collectionStatus": "ok"}, "success"),
+            ]:
+                with self.subTest(tool=tool, body=body):
+                    receipt = self.receipt(tool, body)
+                    self.assertEqual(receipt["outcome"], expected)
+                    self.assertNotIn("PRIVATE", json.dumps(receipt))
+
+    def test_cost_dimension_values_without_continuation_evidence_are_partial(self):
+        # The real producer returns page-local count and discards NextPageToken.
+        for rows in ([], ["PRIVATE service"]):
+            receipt = self.receipt("get_dimension_values", {"dimension": "SERVICE", "values": rows, "count": len(rows)})
+            self.assertEqual(receipt["outcome"], "partial")
+            self.assertTrue(receipt["quality"]["unknown"])
+
     def test_unknown_or_forged_source_status_cannot_certify_positive_data(self):
         for status in (None, {}, "future", "unknown"):
             self.assertEqual(self.receipt("prometheus_labels", {

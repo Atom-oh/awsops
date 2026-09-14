@@ -86,7 +86,7 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |
 | Prometheus/Mimir | Existing bounded vector/matrix envelopes; named labels/series also require upstream-derived `collectionStatus` |
 | Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
-| Loki | Existing explicit query-result handling; named label/value collections require upstream-derived `collectionStatus` |
+| Loki | Validated streams/vector/matrix query envelopes and named label/value collections require upstream-derived `collectionStatus`; hitting a query's line limit remains partial |
 
 The source contract requires affected producers to emit typed collection status (`ok`, `empty`, `partial`, `unknown`, or a
 component `error`) before coercion can erase upstream evidence. Missing or non-list collections

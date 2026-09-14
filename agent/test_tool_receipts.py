@@ -697,7 +697,9 @@ class BoundedProducerReceiptTest(unittest.TestCase):
         ]:
             self.assertEqual(self.receipt("get_item", body)["outcome"], expected)
         for tool in ("loki_query", "loki_query_range"):
-            self.assertEqual(self.receipt(tool, {"result": [], "truncated": False})["outcome"], "empty")
+            self.assertEqual(self.receipt(tool, {"result": [], "truncated": False})["outcome"], "unverified")
+            self.assertEqual(self.receipt(tool, {"resultType": "streams", "result": [],
+                                                "truncated": False, "collectionStatus": "empty"})["outcome"], "empty")
             self.assertEqual(self.receipt(tool, {"result": [], "truncated": True})["outcome"], "partial")
             self.assertEqual(self.receipt(tool, {"result": None})["outcome"], "unverified")
 
