@@ -2,7 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { Pool } from 'pg';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { rebuildGraph, rebuildInfraGraph } from './graph-store';
+import { rebuildGraph, rebuildInfraGraph, rebuildTraceGraph } from './graph-store';
+import { inventorySnapshot } from './graph-inventory';
 import { readGraphState, writeGraphState } from './graph-state';
 const api = vi.hoisted(() => ({ pool: null as unknown }));
 vi.mock('@/lib/auth', () => ({ verifyUser: async () => ({ sub: 'fixture' }) }));
@@ -22,6 +23,12 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
   const old = new Date(now - 3_600_000).toISOString();
   beforeAll(async () => {
     const admin = new Pool({ host: socket, user: 'postgres', database: 'awsops' });
+    const sentinel = await admin.query("SELECT shobj_description(oid,'pg_database') AS marker FROM pg_database WHERE datname=current_database()");
+    if (sentinel.rows[0]?.marker !== 'awsops-disposable-graph-test') {
+      await admin.end();
+      throw new Error('Refusing graph fixtures without disposable database sentinel');
+    }
+    expect((await admin.query('SHOW server_version')).rows[0].server_version).toMatch(/^17\./);
     if (!(await admin.query("SELECT 1 FROM pg_database WHERE datname='awsops_graph_task3'")).rowCount)
       await admin.query('CREATE DATABASE awsops_graph_task3');
     await admin.end();
@@ -60,6 +67,187 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
   const build = (cls: string) => cls === 'flow' ? rebuildGraph(pool) : rebuildInfraGraph(pool);
   const state = (cls: string, account = 'self') => readGraphState(pool, account, cls as never);
 
+  it.each(['flow', 'infra'])('%s confirms host empty from a succeeded aggregate with member-only rows', async cls => {
+    await seed(cls, recent, '111122223333');
+    await build(cls);
+    const result = await state(cls);
+    expect(result).toMatchObject({ status: 'empty', retainedPrevious: false, stale: false });
+    expect(result.sources).toContainEqual(expect.objectContaining({
+      sourceId: `inventory:${cls === 'flow' ? 'alb' : 'vpc'}`, itemCount: 0, status: 'empty',
+    }));
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE account_id='111122223333'")).rowCount).toBeGreaterThan(0);
+  });
+  it.each([1, null])('publishes succeeded enumeration with unknown attributes %s after pruning', async unknown => {
+    await seed('infra');
+    await build('infra');
+    await pool.query("UPDATE inventory_resources SET resource_id='replacement'");
+    await pool.query("UPDATE inventory_sync_runs SET unknown_attribute_count=$1 WHERE resource_type='vpc'", [unknown]);
+    const result = await build('infra');
+    expect(result).toMatchObject({ published: 1, retained: 0, degraded: 1 });
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: false, stale: true });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows)
+      .toEqual([{ id: 'vpc:replacement' }]);
+    await pool.query('DELETE FROM inventory_resources; UPDATE inventory_sync_runs SET row_count=0');
+    await build('infra');
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: false });
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='infra'")).rows).toEqual([]);
+  });
+  it('ignores unrelated failed inventory sources without dropping contributing failure guards', async () => {
+    await seed('infra');
+    await pool.query(`INSERT INTO inventory_sync_runs(resource_type,status) VALUES ('iam_role','failed')`);
+    expect((await build('infra')).nodes).toBeGreaterThan(0);
+    expect(await state('infra')).toMatchObject({ status: 'ok', retainedPrevious: false });
+    await pool.query(`UPDATE inventory_sync_runs SET status='failed' WHERE resource_type='vpc'`);
+    expect(await build('infra')).toMatchObject({ published: 0, retained: 1 });
+    expect(await state('infra')).toMatchObject({ status: 'error', retainedPrevious: true });
+  });
+  it('skips a contended publication without holding a pool connection in a lock wait', async () => {
+    await seed('infra');
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT pg_advisory_xact_lock($1)', [0x696e6672]);
+    try {
+      const result = await Promise.race([build('infra'), new Promise(resolve => setTimeout(() => resolve('waited'), 800))]);
+      expect(result).toMatchObject({ published: 0, skipped: 1, reasons: ['publication_busy'] });
+      expect((await pool.query('SELECT * FROM topology_nodes')).rowCount).toBe(0);
+    } finally { await holder.query('ROLLBACK'); holder.release(); }
+  });
+  it('bounds an account snapshot and retains its graph with explicit truncation', async () => {
+    await seed('infra');
+    await build('infra');
+    await pool.query(`INSERT INTO inventory_resources(resource_type,resource_id,data,captured_at)
+      SELECT 'vpc', 'vpc-'||n, '{}', $1 FROM generate_series(1,2000) n`, [recent]);
+    expect(await build('infra')).toMatchObject({ published: 0, retained: 1, reasons: ['snapshot_limit'] });
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: true, inputTruncated: true });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+  });
+  it('reads ledger and rows in one snapshot, then releases that connection before publication', async () => {
+    await seed('infra');
+    let changed = false;
+    const wrapped = { connect: async () => {
+      const client = await pool.connect();
+      const query = client.query.bind(client);
+      return { release: () => client.release(), query: async (sql: string, args?: unknown[]) => {
+        const result = await query(sql, args);
+        if (sql.includes('FROM inventory_sync_runs') && !sql.includes('UNION') && !changed) {
+          changed = true;
+          const freeLock = await pool.query('SELECT pg_try_advisory_xact_lock($1) AS acquired', [0x696e6672]);
+          expect(freeLock.rows[0].acquired).toBe(true);
+          await pool.query(`DELETE FROM inventory_resources; UPDATE inventory_sync_runs SET row_count=0`);
+        }
+        return result;
+      } };
+    }, query: pool.query.bind(pool) };
+    await rebuildInfraGraph(wrapped as never);
+    expect(changed).toBe(true);
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+    expect(await state('infra')).toMatchObject({ status: 'ok', retainedPrevious: false });
+  });
+  it('does not leave trace publication waiting on a class lock in the web pool', async () => {
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT pg_advisory_xact_lock($1)', [0x74726163]);
+    try {
+      expect(await Promise.race([rebuildTraceGraph(pool, []),
+        new Promise(resolve => setTimeout(() => resolve('waited'), 800))])).not.toBe('waited');
+    } finally { await holder.query('ROLLBACK'); holder.release(); }
+  });
+  it('sends neither oversized flow payloads nor oversized identifiers to the web process', async () => {
+    await seed('flow');
+    await pool.query(`UPDATE inventory_resources SET resource_id=repeat('x',100000),
+      data=jsonb_build_object('name', repeat('p',100000))`);
+    const snapshot = await inventorySnapshot(pool, 'flow', 'self', ['alb']);
+    expect(snapshot.truncated).toBe(true);
+    expect(JSON.stringify(snapshot.rows).length).toBeLessThan(2048);
+  });
+  it('does not transfer irrelevant infra raw payloads or confuse them with missing required attributes', async () => {
+    await seed('infra');
+    await pool.query(`UPDATE inventory_resources SET data=jsonb_build_object(
+      'name','fixture','raw_unused',repeat('x',1000000))`);
+    const snapshot = await inventorySnapshot(pool, 'infra', 'self', ['vpc']);
+    expect(snapshot.truncated).toBe(false);
+    expect(snapshot.rows[0].data).toEqual({ name: 'fixture' });
+    expect((await build('infra')).published).toBe(1);
+  });
+  it('retains every row when aggregate projected input exceeds the byte budget', async () => {
+    await seed('infra');
+    await build('infra');
+    await pool.query(`INSERT INTO inventory_resources(resource_type,resource_id,data,captured_at)
+      SELECT 'vpc','vpc-'||n,jsonb_build_object('name', repeat('a',60000)),$1
+      FROM generate_series(1,150) n`, [recent]);
+    const snapshot = await inventorySnapshot(pool, 'infra', 'self', ['vpc']);
+    expect(snapshot.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(snapshot.rows))).toBeLessThan(8 * 1024 * 1024 + 100000);
+    expect(await build('infra')).toMatchObject({ retained: 1, reasons: ['snapshot_limit'] });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+  });
+  it('continues a small account after retaining an oversized account', async () => {
+    await pool.query(`INSERT INTO inventory_resources(resource_type,account_id,resource_id,data,captured_at)
+      SELECT 'vpc','self','vpc-'||n,'{}',$1 FROM generate_series(1,2001) n`, [recent]);
+    await seed('infra', recent, '111122223333');
+    expect(await build('infra')).toMatchObject({ published: 1, retained: 1, reasons: ['snapshot_limit'] });
+    expect(await state('infra', '111122223333')).toMatchObject({ retainedPrevious: false, status: 'ok' });
+  });
+  it('uses one per-pool rebuild admission slot and leaves request reads available', async () => {
+    await seed('infra');
+    let unblock!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>(resolve => { unblock = resolve; });
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    let once = false;
+    const wrapped = { connect: async () => {
+      const client = await pool.connect();
+      const query = client.query.bind(client);
+      return { release: () => client.release(), query: async (sql: string, args?: unknown[]) => {
+        const result = await query(sql, args);
+        if (sql.includes('FROM inventory_sync_runs') && !once) {
+          once = true; entered(); await blocked;
+        }
+        return result;
+      } };
+    } };
+    const first = rebuildInfraGraph(wrapped as never);
+    await ready;
+    try {
+      expect(await rebuildInfraGraph(wrapped as never)).toMatchObject({ skipped: 1, reasons: ['rebuild_busy'] });
+      expect((await pool.query('SELECT 42 AS value')).rows[0].value).toBe(42);
+    } finally { unblock(); await first; }
+  });
+  it('discloses undiscovered accounts when the bounded account budget is exceeded', async () => {
+    await pool.query(`INSERT INTO inventory_sync_runs(resource_type,account_id,status,last_success_at,row_count,unknown_attribute_count)
+      SELECT 'vpc', lpad(n::text,12,'0'), 'succeeded', now(), 0, 0 FROM generate_series(1,102) n`);
+    const result = await build('infra');
+    expect(result).toMatchObject({ published: 100, skipped: 1, accountsTruncated: true, reasons: ['account_limit'] });
+    expect((await pool.query('SELECT count(*)::int AS n FROM topology_graph_state')).rows[0].n).toBe(100);
+  });
+  it('rolls back graph expansion beyond its budget and discloses the retained snapshot', async () => {
+    await seed('infra');
+    await build('infra');
+    await pool.query(`INSERT INTO inventory_resources(resource_type,resource_id,data,captured_at)
+      SELECT 'ec2','instance-'||n,jsonb_build_object('security_group_ids',
+        (SELECT jsonb_agg('sg-'||n||'-'||m) FROM generate_series(1,500) m)), $1
+      FROM generate_series(1,9) n`, [recent]);
+    expect(await build('infra')).toMatchObject({ retained: 1, reasons: ['graph_limit'] });
+    expect(await state('infra')).toMatchObject({ status: 'partial', retainedPrevious: true, graphTruncated: true });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='infra'")).rows).toEqual([{ id: 'vpc:one' }]);
+  });
+  it('bounds relation-lock waits and records a failed collection without sweeping', async () => {
+    await seed('infra');
+    await build('infra');
+    const previous = await state('infra');
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('LOCK TABLE inventory_resources IN ACCESS EXCLUSIVE MODE');
+    try {
+      const outcome = await Promise.race([
+        build('infra').then(() => 'unexpected success', () => 'failed'),
+        new Promise(resolve => setTimeout(() => resolve('waited'), 800)),
+      ]);
+      expect(outcome).toBe('failed');
+      expect(await state('infra')).toMatchObject({ status: 'error', captured_at: previous.captured_at,
+        retainedPrevious: true, failureReason: 'source_read_failed' });
+    } finally { await holder.query('ROLLBACK'); holder.release(); }
+  });
   it.each(['flow', 'infra'])('%s does not renew stale source data with a fresh publication', async cls => {
     await seed(cls, old);
     expect((await build(cls)).nodes).toBeGreaterThan(0);

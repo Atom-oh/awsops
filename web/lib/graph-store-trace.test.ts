@@ -26,7 +26,7 @@ function mockPool(infraNodeRows: unknown[] = []) {
   const calls: string[] = [];
   const params: unknown[][] = [];
   const client = {
-    query: vi.fn((sql: string, p?: unknown[]) => { calls.push(String(sql)); if (p) params.push(p); return Promise.resolve({ rows: [] }); }),
+    query: vi.fn((sql: string, p?: unknown[]) => { calls.push(String(sql)); if (p) params.push(p); return Promise.resolve({ rows: sql.includes('pg_try_advisory') ? [{ acquired: true }] : [] }); }),
     release: vi.fn(),
   };
   const pool = {

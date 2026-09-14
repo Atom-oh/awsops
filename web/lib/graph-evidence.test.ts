@@ -6,7 +6,7 @@ function database() {
   const client = {
     query: async (sql: string, args: unknown[] = []) => {
       writes.push({ sql, args });
-      return { rows: sql.includes('to_regclass') ? [{ ready: true }] : [] };
+      return { rows: sql.includes('to_regclass') ? [{ ready: true }] : sql.includes('pg_try_advisory') ? [{ acquired: true }] : [] };
     },
     release() {},
   };
