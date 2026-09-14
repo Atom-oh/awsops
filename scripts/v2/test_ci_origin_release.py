@@ -220,7 +220,9 @@ class ReleaseTests(unittest.TestCase):
         self.tick = 0
         patch.object(release.time, "monotonic", side_effect=lambda: self.tick).start()
         patch.object(release.time, "sleep", side_effect=self.advance).start()
-        self.executor = patch("ci_origin_migration.Migration").start().return_value
+        self.migration_patch = patch("ci_origin_migration.Migration")
+        self.executor = self.migration_patch.start().return_value
+        self.executor.target.side_effect = self.migration_target
         self.executor.verify_receipt.side_effect = self.migration_receipt
         self.http_calls = []
         self.http_override = {}
@@ -228,6 +230,46 @@ class ReleaseTests(unittest.TestCase):
 
     def advance(self, seconds):
         self.tick += seconds
+
+    def migration_target(self):
+        reader = os.environ["CI_SQL_READER_SECRET_ARN"]
+        return {
+            "version": 1, "commit": SHA, "account": ACCOUNT, "region": REGION, "project": PROJECT,
+            "database": "awsops", "endpoint": self.cli.database["Endpoint"],
+            "secret_arn": self.cli.database["MasterUserSecret"]["SecretArn"],
+            "sql_reader_secret_arn": None if reader == "disabled" else reader,
+        }
+
+    def real_migration_target(self):
+        """Exercise the shared helper unchanged, substituting only its CLI boundary."""
+        self.migration_patch.stop()
+        import ci_origin_migration as migration
+        config = {
+            "version": 1, "account": ACCOUNT, "region": REGION, "project": PROJECT,
+            "subnets": ["subnet-0123456789abcdef0"], "security_group": "sg-0123456789abcdef0",
+            "master_secret_arn": self.cli.database["MasterUserSecret"]["SecretArn"],
+            "sql_reader_secret_arn": None,
+            "task_role_arn": f"arn:aws:iam::{ACCOUNT}:role/{PROJECT}-ci-migration-task",
+            "execution_role_arn": f"arn:aws:iam::{ACCOUNT}:role/{PROJECT}-ci-migration-execution",
+            "log_group": f"/ecs/{PROJECT}-ci-migration",
+        }
+        os.environ["CI_MIGRATION_RECEIPT"] = str(Path(self.temp.name) / "migration.json")
+        os.environ["CI_ROLE_ARN"] = f"arn:aws:iam::{ACCOUNT}:role/{PROJECT}-ci-release"
+
+        def boundary(argv, **kwargs):
+            if argv[:5] == ["git", "ls-files", "--others", "--exclude-standard", "--"]:
+                self.assertEqual(tuple(argv[5:]), migration.BUILD_INPUTS)
+                self.cli.calls.append((list(argv), kwargs))
+                return ""
+            result = self.cli(argv, **kwargs)
+            if argv[:3] == ["aws", "sts", "get-caller-identity"]:
+                caller = json.loads(result)
+                caller["Arn"] = f"arn:aws:sts::{ACCOUNT}:assumed-role/{PROJECT}-ci-release/test"
+                return json.dumps(caller)
+            return result
+
+        patch.object(migration, "command", side_effect=boundary).start()
+        return config
 
     def migration_receipt(self, database, mode):
         self.cli.migration_context = copy.deepcopy(database)
@@ -293,6 +335,49 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("sidecar", self.manifest.read_text())
         self.assertEqual(self.cli.writes(), [])
         self.assertFalse(any(call[0][0] == "terraform" for call in self.cli.calls))
+
+    def test_real_executor_reader_disagreement_rejects_preflight_before_any_writes(self):
+        config = self.real_migration_target()
+        reader = f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:ops/{PROJECT}/agent/sql-reader-AbCd12"
+        for declaration, configured in ((reader, None), ("disabled", reader)):
+            with self.subTest(declaration=declaration, configured=configured):
+                self.manifest.unlink(missing_ok=True)
+                os.environ["CI_SQL_READER_SECRET_ARN"] = declaration
+                config["sql_reader_secret_arn"] = configured
+                os.environ["AWSOPS_MIGRATION_CONFIG_JSON"] = json.dumps(config)
+                result = self.invoke("preflight", ok=False)
+                self.assertEqual(result["error"], "migration_target_mismatch")
+                self.assertFalse(self.manifest.exists())
+                self.assertTrue(any(argv[:3] == ["aws", "rds", "describe-db-clusters"]
+                                    and "--cli-input-json" in argv for argv, _ in self.cli.calls))
+                self.assertEqual(self.cli.writes(), [])
+                self.assertFalse(any(argv[1:3] in (["ecs", "run-task"], ["ecs", "register-task-definition"])
+                                     for argv, _ in self.cli.calls))
+
+    def test_real_executor_is_rechecked_before_preview_or_apply_launch(self):
+        config = self.real_migration_target()
+        reader = f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:ops/{PROJECT}/agent/sql-reader-AbCd12"
+        for mode in ("preview", "apply"):
+            for declared in (None, reader):
+                with self.subTest(mode=mode, declared=declared):
+                    self.manifest.unlink(missing_ok=True)
+                    self.cli.calls.clear()
+                    os.environ["CI_SQL_READER_SECRET_ARN"] = declared or "disabled"
+                    config["sql_reader_secret_arn"] = declared
+                    os.environ["AWSOPS_MIGRATION_CONFIG_JSON"] = json.dumps(config)
+                    self.invoke("preflight")
+                    if mode == "apply":
+                        self.invoke("record-build", "--digest", INDEX)
+                    stage = self.state()["stage"]
+                    self.invoke("check-executor")
+                    config["sql_reader_secret_arn"] = reader if declared is None else None
+                    os.environ["AWSOPS_MIGRATION_CONFIG_JSON"] = json.dumps(config)
+                    result = self.invoke("check-executor", ok=False)
+                    self.assertEqual(result["error"], "migration_target_mismatch")
+                    self.assertEqual(self.state()["stage"], stage)
+                    self.assertEqual(self.cli.writes(), [])
+                    self.assertFalse(any(argv[1:3] in (["ecs", "run-task"], ["ecs", "register-task-definition"])
+                                         for argv, _ in self.cli.calls))
 
     def test_smoke_rejects_effective_admin_authority_from_any_source(self):
         self.invoke("preflight")

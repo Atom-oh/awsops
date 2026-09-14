@@ -47,6 +47,10 @@ The web workflow does **not** receive Terraform state, a backend configuration,
 or raw tfvars. It discovers the owned repository, ECS service/task definition
 and Aurora metadata through scoped AWS reads. The release controller supplies
 only commit/account/project-bound connection metadata to private Fargate.
+Preflight compares that target with the executor's independently validated
+configuration, including whether the SQL-reader secret is present or disabled.
+`check-executor` repeats the comparison immediately before each preview/apply
+task launch; a disagreement stops the workflow before migrations can run.
 Credentials are fetched inside the task from Secrets Manager and are never
 passed in task environment variables or stored in Actions.
 
@@ -74,7 +78,8 @@ gh workflow run deploy-web.yml -R Atom-oh/awsops --ref main -f mode=preview
 ```
 
 Preview builds the current migration image and starts one private Fargate task.
-It reads the database migration ledger over verified TLS. It does not apply
+It reads the database migration ledger over verified TLS and verifies the
+matching stopped-task/digest/nonce receipt afterward. It does not apply
 migrations, sync the reader password, promote the web image or replace a service.
 
 ## Deploy the selected main snapshot
@@ -99,6 +104,11 @@ An ECS rollback to another image is a failed release, even if the service
 becomes healthy again. A changed source, service, tag or image also fails.
 Private manifests and verifier credentials are cleaned on success or failure;
 credentials and raw Terraform state are not uploaded as artifacts.
+The promoted `web-latest` tag is not automatically restored after a failed
+verification. Investigate a failure that reached rollout before re-dispatching:
+workflow cleanup removes the per-run journals, so a new dispatch is a new release
+attempt. Restoring a previous tag is an explicit operator recovery action subject
+to schema compatibility; it does not undo applied migrations.
 
 This workflow releases the current main snapshot. Older-image rollback remains
 an explicit operator recovery operation with a schema-compatibility review;

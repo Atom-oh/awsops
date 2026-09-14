@@ -107,7 +107,7 @@ jobs:
         run: python3 scripts/v2/ci_origin_workflow.py fetch-smoke-secret
 
       - name: Verify private migration target metadata
-        run: python3 scripts/v2/ci_origin_migration.py check
+        run: python3 scripts/v2/ci_origin_release.py check-executor
 
       - name: Read-only authenticated preflight
         if: inputs.mode != 'deploy'
@@ -147,7 +147,14 @@ jobs:
         if: inputs.mode == 'preview'
         env:
           MIGRATION_DIGEST: ${{ steps.migration_image.outputs.digest }}
-        run: python3 scripts/v2/ci_origin_migration.py run --digest "$MIGRATION_DIGEST" --mode preview
+        run: |
+          set -euo pipefail
+          python3 scripts/v2/ci_origin_release.py check-executor
+          python3 scripts/v2/ci_origin_migration.py run --digest "$MIGRATION_DIGEST" --mode preview
+
+      - name: Verify the private migration preview receipt
+        if: inputs.mode == 'preview'
+        run: python3 scripts/v2/ci_origin_release.py preview-migrations
 
       - name: Build immutable ARM64 image
         if: inputs.mode == 'deploy'
@@ -188,7 +195,10 @@ jobs:
         if: inputs.mode == 'deploy'
         env:
           MIGRATION_DIGEST: ${{ steps.migration_image.outputs.digest }}
-        run: python3 scripts/v2/ci_origin_migration.py run --digest "$MIGRATION_DIGEST" --mode apply
+        run: |
+          set -euo pipefail
+          python3 scripts/v2/ci_origin_release.py check-executor
+          python3 scripts/v2/ci_origin_migration.py run --digest "$MIGRATION_DIGEST" --mode apply
 
       - name: Require the successful migration task receipt
         if: inputs.mode == 'deploy'

@@ -2,8 +2,10 @@
 """Bounded, operator-authorized origin web release controller (Python stdlib only).
 
 Interface, in order:
-  preflight
+  preflight                           # includes executor/release target agreement
   check-smoke                         # check mode: HTTP only, no deployment proof
+  check-executor                      # repeat immediately before a private task
+  preview-migrations                  # verify the completed preview receipt
 Or, after preflight, the opt-in deploy chain:
   record-build --digest sha256:<64 hex>
   migrate                             # verify the private task's apply receipt
@@ -372,10 +374,21 @@ class Controller:
         if self.path.exists() or self.path.is_symlink():
             require(not private_bytes(self.path), "manifest_already_exists")
         database = self.check_scope()
+        self.verify_executor_target(database)
         state = {"version": 1, "context": self.context, "database": database,
                  "stage": "preflight", "snapshot": self.snapshot()}
         self.save(state)
         self.workflow_outputs()
+        return state
+
+    def verify_executor_target(self, database):
+        from ci_origin_migration import Migration
+        require(Migration().target() == database, "migration_target_mismatch")
+        self.check_source()
+
+    def check_executor(self):
+        state = self.load("preflight", "built")
+        self.verify_executor_target(state["database"])
         return state
 
     def workflow_outputs(self):
@@ -709,7 +722,7 @@ class Controller:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="step", required=True)
-    for name in ("preflight", "check-smoke", "preview-migrations", "migrate", "roll-web", "smoke"):
+    for name in ("preflight", "check-smoke", "check-executor", "preview-migrations", "migrate", "roll-web", "smoke"):
         sub.add_parser(name)
     build = sub.add_parser("record-build")
     build.add_argument("--digest", required=True)
