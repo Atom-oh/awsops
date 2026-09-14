@@ -53,6 +53,16 @@ describe('saved evidence boundaries', () => {
 });
 
 describe('review completeness regressions', () => {
+  it.each(['constructor', '__proto__', 'toString'])('unsupported own %s keys cannot disappear from nested quality', key => {
+    const extension = JSON.parse(`{"status":"ok","${key}":false}`);
+    for (const collection of [extension, { status: 'ok', sources: [extension] }, { status: 'ok', publishedSources: [extension] }]) {
+      const r = normalizeReceipt({ ...receipt('a'), quality: { collection } });
+      expect(r?.outcome).toBe('partial');
+      expect(r?.quality?.unsupported).toBe(true);
+      const domain = domainOutcome('network', 'answer', [r], false, false, { version: 1, receiptCount: 1 });
+      expect(normalizeEvidence(normalizeEvidence(answerEvidence([domain])))?.status).toBe('partial');
+    }
+  });
   it.each([['error', 'error'], ['partial', 'partial'], ['unfinished', 'unverified']])(
     'blank prose does not overwrite %s', (outcome, expected) => {
       const d = domainOutcome('network', '', [receipt('a', outcome)]);

@@ -62,8 +62,8 @@ function quality(value: unknown): ReceiptQuality {
     'selection', 'routeSelection', 'truncation', 'collection'].includes(k))) q.unsupported = true;
   const fields = (src: Record<string, any>, dest: Record<string, any>, rules: Record<string, (v: any) => boolean>,
     otherKeys: string[] = []) => {
-    if (Object.keys(src).some(k => !(k in rules) && !otherKeys.includes(k))) q.unsupported = true;
-    for (const [k, valid] of Object.entries(rules)) if (k in src) {
+    if (Object.keys(src).some(k => !Object.prototype.hasOwnProperty.call(rules, k) && !otherKeys.includes(k))) q.unsupported = true;
+    for (const [k, valid] of Object.entries(rules)) if (Object.prototype.hasOwnProperty.call(src, k)) {
       if (valid(src[k])) {
         // Caller-supplied false markers cannot clear a problem found during projection.
         if (dest !== q || !['invalid', 'unsupported', 'truncated'].includes(k) || dest[k] !== true) dest[k] = src[k];
