@@ -12,7 +12,15 @@ hosted_zone_name = "example.com"
 # Optional operator CI access bootstrap; no backend/state or CloudFront access.
 # Requires the existing account GitHub OIDC provider with STS audience.
 # github_actions_enabled = false
-# Leave migration access empty unless an identified private executor can reach Aurora.
+# Keep this empty for private Fargate; only its dedicated task role reads DB secrets.
 # github_actions_migration_secret_arns = []
+# Private executor is separately gated; null creates no resources.
+# github_actions_migration = {
+#   subnets               = ["<EXISTING_PRIVATE_SUBNET_ID>"]
+#   security_group        = "<EXISTING_WEB_SERVICE_SECURITY_GROUP_ID>"
+#   master_secret_arn     = "<OWNED_AURORA_MANAGED_SECRET_ARN>"
+#   sql_reader_secret_arn = null # or the exact owned reader secret ARN
+#   kms_key_arns          = ["<OWNED_MASTER_SECRET_KMS_KEY_ARN>"]
+# }
 # For approved secrets using customer-managed encryption keys, supply full key ARNs.
 # github_actions_secret_kms_key_arns = []
