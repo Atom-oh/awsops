@@ -87,8 +87,9 @@ def validate_agent_config(ac, account, project, region):
     identifiers(ac["security_groups"], "sg")
     require(isinstance(ac["lambda_arns"], dict) and 0 < len(ac["lambda_arns"]) <= 64, "agent_targets_invalid")
     for name, arn in ac["lambda_arns"].items():
-        require(re.fullmatch(r"[a-z0-9_-]+", name) and isinstance(arn, str) and
-                re.fullmatch(rf"arn:aws:lambda:{region}:{account}:function:{project}-agent-[a-z0-9-]+-mcp", arn),
+        # Terraform uses function_name = "${var.project}-agent-${each.key}".
+        require(isinstance(name, str) and re.fullmatch(r"[a-z0-9-]+", name) and isinstance(arn, str) and
+                arn == f"arn:aws:lambda:{region}:{account}:function:{project}-agent-{name}",
                 "agent_targets_invalid")
     for key in ("official_mcp_endpoints", "official_mcp_read_only_ack"):
         require(isinstance(ac[key], dict) and set(ac[key]) <= {"datadog", "dynatrace", "newrelic"},

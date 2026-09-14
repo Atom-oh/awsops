@@ -38,6 +38,9 @@ MIGRATION_DIGEST = OLD_DIGEST
 MIGRATION_TASK = ECS + "task/" + PROJECT + "/" + "2" * 32
 NETWORK = {"awsvpcConfiguration": {"subnets": ["subnet-0123456789abcdef0"],
                                    "securityGroups": ["sg-0123456789abcdef0"], "assignPublicIp": "DISABLED"}}
+# Real ai.tf agent_lambdas keys: both MCP suffixes and ordinary helper names.
+LAMBDA_KEYS = ("iam-mcp", "network-mcp", "flow-monitor", "core-helpers",
+               "reachability-read", "istio-read", "aws-knowledge", "inventory-read")
 
 
 def repo(component):
@@ -74,7 +77,10 @@ def metadata():
                 "provision": {
                     "project": PROJECT, "region": REGION, "ecr_uri": repo("agentcore"),
                     "role_arn": f"arn:aws:iam::{ACCOUNT}:role/{PROJECT}-agentcore",
-                    "lambda_arns": {"ops": f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PROJECT}-agent-ops-mcp"},
+                    "lambda_arns": {
+                        key: f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PROJECT}-agent-{key}"
+                        for key in LAMBDA_KEYS
+                    },
                     "ssm_runtime_arn": f"/ops/{PROJECT}/agentcore/runtime_arn",
                     "ssm_memory_id": f"/ops/{PROJECT}/agentcore/memory_id",
                     "ssm_interpreter_id": f"/ops/{PROJECT}/agentcore/interpreter_id",
@@ -393,6 +399,28 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(Path(os.environ["CI_RUNTIME_METADATA_FILE"]).stat().st_mode & 0o777, 0o600)
         self.assertNotIn("CI_BACKEND_CONFIG", os.environ)
         self.assertFalse(any("terraform" in a[0] for a, _ in self.cli.calls))
+
+    def test_real_terraform_lambda_names_allow_every_component_to_prepare(self):
+        for component in runtime.COMPONENTS:
+            with self.subTest(component=component):
+                self.prepare(component)
+                saved = json.loads(Path(os.environ["CI_AGENT_CONFIG_FILE"]).read_text())
+                self.assertEqual(set(saved["lambda_arns"]), set(LAMBDA_KEYS))
+                self.assertEqual(self.state()["context"]["component"], component)
+                self.assertEqual(self.cli.writes(), [])
+
+    def test_lambda_arn_must_match_its_key_and_account_region_project(self):
+        valid = metadata()["components"]["agentcore"]["provision"]["lambda_arns"]["core-helpers"]
+        for arn in (valid.replace(ACCOUNT, "999999999999"), valid.replace(REGION, "us-east-1"),
+                    valid.replace(PROJECT, "other-project"), valid.replace("core-helpers", "network-mcp"),
+                    valid + "-mcp", valid + ":1", valid + "*"):
+            with self.subTest(arn=arn):
+                self.cli.meta = metadata()
+                self.cli.meta["components"]["agentcore"]["provision"]["lambda_arns"]["core-helpers"] = arn
+                os.environ["AWSOPS_RUNTIME_METADATA_JSON"] = json.dumps(self.cli.meta)
+                result = self.call("prepare", "worker", ok=False)
+                self.assertEqual(result["error"], "agent_targets_invalid")
+                self.assertEqual(self.cli.writes(), [])
 
     def test_unknown_fields_secrets_wrong_scope_and_unsafe_dispatch_fail_before_writes(self):
         for mutate in (
