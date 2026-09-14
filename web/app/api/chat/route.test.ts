@@ -784,6 +784,60 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }],
   };
 
+  it.each([
+    ['fanout', 'success', 'empty', 'success'],
+    ['fanout', 'empty', 'empty', 'empty'],
+    ['fanout', 'empty', 'error', 'partial'],
+    ['single', 'success', 'empty', 'success'],
+    ['single', 'empty', 'empty', 'empty'],
+    ['single', 'empty', 'error', 'partial'],
+  ])('%s preserves confirmed-empty explanations beside %s/%s', async (mode, first, second, expected) => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    if (mode === 'fanout') process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(mode === 'fanout' ? multiRoute : {
+      ...multiRoute, multiDomain: false, selected: [multiRoute.selected[0]],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    const states = [first, second] as Array<'success' | 'empty' | 'error'>;
+    const receipts = states.map((outcome, i) => ({ version: 1 as const, callId: `call-${i}`,
+      tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome }));
+    const explanation = (gateway: string, outcome: string) =>
+      outcome === 'empty' ? `No ${gateway} matches found.` : `${gateway} inspection complete.`;
+    if (mode === 'fanout') {
+      invokeAgent.mockImplementation(async ({ gateway }) => {
+        const i = gateway === 'network' ? 0 : 1;
+        if (states[i] === 'error') throw new Error('Upstream unavailable');
+        return { text: explanation(gateway, states[i]), tools: ['inspect'], receipts: [receipts[i]],
+          completion: { version: 1, receiptCount: 1 } };
+      });
+      synthesizeStream.mockImplementation(async function* (_q, parts) { yield parts.map((p: any) => p.text).join(' '); });
+    } else {
+      streamDetailedEvents = [
+        ...receipts.map(receipt => ({ receipt })),
+        { delta: 'No matches found in the assessed source.' },
+        { completion: { version: 1, receiptCount: 2 } },
+      ];
+    }
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+    expect(body).not.toMatch(/data: \{"error":/);
+    const saved = recordExchange.mock.calls[0][0];
+    expect(saved.meta.evidence.status).toBe(expected);
+    if (mode === 'fanout') {
+      const expectedParts = ['network', 'data'].flatMap((gateway, i) => states[i] === 'error'
+        ? [] : [{ gateway, text: explanation(gateway, states[i]) }]);
+      expect(synthesizeStream.mock.calls[0][1]).toEqual(expectedParts);
+      for (const part of expectedParts) expect(saved.assistantContent).toContain(part.text);
+    } else expect(saved.assistantContent).toContain('No matches found in the assessed source.');
+    const { normalizeEvidence } = await import('@/lib/chat-evidence');
+    expect(normalizeEvidence(saved.meta.evidence)?.status).toBe(expected);
+    const { recordChatInvoke } = await import('@/lib/trace');
+    expect(recordChatInvoke).toHaveBeenLastCalledWith(expect.objectContaining({
+      success: expected === 'success', evidence: saved.meta.evidence,
+    }));
+  });
+
   it.each(['error', 'empty'])('keeps useful survivors and saves deterministic missing-domain disclosure: %s', async (missing) => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
