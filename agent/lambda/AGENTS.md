@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b661293cda75 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: a2ad6cd5525d · generated-at: 2026-09-14 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > Reviewer context distilled from this module’s CLAUDE.md; shared by Kiro, Codex, and Agy.
 
@@ -40,3 +40,8 @@ Run affected `test_*.py` files from `agent/lambda/`. Review schema grants in
 `IpPermissions`, `IpPermissionsEgress`, `Entries` or `Routes` is partial evidence, with the
 affected resource and field in `unknown`. Actual empty lists remain distinct. Per-group
 completeness includes both rule lists and their peers; preserve other returned evidence.
+
+Require established route-association state and sanitized codes for every component read.
+SG output is bounded to 200 peer rows per group with explicit metadata and 100-character
+descriptions; truncation is partial evidence. Validate the ENI test suite, then deploy
+Lambda, AgentCore prompt and live Gateway catalog through the existing operator flow.
