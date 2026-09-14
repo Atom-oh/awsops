@@ -290,6 +290,17 @@ class ProducerReceiptTest(unittest.TestCase):
         })
         self.assertEqual(receipt["outcome"], "empty")
 
+    def test_unfiltered_inventory_limit_does_not_certify_full_or_empty_coverage(self):
+        for returned in (0, 2):
+            with self.subTest(returned=returned):
+                receipt = self.receipt("query_inventory", {
+                    "resource_type": "ec2", "count": returned,
+                    "resources": [{"id": "PRIVATE"}] * returned,
+                    "freshness": inventory_row(count=3),
+                })
+                self.assertEqual(receipt["outcome"], "partial")
+                self.assertTrue(receipt["quality"]["truncated"])
+
     def test_inventory_summary_source_projection_is_bounded_and_does_not_visit_tail(self):
         row = inventory_row(count=1, resource_type="ec2", note="PRIVATE")
         receipt = self.receipt("inventory_summary", {"sync": [row] * 9 + [{"error": "PRIVATE"}] * 1000})

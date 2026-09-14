@@ -295,9 +295,16 @@ def inventory_evidence(body, tool, q):
         current = coll["sources"][0].get("itemCount")
         if current is not None and len(resources) > current:
             q["invalid"] = True
+        filtered_identity = (body.get("resource_type") == "cloudfront"
+                             and body.get("projection") == "identity_only"
+                             and matching(body.get("resource_id"), r"[A-Z0-9]{5,32}", 32))
+        if current is not None and len(resources) < current and not filtered_identity:
+            # This producer otherwise only applies LIMIT. Its full type count cannot certify
+            # a shortened page (including LIMIT 0) as complete or as a successful empty query.
+            q["truncated"] = True
         if outcome in ("success", "empty"):
             # A filtered, current query may match zero even when the type has other rows.
-            return "success" if resources else "empty"
+            return "partial" if q.get("truncated") else "success" if resources else "empty"
         if resources:
             return "partial"
     return outcome
