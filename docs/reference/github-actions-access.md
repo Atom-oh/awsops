@@ -195,5 +195,7 @@ scoped discovery, conditional KMS access, and rejected foreign/wildcard inputs.
 Offline tests establish the policy contract, not live deployment or connectivity.
 Before using the role, a separately reviewed consumer must demonstrate OIDC
 assumption, independent target identity/URL binding, safe response handling, and
-any required private migration execution. No workflow `check` or `deploy` mode is
-provided or claimed by this bootstrap reference.
+any required private migration execution. The separate
+[production web workflow](../runbooks/production-actions.md) consumes this access
+with manual `check` (default), `preview` and `deploy` modes. Its source guard and
+release proofs do not narrow the IAM residual authority described above.
