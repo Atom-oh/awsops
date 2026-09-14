@@ -104,7 +104,7 @@ def list_opensearch_domains(args, region, target_account_id):
         try:
             response = c.describe_domain(DomainName=n)
             st = response.get("DomainStatus") if isinstance(response, dict) else None
-            if not isinstance(st, dict):
+            if not isinstance(st, dict) or not isinstance(st.get("DomainName"), str) or st["DomainName"] != n:
                 out.append({"name": n, "collectionStatus": "unknown"})
                 continue
             out.append({"name": n, "collectionStatus": "ok",

@@ -32,7 +32,7 @@ class _FakeOS:
     def list_domain_names(self):
         return {"DomainNames": self._domains}
     def describe_domain(self, DomainName):
-        return {"DomainStatus": self._status}
+        return {"DomainStatus": {"DomainName": DomainName, **self._status}}
 
 
 def _fake_resp(status, obj):
@@ -87,7 +87,7 @@ class TestListDomains(_Base):
                     self.assertNotIn("PRIVATE", json.dumps(body))
 
     def test_unobserved_domain_status_is_not_a_complete_domain_description(self):
-        for response in ({}, {"DomainStatus": None}, {"DomainStatus": []}, {"DomainStatus": "PRIVATE"}):
+        for response in ({}, {"DomainStatus": None}, {"DomainStatus": []}, {"DomainStatus": "PRIVATE"}, {"DomainStatus": {}}, {"DomainStatus": {"DomainName": "different"}}):
             with self.subTest(response=response):
                 client = _FakeOS()
                 client.describe_domain = mock.Mock(return_value=response)
