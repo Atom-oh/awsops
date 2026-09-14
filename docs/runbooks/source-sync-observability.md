@@ -37,7 +37,9 @@ python3 -B -m unittest discover -s scripts/v2 -p test_evaluate_diagnosis.py -v
 
 ## Migrations and rollout
 
-- `01M2FV44NER7VC3CTX2ZMT9FZG_topology_inventory_evidence.sql`: the current collection-state
+- `01M2GRW64VTMC9AC8M7T9MZKQ4_graph_attempt_disclosure.sql`: bounded `sourceAttempted`,
+  `not_attempted` and `count_not_confirmed` disclosure in the current collection view; no grant changes.
+- `01M2FV44NER7VC3CTX2ZMT9FZG_topology_inventory_evidence.sql`: the preceding collection-state
   projection with bounded flow/infra source clocks, scope, producer status and saved-source
   provenance; no raw provider JSON or new grants.
 - `01M279W0J9HNG1QT0MAS60KV8K_topology_graph_collection_state.sql`: collection attempts,
@@ -159,3 +161,14 @@ The typed collection contract also describes optional additive producer fields; 
 runtime data remains defensively normalized. Source-detail totals include saved sources; latest-attempt status counts have separate labels.
 Verify locally with `cd web && npx vitest run components/topology/GraphCollectionStatus.test.tsx`;
 the regression uses the real graph-state reader with a database boundary fixture.
+
+## Bounded rebuild scheduling
+
+Inventory accounts are ordered by their oldest actual attempt, with unattempted reads
+prioritized. One account failure does not prevent later accounts from progressing; the
+original exception is returned after the bounded pass. Duplicate admission is per pool
+and graph class. A reserved bounded transaction records skipped source reads as unavailable
+with `sourceAttempted=false`, preserving publication clocks, saved sources and graph rows.
+Newer attempts win. If the database or class lock blocks this best-effort metadata write,
+the CLI discloses the recording gap. This does not authorize a new retry loop, degraded
+publication or an unproven empty sweep; failed collection and hard limits retain last-good data.

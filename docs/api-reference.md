@@ -139,7 +139,9 @@ Optional source `producerStatus`, `attemptedAtMs` and `finishedAtMs` describe th
 inventory job, not graph publication time or per-account success proof. Top-level
 `windowStartMs/windowEndMs` describe a graph-attempt window. The bounded
 `failureReason` identifies `publication_failed`, `source_read_failed`, or API-only
-`state_read_failed`.
+`state_read_failed` or `not_attempted`.
+An explicit `sourceAttempted: false` means this bounded rebuild did not start the source read;
+it does not advance the saved graph clock.
 
 The `GraphCollection` / `GraphCollectionSource` TypeScript contract is defined in
 `web/components/topology/GraphCollectionStatus.tsx`; runtime input is still normalized.

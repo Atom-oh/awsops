@@ -92,8 +92,9 @@ cannot prove SQL parses; execute affected migrations against disposable PostgreS
 ### Trace queue projection
 
 `01M279W0J9HNG1QT0MAS60KV8K_topology_graph_collection_state.sql` introduces graph evidence;
-`01M2FV44NER7VC3CTX2ZMT9FZG_topology_inventory_evidence.sql` owns the current collection-state
-projection with bounded inventory source clocks and provenance;
+`01M2FV44NER7VC3CTX2ZMT9FZG_topology_inventory_evidence.sql` adds bounded inventory source clocks and provenance;
+`01M2GRW64VTMC9AC8M7T9MZKQ4_graph_attempt_disclosure.sql` owns the current collection-state
+projection with explicit not-attempted and count-reconciliation reasons;
 `01M27B0000C6QWJ50NRJ8YAH9D_trace_queue_claim_provenance.sql` supersedes the earlier topology-node projection.
 After migration, inspect trace queue views: `claimedAccountId`/`claimedRegion` come only from parsed
 destination ARN qualifiers, including retained rows. Malformed/non-ARN destinations have null claims,
