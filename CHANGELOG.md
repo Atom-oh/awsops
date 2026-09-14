@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ENI configuration evidence (`network-mcp`): preserve all security-group peers and IPv6/ICMP details, select route tables only from established subnet or VPC-main associations, and retain reported route targets without inventing `local`. Expose incomplete evidence through `partial`/`unknown`, attribute failed/truncated/missing SG reads to their group IDs, and report per-group completeness so unassessed empty arrays remain distinct from confirmed ruleless groups while successful evidence is retained.
 - Notion and connector readiness: saved-token verification checks fresh credentials, warm read caches expire, and unavailable credential status is distinct from unconfigured. Authentication does not establish page access or chat-gateway readiness; MCP Lambda updates ship through the normal Terraform deployment.
 
 - Gated Slack executor: normalize action-role environment keys and reject API responses that do not acknowledge the message. Direct delivery remains off by default under owner-controlled gates and human approval governance. These source corrections do not resolve the existing archive and worker-image packaging dependencies.
