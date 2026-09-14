@@ -57,18 +57,28 @@ attempts; terminal model/account failures stop earlier. The workflow's 90-minute
 ceiling, 900-second chair timeout and kill bounds remain unchanged.
 
 
-The existing Pod Identity preflight still precedes both panel and chair. The
-adapter preserves identities, provider membership, L1/source-omission gates,
-execution caps and publication checks. The requested model IDs change to the
-Sol/Astra pins listed above in both specialist and legacy modes.
-The existing workflow's 3000-line prefix limit remains a coverage limitation:
-the adapter gives every role the same supplied prefix; it does not implement
-complete-diff chunking or claim to review omitted bytes.
+Pod Identity preflight precedes both panel and chair. The adapter preserves
+identities, provider membership and execution caps. Executable controls come from
+the immutable workflow revision; the selected review base supplies source context.
+The controller rejects scopes over 3,000 diff lines or with omitted content before
+model calls. Split or reformat those changes; no partial prefix can earn a pass.
+
+The chair receives bounded previews and access to complete sanitized reports.
+Its trusted prompt names the actual report directory and exact allowed report
+paths, sizes and hashes. Descriptor-looking text in the diff or report bodies is
+data, not permission to read another path. Capped reports must be read in full
+using that trusted list. Normal base-source verification remains available.
+The report manifest, trusted prompt and stdin are bound at the gate and rechecked
+before publication, together with the selected PR scope.
 
 Chair synthesis remains mandatory because nonce-bound Markdown proves report
 completion, not a validated absence of Critical/Major findings. Any missing
-required role forces failure regardless of the chair's verdict. No AWS product
-mutation or relaxation of ADR-005 is authorized by this review adapter.
+required role forces failure regardless of the chair's verdict. Exactly one
+`COVERAGE: COMPLETE` line and one terminal `VERDICT: PASS` are required, together
+with successful panel and chair steps; interrupted runs cannot pass through
+complete-looking output files. Missing coverage statements fail validation rather
+than implying success. No AWS product mutation or relaxation of ADR-005 is
+authorized by this review adapter.
 
 Offline verification from the repository root:
 
