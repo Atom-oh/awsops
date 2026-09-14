@@ -75,22 +75,40 @@ def configured_cells():
         raise GuardError("review_contract_unavailable") from None
 
 
-def blocking_line(line, *, first_visible=False):
+def blocking_line(line):
     # Handle real GitHub Markdown headings, bullets, numbered lists and emphasis.
     value = re.sub(r"^(?:(?:#{1,6}|[-+*]|\d+[.)])\s+)+", "", line.strip())
     value = value.lstrip("*_ ")
-    if first_visible:
-        # Inline findings can title their severity after a finding number. Keep
-        # the match anchored so Minor/Info titles mentioning "major" stay minor.
-        value = re.sub(r"^finding\s*#?\s*\d+\b", "", value, flags=re.I)
-    value = re.sub(r"^severity(?: level)?\s*:\s*", "", value, flags=re.I)
+    # Every visible line can introduce a finding, including after context or an
+    # earlier Minor finding. Keep severity anchored rather than searching prose.
+    value = re.sub(r"^finding\s*#?\s*\d+\b", "", value, flags=re.I)
+    value = re.sub(r"^[^\w]+", "", value).lstrip("_")
+    # Both **Severity**: Major and **Severity:** Major are common review labels.
+    value = re.sub(r"^severity(?: level)?[*_]*\s*:\s*", "", value, flags=re.I)
     value = re.sub(r"^[^\w]+", "", value).lstrip("_")
     return bool(re.match(r"(CRITICAL|MAJOR|P0|P1)\b", value, re.I))
 
 
 def blocking_comment(body):
-    return any(blocking_line(line, first_visible=index == 0)
-               for index, line in enumerate(line for line in visible_lines(body) if line))
+    return any(blocking_line(line) for line in visible_lines(body) if line)
+
+
+def verify_merged_tree(fetch, prefix, commit, head):
+    """Match review_scope's normal-merge proof using Git-data API tree fields."""
+    merged = fetch(f"{prefix}/git/commits/{commit}")
+    reviewed = fetch(f"{prefix}/git/commits/{head}")
+    require(isinstance(merged, dict) and merged.get("sha") == commit, "merge_commit_mismatch")
+    require(isinstance(reviewed, dict) and reviewed.get("sha") == head, "reviewed_commit_mismatch")
+    parents = merged.get("parents")
+    require(isinstance(parents, list) and len(parents) == 2
+            and all(isinstance(parent, dict) and isinstance(parent.get("sha"), str)
+                    and SHA.fullmatch(parent["sha"]) for parent in parents), "normal_two_parent_merge_required")
+    require(parents[1]["sha"] == head, "merge_second_parent_mismatch")
+    merged_tree, reviewed_tree = merged.get("tree"), reviewed.get("tree")
+    require(all(isinstance(tree, dict) and isinstance(tree.get("sha"), str)
+                and SHA.fullmatch(tree["sha"]) for tree in (merged_tree, reviewed_tree)),
+            "commit_tree_missing_or_invalid")
+    require(merged_tree["sha"] == reviewed_tree["sha"], "merge_tree_mismatch")
 
 
 def verify_ai_comment(comments, head):
@@ -142,6 +160,7 @@ def verify_release(env, fetch):
             and pr.get("merged_at") and pr.get("base", {}).get("ref") == "main", "pr_scope_changed")
     head = pr.get("head", {}).get("sha", "")
     require(SHA.fullmatch(head), "invalid_reviewed_head")
+    verify_merged_tree(fetch, prefix, commit, head)
     number = int(pr["number"])
     checks = pages(fetch, f"{prefix}/commits/{head}/check-runs?filter=latest", "check_runs")
     require(checks, "required_checks_missing")

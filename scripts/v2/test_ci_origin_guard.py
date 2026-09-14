@@ -11,6 +11,8 @@ SPEC.loader.exec_module(guard)
 
 MERGE = "a" * 40
 HEAD = "b" * 40
+BASE = "c" * 40
+TREE = "d" * 40
 REPO = "Atom-oh/awsops"
 CELLS = "codex/L2 kiro-opus/L3 kiro-gpt/L4"
 
@@ -55,8 +57,19 @@ class ReleaseGuardTests(unittest.TestCase):
         }
         self.ref_reads = 0
         self.move_main = False
+        self.git_reads = []
+        self.merge_commit = {
+            "sha": MERGE, "parents": [{"sha": BASE}, {"sha": HEAD}], "tree": {"sha": TREE},
+        }
+        self.head_commit = {"sha": HEAD, "parents": [{"sha": BASE}], "tree": {"sha": TREE}}
 
     def fetch(self, path):
+        if path == f"repos/{REPO}/git/commits/{MERGE}":
+            self.git_reads.append(path)
+            return copy.deepcopy(self.merge_commit)
+        if path == f"repos/{REPO}/git/commits/{HEAD}":
+            self.git_reads.append(path)
+            return copy.deepcopy(self.head_commit)
         if path.endswith("/git/ref/heads/main"):
             self.ref_reads += 1
             sha = "c" * 40 if self.move_main and self.ref_reads > 1 else MERGE
@@ -89,6 +102,49 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertEqual(result["reviewed_head"], HEAD)
         self.assertEqual(result["pr_number"], 400)
         self.assertEqual(self.ref_reads, 2)
+        self.assertEqual(self.git_reads, [
+            f"repos/{REPO}/git/commits/{MERGE}", f"repos/{REPO}/git/commits/{HEAD}",
+        ])
+
+    def test_merge_requires_exactly_two_parents_including_reviewed_second_parent(self):
+        for parents in (
+            [], [{"sha": BASE}],  # Root/squash/rebase commits cannot inherit PR HEAD review.
+            [{"sha": BASE}, {"sha": HEAD}, {"sha": "e" * 40}],
+            [{"sha": HEAD}, {"sha": BASE}],  # Reviewed HEAD as first parent is insufficient.
+            [{"sha": BASE}, {"sha": "e" * 40}],
+        ):
+            with self.subTest(parents=parents):
+                self.merge_commit["parents"] = parents
+                with self.assertRaises(guard.GuardError):
+                    guard.verify_release(self.env, self.fetch)
+
+    def test_merge_tree_must_equal_reviewed_head_tree(self):
+        self.merge_commit["tree"]["sha"] = "e" * 40
+        with self.assertRaisesRegex(guard.GuardError, "^merge_tree_mismatch$"):
+            guard.verify_release(self.env, self.fetch)
+
+    def test_git_commit_responses_must_bind_to_requested_shas_and_valid_trees(self):
+        cases = [
+            ("merge_commit", "sha", "e" * 40),
+            ("head_commit", "sha", "e" * 40),
+            ("merge_commit", "tree", None),
+            ("head_commit", "tree", {}),
+            ("head_commit", "tree", {"sha": "not-a-tree"}),
+            ("merge_commit", "parents", [{"sha": ""}, {"sha": HEAD}]),
+        ]
+        for attribute, field, value in cases:
+            original = copy.deepcopy(getattr(self, attribute))
+            with self.subTest(attribute=attribute, field=field, value=value):
+                getattr(self, attribute)[field] = value
+                with self.assertRaises(guard.GuardError):
+                    guard.verify_release(self.env, self.fetch)
+            setattr(self, attribute, original)
+
+    def test_missing_tree_hashes_cannot_pass_by_equal_absence(self):
+        self.merge_commit["tree"] = {}
+        self.head_commit["tree"] = {}
+        with self.assertRaises(guard.GuardError):
+            guard.verify_release(self.env, self.fetch)
 
     def test_only_origin_main_manual_dispatch_is_allowed(self):
         for key, value in [
@@ -240,10 +296,36 @@ class ReleaseGuardTests(unittest.TestCase):
                 "> Finding 1 (MAJOR): quoted example",
                 "```\nFinding 1 (MAJOR): code example\n```",
                 "Finding 1 (INFO)\nThis explanatory sentence mentions MAJOR.",
+                "Context sentence.\n**Severity**: Minor — documents a MAJOR version.",
+                "Context sentence.\n**Severity:** Info — documents the CRITICAL path.",
+                "Finding 1 (Minor)\n> Finding 2 (Major): quoted example",
+                "Context.\n```text\n**Severity**: Major\n```\nFinding 1 (Info)",
             ):
                 with self.subTest(outdated=outdated, body=body):
                     self.threads[0]["comments"]["nodes"][0]["body"] = body
                     self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
+
+    def test_findings_and_emphasized_severity_on_every_visible_line_block(self):
+        self.inline = [{"id": 1}]
+        self.threads = [{
+            "isResolved": False, "isOutdated": False,
+            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": ""}]},
+        }]
+        for outdated in (False, True):
+            self.threads[0]["isOutdated"] = outdated
+            for body in (
+                "Context sentence.\n\nFinding1(MAJOR): unresolved issue",
+                "Finding 1 (MINOR): wording\n\nFinding 2 (MAJOR): release issue",
+                "Context sentence.\n### **Finding 2 (CRITICAL)**: release issue",
+                "Context sentence.\n**Severity**: Major",
+                "Context sentence.\n**Severity:** Major",
+                "Finding 1 (Info)\n__Severity__: Critical",
+                "Context sentence.\nFinding 3: **Severity**: Major",
+            ):
+                with self.subTest(outdated=outdated, body=body):
+                    self.threads[0]["comments"]["nodes"][0]["body"] = body
+                    with self.assertRaisesRegex(guard.GuardError, "^unresolved_blocking_thread$"):
+                        guard.verify_release(self.env, self.fetch)
 
     def test_outdated_unresolved_threads_still_require_complete_comment_coverage(self):
         self.inline = [{"id": 1}]
