@@ -6,14 +6,6 @@ import json
 from cross_account import get_client, get_resource, get_role_arn, resolve_tool_name
 
 
-def _page_quality(response, token_key, rows, limit):
-    token = response.get(token_key)
-    token_type = str if token_key == "LastEvaluatedTableName" else dict
-    valid = token is None or isinstance(token, token_type)
-    return {"truncated": len(rows) > limit or (valid and bool(token)),
-            **({"unknown": True} if not valid else {})}
-
-
 def lambda_handler(event, context):
     # Parse event and route to appropriate tool handler / 이벤트 파싱 후 적절한 도구 핸들러로 라우팅
     params = event if isinstance(event, dict) else json.loads(event)
@@ -38,16 +30,14 @@ def lambda_handler(event, context):
         # List all DynamoDB tables with status and size / 모든 DynamoDB 테이블 상태 및 크기 조회
         if t == "list_tables":
             # Fetch table names and describe each / 테이블 이름 조회 후 각 테이블 상세 조회
-            response = ddb.list_tables()
-            tables = response.get("TableNames", [])
+            tables = ddb.list_tables().get("TableNames", [])
             result = []
             for tn in tables[:20]:
                 desc = ddb.describe_table(TableName=tn)["Table"]
                 result.append({"name": tn, "status": desc["TableStatus"],
                     "itemCount": desc.get("ItemCount", 0), "sizeBytes": desc.get("TableSizeBytes", 0),
                     "billingMode": desc.get("BillingModeSummary", {}).get("BillingMode", "PROVISIONED")})
-            return ok({"tables": result, "count": len(tables),
-                       **_page_quality(response, "LastEvaluatedTableName", tables, 20)})
+            return ok({"tables": result, "count": len(tables)})
 
         # Describe table schema, GSIs, billing mode / 테이블 스키마, GSI, 과금 모드 상세 조회
         elif t == "describe_table":
@@ -75,9 +65,7 @@ def lambda_handler(event, context):
             if args.get("limit"): kwargs["Limit"] = args["limit"]
             # Execute query or fallback to scan / 쿼리 실행 또는 스캔으로 폴백
             resp = table.query(**kwargs) if kwargs.get("KeyConditionExpression") else table.scan(Limit=args.get("limit", 20))
-            items = resp.get("Items", [])
-            return ok({"items": items[:50], "count": resp.get("Count", 0), "scannedCount": resp.get("ScannedCount", 0),
-                       **_page_quality(resp, "LastEvaluatedKey", items, 50)})
+            return ok({"items": resp.get("Items", [])[:50], "count": resp.get("Count", 0), "scannedCount": resp.get("ScannedCount", 0)})
 
         # Get a single item by primary key / 기본 키로 단일 항목 조회
         elif t == "get_item":
@@ -92,9 +80,7 @@ def lambda_handler(event, context):
             kwargs = {"Limit": args.get("limit", 20)}
             if args.get("filter_expression"): kwargs["FilterExpression"] = args["filter_expression"]
             resp = table.scan(**kwargs)
-            items = resp.get("Items", [])
-            return ok({"items": items[:50], "count": resp.get("Count", 0),
-                       **_page_quality(resp, "LastEvaluatedKey", items, 50)})
+            return ok({"items": resp.get("Items", [])[:50], "count": resp.get("Count", 0)})
 
         # Return DynamoDB data modeling best practices / DynamoDB 데이터 모델링 모범 사례 반환
         elif t == "dynamodb_data_modeling":

@@ -523,6 +523,8 @@ class ProducerReceiptTest(unittest.TestCase):
         for tool, field in (("prometheus_query", "result"), ("mimir_query_range", "result"),
                             ("tempo_search", "traces")):
             body = {field: [], "truncated": False, **({"resultType": "vector"} if field == "result" else {})}
+            if tool == "tempo_search":
+                body["collectionStatus"] = "empty"
             self.assertEqual(self.receipt(tool, body)["outcome"], "empty")
             self.assertEqual(self.receipt(tool, {**body, "truncated": True})["outcome"], "partial")
 
@@ -679,7 +681,9 @@ class BoundedProducerReceiptTest(unittest.TestCase):
                                         (1, 3, "partial"), (1, 0, "unverified"), (0, None, "unverified"),
                                         (0, True, "unverified")]:
                 with self.subTest(tool=tool, returned=length, total=n):
-                    r = self.receipt(tool, {field: ["PRIVATE"] * length, total: n, "truncated": False})
+                    source = ({"collectionStatus": "ok" if length else "empty",
+                               "timedOut": False, "failedShards": 0} if tool == "search_opensearch_logs" else {})
+                    r = self.receipt(tool, {field: ["PRIVATE"] * length, total: n, "truncated": False, **source})
                     self.assertEqual(r["outcome"], expected)
                     if expected == "partial":
                         self.assertTrue(r["quality"]["truncated"])

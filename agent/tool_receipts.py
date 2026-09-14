@@ -609,6 +609,16 @@ def shallow_evidence(body, tool, q):
             q["invalid"] = True
             return "unverified"
         return "success" if found else "empty"
+    if tool == "search_opensearch_logs":
+        verdict = source_collection(body, q)
+        if verdict is not None:
+            return verdict
+        if type(body.get("timedOut")) is not bool or not count(body.get("failedShards")):
+            q["unknown"] = True
+            return "unverified"
+        if body["timedOut"] or body["failedShards"] > 0:
+            q["partial"] = True
+            return "partial"
     if tool in PAGINATED_TOOLS and "truncated" not in body:
         q["unknown"] = True  # old producers dropped continuation markers
     if tool == "describe_network":
@@ -627,6 +637,9 @@ def shallow_evidence(body, tool, q):
         field = COUNTED_LISTS[tool][0] if tool in COUNTED_LISTS else IAM_LISTS.get(tool, "result")
     rows = body.get(field)
     if not isinstance(rows, list):
+        q["invalid"] = True
+        return "unverified"
+    if tool == "search_opensearch_logs" and (body["collectionStatus"] == "empty") != (not rows):
         q["invalid"] = True
         return "unverified"
     if tool in COUNTED_LISTS:
@@ -664,6 +677,27 @@ def bounded_list(value, limit, q):
         q["truncated"] = True
         return None
     return value
+
+
+def source_collection(body, q, key="collectionStatus"):
+    """Only for producers whose legacy output erased upstream collection evidence."""
+    if key not in body:
+        restricted = bool(incomplete(q))
+        q["unknown"] = True
+        return "partial" if restricted else "unverified"
+    status = body[key]
+    if status == "unknown":
+        q["unknown"] = True
+        return "unverified"
+    if status == "partial":
+        q["partial"] = True
+        return "partial"
+    if status == "error":
+        return "error"
+    if status not in ("ok", "empty"):
+        q["invalid"] = True
+        return "unverified"
+    return None
 
 
 def network_evidence(body, tool, q):
@@ -742,10 +776,21 @@ def notion_evidence(body, tool, q):
                 q["partial"] = True
             else:
                 q["invalid"] = True
+        verdict = source_collection(body, q)
+        if verdict is not None:
+            return verdict
+        if body["collectionStatus"] != "ok" or not identified(body.get("page"), ("page",)):
+            return "unverified"
+        verdict = source_collection(body, q, "blocksCollectionStatus")
+        if verdict is not None:
+            q["partial"] = True
+            return "partial"  # retrieved page metadata survives failed/unassessed child collection
         blocks = bounded_list(body.get("blocks"), 25, q)
         if (type(body.get("truncated")) is not bool or not identified(body.get("page"), ("page",))
                 or blocks is None or not all(identified(b, ("block",)) and text(b.get("type"), 80) for b in blocks)):
             return None
+        if (body["blocksCollectionStatus"] == "empty") != (not blocks):
+            return "unverified"
         return "success"  # a fetched page with zero child blocks is still useful page evidence
     if "has_more" in body:
         if type(body["has_more"]) is bool:
@@ -759,19 +804,30 @@ def notion_evidence(body, tool, q):
             q["truncated"] = True
         else:
             q["invalid"] = True
+    verdict = source_collection(body, q)
+    if verdict is not None:
+        return verdict
     rows = bounded_list(body.get("results"), 25, q)
     if rows is None or type(body.get("has_more")) is not bool or not all(identified(r, ("page", "database")) for r in rows):
         return None
+    if (body["collectionStatus"] == "empty") != (not rows):
+        return "unverified"
     return "success" if rows else "empty"
 
 
 def metric_trace_evidence(body, tool, q):
+    if tool in NAMED_LISTS or tool == "tempo_search":
+        verdict = source_collection(body, q)
+        if verdict is not None:
+            return verdict
     if type(body.get("truncated")) is not bool:
         return None
     if tool in NAMED_LISTS:
         field, limit, kind = NAMED_LISTS[tool]
         rows = bounded_list(body.get(field), limit, q)
         if rows is not None and all(isinstance(r, kind) for r in rows):
+            if (body["collectionStatus"] == "empty") != (not rows):
+                return "unverified"
             return "success" if rows else "empty"
         return None
     if tool in METRIC_QUERIES:
@@ -796,6 +852,8 @@ def metric_trace_evidence(body, tool, q):
     if tool == "tempo_search":
         traces = bounded_list(body.get("traces"), 50, q)
         if traces is not None and all(isinstance(t, dict) and matching(t.get("traceID"), r"[a-fA-F0-9]+") for t in traces):
+            if (body["collectionStatus"] == "empty") != (not traces):
+                return "unverified"
             return "success" if traces else "empty"
         return None
     # Tempo's current get-trace fixture/producer uses OTLP batches. Other pass-through

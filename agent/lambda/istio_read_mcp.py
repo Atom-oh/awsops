@@ -110,28 +110,20 @@ def _mesh_overview(session):
     counts = {}
     for gv, plural in {(g, p) for g, p in _CRDS.values()}:
         try:
-            items = _k8s_get(endpoint, f"/apis/{gv}/{plural}", token, ctx).get("items")
-            if not isinstance(items, list):
-                raise ValueError("Invalid CRD collection")
-            counts[plural] = len(items)
+            counts[plural] = len(_k8s_get(endpoint, f"/apis/{gv}/{plural}", token, ctx).get("items", []))
         except Exception:
             counts[plural] = None
     injected = []
-    namespace_status = "error"
     try:
         ns = _k8s_get(endpoint, "/api/v1/namespaces", token, ctx)
-        items = ns.get("items")
-        if not isinstance(items, list):
-            raise ValueError("Invalid namespace collection")
-        for n in items:
+        for n in ns.get("items", []):
             labels = n.get("metadata", {}).get("labels", {}) or {}
             # match value, not mere presence — `istio-injection: disabled` is an explicit opt-OUT
             if labels.get("istio-injection") == "enabled" or labels.get("istio.io/rev"):
                 injected.append(n["metadata"]["name"])
-        namespace_status = "ok" if injected else "empty"
     except Exception:
         pass
-    return {"counts": counts, "injected_namespaces": injected, "namespaceCollectionStatus": namespace_status}
+    return {"counts": counts, "injected_namespaces": injected}
 
 
 def lambda_handler(event, context):

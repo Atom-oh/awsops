@@ -83,10 +83,24 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Existing explicit handlers | Async terminal-query results, inventory freshness, rightsizing and the bounded shallow producer contracts |
 | ENI lookup/configuration | The current IPv4 lookup's typed identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
 | Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
-| Notion | Identified page/database/block records, the relevant result collection and typed pagination/error markers |
-| Prometheus/Mimir | Bounded vector/matrix query envelopes; named labels/series collections with typed truncation |
-| Tempo | Bounded trace-search envelopes and OTLP `batches` with `scopeSpans` or `instrumentationLibrarySpans` |
-| Loki | Existing explicit query-result handling and bounded named label/value collections |
+| Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |
+| Prometheus/Mimir | Existing bounded vector/matrix envelopes; named labels/series also require upstream-derived `collectionStatus` |
+| Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
+| Loki | Existing explicit query-result handling; named label/value collections require upstream-derived `collectionStatus` |
+
+The affected producers emit typed collection status (`ok`, `empty`, `partial`, `unknown`, or a
+component `error`) before coercion can erase upstream evidence. Missing or non-list collections
+cannot become confirmed empty lists. Named Prometheus/Mimir/Loki lists also require an upstream
+success status. Tempo search treats an omitted protobuf-style `traces` field as unknown, while
+retaining returned metrics and bounded trace data.
+
+OpenSearch search retains nullable `timedOut` and `failedShards` fields plus `collectionStatus`;
+absent or malformed flags are unknown, never false/zero. Timeouts, failed shards and omitted hits
+prevent a complete result. Notion independently records page and block collection: valid page
+metadata remains useful when block retrieval fails or its results/pagination fields are absent.
+Legacy clean responses without the required source markers remain unverified; explicit errors and
+already disclosed incompleteness retain their restrictive outcomes. These markers still require
+matching payload structure before success or confirmed empty can be granted.
 
 These are finite envelope checks, not recursive validation of resource health, metric values, span
 attributes or document contents. Other tool responses, introspection formats and future encodings
