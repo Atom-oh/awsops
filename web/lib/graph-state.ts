@@ -68,7 +68,9 @@ export async function readGraphState(pool: Pick<Pool, 'query'>, account: string,
     || row.status === 'error' || row.status === 'unavailable'
     || row.details?.retainedPrevious === true
     || (cls !== 'trace' && inventorySourcesStale(row.details?.publishedSources));
-  return { ...row.details, ...(cls !== 'trace' ? { evidenceKind: 'inventory' } : {}), status: row.status, stale,
+  const details = { ...row.details };
+  delete details.lastSourceAttemptedAtMs; // Internal scheduler state, not collection evidence.
+  return { ...details, ...(cls !== 'trace' ? { evidenceKind: 'inventory' } : {}), status: row.status, stale,
     attempted_at: row.attempted_at, captured_at: row.captured_at };
 }
 
