@@ -75,13 +75,22 @@ def configured_cells():
         raise GuardError("review_contract_unavailable") from None
 
 
-def blocking_line(line):
+def blocking_line(line, *, first_visible=False):
     # Handle real GitHub Markdown headings, bullets, numbered lists and emphasis.
     value = re.sub(r"^(?:(?:#{1,6}|[-+*]|\d+[.)])\s+)+", "", line.strip())
     value = value.lstrip("*_ ")
+    if first_visible:
+        # Inline findings can title their severity after a finding number. Keep
+        # the match anchored so Minor/Info titles mentioning "major" stay minor.
+        value = re.sub(r"^finding\s*#?\s*\d+\b", "", value, flags=re.I)
     value = re.sub(r"^severity(?: level)?\s*:\s*", "", value, flags=re.I)
     value = re.sub(r"^[^\w]+", "", value).lstrip("_")
     return bool(re.match(r"(CRITICAL|MAJOR|P0|P1)\b", value, re.I))
+
+
+def blocking_comment(body):
+    return any(blocking_line(line, first_visible=index == 0)
+               for index, line in enumerate(line for line in visible_lines(body) if line))
 
 
 def verify_ai_comment(comments, head):
@@ -169,13 +178,14 @@ def verify_release(env, fetch):
         require(not threads.get("pageInfo", {}).get("hasNextPage"), "thread_coverage_incomplete")
         require(isinstance(threads.get("nodes"), list), "thread_coverage_missing")
         for thread in threads["nodes"]:
-            if thread.get("isResolved") or thread.get("isOutdated"):
+            # Outdated only means the diff moved; it is not resolution evidence.
+            if thread.get("isResolved") is True:
                 continue
             comments = thread.get("comments") or {}
             require(not comments.get("pageInfo", {}).get("hasNextPage"), "thread_coverage_incomplete")
             require(isinstance(comments.get("nodes"), list), "thread_comments_missing")
-            require(not any(blocking_line(line) for item in comments["nodes"]
-                            for line in visible_lines(item.get("body", ""))), "unresolved_blocking_thread")
+            require(not any(blocking_comment(item.get("body", "")) for item in comments["nodes"]),
+                    "unresolved_blocking_thread")
     after = fetch(f"{prefix}/git/ref/heads/main")
     require(after.get("object", {}).get("sha") == commit, "main_head_moved")
     return {"commit_sha": commit, "reviewed_head": head, "pr_number": number,

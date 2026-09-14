@@ -193,6 +193,67 @@ class ReleaseGuardTests(unittest.TestCase):
         self.threads[0]["isResolved"] = True
         self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
 
+    def test_outdated_unresolved_major_blocks_until_explicitly_resolved(self):
+        self.inline = [{"id": 1}]
+        self.threads = [{
+            "isResolved": False, "isOutdated": True,
+            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": "MAJOR: still unresolved"}]},
+        }]
+        with self.assertRaisesRegex(guard.GuardError, "^unresolved_blocking_thread$"):
+            guard.verify_release(self.env, self.fetch)
+        self.threads[0]["isResolved"] = True
+        self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
+
+    def test_first_visible_finding_severity_blocks_current_and_outdated_threads(self):
+        self.inline = [{"id": 1}]
+        self.threads = [{
+            "isResolved": False, "isOutdated": False,
+            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": ""}]},
+        }]
+        for outdated in (False, True):
+            self.threads[0]["isOutdated"] = outdated
+            for body in (
+                "Finding1(MAJOR): unresolved risk",
+                "Finding 1 (MAJOR): unresolved risk",
+                "### **Finding 2 (Critical)** — release issue",
+                "\n\nFinding #3 [P1]: release issue",
+                "> Quoted context\n\n```\nexample\n```\nFinding 1 (Major): actual finding",
+            ):
+                with self.subTest(outdated=outdated, body=body):
+                    self.threads[0]["comments"]["nodes"][0]["body"] = body
+                    with self.assertRaisesRegex(guard.GuardError, "^unresolved_blocking_thread$"):
+                        guard.verify_release(self.env, self.fetch)
+
+    def test_minor_info_and_quoted_findings_do_not_block(self):
+        self.inline = [{"id": 1}]
+        self.threads = [{
+            "isResolved": False, "isOutdated": False,
+            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": ""}]},
+        }]
+        for outdated in (False, True):
+            self.threads[0]["isOutdated"] = outdated
+            for body in (
+                "Finding 1 (MINOR): major-version wording",
+                "Finding1(INFO): critical-path documentation",
+                "### Minor: mentions a MAJOR release",
+                "Info: explains CRITICAL terminology",
+                "> Finding 1 (MAJOR): quoted example",
+                "```\nFinding 1 (MAJOR): code example\n```",
+                "Finding 1 (INFO)\nThis explanatory sentence mentions MAJOR.",
+            ):
+                with self.subTest(outdated=outdated, body=body):
+                    self.threads[0]["comments"]["nodes"][0]["body"] = body
+                    self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
+
+    def test_outdated_unresolved_threads_still_require_complete_comment_coverage(self):
+        self.inline = [{"id": 1}]
+        self.threads = [{
+            "isResolved": False, "isOutdated": True,
+            "comments": {"pageInfo": {"hasNextPage": True}, "nodes": [{"body": "Minor: first page"}]},
+        }]
+        with self.assertRaisesRegex(guard.GuardError, "^thread_coverage_incomplete$"):
+            guard.verify_release(self.env, self.fetch)
+
 
 if __name__ == "__main__":
     unittest.main()
