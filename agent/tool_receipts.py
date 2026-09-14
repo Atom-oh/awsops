@@ -7,6 +7,7 @@ import json
 import math
 import re
 import time
+from datetime import datetime
 
 MAX_CALLS = 32
 MAX_RESULT = 262144
@@ -43,7 +44,7 @@ def scope(value):
 
 
 def number(value):
-    return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 9007199254740991
+    return type(value) in (int, float) and 0 <= value <= 9007199254740991 and math.isfinite(value)
 
 
 def quality(body):
@@ -65,7 +66,7 @@ def quality(body):
 
     boolean = lambda v: type(v) is bool
     clock = lambda v: v is None or matching(v, r"\d{4}-\d\d-\d\d[T ][0-9:.+-]+Z?", 40)
-    fields(body, out, {"partial": boolean})
+    fields(body, out, {"partial": boolean, "truncated": boolean})
     if "unknown" in body:
         if type(body["unknown"]) is bool or isinstance(body["unknown"], list):
             out["unknown"] = bool(body["unknown"])
@@ -166,7 +167,234 @@ def decode(value):
     return value
 
 
-def terminal(result, ignored_texts=()):
+def combined(outcomes):
+    """A confirmed empty source is useful evidence, including beside a failed source."""
+    states = set(outcomes)
+    if "partial" in states:
+        return "partial"
+    if states & {"success", "empty"}:
+        if states & {"error", "unverified"}:
+            return "partial"
+        return "success" if "success" in states else "empty"
+    if states == {"error"}:
+        return "error"
+    return "unverified"
+
+
+def count(value):
+    return type(value) is int and number(value)
+
+
+def inventory_source(row, q):
+    """One SQL freshness row, never a recursive walk over inventory resource data."""
+    if not isinstance(row, dict):
+        q["invalid"] = True
+        return {"status": "unknown"}, "unverified"
+    source = {}
+    rtype = row.get("resource_type")
+    if matching(rtype, r"[a-z][a-z0-9_]{0,60}"):
+        source["sourceId"] = "inventory:" + rtype
+    elif "resource_type" in row:
+        q["invalid"] = True
+    fresh = row.get("freshness")
+    valid = isinstance(fresh, str) and fresh in {"healthy", "degraded", "stale", "unavailable"}
+    current = row.get("current_count")
+    if not valid or not count(current):
+        q["invalid" if "freshness" in row and "current_count" in row else "unknown"] = True
+        valid = False
+    else:
+        source["itemCount"] = current
+    if "status" in row:
+        status = row["status"]
+        if status is None:
+            source["producerStatus"] = "unknown"
+        elif isinstance(status, str) and status in {"succeeded", "failed", "partial", "running"}:
+            source["producerStatus"] = status
+        else:
+            q["invalid"] = True
+            valid = False
+        if fresh == "healthy" and status != "succeeded":
+            q["invalid"] = True
+            valid = False
+    for key in ("row_count", "last_success_row_count", "unknown_attribute_count", "age_minutes", "stale_after_minutes"):
+        if key in row and row[key] is not None and not count(row[key]):
+            q["invalid"] = True
+            valid = False
+    if fresh == "healthy" and "unknown_attribute_count" in row and row["unknown_attribute_count"] != 0:
+        q["invalid"] = True
+        valid = False
+    # These are producer clocks, not receipt delivery clocks. SQL's latest_success_at
+    # already takes the oldest retained capture into account.
+    for key, dest in (("latest_success_at", "capturedAtMs"), ("last_success_at", "lastSuccessAtMs"),
+                      ("finished_at", "finishedAtMs")):
+        if key not in row:
+            continue
+        value = row[key]
+        if value is None:
+            source[dest] = None
+            if fresh == "healthy" and key != "finished_at":
+                q["invalid"] = True
+                valid = False
+            continue
+        try:
+            if not matching(value, r"\d{4}-\d\d-\d\d[T ][0-9:.+-]+Z?", 40):
+                raise ValueError("invalid clock")
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError("clock without timezone")
+            stamp = int(parsed.timestamp() * 1000)
+            if not number(stamp):
+                raise ValueError("invalid clock")
+            source[dest] = stamp
+        except (ValueError, OverflowError):
+            q["invalid"] = True
+            valid = False
+    if not valid:
+        source["status"] = "unknown"
+        return source, "unverified"
+    if fresh == "healthy":
+        source["status"] = "empty" if current == 0 else "ok"
+        return source, "empty" if current == 0 else "success"
+    if fresh == "stale":
+        q["collection"]["stale"] = True
+    if fresh in ("stale", "degraded") or current:
+        source["status"] = "partial"
+        return source, "partial"
+    source["status"] = "error" if row.get("status") == "failed" else "unavailable"
+    return source, "error" if source["status"] == "error" else "unverified"
+
+
+def inventory_evidence(body, tool, q):
+    if "collection" in q:
+        # This producer does not emit collection; do not erase an unexpected quality claim.
+        q["unsupported"] = True
+        return "unverified"
+    coll = q["collection"] = {"status": "unknown", "evidenceKind": "inventory", "sources": []}
+    rows = body.get("sync") if tool == "inventory_summary" else [body.get("freshness")]
+    if not isinstance(rows, list):
+        q["invalid"] = True
+        return "unverified"
+    if not rows:
+        coll["status"] = "unavailable"
+        return "unverified"  # no sync ledger is not a successful empty inventory
+    outcomes = []
+    if len(rows) > 8:
+        q["truncated"] = True
+        outcomes.append("unverified")
+    for row in rows[:8]:
+        source, outcome = inventory_source(row, q)
+        coll["sources"].append(source)
+        outcomes.append(outcome)
+    outcome = combined(outcomes)
+    coll["status"] = {"success": "ok", "unverified": "unavailable"}.get(outcome, outcome)
+    if tool == "query_inventory":
+        resources = body.get("resources")
+        if not isinstance(resources, list) or not count(body.get("count")) or body["count"] != len(resources):
+            q["invalid"] = True
+            return "unverified"
+        current = coll["sources"][0].get("itemCount")
+        if current is not None and len(resources) > current:
+            q["invalid"] = True
+        if outcome in ("success", "empty"):
+            # A filtered, current query may match zero even when the type has other rows.
+            return "success" if resources else "empty"
+        if resources:
+            return "partial"
+    return outcome
+
+
+def rightsizing_evidence(body, q):
+    """Exactly four advertised services; inspect markers, not recommendation/error contents."""
+    services = ("ec2", "rds", "ecs", "lambda")
+    selected = body.get("resourceType")
+    results = body.get("results")
+    if not isinstance(selected, str) or selected not in (*services, "all") or not isinstance(results, dict):
+        q["invalid"] = True
+        return "unverified"
+    expected = services if selected == "all" else (selected,)
+    # Membership is bounded even if a native JSON block contains a huge foreign mapping.
+    if len(results) != sum(service in results for service in expected):
+        q["unsupported"] = True
+    total = body.get("totalEstimatedMonthlySavings")
+    if total is None:
+        q["unknown"] = True
+    elif not number(total):
+        q["invalid"] = True
+    outcomes = []
+    for service in expected:
+        if service not in results:
+            q["unknown"] = True
+            outcomes.append("unverified")
+            continue
+        entry = results[service]
+        if not isinstance(entry, dict):
+            q["invalid"] = True
+            outcomes.append("unverified")
+            continue
+        failed = False
+        malformed = False
+        if "error" in entry:
+            if isinstance(entry["error"], str) and entry["error"]:
+                failed = True
+            else:
+                malformed = True
+        if "errors" in entry:
+            if isinstance(entry["errors"], list):
+                failed |= bool(entry["errors"])
+            else:
+                malformed = True
+        if "truncated" in entry:
+            if type(entry["truncated"]) is bool:
+                if entry["truncated"]:
+                    q["truncated"] = True
+            else:
+                malformed = True
+        recs = entry.get("recommendations")
+        if failed and "recommendations" not in entry and "count" not in entry:
+            outcome = "error"
+        elif not isinstance(recs, list) or not count(entry.get("count")) or entry["count"] != len(recs):
+            malformed = True
+            outcome = "unverified"
+        elif failed:
+            outcome = "partial" if recs else "error"
+        else:
+            outcome = "success" if recs else "empty"
+        if malformed:
+            q["invalid"] = True
+            outcome = "unverified"
+        elif entry.get("truncated") is True:
+            outcome = "partial"
+        outcomes.append(outcome)
+    outcome = combined(outcomes)
+    if outcome == "empty" and number(total) and total != 0:
+        q["invalid"] = True
+    if "error" in outcomes or "partial" in outcomes:
+        q["partial"] = True
+    return outcome
+
+
+def producer_evidence(body, tool, q):
+    """Curated producer shapes only; no arbitrary nested error/key searching."""
+    name = tool.rsplit("___", 1)[-1]
+    if name in ("query_inventory", "inventory_summary"):
+        return inventory_evidence(body, name, q)
+    if name == "get_rightsizing_recommendations":
+        return rightsizing_evidence(body, q)
+    if name in ("notion_search", "notion_query_database") and "has_more" in body:
+        if type(body["has_more"]) is bool:
+            if body["has_more"]:
+                q["truncated"] = True
+        else:
+            q["invalid"] = True
+    if name == "notion_fetch_page" and "blocks_error" in body:
+        if isinstance(body["blocks_error"], str) and body["blocks_error"]:
+            q["partial"] = True
+        else:
+            q["invalid"] = True
+    return None
+
+
+def terminal(result, ignored_texts=(), tool=""):
     if result.get("status") == "error":
         return "error", {}, {}
     if result.get("status") != "success":
@@ -174,8 +402,11 @@ def terminal(result, ignored_texts=()):
     content = result.get("content")
     if not isinstance(content, list):
         return "unverified", {"invalid": True}, {}
+    object_producer = tool.rsplit("___", 1)[-1] in {
+        "query_inventory", "inventory_summary", "get_rightsizing_recommendations",
+    }
     if not content:
-        return "empty", {}, {}
+        return ("unverified", {"unknown": True}, {}) if object_producer else ("empty", {}, {})
     outcomes, q, observed = [], {}, {}
     # Scan bounded content; language-hook reminders are non-JSON and not evidence.
     for block in content[:16]:
@@ -201,6 +432,7 @@ def terminal(result, ignored_texts=()):
                 body = decode(body.get("body"))
             if isinstance(body, dict):
                 projected = quality(body)
+                producer_outcome = producer_evidence(body, tool, projected)
                 for key in ("partial", "unknown", "truncated", "invalid", "unsupported"):
                     if q.get(key) is True:
                         projected[key] = True
@@ -208,6 +440,9 @@ def terminal(result, ignored_texts=()):
                 observed.update(scope(body.get("observedScope")))  # never infer from request/account defaults
                 if body.get("error") or body.get("isError") is True:
                     outcomes.append("error")
+                elif producer_outcome is not None:
+                    outcomes.append("partial" if producer_outcome in ("success", "empty") and incomplete(q)
+                                    else producer_outcome)
                 elif incomplete(q):
                     outcomes.append("partial")
                 elif (not body or body.get("collection", {}).get("status") == "empty"
@@ -217,7 +452,11 @@ def terminal(result, ignored_texts=()):
                 else:
                     outcomes.append("success")
             elif isinstance(body, list):
-                outcomes.append("success" if body else "empty")
+                if object_producer:
+                    q["invalid"] = True
+                    outcomes.append("unverified")
+                else:
+                    outcomes.append("success" if body else "empty")
             else:
                 q["unsupported"] = True
                 outcomes.append("unverified")
@@ -228,17 +467,7 @@ def terminal(result, ignored_texts=()):
     if len(content) > 16:
         q["truncated"] = True
         outcomes.append("unverified")
-    if "error" in outcomes:
-        outcome = "partial" if "success" in outcomes or "partial" in outcomes else "error"
-    elif "partial" in outcomes:
-        outcome = "partial"
-    elif "success" in outcomes:
-        outcome = "partial" if "unverified" in outcomes else "success"
-    elif "unverified" in outcomes or not outcomes:
-        outcome = "unverified"
-    else:
-        outcome = "empty"
-    return outcome, q, observed
+    return combined(outcomes), q, observed
 
 
 class ReceiptTracker:
@@ -284,7 +513,7 @@ class ReceiptTracker:
             if receipt is None:
                 self.truncated = True
                 continue
-            outcome, q, observed = terminal(result, self.ignored_texts)
+            outcome, q, observed = terminal(result, self.ignored_texts, receipt["tool"])
             if receipt["tool"].endswith("get_topology") and "collection" not in q and outcome == "success":
                 outcome = "unverified"
             receipt.update(outcome=outcome, terminalObservedAt=now, quality=q, observedScope=observed)

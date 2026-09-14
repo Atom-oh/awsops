@@ -1,5 +1,6 @@
 """Public Strands 1.41.0 messages, replayed offline through the real stream adapter."""
 import asyncio
+import copy
 import json
 from pathlib import Path
 import unittest
@@ -190,3 +191,253 @@ class ReviewReceiptTest(unittest.TestCase):
         self.assertEqual(frames[-1], {"runtimeOutcome": "error"})
         self.assertEqual([f["receipt"]["outcome"] for f in frames if "receipt" in f], ["success", "unfinished"])
         self.assertNotIn("PRIVATE", json.dumps(frames))
+
+
+def inventory_row(freshness="healthy", count=0, **changes):
+    """Shape of inventory_read_mcp._sync_freshness(), without database access."""
+    stamp = "2026-09-14T00:00:00+00:00"
+    return {
+        "resource_type": "ec2", "status": "succeeded", "finished_at": stamp,
+        "row_count": count, "current_count": count, "last_success_at": stamp,
+        "last_success_row_count": count, "unknown_attribute_count": 0,
+        "oldest_captured_at": stamp if count else None, "latest_success_at": stamp,
+        "freshness": freshness, "age_minutes": 0, "stale_after_minutes": 30,
+        **changes,
+    }
+
+
+def rightsizing_service(count=0, **changes):
+    """Shape of aws_finops_mcp._rightsizing_result()."""
+    return {"count": count, "recommendations": [
+        {"instanceArn": "PRIVATE", "estimatedMonthlySavings": 12.5, "currency": "USD"}
+    ] * count, "truncated": False, "errors": [], **changes}
+
+
+class ProducerReceiptTest(unittest.TestCase):
+    def receipt(self, tool, body):
+        start = use("a", query="PRIVATE")
+        start["message"]["content"][0]["toolUse"]["name"] = "producer___" + tool
+        frames = collect([start, result("a", {"statusCode": 200, "body": json.dumps(body)})])
+        self.assertEqual(frames[-1], {"completion": {"version": 1, "receiptCount": 1}})
+        receipt = next(f["receipt"] for f in frames if "receipt" in f)
+        self.assertNotIn("PRIVATE", json.dumps(receipt))
+        self.assertLess(len(json.dumps(receipt)), 6500)
+        return receipt
+
+    def test_inventory_distinguishes_confirmed_empty_from_unavailable_and_retained_data(self):
+        for freshness, count, expected in [
+            ("healthy", 0, "empty"), ("healthy", 1, "success"),
+            ("degraded", 0, "partial"), ("degraded", 1, "partial"),
+            ("stale", 0, "partial"), ("stale", 1, "partial"),
+            ("unavailable", 0, "unverified"), ("unavailable", 1, "partial"),
+        ]:
+            with self.subTest(freshness=freshness, count=count):
+                row = inventory_row(freshness, count)
+                if freshness == "unavailable":
+                    row.update(status=None, last_success_at=None, latest_success_at=None)
+                body = {"resource_type": "ec2", "resources": [{"id": "PRIVATE"}] * count,
+                        "count": count, "freshness": row}
+                receipt = self.receipt("query_inventory", body)
+                self.assertEqual(receipt["outcome"], expected)
+                source = receipt["quality"]["collection"]["sources"][0]
+                self.assertEqual(source["sourceId"], "inventory:ec2")
+                self.assertEqual(source["itemCount"], count)
+                self.assertEqual(receipt["quality"]["collection"].get("stale", False), freshness == "stale")
+
+    def test_inventory_summary_uses_current_count_not_latest_attempt_row_count(self):
+        row = inventory_row(count=5, row_count=0)
+        receipt = self.receipt("inventory_summary", {"sync": [row], "note": "PRIVATE"})
+        self.assertEqual(receipt["outcome"], "success")
+        self.assertEqual(receipt["quality"]["collection"]["sources"][0]["itemCount"], 5)
+
+    def test_inventory_summary_handles_mixed_and_wholly_failed_sources(self):
+        failed = inventory_row("unavailable", status="failed", last_success_at=None, latest_success_at=None)
+        for rows, expected in [
+            ([], "unverified"), ([inventory_row()], "empty"), ([failed], "error"),
+            ([failed, inventory_row()], "partial"), ([failed, inventory_row(count=2)], "partial"),
+            ([inventory_row("stale")], "partial"),
+        ]:
+            with self.subTest(rows=rows):
+                self.assertEqual(self.receipt("inventory_summary", {"sync": rows})["outcome"], expected)
+
+    def test_inventory_missing_malformed_and_contradictory_markers_never_certify_empty(self):
+        for changes in [
+            {"freshness": None}, {"freshness": {"PRIVATE": True}}, {"freshness": "future"},
+            {"current_count": None}, {"current_count": True}, {"current_count": -1},
+            {"status": "failed"}, {"unknown_attribute_count": 1}, {"unknown_attribute_count": None},
+            {"last_success_at": None}, {"age_minutes": "PRIVATE"}, {"latest_success_at": "PRIVATE"},
+        ]:
+            with self.subTest(changes=changes):
+                receipt = self.receipt("query_inventory", {
+                    "count": 0, "resources": [], "freshness": inventory_row(**changes),
+                })
+                self.assertNotIn(receipt["outcome"], ("empty", "success"))
+        for body in [
+            {"count": 0, "resources": []},
+            {"count": 0, "resources": [], "freshness": None},
+            {"count": 0, "resources": {}, "freshness": inventory_row()},
+            {"count": 1, "resources": [], "freshness": inventory_row()},
+            {"sync": None},
+        ]:
+            tool = "inventory_summary" if "sync" in body else "query_inventory"
+            self.assertNotIn(self.receipt(tool, body)["outcome"], ("empty", "success"))
+
+    def test_inventory_optional_markers_and_filtered_empty_are_not_false_failures(self):
+        row = {"resource_type": "cloudfront", "freshness": "healthy", "current_count": 5}
+        receipt = self.receipt("query_inventory", {
+            "resource_type": "cloudfront", "resource_id": "E123456", "projection": "identity_only",
+            "count": 0, "resources": [], "freshness": row,
+        })
+        self.assertEqual(receipt["outcome"], "empty")
+
+    def test_inventory_summary_source_projection_is_bounded_and_does_not_visit_tail(self):
+        row = inventory_row(count=1, resource_type="ec2", note="PRIVATE")
+        receipt = self.receipt("inventory_summary", {"sync": [row] * 9 + [{"error": "PRIVATE"}] * 1000})
+        self.assertEqual(receipt["outcome"], "partial")
+        self.assertTrue(receipt["quality"]["truncated"])
+        self.assertLessEqual(len(receipt["quality"]["collection"]["sources"]), 8)
+
+    def test_rightsizing_partial_and_wholly_failed_services(self):
+        for results, resource_type, total, expected in [
+            ({"ec2": {"error": "PRIVATE"}}, "ec2", None, "error"),
+            ({s: {"error": "PRIVATE"} for s in ("ec2", "rds", "ecs", "lambda")}, "all", None, "error"),
+            ({"ec2": rightsizing_service(), "rds": {"error": "PRIVATE"},
+              "ecs": rightsizing_service(), "lambda": rightsizing_service()}, "all", None, "partial"),
+            ({"ec2": rightsizing_service(1)}, "ec2", 12.5, "success"),
+            ({"ec2": rightsizing_service()}, "ec2", 0, "empty"),
+            ({"ec2": rightsizing_service(1)}, "ec2", None, "partial"),
+            ({"ec2": rightsizing_service(1, errors=[{"message": "PRIVATE"}])}, "ec2", None, "partial"),
+            ({"ec2": rightsizing_service(errors=[{"message": "PRIVATE"}])}, "ec2", None, "error"),
+            ({"ec2": rightsizing_service(truncated=True)}, "ec2", None, "partial"),
+        ]:
+            with self.subTest(results=results, expected=expected):
+                receipt = self.receipt("get_rightsizing_recommendations", {
+                    "resourceType": resource_type, "results": results,
+                    "totalEstimatedMonthlySavings": total, "currency": "USD" if total else None,
+                })
+                self.assertEqual(receipt["outcome"], expected)
+                if total is None:
+                    self.assertTrue(receipt["quality"].get("unknown"))
+
+    def test_rightsizing_malformed_or_omitted_markers_and_services_fail_conservatively(self):
+        valid = {"resourceType": "ec2", "results": {"ec2": rightsizing_service()},
+                 "totalEstimatedMonthlySavings": 0}
+        for field, value in [("truncated", "false"), ("errors", None), ("errors", "PRIVATE"),
+                             ("error", None), ("error", {}), ("count", True), ("count", 1),
+                             ("recommendations", {}), ("recommendations", None)]:
+            body = copy.deepcopy(valid)
+            body["results"]["ec2"][field] = value
+            with self.subTest(field=field, value=value):
+                receipt = self.receipt("get_rightsizing_recommendations", body)
+                self.assertNotIn(receipt["outcome"], ("empty", "success"))
+                self.assertTrue(receipt["quality"].get("invalid"))
+        for changes in [{"results": None}, {"results": {}}, {"resourceType": "all"},
+                        {"totalEstimatedMonthlySavings": "PRIVATE"}, {"totalEstimatedMonthlySavings": True},
+                        {"totalEstimatedMonthlySavings": None}]:
+            self.assertNotIn(self.receipt("get_rightsizing_recommendations", {
+                **valid, **changes,
+            })["outcome"], ("empty", "success"))
+        # The additive errors/truncated markers may be absent in an older valid response.
+        body = copy.deepcopy(valid)
+        del body["results"]["ec2"]["errors"]
+        del body["results"]["ec2"]["truncated"]
+        self.assertEqual(self.receipt("get_rightsizing_recommendations", body)["outcome"], "empty")
+
+    def test_rightsizing_unknown_service_does_not_expand_projection(self):
+        receipt = self.receipt("get_rightsizing_recommendations", {
+            "resourceType": "ec2", "results": {
+                "ec2": rightsizing_service(), "PRIVATE": {"error": "PRIVATE"},
+            }, "totalEstimatedMonthlySavings": 0,
+        })
+        self.assertNotIn(receipt["outcome"], ("success", "empty"))
+        self.assertTrue(receipt["quality"]["unsupported"])
+
+    def test_connector_truncation_is_typed_sticky_and_not_raw_output(self):
+        from tool_receipts import terminal
+        for value, expected_marker in [(True, "truncated"), ("true", "invalid"), (None, "invalid")]:
+            event = result("a", {"truncated": value, "result": [], "query": "PRIVATE"})
+            raw = event["message"]["content"][0]["toolResult"]
+            raw["content"].append({"json": {"truncated": False, "id": "PRIVATE"}})
+            outcome, quality, _ = terminal(raw)
+            self.assertEqual(outcome, "partial")
+            self.assertTrue(quality[expected_marker])
+            self.assertNotIn("PRIVATE", json.dumps(quality))
+
+    def test_notion_children_failure_and_more_pages_preserve_partial_evidence(self):
+        receipt = self.receipt("notion_fetch_page", {
+            "page": {"id": "PRIVATE"}, "blocks": [], "truncated": False, "blocks_error": "(403) PRIVATE",
+        })
+        self.assertEqual(receipt["outcome"], "partial")
+        for tool in ("notion_search", "notion_query_database"):
+            for marker in (True, "false", None):
+                receipt = self.receipt(tool, {"results": [], "has_more": marker, "next_cursor": "PRIVATE"})
+                self.assertEqual(receipt["outcome"], "partial")
+
+    def test_extreme_numeric_markers_do_not_crash_the_stream(self):
+        for value in (10 ** 400, float("nan"), float("inf"), -1, True):
+            with self.subTest(value=value):
+                receipt = self.receipt("inventory_summary", {
+                    "sync": [inventory_row(current_count=value)],
+                })
+                self.assertNotIn(receipt["outcome"], ("success", "empty"))
+                self.assertTrue(receipt["quality"].get("invalid"))
+                receipt = self.receipt("get_rightsizing_recommendations", {
+                    "resourceType": "ec2", "results": {"ec2": rightsizing_service()},
+                    "totalEstimatedMonthlySavings": value,
+                })
+                self.assertNotIn(receipt["outcome"], ("success", "empty"))
+
+    def test_projection_does_not_walk_rows_errors_or_unknown_services(self):
+        from tool_receipts import terminal
+
+        class DoNotWalk(list):
+            def __iter__(self):
+                raise AssertionError("raw content must not be traversed")
+
+        class DoNotRead(dict):
+            def get(self, *args):
+                raise AssertionError("summary tail must not be read")
+
+        for tool, body in [
+            ("query_inventory", {"resources": DoNotWalk([{"query": "PRIVATE"}]), "count": 1,
+                                 "freshness": inventory_row(count=1)}),
+            ("inventory_summary", {"sync": [inventory_row(count=1)] * 8 + [DoNotRead()]}),
+            ("get_rightsizing_recommendations", {
+                "resourceType": "ec2", "totalEstimatedMonthlySavings": None,
+                "results": {"ec2": rightsizing_service(1, recommendations=DoNotWalk([{"arn": "PRIVATE"}]),
+                                                       errors=DoNotWalk([{"error": "PRIVATE"}])),
+                            "PRIVATE": DoNotRead()},
+            }),
+        ]:
+            raw = {"status": "success", "content": [{"json": body}]}
+            outcome, q, _ = terminal(raw, tool="producer___" + tool)
+            self.assertIn(outcome, ("success", "partial"))
+            self.assertNotIn("PRIVATE", json.dumps(q))
+
+    def test_inventory_source_clocks_are_not_latest_attempt_clocks(self):
+        row = inventory_row("degraded", count=1, status="failed",
+                            finished_at="2026-09-14T02:00:00Z",
+                            latest_success_at="2026-09-14T00:00:00Z",
+                            last_success_at="2026-09-14T01:00:00Z")
+        receipt = self.receipt("inventory_summary", {"sync": [row]})
+        source = receipt["quality"]["collection"]["sources"][0]
+        self.assertEqual(source["lastSuccessAtMs"] - source["capturedAtMs"], 3600000)
+        self.assertEqual(source["finishedAtMs"] - source["lastSuccessAtMs"], 3600000)
+        self.assertEqual(source["producerStatus"], "failed")
+        self.assertEqual(receipt["outcome"], "partial")
+
+    def test_confirmed_empty_and_failed_content_blocks_are_partial(self):
+        from tool_receipts import terminal
+        outcome, _, _ = terminal({"status": "success", "content": [
+            {"json": []}, {"json": {"error": "PRIVATE"}},
+        ]})
+        self.assertEqual(outcome, "partial")
+
+    def test_known_producers_require_their_object_envelope_to_confirm_empty(self):
+        from tool_receipts import terminal
+        for tool in ("query_inventory", "inventory_summary", "get_rightsizing_recommendations"):
+            for content in ([], [{"json": []}], [{"json": {}}]):
+                with self.subTest(tool=tool, content=content):
+                    outcome, _, _ = terminal({"status": "success", "content": content},
+                                             tool="producer___" + tool)
+                    self.assertEqual(outcome, "unverified")
