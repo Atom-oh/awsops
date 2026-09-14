@@ -16,11 +16,13 @@ for (const path of ['/topology/infra', '/topology/resource/vpc%3Aone']) {
           sourceId: `inventory:source_${i}`, status: i ? 'ok' : 'partial', scope: 'aggregate',
           reasons: i ? [] : ['unknown_attributes'], itemCount: 3,
           capturedAtMs: 1789380000000, lastSuccessAtMs: 1789380300000,
+          windowStartMs: 1789376400000, windowEndMs: 1789380000000,
         }));
         return route.fulfill({ json: url.pathname === '/api/graph' ? {
           nodes: [{ id: 'vpc:one', kind: 'vpc', label: 'Example VPC' }],
           edges: [], captured_at: '2026-09-14T12:00:00Z',
           collection: { status: 'partial', stale: true, retainedPrevious: true,
+            nodeDrops: 2, edgeDrops: 3, infraUnavailable: true,
             attempted_at: '2026-09-14T12:05:00Z', captured_at: '2026-09-14T12:00:00Z',
             sources, publishedSources: sources, evidenceKind: 'inventory' },
         } : { accounts: [], rows: [], clusters: [] } });
@@ -31,6 +33,8 @@ for (const path of ['/topology/infra', '/topology/resource/vpc%3Aone']) {
       const panel = page.getByRole('alert').filter({ hasText: 'Partial collection' });
       await expect(canvas).toBeVisible();
       await expect(panel).toBeVisible();
+      await expect(panel.getByText('Nodes omitted: 2')).toBeVisible();
+      await expect(panel.getByText('Inventory context unavailable')).toBeVisible();
       // This assertion reproduces the original zero-height canvas before the details fix.
       expect((await canvas.boundingBox())!.height).toBeGreaterThanOrEqual(240);
       const details = panel.locator('details');
@@ -45,6 +49,8 @@ for (const path of ['/topology/infra', '/topology/resource/vpc%3Aone']) {
       expect(expandedCanvas.height).toBeGreaterThanOrEqual(240);
       expect(expandedPanel.height).toBeLessThanOrEqual(viewport.height * .36 + 2);
       await expect(details.getByText('Sources used by saved graph')).toHaveCount(1);
+      await expect(details.getByText('Source window start', { exact: false })).toHaveCount(96);
+      await expect(details.getByText('Source window end', { exact: false })).toHaveCount(96);
       const scroll = panel.locator('[data-source-details]');
       expect(await scroll.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
       await scroll.evaluate(el => { el.scrollTop = el.scrollHeight; });
