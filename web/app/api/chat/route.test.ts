@@ -785,6 +785,47 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
   };
 
   it.each([
+    ['max_tokens', 'success'], ['max_tokens', 'unverified'], ['end_turn', 'unverified'],
+  ] as const)('keeps %s synthesis with %s source evidence partial', async (stopReason, dataOutcome) => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    invokeAgent.mockImplementation(async ({ gateway }) => ({
+      text: `${gateway} evidence`, tools: ['inspect'], receipts: [{
+        version: 1, callId: gateway, tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000,
+        outcome: gateway === 'data' ? dataOutcome : 'success', inputs: {}, requestedScope: {}, observedScope: {},
+      }], completion: { version: 1, receiptCount: 1 },
+    }));
+    const sdk = await import('@aws-sdk/client-bedrock-runtime');
+    async function* events(): AsyncIterable<import('@aws-sdk/client-bedrock-runtime').ConverseStreamOutput> {
+      yield { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'cut-off summary' } } };
+      yield { messageStop: { stopReason } };
+    }
+    const send = vi.spyOn(sdk.BedrockRuntimeClient.prototype, 'send')
+      .mockResolvedValue({ $metadata: {}, stream: events() });
+    try {
+      const real = await vi.importActual<typeof import('@/lib/synthesize')>('@/lib/synthesize');
+      synthesizeStream.mockImplementation(real.synthesizeStream);
+      const { POST } = await import('./route');
+      const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+      expect(body).toContain('Incomplete evidence');
+      const saved = recordExchange.mock.calls[0][0];
+      if (stopReason === 'max_tokens') {
+        expect(saved.assistantContent).toContain('network evidence');
+        expect(saved.assistantContent).toContain('data evidence');
+        expect(saved.meta.evidence.synthesis).toBe('interrupted');
+      } else expect(saved.meta.evidence.synthesis).toBeUndefined();
+      expect(saved.meta.evidence.status).toBe('partial');
+      expect(saved.meta.evidence.domains.map((d: any) => d.status)).toEqual(['success', dataOutcome]);
+      const { normalizeEvidence } = await import('@/lib/chat-evidence');
+      expect(normalizeEvidence(saved.meta.evidence)?.status).toBe('partial');
+      const { recordChatInvoke } = await import('@/lib/trace');
+      expect(recordChatInvoke).toHaveBeenLastCalledWith(expect.objectContaining({ success: false }));
+    } finally { send.mockRestore(); }
+  });
+
+  it.each([
     ['fanout', 'success', 'empty', 'success'],
     ['fanout', 'empty', 'empty', 'empty'],
     ['fanout', 'empty', 'error', 'partial'],
@@ -801,7 +842,8 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
     const states = [first, second] as Array<'success' | 'empty' | 'error'>;
     const receipts = states.map((outcome, i) => ({ version: 1 as const, callId: `call-${i}`,
-      tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome }));
+      tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome,
+      inputs: {}, requestedScope: {}, observedScope: {} }));
     const explanation = (gateway: string, outcome: string) =>
       outcome === 'empty' ? `No ${gateway} matches found.` : `${gateway} inspection complete.`;
     if (mode === 'fanout') {
