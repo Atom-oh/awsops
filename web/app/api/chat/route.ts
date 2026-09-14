@@ -1,5 +1,6 @@
 import { verifyUser } from '@/lib/auth';
-import { invokeAgent, invokeAgentStreamDetailed, type ChatMsg, type TokenUsage } from '@/lib/agentcore';
+import { invokeAgentDetailed, invokeAgentStreamDetailed, type ChatMsg, type TokenUsage } from '@/lib/agentcore';
+import { ReceiptBuffer, domainOutcome, answerEvidence, evidenceDisclosure } from '@/lib/chat-evidence';
 import { getModelLabel, getModelPricing, computeCost } from '@/lib/bedrock';
 import { isCodeIntent, getInterpreterId, generateCode, extractPython, executePython } from '@/lib/code-interpreter';
 import { bedrockDirectStream } from '@/lib/bedrock-direct';
@@ -654,32 +655,53 @@ export async function POST(request: Request) {
         const tf0 = Date.now();
         // gate CRITICAL: each gateway gets its OWN built-in invoke input (no shared primary spec).
         const settled = await Promise.allSettled(
-          fanGateways.map((g) => invokeAgent({
-            gateway: g, messages, sessionId, accountId, accountAlias,
+          fanGateways.map((g) => invokeAgentDetailed({
+            gateway: g, messages, sessionId, accountId, accountAlias, abortSignal: request.signal,
             extraContext: obs(g) ? datasourceSchemaContext : undefined, // cached schema reaches fanned monitoring/data agents too
             responseLanguage: lang,
           })),
         );
+        if (request.signal.aborted) { controller.close(); return; }
+        const domains = settled.map((r, i) => r.status === 'fulfilled'
+          ? domainOutcome(fanGateways[i], r.value.text, r.value.receipts, r.value.evidenceTruncated, r.value.runtimeError)
+          : domainOutcome(fanGateways[i], '', [], false, true));
+        const evidence = answerEvidence(domains);
         const survivors = settled.flatMap((r, i) =>
-          r.status === 'fulfilled' ? [{ gateway: fanGateways[i], text: r.value }] : []);
+          r.status === 'fulfilled' && r.value.text.trim() && !['empty', 'error'].includes(domains[i].status)
+            ? [{ gateway: fanGateways[i], text: r.value.text }] : []);
+        const footer = () => ({ evidence, elapsedMs: Date.now() - tf0,
+          tools: [...new Set(domains.flatMap(d => d.receipts.map(r => r.tool)))] });
         if (survivors.length === 0) {
-          controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: chatMsg.allRoutesFailed(lang) })}\n\n`));
+          const text = chatMsg.allRoutesFailed(lang) + evidenceDisclosure(evidence, lang);
+          controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footer())}\n\n`));
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: text })}\n\n`));
+          record(text, footer());
+          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub,
+            elapsedMs: Date.now() - tf0, success: false, via, evidence });
           controller.enqueue(enc.encode('data: [DONE]\n\n'));
           controller.close();
-          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: Date.now() - tf0, success: false, via });
           return;
         }
         // synthesizeStream: ≥2 survivors → merged stream; exactly 1 → passthrough (no extra Bedrock call).
         // abortSignal threaded into the Bedrock call so a client disconnect stops token generation (cost).
         let full = '';
-        for await (const t of synthesizeStream(prompt, survivors, { abortSignal: request.signal, responseLanguage: lang })) {
+        for await (const t of synthesizeStream(prompt, survivors, {
+          abortSignal: request.signal, responseLanguage: lang,
+          domainOutcomes: domains.map(({ gateway, status }) => ({ gateway, status })),
+          onIncomplete: () => { evidence.status = 'partial'; evidence.synthesis = 'interrupted'; },
+        })) {
           if (request.signal.aborted) break;
           full += t;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: t })}\n\n`));
         }
         if (!request.signal.aborted) {
-          record(full); // don't persist a half-streamed, client-aborted answer
-          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: Date.now() - tf0, success: true, via });
+          const disclosure = evidenceDisclosure(evidence, lang);
+          full += disclosure;
+          if (disclosure) controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: disclosure })}\n\n`));
+          controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footer())}\n\n`));
+          record(full, footer());
+          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub,
+            elapsedMs: Date.now() - tf0, success: evidence.status === 'success', via, evidence });
         }
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
@@ -716,11 +738,14 @@ export async function POST(request: Request) {
       // and enqueued it in one tick, since CHAT_TYPEWRITER_MS defaults to 0).
       const tools: string[] = [];
       const seenTools = new Set<string>();
+      const receipts = new ReceiptBuffer();
+      let runtimeError = false;
+      let failedWithoutAnswer = false;
       let model: string | undefined;
       let usage: TokenUsage | undefined;
       try {
         for await (const ev of invokeAgentStreamDetailed({
-          gateway: spec.gateway, messages, sessionId,
+          gateway: spec.gateway, messages, sessionId, abortSignal: request.signal,
           systemPromptOverride: spec.systemPromptOverride,
           toolAllowlist: spec.toolAllowlist,
           agentName: spec.agentName, agentVersion: spec.agentVersion, skillHashes: spec.skillHashes,
@@ -738,6 +763,9 @@ export async function POST(request: Request) {
           }
           if (ev.tool && !seenTools.has(ev.tool)) { seenTools.add(ev.tool); tools.push(ev.tool); }
           if (ev.model) model = ev.model;
+          if (ev.receipt) receipts.add(ev.receipt);
+          if (ev.evidenceTruncated) receipts.truncated = true;
+          if (ev.runtimeOutcome === 'error') runtimeError = true;
           if (ev.usage) usage = ev.usage; // v1-parity per-answer token usage (cost footer)
           if (ev.toolInput) {
             // v1-parity: surface the generated query (SQL/PromQL/...) in the status line
@@ -751,6 +779,7 @@ export async function POST(request: Request) {
         // v1-parity last-resort ladder (v1 route.ts:1335-1353): the Runtime itself was unreachable
         // BEFORE any answer text — answer via Bedrock direct instead of a dead error frame. Honest:
         // tagged via 'bedrock-direct-fallback' + an explicit no-live-tools notice in the text.
+        failedWithoutAnswer = !text.trim();
         if (!text && !request.signal.aborted) {
           try {
             controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify({ via: 'bedrock-direct-fallback' })}\n\n`));
@@ -763,19 +792,20 @@ export async function POST(request: Request) {
               controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: d })}\n\n`));
             }
             if (!request.signal.aborted) {
-              record(text, { via: 'bedrock-direct-fallback' });
-              void recordChatInvoke({ gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0, success: true, via: 'bedrock-direct-fallback' });
+              const evidence = answerEvidence([domainOutcome(spec.gateway, '', receipts.receipts, receipts.truncated, true)]);
+              evidence.fallback = 'unverified';
+              controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify({ evidence })}\n\n`));
+              record(text, { via: 'bedrock-direct-fallback', evidence });
+              void recordChatInvoke({ gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0,
+                success: false, via: 'bedrock-direct-fallback', evidence });
             }
             controller.enqueue(enc.encode('data: [DONE]\n\n'));
             controller.close();
             return;
           } catch { /* Bedrock also down — fall through to the true end of the ladder */ }
         }
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));
-        controller.enqueue(enc.encode('data: [DONE]\n\n'));
-        controller.close();
-        void recordChatInvoke({ gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0, success: false });
-        return;
+        runtimeError = true;
+        provenance = { tools, model };
       } finally {
         clearInterval(tick);
         request.signal.removeEventListener('abort', onAbort);
@@ -795,7 +825,15 @@ export async function POST(request: Request) {
             getModelPricing(model),
           ).total
         : undefined;
+      if (request.signal.aborted) { controller.close(); return; }
+      const evidence = answerEvidence([domainOutcome(spec.gateway, failedWithoutAnswer ? '' : text, receipts.receipts, receipts.truncated, runtimeError)]);
+      const disclosure = evidence.status === 'unverified' ? '' : evidenceDisclosure(evidence, lang);
+      text += disclosure;
+      if (evidence.status === 'error' || evidence.status === 'empty') {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: text })}\n\n`));
+      } else if (disclosure) controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: disclosure })}\n\n`));
       const footerMeta = {
+        evidence,
         elapsedMs: Date.now() - t0,
         ...(provenance.tools.length ? { tools: provenance.tools } : {}),
         ...(provenance.model ? { model: getModelLabel(provenance.model) } : {}),
@@ -807,7 +845,8 @@ export async function POST(request: Request) {
       if (!request.signal.aborted) {
         record(text, footerMeta);
         void recordChatInvoke({
-          gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0, success: true,
+          gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0,
+          success: evidence.status === 'success', evidence,
           model: provenance.model, toolCount: provenance.tools.length, usage,
         });
       }

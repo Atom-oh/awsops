@@ -946,6 +946,8 @@ async def _stream_text(agent, user_input):
       next text delta arrives or a different tool starts (and at end-of-stream).
     - ``{"usage": {"inputTokens", "outputTokens"}}`` — accumulated token usage from the final
       Strands result metrics (per-answer cost footer)."""
+    from tool_receipts import ReceiptTracker
+    receipts = ReceiptTracker(ignored_texts=LANG_TOOL_REMINDER.values())
     yield {"model": MODEL_ID}  # answer provenance: which model produced this (footer)
     seen_tools = set()
     pending = {}   # toolUseId -> {"name", "input"} — last (most complete) streamed input
@@ -958,35 +960,53 @@ async def _stream_text(agent, user_input):
         q = _extract_tool_query(entry["name"], entry["input"])
         return {"toolInput": {"tool": entry["name"], "query": q}} if q else None
 
-    async for event in agent.stream_async(user_input):
-        if "data" in event:
-            if cur_tid:  # text resumed → the pending tool call's input is final
-                frame = flush_tool_input(cur_tid)
-                cur_tid = None
-                if frame:
-                    yield frame
-            yield {"delta": event["data"]}
-        tu = event.get("current_tool_use") or {}
-        tool_use_id, tool_name = tu.get("toolUseId"), tu.get("name")
-        if tool_use_id and tool_name:
-            if cur_tid and cur_tid != tool_use_id:  # next tool started → previous input is final
-                frame = flush_tool_input(cur_tid)
-                if frame:
-                    yield frame
-            if tool_use_id not in seen_tools:
-                seen_tools.add(tool_use_id)
-                yield {"tool": tool_name}
-            pending[tool_use_id] = {"name": tool_name, "input": tu.get("input")}
-            cur_tid = tool_use_id
-        res = event.get("result")
-        if res is not None:  # final AgentResult → accumulated usage for the cost footer
-            usage = _extract_usage(res)
-            if usage:
-                yield {"usage": usage}
+    try:
+        async for event in agent.stream_async(user_input):
+            receipts.observe(event)
+            message = event.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), list):
+                for block in message["content"]:
+                    use = block.get("toolUse") if isinstance(block, dict) else None
+                    if isinstance(use, dict) and use.get("toolUseId") in receipts.calls:
+                        tid = use["toolUseId"]
+                        if tid not in seen_tools:
+                            seen_tools.add(tid)
+                            yield {"tool": receipts.calls[tid]["tool"]}
+            if "data" in event:
+                if cur_tid:  # text resumed → the pending tool call's input is final
+                    frame = flush_tool_input(cur_tid)
+                    cur_tid = None
+                    if frame:
+                        yield frame
+                yield {"delta": event["data"]}
+            tu = event.get("current_tool_use") or {}
+            tool_use_id, tool_name = tu.get("toolUseId"), tu.get("name")
+            if tool_use_id and tool_name:
+                if cur_tid and cur_tid != tool_use_id:  # next tool started → previous input is final
+                    frame = flush_tool_input(cur_tid)
+                    if frame:
+                        yield frame
+                if tool_use_id not in seen_tools:
+                    seen_tools.add(tool_use_id)
+                    yield {"tool": tool_name}
+                pending[tool_use_id] = {"name": tool_name, "input": tu.get("input")}
+                cur_tid = tool_use_id
+            res = event.get("result")
+            if res is not None:  # final AgentResult → accumulated usage for the cost footer
+                usage = _extract_usage(res)
+                if usage:
+                    yield {"usage": usage}
+    except Exception:
+        for frame in receipts.frames():
+            yield frame
+        yield {"runtimeOutcome": "error"}
+        raise
     if cur_tid:  # answer ended right after a tool call (no trailing text delta)
         frame = flush_tool_input(cur_tid)
         if frame:
             yield frame
+    for frame in receipts.frames():
+        yield frame
 
 
 # Query-ish keys surfaced to the UI, in priority order (v1 showed the generated SQL/PromQL

@@ -2,12 +2,13 @@
 import { sectionByKey } from '@/lib/sections';
 import type { SessionStats } from './useChat';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { evidenceLabels } from '@/lib/chat-evidence';
 
 // v1-parity session stats bar (v1 src/app/ai/page.tsx:483-493): a thin summary of THIS session's
 // activity — query count, avg latency, success rate (color-coded), and the top gateways used.
 // Hidden until at least one answer exists, so an empty chat looks unchanged.
 export default function SessionStatsBar({ stats }: { stats: SessionStats }) {
-  const { tt } = useI18n();
+  const { tt, lang } = useI18n();
   if (stats.count === 0) return null;
   const rate = stats.successRate;
   const rateColor = rate === null ? 'text-ink-400'
@@ -15,6 +16,7 @@ export default function SessionStatsBar({ stats }: { stats: SessionStats }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ink-100 px-4 py-1.5 text-[11px] text-ink-500">
       <span>{tt(`이 세션 ${stats.count}개 질의`)}</span>
+      {stats.unverified > 0 ? <span>{evidenceLabels[lang].unverified}: {stats.unverified}</span> : null}
       {stats.avgMs !== null && (
         <span>{tt('평균')} <span className="font-semibold text-ink-700 tabular-nums">{(stats.avgMs / 1000).toFixed(1)}s</span></span>
       )}

@@ -4,6 +4,7 @@ import type { Msg } from './MessageList';
 import { sectionByKey } from '@/lib/sections';
 import type { ThreadSummary, ThreadMessage } from '@/lib/chat-store';
 import { getActiveAccount } from '@/lib/account-context';
+import { normalizeEvidence, type ChatEvidence } from '@/lib/chat-evidence';
 
 export function newSessionId(): string {
   const s = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.round(Math.random() * 1e9)}`);
@@ -27,6 +28,7 @@ export function parseFrame(frame: string): {
   costUsd?: number;
   tool?: string;
   query?: string;
+  evidence?: ChatEvidence;
 } {
   const isMeta = frame.startsWith('event: meta');
   const isStatus = frame.startsWith('event: status');
@@ -38,7 +40,7 @@ export function parseFrame(frame: string): {
     const obj = JSON.parse(data);
     // spread obj FIRST so a server payload field named `kind`/`delta`/`error` can never
     // override the classifier's discriminant (fail-closed).
-    if (isMeta) return { ...obj, kind: 'meta' };
+    if (isMeta) return { ...obj, ...(obj.evidence !== undefined ? { evidence: normalizeEvidence(obj.evidence) } : {}), kind: 'meta' };
     if (isStatus) return { ...obj, kind: 'status' };
     if (obj.delta !== undefined) return { kind: 'delta', delta: obj.delta };
     if (obj.error) return { kind: 'error', error: obj.error };
@@ -122,12 +124,12 @@ export function useChat() {
       }
       const data: { thread: ThreadSummary; messages: ThreadMessage[] } = await res.json();
       setMsgs(data.messages.map((m) => {
-        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string; tools?: string[]; model?: string; elapsedMs?: number; usage?: Msg['usage']; costUsd?: number };
+        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string; tools?: string[]; model?: string; elapsedMs?: number; usage?: Msg['usage']; costUsd?: number; evidence?: unknown };
         return {
           role: m.role, content: m.content, gateway: m.gateway ?? undefined,
           ranked: meta.ranked, method: meta.method, via: meta.via,
           tools: meta.tools, model: meta.model, elapsedMs: meta.elapsedMs,
-          usage: meta.usage, costUsd: meta.costUsd,
+          usage: meta.usage, costUsd: meta.costUsd, evidence: normalizeEvidence(meta.evidence),
         };
       }));
       sessionRef.current = data.thread.sessionId;
@@ -188,7 +190,7 @@ export function useChat() {
       }
       // Answer-provenance footer: a second, later `meta` frame (no `gateway`) carries the
       // server-measured elapsed total + tools/model + token usage/cost, known only after resolve.
-      if (parsed.tools || parsed.model || parsed.elapsedMs !== undefined || parsed.usage) {
+      if (parsed.tools || parsed.model || parsed.elapsedMs !== undefined || parsed.usage || parsed.evidence || parsed.via) {
         patchLast((m) => ({
           ...m,
           tools: parsed.tools ?? m.tools,
@@ -196,6 +198,8 @@ export function useChat() {
           elapsedMs: parsed.elapsedMs ?? m.elapsedMs,
           usage: parsed.usage ?? m.usage,
           costUsd: parsed.costUsd ?? m.costUsd,
+          evidence: parsed.evidence ?? m.evidence,
+          via: parsed.via ?? m.via,
         }));
       }
     } else if (parsed.kind === 'status') {
@@ -287,13 +291,14 @@ export function useChat() {
     const count = answers.length;
     const timed = answers.filter((m) => m.elapsedMs !== undefined);
     const avgMs = timed.length ? Math.round(timed.reduce((s, m) => s + (m.elapsedMs ?? 0), 0) / timed.length) : null;
-    const errors = answers.filter((m) => m.content.startsWith('⚠️')).length;
-    const successRate = count ? (count - errors) / count : null;
+    const unverified = answers.filter(m => !m.evidence || m.evidence.status === 'unverified').length;
+    const assessed = count - unverified;
+    const successRate = assessed ? answers.filter(m => m.evidence?.status === 'success').length / assessed : null;
     const byGateway: Record<string, number> = {};
     for (const m of answers) if (m.gateway) byGateway[m.gateway] = (byGateway[m.gateway] ?? 0) + 1;
     const topGateways = Object.entries(byGateway).sort((a, b) => b[1] - a[1]).slice(0, 4)
       .map(([gateway, n]) => ({ gateway, count: n }));
-    return { count, avgMs, successRate, topGateways };
+    return { count, avgMs, successRate, unverified, topGateways };
   }
 
   return {

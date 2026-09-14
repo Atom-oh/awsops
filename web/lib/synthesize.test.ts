@@ -13,6 +13,26 @@ const parts = [
 ];
 
 describe('synthesizeStream', () => {
+  it('carries attempted-domain outcomes into synthesis instead of treating surviving prose as verified', async () => {
+    let user = '';
+    const send: SynthSend = async function* (_system, value) { user = value; yield 'summary'; };
+    await collect(synthesizeStream('inspect', parts, { send, domainOutcomes: [
+      { gateway: 'network', status: 'unverified' }, { gateway: 'data', status: 'error' },
+    ] } as any));
+    expect(user).toContain('network=unverified');
+    expect(user).toContain('data=error');
+  });
+  it('returns every useful domain after a synthesis interruption and reports incomplete synthesis', async () => {
+    let interrupted = false;
+    const send: SynthSend = async function* () { yield 'partial synthesis'; throw new Error('SECRET'); };
+    const text = await collect(synthesizeStream('q', parts, {
+      send, onIncomplete: () => { interrupted = true; },
+    } as any));
+    expect(text).toContain('SG blocks 5432.');
+    expect(text).toContain('RDS is healthy.');
+    expect(interrupted).toBe(true);
+    expect(text).not.toContain('SECRET');
+  });
   it('merges ≥2 parts via the injected streamer', async () => {
     const send: SynthSend = async function* () { yield 'merged '; yield 'answer'; };
     const spy = vi.fn(send);

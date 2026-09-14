@@ -45,6 +45,91 @@ function eventStreamOf(frames: string[], splitAt?: number) {
 }
 
 describe('agentcore', () => {
+  it('does not return an interrupted answer as success to text-only consumers', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ delta: 'partial' }), JSON.stringify({ runtimeOutcome: 'error' }),
+    ]));
+    const { invokeAgent } = await import('./agentcore');
+    await expect(invokeAgent({ gateway: 'ops', messages: [], sessionId: 's'.repeat(36) })).rejects.toThrow('interrupted');
+  });
+  it('never turns malformed or oversized receipt frames into saved answer text', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf([
+      '{"receipt":{"result":"SECRET"',
+      JSON.stringify({ receipt: { result: 'SECRET'.repeat(60000) } }),
+      JSON.stringify({ delta: 'Useful answer' }),
+    ], 100));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const answer = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    expect(answer.text).toBe('Useful answer');
+    expect(answer.evidenceTruncated).toBe(true);
+    expect(JSON.stringify(answer)).not.toContain('SECRET');
+  });
+  it('consumes receipts produced by Python from the recorded real Strands public stream', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    const dir = fileURLToPath(new URL('../../agent/', import.meta.url));
+    const script = `
+import json,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from test_tool_receipts import collect
+events=json.loads((Path(sys.argv[1])/'fixtures/strands-1.41-public-stream.json').read_text())
+print(json.dumps(collect(events)))
+`;
+    const output = execFileSync('python3', ['-B', '-c', script, dir], { encoding: 'utf8' });
+    const frames = JSON.parse(output.trim().split('\n').at(-1)!);
+    acSend.mockResolvedValue(eventStreamOf(frames.map((frame: unknown) => JSON.stringify(frame))));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const answer = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    expect(answer.text).toBe('Synthetic result.');
+    expect(answer.receipts?.map(r => [r.callId, r.tool, r.outcome])).toEqual([
+      ['call-0', 'scoped_read', 'success'], ['call-1', 'scoped_read', 'success'],
+    ]);
+    expect(answer.receipts?.every(r => Object.keys(r.observedScope).length === 0)).toBe(true);
+  });
+  it('cancels a pending runtime read when the caller aborts', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    let cancelled = false;
+    acSend.mockResolvedValue({ contentType: 'text/event-stream', response: {
+      transformToWebStream: () => new ReadableStream({ cancel: () => { cancelled = true; } }),
+    } });
+    const { invokeAgentStreamDetailed } = await import('./agentcore');
+    const ac = new AbortController();
+    const stream = invokeAgentStreamDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36), abortSignal: ac.signal });
+    const pending = stream.next();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    ac.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelled).toBe(true);
+    expect(acSend).toHaveBeenCalledTimes(1);
+  });
+  it('keeps versioned receipts through SSE and rejects credential-bearing metadata', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ delta: 'answer' }),
+      JSON.stringify({ receipt: { version: 1, callId: 'call-1', tool: 'network___inspect',
+        observedAt: 1000, terminalObservedAt: 2000, outcome: 'partial',
+        requestedScope: { accountId: '123456789012' }, observedScope: {},
+        inputs: { region: 'us-east-1', query: 'SECRET', url: 'https://user:SECRET@host' },
+        quality: { partial: true, secret: 'SECRET' }, result: 'SECRET',
+      } }),
+      JSON.stringify({ receipt: { version: 99, callId: 'invalid', result: 'SECRET' } }),
+    ], 23));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const answer = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    expect(answer.text).toBe('answer');
+    expect((answer as any).receipts).toHaveLength(1);
+    expect((answer as any).receipts[0]).toMatchObject({
+      callId: 'call-1', outcome: 'partial', observedScope: {}, inputs: { region: 'us-east-1' },
+    });
+    expect(JSON.stringify(answer)).not.toContain('SECRET');
+  });
   it.each([
     [['list_users'], ['list_roles'], [], ['!awsops-deny-all!']],
     [['list_users'], ['iam-mcp-target___list_users'], ['iam-mcp-target___list_users'], ['iam-mcp-target___list_users']],

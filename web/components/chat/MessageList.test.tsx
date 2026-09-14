@@ -7,6 +7,19 @@ const doneMsg = (over: Partial<Msg>): Msg => ({ role: 'assistant', content: 'ans
 
 afterEach(cleanup);
 
+it('shows incomplete domains for saved answers and does not invent a legacy model or evidence', () => {
+  render(<MessageList msgs={[doneMsg({ gateway: 'network', evidence: {
+    version: 1, status: 'partial', domains: [
+      { gateway: 'network', status: 'unverified', receipts: [] },
+      { gateway: 'data', status: 'error', receipts: [] },
+    ],
+  } } as any), doneMsg({ gateway: 'ops' })]} />);
+  expect(screen.getByText('불완전한 근거')).toBeTruthy();
+  expect(screen.getByText(/data.*실패/)).toBeTruthy();
+  expect(screen.getAllByText(/미검증/).length).toBeGreaterThan(0);
+  expect(screen.queryByText('Claude Sonnet 4.6')).toBeNull();
+});
+
 describe('MessageList switch chips (ADR-038)', () => {
   it('renders switch chips for active ranked alternates (excluding the used gateway)', () => {
     const msgs: Msg[] = [doneMsg({
@@ -119,7 +132,7 @@ describe('MessageList answer-provenance footer (design handoff 개선안 ③)', 
   it('falls back to the default model label and hides elapsed/tools when absent (legacy agent image)', () => {
     const msgs: Msg[] = [doneMsg({ gateway: 'network' })];
     render(<MessageList msgs={msgs} />);
-    expect(screen.getByText('Claude Sonnet 4.6')).toBeTruthy(); // fallback constant
+    expect(screen.queryByText('Claude Sonnet 4.6')).toBeNull(); // absent model is unknown
     expect(screen.queryByText(/^\d+\.\ds$/)).toBeNull();
     expect(screen.queryByText('Tools')).toBeNull();
   });
@@ -139,4 +152,3 @@ describe('MessageList answer-provenance footer (design handoff 개선안 ③)', 
     expect(writeText).toHaveBeenCalledWith('copy me');
   });
 });
-

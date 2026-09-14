@@ -16,6 +16,29 @@ const localStorageMock = (() => {
 Object.defineProperty(global, 'localStorage', { value: localStorageMock });
 
 describe('useChat hook and parseFrame', () => {
+  it('keeps partial domain evidence through SSE and restored history without counting legacy text as success', async () => {
+    const evidence = { version: 1, status: 'partial', domains: [
+      { gateway: 'network', status: 'unverified', receipts: [] },
+      { gateway: 'data', status: 'error', receipts: [] },
+    ] };
+    const frames = `data: {"delta":"useful answer"}\n\nevent: meta\ndata: ${JSON.stringify({ evidence })}\n\ndata: [DONE]\n\n`;
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce(new Response(frames));
+    const { result } = renderHook(() => useChat());
+    await act(async () => { await result.current.send('inspect'); });
+    expect((result.current.msgs[1] as any).evidence).toEqual(evidence);
+    expect(result.current.sessionStats().successRate).toBe(0);
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({
+      thread: { id: 't', sessionId: 's' }, messages: [
+        { role: 'assistant', content: 'useful answer', gateway: 'network', meta: { evidence } },
+        { role: 'assistant', content: 'legacy answer', gateway: 'network', meta: {} },
+      ],
+    })));
+    await act(async () => { await result.current.selectThread('t'); });
+    expect((result.current.msgs[0] as any).evidence).toEqual(evidence);
+    expect(result.current.sessionStats().successRate).toBe(0);
+    expect((result.current.sessionStats() as any).unverified).toBe(1);
+    fetchSpy.mockRestore();
+  });
   it('handles event: status and extracts phase and elapsedMs', () => {
     const frame = 'event: status\ndata: {"phase":"working","elapsedMs":3000}\n\n';
     const parsed = parseFrame(frame);

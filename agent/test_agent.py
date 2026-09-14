@@ -507,7 +507,10 @@ class StreamTextTest(unittest.TestCase):
 
     def _collect(self, events):
         async def run():
-            return [c async for c in agent._stream_text(FakeStreamingAgent(events), 'q')]
+            # Legacy consumers ignore optional evidence frames. Receipts are exercised separately
+            # with actual SDK public messages in test_tool_receipts.py.
+            return [c async for c in agent._stream_text(FakeStreamingAgent(events), 'q')
+                    if "receipt" not in c and "evidenceTruncated" not in c]
         return asyncio.run(run())
 
     def test_model_frame_first_then_deltas(self):
