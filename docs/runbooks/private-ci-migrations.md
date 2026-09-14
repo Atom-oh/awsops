@@ -31,6 +31,14 @@ build/read permissions.
 
 ## Execution contract
 
+For accounts with GuardDuty Runtime Monitoring, AWS injects a security sidecar
+at task launch. Its image pull uses the task execution role, which therefore
+also receives read-only pull access to the exact AWS-owned GuardDuty repository
+for the configured region. The checked-in regional map comes from AWS's
+[Fargate agent repository table](https://docs.aws.amazon.com/guardduty/latest/ug/ecs-runtime-agent-ecr-image-uri.html)
+(verified 2026-09-14). This does not enable, disable or otherwise change GuardDuty.
+Keep the agent active; do not opt the task out to make a release pass.
+
 From the repository root, run `python3 scripts/v2/ci_origin_migration.py prepare-build`.
 It rejects untracked migration
 inputs and exports the allowlisted files from `git archive <reviewed SHA>` into

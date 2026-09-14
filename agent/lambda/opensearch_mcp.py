@@ -82,21 +82,30 @@ def _signed_request(method, url, body_bytes, region, target_account_id):
 
 
 # ---- Tools (read-only) ----
+def _domain_names(client):
+    rows = client.list_domain_names().get("DomainNames", [])
+    if not isinstance(rows, list):
+        raise ValueError("Invalid domain enumeration")
+    return [d["DomainName"] for d in rows[:20]], len(rows) > 20
+
+
 def list_opensearch_domains(args, region, target_account_id):
     role_arn = get_role_arn(target_account_id) if target_account_id else None
     c = get_client("opensearch", region, role_arn)
-    names = [d["DomainName"] for d in c.list_domain_names().get("DomainNames", [])]
+    names, truncated = _domain_names(c)
     if not names:
-        return ok({"domains": [], "message": "no OpenSearch domains in this account/region"})
+        return ok({"domains": [], "collectionStatus": "empty", "truncated": False,
+                   "message": "no OpenSearch domains in this account/region"})
     out = []
     for n in names:
         try:
             st = c.describe_domain(DomainName=n).get("DomainStatus", {})
-            out.append({"name": n, "endpoint": st.get("Endpoint") or (st.get("Endpoints") or {}).get("vpc"),
+            out.append({"name": n, "collectionStatus": "ok",
+                        "endpoint": st.get("Endpoint") or (st.get("Endpoints") or {}).get("vpc"),
                         "engineVersion": st.get("EngineVersion")})
-        except Exception as e:  # noqa: BLE001
-            out.append({"name": n, "error": str(e)[:120]})
-    return ok({"domains": out})
+        except Exception:  # noqa: BLE001 — retain collection failure without upstream messages
+            out.append({"name": n, "collectionStatus": "error", "error": "domain_description_failed"})
+    return ok({"domains": out, "collectionStatus": "ok", "truncated": truncated})
 
 
 def search_opensearch_logs(args, region, target_account_id):
@@ -136,17 +145,23 @@ def opensearch_schema(args, region, target_account_id):
     """Normalized schema for caching: each domain's endpoint + its indices (bounded)."""
     role_arn = get_role_arn(target_account_id) if target_account_id else None
     c = get_client("opensearch", region, role_arn)
-    names = [d["DomainName"] for d in c.list_domain_names().get("DomainNames", [])][:20]
+    names, truncated = _domain_names(c)
     domains = []
     for n in names:
         try:
             endpoint = _resolve_endpoint(n, region, role_arn)
             status, data = _signed_request("GET", f"{endpoint}/_cat/indices?format=json", b"", region, target_account_id)
-            idx = [i.get("index") for i in data][:100] if status < 400 and isinstance(data, list) else []
-            domains.append({"name": n, "indices": idx, "truncated": len(idx) >= 100})
-        except Exception as e:  # noqa: BLE001
-            domains.append({"name": n, "error": str(e)[:120]})
-    return ok({"domains": domains})
+            if status >= 400 or not isinstance(data, list):
+                raise ValueError("Index collection failed")
+            idx = [i["index"] for i in data[:100]]
+            if any(not isinstance(i, str) or not i for i in idx):
+                raise ValueError("Invalid index collection")
+            domains.append({"name": n, "indices": idx, "truncated": len(data) > 100,
+                            "collectionStatus": "ok" if idx else "empty"})
+        except Exception:  # noqa: BLE001 — same typed failure for HTTP and transport errors
+            domains.append({"name": n, "indices": [], "truncated": False,
+                            "collectionStatus": "error", "error": "index_collection_failed"})
+    return ok({"domains": domains, "collectionStatus": "ok" if names else "empty", "truncated": truncated})
 
 
 _TOOLS = {
