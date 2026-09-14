@@ -121,11 +121,27 @@ def search_opensearch_logs(args, region, target_account_id):
     status, data = _signed_request("POST", f"{endpoint}/{index}/_search", body_bytes, region, target_account_id)
     if status >= 400:
         return err(f"OpenSearch search failed ({status}): {(data.get('error') or data)}")
-    hits = (data.get("hits") or {})
-    rows = hits.get("hits", [])[:MAX_SIZE]
-    total = (hits.get("total") or {})
+    data = data if isinstance(data, dict) else {}
+    hits = data.get("hits")
+    hits = hits if isinstance(hits, dict) else {}
+    raw = hits.get("hits")
+    rows = [h for h in raw[:MAX_SIZE] if isinstance(h, dict)] if isinstance(raw, list) else []
+    total = hits.get("total")
+    relation = total.get("relation") if isinstance(total, dict) else "eq"
+    total = total.get("value") if isinstance(total, dict) else total
+    total = total if type(total) is int and total >= 0 else None
+    timed_out = data.get("timed_out") if type(data.get("timed_out")) is bool else None
+    shards = data.get("_shards")
+    failed = shards.get("failed") if isinstance(shards, dict) else None
+    failed = failed if type(failed) is int and failed >= 0 else None
+    truncated = (isinstance(raw, list) and len(raw) > MAX_SIZE) or (total is not None and total > len(rows)) or relation == "gte"
+    valid_rows = isinstance(raw, list) and len(rows) == min(len(raw), MAX_SIZE)
+    state = ("partial" if timed_out is True or (failed is not None and failed > 0) or truncated else
+             "unknown" if not valid_rows or timed_out is None or failed is None or total is None
+                          or relation != "eq" or total < len(rows) else "ok" if rows else "empty")
     return ok({"domain": domain, "index": index, "count": len(rows),
-               "total": total.get("value") if isinstance(total, dict) else total,
+               "total": total, "timedOut": timed_out, "failedShards": failed,
+               "truncated": truncated, "collectionStatus": state,
                "hits": [{"_index": h.get("_index"), "_id": h.get("_id"), "_source": h.get("_source")} for h in rows]})
 
 

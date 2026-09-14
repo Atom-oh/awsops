@@ -125,6 +125,17 @@ def _notion_msg(data, status):
 
 
 # ---- Tools (read-only) ----
+def _collection_page(data):
+    data = data if isinstance(data, dict) else {}
+    raw, more = data.get("results"), data.get("has_more")
+    rows = raw[:MAX_PAGE_SIZE] if isinstance(raw, list) else []
+    truncated = more is True or (isinstance(raw, list) and len(raw) > MAX_PAGE_SIZE)
+    state = ("unknown" if not isinstance(raw, list) or type(more) is not bool else
+             "partial" if truncated else "ok" if rows else "empty")
+    return {"results": rows, "has_more": more if type(more) is bool else None,
+            "next_cursor": data.get("next_cursor"), "truncated": truncated, "collectionStatus": state}
+
+
 def notion_search(args):
     token = _get_token()
     ps = _clamp_page_size(args.get("page_size"))
@@ -132,9 +143,7 @@ def notion_search(args):
                               {"query": args.get("query", ""), "page_size": ps})
     if status >= 400:
         return err(f"Notion search failed ({status}): {_notion_msg(data, status)}")
-    return ok({"results": data.get("results", []),
-               "has_more": data.get("has_more", False),
-               "next_cursor": data.get("next_cursor")})
+    return ok(_collection_page(data))
 
 
 def notion_fetch_page(args):
@@ -145,15 +154,17 @@ def notion_fetch_page(args):
     status, page = _http_json("GET", f"/pages/{page_id}", token)
     if status >= 400:
         return err(f"Notion fetch_page failed ({status}): {_notion_msg(page, status)}")
+    page_status = ("ok" if isinstance(page, dict) and page.get("object") == "page"
+                   and isinstance(page.get("id"), str) and page["id"] else "unknown")
     ps = _clamp_page_size(args.get("page_size"))
     cstatus, children = _http_json("GET", f"/blocks/{page_id}/children?page_size={ps}", token)
     if cstatus >= 400:
         # page metadata still useful even if children fail
-        return ok({"page": page, "blocks": [], "truncated": False,
-                   "blocks_error": f"({cstatus}) {_notion_msg(children, cstatus)}"})
-    results = children.get("results", [])
-    truncated = bool(children.get("has_more")) or len(results) > MAX_PAGE_SIZE
-    return ok({"page": page, "blocks": results[:MAX_PAGE_SIZE], "truncated": truncated})
+        return ok({"page": page, "blocks": [], "truncated": False, "collectionStatus": page_status,
+                   "blocksCollectionStatus": "error", "blocks_error": "block_collection_failed"})
+    collection = _collection_page(children)
+    return ok({"page": page, "blocks": collection["results"], "truncated": collection["truncated"],
+               "collectionStatus": page_status, "blocksCollectionStatus": collection["collectionStatus"]})
 
 
 def notion_query_database(args):
@@ -165,9 +176,7 @@ def notion_query_database(args):
     status, data = _http_json("POST", f"/databases/{db}/query", token, {"page_size": ps})
     if status >= 400:
         return err(f"Notion query_database failed ({status}): {_notion_msg(data, status)}")
-    return ok({"results": data.get("results", []),
-               "has_more": data.get("has_more", False),
-               "next_cursor": data.get("next_cursor")})
+    return ok(_collection_page(data))
 
 def notion_health(args):
     """Check the latest saved token; do not expose bot/workspace identity.

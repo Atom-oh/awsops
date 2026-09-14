@@ -22,6 +22,32 @@ def topology_body():
 class EvidenceBoundaryTest(unittest.TestCase):
     receipt = helpers.ProducerReceiptTest.receipt
 
+    def test_erasing_producer_contract_requires_current_source_markers(self):
+        for tool, body in [
+            ("search_opensearch_logs", {"hits": [], "count": 0, "total": 0}),
+            ("prometheus_labels", {"labels": [], "truncated": False}),
+            ("mimir_series", {"series": [], "truncated": False}),
+            ("loki_label_values", {"values": [], "truncated": False}),
+            ("tempo_search", {"traces": [], "truncated": False}),
+            ("notion_search", {"results": [], "has_more": False}),
+            ("notion_fetch_page", {"page": {"object": "page", "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+                                   "blocks": [], "truncated": False}),
+        ]:
+            with self.subTest(tool=tool):
+                self.assertEqual(self.receipt(tool, body)["outcome"], "unverified")
+
+    def test_unknown_or_forged_source_status_cannot_certify_positive_data(self):
+        for status in (None, {}, "future", "unknown"):
+            self.assertEqual(self.receipt("prometheus_labels", {
+                "labels": [], "truncated": False, "collectionStatus": status,
+            })["outcome"], "unverified")
+        self.assertEqual(self.receipt("prometheus_labels", {
+            "labels": ["job"], "truncated": False, "collectionStatus": "empty",
+        })["outcome"], "unverified")
+        self.assertEqual(self.receipt("search_opensearch_logs", {
+            "hits": [], "count": 0, "total": 0, "collectionStatus": "empty",
+        })["outcome"], "unverified")
+
     def test_unknown_json_or_empty_content_never_certifies_completion(self):
         for body in ({}, [], [{"id": "PRIVATE"}], {"id": "PRIVATE"}, {"results": []},
                      {"partial": False, "unknown": [], "truncated": False},
@@ -74,11 +100,13 @@ class EvidenceBoundaryTest(unittest.TestCase):
         page = {"object": "page", "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
         for tool in ("notion_search", "notion_query_database"):
             for rows, expected in [([], "empty"), ([page], "success")]:
-                self.assertEqual(self.receipt(tool, {"results": rows, "has_more": False, "next_cursor": None})["outcome"], expected)
+                self.assertEqual(self.receipt(tool, {"results": rows, "has_more": False, "next_cursor": None,
+                                                    "collectionStatus": "ok" if rows else "empty"})["outcome"], expected)
             for body in ({"results": []}, {"results": [], "has_more": "false"},
                          {"results": [{}], "has_more": False}, {"results": None, "has_more": False}):
                 self.assertNotIn(self.receipt(tool, body)["outcome"], ("success", "empty"))
-        self.assertEqual(self.receipt("notion_fetch_page", {"page": page, "blocks": [], "truncated": False})["outcome"], "success")
+        self.assertEqual(self.receipt("notion_fetch_page", {"page": page, "blocks": [], "truncated": False,
+                                                          "collectionStatus": "ok", "blocksCollectionStatus": "empty"})["outcome"], "success")
         self.assertEqual(self.receipt("notion_fetch_page", {"page": page, "blocks": [], "truncated": False,
                                                           "blocks_error": "PRIVATE"})["outcome"], "partial")
         self.assertNotIn(self.receipt("notion_fetch_page", {"page": {}, "blocks": [], "truncated": False})["outcome"], ("success", "empty"))
@@ -91,8 +119,9 @@ class EvidenceBoundaryTest(unittest.TestCase):
             for body in ({}, {"result": []}, {"resultType": "future", "result": [], "truncated": False},
                          {"resultType": "vector", "result": [{}], "truncated": False}):
                 self.assertNotIn(self.receipt(tool, body)["outcome"], ("success", "empty"))
-        self.assertEqual(self.receipt("tempo_search", {"traces": [{"traceID": "a1B2c3"}], "truncated": False})["outcome"], "success")
-        self.assertEqual(self.receipt("tempo_search", {"traces": [], "truncated": False})["outcome"], "empty")
+        self.assertEqual(self.receipt("tempo_search", {"traces": [{"traceID": "a1B2c3"}], "truncated": False,
+                                                      "collectionStatus": "ok"})["outcome"], "success")
+        self.assertEqual(self.receipt("tempo_search", {"traces": [], "truncated": False, "collectionStatus": "empty"})["outcome"], "empty")
         self.assertNotIn(self.receipt("tempo_search", {"traces": [{}], "truncated": False})["outcome"], ("success", "empty"))
         self.assertEqual(self.receipt("tempo_get_trace", {"batches": [], "truncated": False})["outcome"], "empty")
         self.assertNotIn(self.receipt("tempo_get_trace", {"truncated": False})["outcome"], ("success", "empty"))
@@ -107,7 +136,7 @@ class EvidenceBoundaryTest(unittest.TestCase):
                 raise AssertionError("overflow tail must not be inspected")
         for tool, body in [
             ("prometheus_query", {**metric_body(), "result": [Unreadable()] * 51}),
-            ("tempo_search", {"traces": [Unreadable()] * 51, "truncated": False}),
+            ("tempo_search", {"traces": [Unreadable()] * 51, "truncated": False, "collectionStatus": "ok"}),
             ("get_topology", {**topology_body(), "nodes": [Unreadable()] * 501, "node_count": 501}),
         ]:
             outcome, q, _ = terminal({"status": "success", "content": [{"json": body}]}, tool=tool)
@@ -124,7 +153,8 @@ class EvidenceBoundaryTest(unittest.TestCase):
             ("loki_labels", "labels", "job"), ("loki_label_values", "values", "fixture"),
         ]:
             for values, expected in [([], "empty"), ([row], "success")]:
-                self.assertEqual(self.receipt(tool, {field: values, "truncated": False})["outcome"], expected)
+                self.assertEqual(self.receipt(tool, {field: values, "truncated": False,
+                                                    "collectionStatus": "ok" if values else "empty"})["outcome"], expected)
             self.assertEqual(self.receipt(tool, {field: []})["outcome"], "unverified")
 
     def test_unknown_and_mixed_reader_cases_preserve_text_and_completion(self):
