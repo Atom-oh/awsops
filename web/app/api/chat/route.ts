@@ -466,21 +466,26 @@ export async function POST(request: Request) {
   // section — and it sits ABOVE keyword-matched custom agents and the classifier in the ladder.
   // A non-built-in `section` is a custom-agent pin attempt (hybrid path only; legacy is unchanged).
   const customPinTarget = (hybridOn && body.section && !pinIsBuiltin) ? body.section : null;
-  const customPinEnabled = customPinTarget
-    ? (customAgents.some((a) => a.name === customPinTarget) && (await isCustomAgentEnabled(customPinTarget)))
-    : false;
-  // ADR-044 §2: a pin to an agent disabled/absent in this Agent Space gets an HONEST message,
-  // never a silent fallback to keyword/classifier routing.
-  const unavailablePin = !!customPinTarget && !customPinEnabled;
-  // Re-check enablement after the fresh catalog read to catch a concurrent agent revocation.
-  const customPick = unavailablePin
-    ? null
-    : customPinEnabled
-      ? customPinTarget                                   // explicit custom pin — highest precedence
-      : (hybridOn && pinIsBuiltin) ? null : pickCustomAgent(prompt, customAgents);
-  let routeKey = customPinEnabled
-    ? customPinTarget!
-    : (customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway);
+  let customPinEnabled: boolean, unavailablePin: boolean, customPick: string | null, routeKey: string;
+  try {
+    customPinEnabled = customPinTarget
+      ? (customAgents.some((a) => a.name === customPinTarget) && (await isCustomAgentEnabled(customPinTarget, { throwOnError: true })))
+      : false;
+    // ADR-044 §2: a confirmed disabled/absent pin gets an honest message, never a fallback.
+    unavailablePin = !!customPinTarget && !customPinEnabled;
+    // Recheck enablement after the fresh catalog read to catch a concurrent revocation.
+    customPick = unavailablePin
+      ? null
+      : customPinEnabled
+        ? customPinTarget                                   // explicit custom pin — highest precedence
+        : (hybridOn && pinIsBuiltin) ? null : pickCustomAgent(prompt, customAgents);
+    routeKey = customPinEnabled
+      ? customPinTarget!
+      : (customPick && (await isCustomAgentEnabled(customPick, { throwOnError: true })) ? customPick : gateway);
+  } catch {
+    // An unavailable final read is not a revocation and must not discard the custom policy.
+    return Response.json({ error: 'Custom-agent policy unavailable' }, { status: 503 });
+  }
   const customRevoked = !!customPick && routeKey !== customPick;
   // v1 priority-10 'aws-data' local handler: when the routing decision (pin included — a pinned
   // built-in section reaches here as `gateway`) lands on aws-data, answer with live Steampipe SQL

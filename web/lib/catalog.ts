@@ -182,18 +182,20 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
 /**
  * ADR-031/ADR-039 fail-closed revocation. Authoritative (un-cached) check that a custom agent
  * is still enabled, used on the chat hot path BEFORE routing to a keyword-picked custom agent.
- * This re-check also catches a disable committed after the fresh catalog read on whichever
- * Fargate task serves the request. Returns false (deny, never
- * grant) for missing / disabled / builtin rows and on ANY query error.
+ * This also catches revocation committed after the fresh catalog read. Missing / disabled /
+ * builtin rows return false. Compatibility callers also get false on query errors; dispatch
+ * must opt into throwOnError so unavailable policy cannot be mistaken for confirmed disablement
+ * and silently fall back to a builtin without the selected custom restriction.
  */
-export async function isCustomAgentEnabled(name: string): Promise<boolean> {
+export async function isCustomAgentEnabled(name: string, options?: { throwOnError?: boolean }): Promise<boolean> {
   try {
     const { rows } = await getPool().query(
       `SELECT 1 FROM agents WHERE name = $1 AND tier = 'custom' AND enabled = true LIMIT 1`,
       [name],
     );
     return rows.length > 0;
-  } catch {
+  } catch (error) {
+    if (options?.throwOnError) throw error;
     return false; // fail-closed
   }
 }

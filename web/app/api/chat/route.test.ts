@@ -550,7 +550,7 @@ describe('hybrid routing (ADR-038)', () => {
     invokeAgent.mockResolvedValue('ok');
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) })));
-    expect(isCustomAgentEnabled).toHaveBeenCalledWith('compliance');
+    expect(isCustomAgentEnabled).toHaveBeenCalledWith('compliance', { throwOnError: true });
     expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, [], []); // gateway, not the revoked custom
   });
 
