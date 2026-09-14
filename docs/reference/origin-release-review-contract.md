@@ -36,8 +36,11 @@ hide later blockers. For example:
 
 Minor/Info and severity words inside ordinary explanatory prose do not block.
 Fenced code, indented code (four spaces relative to its enclosing list content),
-and explicitly quoted lines are excluded, including inside lists. This is a
-bounded Markdown severity convention, not natural-language issue resolution;
+and explicitly quoted lines are excluded, including inside lists. Indentation
+alone cannot start a code block in the middle of a paragraph: for example,
+`Context.` followed immediately by an indented `**Severity:** Major` is visible
+paragraph text and blocks. Blank lines or block boundaries end that paragraph.
+This is a bounded Markdown severity convention, not natural-language issue resolution;
 write actual findings with these labels and examples in code fences or quotes.
 
 Reviews are processed in review-ID order per author. `CHANGES_REQUESTED` blocks

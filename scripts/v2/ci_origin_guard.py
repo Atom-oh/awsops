@@ -47,15 +47,19 @@ def visible_lines(body):
     """Ignore code/quotes while retaining list items and their visible content."""
     fence = None
     list_indents = []
+    paragraph_indent = None
     for raw in body.splitlines():
         raw = raw.expandtabs(4)
         line = raw.lstrip()
         if not line:
+            paragraph_indent = None
             continue
         indent = len(raw) - len(line)
         while list_indents and indent < list_indents[-1]:
             list_indents.pop()
         container_indent = list_indents[-1] if list_indents else 0
+        if paragraph_indent is not None and paragraph_indent > container_indent:
+            paragraph_indent = None
         if fence and indent < fence[2]:
             fence = None  # Outdenting ends a fence's enclosing list item.
         if fence:
@@ -63,10 +67,20 @@ def visible_lines(body):
                     re.escape(fence[0]) + "{" + str(fence[1]) + r",}\s*", line):
                 fence = None
             continue
-        # Four spaces are code only relative to the enclosing list's content.
+        # Indented code cannot interrupt an existing paragraph, even in a list.
         if indent - container_indent >= 4:
+            if paragraph_indent == container_indent:
+                yield line.strip()
+            continue
+        # Headings/thematic breaks end paragraphs without requiring a blank line.
+        thematic_break = re.fullmatch(r"(?:\* *){3,}|(?:_ *){3,}|(?:- *){3,}", line)
+        setext_heading = paragraph_indent == container_indent and re.fullmatch(r"=+\s*|-+\s*", line)
+        if thematic_break or setext_heading:
+            paragraph_indent = None
+            yield line.strip()
             continue
         while match := re.match(r"([-+*]|\d{1,9}[.)])( +)", line):
+            paragraph_indent = None
             # More than four spaces after a marker starts indented list code.
             padding = len(match[2]) if len(match[2]) <= 4 else 1
             consumed = len(match[1]) + padding
@@ -74,11 +88,15 @@ def visible_lines(body):
             list_indents.append(indent)
             line = line[consumed:]
         if line.startswith(("    ", ">")):
+            paragraph_indent = None
             continue
         marker = re.match(r"(`{3,}|~{3,})(.*)", line)
         if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            paragraph_indent = None
             fence = (marker[1][0], len(marker[1]), list_indents[-1] if list_indents else 0)
             continue
+        paragraph_indent = (None if re.match(r"#{1,6}(?:\s|$)", line)
+                            else list_indents[-1] if list_indents else 0)
         yield line.strip()
 
 

@@ -329,6 +329,58 @@ class ReleaseGuardTests(unittest.TestCase):
                 self.threads[0]["comments"]["nodes"][0]["body"] = body
                 self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
 
+    def test_indented_paragraph_continuations_block_in_reviews_and_threads(self):
+        for channel in ("review", "thread"):
+            for body in (
+                "Context.\n    **Severity:** Major — rollback broken",
+                "Context.\n\t**Severity**: Critical",
+                "Context.\n        Finding 1 (MAJOR): still paragraph text",
+                "==\n    **Severity:** Major — equals alone is a paragraph",
+                "Finding 1 (Minor): wording\n    Finding 2 (Major): rollback broken",
+                "- Context.\n      **Severity:** Major",
+                "- Findings\n    - Context.\n          **Severity:** Major",
+            ):
+                with self.subTest(channel=channel, body=body):
+                    self.reviews, self.inline, self.threads = [], [], []
+                    if channel == "review":
+                        self.reviews = [
+                            {"id": 1, "user": {"login": "reviewer"}, "state": "COMMENTED", "body": body},
+                        ]
+                    else:
+                        self.inline = [{"id": 1}]
+                        self.threads = [{
+                            "isResolved": False, "isOutdated": False,
+                            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": body}]},
+                        }]
+                    with self.assertRaisesRegex(guard.GuardError, f"^unresolved_blocking_{channel}$"):
+                        guard.verify_release(self.env, self.fetch)
+
+    def test_paragraph_boundaries_preserve_real_code_in_reviews_and_threads(self):
+        for channel in ("review", "thread"):
+            for body in (
+                "Context.\n\n    **Severity:** Major — code example",
+                "### Context\n    **Severity:** Major — code after heading",
+                "Context\n---\n    **Severity:** Major — code after setext heading",
+                "Context.\n\n***\n    **Severity:** Major — code after thematic break",
+                "Context.\n```text\n**Severity:** Major — fenced code\n```",
+                "Context.\n\n-     **Severity:** Major — code at list-item start",
+                "- Context.\n\n      **Severity:** Major — list code after blank",
+                "Context.\n    Minor: wording only",
+            ):
+                with self.subTest(channel=channel, body=body):
+                    self.reviews, self.inline, self.threads = [], [], []
+                    if channel == "review":
+                        self.reviews = [
+                            {"id": 1, "user": {"login": "reviewer"}, "state": "COMMENTED", "body": body},
+                        ]
+                    else:
+                        self.inline = [{"id": 1}]
+                        self.threads = [{
+                            "isResolved": False, "isOutdated": False,
+                            "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{"body": body}]},
+                        }]
+                    self.assertEqual(guard.verify_release(self.env, self.fetch)["commit_sha"], MERGE)
+
     def test_heading_numbered_and_emphasized_blocking_threads_are_rejected(self):
         self.inline = [{"id": 1}]
         self.threads = [{
