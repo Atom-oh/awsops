@@ -45,6 +45,96 @@ function eventStreamOf(frames: string[], splitAt?: number) {
 }
 
 describe('agentcore', () => {
+  it('does not return an interrupted answer as success to text-only consumers', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ delta: 'partial' }), JSON.stringify({ runtimeOutcome: 'error' }),
+    ]));
+    const { invokeAgent } = await import('./agentcore');
+    await expect(invokeAgent({ gateway: 'ops', messages: [], sessionId: 's'.repeat(36) })).rejects.toThrow('interrupted');
+  });
+  it('never turns malformed or oversized receipt frames into saved answer text', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf([
+      '{"receipt":{"result":"SECRET"',
+      JSON.stringify({ receipt: { result: 'SECRET'.repeat(60000) } }),
+      JSON.stringify({ delta: 'Useful answer' }),
+    ], 100));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const answer = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    expect(answer.text).toBe('Useful answer');
+    expect(answer.evidenceTruncated).toBe(true);
+    expect(JSON.stringify(answer)).not.toContain('SECRET');
+  });
+  it('consumes receipts produced by Python from the recorded real Strands public stream', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    const dir = fileURLToPath(new URL('../../agent/', import.meta.url));
+    const script = `
+import json,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from test_tool_receipts import collect
+events=json.loads((Path(sys.argv[1])/'fixtures/strands-1.41-public-stream.json').read_text())
+print(json.dumps(collect(events)))
+`;
+    const output = execFileSync('python3', ['-B', '-c', script, dir], { encoding: 'utf8' });
+    const frames = JSON.parse(output.trim().split('\n').at(-1)!);
+    acSend.mockResolvedValue(eventStreamOf(frames.map((frame: unknown) => JSON.stringify(frame))));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const answer = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    expect(answer.text).toBe('Synthetic result.');
+    // The public SDK fixture proves delivery/correlation, not a recognized producer envelope.
+    expect(answer.receipts?.map(r => [r.callId, r.tool, r.outcome])).toEqual([
+      ['call-0', 'scoped_read', 'unverified'], ['call-1', 'scoped_read', 'unverified'],
+    ]);
+    expect(answer.completion).toEqual({ version: 1, receiptCount: 2 });
+    const { domainOutcome } = await import('./chat-evidence');
+    expect(domainOutcome('network', answer.text, answer.receipts ?? [], !!answer.evidenceTruncated,
+      answer.runtimeError, answer.completion, answer.runtimeUnverified).status).toBe('unverified');
+    expect(answer.receipts?.every(r => Object.keys(r.observedScope).length === 0)).toBe(true);
+  });
+  it('cancels a pending runtime read when the caller aborts', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    let cancelled = false;
+    acSend.mockResolvedValue({ contentType: 'text/event-stream', response: {
+      transformToWebStream: () => new ReadableStream({ cancel: () => { cancelled = true; } }),
+    } });
+    const { invokeAgentStreamDetailed } = await import('./agentcore');
+    const ac = new AbortController();
+    const stream = invokeAgentStreamDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36), abortSignal: ac.signal });
+    const pending = stream.next();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    ac.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelled).toBe(true);
+    expect(acSend).toHaveBeenCalledTimes(1);
+  });
+  it('keeps versioned receipts through SSE and rejects credential-bearing metadata', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ delta: 'answer' }),
+      JSON.stringify({ receipt: { version: 1, callId: 'call-1', tool: 'network___inspect',
+        observedAt: 1000, terminalObservedAt: 2000, outcome: 'partial',
+        requestedScope: { accountId: '123456789012' }, observedScope: {},
+        inputs: { region: 'us-east-1', query: 'SECRET', url: 'https://user:SECRET@host' },
+        quality: { partial: true, secret: 'SECRET' }, result: 'SECRET',
+      } }),
+      JSON.stringify({ receipt: { version: 99, callId: 'invalid', result: 'SECRET' } }),
+    ], 23));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const answer = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    expect(answer.text).toBe('answer');
+    expect((answer as any).receipts).toHaveLength(1);
+    expect((answer as any).receipts[0]).toMatchObject({
+      callId: 'call-1', outcome: 'partial', observedScope: {}, inputs: { region: 'us-east-1' },
+    });
+    expect(JSON.stringify(answer)).not.toContain('SECRET');
+  });
   it.each([
     [['list_users'], ['list_roles'], [], ['!awsops-deny-all!']],
     [['list_users'], ['iam-mcp-target___list_users'], ['iam-mcp-target___list_users'], ['iam-mcp-target___list_users']],
@@ -319,4 +409,63 @@ print(json.dumps({'current': [t.tool_name for t in scope['_filter_tools'](tools,
     for await (const ev of invokeAgentStreamDetailed({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) events.push(ev);
     expect(events).toEqual([{ delta: 'legacy answer' }]);
   });
+});
+
+describe('review public-stream receipt contract', () => {
+  const dir = fileURLToPath(new URL('../../agent/', import.meta.url));
+  const script = `
+import json,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from test_tool_receipts import collect,use,result
+cases=json.loads((Path(sys.argv[1])/'fixtures/task4-receipt-cases.json').read_text())
+for case in cases:
+    start=use('a')
+    start['message']['content'][0]['toolUse']['name']=case.get('tool','network___inspect')
+    end=result('a',{})
+    end['message']['content'][0]['toolResult']['content']=case['content']
+    case['frames']=collect([start,end,{'data':'answer'}])
+print(json.dumps(cases))
+`;
+  // This executes only the offline public-message adapter; test_agent stubs AWS/Strands clients.
+  const cases = JSON.parse(execFileSync('python3', ['-B', '-c', script, dir], { encoding: 'utf8' }).trim().split('\n').at(-1)!);
+  it.each(cases)('$name survives Python production, SSE and restoration', async ({ frames, outcome, marker, expectedSourceId, expectedWindow }) => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf(frames.map((f: unknown) => JSON.stringify(f)), 73));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const { domainOutcome, answerEvidence, normalizeEvidence } = await import('./chat-evidence');
+    const a = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    const d = domainOutcome('network', a.text, a.receipts, a.evidenceTruncated, a.runtimeError, a.completion, a.runtimeUnverified);
+    expect(a.receipts?.[0].outcome).toBe(outcome);
+    if (marker) expect(a.receipts?.[0].quality?.[marker]).toBe(true);
+    expect(d.status).toBe(outcome);
+    const restored = normalizeEvidence(normalizeEvidence(answerEvidence([d])));
+    expect(restored?.status).toBe(outcome);
+    if (expectedSourceId) expect(restored?.domains[0].receipts[0].quality?.collection).toMatchObject({
+      windowStartMs: expectedWindow[0], windowEndMs: expectedWindow[1],
+      sources: [{ sourceId: expectedSourceId, windowStartMs: expectedWindow[0], windowEndMs: expectedWindow[1] }],
+    });
+    expect(JSON.stringify(a)).not.toContain('PRIVATE');
+  });
+  it.each(['short-tail', 'missing-completion', 'mismatch', 'unsupported', 'late-receipt', 'runtime-unverified', 'complete'])(
+    '%s with repeated names cannot conceal a withheld failure', async mode => {
+      vi.resetModules();
+      ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+      const receipt = { version: 1, callId: 'a', tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000,
+        outcome: 'success', inputs: {}, requestedScope: {}, observedScope: {} };
+      const frames: unknown[] = [{ tool: 'inspect' }, { tool: 'inspect' }, { delta: 'answer' }, { receipt }];
+      if (!['short-tail', 'late-receipt'].includes(mode)) frames.push({ receipt: { ...receipt, callId: 'b', outcome: mode === 'complete' ? 'error' : 'success' } });
+      if (!['short-tail', 'missing-completion'].includes(mode)) frames.push({ completion: {
+        version: mode === 'unsupported' ? 2 : 1, receiptCount: mode === 'mismatch' ? 3 : mode === 'late-receipt' ? 1 : 2 } });
+      if (mode === 'late-receipt') frames.push({ receipt: { ...receipt, callId: 'b' } });
+      if (mode === 'runtime-unverified') frames.push({ runtimeOutcome: 'unverified' });
+      acSend.mockResolvedValue(eventStreamOf(frames.map(f => JSON.stringify(f))));
+      const { invokeAgentDetailed } = await import('./agentcore');
+      const { domainOutcome } = await import('./chat-evidence');
+      const a = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+      const d = domainOutcome('network', a.text, a.receipts, a.evidenceTruncated, a.runtimeError, a.completion, a.runtimeUnverified);
+      expect(d.status).toBe(mode === 'runtime-unverified' ? 'unverified' : 'partial');
+      expect(a.text).toBe('answer');
+    });
 });

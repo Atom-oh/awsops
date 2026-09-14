@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { BedrockRuntimeClient, type ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime';
 import { synthesizeStream, buildSynthUser, type SynthSend } from './synthesize';
 
 async function collect(it: AsyncIterable<string>): Promise<string> {
@@ -12,7 +13,60 @@ const parts = [
   { gateway: 'data', text: 'RDS is healthy.' },
 ];
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('synthesizeStream', () => {
+  it.each(['end_turn', 'stop_sequence', 'max_tokens', 'guardrail_intervened', 'content_filtered', undefined] as const)(
+    'assesses the actual Bedrock terminal event: %s', async stopReason => {
+      async function* events(): AsyncIterable<ConverseStreamOutput> {
+        yield { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'summary fragment' } } };
+        if (stopReason) yield { messageStop: { stopReason } };
+      }
+      vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockResolvedValue({ $metadata: {}, stream: events() });
+      const onIncomplete = vi.fn();
+      const text = await collect(synthesizeStream('q', parts, { onIncomplete }));
+      if (stopReason === 'end_turn' || stopReason === 'stop_sequence') {
+        expect(text).toBe('summary fragment');
+        expect(onIncomplete).not.toHaveBeenCalled();
+      } else {
+        expect(onIncomplete).toHaveBeenCalledOnce();
+        expect(text).toContain(parts[0].text);
+        expect(text).toContain(parts[1].text);
+      }
+    });
+
+  it('does not certify a malformed stream with multiple terminal events', async () => {
+    async function* events(): AsyncIterable<ConverseStreamOutput> {
+      yield { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'summary' } } };
+      yield { messageStop: { stopReason: 'end_turn' } };
+      yield { messageStop: { stopReason: 'end_turn' } };
+    }
+    vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockResolvedValue({ $metadata: {}, stream: events() });
+    const onIncomplete = vi.fn();
+    await collect(synthesizeStream('q', parts, { onIncomplete }));
+    expect(onIncomplete).toHaveBeenCalledOnce();
+  });
+
+  it('carries attempted-domain outcomes into synthesis instead of treating surviving prose as verified', async () => {
+    let user = '';
+    const send: SynthSend = async function* (_system, value) { user = value; yield 'summary'; };
+    await collect(synthesizeStream('inspect', parts, { send, domainOutcomes: [
+      { gateway: 'network', status: 'unverified' }, { gateway: 'data', status: 'error' },
+    ] } as any));
+    expect(user).toContain('network=unverified');
+    expect(user).toContain('data=error');
+  });
+  it('returns every useful domain after a synthesis interruption and reports incomplete synthesis', async () => {
+    let interrupted = false;
+    const send: SynthSend = async function* () { yield 'partial synthesis'; throw new Error('SECRET'); };
+    const text = await collect(synthesizeStream('q', parts, {
+      send, onIncomplete: () => { interrupted = true; },
+    } as any));
+    expect(text).toContain('SG blocks 5432.');
+    expect(text).toContain('RDS is healthy.');
+    expect(interrupted).toBe(true);
+    expect(text).not.toContain('SECRET');
+  });
   it('merges ≥2 parts via the injected streamer', async () => {
     const send: SynthSend = async function* () { yield 'merged '; yield 'answer'; };
     const spy = vi.fn(send);

@@ -3,6 +3,8 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { sectionByKey } from '@/lib/sections';
 import Markdown from './Markdown';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import type { ChatEvidence } from '@/lib/chat-evidence';
+import EvidenceStatus from './EvidenceStatus';
 
 // 스트리밍 중에도 마크다운을 렌더하되(owner: "렌더링이 늦게 됩니다"), 토큰마다 전체
 // 재파싱하는 O(n²)를 피하기 위해 파싱 입력을 ~180ms로 스로틀한다. 미완성 코드펜스는
@@ -51,6 +53,7 @@ export interface Msg {
   // report usage AND a priced model), and the generated queries surfaced during the run.
   usage?: { inputTokens: number; outputTokens: number }; costUsd?: number;
   queries?: QueryPreview[];
+  evidence?: ChatEvidence;
 }
 
 function fmtCost(usd: number): string {
@@ -72,10 +75,6 @@ function statusLabel(s: { phase: string; elapsedMs?: number }, tt: (s: string) =
     default: return `🔎 ${tt('분석 중…')}`;
   }
 }
-
-// Mirrors agent.py's MODEL_ID label for the (rare) legacy-image case where the stream carries
-// no `{"model": ...}` provenance frame — never shown once a redeployed agent reports its own.
-const FALLBACK_MODEL_LABEL = 'Claude Sonnet 4.6';
 
 export default function MessageList({ msgs, onSwitch, onFollowUp }: { msgs: Msg[]; onSwitch?: (key: string) => void; onFollowUp?: (q: string) => void }) {
   const { tt } = useI18n();
@@ -141,13 +140,14 @@ export default function MessageList({ msgs, onSwitch, onFollowUp }: { msgs: Msg[
                   ? <StreamingMarkdown content={m.content} />
                   : <Markdown>{m.content}</Markdown>}
             {m.streaming && (!m.content && m.status ? null : <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />)}
+            {!me && !m.streaming ? <EvidenceStatus evidence={m.evidence} /> : null}
             {!me && !m.streaming && sec && (
               <div className="mt-3 border-t border-ink-100 pt-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-md border border-brand-200 bg-brand-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-brand-700">
                     AgentCore → {sec.label} Gateway
                   </span>
-                  <span className="font-mono text-[11px] text-ink-500">{m.model ?? FALLBACK_MODEL_LABEL}</span>
+                  {m.model ? <span className="font-mono text-[11px] text-ink-500">{m.model}</span> : null}
                   {m.elapsedMs !== undefined && (
                     <span className="tabular-nums text-[11px] text-ink-300">{(m.elapsedMs / 1000).toFixed(1)}s</span>
                   )}

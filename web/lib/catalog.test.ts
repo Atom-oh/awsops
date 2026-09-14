@@ -208,4 +208,14 @@ describe('isCustomAgentEnabled (fail-closed revocation)', () => {
     query.mockRejectedValueOnce(new Error('db down'));
     await expect(isCustomAgentEnabled('x')).resolves.toBe(false);
   });
+
+  it('preserves query failure for dispatch callers that distinguish unavailable from disabled', async () => {
+    query.mockRejectedValueOnce(new Error('db down'));
+    await expect(isCustomAgentEnabled('x', { throwOnError: true })).rejects.toThrow('db down');
+  });
+
+  it('still returns false for a confirmed missing row in strict dispatch mode', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await expect(isCustomAgentEnabled('x', { throwOnError: true })).resolves.toBe(false);
+  });
 });

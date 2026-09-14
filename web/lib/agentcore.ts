@@ -2,10 +2,12 @@ import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { ResolvedIntegration } from '@/lib/agent-resolver';
 import { runtimeParameter, validRuntimeArn } from './agentcore-config';
+import { normalizeReceipt, normalizeCompletion, ReceiptBuffer, type ToolReceipt, type InvocationCompletion } from './chat-evidence';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 const ARN_PARAM = runtimeParameter();
 const TTL_MS = 5 * 60 * 1000;
+const MAX_FRAME = 262144;
 
 let ssm: SSMClient | null = null;
 let ac: BedrockAgentCoreClient | null = null;
@@ -30,6 +32,7 @@ export interface ChatMsg {
 }
 
 export interface InvokeInput {
+  abortSignal?: AbortSignal;
   gateway: string;
   messages: ChatMsg[];
   sessionId: string; // `awsops-<caller's own sub>-<32 lowercase hex chars>`. app/api/chat/route.ts's
@@ -75,7 +78,10 @@ export interface ToolQuery { tool: string; query: string }
 /** One agent stream event: incremental answer text, a tool invocation, the model id, the
  *  answer's token usage, or a tool's generated query (answer provenance — agent.py emits
  *  `{"tool"}` / `{"model"}` / `{"usage"}` / `{"toolInput"}` frames alongside deltas). */
-export interface AgentEvent { delta?: string; tool?: string; model?: string; usage?: TokenUsage; toolInput?: ToolQuery }
+export interface AgentEvent {
+  delta?: string; tool?: string; model?: string; usage?: TokenUsage; toolInput?: ToolQuery;
+  receipt?: ToolReceipt; completion?: InvocationCompletion; evidenceTruncated?: boolean; runtimeOutcome?: 'error' | 'unverified';
+}
 
 /** Extract an event from one SSE `data:` payload. The streaming agent.py yields
  *  `{"delta": str}` dicts (AgentCore JSON-encodes them) plus `{"tool": str}` / `{"model": str}`
@@ -85,22 +91,33 @@ function extractEvent(data: string): AgentEvent | null {
   try {
     const o = JSON.parse(data);
     if (o && typeof o === 'object') {
-      if (typeof (o as { delta?: unknown }).delta === 'string') return { delta: (o as { delta: string }).delta };
-      if (typeof (o as { data?: unknown }).data === 'string') return { delta: (o as { data: string }).data };
-      if (typeof (o as { tool?: unknown }).tool === 'string') return { tool: (o as { tool: string }).tool };
-      if (typeof (o as { model?: unknown }).model === 'string') return { model: (o as { model: string }).model };
-      const u = (o as { usage?: { inputTokens?: unknown; outputTokens?: unknown } }).usage;
+      const event: AgentEvent = {};
+      if ('receipt' in o) {
+        const receipt = normalizeReceipt(o.receipt);
+        if (receipt) event.receipt = receipt; else event.evidenceTruncated = true;
+      }
+      if ('completion' in o) {
+        const completion = normalizeCompletion(o.completion);
+        if (completion) event.completion = completion; else event.evidenceTruncated = true;
+      }
+      if (o.evidenceTruncated === true) event.evidenceTruncated = true;
+      if (o.runtimeOutcome === 'error' || o.runtimeOutcome === 'unverified') event.runtimeOutcome = o.runtimeOutcome;
+      if (typeof o.delta === 'string') event.delta = o.delta;
+      else if (typeof o.data === 'string') event.delta = o.data;
+      if (typeof o.tool === 'string') event.tool = o.tool;
+      if (typeof o.model === 'string') event.model = o.model;
+      const u = o.usage;
       if (u && typeof u.inputTokens === 'number' && typeof u.outputTokens === 'number') {
-        return { usage: { inputTokens: u.inputTokens, outputTokens: u.outputTokens } };
+        event.usage = { inputTokens: u.inputTokens, outputTokens: u.outputTokens };
       }
-      const ti = (o as { toolInput?: { tool?: unknown; query?: unknown } }).toolInput;
-      if (ti && typeof ti.tool === 'string' && typeof ti.query === 'string') {
-        return { toolInput: { tool: ti.tool, query: ti.query } };
-      }
+      const ti = o.toolInput;
+      if (ti && typeof ti.tool === 'string' && typeof ti.query === 'string') event.toolInput = { tool: ti.tool, query: ti.query };
+      if (Object.keys(event).length) return event;
       return null;
     }
     return typeof o === 'string' && o ? { delta: o } : null;
   } catch {
+    if (/^[{[]/.test(data.trim())) return { evidenceTruncated: true };
     return data ? { delta: data } : null;
   }
 }
@@ -110,12 +127,13 @@ function lineToEvent(line: string): AgentEvent | null {
   if (!line.startsWith('data:')) return null; // skip `event:`/`id:`/comment(`:`)/blank lines
   const payload = line.slice(5).trim();
   if (!payload || payload === '[DONE]') return null;
+  if (payload.length > MAX_FRAME) return { evidenceTruncated: true };
   return extractEvent(payload);
 }
 
 /** Iterate the runtime response as a stream of agent events. Falls back to a single
  *  buffered text chunk when the body isn't an SSE web stream (legacy JSON entrypoint, or a mock). */
-async function* streamEvents(resp: unknown): AsyncGenerator<AgentEvent> {
+async function* streamEvents(resp: unknown, signal?: AbortSignal): AsyncGenerator<AgentEvent> {
   const body = (resp as {
     response?: {
       transformToWebStream?: () => ReadableStream<Uint8Array>;
@@ -130,24 +148,42 @@ async function* streamEvents(resp: unknown): AsyncGenerator<AgentEvent> {
     return;
   }
   const reader = webStream.getReader();
+  const onAbort = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener('abort', onAbort, { once: true });
   const dec = new TextDecoder();
   let buf = '';
+  let discarding = false;
   try {
     for (;;) {
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
+      signal?.throwIfAborted();
       if (done) break;
-      buf += dec.decode(value, { stream: true });
+      let text = dec.decode(value, { stream: true });
+      if (discarding) {
+        const end = text.indexOf('\n');
+        if (end < 0) continue;
+        text = text.slice(end + 1);
+        discarding = false;
+      }
+      buf += text;
       let nl: number;
       while ((nl = buf.indexOf('\n')) >= 0) {
         const ev = lineToEvent(buf.slice(0, nl));
         buf = buf.slice(nl + 1);
         if (ev) yield ev;
       }
+      if (buf.length > MAX_FRAME) {
+        buf = '';
+        discarding = true;
+        yield { evidenceTruncated: true };
+      }
     }
     buf += dec.decode(); // flush any multibyte remainder held by the decoder
-    const tail = lineToEvent(buf); // flush a trailing line that had no newline
+    const tail = discarding ? null : lineToEvent(buf); // flush a trailing line that had no newline
     if (tail) yield tail;
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     // If the consumer stops early (client abort → the for-await calls .return() here), cancel the
     // upstream body so AgentCore stops generating into the void (no wasted Bedrock tokens). A no-op
     // once the reader has already drained.
@@ -184,47 +220,70 @@ function buildCommand(input: InvokeInput, arn: string): InvokeAgentRuntimeComman
 /** Send the invoke command, retrying once on a transient send error. The body is NOT consumed
  *  here, so the retry is safe for both the buffered and the streaming consumer. */
 async function send(input: InvokeInput): Promise<unknown> {
+  input.abortSignal?.throwIfAborted();
   const arn = await getRuntimeArn();
   if (!ac) ac = new BedrockAgentCoreClient({ region: REGION });
   const cmd = buildCommand(input, arn);
   try {
-    return await ac.send(cmd);
+    return await ac.send(cmd, { abortSignal: input.abortSignal });
   } catch {
+    input.abortSignal?.throwIfAborted();
     await new Promise((r) => setTimeout(r, 500));
-    return await ac.send(cmd);
+    input.abortSignal?.throwIfAborted();
+    return await ac.send(cmd, { abortSignal: input.abortSignal });
   }
 }
 
 /** Invoke the AgentCore runtime, buffering the full answer plus provenance (tools invoked,
  *  model id). Tools/model are empty against a legacy agent image that doesn't emit them —
  *  callers must treat both as optional. */
-export async function invokeAgentDetailed(input: InvokeInput): Promise<{ text: string; tools: string[]; model?: string }> {
+export async function invokeAgentDetailed(input: InvokeInput): Promise<{
+  text: string; tools: string[]; model?: string; receipts?: ToolReceipt[]; evidenceTruncated?: boolean; runtimeError?: boolean; completion?: InvocationCompletion; runtimeUnverified?: boolean;
+}> {
   const resp = await send(input);
   if (!isEventStream(resp)) return { text: await readResponse(resp), tools: [] };
   let text = '';
   let model: string | undefined;
   const tools: string[] = []; // insertion-ordered; agent.py dedupes per toolUseId, Set guards re-emits
   const seen = new Set<string>();
-  for await (const ev of streamEvents(resp)) {
-    if (ev.delta) text += ev.delta;
-    else if (ev.tool && !seen.has(ev.tool)) { seen.add(ev.tool); tools.push(ev.tool); }
-    else if (ev.model) model = ev.model;
+  const buffer = new ReceiptBuffer();
+  let runtimeError = false;
+  let runtimeUnverified = false;
+  try {
+    for await (const ev of streamEvents(resp, input.abortSignal)) {
+      if (ev.delta) text += ev.delta;
+      if (ev.tool && !seen.has(ev.tool)) { seen.add(ev.tool); tools.push(ev.tool); }
+      if (ev.model) model = ev.model;
+      if (ev.receipt) buffer.add(ev.receipt);
+      if (ev.completion) buffer.finish(ev.completion);
+      if (ev.evidenceTruncated) buffer.truncated = true;
+      if (ev.runtimeOutcome === 'error') runtimeError = true;
+      if (ev.runtimeOutcome === 'unverified') runtimeUnverified = true;
+    }
+  } catch (e) {
+    if (input.abortSignal?.aborted || (!text && !buffer.receipts.length)) throw e;
+    runtimeError = true;
   }
-  return { text, tools, model };
+  return { text, tools, model, ...(buffer.receipts.length ? { receipts: buffer.receipts } : {}),
+    ...(buffer.truncated ? { evidenceTruncated: true } : {}), ...(runtimeError ? { runtimeError: true } : {}),
+    ...(buffer.completion ? { completion: buffer.completion } : {}), ...(runtimeUnverified ? { runtimeUnverified: true } : {}) };
 }
 
 /** Invoke the AgentCore runtime, buffering the full answer. Used by fan-out synthesis and k8sgpt
  *  (which need the complete text). Consumes an SSE stream into a string when present; otherwise
  *  reads the legacy buffered JSON. */
 export async function invokeAgent(input: InvokeInput): Promise<string> {
-  return (await invokeAgentDetailed(input)).text;
+  const answer = await invokeAgentDetailed(input);
+  // Text-only callers cannot carry partial-outcome metadata (e.g. K8sGPT).
+  if (answer.runtimeError) throw new Error('Agent runtime interrupted');
+  return answer.text;
 }
 
 /** Invoke the AgentCore runtime and yield assistant text deltas as they arrive (real token
  *  streaming). Transparently degrades to a one-shot yield against a legacy buffered agent image. */
 export async function* invokeAgentStream(input: InvokeInput): AsyncGenerator<string> {
   const resp = await send(input);
-  for await (const ev of streamEvents(resp)) if (ev.delta) yield ev.delta;
+  for await (const ev of streamEvents(resp, input.abortSignal)) if (ev.delta) yield ev.delta;
 }
 
 /** Invoke the AgentCore runtime and yield each event (delta/tool/model) as it arrives — the
@@ -232,5 +291,5 @@ export async function* invokeAgentStream(input: InvokeInput): AsyncGenerator<str
  *  live to a client AND still surface tool/model provenance once the stream ends. */
 export async function* invokeAgentStreamDetailed(input: InvokeInput): AsyncGenerator<AgentEvent> {
   const resp = await send(input);
-  yield* streamEvents(resp);
+  yield* streamEvents(resp, input.abortSignal);
 }

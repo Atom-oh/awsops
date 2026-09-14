@@ -2,6 +2,10 @@
   "sloAccuracy": 0.85,
   "minDeltaPp": 15,
   "cases": [
+    { "q": "이 ENI의 보안 그룹도 확인해줘", "expect": ["network"] },
+    { "q": "보안그룹 규칙을 보여줘", "expect": ["network"] },
+    { "q": "eni-0123456789abcdef0 확인", "expect": ["network"] },
+    { "q": "보안 그룹 변경 권한이 있는 IAM 역할", "expect": ["security"] },
     { "q": "Notion database runbooks", "expect": ["observability"] },
     { "q": "노션에서 운영 정책 검색", "expect": ["observability"] },
     { "q": "두 인스턴스 통신이 안 돼요", "expect": ["network"] },

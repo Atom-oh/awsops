@@ -2,6 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { pickGateway, classifyRoute, matchedSections, ACTIVE_FALLBACK } from './route';
 
 describe('pickGateway', () => {
+  it.each([
+    ['이 ENI의 보안 그룹도 확인해줘', 'network'],
+    ['보안그룹 규칙을 보여줘', 'network'],
+    ['eni-0123456789abcdef0 확인', 'network'],
+    ['보안 그룹 변경 권한이 있는 IAM 역할', 'security'],
+    ['IAM policy permission denied', 'security'],
+  ])('routes follow-up %s without a classifier', async (prompt, gateway) => {
+    expect(pickGateway(prompt)).toBe(gateway);
+    expect((await classifyRoute(prompt, undefined, { llmEnabled: false })).primary).toBe(gateway);
+  });
   it('routes Notion knowledge requests to the gateway that owns its read tools', async () => {
     for (const prompt of ['Notion database runbooks', '노션에서 운영 정책 검색']) {
       expect(pickGateway(prompt)).toBe('observability');

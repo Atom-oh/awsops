@@ -35,9 +35,10 @@ async function* invokeAgentStreamImpl(...a: unknown[]): AsyncGenerator<string> {
 // invokeAgentDetailed (single-route path, provenance footer) delegates to the same invokeAgent
 // mock — existing tests assert call args/count against invokeAgent, so it stays the one spy.
 async function invokeAgentDetailedImpl(...a: unknown[]): Promise<{ text: string; tools: string[]; model?: string }> {
-  return { text: (await invokeAgent(...a)) as string, tools: [] };
+  const answer = await invokeAgent(...a);
+  return typeof answer === 'object' && answer !== null ? answer : { text: answer as string, tools: [] };
 }
-type AgentEvent = { delta?: string; tool?: string; model?: string };
+type AgentEvent = import('@/lib/agentcore').AgentEvent;
 // invokeAgentStreamDetailed backs the route's main path (real streaming + provenance). Defaults
 // to wrapping the invokeAgent mock as ONE delta event, so every existing invokeAgent.mockResolvedValue
 // test keeps working unchanged. A test that needs to assert genuine incremental delivery (multiple
@@ -181,6 +182,58 @@ beforeEach(() => {
 afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; delete process.env.AURORA_ENDPOINT; });
 
 describe('POST /api/chat', () => {
+  it('labels tool-less fallback unverified while retaining the failed requested domain', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    invokeAgent.mockRejectedValue(new Error('runtime unavailable'));
+    const { bedrockDirectStream } = await import('@/lib/bedrock-direct');
+    vi.mocked(bedrockDirectStream).mockImplementationOnce(async function* () { yield 'General guidance only.'; });
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+    expect(body).toContain('General guidance only.');
+    const evidence = recordExchange.mock.calls[0][0].meta.evidence;
+    expect(evidence.fallback).toBe('unverified');
+    expect(evidence.domains[0].status).toBe('error');
+    const { normalizeEvidence } = await import('@/lib/chat-evidence');
+    expect((normalizeEvidence(evidence) as any)?.fallback).toBe('unverified');
+  });
+  it('saves distinct call receipts and partial failure without unsafe inputs or result payloads', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const call = { version: 1, tool: 'network___inspect', observedAt: 1000, terminalObservedAt: 2000,
+      requestedScope: { accountId: '123456789012' }, observedScope: {},
+      inputs: { region: 'us-east-1', query: 'SECRET', Authorization: 'Bearer SECRET' } };
+    streamDetailedEvents = [
+      { delta: 'One ENI checked.' },
+      { receipt: { ...call, callId: 'a', outcome: 'success' } as any },
+      { receipt: { ...call, callId: 'b', outcome: 'error', result: 'SECRET' } as any },
+    ];
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+    expect(body).toContain('Incomplete evidence');
+    expect(body).not.toContain('SECRET');
+    const evidence = recordExchange.mock.calls[0][0].meta.evidence;
+    expect(evidence.status).toBe('partial');
+    expect(evidence.domains[0].receipts.map((r: any) => [r.callId, r.outcome])).toEqual([
+      ['a', 'success'], ['b', 'error'],
+    ]);
+    expect(evidence.domains[0].receipts[0].observedScope).toEqual({});
+    expect(JSON.stringify(evidence)).not.toContain('SECRET');
+  });
+
+  it('keeps an interrupted answer and unfinished receipt instead of losing partial evidence', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    streamDetailedGenerator = async function* () {
+      yield { delta: 'Useful observed result.' };
+      yield { receipt: { version: 1, tool: 'inspect', callId: 'a', observedAt: 1000,
+        outcome: 'unfinished', inputs: {}, requestedScope: {}, observedScope: {} } };
+      throw new Error('SECRET');
+    };
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+    expect(body).toContain('Useful observed result.');
+    expect(body).not.toContain('SECRET');
+    expect(recordExchange.mock.calls[0][0].meta.evidence.status).toBe('partial');
+    expect(recordExchange.mock.calls[0][0].meta.evidence.domains[0].receipts[0].outcome).toBe('unfinished');
+  });
   for (const failure of ['space', 'agents'] as const) {
     it.each(['automatic', 'builtin-pin', 'custom-pin', 'help'])(`keeps the %s path honest when ${failure} cannot be read`, async (path) => {
       process.env.HYBRID_ROUTING_ENABLED = 'true';
@@ -497,7 +550,7 @@ describe('hybrid routing (ADR-038)', () => {
     invokeAgent.mockResolvedValue('ok');
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) })));
-    expect(isCustomAgentEnabled).toHaveBeenCalledWith('compliance');
+    expect(isCustomAgentEnabled).toHaveBeenCalledWith('compliance', { throwOnError: true });
     expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, [], []); // gateway, not the revoked custom
   });
 
@@ -562,7 +615,7 @@ describe('thread persistence', () => {
     expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({ threadId: tid }));
   });
 
-  it('does not record when the agent invoke fails, and chat still streams the error', async () => {
+  it('records the failed domain so restored history keeps the error', async () => {
     verifyUser.mockResolvedValue({ sub: 'u1' });
     pickGateway.mockReturnValue('security');
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
@@ -570,7 +623,7 @@ describe('thread persistence', () => {
     const { POST } = await import('./route');
     const body = await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
     expect(body).toContain('[DONE]');
-    expect(recordExchange).not.toHaveBeenCalled();
+    expect(recordExchange.mock.calls[0][0].meta.evidence.domains[0].status).toBe('error');
   });
 
   it('records the inactive-section 🔒 guidance exchange too (explicit pin, spec §3)', async () => {
@@ -730,6 +783,159 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     multiDomain: true,
     selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }],
   };
+
+  it.each([
+    ['max_tokens', 'success'], ['max_tokens', 'unverified'], ['end_turn', 'unverified'],
+  ] as const)('keeps %s synthesis with %s source evidence partial', async (stopReason, dataOutcome) => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    invokeAgent.mockImplementation(async ({ gateway }) => ({
+      text: `${gateway} evidence`, tools: ['inspect'], receipts: [{
+        version: 1, callId: gateway, tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000,
+        outcome: gateway === 'data' ? dataOutcome : 'success', inputs: {}, requestedScope: {}, observedScope: {},
+      }], completion: { version: 1, receiptCount: 1 },
+    }));
+    const sdk = await import('@aws-sdk/client-bedrock-runtime');
+    async function* events(): AsyncIterable<import('@aws-sdk/client-bedrock-runtime').ConverseStreamOutput> {
+      yield { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'cut-off summary' } } };
+      yield { messageStop: { stopReason } };
+    }
+    const send = vi.spyOn(sdk.BedrockRuntimeClient.prototype, 'send')
+      .mockResolvedValue({ $metadata: {}, stream: events() });
+    try {
+      const real = await vi.importActual<typeof import('@/lib/synthesize')>('@/lib/synthesize');
+      synthesizeStream.mockImplementation(real.synthesizeStream);
+      const { POST } = await import('./route');
+      const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+      expect(body).toContain('Incomplete evidence');
+      const saved = recordExchange.mock.calls[0][0];
+      if (stopReason === 'max_tokens') {
+        expect(saved.assistantContent).toContain('network evidence');
+        expect(saved.assistantContent).toContain('data evidence');
+        expect(saved.meta.evidence.synthesis).toBe('interrupted');
+      } else expect(saved.meta.evidence.synthesis).toBeUndefined();
+      expect(saved.meta.evidence.status).toBe('partial');
+      expect(saved.meta.evidence.domains.map((d: any) => d.status)).toEqual(['success', dataOutcome]);
+      const { normalizeEvidence } = await import('@/lib/chat-evidence');
+      expect(normalizeEvidence(saved.meta.evidence)?.status).toBe('partial');
+      const { recordChatInvoke } = await import('@/lib/trace');
+      expect(recordChatInvoke).toHaveBeenLastCalledWith(expect.objectContaining({ success: false }));
+    } finally { send.mockRestore(); }
+  });
+
+  it.each([
+    ['fanout', 'success', 'empty', 'success'],
+    ['fanout', 'empty', 'empty', 'empty'],
+    ['fanout', 'empty', 'error', 'partial'],
+    ['single', 'success', 'empty', 'success'],
+    ['single', 'empty', 'empty', 'empty'],
+    ['single', 'empty', 'error', 'partial'],
+  ])('%s preserves confirmed-empty explanations beside %s/%s', async (mode, first, second, expected) => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    if (mode === 'fanout') process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(mode === 'fanout' ? multiRoute : {
+      ...multiRoute, multiDomain: false, selected: [multiRoute.selected[0]],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    const states = [first, second] as Array<'success' | 'empty' | 'error'>;
+    const receipts = states.map((outcome, i) => ({ version: 1 as const, callId: `call-${i}`,
+      tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome,
+      inputs: {}, requestedScope: {}, observedScope: {} }));
+    const explanation = (gateway: string, outcome: string) =>
+      outcome === 'empty' ? `No ${gateway} matches found.` : `${gateway} inspection complete.`;
+    if (mode === 'fanout') {
+      invokeAgent.mockImplementation(async ({ gateway }) => {
+        const i = gateway === 'network' ? 0 : 1;
+        if (states[i] === 'error') throw new Error('Upstream unavailable');
+        return { text: explanation(gateway, states[i]), tools: ['inspect'], receipts: [receipts[i]],
+          completion: { version: 1, receiptCount: 1 } };
+      });
+      synthesizeStream.mockImplementation(async function* (_q, parts) { yield parts.map((p: any) => p.text).join(' '); });
+    } else {
+      streamDetailedEvents = [
+        ...receipts.map(receipt => ({ receipt })),
+        { delta: 'No matches found in the assessed source.' },
+        { completion: { version: 1, receiptCount: 2 } },
+      ];
+    }
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+    expect(body).not.toMatch(/data: \{"error":/);
+    const saved = recordExchange.mock.calls[0][0];
+    expect(saved.meta.evidence.status).toBe(expected);
+    if (mode === 'fanout') {
+      const expectedParts = ['network', 'data'].flatMap((gateway, i) => states[i] === 'error'
+        ? [] : [{ gateway, text: explanation(gateway, states[i]) }]);
+      expect(synthesizeStream.mock.calls[0][1]).toEqual(expectedParts);
+      for (const part of expectedParts) expect(saved.assistantContent).toContain(part.text);
+    } else expect(saved.assistantContent).toContain('No matches found in the assessed source.');
+    const { normalizeEvidence } = await import('@/lib/chat-evidence');
+    expect(normalizeEvidence(saved.meta.evidence)?.status).toBe(expected);
+    const { recordChatInvoke } = await import('@/lib/trace');
+    expect(recordChatInvoke).toHaveBeenLastCalledWith(expect.objectContaining({
+      success: expected === 'success', evidence: saved.meta.evidence,
+    }));
+  });
+
+  it.each(['error', 'empty'])('keeps useful survivors and saves deterministic missing-domain disclosure: %s', async (missing) => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    invokeAgent.mockImplementation(async ({ gateway }) => {
+      if (gateway === 'network') return 'Useful network answer';
+      if (missing === 'error') throw new Error('SECRET raw upstream error');
+      return { text: '   ', tools: ['inspect'], receipts: [{ version: 1, callId: 'empty', tool: 'inspect',
+        observedAt: 1000, terminalObservedAt: 2000, outcome: 'empty' }], completion: { version: 1, receiptCount: 1 } };
+    });
+    synthesizeStream.mockImplementation(async function* (_q, parts) { yield parts[0].text; });
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+    expect(body).toContain('Useful network answer');
+    expect(body).toContain('Incomplete evidence');
+    expect(body).not.toContain('SECRET');
+    const saved = recordExchange.mock.calls[0][0];
+    expect(saved.meta.evidence.status).toBe('partial');
+    expect(saved.meta.evidence.domains.map((d: any) => [d.gateway, d.status])).toEqual([
+      ['network', 'unverified'], ['data', missing],
+    ]);
+    expect(saved.assistantContent).toContain('data');
+    const { recordChatInvoke } = await import('@/lib/trace');
+    expect(recordChatInvoke).toHaveBeenLastCalledWith(expect.objectContaining({ success: false,
+      evidence: saved.meta.evidence }));
+  });
+
+  it.each(['empty', 'error'])('all %s is non-success and restored history retains the outcome', async (outcome) => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    if (outcome === 'empty') invokeAgent.mockResolvedValue({ text: '   ', tools: ['inspect'], receipts: [
+      { version: 1, callId: 'empty', tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome: 'empty' },
+    ], completion: { version: 1, receiptCount: 1 } });
+    else invokeAgent.mockRejectedValue(new Error('SECRET'));
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en' })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(body).toContain('"error"');
+    expect(recordExchange.mock.calls[0]?.[0].meta.evidence.status).toBe(outcome);
+  });
+
+  it('does not synthesize or save after fan-out abort', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    const ac = new AbortController();
+    invokeAgent.mockImplementation(async () => { ac.abort(); return 'partial'; });
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'inspect' }, undefined, ac.signal)));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(recordExchange).not.toHaveBeenCalled();
+  });
 
   it('flag OFF: multiDomain route still uses the single path (regression lock)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
@@ -1164,5 +1370,37 @@ describe('chat sessionId — bound to the caller, never client-trusted', () => {
     const used2 = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
     expect(used2).not.toBe(badCharset);
     expect(used2.startsWith('awsops-u-5-')).toBe(true);
+  });
+});
+
+
+describe('review blank-prose and runtime uncertainty through both chat paths', () => {
+  it.each(['single', 'fanout'].flatMap(path => [
+    ['error', 'error'], ['partial', 'partial'], ['unfinished', 'unverified'], ['runtime-unverified', 'unverified'],
+  ].map(([outcome, expected]) => [path, outcome, expected])))('%s preserves %s without prose', async (path, outcome, expected) => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const call = { version: 1, callId: 'a', tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000,
+      outcome: outcome === 'runtime-unverified' ? 'success' : outcome, inputs: {}, requestedScope: {}, observedScope: {} };
+    const completion = { version: 1, receiptCount: 1 };
+    if (path === 'single') {
+      streamDetailedEvents = [{ receipt: call as any }, { completion } as any,
+        ...(outcome === 'runtime-unverified' ? [{ runtimeOutcome: 'unverified' as const }] : [])];
+    } else {
+      process.env.HYBRID_ROUTING_ENABLED = 'true';
+      process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+      classifyRoute.mockResolvedValue({ primary: 'network', method: 'llm', multiDomain: true,
+        ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.8, active: true }],
+        selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.8, active: true }] });
+      invokeAgent.mockResolvedValue({ text: '', tools: ['inspect'], receipts: [call], completion,
+        runtimeUnverified: outcome === 'runtime-unverified' });
+    }
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'inspect', lang: 'en', ...(path === 'single' ? { gateway: 'network' } : {}) })));
+    const saved = recordExchange.mock.calls[0][0].meta.evidence;
+    expect(saved.status).toBe(expected);
+    expect(saved.domains.every((d: any) => d.status === expected)).toBe(true);
+    expect(body).toContain(`"status":"${expected}"`);
+    const { normalizeEvidence } = await import('@/lib/chat-evidence');
+    expect(normalizeEvidence(normalizeEvidence(saved))?.status).toBe(expected);
   });
 });
