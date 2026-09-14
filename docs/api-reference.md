@@ -128,3 +128,14 @@ do not maintain a separate route count in README or agent context.
 Deployment readiness requires admin or deployment-verifiers, a bounded nonce/account request,
 and a process cooldown. Inventory summary `collection.scope=aggregate` describes the
 whole collection job; selected account/region counts do not turn it into per-account health.
+
+## Trace collection disclosure
+
+The `GraphCollection` / `GraphCollectionSource` TypeScript contract is defined in
+`web/components/topology/GraphCollectionStatus.tsx`; runtime input is still normalized.
+Trace `sources[].windowStartMs/windowEndMs` identify the source query window, separately
+from top-level `attempted_at/captured_at` and optional source capture/last-success clocks.
+Positive `nodeDrops/edgeDrops` and `infraUnavailable` remain visible for older persisted
+envelopes as well as newer producer flags. Losses alone do not prove retention:
+`retainedPrevious` is required for that claim. Source-detail totals include saved sources.
+Missing collection metadata stays unknown rather than implying collector failure.

@@ -127,3 +127,15 @@ ADR-005 deliberately leaves `awaiting_approval` unclaimable in `db.claim_running
 an approval callback. The retained remediation ASL is dark substrate, not a supported execution
 path. SQL tests exercise the actual predicate before/after lifecycle migration; enabling this
 path or widening the predicate is outside these review fixes.
+
+## Trace collection rendering
+
+When a partial graph lacks an explanation, inspect its existing collection fields:
+`nodeDrops`, `edgeDrops`, `infraUnavailable`, and per-source `windowStartMs/windowEndMs`.
+The panel discloses positive loss counters and unavailable inventory context, renders
+source windows separately from publication/capture clocks, and does not infer retention
+from losses. `retainedPrevious` alone establishes that a saved graph is being reused.
+The typed collection contract also describes optional additive producer fields; unknown
+runtime data remains defensively normalized. Source-detail counts include saved sources.
+Verify locally with `cd web && npx vitest run components/topology/GraphCollectionStatus.test.tsx`;
+the regression uses the real graph-state reader with a database boundary fixture.
