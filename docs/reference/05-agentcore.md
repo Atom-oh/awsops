@@ -81,7 +81,7 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Coverage | Required evidence |
 |---|---|
 | Existing explicit handlers | Async terminal-query results, inventory freshness, rightsizing and the bounded shallow producer contracts |
-| ENI lookup/configuration | Typed IP/ENI identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
+| ENI lookup/configuration | The current IPv4 lookup's typed identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
 | Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
 | Notion | Identified page/database/block records, the relevant result collection and typed pagination/error markers |
 | Prometheus/Mimir | Bounded vector/matrix query envelopes; named labels/series collections with typed truncation |

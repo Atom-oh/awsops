@@ -65,6 +65,10 @@ class EvidenceBoundaryTest(unittest.TestCase):
             self.assertNotIn(self.receipt("find_ip_address", {**body, **change})["outcome"], ("success", "empty"))
         capped = {**body, "enis": [eni] * 10, "count": 10}
         self.assertEqual(self.receipt("find_ip_address", capped)["outcome"], "partial")
+        # The current Lambda only searches private/public IPv4 filters.
+        self.assertEqual(self.receipt("find_ip_address", {
+            "ip": "2001:db8::1", "enis": [], "count": 0,
+        })["outcome"], "unverified")
 
     def test_notion_distinguishes_page_metadata_from_empty_search(self):
         page = {"object": "page", "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}

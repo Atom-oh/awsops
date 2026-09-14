@@ -674,7 +674,8 @@ def network_evidence(body, tool, q):
                 and ip(row.get("privateIp")))
     if tool == "find_ip_address":
         rows = bounded_list(body.get("enis"), 10, q)
-        if rows is None or not ip(body.get("ip")) or not count(body.get("count")) or body["count"] != len(rows):
+        if (rows is None or not ip(body.get("ip")) or ip_address(body["ip"]).version != 4
+                or not count(body.get("count")) or body["count"] != len(rows)):
             return None
         if not all(identity(row) for row in rows):
             return None
