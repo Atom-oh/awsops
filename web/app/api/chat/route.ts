@@ -466,6 +466,8 @@ export async function POST(request: Request) {
   // section — and it sits ABOVE keyword-matched custom agents and the classifier in the ladder.
   // A non-built-in `section` is a custom-agent pin attempt (hybrid path only; legacy is unchanged).
   const customPinTarget = (hybridOn && body.section && !pinIsBuiltin) ? body.section : null;
+  const productHelpIntent = hybridOn && !body.section && isProductHelpIntent(prompt);
+  let finalPolicyUnavailable = false;
   let customPinEnabled: boolean, unavailablePin: boolean, customPick: string | null, routeKey: string;
   try {
     customPinEnabled = customPinTarget
@@ -474,7 +476,7 @@ export async function POST(request: Request) {
     // ADR-044 §2: a confirmed disabled/absent pin gets an honest message, never a fallback.
     unavailablePin = !!customPinTarget && !customPinEnabled;
     // Recheck enablement after the fresh catalog read to catch a concurrent revocation.
-    customPick = unavailablePin
+    customPick = unavailablePin || productHelpIntent
       ? null
       : customPinEnabled
         ? customPinTarget                                   // explicit custom pin — highest precedence
@@ -483,8 +485,13 @@ export async function POST(request: Request) {
       ? customPinTarget!
       : (customPick && (await isCustomAgentEnabled(customPick, { throwOnError: true })) ? customPick : gateway);
   } catch {
-    // An unavailable final read is not a revocation and must not discard the custom policy.
-    return Response.json({ error: 'Custom-agent policy unavailable' }, { status: 503 });
+    // Deny this custom candidate. ADR-003/004 keep independent builtin routing/help usable;
+    // an explicit custom pin receives an unavailable response and is never substituted.
+    finalPolicyUnavailable = true;
+    customPinEnabled = false;
+    unavailablePin = !!customPinTarget;
+    customPick = null;
+    routeKey = gateway;
   }
   const customRevoked = !!customPick && routeKey !== customPick;
   // v1 priority-10 'aws-data' local handler: when the routing decision (pin included — a pinned
@@ -532,7 +539,8 @@ export async function POST(request: Request) {
   const proposableWrites = enabledIntegrations
     .filter((i) => i.direction === 'egress' && i.capability === 'read_write')
     .map((i) => ({ name: i.name, writeActionRefs: i.writeActionRefs }));
-  const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations, proposableWrites); // server-side enforcement
+  const spec = resolveAgent(routeKey, finalPolicyUnavailable || productHelpIntent ? [] : customAgents,
+    space, egressReadIntegrations, proposableWrites); // server-side enforcement
   // ADR-044: cross-domain auto-synthesis (flag MULTI_ROUTE_SYNTHESIS_ENABLED, default OFF ⇒ unchanged
   // single-route path). Only built-in multi-domain fans out — a pinned/picked custom agent stays single.
   // `fanGateways` is the ACTIVE subset of route.selected — the FINAL multi-domain decision is
@@ -556,11 +564,11 @@ export async function POST(request: Request) {
   const explicitPin = pinIsBuiltin || customPinEnabled || unavailablePin;
   const inactiveWasPinned = inactiveSection != null && route?.method === 'pin';
   const useAssistant = hybridOn && !unavailablePin
-    && ((!explicitPin && isProductHelpIntent(prompt)) || (inactiveSection != null && !inactiveWasPinned));
+    && (productHelpIntent || (inactiveSection != null && !inactiveWasPinned));
   // Policy eligibility is not live tool discovery. Only a provable zero is disclosed here.
   const fallbackNotice = !useAssistant && spec.tier === 'custom' && spec.toolAllowlist?.length === 0
     ? `${CUSTOM_ROUTE_NOTICE[lang].zeroTools}\n\n`
-    : !explicitPin && !useAssistant && (customContext.status === 'unavailable' || customRevoked)
+    : !explicitPin && !useAssistant && (customContext.status === 'unavailable' || finalPolicyUnavailable || customRevoked)
       ? `${CUSTOM_ROUTE_NOTICE[lang].fallback}\n\n` : '';
   const messages: ChatMsg[] = [...history, { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
@@ -630,7 +638,8 @@ export async function POST(request: Request) {
       // HONEST message — never a silent fallback to keyword/classifier routing.
       if (unavailablePin) {
         const name = String(body.section).slice(0, 40);
-        const guide = customContext.status === 'unavailable' ? CUSTOM_ROUTE_NOTICE[lang].pin : chatMsg.unavailablePin(lang, name);
+        const guide = customContext.status === 'unavailable' || finalPolicyUnavailable
+          ? CUSTOM_ROUTE_NOTICE[lang].pin : chatMsg.unavailablePin(lang, name);
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: guide })}\n\n`));
         record(guide);
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
