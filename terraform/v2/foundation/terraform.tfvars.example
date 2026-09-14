@@ -8,3 +8,11 @@ hosted_zone_name = "example.com"
 # steampipe_aws_fill_rate            = 2
 # steampipe_sync_reserved_concurrency = 4
 # inventory_stale_after_minutes       = 30
+
+# Optional operator CI access bootstrap; no backend/state or CloudFront access.
+# Requires the existing account GitHub OIDC provider with STS audience.
+# github_actions_enabled = false
+# Leave migration access empty unless an identified private executor can reach Aurora.
+# github_actions_migration_secret_arns = []
+# For approved secrets using customer-managed encryption keys, supply full key ARNs.
+# github_actions_secret_kms_key_arns = []
