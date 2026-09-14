@@ -54,6 +54,27 @@ Either policy or agent-catalog failure denies custom candidates, while built-in 
 usable. Explicit custom pins receive an unavailable response; automatic fallback is visibly
 identified and persisted as a built-in answer. Confirmed no-row policies retain Phase-1 behavior.
 
+## Optional stream evidence
+
+The Runtime adds metadata frames alongside existing text frames:
+
+| Field | Contract |
+| --- | --- |
+| `receipt` | Version 1, one bounded record per call ID, with tool identity, delivery clocks, safe requested/tool-reported scope and outcome. |
+| `evidenceTruncated` | Some call evidence was omitted; consumers must not certify complete coverage. |
+| `completion` | Version 1 and `receiptCount`, emitted after receipts. This closes delivery of the receipt set, not successful collection. |
+| `runtimeOutcome` | `error` when the stream fails; preceding useful text does not erase that failure. |
+
+Receipt outcomes distinguish success, confirmed empty, partial, error, unverified and unfinished
+calls. Async query submission or pending status is not a completed result. Known producer freshness,
+continuation and child-error signals restrict the conclusion; missing metadata does not establish
+independently verified scope. Source clocks remain distinct from stream delivery clocks.
+
+The web consumer ships separately. Older consumers ignore these optional frames; newer consumers
+must preserve useful text but treat absent, malformed or incomplete evidence as unverified/partial.
+Detailed receipts belong only in ownership-checked conversation metadata. Global invocation
+statistics retain coarse outcomes, never raw outputs, queries, credentials or pagination tokens.
+
 ## Custom tool policy and registration
 
 `web/lib/gateway-tool-catalog.json` maps approved target names to `{gateway, tools}`.

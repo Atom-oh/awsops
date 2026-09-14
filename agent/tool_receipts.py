@@ -11,6 +11,10 @@ from datetime import datetime
 
 MAX_CALLS = 32
 MAX_RESULT = 262144
+ASYNC_QUERY_TOOLS = {
+    "execute_log_insights_query", "get_logs_insight_query_results",
+    "lake_query", "get_query_status", "get_query_results",
+}
 STATUS = {"ok", "empty", "partial", "unavailable", "error", "unknown"}
 REASONS = {
     "missing_ledger", "unknown_account_coverage", "source_failed", "incomplete_collection",
@@ -380,9 +384,45 @@ def rightsizing_evidence(body, q):
     return outcome
 
 
+def query_evidence(body, tool, q):
+    """These APIs return HTTP 200 while an asynchronous query is pending or failed."""
+    state = body.get("status")
+    if not isinstance(state, str):
+        q["invalid"] = True
+        return "unverified"
+    if tool in ("execute_log_insights_query", "lake_query"):
+        q["unknown"] = True  # submitted is not completed query evidence
+        return "unverified"
+    cloudwatch = tool == "get_logs_insight_query_results"
+    failed = ("Failed", "Cancelled", "Timeout") if cloudwatch else ("FAILED", "CANCELLED", "TIMED_OUT")
+    if state in failed:
+        return "error"
+    if state != ("Complete" if cloudwatch else "FINISHED"):
+        q["unknown"] = True
+        return "unverified"
+    token = body.get("nextToken")
+    if token is not None and token != "":
+        if isinstance(token, str):
+            q["truncated"] = True
+        else:
+            q["invalid"] = True
+    if tool == "get_query_status":
+        return "success"  # the requested status check completed; no result rows are claimed
+    rows = body.get("results")
+    if not isinstance(rows, list) or not count(body.get("count")) or body["count"] != len(rows):
+        q["invalid"] = True
+        return "unverified"
+    if len(rows) >= 50 and "truncated" not in body:
+        # Existing Lambda producers slice at 50 without exposing the unsliced length.
+        q["unknown"] = True
+    return "success" if rows else "empty"
+
+
 def producer_evidence(body, tool, q):
     """Curated producer shapes only; no arbitrary nested error/key searching."""
     name = tool.rsplit("___", 1)[-1]
+    if name in ASYNC_QUERY_TOOLS:
+        return query_evidence(body, name, q)
     if name in ("query_inventory", "inventory_summary"):
         return inventory_evidence(body, name, q)
     if name == "get_rightsizing_recommendations":
@@ -409,7 +449,7 @@ def terminal(result, ignored_texts=(), tool=""):
     content = result.get("content")
     if not isinstance(content, list):
         return "unverified", {"invalid": True}, {}
-    object_producer = tool.rsplit("___", 1)[-1] in {
+    object_producer = tool.rsplit("___", 1)[-1] in ASYNC_QUERY_TOOLS | {
         "query_inventory", "inventory_summary", "get_rightsizing_recommendations",
     }
     if not content:
@@ -454,7 +494,7 @@ def terminal(result, ignored_texts=(), tool=""):
                     outcomes.append("partial")
                 elif (not body or body.get("collection", {}).get("status") == "empty"
                       or (body.get("enis") == [] and type(body.get("count")) is int and body["count"] == 0)
-                      or any(body.get(k) == [] for k in ("items", "data", "rows", "results"))):
+                      or any(body.get(k) == [] for k in ("items", "data", "rows", "results", "result", "traces"))):
                     outcomes.append("empty")
                 else:
                     outcomes.append("success")
@@ -521,7 +561,7 @@ class ReceiptTracker:
                 self.truncated = True
                 continue
             outcome, q, observed = terminal(result, self.ignored_texts, receipt["tool"])
-            if receipt["tool"].endswith("get_topology") and "collection" not in q and outcome == "success":
+            if receipt["tool"].endswith("get_topology") and "collection" not in q and outcome in ("success", "empty"):
                 outcome = "unverified"
             receipt.update(outcome=outcome, terminalObservedAt=now, quality=q, observedScope=observed)
 

@@ -452,3 +452,61 @@ class ProducerReceiptTest(unittest.TestCase):
                     outcome, _, _ = terminal({"status": "success", "content": content},
                                              tool="producer___" + tool)
                     self.assertEqual(outcome, "unverified")
+
+    def test_async_queries_require_terminal_success_before_confirming_results(self):
+        for tool, complete, pending, failed in [
+            ("get_logs_insight_query_results", "Complete", ("Scheduled", "Running", "Unknown"),
+             ("Failed", "Cancelled", "Timeout")),
+            ("get_query_results", "FINISHED", ("QUEUED", "RUNNING"),
+             ("FAILED", "CANCELLED", "TIMED_OUT")),
+        ]:
+            for state, expected in [(complete, "empty"), *[(s, "unverified") for s in pending],
+                                    *[(s, "error") for s in failed], ("future", "unverified")]:
+                with self.subTest(tool=tool, state=state):
+                    receipt = self.receipt(tool, {
+                        "queryId": "PRIVATE", "status": state, "results": [], "count": 0, "nextToken": None,
+                    })
+                    self.assertEqual(receipt["outcome"], expected)
+            receipt = self.receipt(tool, {"status": complete, "results": [{"message": "PRIVATE"}], "count": 1})
+            self.assertEqual(receipt["outcome"], "success")
+
+    def test_async_query_start_status_and_continuation_are_not_result_completion(self):
+        for tool in ("execute_log_insights_query", "lake_query"):
+            self.assertEqual(self.receipt(tool, {"queryId": "PRIVATE", "status": "STARTED"})["outcome"], "unverified")
+        for state, expected in [("QUEUED", "unverified"), ("RUNNING", "unverified"),
+                                ("FAILED", "error"), ("FINISHED", "success")]:
+            self.assertEqual(self.receipt("get_query_status", {"status": state})["outcome"], expected)
+        receipt = self.receipt("get_query_results", {
+            "status": "FINISHED", "results": [], "count": 0, "nextToken": "PRIVATE",
+        })
+        self.assertEqual(receipt["outcome"], "partial")
+        self.assertTrue(receipt["quality"]["truncated"])
+
+    def test_query_bounds_and_malformed_markers_cannot_certify_complete_results(self):
+        for tool, complete in (("get_query_results", "FINISHED"), ("get_logs_insight_query_results", "Complete")):
+            for changes in ({"status": None}, {"status": []}, {"count": True}, {"count": 1},
+                            {"results": {}}, {"nextToken": 1}):
+                with self.subTest(tool=tool, changes=changes):
+                    receipt = self.receipt(tool, {"status": complete, "results": [], "count": 0, **changes})
+                    self.assertNotIn(receipt["outcome"], ("empty", "success"))
+            # Both existing Lambda producers slice at 50 without emitting whether that slice dropped rows.
+            receipt = self.receipt(tool, {
+                "status": complete, "results": [{"message": "PRIVATE"}] * 50, "count": 50,
+            })
+            self.assertEqual(receipt["outcome"], "partial")
+            self.assertTrue(receipt["quality"]["unknown"])
+
+    def test_query_and_topology_envelopes_cannot_certify_empty_when_missing(self):
+        from tool_receipts import terminal
+        for tool in ("get_query_results", "get_logs_insight_query_results", "get_query_status",
+                     "execute_log_insights_query", "lake_query"):
+            for content in ([], [{"json": []}], [{"json": {}}]):
+                self.assertEqual(terminal({"status": "success", "content": content}, tool=tool)[0], "unverified")
+        for body in ({}, []):
+            self.assertEqual(self.receipt("get_topology", body)["outcome"], "unverified")
+
+    def test_metric_and_trace_empty_collections_remain_distinct(self):
+        for tool, field in (("prometheus_query", "result"), ("mimir_query_range", "result"),
+                            ("tempo_search", "traces")):
+            self.assertEqual(self.receipt(tool, {field: [], "truncated": False})["outcome"], "empty")
+            self.assertEqual(self.receipt(tool, {field: [], "truncated": True})["outcome"], "partial")
