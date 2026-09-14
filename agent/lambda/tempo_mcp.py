@@ -121,7 +121,8 @@ def tempo_search(args):
     if isinstance(metrics, dict) and state != "unknown":
         completed, total = metrics.get("completedJobs"), metrics.get("totalJobs")
         if "completedJobs" in metrics or "totalJobs" in metrics:
-            if type(completed) is not int or type(total) is not int or min(completed, total) < 0:
+            if (type(completed) is not int or type(total) is not int
+                    or min(completed, total) < 0 or completed > total):
                 state = "unknown"  # Missing counters are not affirmative completion (or assumed zero).
             elif completed < total:
                 state = "partial"

@@ -329,6 +329,7 @@ def test_inventory_actual_projection_disclosure_restricts_receipt(resource_type,
     (2, 0, {"completedJobs": 2, "totalJobs": None}, "unverified"),
     (2, 0, {"completedJobs": -1, "totalJobs": 2}, "unverified"),
     (2, 0, {"completedJobs": 0, "totalJobs": 0}, "empty"),
+    (2, 0, {"completedJobs": 3, "totalJobs": 2}, "unverified"),
     (2, 1, {"completedJobs": 2, "totalJobs": 2}, "success"),
     ("invalid", 0, {}, "unverified"),
 ])
@@ -348,3 +349,18 @@ def test_tempo_effective_search_limit_and_incomplete_jobs(limit, n, metrics, exp
     body = json.loads(out["body"])
     assert body["traces"] == data["traces"]
     assert body["metrics"] == metrics
+
+
+@pytest.mark.parametrize("module,tool", [(prom, "prometheus_query"), (mimir, "mimir_query")])
+@pytest.mark.parametrize("warned", [False, True])
+def test_metric_pair_lists_are_not_certified_after_dict_coercion(module, tool, warned):
+    raw = [["metric", {}], ["value", [1, "2"]]]
+    data = {"status": "success", "data": {"resultType": "vector", "result": [raw]}}
+    if warned:
+        data["warnings"] = ["UPSTREAM_SECRET"]
+    with patch.object(module, "_ds", return_value={"endpoint": "https://fixture.invalid"}), \
+            patch.object(module, "http_json", return_value=(200, data)) as http:
+        out = module.lambda_handler({"tool_name": tool, "arguments": {"query": "fixture"}}, None)
+    http.assert_called_once()
+    assert json.loads(out["body"])["collectionStatus"] == "unknown"
+    assert receipt(tool, out) == "unverified"

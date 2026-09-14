@@ -81,6 +81,9 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Coverage | Required evidence |
 |---|---|
 | Existing explicit handlers | Async terminal-query results, inventory freshness, rightsizing and the bounded shallow producer contracts |
+| IAM/DynamoDB lists | Observed list fields plus typed continuation/truncation evidence; missing or malformed collection/continuation values stay unknown |
+| Trusted Advisor | Observed check collection, a 15-check cap, and known finite estimates for numeric savings totals; unavailable estimates remain null/unknown |
+| OpenSearch | Domain enumeration is capped at 20 with truncation disclosed; missing collection/description metadata is unknown; search validates timeout and shard evidence |
 | ENI lookup/configuration | The current IPv4 lookup's typed identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
 | Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
 | Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |

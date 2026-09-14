@@ -113,8 +113,10 @@ def _bound(data):
 
 def _query_result(observed):
     data, source_status = observed
+    raw_rows = data.get("result") if isinstance(data, dict) else None
+    raw_rows_valid = isinstance(raw_rows, list) and all(isinstance(row, dict) for row in raw_rows[:MAX_SERIES])
     bounded, truncated = _bound(data)
-    state = source_status
+    state = source_status if raw_rows_valid else "unknown"
     if state == "ok":
         state = ("unknown" if not isinstance(bounded, dict)
                  or bounded.get("resultType") not in ("vector", "matrix")
