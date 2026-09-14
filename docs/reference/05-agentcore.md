@@ -19,6 +19,18 @@ Policy: [BASELINE](../decisions/BASELINE.md). Local contracts:
 - Runtime settings come from SSM `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
   The BFF reads these at runtime; ECS `valueFrom` placeholders are not the config path.
 
+Gateway reconciliation requires the deployment identity to have
+`bedrock-agentcore:GetGateway` in addition to its existing list/update permissions.
+The provisioner reads each existing gateway before correcting its role or description,
+preserving deployed authentication, protocol and optional security configuration.
+Lambda targets reconcile ARN and credential type as well as the managed tool schema.
+Known gateway IDs remain available for runtime routing and ADR-017 teardown when a
+read/update fails; a failed role reconciliation makes provisioning fail, while a
+description-only update failure remains a warning. Gateway/target failures use fixed
+diagnostic codes without raw exception details. `CREATED`/`UPDATED` means AWS accepted
+the request; verify readiness and actual invocation separately. There is no automatic
+delete/recreate recovery for failed resources.
+
 ## Routing and runtime
 
 [agent.py](../../agent/agent.py) selects from discovered/configured gateways and
