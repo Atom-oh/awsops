@@ -54,6 +54,12 @@ jobs:
       - name: Run merge verification
         run: bash scripts/v2/merge-verify.sh
 
+      - name: Verify migration TLS chain and hostname checks
+        run: node --test scripts/v2/migrate-tls.test.mjs scripts/v2/migration-context.test.mjs
+
+      - name: Verify private migration image entrypoint
+        run: node --test scripts/v2/ci/origin-migration-entry.test.mjs
+
       - name: Verify runtime IAM with mocked providers
         working-directory: terraform/v2/foundation
         env:
@@ -63,7 +69,7 @@ jobs:
         run: |
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
-          terraform test -filter=tests/runtime_iam.tftest.hcl -filter=tests/github_actions_release.tftest.hcl
+          terraform test -filter=tests/runtime_iam.tftest.hcl -filter=tests/github_actions_release.tftest.hcl -filter=tests/github_actions_migration.tftest.hcl
 
   # Pre-merge mirror of deploy-guide.yml's deck gates, so a sensitive-content
   # leak or generator drift in the committed pptx is caught BEFORE the binary
