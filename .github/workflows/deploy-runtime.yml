@@ -1,0 +1,196 @@
+name: Production Runtime Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check: read-only configuration checks; deploy: publish and prove actual component consumption"
+        required: true
+        type: choice
+        default: check
+        options: [check, deploy]
+      component:
+        description: "Previously provisioned foundation component"
+        required: true
+        type: choice
+        default: agentcore
+        options: [agentcore, worker, steampipe]
+      image_digest:
+        description: "Optional existing commit-tagged digest; use after a reviewed Terraform image-pin update"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: origin-production-runtime-release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require origin main and an explicit component operation
+        env:
+          RUNTIME_MODE: ${{ inputs.mode }}
+          RUNTIME_COMPONENT: ${{ inputs.component }}
+          REQUESTED_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REPOSITORY" = "Atom-oh/awsops" ]
+          [ "$GITHUB_REF" = "refs/heads/main" ]
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]
+          case "$RUNTIME_MODE" in check|deploy) ;; *) exit 1 ;; esac
+          case "$RUNTIME_COMPONENT" in agentcore|worker|steampipe) ;; *) exit 1 ;; esac
+          [[ -z "$REQUESTED_DIGEST" || "$REQUESTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+  release:
+    needs: [guard]
+    if: github.repository == 'Atom-oh/awsops' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: awsops-claude-arm
+    environment: production
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ${{ vars.AWSOPS_REGION }}
+      AWS_PAGER: ""
+      CI_COMMIT_SHA: ${{ github.sha }}
+      CI_EXPECTED_ACCOUNT_ID: ${{ vars.AWSOPS_ACCOUNT_ID }}
+      CI_EXPECTED_PROJECT: ${{ vars.AWSOPS_PROJECT }}
+      CI_ROLE_ARN: ${{ vars.AWSOPS_RUNTIME_ROLE_ARN }}
+      CI_RUNTIME_MODE: ${{ inputs.mode }}
+      RUNTIME_COMPONENT: ${{ inputs.component }}
+      AWSOPS_RUNTIME_METADATA_JSON: ${{ vars.AWSOPS_RUNTIME_METADATA_JSON }}
+      AWSOPS_MIGRATION_CONFIG_JSON: ${{ vars.AWSOPS_MIGRATION_CONFIG_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned control-plane SDK
+        run: python3 -m pip install --disable-pip-version-check boto3==1.42.97
+
+      - name: Require completed review and CI for this main snapshot
+        run: python3 scripts/v2/ci_origin_guard.py
+
+      - name: Validate the non-secret metadata handoff and prepare private files
+        run: python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" prepare
+
+      - name: Obtain the dedicated runtime role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWSOPS_RUNTIME_ROLE_ARN }}
+          aws-region: ${{ vars.AWSOPS_REGION }}
+          role-duration-seconds: 3600
+          role-session-name: awsops-runtime-${{ github.run_id }}
+          unset-current-credentials: true
+
+      - name: Verify source, caller and actual component configuration
+        id: target
+        run: python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" preflight
+
+      - name: Check private migration executor metadata
+        if: inputs.component == 'agentcore'
+        run: python3 scripts/v2/ci_origin_migration.py check
+
+      - name: Read-only check
+        if: inputs.mode == 'check'
+        run: python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" check
+
+      - name: Prepare the reviewed build context
+        if: inputs.mode == 'deploy' && inputs.image_digest == ''
+        run: python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" stage-build
+
+      - uses: docker/setup-buildx-action@v3
+        if: inputs.mode == 'deploy' && (inputs.image_digest == '' || inputs.component == 'agentcore')
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        if: inputs.mode == 'deploy' && (inputs.image_digest == '' || inputs.component == 'agentcore')
+
+      - name: Build the immutable ARM64 image
+        id: image
+        if: inputs.mode == 'deploy' && inputs.image_digest == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.target.outputs.build_context }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.target.outputs.repository_uri }}:${{ steps.target.outputs.source_tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Export committed migration build inputs
+        id: migration_context
+        if: inputs.mode == 'deploy' && inputs.component == 'agentcore'
+        run: python3 scripts/v2/ci_origin_migration.py prepare-build
+
+      - name: Build the private migration image
+        id: migration_image
+        if: inputs.mode == 'deploy' && inputs.component == 'agentcore'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.migration_context.outputs.context }}
+          file: ${{ steps.migration_context.outputs.context }}/scripts/v2/ci/Dockerfile.origin-migration
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          build-args: SOURCE_COMMIT=${{ github.sha }}
+          tags: ${{ steps.target.outputs.migration_repository_uri }}:migration-${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Bind the image manifest to the reviewed commit
+        if: inputs.mode == 'deploy'
+        env:
+          BUILT_DIGEST: ${{ steps.image.outputs.digest }}
+          REQUESTED_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          digest="${REQUESTED_DIGEST:-$BUILT_DIGEST}"
+          python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" record-build --digest "$digest"
+
+      - name: Refresh runtime credentials after the build
+        if: inputs.mode == 'deploy'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWSOPS_RUNTIME_ROLE_ARN }}
+          aws-region: ${{ vars.AWSOPS_REGION }}
+          role-duration-seconds: 3600
+          role-session-name: awsops-runtime-roll-${{ github.run_id }}
+          unset-current-credentials: true
+
+      - name: Recheck main before production writes
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_guard.py
+
+      - name: Execute migrations inside private Fargate
+        if: inputs.mode == 'deploy' && inputs.component == 'agentcore'
+        env:
+          MIGRATION_DIGEST: ${{ steps.migration_image.outputs.digest }}
+        run: python3 scripts/v2/ci_origin_migration.py run --digest "$MIGRATION_DIGEST" --mode apply
+
+      - name: Require migration receipt before AgentCore provisioning
+        if: inputs.mode == 'deploy' && inputs.component == 'agentcore'
+        env:
+          MIGRATION_DIGEST: ${{ steps.migration_image.outputs.digest }}
+        run: python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" migrate --digest "$MIGRATION_DIGEST"
+
+      - name: Deploy and prove actual runtime consumption
+        if: inputs.mode == 'deploy'
+        run: python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" deploy
+
+      - name: Clean up only this run's tasks and private files
+        if: always()
+        run: python3 scripts/v2/ci_origin_runtime.py --component "$RUNTIME_COMPONENT" cleanup

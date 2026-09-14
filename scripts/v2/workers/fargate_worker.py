@@ -2,10 +2,47 @@
 allocates beyond the task memory limit to force an OOM kill (exit 137) -> SFN RunTask.sync catches
 -> status_updater sets failed -> proves web is unaffected (spec §5)."""
 import argparse
+import json
+import os
+import re
 import db
 import handlers
 
 _OOM_CHUNK = 64 * 1024 * 1024  # OOM demo: 64 MiB allocation step until the task memory limit kills us
+
+
+def ci_probe(nonce):
+    """Fixed startup/DB proof for operator CI; never reads or dispatches a job."""
+    valid = isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce)
+    proof = {"mode": "ci_runtime_probe", "nonce": nonce if valid else "", "status": "failed",
+             "checks": {"startup": True, "database": False, "schema": False}}
+    conn = None
+    try:
+        if not valid:
+            raise ValueError()
+        conn = db.connect()
+        conn.run("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        rows = conn.run(
+            "SELECT current_database(), current_user, "
+            "to_regclass('public.worker_jobs') IS NOT NULL, "
+            "to_regclass('public.schema_migrations') IS NOT NULL"
+        )
+        if len(rows) == 1 and len(rows[0]) == 4:
+            row = rows[0]
+            proof["checks"]["database"] = row[0] == os.environ.get("AURORA_DATABASE") and row[1] == "awsops_worker"
+            proof["checks"]["schema"] = row[2] is True and row[3] is True
+            if all(proof["checks"].values()):
+                proof["status"] = "ok"
+    except Exception:
+        pass  # The fixed failed proof carries no SQL/SDK/credential error text.
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                proof["status"] = "failed"
+    print(json.dumps(proof, sort_keys=True))
+    return 0 if proof["status"] == "ok" else 1
 
 
 def _fail_report(conn, report_id, error):
@@ -23,9 +60,15 @@ def _fail_report(conn, report_id, error):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--job-id", required=True)
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--job-id")
+    mode.add_argument("--ci-probe", metavar="NONCE")
     ap.add_argument("--oom", action="store_true")
     args = ap.parse_args()
+    if args.ci_probe is not None:
+        if args.oom:
+            ap.error("--ci-probe does not permit --oom")
+        return ci_probe(args.ci_probe)
     conn = db.connect()
     try:
         if db.claim_running(conn, args.job_id, runtime="fargate") == 0:
@@ -65,4 +108,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

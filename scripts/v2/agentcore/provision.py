@@ -15,6 +15,8 @@ import copy
 import ipaddress
 import json
 import os
+from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -30,6 +32,8 @@ RUNTIME_NAME = "awsops_v2_agent"                 # underscores only
 MEMORY_NAME = "awsops_v2_memory"                 # underscores only
 INTERPRETER_NAME = "awsops_v2_code_interpreter"  # underscores only
 IMAGE_TAG = os.environ.get("AGENT_IMAGE_TAG", "agent-latest")  # keep in sync with agentcore.mjs push tag
+IMAGE_URI = None  # CI/operator digest override; default mutable-tag behavior is preserved.
+CREATE_TAGS = {"awsops:project": "awsops-v2"}  # Only new resources; never retag existing resources.
 
 report = []  # (resource, status, detail)
 
@@ -145,6 +149,7 @@ def ensure_gateways(ctrl, ac):
                 protocolType="MCP",
                 authorizerType="NONE",
                 description=catalog.GATEWAY_DESCRIPTIONS.get(key, key),
+                tags=CREATE_TAGS,
             )
             ids[key] = resp["gatewayId"]
             log(f"gateway:{key}", "CREATED", name)
@@ -457,7 +462,7 @@ def _ensure_api_key_provider(ctrl, provider_name, token):
             log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
             return ""
     try:
-        resp = ctrl.create_api_key_credential_provider(name=provider_name, apiKey=token)
+        resp = ctrl.create_api_key_credential_provider(name=provider_name, apiKey=token, tags=CREATE_TAGS)
         return resp["credentialProviderArn"]
     except ClientError as e:
         log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
@@ -993,7 +998,7 @@ def ensure_memory(ctrl):
             return mid
     try:
         resp = ctrl.create_memory(name=MEMORY_NAME, description="AWSops v2 conversation history",
-                                  eventExpiryDuration=365)
+                                  eventExpiryDuration=365, tags=CREATE_TAGS)
         # CreateMemory returns {"memory": {"id": ...}}.
         mem = resp.get("memory", resp)
         mid = mem.get("id") or mem.get("memoryId")
@@ -1012,7 +1017,7 @@ def ensure_interpreter(ctrl):
             return cid
     try:
         resp = ctrl.create_code_interpreter(name=INTERPRETER_NAME,
-                                            networkConfiguration={"networkMode": "PUBLIC"})
+                                            networkConfiguration={"networkMode": "PUBLIC"}, tags=CREATE_TAGS)
         cid = resp.get("codeInterpreterId") or resp.get("id")
         log("interpreter", "CREATED", cid)
         return cid
@@ -1024,7 +1029,7 @@ def ensure_interpreter(ctrl):
 def ensure_runtime(ctrl, ac, gw_ids):
     region = ac["region"]
     gateways_json = json.dumps({k: gateway_url(v, region) for k, v in gw_ids.items()})
-    artifact = {"containerConfiguration": {"containerUri": f"{ac['ecr_uri']}:{IMAGE_TAG}"}}
+    artifact = {"containerConfiguration": {"containerUri": IMAGE_URI or f"{ac['ecr_uri']}:{IMAGE_TAG}"}}
     # VPC mode when the TF output supplies subnets+SGs (Pattern 2: ENIs in our VPC so agents reach
     # private Aurora/EKS; egress to Bedrock/AgentCore still works via the subnets' NAT). Falls back
     # to PUBLIC otherwise. networkMode/networkModeConfig flip in-place (no interruption).
@@ -1079,7 +1084,7 @@ def ensure_runtime(ctrl, ac, gw_ids):
         else:
             resp = ctrl.create_agent_runtime(agentRuntimeName=RUNTIME_NAME, roleArn=ac["role_arn"],
                                              agentRuntimeArtifact=artifact, networkConfiguration=netcfg,
-                                             environmentVariables=env)
+                                             environmentVariables=env, tags=CREATE_TAGS)
             rid = resp.get("agentRuntimeId")
             arn = resp.get("agentRuntimeArn")
             log("runtime", "CREATED", arn)
@@ -1139,11 +1144,30 @@ def smoke(ac, runtime_arn):
 
 
 def main():
+    global IMAGE_URI, CREATE_TAGS
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true", help="invoke the runtime through one gateway after provisioning")
+    ap.add_argument("--config", help="Private, validated non-secret AgentCore metadata JSON; skips Terraform entirely")
+    ap.add_argument("--image", help="Exact ECR repository@sha256 digest; required with --config")
     args = ap.parse_args()
 
-    ac = tf_outputs()
+    if args.config:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from ci_origin_runtime import load_agent_config
+        ac = load_agent_config(args.config)
+        if ac["project"] != "awsops-v2":
+            ap.error("this catalog requires the awsops-v2 project")
+        if not args.image:
+            ap.error("--config requires --image")
+        identity = boto3.client("sts", region_name=ac["region"]).get_caller_identity()
+        if identity.get("Account") != ac["role_arn"].split(":")[4]:
+            ap.error("configuration account does not match caller")
+    else:
+        ac = tf_outputs()
+    if args.image and not re.fullmatch(re.escape(ac["ecr_uri"]) + r"@sha256:[0-9a-f]{64}", args.image):
+        ap.error("--image must be a digest in the configured ECR repository")
+    IMAGE_URI = args.image
+    CREATE_TAGS = {"awsops:project": ac.get("project", "awsops-v2")}
     region = ac["region"]
     ctrl = boto3.client("bedrock-agentcore-control", region_name=region)
 
