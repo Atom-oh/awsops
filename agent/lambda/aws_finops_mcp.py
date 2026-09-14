@@ -3,7 +3,14 @@ AWS FinOps Optimization MCP Lambda - Compute Optimizer, RI/SP Recommendations, C
 AWS FinOps 최적화 MCP 람다 - Compute Optimizer, RI/SP 추천, Cost Optimization Hub, Trusted Advisor
 """
 import json
+import math
 from cross_account import get_client, get_role_arn, resolve_tool_name
+
+
+def _known_savings(value):
+    """A missing or non-finite estimate is not an observed zero."""
+    return value if (type(value) in (int, float) and 0 <= value <= 9007199254740991
+                     and math.isfinite(value)) else None
 
 
 def _monthly_savings(option):
@@ -283,7 +290,12 @@ def lambda_handler(event, context):
             category = args.get("category", "cost_optimizing")
 
             checks = ta.describe_trusted_advisor_checks(language='en')
-            cost_checks = [c for c in checks.get("checks", []) if c.get("category") == category]
+            raw_checks = checks.get("checks") if isinstance(checks, dict) else None
+            observed_checks = isinstance(raw_checks, list)
+            readable_checks = [c for c in raw_checks if isinstance(c, dict)
+                               and isinstance(c.get("category"), str) and c["category"].strip()] if observed_checks else []
+            observed_checks = observed_checks and len(readable_checks) == len(raw_checks)
+            cost_checks = [c for c in readable_checks if c["category"] == category]
 
             results = []
             for check in cost_checks[:15]:
@@ -291,12 +303,15 @@ def lambda_handler(event, context):
                     result = ta.describe_trusted_advisor_check_result(checkId=check["id"], language='en')
                     r = result.get("result", {})
                     flagged = r.get("flaggedResources", [])
+                    summary = r.get("categorySpecificSummary")
+                    cost_summary = summary.get("costOptimizing") if isinstance(summary, dict) else None
+                    savings = _known_savings(cost_summary.get("estimatedMonthlySavings")) if isinstance(cost_summary, dict) else None
                     results.append({
                         "name": check.get("name", ""),
                         "description": check.get("description", "")[:200],
                         "status": r.get("status", ""),
                         "resourcesSummary": r.get("resourcesSummary", {}),
-                        "estimatedMonthlySavings": r.get("categorySpecificSummary", {}).get("costOptimizing", {}).get("estimatedMonthlySavings", 0),
+                        "estimatedMonthlySavings": savings,
                         "flaggedCount": len(flagged),
                         "flaggedResources": [
                             {h: v for h, v in zip(check.get("metadata", []), f.get("metadata", []))}
@@ -307,15 +322,17 @@ def lambda_handler(event, context):
                     results.append({"name": check.get("name", ""), "error": "Could not fetch"})
 
             truncated = len(cost_checks) > len(results)
-            complete = not truncated and not any(
-                r.get("error") or r.get("status") not in ("ok", "warning", "error") for r in results
+            complete = observed_checks and not truncated and not any(
+                r.get("error") or r.get("status") not in ("ok", "warning", "error")
+                or r.get("estimatedMonthlySavings") is None for r in results
             )
-            total_savings = sum(float(r.get("estimatedMonthlySavings", 0) or 0) for r in results) if complete else None
+            total_savings = _known_savings(sum(r["estimatedMonthlySavings"] for r in results)) if complete else None
             return ok({
                 "category": category,
                 "totalChecks": len(results),
                 "totalEstimatedMonthlySavings": round(total_savings, 2) if total_savings is not None else None,
                 "truncated": truncated,
+                **({"unknown": True} if total_savings is None else {}),
                 "checks": results,
             })
 

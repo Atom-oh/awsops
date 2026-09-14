@@ -123,12 +123,21 @@ def _mesh_overview(session):
         items = ns.get("items")
         if not isinstance(items, list):
             raise ValueError("Invalid namespace collection")
+        malformed = False
         for n in items:
-            labels = n.get("metadata", {}).get("labels", {}) or {}
+            metadata = n.get("metadata") if isinstance(n, dict) else None
+            name = metadata.get("name") if isinstance(metadata, dict) else None
+            if not isinstance(name, str) or not _NS_RE.fullmatch(name):
+                malformed = True
+                continue
+            labels = metadata.get("labels", {}) or {}
+            if not isinstance(labels, dict):
+                malformed = True
+                continue
             # match value, not mere presence — `istio-injection: disabled` is an explicit opt-OUT
             if labels.get("istio-injection") == "enabled" or labels.get("istio.io/rev"):
-                injected.append(n["metadata"]["name"])
-        namespace_status = "ok" if injected else "empty"
+                injected.append(name)
+        namespace_status = "unknown" if malformed else "ok" if injected else "empty"
     except Exception:
         pass
     return {"counts": counts, "injected_namespaces": injected, "namespaceCollectionStatus": namespace_status}

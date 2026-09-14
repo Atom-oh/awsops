@@ -157,3 +157,22 @@ class TestCatalogWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NamespaceIdentityEvidenceTest(unittest.TestCase):
+    def test_malformed_namespace_identity_does_not_certify_empty_mesh(self):
+        for row in ({}, {"metadata": {}}, {"metadata": {"name": None}}, {"metadata": {"name": ""}}):
+            with self.subTest(row=row):
+                def get(endpoint, path, token, ctx):
+                    return {"items": [row]} if path == "/api/v1/namespaces" else {"items": []}
+                with mock.patch.object(im, "_k8s_get", side_effect=get):
+                    body = im._mesh_overview(("https://fixture.invalid", "fixture-token", None))
+                self.assertEqual(body["namespaceCollectionStatus"], "unknown")
+
+    def test_malformed_namespace_keeps_observed_injected_siblings(self):
+        def get(endpoint, path, token, ctx):
+            return {"items": [{}, {"metadata": {"name": "valid", "labels": {"istio-injection": "enabled"}}}]} if path == "/api/v1/namespaces" else {"items": []}
+        with mock.patch.object(im, "_k8s_get", side_effect=get):
+            body = im._mesh_overview(("https://fixture.invalid", "fixture-token", None))
+        self.assertEqual(body["namespaceCollectionStatus"], "unknown")
+        self.assertEqual(body["injected_namespaces"], ["valid"])
