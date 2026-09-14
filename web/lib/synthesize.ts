@@ -51,9 +51,16 @@ const bedrockSend: SynthSend = async function* (system, user, modelId, abortSign
     // fan-out path degraded to concatenation. Same constraint as agent/agent.py.
     inferenceConfig: { maxTokens: 4096 },
   }), { abortSignal }); // stop token generation (and cost) if the client disconnects
+  let stopReason: string | undefined;
+  let stopCount = 0;
   for await (const ev of res.stream ?? []) {
     const d = ev.contentBlockDelta?.delta;
     if (d && 'text' in d && d.text) yield d.text;
+    if (ev.messageStop) { stopReason = ev.messageStop.stopReason; stopCount++; }
+  }
+  // Transport EOF alone cannot certify a complete synthesis.
+  if (stopCount !== 1 || (stopReason !== 'end_turn' && stopReason !== 'stop_sequence')) {
+    throw new Error('Synthesis did not complete');
   }
 };
 
