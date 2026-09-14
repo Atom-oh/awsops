@@ -20,7 +20,7 @@ describe('saved evidence boundaries', () => {
     [['success', 'unfinished'], 'partial'],
     [[], 'unverified'],
   ])('preserves terminal outcomes %j in saved/restored domains', (states, expected) => {
-    const domain = domainOutcome('network', 'answer', (states as string[]).map((s, i) => receipt(`call-${i}`, s)));
+    const domain = domainOutcome('network', 'answer', (states as string[]).map((s, i) => receipt(`call-${i}`, s)), false, false, { version: 1, receiptCount: states.length });
     expect(domain.status).toBe(expected);
     expect(normalizeEvidence(answerEvidence([domain]))?.domains[0].status).toBe(expected);
   });
@@ -50,4 +50,66 @@ describe('saved evidence boundaries', () => {
     expect(r?.outcome).toBe('unverified');
     expect(JSON.stringify(r)).not.toContain('SECRET');
   });
+});
+
+describe('review completeness regressions', () => {
+  it.each([['error', 'error'], ['partial', 'partial'], ['unfinished', 'unverified']])(
+    'blank prose does not overwrite %s', (outcome, expected) => {
+      const d = domainOutcome('network', '', [receipt('a', outcome)]);
+      expect(d.status).toBe(expected);
+      expect(normalizeEvidence(answerEvidence([d]))?.domains[0].status).toBe(expected);
+    });
+  it.each([null, 'PRIVATE', { unknown: 'unknown' }, { truncation: { nodes: 'true' } },
+    { partial: null }, { collection: null }, { futureQuality: true }, { unsupported: true }])(
+    'present unassessed quality taints a terminal success: %j', quality => {
+      const r = normalizeReceipt({ ...receipt('a'), quality });
+      expect(r?.outcome).toBe('partial');
+      expect(normalizeReceipt(r)).toEqual(r);
+      expect(JSON.stringify(r)).not.toContain('PRIVATE');
+    });
+  it.each(['missing', 'mismatch', 'unsupported', 'valid', 'runtime-unverified'])('%s completion bounds completeness', mode => {
+    const completion = mode === 'missing' ? undefined : { version: mode === 'unsupported' ? 2 : 1, receiptCount: mode === 'mismatch' ? 2 : 1 };
+    const d = domainOutcome('network', 'answer', [receipt('a')], false, false, completion as any, mode === 'runtime-unverified');
+    expect(d.status).toBe(mode === 'valid' ? 'success' : mode === 'runtime-unverified' ? 'unverified' : 'partial');
+    expect(normalizeEvidence(answerEvidence([d]))?.status).toBe(d.status);
+  });
+  it.each(['omitted', 'invalid-domain', 'explicit-unverified'])('normalization remains conservative after %s', mode => {
+    const d = { gateway: 'network', status: 'success', receipts: [receipt('a')], completion: { version: 1, receiptCount: 1 } };
+    const raw = { version: 1, status: mode === 'explicit-unverified' ? 'unverified' : 'success', domains:
+      mode === 'omitted' ? [d, { ...d, gateway: 'data' }, { ...d, gateway: 'ops' }, { ...d, gateway: 'security' }]
+      : mode === 'invalid-domain' ? [d, { gateway: 'invalid gateway', status: 'error', receipts: [] }]
+      : [{ ...d, status: 'unverified' }] };
+    const once = normalizeEvidence(raw);
+    expect(once?.status).toBe(mode === 'explicit-unverified' ? 'unverified' : 'partial');
+    expect(normalizeEvidence(once)).toEqual(once);
+    expect(normalizeEvidence(normalizeEvidence(once))).toEqual(once);
+  });
+});
+
+
+it('retains explicit unverified status even for old receipt sets without completion', () => {
+  const raw = { version: 1, status: 'unverified', domains: [{ gateway: 'network', status: 'unverified', receipts: [receipt('a')] }] };
+  expect(normalizeEvidence(raw)?.status).toBe('unverified');
+  expect(normalizeEvidence(raw)?.domains[0].status).toBe('unverified');
+});
+it.each([{ unknown: 'unknown', invalid: false }, { futureQuality: true, unsupported: false },
+  { partial: 'unknown', invalid: false }])('caller flags cannot clear newly detected quality taint: %j', quality => {
+  const r = normalizeReceipt({ ...receipt('a'), quality });
+  expect(r?.outcome).toBe('partial');
+  expect(normalizeReceipt(r)).toEqual(r);
+});
+it('legacy blank text without receipts remains unverified', () => {
+  expect(domainOutcome('network', '').status).toBe('unverified');
+});
+
+it.each(['answer', 'domain'])('malformed omission markers cannot certify the %s', level => {
+  const d = { gateway: 'network', status: 'success', receipts: [receipt('a')], completion: { version: 1, receiptCount: 1 } };
+  const raw = { version: 1, status: 'success', domains: [{ ...d, ...(level === 'domain' ? { truncated: 'true' } : {}) }],
+    ...(level === 'answer' ? { truncated: 'true' } : {}) };
+  const once = normalizeEvidence(raw);
+  expect(once?.status).toBe('partial');
+  expect(normalizeEvidence(once)).toEqual(once);
+});
+it('unknown nested quality fields cannot silently become trustworthy absence', () => {
+  expect(normalizeReceipt({ ...receipt('a'), quality: { truncation: { futureLimit: true } } })?.outcome).toBe('partial');
 });

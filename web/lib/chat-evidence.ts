@@ -2,6 +2,24 @@
 import type { ChatLang } from './chat-i18n';
 
 export type Outcome = 'success' | 'error' | 'empty' | 'unverified' | 'partial';
+export type SourceStatus = 'ok' | 'empty' | 'partial' | 'unavailable' | 'error' | 'unknown';
+export interface SourceQuality {
+  status: SourceStatus; sourceId?: string; scope?: 'account' | 'aggregate';
+  producerStatus?: 'succeeded' | 'failed' | 'partial' | 'running' | 'unknown';
+  capturedAtMs?: number | null; lastSuccessAtMs?: number | null; attemptedAtMs?: number | null;
+  finishedAtMs?: number | null; itemCount?: number | null; reasons?: string[];
+}
+export interface ReceiptQuality {
+  partial?: boolean; unknown?: boolean; truncated?: boolean; invalid?: boolean; unsupported?: boolean;
+  selection?: 'all' | 'resolved' | 'not_found' | 'ambiguous';
+  routeSelection?: { status: 'selected' | 'unknown'; basis?: 'explicit' | 'main' | null; reason?: string };
+  truncation?: { nodes?: boolean; edges?: boolean; node_limit?: number; edge_limit?: number };
+  collection?: { status: SourceStatus; stale?: boolean; retainedPrevious?: boolean; snapshotConsistent?: boolean;
+    captured_at?: string | null; attempted_at?: string | null; evidenceKind?: 'inventory' | 'trace';
+    sources?: SourceQuality[]; publishedSources?: SourceQuality[] };
+}
+/** Last Runtime frame after all receipts. Count is logical call IDs, never deduplicated tool names. */
+export interface InvocationCompletion { version: 1; receiptCount: number }
 export interface ToolReceipt {
   version: 1; callId: string; tool: string;
   observedAt: number; terminalObservedAt?: number; // delivery clocks, never execution durations
@@ -9,12 +27,12 @@ export interface ToolReceipt {
   inputs: Record<string, string>;
   requestedScope: Record<string, string>;
   observedScope: Record<string, string>;
-  quality?: Record<string, any>;
+  quality?: ReceiptQuality;
 }
-export interface DomainOutcome { gateway: string; status: Outcome; receipts: ToolReceipt[]; truncated?: boolean }
+export interface DomainOutcome { gateway: string; status: Outcome; receipts: ToolReceipt[]; truncated?: boolean; invalid?: boolean; completion?: InvocationCompletion }
 export interface ChatEvidence {
   version: 1; status: Outcome; domains: DomainOutcome[];
-  synthesis?: 'interrupted'; fallback?: 'unverified';
+  synthesis?: 'interrupted'; fallback?: 'unverified'; truncated?: boolean; invalid?: boolean;
 }
 const outcomes = ['success', 'error', 'empty', 'unverified', 'partial'];
 const statuses = ['ok', 'empty', 'partial', 'unavailable', 'error', 'unknown'];
@@ -33,55 +51,77 @@ const reasons = new Set(['missing_ledger', 'unknown_account_coverage', 'source_f
   'unknown_attributes', 'empty_not_confirmed', 'unknown_capture', 'publication_failed', 'read_failed',
   'response_missing', 'truncated', 'scope_missing', 'ambiguous', 'missing', 'identity_missing',
   'target_missing', 'destination_missing', 'snapshot_changed']);
-function quality(value: unknown): Record<string, any> {
-  const o = obj(value), q: Record<string, any> = {};
-  for (const k of ['partial', 'unknown', 'truncated']) if (typeof o[k] === 'boolean') q[k] = o[k];
-  if (['all', 'resolved', 'not_found', 'ambiguous'].includes(o.selection)) q.selection = o.selection;
-  if (o.routeSelection) {
-    const route = obj(o.routeSelection);
-    q.routeSelection = { status: route.status === 'selected' ? 'selected' : 'unknown' };
-    if (['explicit', 'main'].includes(route.basis)) q.routeSelection.basis = route.basis;
-    if (reasons.has(route.reason)) q.routeSelection.reason = route.reason;
-  }
-  if (o.truncation) q.truncation = Object.fromEntries(['nodes', 'edges']
-    .filter(k => typeof o.truncation[k] === 'boolean').map(k => [k, o.truncation[k]]));
-  if (q.truncation) for (const k of ['node_limit', 'edge_limit']) if (num(o.truncation[k])) q.truncation[k] = o.truncation[k];
-  if (o.collection) {
-    const c = obj(o.collection);
-    const out: Record<string, any> = { status: statuses.includes(c.status) ? c.status : 'unknown' };
-    for (const k of ['stale', 'retainedPrevious', 'snapshotConsistent']) if (typeof c[k] === 'boolean') out[k] = c[k];
-    for (const k of ['captured_at', 'attempted_at']) {
-      if (c[k] === null || match(c[k], /^\d{4}-\d\d-\d\d[T ][0-9:.+-]+Z?$/, 40)) out[k] = c[k];
+function quality(value: unknown): ReceiptQuality {
+  const o = obj(value), q: ReceiptQuality = {};
+  if (o !== value) q.invalid = true;
+  if (Object.keys(o).some(k => !['partial', 'unknown', 'truncated', 'invalid', 'unsupported',
+    'selection', 'routeSelection', 'truncation', 'collection'].includes(k))) q.unsupported = true;
+  const fields = (src: Record<string, any>, dest: Record<string, any>, rules: Record<string, (v: any) => boolean>,
+    otherKeys: string[] = []) => {
+    if (Object.keys(src).some(k => !(k in rules) && !otherKeys.includes(k))) q.unsupported = true;
+    for (const [k, valid] of Object.entries(rules)) if (k in src) {
+      if (valid(src[k])) {
+        // Caller-supplied false markers cannot clear a problem found during projection.
+        if (dest !== q || !['invalid', 'unsupported', 'truncated'].includes(k) || dest[k] !== true) dest[k] = src[k];
+      } else q.invalid = true;
     }
-    if (['inventory', 'trace'].includes(c.evidenceKind)) out.evidenceKind = c.evidenceKind;
-    for (const k of ['sources', 'publishedSources']) {
-      if (!(k in c)) continue;
-      if (!Array.isArray(c[k])) { out[k] = []; q.truncated = true; continue; }
-      if (c[k].length > 8) q.truncated = true;
-      out[k] = c[k].slice(0, 8).map((value: unknown) => {
-        const s = obj(value);
-        const source: Record<string, any> = { status: statuses.includes(s.status) ? s.status : 'unknown' };
-        if (match(s.sourceId, /^(?:inventory:)?[a-z][a-z0-9_-]*$/, 80)) source.sourceId = s.sourceId;
-        if (['account', 'aggregate'].includes(s.scope)) source.scope = s.scope;
-        if (['succeeded', 'failed', 'partial', 'running', 'unknown'].includes(s.producerStatus)) source.producerStatus = s.producerStatus;
-        for (const clock of ['capturedAtMs', 'lastSuccessAtMs', 'attemptedAtMs', 'finishedAtMs', 'itemCount']) {
-          if (s[clock] === null || num(s[clock])) source[clock] = s[clock];
+  };
+  const oneOf = (values: string[]) => (v: unknown) => typeof v === 'string' && values.includes(v);
+  const boolean = (v: unknown) => typeof v === 'boolean';
+  const clock = (v: unknown) => v === null || match(v, /^\d{4}-\d\d-\d\d[T ][0-9:.+-]+Z?$/, 40);
+  fields(o, q, { partial: boolean, unknown: boolean, truncated: boolean, invalid: boolean, unsupported: boolean,
+    selection: oneOf(['all', 'resolved', 'not_found', 'ambiguous']) }, ['routeSelection', 'truncation', 'collection']);
+  for (const k of ['routeSelection', 'truncation', 'collection']) {
+    if (!(k in o)) continue;
+    const v = obj(o[k]);
+    if (v !== o[k]) { q.invalid = true; continue; }
+    if (k === 'routeSelection') {
+      q.routeSelection = { status: v.status === 'selected' ? 'selected' : 'unknown' };
+      if (!['selected', 'unknown'].includes(v.status)) q.invalid = true;
+      fields(v, q.routeSelection, { basis: x => x === null || oneOf(['explicit', 'main'])(x), reason: x => reasons.has(x) }, ['status']);
+    } else if (k === 'truncation') {
+      q.truncation = {};
+      fields(v, q.truncation, { nodes: boolean, edges: boolean, node_limit: num, edge_limit: num });
+    } else {
+      const c: NonNullable<ReceiptQuality['collection']> = { status: statuses.includes(v.status) ? v.status : 'unknown' };
+      if (!statuses.includes(v.status)) q.invalid = true;
+      fields(v, c, { stale: boolean, retainedPrevious: boolean, snapshotConsistent: boolean,
+        captured_at: clock, attempted_at: clock, evidenceKind: oneOf(['inventory', 'trace']) }, ['status', 'sources', 'publishedSources']);
+      for (const name of ['sources', 'publishedSources'] as const) {
+        if (!(name in v)) continue;
+        c[name] = [];
+        if (!Array.isArray(v[name])) { q.invalid = true; continue; }
+        if (v[name].length > 8) q.truncated = true;
+        for (const raw of v[name].slice(0, 8)) {
+          const source = obj(raw);
+          if (source !== raw) { q.invalid = true; continue; }
+          const record: SourceQuality = { status: statuses.includes(source.status) ? source.status : 'unknown' };
+          if (!statuses.includes(source.status)) q.invalid = true;
+          fields(source, record, { sourceId: x => match(x, /^(?:inventory:)?[a-z][a-z0-9_-]*$/, 80),
+            scope: oneOf(['account', 'aggregate']), producerStatus: oneOf(['succeeded', 'failed', 'partial', 'running', 'unknown']),
+            ...Object.fromEntries(['capturedAtMs', 'lastSuccessAtMs', 'attemptedAtMs', 'finishedAtMs', 'itemCount'].map(k => [k, (x: unknown) => x === null || num(x)])) }, ['status', 'reasons']);
+          if ('reasons' in source) {
+            if (!Array.isArray(source.reasons)) q.invalid = true;
+            else {
+              record.reasons = source.reasons.slice(0, 6).filter((r: unknown) => typeof r === 'string' && reasons.has(r));
+              if (record.reasons!.length !== source.reasons.length) q.truncated = true;
+            }
+          }
+          c[name]!.push(record);
         }
-        if (Array.isArray(s.reasons)) source.reasons = s.reasons.slice(0, 6).filter((r: unknown) => typeof r === 'string' && reasons.has(r));
-        return source;
-      });
+      }
+      q.collection = c;
     }
-    q.collection = out;
   }
   return q;
 }
 
-function incomplete(q: Record<string, any>): boolean {
+function incomplete(q: ReceiptQuality): boolean {
   const c = q.collection;
-  return !!(q.partial || q.unknown || q.truncated || ['not_found', 'ambiguous'].includes(q.selection)
-    || q.routeSelection?.status === 'unknown' || ['nodes', 'edges'].some(k => q.truncation?.[k] === true)
+  return !!(q.partial || q.unknown || q.truncated || q.invalid || q.unsupported || ['not_found', 'ambiguous'].includes(q.selection ?? '')
+    || q.routeSelection?.status === 'unknown' || q.truncation?.nodes || q.truncation?.edges
     || (c && (c.stale || c.retainedPrevious || c.snapshotConsistent === false || !['ok', 'empty'].includes(c.status)
-      || ['sources', 'publishedSources'].some(k => c[k]?.some((s: any) => !['ok', 'empty'].includes(s.status))))));
+      || [c.sources, c.publishedSources].some(sources => sources?.some(s => !['ok', 'empty'].includes(s.status))))));
 }
 
 /** Whitelist projection, including nested quality. Never spread caller metadata into storage. */
@@ -89,10 +129,10 @@ export function normalizeReceipt(value: unknown): ToolReceipt | undefined {
   const o = obj(value);
   if (o.version !== 1 || !match(o.callId, id) || !match(o.tool, id) || !num(o.observedAt)
     || ![...outcomes, 'unfinished'].includes(o.outcome)) return;
-  const q = quality(o.quality);
+  const q = 'quality' in o ? quality(o.quality) : {};
   let outcome = o.outcome as ToolReceipt['outcome'];
   if (outcome !== 'unfinished' && (!num(o.terminalObservedAt) || o.terminalObservedAt < o.observedAt)) outcome = 'unverified';
-  if (outcome === 'success' && incomplete(q)) outcome = 'partial';
+  if (['success', 'empty'].includes(outcome) && incomplete(q)) outcome = 'partial';
   return {
     version: 1, callId: o.callId, tool: o.tool, observedAt: o.observedAt,
     ...(num(o.terminalObservedAt) && o.terminalObservedAt >= o.observedAt ? { terminalObservedAt: o.terminalObservedAt } : {}),
@@ -109,7 +149,14 @@ export function normalizeReceipt(value: unknown): ToolReceipt | undefined {
 export class ReceiptBuffer {
   receipts: ToolReceipt[] = [];
   truncated = false;
+  completion?: InvocationCompletion;
+  finish(value: unknown) {
+    const completion = normalizeCompletion(value);
+    if (this.completion || !completion || completion.receiptCount !== this.receipts.length) this.truncated = true;
+    if (completion) this.completion = completion;
+  }
   add(value: unknown) {
+    if (this.completion) this.truncated = true;
     const receipt = normalizeReceipt(value);
     if (!receipt) { this.truncated = true; return; }
     const existing = this.receipts.findIndex(r => r.callId === receipt.callId);
@@ -133,38 +180,70 @@ function aggregate(states: Outcome[]): Outcome {
   return 'partial';
 }
 
+export function normalizeCompletion(value: unknown): InvocationCompletion | undefined {
+  const o = obj(value);
+  if (o.version === 1 && Number.isInteger(o.receiptCount) && o.receiptCount >= 0 && o.receiptCount <= 32) {
+    return { version: 1, receiptCount: o.receiptCount };
+  }
+}
+
 export function domainOutcome(gateway: string, text: string, receipts: unknown[] = [], truncated = false,
-  runtimeError = false): DomainOutcome {
+  runtimeError = false, completion?: InvocationCompletion, runtimeUnverified = false): DomainOutcome {
   const buffer = new ReceiptBuffer();
   for (const r of receipts) buffer.add(r);
+  if (completion !== undefined) buffer.finish(completion);
   const states = buffer.receipts.map(r => r.outcome === 'unfinished' ? 'unverified' : r.outcome) as Outcome[];
-  let status: Outcome = runtimeError ? (text.trim() ? 'partial' : 'error')
-    : !text.trim() ? 'empty' : aggregate(states);
-  if ((truncated || buffer.truncated || buffer.receipts.some(r => r.outcome === 'unfinished')) && status === 'success') status = 'partial';
-  return { gateway, status, receipts: buffer.receipts, ...((truncated || buffer.truncated) ? { truncated: true } : {}) };
+  let status = aggregate(states);
+  if (runtimeUnverified && ['success', 'empty', 'unverified'].includes(status)) status = 'unverified';
+  if (runtimeError) status = text.trim() ? 'partial' : 'error';
+  const omitted = truncated || buffer.truncated;
+  if ((omitted || !buffer.completion || !text.trim()) && ['success', 'empty'].includes(status)) {
+    // A complete empty tool result needs no model prose. Blank prose cannot erase a failed read.
+    if (!(status === 'empty' && buffer.completion && !omitted)) status = 'partial';
+  }
+  return { gateway, status, receipts: buffer.receipts, ...(omitted ? { truncated: true } : {}),
+    ...(buffer.completion ? { completion: buffer.completion } : {}) };
 }
 
 export function answerEvidence(domains: DomainOutcome[]): ChatEvidence {
   return { version: 1, status: aggregate(domains.map(d => d.status)), domains };
 }
 
-/** Restore only this version. Unknown/legacy metadata must stay unverified. */
+/** Incoming uncertainty may constrain a result, but never certify it. */
+function conservativeStatus(computed: Outcome, incoming: unknown): Outcome {
+  if (incoming === 'error' || incoming === 'partial') return incoming;
+  if (incoming === 'unverified') return 'unverified';
+  if (incoming === 'empty' && computed === 'success') return 'partial';
+  return computed;
+}
+
+/** Restore only this version. Omission/invalid markers and uncertainty survive repeated projections. */
 export function normalizeEvidence(value: unknown): ChatEvidence | undefined {
   const o = obj(value);
   if (o.version !== 1 || !Array.isArray(o.domains)) return;
+  const malformedMarker = (v: Record<string, any>) =>
+    ['invalid', 'truncated'].some(k => k in v && typeof v[k] !== 'boolean');
+  let invalid = o.invalid === true || malformedMarker(o) || !outcomes.includes(o.status);
   const domains: DomainOutcome[] = o.domains.slice(0, 3).flatMap((value: unknown) => {
     const d = obj(value);
-    if (!match(d.gateway, id, 64)) return [];
-    const normalized = domainOutcome(d.gateway, d.status === 'empty' ? '' : 'restored',
-      Array.isArray(d.receipts) ? d.receipts.slice(0, 33) : [], d.truncated === true || d.receipts?.length > 32);
-    if (['error', 'empty', 'partial'].includes(d.status)) normalized.status = d.status;
+    if (!match(d.gateway, id, 64)) { invalid = true; return []; }
+    const normalized = domainOutcome(d.gateway, 'restored',
+      Array.isArray(d.receipts) ? d.receipts.slice(0, 33) : [], d.truncated === true || d.receipts?.length > 32,
+      false, d.completion);
+    normalized.status = conservativeStatus(normalized.status, d.status);
+    if (d.invalid === true || malformedMarker(d) || !outcomes.includes(d.status) || !Array.isArray(d.receipts)) {
+      normalized.invalid = true;
+      if (['success', 'empty'].includes(normalized.status)) normalized.status = 'partial';
+    }
     return [normalized];
   });
-  if (!domains.length) return;
   const evidence = answerEvidence(domains);
+  evidence.status = conservativeStatus(evidence.status, o.status);
   if (o.fallback === 'unverified') evidence.fallback = 'unverified';
   if (o.synthesis === 'interrupted') { evidence.synthesis = 'interrupted'; evidence.status = 'partial'; }
-  if (o.domains.length > 3) evidence.status = 'partial';
+  if (o.truncated === true || o.domains.length > 3) evidence.truncated = true;
+  if (invalid) evidence.invalid = true;
+  if ((evidence.truncated || invalid) && ['success', 'empty'].includes(evidence.status)) evidence.status = 'partial';
   return evidence;
 }
 

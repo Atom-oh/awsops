@@ -663,7 +663,7 @@ export async function POST(request: Request) {
         );
         if (request.signal.aborted) { controller.close(); return; }
         const domains = settled.map((r, i) => r.status === 'fulfilled'
-          ? domainOutcome(fanGateways[i], r.value.text, r.value.receipts, r.value.evidenceTruncated, r.value.runtimeError)
+          ? domainOutcome(fanGateways[i], r.value.text, r.value.receipts, r.value.evidenceTruncated, r.value.runtimeError, r.value.completion, r.value.runtimeUnverified)
           : domainOutcome(fanGateways[i], '', [], false, true));
         const evidence = answerEvidence(domains);
         const survivors = settled.flatMap((r, i) =>
@@ -740,6 +740,7 @@ export async function POST(request: Request) {
       const seenTools = new Set<string>();
       const receipts = new ReceiptBuffer();
       let runtimeError = false;
+      let runtimeUnverified = false;
       let failedWithoutAnswer = false;
       let model: string | undefined;
       let usage: TokenUsage | undefined;
@@ -764,8 +765,10 @@ export async function POST(request: Request) {
           if (ev.tool && !seenTools.has(ev.tool)) { seenTools.add(ev.tool); tools.push(ev.tool); }
           if (ev.model) model = ev.model;
           if (ev.receipt) receipts.add(ev.receipt);
+          if (ev.completion) receipts.finish(ev.completion);
           if (ev.evidenceTruncated) receipts.truncated = true;
           if (ev.runtimeOutcome === 'error') runtimeError = true;
+          if (ev.runtimeOutcome === 'unverified') runtimeUnverified = true;
           if (ev.usage) usage = ev.usage; // v1-parity per-answer token usage (cost footer)
           if (ev.toolInput) {
             // v1-parity: surface the generated query (SQL/PromQL/...) in the status line
@@ -826,7 +829,7 @@ export async function POST(request: Request) {
           ).total
         : undefined;
       if (request.signal.aborted) { controller.close(); return; }
-      const evidence = answerEvidence([domainOutcome(spec.gateway, failedWithoutAnswer ? '' : text, receipts.receipts, receipts.truncated, runtimeError)]);
+      const evidence = answerEvidence([domainOutcome(spec.gateway, failedWithoutAnswer ? '' : text, receipts.receipts, receipts.truncated, runtimeError, receipts.completion, runtimeUnverified)]);
       const disclosure = evidence.status === 'unverified' ? '' : evidenceDisclosure(evidence, lang);
       text += disclosure;
       if (evidence.status === 'error' || evidence.status === 'empty') {

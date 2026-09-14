@@ -405,3 +405,57 @@ print(json.dumps({'current': [t.tool_name for t in scope['_filter_tools'](tools,
     expect(events).toEqual([{ delta: 'legacy answer' }]);
   });
 });
+
+describe('review public-stream receipt contract', () => {
+  const dir = fileURLToPath(new URL('../../agent/', import.meta.url));
+  const script = `
+import json,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from test_tool_receipts import collect,use,result
+cases=json.loads((Path(sys.argv[1])/'fixtures/task4-receipt-cases.json').read_text())
+for case in cases:
+    start=use('a')
+    start['message']['content'][0]['toolUse']['name']=case.get('tool','network___inspect')
+    end=result('a',{})
+    end['message']['content'][0]['toolResult']['content']=case['content']
+    case['frames']=collect([start,end,{'data':'answer'}])
+print(json.dumps(cases))
+`;
+  // This executes only the offline public-message adapter; test_agent stubs AWS/Strands clients.
+  const cases = JSON.parse(execFileSync('python3', ['-B', '-c', script, dir], { encoding: 'utf8' }).trim().split('\n').at(-1)!);
+  it.each(cases)('$name survives Python production, SSE and restoration', async ({ frames, outcome, marker }) => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+    acSend.mockResolvedValue(eventStreamOf(frames.map((f: unknown) => JSON.stringify(f)), 73));
+    const { invokeAgentDetailed } = await import('./agentcore');
+    const { domainOutcome, answerEvidence, normalizeEvidence } = await import('./chat-evidence');
+    const a = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+    const d = domainOutcome('network', a.text, a.receipts, a.evidenceTruncated, a.runtimeError, a.completion, a.runtimeUnverified);
+    expect(a.receipts?.[0].outcome).toBe(outcome);
+    if (marker) expect(a.receipts?.[0].quality?.[marker]).toBe(true);
+    expect(d.status).toBe(outcome);
+    expect(normalizeEvidence(normalizeEvidence(answerEvidence([d])))?.status).toBe(outcome);
+    expect(JSON.stringify(a)).not.toContain('PRIVATE');
+  });
+  it.each(['short-tail', 'missing-completion', 'mismatch', 'unsupported', 'late-receipt', 'runtime-unverified', 'complete'])(
+    '%s with repeated names cannot conceal a withheld failure', async mode => {
+      vi.resetModules();
+      ssmSend.mockResolvedValue({ Parameter: { Value: RUNTIME_ARN } });
+      const receipt = { version: 1, callId: 'a', tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000,
+        outcome: 'success', inputs: {}, requestedScope: {}, observedScope: {} };
+      const frames: unknown[] = [{ tool: 'inspect' }, { tool: 'inspect' }, { delta: 'answer' }, { receipt }];
+      if (!['short-tail', 'late-receipt'].includes(mode)) frames.push({ receipt: { ...receipt, callId: 'b', outcome: mode === 'complete' ? 'error' : 'success' } });
+      if (!['short-tail', 'missing-completion'].includes(mode)) frames.push({ completion: {
+        version: mode === 'unsupported' ? 2 : 1, receiptCount: mode === 'mismatch' ? 3 : mode === 'late-receipt' ? 1 : 2 } });
+      if (mode === 'late-receipt') frames.push({ receipt: { ...receipt, callId: 'b' } });
+      if (mode === 'runtime-unverified') frames.push({ runtimeOutcome: 'unverified' });
+      acSend.mockResolvedValue(eventStreamOf(frames.map(f => JSON.stringify(f))));
+      const { invokeAgentDetailed } = await import('./agentcore');
+      const { domainOutcome } = await import('./chat-evidence');
+      const a = await invokeAgentDetailed({ gateway: 'network', messages: [], sessionId: 's'.repeat(36) });
+      const d = domainOutcome('network', a.text, a.receipts, a.evidenceTruncated, a.runtimeError, a.completion, a.runtimeUnverified);
+      expect(d.status).toBe(mode === 'runtime-unverified' ? 'unverified' : 'partial');
+      expect(a.text).toBe('answer');
+    });
+});

@@ -133,3 +133,25 @@ describe('useChat hook and parseFrame', () => {
     fetchSpy.mockRestore();
   });
 });
+
+it('keeps omitted domains tainted across SSE, history and session stats', async () => {
+  const d = { gateway: 'network', status: 'success', completion: { version: 1, receiptCount: 1 }, receipts: [
+    { version: 1, callId: 'a', tool: 'inspect', observedAt: 1000, terminalObservedAt: 2000, outcome: 'success' },
+  ] };
+  const evidence = { version: 1, status: 'success', domains: ['network', 'data', 'ops', 'security'].map(gateway => ({ ...d, gateway })) };
+  const frame = `event: meta\ndata: ${JSON.stringify({ evidence })}\n\n`;
+  const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce(new Response(`data: {"delta":"answer"}\n\n${frame}data: [DONE]\n\n`));
+  const { result } = renderHook(() => useChat());
+  try {
+    await act(async () => { await result.current.send('inspect'); });
+    const saved = result.current.msgs[1].evidence;
+    expect(saved?.status).toBe('partial');
+    expect((parseFrame(`event: meta\ndata: ${JSON.stringify({ evidence: saved })}\n\n`) as any).evidence).toEqual(saved);
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ thread: { id: 't', sessionId: 's' }, messages: [
+      { role: 'assistant', content: 'answer', gateway: 'network', meta: { evidence: saved } },
+    ] })));
+    await act(async () => { await result.current.selectThread('t'); });
+    expect(result.current.msgs[0].evidence).toEqual(saved);
+    expect(result.current.sessionStats().successRate).toBe(0);
+  } finally { fetchSpy.mockRestore(); }
+});

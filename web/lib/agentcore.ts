@@ -2,7 +2,7 @@ import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { ResolvedIntegration } from '@/lib/agent-resolver';
 import { runtimeParameter, validRuntimeArn } from './agentcore-config';
-import { normalizeReceipt, ReceiptBuffer, type ToolReceipt } from './chat-evidence';
+import { normalizeReceipt, normalizeCompletion, ReceiptBuffer, type ToolReceipt, type InvocationCompletion } from './chat-evidence';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 const ARN_PARAM = runtimeParameter();
@@ -80,7 +80,7 @@ export interface ToolQuery { tool: string; query: string }
  *  `{"tool"}` / `{"model"}` / `{"usage"}` / `{"toolInput"}` frames alongside deltas). */
 export interface AgentEvent {
   delta?: string; tool?: string; model?: string; usage?: TokenUsage; toolInput?: ToolQuery;
-  receipt?: ToolReceipt; evidenceTruncated?: boolean; runtimeOutcome?: 'error' | 'unverified';
+  receipt?: ToolReceipt; completion?: InvocationCompletion; evidenceTruncated?: boolean; runtimeOutcome?: 'error' | 'unverified';
 }
 
 /** Extract an event from one SSE `data:` payload. The streaming agent.py yields
@@ -91,24 +91,28 @@ function extractEvent(data: string): AgentEvent | null {
   try {
     const o = JSON.parse(data);
     if (o && typeof o === 'object') {
+      const event: AgentEvent = {};
       if ('receipt' in o) {
         const receipt = normalizeReceipt(o.receipt);
-        return receipt ? { receipt } : { evidenceTruncated: true };
+        if (receipt) event.receipt = receipt; else event.evidenceTruncated = true;
       }
-      if (o.evidenceTruncated === true) return { evidenceTruncated: true };
-      if (o.runtimeOutcome === 'error' || o.runtimeOutcome === 'unverified') return { runtimeOutcome: o.runtimeOutcome };
-      if (typeof (o as { delta?: unknown }).delta === 'string') return { delta: (o as { delta: string }).delta };
-      if (typeof (o as { data?: unknown }).data === 'string') return { delta: (o as { data: string }).data };
-      if (typeof (o as { tool?: unknown }).tool === 'string') return { tool: (o as { tool: string }).tool };
-      if (typeof (o as { model?: unknown }).model === 'string') return { model: (o as { model: string }).model };
-      const u = (o as { usage?: { inputTokens?: unknown; outputTokens?: unknown } }).usage;
+      if ('completion' in o) {
+        const completion = normalizeCompletion(o.completion);
+        if (completion) event.completion = completion; else event.evidenceTruncated = true;
+      }
+      if (o.evidenceTruncated === true) event.evidenceTruncated = true;
+      if (o.runtimeOutcome === 'error' || o.runtimeOutcome === 'unverified') event.runtimeOutcome = o.runtimeOutcome;
+      if (typeof o.delta === 'string') event.delta = o.delta;
+      else if (typeof o.data === 'string') event.delta = o.data;
+      if (typeof o.tool === 'string') event.tool = o.tool;
+      if (typeof o.model === 'string') event.model = o.model;
+      const u = o.usage;
       if (u && typeof u.inputTokens === 'number' && typeof u.outputTokens === 'number') {
-        return { usage: { inputTokens: u.inputTokens, outputTokens: u.outputTokens } };
+        event.usage = { inputTokens: u.inputTokens, outputTokens: u.outputTokens };
       }
-      const ti = (o as { toolInput?: { tool?: unknown; query?: unknown } }).toolInput;
-      if (ti && typeof ti.tool === 'string' && typeof ti.query === 'string') {
-        return { toolInput: { tool: ti.tool, query: ti.query } };
-      }
+      const ti = o.toolInput;
+      if (ti && typeof ti.tool === 'string' && typeof ti.query === 'string') event.toolInput = { tool: ti.tool, query: ti.query };
+      if (Object.keys(event).length) return event;
       return null;
     }
     return typeof o === 'string' && o ? { delta: o } : null;
@@ -234,7 +238,7 @@ async function send(input: InvokeInput): Promise<unknown> {
  *  model id). Tools/model are empty against a legacy agent image that doesn't emit them —
  *  callers must treat both as optional. */
 export async function invokeAgentDetailed(input: InvokeInput): Promise<{
-  text: string; tools: string[]; model?: string; receipts?: ToolReceipt[]; evidenceTruncated?: boolean; runtimeError?: boolean;
+  text: string; tools: string[]; model?: string; receipts?: ToolReceipt[]; evidenceTruncated?: boolean; runtimeError?: boolean; completion?: InvocationCompletion; runtimeUnverified?: boolean;
 }> {
   const resp = await send(input);
   if (!isEventStream(resp)) return { text: await readResponse(resp), tools: [] };
@@ -244,21 +248,25 @@ export async function invokeAgentDetailed(input: InvokeInput): Promise<{
   const seen = new Set<string>();
   const buffer = new ReceiptBuffer();
   let runtimeError = false;
+  let runtimeUnverified = false;
   try {
     for await (const ev of streamEvents(resp, input.abortSignal)) {
       if (ev.delta) text += ev.delta;
       if (ev.tool && !seen.has(ev.tool)) { seen.add(ev.tool); tools.push(ev.tool); }
       if (ev.model) model = ev.model;
       if (ev.receipt) buffer.add(ev.receipt);
+      if (ev.completion) buffer.finish(ev.completion);
       if (ev.evidenceTruncated) buffer.truncated = true;
       if (ev.runtimeOutcome === 'error') runtimeError = true;
+      if (ev.runtimeOutcome === 'unverified') runtimeUnverified = true;
     }
   } catch (e) {
-    if (input.abortSignal?.aborted || !text) throw e;
+    if (input.abortSignal?.aborted || (!text && !buffer.receipts.length)) throw e;
     runtimeError = true;
   }
   return { text, tools, model, ...(buffer.receipts.length ? { receipts: buffer.receipts } : {}),
-    ...(buffer.truncated ? { evidenceTruncated: true } : {}), ...(runtimeError ? { runtimeError: true } : {}) };
+    ...(buffer.truncated ? { evidenceTruncated: true } : {}), ...(runtimeError ? { runtimeError: true } : {}),
+    ...(buffer.completion ? { completion: buffer.completion } : {}), ...(runtimeUnverified ? { runtimeUnverified: true } : {}) };
 }
 
 /** Invoke the AgentCore runtime, buffering the full answer. Used by fan-out synthesis and k8sgpt

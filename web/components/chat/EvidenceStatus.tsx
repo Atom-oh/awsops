@@ -1,5 +1,5 @@
 'use client';
-import { evidenceLabels, type ChatEvidence } from '@/lib/chat-evidence';
+import { evidenceLabels, type ChatEvidence, type SourceStatus } from '@/lib/chat-evidence';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 const labels = {
@@ -17,11 +17,19 @@ const labels = {
     bounded: '一部の根拠を省略', timing: '時刻はストリーム観測時点であり、実行時間ではありません。' },
 };
 
+const sourceLabels: Record<keyof typeof labels, Record<SourceStatus, string>> = {
+  en: { ok: 'Available', empty: 'No results', partial: 'Incomplete', unavailable: 'Unavailable', error: 'Failed', unknown: 'Unknown' },
+  ko: { ok: '사용 가능', empty: '결과 없음', partial: '불완전', unavailable: '사용 불가', error: '실패', unknown: '알 수 없음' },
+  zh: { ok: '可用', empty: '无结果', partial: '不完整', unavailable: '不可用', error: '失败', unknown: '未知' },
+  ja: { ok: '利用可能', empty: '結果なし', partial: '不完全', unavailable: '利用不可', error: '失敗', unknown: '不明' },
+};
+
 export default function EvidenceStatus({ evidence }: { evidence?: ChatEvidence }) {
   const { lang } = useI18n();
   const l = labels[lang], states = evidenceLabels[lang];
   return <div className="mt-2 space-y-1 text-[11px] text-ink-500">
     <div className="font-semibold">{states[evidence?.fallback ?? evidence?.status ?? 'unverified']}</div>
+    {evidence?.truncated || evidence?.invalid ? <div>{l.bounded}</div> : null}
     {evidence?.domains.map(d => <div key={d.gateway}>
       <div>{d.gateway}: {states[d.status]}{d.truncated ? ` · ${l.bounded}` : ''}</div>
       {d.receipts.length > 0 ? <details className="mt-1">
@@ -32,12 +40,13 @@ export default function EvidenceStatus({ evidence }: { evidence?: ChatEvidence }
           <div>{l.requested}: {Object.values(r.requestedScope).join(', ') || l.unknown}</div>
           <div>{l.observed}: {Object.values(r.observedScope).join(', ') || l.unknown}</div>
           <div>{new Date(r.observedAt).toISOString()}{r.terminalObservedAt !== undefined ? ` → ${new Date(r.terminalObservedAt).toISOString()}` : ''}</div>
+          {r.quality?.truncated ? <div>{l.bounded}</div> : null}
           {r.quality?.collection ? <div>
             {r.quality.collection.stale || r.quality.collection.retainedPrevious ? <div>{l.stale}</div> : null}
             <div>{l.publication}: {r.quality.collection.captured_at ?? l.unknown}</div>
             {(['sources', 'publishedSources'] as const).map(key => <div key={key}>
-              {key === 'sources' ? l.sources : l.published}: {r.quality?.collection[key]?.map((s: any) =>
-                `${s.sourceId ?? l.unknown} (${s.status}; ${s.capturedAtMs == null ? l.unknown : new Date(s.capturedAtMs).toISOString()})`).join(', ') || l.unknown}
+              {key === 'sources' ? l.sources : l.published}: {r.quality?.collection?.[key]?.map(s =>
+                `${s.sourceId ?? l.unknown} (${sourceLabels[lang][s.status]}; ${s.capturedAtMs == null ? l.unknown : new Date(s.capturedAtMs).toISOString()})`).join(', ') || l.unknown}
             </div>)}
           </div> : null}
         </div>)}
