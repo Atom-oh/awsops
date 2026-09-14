@@ -98,3 +98,20 @@ variable "migration_secret_arns" {
     error_message = "migration_secret_arns must contain unique complete Secrets Manager ARNs in the configured account/region, without wildcards; at least one is required when enabled."
   }
 }
+
+variable "secret_kms_key_arns" {
+  type        = list(string)
+  default     = []
+  nullable    = false
+  description = "Optional existing customer-managed keys for approved release secrets; complete key ARNs only."
+  validation {
+    condition = (
+      length(distinct(var.secret_kms_key_arns)) == length(var.secret_kms_key_arns) &&
+      alltrue([
+        for arn in var.secret_kms_key_arns :
+        can(regex("^arn:aws:kms:${var.region}:${var.account_id}:key/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$", arn))
+      ])
+    )
+    error_message = "secret_kms_key_arns must contain unique full KMS key ARNs in the configured account and region; aliases, bare IDs, wildcards and malformed IDs are not allowed."
+  }
+}

@@ -26,6 +26,13 @@ variable "github_actions_migration_secret_arns" {
   description = "Explicit existing same-account/region Aurora master and reader secret ARNs, never secret values."
 }
 
+variable "github_actions_secret_kms_key_arns" {
+  type        = list(string)
+  default     = []
+  nullable    = false
+  description = "Optional existing same-account/region KMS key ARNs for approved migration/verifier secrets; no aliases or key creation."
+}
+
 module "github_actions_release" {
   source = "./modules/github-actions-release"
 
@@ -38,6 +45,7 @@ module "github_actions_release" {
   state_bucket          = var.github_actions_state_bucket
   state_key             = var.github_actions_state_key
   migration_secret_arns = var.github_actions_migration_secret_arns
+  secret_kms_key_arns   = var.github_actions_secret_kms_key_arns
 }
 
 output "github_actions_release_role_arn" {

@@ -34,6 +34,10 @@ run "default_off_without_backend_or_secret_inputs" {
     condition     = output.release_role_arn == null && output.smoke_secret_arn == null
     error_message = "Disabled CI outputs must remain null."
   }
+  assert {
+    condition     = length(var.secret_kms_key_arns) == 0
+    error_message = "The optional secret-key allowlist must default to empty."
+  }
 }
 
 run "enabled_release_is_exactly_scoped" {
@@ -96,6 +100,13 @@ run "enabled_release_is_exactly_scoped" {
       "ecs:ListTasks", "ecs:DescribeTaskDefinition",
     ])
     error_message = "Grant only web-release operations: no PassRole, RunTask, IAM administration, AgentCore, secret writes or backend writes."
+  }
+  assert {
+    condition = !anytrue(flatten([
+      for s in jsondecode(aws_iam_role_policy.release[0].policy).Statement :
+      [for action in s.Action : startswith(action, "kms:")]
+    ]))
+    error_message = "An empty secret-key allowlist must add no KMS permissions."
   }
   assert {
     condition = alltrue([
@@ -323,4 +334,155 @@ run "reject_malformed_region" {
   module { source = "./modules/github-actions-release" }
   variables { region = "ap-northeast-2*" }
   expect_failures = [var.region]
+}
+
+run "decrypt_only_explicit_keys_via_approved_secrets" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    enabled      = true
+    state_bucket = "awsops-fixture-tfstate"
+    state_key    = "production/foundation.tfstate"
+    migration_secret_arns = [
+      "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:rds!cluster-11111111-1111-1111-1111-111111111111-AbCd12",
+      "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:ops/awsops-fixture/agent/sql-reader-EfGh34",
+    ]
+    secret_kms_key_arns = [
+      "arn:aws:kms:ap-northeast-2:123456789012:key/11111111-2222-3333-4444-555555555555",
+      "arn:aws:kms:ap-northeast-2:123456789012:key/mrk-0123456789abcdef0123456789abcdef",
+    ]
+  }
+
+  assert {
+    condition = jsonencode([
+      for s in jsondecode(aws_iam_role_policy.release[0].policy).Statement : s
+      if anytrue([for action in s.Action : startswith(action, "kms:")])
+      ]) == jsonencode([{
+        Sid      = "DecryptApprovedSecrets"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = var.secret_kms_key_arns
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion"             = "ap-northeast-2"
+            "kms:ViaService"                  = "secretsmanager.ap-northeast-2.amazonaws.com"
+            "kms:EncryptionContext:SecretARN" = concat(var.migration_secret_arns, [output.smoke_secret_arn])
+          }
+        }
+    }])
+    error_message = "KMS may only decrypt the explicit keys via regional Secrets Manager with an approved migration/verifier SecretARN encryption context."
+  }
+  assert {
+    condition = (
+      length(aws_iam_role.release) == 1 && length(aws_iam_role_policy.release) == 1 &&
+      length(aws_secretsmanager_secret.verifier) == 1
+    )
+    error_message = "Adding key metadata must keep the existing three CI resources."
+  }
+}
+
+run "disabled_with_key_metadata_creates_no_resources" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws:kms:ap-northeast-2:123456789012:key/11111111-2222-3333-4444-555555555555",
+    ]
+  }
+  assert {
+    condition     = length(aws_iam_role.release) == 0 && length(aws_iam_role_policy.release) == 0 && length(aws_secretsmanager_secret.verifier) == 0
+    error_message = "Existing key identifiers cannot activate the default-off module."
+  }
+}
+
+run "reject_foreign_account_key" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws:kms:ap-northeast-2:999999999999:key/11111111-2222-3333-4444-555555555555",
+    ]
+  }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_foreign_region_key" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555",
+    ]
+  }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_foreign_partition_key" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws-cn:kms:ap-northeast-2:123456789012:key/11111111-2222-3333-4444-555555555555",
+    ]
+  }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_key_alias_arn" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws:kms:ap-northeast-2:123456789012:alias/awsops-fixture-aurora",
+    ]
+  }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_key_alias_name" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables { secret_kms_key_arns = ["alias/awsops-fixture-aurora"] }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_bare_key_id" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables { secret_kms_key_arns = ["11111111-2222-3333-4444-555555555555"] }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_wildcard_key" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws:kms:ap-northeast-2:123456789012:key/*",
+    ]
+  }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_invalid_key_id" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws:kms:ap-northeast-2:123456789012:key/not-a-key-uuid",
+    ]
+  }
+  expect_failures = [var.secret_kms_key_arns]
+}
+
+run "reject_duplicate_key_arns" {
+  command = plan
+  module { source = "./modules/github-actions-release" }
+  variables {
+    secret_kms_key_arns = [
+      "arn:aws:kms:ap-northeast-2:123456789012:key/11111111-2222-3333-4444-555555555555",
+      "arn:aws:kms:ap-northeast-2:123456789012:key/11111111-2222-3333-4444-555555555555",
+    ]
+  }
+  expect_failures = [var.secret_kms_key_arns]
 }

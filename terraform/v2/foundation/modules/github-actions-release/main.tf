@@ -13,6 +13,9 @@ terraform {
 locals {
   ecs_cluster_arn  = "arn:aws:ecs:${var.region}:${var.account_id}:cluster/${var.project}"
   state_bucket_arn = "arn:aws:s3:::${coalesce(var.state_bucket, "unconfigured")}"
+  release_secret_arns = concat(
+    var.migration_secret_arns, aws_secretsmanager_secret.verifier[*].arn,
+  )
   region_condition = {
     StringEquals = { "aws:RequestedRegion" = var.region }
   }
@@ -53,7 +56,7 @@ resource "aws_iam_role_policy" "release" {
   role  = aws_iam_role.release[0].id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid       = "EcrAuthentication"
         Effect    = "Allow"
@@ -94,7 +97,7 @@ resource "aws_iam_role_policy" "release" {
         Sid       = "ExplicitReleaseSecrets"
         Effect    = "Allow"
         Action    = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-        Resource  = concat(var.migration_secret_arns, [aws_secretsmanager_secret.verifier[0].arn])
+        Resource  = local.release_secret_arns
         Condition = local.region_condition
       },
       {
@@ -131,6 +134,18 @@ resource "aws_iam_role_policy" "release" {
         Resource  = "*"
         Condition = local.region_condition
       },
-    ]
+      ], length(var.secret_kms_key_arns) > 0 ? [{
+        Sid      = "DecryptApprovedSecrets"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = var.secret_kms_key_arns
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion"             = var.region
+            "kms:ViaService"                  = "secretsmanager.${var.region}.amazonaws.com"
+            "kms:EncryptionContext:SecretARN" = local.release_secret_arns
+          }
+        }
+    }] : [])
   })
 }
