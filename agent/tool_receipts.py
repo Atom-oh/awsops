@@ -8,6 +8,7 @@ import math
 import re
 import time
 from datetime import datetime
+from ipaddress import ip_address
 
 MAX_CALLS = 32
 MAX_RESULT = 262144
@@ -27,6 +28,16 @@ SHALLOW_TOOLS = set(COUNTED_LISTS) | set(IAM_LISTS) | {
     "get_trusted_advisor_cost_checks", "list_opensearch_domains", "opensearch_schema",
     "mesh_overview", "check_cloudformation_template_compliance", "describe_network", "get_item",
     "loki_query", "loki_query_range",
+}
+METRIC_QUERIES = {"prometheus_query", "prometheus_query_range", "mimir_query", "mimir_query_range"}
+NAMED_LISTS = {
+    "prometheus_labels": ("labels", 1000, str), "mimir_labels": ("labels", 1000, str),
+    "prometheus_series": ("series", 50, dict), "mimir_series": ("series", 50, dict),
+    "loki_labels": ("labels", 1000, str), "loki_label_values": ("values", 1000, str),
+}
+POSITIVE_TOOLS = METRIC_QUERIES | set(NAMED_LISTS) | {
+    "get_eni_details", "find_ip_address", "get_topology", "notion_search",
+    "notion_query_database", "notion_fetch_page", "tempo_search", "tempo_get_trace",
 }
 STATUS = {"ok", "empty", "partial", "unavailable", "error", "unknown"}
 REASONS = {
@@ -626,6 +637,191 @@ def shallow_evidence(body, tool, q):
     return "success" if rows else "empty"
 
 
+def text(value, limit=4096):
+    return isinstance(value, str) and 0 < len(value) <= limit
+
+
+def ip(value):
+    if not text(value, 64):
+        return False
+    try:
+        ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def bounded_list(value, limit, q):
+    if not isinstance(value, list):
+        return None
+    if len(value) > limit:
+        q["truncated"] = True
+        return None
+    return value
+
+
+def network_evidence(body, tool, q):
+    def identity(row):
+        return (isinstance(row, dict) and matching(row.get("eniId"), r"eni-[a-zA-Z0-9-]{1,64}")
+                and matching(row.get("vpcId"), r"vpc-[a-zA-Z0-9-]{1,64}")
+                and matching(row.get("subnetId"), r"subnet-[a-zA-Z0-9-]{1,64}")
+                and ip(row.get("privateIp")))
+    if tool == "find_ip_address":
+        rows = bounded_list(body.get("enis"), 10, q)
+        if rows is None or not ip(body.get("ip")) or not count(body.get("count")) or body["count"] != len(rows):
+            return None
+        if not all(identity(row) for row in rows):
+            return None
+        if len(rows) == 10 and "truncated" not in body:
+            q["unknown"] = True  # this producer silently slices at ten matches
+        return "success" if rows else "empty"
+    selection = body.get("routeSelection")
+    if (not identity(body) or body.get("partial") is not False or body.get("unknown") != []
+            or not all(isinstance(body.get(k), list) for k in ("securityGroups", "nacl", "routes"))
+            or not matching(body.get("naclId"), r"acl-[a-zA-Z0-9-]{1,64}")
+            or not matching(body.get("routeTableId"), r"rtb-[a-zA-Z0-9-]{1,64}")
+            or not isinstance(selection, dict) or selection.get("status") != "selected"
+            or selection.get("basis") not in ("explicit", "main")):
+        return None
+    return "success"  # configuration evidence, not a connectivity/health verdict
+
+
+def topology_evidence(body, q):
+    nodes = bounded_list(body.get("nodes"), 500, q)
+    edges = bounded_list(body.get("edges"), 1000, q)
+    collection = q.get("collection", {})
+    selection, truncation = body.get("selection"), body.get("truncation")
+    if (body.get("class") not in ("flow", "infra", "trace") or nodes is None or edges is None
+            or not count(body.get("node_count")) or body["node_count"] != len(nodes)
+            or not count(body.get("edge_count")) or body["edge_count"] != len(edges)
+            or not isinstance(selection, dict) or not isinstance(truncation, dict)
+            or collection.get("status") not in ("ok", "empty") or collection.get("stale") is not False
+            or not text(collection.get("captured_at"), 40)):
+        return None
+    for key, cap, rows in (("nodes", 500, nodes), ("edges", 1000, edges)):
+        limit = truncation.get("node_limit" if key == "nodes" else "edge_limit")
+        if type(truncation.get(key)) is not bool or not count(limit) or not 0 < limit <= cap or len(rows) > limit:
+            return None
+    for key in ("sources", "publishedSources") if body["class"] != "trace" else ("sources",):
+        sources = collection.get(key)
+        if not isinstance(sources, list) or not sources or not all(
+                s.get("status") in ("ok", "empty") and text(s.get("sourceId"), 80) and count(s.get("itemCount"))
+                for s in sources):
+            return None
+    if not all(isinstance(n, dict) and all(text(n.get(k)) for k in ("id", "kind", "label")) for n in nodes):
+        return None
+    ids = {n["id"] for n in nodes}
+    if len(ids) != len(nodes) or not all(
+            isinstance(e, dict) and text(e.get("source")) and text(e.get("target"))
+            and e["source"] in ids and e["target"] in ids and text(e.get("rel"), 128) for e in edges):
+        return None
+    if selection.get("status") == "resolved":
+        if not text(selection.get("resolved_id")) or selection["resolved_id"] not in ids:
+            return None
+    elif selection.get("status") != "all":
+        return None
+    if collection["status"] == "empty":
+        return "empty" if not nodes and not edges else None
+    return "success" if nodes else None
+
+
+def notion_evidence(body, tool, q):
+    def identified(row, objects):
+        return (isinstance(row, dict) and row.get("object") in objects
+                and matching(row.get("id"), r"(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})", 36))
+    if tool == "notion_fetch_page":
+        if "blocks_error" in body:
+            if isinstance(body["blocks_error"], str) and body["blocks_error"]:
+                q["partial"] = True
+            else:
+                q["invalid"] = True
+        blocks = bounded_list(body.get("blocks"), 25, q)
+        if (type(body.get("truncated")) is not bool or not identified(body.get("page"), ("page",))
+                or blocks is None or not all(identified(b, ("block",)) and text(b.get("type"), 80) for b in blocks)):
+            return None
+        return "success"  # a fetched page with zero child blocks is still useful page evidence
+    if "has_more" in body:
+        if type(body["has_more"]) is bool:
+            if body["has_more"]:
+                q["truncated"] = True
+        else:
+            q["invalid"] = True
+    cursor = body.get("next_cursor")
+    if cursor is not None:
+        if text(cursor):
+            q["truncated"] = True
+        else:
+            q["invalid"] = True
+    rows = bounded_list(body.get("results"), 25, q)
+    if rows is None or type(body.get("has_more")) is not bool or not all(identified(r, ("page", "database")) for r in rows):
+        return None
+    return "success" if rows else "empty"
+
+
+def metric_trace_evidence(body, tool, q):
+    if type(body.get("truncated")) is not bool:
+        return None
+    if tool in NAMED_LISTS:
+        field, limit, kind = NAMED_LISTS[tool]
+        rows = bounded_list(body.get(field), limit, q)
+        if rows is not None and all(isinstance(r, kind) for r in rows):
+            return "success" if rows else "empty"
+        return None
+    if tool in METRIC_QUERIES:
+        rows = bounded_list(body.get("result"), 50, q)
+        kind = body.get("resultType")
+        if rows is None or kind not in ("vector", "matrix"):
+            return None
+        samples = 0
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("metric"), dict):
+                return None
+            values = [row.get("value")] if kind == "vector" else bounded_list(row.get("values"), 500, q)
+            if values is None:
+                return None
+            samples += len(values)
+            if samples > 5000:
+                q["truncated"] = True
+                return None
+            if not all(isinstance(v, list) and len(v) == 2 and number(v[0]) and text(v[1], 128) for v in values):
+                return None
+        return "success" if rows else "empty"
+    if tool == "tempo_search":
+        traces = bounded_list(body.get("traces"), 50, q)
+        if traces is not None and all(isinstance(t, dict) and matching(t.get("traceID"), r"[a-fA-F0-9]+") for t in traces):
+            return "success" if traces else "empty"
+        return None
+    # Tempo's current get-trace fixture/producer uses OTLP batches. Other pass-through
+    # encodings remain unverified; inspect only bounded structure, never span attributes.
+    batches = bounded_list(body.get("batches"), 50, q)
+    if batches is None:
+        return None
+    scopes_seen = spans_seen = 0
+    for batch in batches:
+        if not isinstance(batch, dict):
+            return None
+        scopes = bounded_list(batch.get("scopeSpans", batch.get("instrumentationLibrarySpans")), 200, q)
+        if scopes is None:
+            return None
+        scopes_seen += len(scopes)
+        if scopes_seen > 200:
+            q["truncated"] = True
+            return None
+        for scope in scopes:
+            if not isinstance(scope, dict):
+                return None
+            spans = bounded_list(scope.get("spans"), 5000, q)
+            if spans is None:
+                return None
+            spans_seen += len(spans)
+            if spans_seen > 5000:
+                q["truncated"] = True
+                return None
+            if not all(isinstance(s, dict) and text(s.get("traceId"), 128) and text(s.get("spanId"), 128) for s in spans):
+                return None
+    return "success" if spans_seen else "empty"
+
+
 def producer_evidence(body, tool, q):
     """Curated producer shapes only; no arbitrary nested error/key searching."""
     name = tool.rsplit("___", 1)[-1]
@@ -637,17 +833,14 @@ def producer_evidence(body, tool, q):
         return rightsizing_evidence(body, q)
     if name in SHALLOW_TOOLS:
         return shallow_evidence(body, name, q)
-    if name in ("notion_search", "notion_query_database") and "has_more" in body:
-        if type(body["has_more"]) is bool:
-            if body["has_more"]:
-                q["truncated"] = True
-        else:
-            q["invalid"] = True
-    if name == "notion_fetch_page" and "blocks_error" in body:
-        if isinstance(body["blocks_error"], str) and body["blocks_error"]:
-            q["partial"] = True
-        else:
-            q["invalid"] = True
+    if name in ("find_ip_address", "get_eni_details"):
+        return network_evidence(body, name, q)
+    if name == "get_topology":
+        return topology_evidence(body, q)
+    if name in ("notion_search", "notion_query_database", "notion_fetch_page"):
+        return notion_evidence(body, name, q)
+    if name in METRIC_QUERIES | set(NAMED_LISTS) | {"tempo_search", "tempo_get_trace"}:
+        return metric_trace_evidence(body, name, q)
     return None
 
 
@@ -659,11 +852,11 @@ def terminal(result, ignored_texts=(), tool=""):
     content = result.get("content")
     if not isinstance(content, list):
         return "unverified", {"invalid": True}, {}
-    object_producer = tool.rsplit("___", 1)[-1] in ASYNC_QUERY_TOOLS | SHALLOW_TOOLS | {
+    object_producer = tool.rsplit("___", 1)[-1] in ASYNC_QUERY_TOOLS | SHALLOW_TOOLS | POSITIVE_TOOLS | {
         "query_inventory", "inventory_summary", "get_rightsizing_recommendations",
     }
     if not content:
-        return ("unverified", {"unknown": True}, {}) if object_producer else ("empty", {}, {})
+        return "unverified", {"unknown": True}, {}
     outcomes, q, observed = [], {}, {}
     # Scan bounded content; language-hook reminders are non-JSON and not evidence.
     for block in content[:16]:
@@ -702,18 +895,12 @@ def terminal(result, ignored_texts=(), tool=""):
                                     else producer_outcome)
                 elif incomplete(q):
                     outcomes.append("partial")
-                elif (not body or body.get("collection", {}).get("status") == "empty"
-                      or (body.get("enis") == [] and type(body.get("count")) is int and body["count"] == 0)
-                      or any(body.get(k) == [] for k in ("items", "data", "rows", "results", "result", "traces"))):
-                    outcomes.append("empty")
                 else:
-                    outcomes.append("success")
+                    outcomes.append("unverified")
             elif isinstance(body, list):
                 if object_producer:
                     q["invalid"] = True
-                    outcomes.append("unverified")
-                else:
-                    outcomes.append("success" if body else "empty")
+                outcomes.append("unverified")
             else:
                 q["unsupported"] = True
                 outcomes.append("unverified")

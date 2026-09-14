@@ -70,10 +70,37 @@ calls. Async query submission or pending status is not a completed result. Known
 continuation and child-error signals restrict the conclusion; missing metadata does not establish
 independently verified scope. Source clocks remain distinct from stream delivery clocks.
 
+Strands success, HTTP 2xx and parseable JSON certify neither complete collection nor a confirmed
+empty result. Unknown objects, arrays (including empty arrays), and empty result content default to
+`unverified`. Explicit errors and recognized incompleteness still constrain the outcome. A valid but
+unrecognized payload is not automatically malformed. Useful model text and raw tool data remain
+unchanged; this classification governs only evidence metadata.
+
+Positive outcomes require a recognized tool and its validated producer envelope:
+
+| Coverage | Required evidence |
+|---|---|
+| Existing explicit handlers | Async terminal-query results, inventory freshness, rightsizing and the bounded shallow producer contracts |
+| ENI lookup/configuration | Typed IP/ENI identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
+| Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
+| Notion | Identified page/database/block records, the relevant result collection and typed pagination/error markers |
+| Prometheus/Mimir | Bounded vector/matrix query envelopes; named labels/series collections with typed truncation |
+| Tempo | Bounded trace-search envelopes and OTLP `batches` with `scopeSpans` or `instrumentationLibrarySpans` |
+| Loki | Existing explicit query-result handling and bounded named label/value collections |
+
+These are finite envelope checks, not recursive validation of resource health, metric values, span
+attributes or document contents. Other tool responses, introspection formats and future encodings
+remain unverified until explicitly supported; positive-looking quality fields alone do not enable
+them. Bounded omission remains partial, including ENI lookups at the legacy ten-match cap.
+
 The web consumer ships separately. Older consumers ignore these optional frames; newer consumers
 must preserve useful text but treat absent, malformed or incomplete evidence as unverified/partial.
 Detailed receipts belong only in ownership-checked conversation metadata. Global invocation
 statistics retain coarse outcomes, never raw outputs, queries, credentials or pagination tokens.
+Current readers retain unverified answers and mark mixed confirmed/unverified evidence partial.
+Unverified calls are excluded from the evidence-confirmed success-rate denominator. Expanding or
+tightening producer coverage can therefore change that rate without a change in operational health;
+compare it alongside assessed/unverified counts and the coverage policy in effect.
 
 ## Custom tool policy and registration
 
