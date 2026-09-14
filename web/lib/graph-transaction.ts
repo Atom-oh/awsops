@@ -36,9 +36,10 @@ async function runTransaction<T>(pool: Pool, readOnly: boolean, fn: (client: Poo
     await client.query('COMMIT');
     return result;
   } catch (error) {
-    // Capture before cleanup: a later disconnect/rollback error must not replace the
-    // original rejection (notably SQLSTATE 25P04) used by callers and failure recording.
-    const failure = error;
+    // Keep the primary SQLSTATE. A later generic "not queryable" rejection must instead
+    // retain an already-observed fatal event. Cleanup cannot replace this snapshot.
+    const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+    const failure = typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? error : clientError ?? error;
     if (!clientError) {
       try { await client.query('ROLLBACK'); }
       catch { discard = true; }

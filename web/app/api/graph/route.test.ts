@@ -62,6 +62,23 @@ describe('graph collection evidence API', () => {
       collection: { status: 'unknown', readStatus: 'unavailable', readReason: 'query_failed' } });
     expect(connection.release).toHaveBeenCalledWith(true);
   });
+  it('preserves a primary SQL error when a later client event arrives before rejection is handled', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const primary = Object.assign(new Error('private primary'), { code: '42501' });
+    const secondary = Object.assign(new Error('private secondary'), { code: '57P01' });
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM topology_nodes')) {
+        connection.current.emit('error', secondary);
+        throw primary;
+      }
+      return { rows: [] };
+    });
+    const response = await GET(new Request('http://localhost/api/graph'));
+    expect(response.status).toBe(500);
+    expect(logged).toHaveBeenCalledWith('[graph-read] failed {"stage":"graph_read","code":"42501"}');
+    expect(connection.release).toHaveBeenCalledWith(true);
+  });
+
   it('handles a checked-out client error event and discards the fatal connection', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     let unhandled = false;
