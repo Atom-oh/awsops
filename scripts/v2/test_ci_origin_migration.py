@@ -67,6 +67,8 @@ class FakeCommands:
         self.mode = "apply"
         self.task_changes = {}
         self.container_changes = {}
+        self.sidecars = []
+        self.definition = None
         self.missing_reads = 0
 
     def sleep(self, seconds):
@@ -79,7 +81,7 @@ class FakeCommands:
             "stopCode": "EssentialContainerExited",
             "containers": [{"name": "migration", "exitCode": 0,
                             "image": REPO + "@" + self.digest, "imageDigest": self.digest,
-                            **self.container_changes}],
+                            **self.container_changes}, *copy.deepcopy(self.sidecars)],
             **self.task_changes,
         }
 
@@ -123,7 +125,11 @@ class FakeCommands:
         if operation == ("ecs", "register-task-definition"):
             values = {e["name"]: e["value"] for e in params["containerDefinitions"][0]["environment"]}
             self.mode = values["CI_MIGRATION_MODE"]
-            return {"taskDefinition": {"taskDefinitionArn": DEFINITION, **params}}
+            self.definition = {"taskDefinitionArn": DEFINITION, **copy.deepcopy(params)}
+            return {"taskDefinition": self.definition}
+        if operation == ("ecs", "describe-task-definition"):
+            assert params == {"taskDefinition": DEFINITION}
+            return {"taskDefinition": copy.deepcopy(self.definition)}
         if operation == ("ecs", "run-task"):
             # The durable journal must precede any launch, including a lost response.
             assert self.receipt.is_file()
@@ -208,6 +214,200 @@ def test_success_binds_source_private_target_digest_nonce_and_runtime(rig, mode)
     }
     assert "overrides" not in run
     assert not any(service == "secretsmanager" for service, _ in rig.operations())
+
+
+def guardduty_sidecar(rig, exit_code=143):
+    rig.task_changes["startedAt"] = "2026-09-14T15:17:26.349000+00:00"
+    return {
+        "name": "aws-guardduty-agent-dpSB4", "runtimeId": "c" * 32 + "-1459054608",
+        "lastStatus": "STOPPED", "healthStatus": "UNKNOWN", "exitCode": exit_code,
+    }
+
+
+@pytest.mark.parametrize("mode", ["preview", "apply"])
+@pytest.mark.parametrize("exit_code", [0, 143])
+@pytest.mark.parametrize("image_form", ["absent", "tag", "digest"])
+def test_aws_injected_guardduty_is_verified_in_run_and_receipt(rig, mode, exit_code, image_form):
+    agent = guardduty_sidecar(rig, exit_code)
+    repo = f"914738172881.dkr.ecr.{REGION}.amazonaws.com/aws-guardduty-agent-fargate"
+    if image_form != "absent":
+        agent["imageDigest"] = "sha256:" + "e" * 64
+        agent["image"] = repo + (":v1.17.1-Fg_arm64" if image_form == "tag" else "@" + agent["imageDigest"])
+    rig.sidecars = [agent]
+    # AWS's captured response lists the injected agent before the application.
+    rig.hooks[("ecs", "describe-tasks")] = lambda _: {
+        "tasks": [{**rig.task(), "containers": list(reversed(rig.task()["containers"]))}], "failures": []}
+    migration = subject.Migration()
+    record = migration.run(rig.digest, mode, poll=1)
+    assert migration.verify_receipt(record["database"], mode) == record
+    assert rig.operations().count(("ecs", "describe-task-definition")) == 2
+    assert len(rig.definition["containerDefinitions"]) == 1
+
+
+@pytest.mark.parametrize("phase", ["run", "verify"])
+@pytest.mark.parametrize("field,value", [
+    ("exitCode", None), ("exitCode", False), ("exitCode", 1), ("exitCode", 137),
+    ("exitCode", 139), ("exitCode", 255), ("runtimeId", None), ("runtimeId", ""),
+    ("lastStatus", "RUNNING"), ("healthStatus", "UNHEALTHY"),
+    ("reason", "CannotPullContainerError: ECR 403 PRIVATE_SECURITY_ERROR"),
+    ("reason", "OutOfMemoryError"), ("image", "attacker.example/agent:latest"),
+    ("image", f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/aws-guardduty-agent-fargate:latest"),
+    ("image", "914738172881.dkr.ecr.us-east-1.amazonaws.com/aws-guardduty-agent-fargate:latest"),
+    ("image", f"914738172881.dkr.ecr.{REGION}.amazonaws.com/unrelated:latest"),
+    ("imageDigest", ""), ("imageDigest", "sha256:bad"),
+])
+def test_failed_or_untrusted_guardduty_never_proves_success(rig, phase, field, value):
+    agent = guardduty_sidecar(rig)
+    rig.sidecars = [agent]
+    migration = subject.Migration()
+    if phase == "verify":
+        record = migration.run(rig.digest, "apply", poll=1)
+    agent[field] = value
+    with pytest.raises(subject.ReleaseError):
+        if phase == "run":
+            migration.run(rig.digest, "apply", poll=1)
+        else:
+            migration.verify_receipt(record["database"])
+    if phase == "run":
+        assert json.loads(rig.receipt.read_text())["status"] != "succeeded"
+
+
+@pytest.mark.parametrize("extra", ["unknown", "duplicate-agent", "duplicate-migration"])
+def test_unrecognized_or_duplicate_containers_are_not_ignored(rig, extra):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    rig.sidecars.append({"name": "other"} if extra == "unknown" else
+                        copy.deepcopy(rig.sidecars[0] if extra == "duplicate-agent" else rig.task()["containers"][0]))
+    with pytest.raises(subject.ReleaseError):
+        subject.Migration().run(rig.digest, "apply")
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d.update(taskDefinitionArn=DEFINITION + "0"),
+    lambda d: d.update(taskRoleArn=CONFIG["execution_role_arn"]),
+    lambda d: d.update(executionRoleArn=CONFIG["task_role_arn"]),
+    lambda d: d.update(networkMode="host"),
+    lambda d: d.update(runtimePlatform={"cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX"}),
+    lambda d: d["containerDefinitions"].append({"name": "aws-guardduty-agent-dpSB4", "image": "attacker"}),
+    lambda d: d["containerDefinitions"][0].update(name="other"),
+    lambda d: d["containerDefinitions"][0].update(image="attacker"),
+    lambda d: d["containerDefinitions"][0].update(essential=False),
+    lambda d: d["containerDefinitions"][0].update(command=["node", "-e", "fake proof"]),
+])
+def test_guardduty_requires_original_single_container_definition(rig, change):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    def definition(_):
+        result = copy.deepcopy(rig.definition)
+        change(result)
+        return {"taskDefinition": result}
+    rig.hooks[("ecs", "describe-task-definition")] = definition
+    with pytest.raises(subject.ReleaseError):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+def test_guardduty_cannot_bypass_task_role_overrides(rig):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    rig.task_changes["overrides"] = {"taskRoleArn": f"arn:aws:iam::{ACCOUNT}:role/Administrator"}
+    with pytest.raises(subject.ReleaseError):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+@pytest.mark.parametrize("started", [None, 0, -1, False, "not-a-time", "2026-09-14T15:17:26"])
+def test_guardduty_requires_evidence_of_a_started_task(rig, started):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    rig.task_changes["startedAt"] = started
+    with pytest.raises(subject.ReleaseError, match="migration_guardduty_agent_failed"):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+def test_one_unknown_extra_container_is_not_a_guardduty_exception(rig):
+    agent = guardduty_sidecar(rig)
+    agent["name"] = "customer-monitor"
+    rig.sidecars = [agent]
+    with pytest.raises(subject.ReleaseError, match="migration_unexpected_container"):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+def test_guardduty_definition_is_rechecked_when_consuming_receipt(rig):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    migration = subject.Migration()
+    record = migration.run(rig.digest, "apply", poll=1)
+    rig.definition["executionRoleArn"] = CONFIG["task_role_arn"]
+    with pytest.raises(subject.ReleaseError, match="migration_guardduty_definition_mismatch"):
+        migration.verify_receipt(record["database"])
+
+
+def test_guardduty_digest_must_agree_with_pinned_image_when_both_are_exposed(rig):
+    agent = guardduty_sidecar(rig)
+    agent.update(image=f"914738172881.dkr.ecr.{REGION}.amazonaws.com/aws-guardduty-agent-fargate@sha256:" + "e" * 64,
+                 imageDigest="sha256:" + "f" * 64)
+    rig.sidecars = [agent]
+    with pytest.raises(subject.ReleaseError, match="migration_guardduty_image_mismatch"):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+@pytest.mark.parametrize("content", [None, "not JSON", "{}", '{"ap-northeast-2": 914738172881}',
+                                   '{"ap-northeast-2": "91473817288*"}'])
+def test_guardduty_registry_map_missing_or_malformed_fails_closed(rig, monkeypatch, tmp_path, content):
+    path = tmp_path / "registry.json"
+    if content is not None:
+        path.write_text(content)
+    monkeypatch.setattr(subject, "GUARDDUTY_ACCOUNTS", path)
+    rig.sidecars = [guardduty_sidecar(rig)]
+    with pytest.raises(subject.ReleaseError, match="migration_guardduty_registry_unavailable"):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+def test_guardduty_definition_access_denial_cannot_be_treated_as_absence(rig):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    def denied(_):
+        raise subject.ReleaseError("command_failed")
+    rig.hooks[("ecs", "describe-task-definition")] = denied
+    with pytest.raises(subject.ReleaseError, match="command_failed"):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+def test_aws_injected_override_metadata_is_allowed_but_not_an_application_command(rig):
+    agent = guardduty_sidecar(rig)
+    rig.sidecars = [agent]
+    rig.task_changes["overrides"] = {
+        "containerOverrides": [{"name": "migration"}, {"name": agent["name"], "memory": 128,
+                              "environment": [{"name": "AWS_MANAGED_SETTING", "value": "fixture"}]}],
+        "inferenceAcceleratorOverrides": [],
+    }
+    migration = subject.Migration()
+    record = migration.run(rig.digest, "apply", poll=1)
+    rig.task_changes["overrides"]["containerOverrides"][0]["command"] = ["fake", "success"]
+    with pytest.raises(subject.ReleaseError, match="migration_guardduty_definition_mismatch"):
+        migration.verify_receipt(record["database"])
+
+
+def test_guardduty_cannot_bypass_migration_failure_or_nonce(rig):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    rig.container_changes["exitCode"] = 1
+    with pytest.raises(subject.ReleaseError, match="migration_exit_or_digest_failed"):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+def test_successful_guardduty_cannot_replace_the_migration_nonce_proof(rig):
+    rig.sidecars = [guardduty_sidecar(rig)]
+    rig.hooks[("logs", "get-log-events")] = lambda _: {
+        "events": [{"message": json.dumps({**rig.proof(), "nonce": "e" * 32})}]}
+    with pytest.raises(subject.ReleaseError, match="migration_receipt_log_missing"):
+        subject.Migration().run(rig.digest, "apply", poll=1)
+
+
+def test_captured_pull_failure_with_runtime_id_is_not_started_agent_success(rig, monkeypatch, capsys):
+    # The real failed task has runtimeId but no exitCode or image metadata.
+    agent = guardduty_sidecar(rig)
+    agent.pop("exitCode")
+    agent["reason"] = "CannotPullContainerError: ECR 403 PRIVATE_SECURITY_ERROR"
+    rig.sidecars = [agent]
+    monkeypatch.setattr(sys, "argv", ["ci_origin_migration.py", "run", "--digest", rig.digest, "--mode", "preview"])
+    assert subject.main() == 1
+    output = capsys.readouterr()
+    assert "PRIVATE_SECURITY_ERROR" not in output.out + output.err
+    assert "403" not in output.out + output.err
+    assert json.loads(rig.receipt.read_text())["status"] != "succeeded"
 
 
 def test_untracked_sql_cannot_receive_reviewed_source_identity(rig):
