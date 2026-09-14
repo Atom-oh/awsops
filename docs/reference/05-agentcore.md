@@ -81,11 +81,14 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | Coverage | Required evidence |
 |---|---|
 | Existing explicit handlers | Async terminal-query results, inventory freshness, rightsizing and the bounded shallow producer contracts |
+| IAM/DynamoDB lists | Observed list fields plus typed continuation/truncation evidence; missing or malformed collection/continuation values stay unknown |
+| Trusted Advisor | Observed check collection, a 15-check cap, and known finite estimates for numeric savings totals; unavailable estimates remain null/unknown |
+| OpenSearch | Domain enumeration is capped at 20 with truncation disclosed; missing collection/description metadata is unknown; search validates timeout and shard evidence |
 | ENI lookup/configuration | The current IPv4 lookup's typed identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
 | Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
 | Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |
 | Prometheus/Mimir | Bounded vector/matrix envelopes and named labels/series require upstream-derived `collectionStatus`; upstream query warnings remain partial |
-| Tempo | Trace search requires an observed list and `collectionStatus`; existing OTLP `batches` handling remains separate |
+| Tempo | Trace search requires an observed list and `collectionStatus`; hitting the explicit request limit (default 20) or reported unfinished jobs remains partial; existing OTLP `batches` handling remains separate |
 | Loki | Validated streams/vector/matrix query envelopes and named label/value collections require upstream-derived `collectionStatus`; hitting a query's line limit remains partial |
 
 `query_inventory` also follows the producer's registered field projections. Other resource types
@@ -104,6 +107,9 @@ metadata remains useful when block retrieval fails or its results/pagination fie
 Legacy responses without required source markers remain unverified or partial according to the handler;
 explicit errors and disclosed incompleteness retain their restrictive outcomes. These markers require
 matching payload structure before success or confirmed empty can be granted.
+
+Topology source adapters also honor the typed collection markers. Unknown or incomplete empty
+responses cannot authorize an empty graph publication; a genuinely observed empty response can.
 
 These are finite envelope checks, not recursive validation of resource health, metric values, span
 attributes or document contents. Other tool responses, introspection formats and future encodings

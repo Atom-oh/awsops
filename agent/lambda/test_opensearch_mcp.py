@@ -17,6 +17,8 @@ from botocore.credentials import Credentials
 sys.path.insert(0, os.path.dirname(__file__))
 import opensearch_mcp as om  # noqa: E402
 import cross_account as ca  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from tool_receipts import terminal
 
 FAKE_CREDS = Credentials(access_key="AKIAEXAMPLE", secret_key="secretkey", token="tok")
 
@@ -30,7 +32,7 @@ class _FakeOS:
     def list_domain_names(self):
         return {"DomainNames": self._domains}
     def describe_domain(self, DomainName):
-        return {"DomainStatus": self._status}
+        return {"DomainStatus": {"DomainName": DomainName, **self._status}}
 
 
 def _fake_resp(status, obj):
@@ -67,10 +69,44 @@ class TestListDomains(_Base):
             out = om.lambda_handler({"tool_name": "list_opensearch_domains", "arguments": {}}, None)
         self.assertEqual(json.loads(out["body"])["domains"][0]["endpoint"], "vpc-logs.es.amazonaws.com")
 
+    def test_missing_or_malformed_domain_collection_is_unknown(self):
+        for tool in ("list_opensearch_domains", "opensearch_schema"):
+            for response in ({}, {"DomainNames": None}, {"DomainNames": {}}, {"DomainNames": "PRIVATE"}):
+                with self.subTest(tool=tool, response=response):
+                    client = _FakeOS()
+                    client.list_domain_names = mock.Mock(return_value=response)
+                    with mock.patch.object(om, "get_client", return_value=client), \
+                            mock.patch.object(om, "_signed_request") as http:
+                        out = om.lambda_handler({"tool_name": tool, "arguments": {}}, None)
+                    client.list_domain_names.assert_called_once()
+                    http.assert_not_called()
+                    body = json.loads(out["body"])
+                    self.assertEqual(body["collectionStatus"], "unknown")
+                    self.assertIn(terminal({"status": "success", "content": [{"json": body}]}, tool=tool)[0],
+                                  ("partial", "unverified"))
+                    self.assertNotIn("PRIVATE", json.dumps(body))
+
+    def test_unobserved_domain_status_is_not_a_complete_domain_description(self):
+        for response in ({}, {"DomainStatus": None}, {"DomainStatus": []}, {"DomainStatus": "PRIVATE"}, {"DomainStatus": {}}, {"DomainStatus": {"DomainName": "different"}}):
+            with self.subTest(response=response):
+                client = _FakeOS()
+                client.describe_domain = mock.Mock(return_value=response)
+                with mock.patch.object(om, "get_client", return_value=client):
+                    out = om.lambda_handler({"tool_name": "list_opensearch_domains", "arguments": {}}, None)
+                client.describe_domain.assert_called_once()
+                body = json.loads(out["body"])
+                self.assertEqual(body["domains"][0]["collectionStatus"], "unknown")
+                self.assertIn(terminal({"status": "success", "content": [{"json": body}]}, tool="list_opensearch_domains")[0], ("partial", "unverified"))
+                self.assertNotIn("PRIVATE", json.dumps(body))
+
     def test_no_domains(self):
-        with mock.patch.object(om, "get_client", return_value=_FakeOS(domains=[])):
-            out = om.lambda_handler({"tool_name": "list_opensearch_domains", "arguments": {}}, None)
-        self.assertEqual(json.loads(out["body"])["domains"], [])
+        for tool in ("list_opensearch_domains", "opensearch_schema"):
+            with mock.patch.object(om, "get_client", return_value=_FakeOS(domains=[])):
+                out = om.lambda_handler({"tool_name": tool, "arguments": {}}, None)
+            body = json.loads(out["body"])
+            self.assertEqual(body["domains"], [])
+            self.assertEqual(body["collectionStatus"], "empty")
+            self.assertEqual(terminal({"status": "success", "content": [{"json": body}]}, tool=tool)[0], "empty")
 
 
 class TestSearch(_Base):
@@ -167,6 +203,57 @@ class TestSchema(_Base):
              mock.patch("opensearch_mcp.urllib.request.urlopen",side_effect=fake_urlopen):
             out=om.lambda_handler({"tool_name":"opensearch_schema","arguments":{}},None)
         b=json.loads(out["body"]); self.assertEqual(b["domains"][0]["name"],"logs"); self.assertIn("logs-2026",b["domains"][0]["indices"])
+
+    def test_source_failures_are_typed_and_do_not_disclose_error_text(self):
+        for response in [(403, {"error": "PRIVATE"}), (200, {"error": "PRIVATE"})]:
+            with self.subTest(response=response), mock.patch.object(om, "get_client", return_value=_FakeOS()), \
+                    mock.patch.object(om, "_resolve_endpoint", return_value="https://fixture.invalid"), \
+                    mock.patch.object(om, "_signed_request", return_value=response):
+                body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+                self.assertEqual(body["domains"][0]["collectionStatus"], "error")
+                self.assertEqual(body["domains"][0]["error"], "index_collection_failed")
+                self.assertEqual(body["collectionStatus"], "ok")
+                self.assertNotIn("PRIVATE", json.dumps(body))
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
+                                          tool="opensearch_schema")[0], "error")
+        with mock.patch.object(om, "get_client", return_value=_FakeOS()), \
+                mock.patch.object(om, "_resolve_endpoint", side_effect=RuntimeError("PRIVATE")):
+            body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+            self.assertEqual(body["domains"][0]["collectionStatus"], "error")
+            self.assertNotIn("PRIVATE", json.dumps(body))
+
+    def test_empty_and_bounded_schema_are_explicit(self):
+        for size in (0, 1, 100, 101):
+            with self.subTest(size=size), mock.patch.object(om, "get_client", return_value=_FakeOS()), \
+                    mock.patch.object(om, "_resolve_endpoint", return_value="https://fixture.invalid"), \
+                    mock.patch.object(om, "_signed_request", return_value=(200, [{"index": "fixture"}] * size)):
+                body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+                domain = body["domains"][0]
+                self.assertEqual(domain["collectionStatus"], "ok" if size else "empty")
+                self.assertEqual(domain["truncated"], size > 100)
+                self.assertLessEqual(len(domain["indices"]), 100)
+                expected = "partial" if size > 100 else "success" if size else "empty"
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]},
+                                          tool="opensearch_schema")[0], expected)
+        with mock.patch.object(om, "get_client", return_value=_FakeOS(domains=[])):
+            body = json.loads(om.opensearch_schema({}, "ap-northeast-2", None)["body"])
+            self.assertEqual(body["collectionStatus"], "empty")
+
+    def test_domain_enumeration_is_bounded_and_errors_are_typed(self):
+        client = _FakeOS(domains=[{"DomainName": f"domain{i}"} for i in range(21)])
+        for tool in ("opensearch_schema", "list_opensearch_domains"):
+            with self.subTest(tool=tool), mock.patch.object(om, "get_client", return_value=client), \
+                    mock.patch.object(client, "describe_domain", side_effect=RuntimeError("PRIVATE")) as calls, \
+                    mock.patch.object(om, "_resolve_endpoint", side_effect=RuntimeError("PRIVATE")):
+                body = json.loads(getattr(om, tool)({}, "ap-northeast-2", None)["body"])
+                self.assertEqual(len(body["domains"]), 20)
+                self.assertTrue(body["truncated"])
+                self.assertTrue(all(d["collectionStatus"] == "error" for d in body["domains"]))
+                self.assertTrue(all(d.get("error") in ("domain_description_failed", "index_collection_failed")
+                                    for d in body["domains"]))
+                self.assertLessEqual(calls.call_count, 20)
+                self.assertNotIn("PRIVATE", json.dumps(body))
+                self.assertEqual(terminal({"status": "success", "content": [{"json": body}]}, tool=tool)[0], "partial")
 
 
 if __name__ == "__main__":
