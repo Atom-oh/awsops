@@ -9,42 +9,13 @@ import type { AuthType } from '@/lib/datasource-auth';
 import type { ConnConfig } from '@/lib/mcp-lambda-invoke';
 import {
   getCredentialById,
+  getIntegrationCredentialSnapshot,
   mirrorDefaultCredential,
   deleteCredentialKeys,
 } from '@/lib/integration-credentials';
 
-// Gap L203 (v1 parity): per-datasource connection settings persisted on the row.
-// - timeoutS: upstream query execution bound in SECONDS (v1 used ms; v2 stores seconds to match
-//   the connectors' own clamps — prometheus/mimir forward it as the API `timeout` param under the
-//   connector's 12s HTTP timeout, clickhouse as `max_execution_time`).
-// - database: ClickHouse default database (identifier-only; other kinds ignore it).
-// v1's result-cache TTL is deliberately NOT ported — the v2 thin-BFF query path is uncached by
-// design (disclosed deviation in the gap audit).
-export interface DsSettings {
-  timeoutS?: number;
-  database?: string;
-}
-
-const DB_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** Server-side validation: drop anything out of contract rather than erroring (a stale client
- *  must not brick the form). timeoutS: int 1..60; database: bare identifier. Exported for tests. */
-export function sanitizeDsSettings(input: unknown): DsSettings {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
-  const o = input as Record<string, unknown>;
-  const out: DsSettings = {};
-  // strict type check — no coercion ('30'/true must NOT pass; out-of-contract is dropped)
-  if (typeof o.timeoutS === 'number' && Number.isInteger(o.timeoutS) && o.timeoutS >= 1 && o.timeoutS <= 60) out.timeoutS = o.timeoutS;
-  // identifier-only, and NEVER the system databases: the connector's read-only guard is
-  // lexical over the SQL text — database=system would resolve an unqualified FROM tables to
-  // system.tables (create_table_query can carry plaintext engine credentials). Re-checked in
-  // the connector too (defense in depth on both sides of the trust boundary).
-  if (
-    typeof o.database === 'string' && o.database.length <= 128 && DB_IDENTIFIER.test(o.database)
-    && !['system', 'information_schema'].includes(o.database.toLowerCase())
-  ) out.database = o.database;
-  return out;
-}
+import { sanitizeDsSettings, effectiveSavedConnection, mergeDatasourceConnection, type DsSettings } from './datasource-connection';
+export { sanitizeDsSettings, type DsSettings } from './datasource-connection';
 
 export interface DatasourceRow {
   id: number;
@@ -159,38 +130,11 @@ export async function getDatasource(id: number, q: Queryable = getPool()): Promi
   return rows.length ? mapRow(rows[0]) : null;
 }
 
-/** Build the inline connector conn-config for an instance. The integrations ROW is authoritative for
- *  endpoint + authType — so an auth=none instance (or one whose Secrets Manager credential was never
- *  written) still resolves a usable endpoint — overlaid with the SM credential (auth material / org_id).
- *  Without the row fallback, a no-auth datasource has no SM cred → connConfig is empty → the connector
- *  Lambda falls back to the (often empty) kind-mirror and reports "not connected".
- *  Callers: the /api/datasources/query route (run) and the /api/datasources/generate route's
- *  background schema introspect (cache warm). Exported here — see PR #70 review (false-positive). */
+/** Explore uses the same endpoint/credential isolation as Test and Save. */
 export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> {
-  // ID-ONLY credential resolution — deliberately NO kind-mirror fallback. The kind mirror holds the
-  // DEFAULT instance's credential; blending it with THIS instance's endpoint (below) would send the
-  // default's auth material to a different target (credential leak). A no-auth instance, or one whose
-  // id-keyed secret was never written, simply resolves with no auth (the row endpoint still works).
-  const cred: Record<string, unknown> = { ...((await getCredentialById(ds.id)) ?? {}) };
-  // The ROW is authoritative for the L203 settings too — a stale blob (written before a
-  // clear/partial settings update) must never leak an old database/timeoutS through the
-  // cred-first spread (round-3 review).
-  delete cred.database;
-  delete cred.timeoutS;
-  // Spread the SM cred FIRST (auth material / org_id), then FORCE the row's endpoint + authType on top
-  // so the ROW stays authoritative (a stale/partial secret blob can't redirect the query to a different
-  // endpoint). The endpoint is re-checked by the SSRF guard at the call site regardless.
-  return {
-    ...cred,
-    ...(ds.endpoint ? { endpoint: ds.endpoint } : {}),
-    ...(ds.authType ? { authType: ds.authType } : {}),
-    // gap L203: the ClickHouse settings ride the conn config — database (identifier-validated
-    // on write AND read) becomes &database=, and timeoutS becomes the connector's DEFAULT
-    // max_execution_time, so the Explore route, the service-graph sources, and the agent
-    // path all get the same bound from one mechanism.
-    ...(ds.kind === 'clickhouse' && ds.settings?.database ? { database: ds.settings.database } : {}),
-    ...(ds.kind === 'clickhouse' && ds.settings?.timeoutS ? { timeoutS: ds.settings.timeoutS } : {}),
-  } as ConnConfig;
+  const config = mergeDatasourceConnection(ds.kind, {}, effectiveSavedConnection(ds, await getIntegrationCredentialSnapshot()));
+  if (ds.kind !== 'clickhouse') delete config.timeoutS; // query route forwards its API timeout separately
+  return config;
 }
 
 export async function getDefaultDatasource(kind: string): Promise<DatasourceRow | null> {

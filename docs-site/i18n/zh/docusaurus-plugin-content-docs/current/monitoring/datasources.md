@@ -1,6 +1,6 @@
 ---
 sidebar_position: 7
-title: 数据源
+title: 旧版数据源参考资料
 description: 外部数据源集成管理 (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
@@ -8,7 +8,15 @@ import Screenshot from '@site/src/components/Screenshot';
 import DatasourceFlow from '@site/src/components/diagrams/DatasourceFlow';
 import DatasourceExploreFlow from '@site/src/components/diagrams/DatasourceExploreFlow';
 
-# 数据源
+# 旧版数据源参考资料
+
+:::warning
+此页面保留多个旧版本的说明和图示，仅供参考，不是当前操作指南。支持的 API、身份验证、状态和执行步骤请参阅[最新数据源指南](../observability/datasources)。
+:::
+
+<details>
+<summary>历史内容 — 请勿用于当前操作</summary>
+
 
 这是一个 Grafana 风格的数据源管理页面，可将外部监控与可观测性系统集成到 AWSops 中进行统一管理。
 
@@ -363,3 +371,5 @@ AI 助手识别的关键词：**프로메테우스/prometheus**、**로키/loki*
 - [监控仪表板](./monitoring.md) - 系统监控现状
 - [CloudWatch](./cloudwatch) - AWS CloudWatch 指标
 - [AI 助手](../overview/ai-assistant) - AI 分析功能
+
+</details>

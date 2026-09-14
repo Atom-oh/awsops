@@ -10,8 +10,17 @@ import asyncio
 import os
 import types
 import unittest
+import ast
+from pathlib import Path
 
 import anthropic_loop as al
+
+# Keep the production tool boundary real without importing/booting AgentCore or AWS SDKs.
+_gate_tree = ast.parse((Path(__file__).resolve().parents[1] / 'agent.py').read_text())
+_gate_scope = {}
+exec(compile(ast.Module(body=[n for n in _gate_tree.body if isinstance(n, ast.FunctionDef)
+                             and n.name in ('_filter_tools', '_dedup_by_tool_name')],
+                        type_ignores=[]), 'agent.py', 'exec'), _gate_scope)
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
@@ -411,14 +420,8 @@ def _install_agent_stub(gateway_tools, *, footer="FOOTER", skill_prompt="SKILLPR
     m._resolve_gateway_key = lambda role, gws: role if role in gws else "ops"
     m.create_gateway_transport = lambda url: ("transport", url)
     m.get_all_tools = lambda client: list(gateway_tools)
-    m._dedup_by_tool_name = lambda tools: tools
-
-    def _filter(tools, allow):
-        if not allow:
-            return tools
-        s = set(allow)
-        return [t for t in tools if getattr(t, "tool_name", None) in s]
-    m._filter_tools = _filter
+    m._dedup_by_tool_name = _gate_scope['_dedup_by_tool_name']
+    m._filter_tools = _gate_scope['_filter_tools']
     # ADR-017 gates: default pass-through; individual tests override with a spy.
     m.apply_official_mcp_gates = lambda gateway_tools, gateway_key, stack: (list(gateway_tools), [], None)
     m.build_skill_prompt = lambda role, tools: skill_prompt  # real impl already includes the footer
@@ -472,6 +475,13 @@ class RunAnthropicLoopTest(unittest.TestCase):
                                    "toolAllowlist": ["keep"]}))
         tools = _CapturingBedrock.instances[-1].messages.calls[0]["tools"]
         self.assertEqual([t["name"] for t in tools], ["keep"])
+
+    def test_deny_all_and_duplicate_identities_reach_the_same_production_filter(self):
+        _install_agent_stub([FakeTool("same"), FakeTool("same"), FakeTool("unique")])
+        for allow, expected in (([], []), (["same", "unique"], ["unique"])):
+            run(al.run_anthropic_loop({"prompt": "inspect", "toolAllowlist": allow}))
+            tools = _CapturingBedrock.instances[-1].messages.calls[0].get("tools", [])
+            self.assertEqual([t["name"] for t in tools], expected)
 
     def test_official_mcp_gates_applied_to_raw_gateway_tools(self):
         # CRITICAL-1 regression guard: the dark path must never skip the shared ADR-017 gates.

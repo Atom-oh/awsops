@@ -20,17 +20,11 @@ const RULES: { key: string; re: RegExp }[] = [
   // it does NOT force 'general'. Remaining domain keywords still route by domain (e.g. 'jaeger
   // 트레이스…' hits monitoring's 트레이스 rule, where the tempo tools live), and a query with no
   // matching keyword lands on the ops catch-all (or the LLM classifier on the hybrid path).
-  // Tempo/트레이스/trace are DELIBERATELY EXCLUDED here (round-3 review MAJOR, 2026-07-31): round-2
-  // put them on this rule to fix the POST-cutover dead-end (tempo-mcp-target retired, tools only
-  // live on external-obs), but official_mcp_enabled defaults to false — that made the dead-end the
-  // DEFAULT state for every deployment that never opts into ADR-017 presets, not just a brief
-  // migration window. There's no runtime signal here (route.ts is a pure prompt->key function; the
-  // official_mcp_enabled/ack/endpoint state lives in terraform vars + provision.py, not something
-  // this request handler reads) to route dynamically per deployment, so this picks the one static
-  // answer that matches the DEFAULT/most-common state: legacy tempo-mcp-target on 'monitoring'.
-  // REQUIRED cutover step: when actually flipping official_mcp_enabled=true for the tempo preset,
-  // move `tempo|트레이스|\btrace\b` from the monitoring rule below to this rule (see ADR-017 §Trade-offs).
-  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|datadog|데이터독|dynatrace|다이나트레이스|newrelic|new relic|뉴렐릭/i },
+  // Tempo/트레이스/trace stay on monitoring, which owns the existing tempo-mcp-target Lambda.
+  // The catalog has no hosted Tempo preset. Enabling official_mcp_enabled for the supported
+  // vendors does not move Tempo. Any future move must match actual gateway membership and
+  // golden-routing tests (ADR-017, Decision 4 and Trade-offs).
+  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|datadog|데이터독|dynatrace|다이나트레이스|newrelic|new relic|뉴렐릭|\bnotion\b|노션/i },
   { key: 'cost', re: /비용|요금|예산|절감|billing|cost|budget|forecast|spend/i },
   { key: 'security', re: /보안|권한|역할|정책|iam|policy|role|denied|permission|public|노출/i },
   { key: 'network', re: /통신|연결|네트워크|포트|라우트|reachab|network|connectivity|security ?group|\bsg\b|nacl|tgw|vpn|peering|flow ?log/i },
@@ -41,8 +35,8 @@ const RULES: { key: string; re: RegExp }[] = [
   // Mimir long-term metrics, OpenSearch) — route those keywords here, where the tools are.
   // Ambiguous generic terms (metric/alarm/audit) are matched here but only reached when no
   // vendor-specific observability keyword matched first (see the FIRST rule above). tempo/트레이스/
-  // trace stay here too (see that rule's comment) — tempo-mcp-target is the legacy lambda target
-  // and lives on this gateway in the DEFAULT (official_mcp_enabled=false) state most deployments run in.
+  // trace stay here too: tempo-mcp-target belongs to this gateway, independently of the hosted
+  // vendor preset flag.
   { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit|loki|mimir|opensearch|tempo|트레이스|\btrace\b/i },
   { key: 'iac', re: /드리프트|스택|terraform|cloudformation|\bcdk\b|drift|stack|iac/i },
   // ops = inventory_read MCP home: topology, unused/orphan resources, and the load-balancer /

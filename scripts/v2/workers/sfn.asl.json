@@ -1,5 +1,5 @@
 {
-  "Comment": "AWSops v2 P2 async worker backbone. Route by $.runtime; the web enqueues 'queued', the worker claims running and sets succeeded itself; on any Catch the status_updater Lambda sets failed (SFN cannot write VPC Aurora). Idempotent: execution name == job_id (set by the dispatcher). Task TimeoutSeconds bound runaway/wedged runs so .sync stops the ECS task and Catch records failed (the reaper is only the slow backstop).",
+  "Comment": "AWSops v2 P2 async worker backbone. Route by $.runtime; the web enqueues 'queued', the worker claims running and sets succeeded itself; on any Catch the status_updater Lambda sets failed (this workflow uses Lambda for SQL persistence). Idempotent: execution name == job_id (set by the dispatcher). Task TimeoutSeconds bound runaway/wedged runs so .sync stops the ECS task and Catch records failed (the reaper is only the slow backstop).",
   "StartAt": "Route",
   "States": {
     "Route": {

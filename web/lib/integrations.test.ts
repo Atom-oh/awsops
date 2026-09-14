@@ -10,6 +10,21 @@ import { upsertIntegration, listIntegrations, setIntegrationEnabled, getEnabledI
 beforeEach(() => { query.mockReset(); delete process.env.AURORA_ENDPOINT; });
 
 describe('integrations catalog', () => {
+  it('rejects direct registration of the retired kind before persistence', async () => {
+    await expect(upsertIntegration({ name: 'retired', kind: 'custom_mcp', direction: 'egress' }))
+      .rejects.toThrow(/retired/);
+    expect(query).not.toHaveBeenCalled();
+  });
+  it('refuses a retired enable atomically but permits disabling historical rows', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ id: 7 }] });
+    expect(await setIntegrationEnabled(7, true)).toBe(false);
+    expect(await setIntegrationEnabled(7, false)).toBe(true);
+    const [sql, args] = query.mock.calls[0];
+    expect(sql).toMatch(/\$1 = false OR kind <> 'custom_mcp'/);
+    expect(sql).toMatch(/tier = 'custom'/);
+    expect(args).toEqual([true, 7]);
+    expect(query.mock.calls[1][1]).toEqual([false, 7]);
+  });
   it('upsertIntegration: custom-only ON CONFLICT, no version column, disabled-by-default', async () => {
     query.mockResolvedValueOnce({ rows: [{ id: 5 }] });
     const id = await upsertIntegration({ name: 'grafana-ro', kind: 'grafana', direction: 'egress', endpoint: 'https://g.example', transport: 'api_key', capability: 'read' });
@@ -47,8 +62,8 @@ describe('integrations catalog', () => {
   });
 
   it('setIntegrationEnabled is custom-only', async () => {
-    query.mockResolvedValueOnce({ rows: [] });
-    await setIntegrationEnabled(7, true);
+    query.mockResolvedValueOnce({ rows: [{ id: 7 }] });
+    expect(await setIntegrationEnabled(7, true)).toBe(true);
     const [sql, params] = query.mock.calls[0];
     expect(sql).toMatch(/UPDATE integrations SET enabled/i);
     expect(sql).toMatch(/tier = 'custom'/i);
@@ -72,6 +87,7 @@ describe('integrations catalog', () => {
     const out = await getEnabledIntegrations('123456789012');
     const [sql, params] = query.mock.calls[0];
     expect(sql).toMatch(/i\.enabled = true/i);
+    expect(sql).toMatch(/i\.kind <> 'custom_mcp'/i);
     expect(sql).toMatch(/agent_spaces/i);
     expect(sql).toMatch(/enabled_integration_ids/i);
     expect(params).toEqual(['123456789012']);

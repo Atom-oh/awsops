@@ -125,6 +125,11 @@ describe('assertDatasourceEndpointAllowed (datasource — private allowed, alway
     expect(() => assertDatasourceEndpointAllowed('gopher://10.0.0.1/')).toThrow();
     expect(() => assertDatasourceEndpointAllowed('not a url')).toThrow();
   });
+  it('requires a datasource API base URL without credentials, query or fragment', () => {
+    for (const url of ['https://user:secret@metrics.example', 'https://metrics.example?token=secret', 'https://metrics.example#token']) {
+      expect(() => assertDatasourceEndpointAllowed(url)).toThrow();
+    }
+  });
   it('isAlwaysBlockedHost: RFC1918 is NOT always-blocked but metadata is', () => {
     expect(isAlwaysBlockedHost('10.0.0.1')).toBe(false);
     expect(isAlwaysBlockedHost('169.254.169.254')).toBe(true);

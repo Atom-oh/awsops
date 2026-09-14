@@ -17,6 +17,26 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('DatasourcesTab', () => {
+  it.each(['endpoint_missing', 'endpoint_invalid'])('labels %s as an endpoint problem', async configurationStatus => {
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ datasources: [{
+      ...INSTANCES[0], connected: false, configurationStatus,
+    }] }) })) as unknown as typeof fetch;
+    render(<DatasourcesTab canManage />);
+    expect(await screen.findByText('연결 주소 확인 필요')).toBeTruthy();
+    expect(screen.queryByText('인증 설정 필요')).toBeNull();
+    expect(screen.queryByText('AI로 진단')).toBeNull();
+  });
+  it('shows mirror-only configuration distinctly and uses inferred auth when editing', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ datasources: [{
+      id: 7, name: 'migrated', kind: 'prometheus', endpoint: 'https://p/tenant',
+      authType: 'bearer', isDefault: true, connected: true, configurationStatus: 'mirror_only',
+    }] }) })) as unknown as typeof fetch;
+    render(<DatasourcesTab canManage />);
+    expect(await screen.findByText('기본 연결 설정 · 인스턴스 저장 필요')).toBeTruthy();
+    expect(screen.getByText('AI로 진단')).toBeTruthy();
+    fireEvent.click(screen.getByText('편집'));
+    expect((screen.getByLabelText('Auth method') as HTMLSelectElement).value).toBe('bearer');
+  });
   it('lists instances (name/type/auth/default) with an Explore link per row', async () => {
     render(<DatasourcesTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
@@ -48,7 +68,7 @@ describe('DatasourcesTab', () => {
     render(<DatasourcesTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
     expect(screen.getByText('총 데이터소스')).toBeTruthy();
-    expect(screen.getByText('연결됨')).toBeTruthy();
+    expect(screen.getByText('설정 저장됨')).toBeTruthy();
     expect(screen.getByText('타입 종류')).toBeTruthy();
     expect(screen.getByText('기본 데이터소스')).toBeTruthy();
     // single default in this scenario → the tile names it
@@ -105,5 +125,25 @@ describe('DatasourcesTab', () => {
     expect(screen.getAllByText('AI로 진단')).toHaveLength(1);
     const links = screen.getAllByText('AI로 진단') as HTMLAnchorElement[];
     expect(decodeURIComponent(links[0].getAttribute('href')!)).toContain('prod-prom');
+  });
+
+  it('shows unavailable data as an error instead of an empty inventory', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ datasources: [], available: false }) })) as unknown as typeof fetch;
+    render(<DatasourcesTab />);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.queryByText('등록된 데이터소스가 없습니다.')).toBeNull();
+  });
+
+  it('keeps the row and reports a failed delete', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    global.fetch = vi.fn(async (_url, init) => ({
+      ok: init?.method !== 'DELETE', status: init?.method === 'DELETE' ? 503 : 200,
+      json: async () => ({ datasources: INSTANCES }),
+    })) as unknown as typeof fetch;
+    render(<DatasourcesTab canManage />);
+    await waitFor(() => expect(screen.getByText('prod-prom')).toBeTruthy());
+    fireEvent.click(screen.getAllByText('삭제')[0]);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByText('prod-prom')).toBeTruthy();
   });
 });

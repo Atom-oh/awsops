@@ -67,7 +67,8 @@ describe('parseChangelog', () => {
     expect(pending.en).toContain('v0.9.0');
     expect(pending.ko).toContain('v0.9.0');
     expect(pending.en).toContain('topology diagram + resilience assessment');
-    expect(pending.ko).toContain('구성도 + 복원력 평가');
+    expect(pending.ko).toBe(pending.en);
+    expect(c.versions.every(v => v.ko === v.en)).toBe(true);
   });
 
   it('latest = 첫 번째 non-Unreleased 버전 (사이드바 칩과 CHANGELOG 일치의 근거)', () => {

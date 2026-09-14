@@ -42,19 +42,14 @@ _GATEWAY_ALIAS = {"observability": "external-obs"}
 def _resolve_gateway_key(role, gateways):
     """Map a chat/section role to an actual key in the runtime GATEWAYS map.
 
-    BUGFIX: `_discover_gateways` derives keys via name.replace("awsops-","").replace("-gateway","").
-    While v1 and v2 gateways COEXIST, v2 gateways are named `awsops-v2-<x>-gateway`, so discovery
-    yields `v2-<x>` (e.g. `v2-external-obs`), whereas the GATEWAYS_JSON env fallback uses the
-    canonical `<x>` (`external-obs`). The `observability`→`external-obs` alias only matched the env
-    spelling; on the (primary) discovery path `external-obs` was absent → silent fallback to `ops`.
-
-    We try the CANONICAL key first, then the `v2-`-prefixed transition spelling. This is
-    forward-compatible: once v2 merges to main and the gateways are renamed to `awsops-<x>-gateway`
-    (v1 retired, the `v2` name dropped), discovery yields the canonical `<x>` and the first branch
-    matches — the `v2-` fallback becomes dead code. **REMOVE the `v2-` candidate at the v2→main
-    cutover** (it is a coexistence shim, not permanent behavior)."""
+    Discovery strips "awsops-" and "-gateway", so current awsops-v2-<x>-gateway
+    names produce v2-<x>. GATEWAYS_JSON uses canonical <x> keys. Preserve both
+    spellings while these configuration paths differ; the v2 main cutover did
+    not remove the prefix. Without this compatibility, observability can
+    silently fall back to ops instead of external-obs.
+    """
     key = _GATEWAY_ALIAS.get(role, role)
-    # canonical first; `v2-` = transition shim (drop at v2→main). The DEFAULT_GATEWAY fallback is
+    # Canonical first, then the current discovery spelling. The DEFAULT_GATEWAY fallback is
     # resolved the SAME tolerant way — under v2-only discovery the default is `v2-ops`, not `ops`,
     # so a hard `GATEWAYS[DEFAULT_GATEWAY]` would KeyError. Returning DEFAULT_GATEWAY as the last
     # resort yields None at the call site (GATEWAYS.get), which the MCP try-block degrades to a
@@ -427,16 +422,24 @@ def build_skill_prompt(gateway_role, tools):
 def _filter_tools(tools, allowlist):
     """ADR-031/ADR-039: enforce the resolver-computed tool allowlist OUTSIDE the model.
 
-    Keeps only tools whose ``.tool_name`` is in ``allowlist``, preserving the original
-    tool order. ``None`` or ``[]`` ⇒ no restriction (the resolver omits the key when
-    empty; ``[]`` is NOT deny-all). Unknown names in the allowlist are ignored. A
-    non-empty allowlist that matches nothing yields an empty tool set (the agent then
-    runs tool-less — safe). This is the single point where the per-account / per-skill
-    cap actually takes effect at the runtime (the cap was previously dropped here)."""
-    if not allowlist:
+    None is legacy unrestricted; [] or the reserved wire token is deny-all. The BFF resolves gateway aliases
+    to exact target-qualified names; NEVER authorize by suffix here. Duplicate
+    identities are ambiguous across sources and denied before deduplication.
+    """
+    if allowlist is None:
         return tools
+    if not isinstance(allowlist, list) or any(not isinstance(n, str) for n in allowlist):
+        return []
+    if '!awsops-deny-all!' in allowlist:
+        return []  # also denies a malicious advertised token or a malformed mixed list
     allow = set(allowlist)
-    return [t for t in tools if getattr(t, "tool_name", None) in allow]
+    counts = {}
+    for t in tools:
+        name = getattr(t, "tool_name", None)
+        if isinstance(name, str):
+            counts[name] = counts.get(name, 0) + 1
+    return [t for t in tools if getattr(t, "tool_name", None) in allow
+            and counts.get(getattr(t, "tool_name", None)) == 1]
 
 
 # ADR-017 (amended 2026-08-05) — fail-closed runtime allowlist for the vendor-hosted official-MCP
@@ -1165,10 +1168,11 @@ async def handler(payload):
                 integrations, lambda spec: _connect_integration(spec, stack))
             # ADR-031/039: enforce the resolver-computed allowlist OUTSIDE the model over BOTH gateway +
             # integration tools BEFORE the prompt tool-list and Agent(tools=) are built (cap is the ceiling).
-            # Dedup first (gateway precedence) so a name collision never hands Agent two same-named tools.
-            tools = _filter_tools(_dedup_by_tool_name(gateway_tools + clickhouse_stdio_tools + integration_tools), tool_allowlist)
+            # Filter before dedup: an ambiguous identity must not silently pick the first source.
+            tools = _dedup_by_tool_name(_filter_tools(
+                gateway_tools + clickhouse_stdio_tools + integration_tools, tool_allowlist))
             tool_names = [t.tool_name for t in tools]
-            logging.info(f"Gateway [{gateway_role}] tools ({len(tools)} = {len(gateway_tools)} gw + {len(clickhouse_stdio_tools)} stdio + {len(integration_tools)} integ, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
+            logging.info(f"Gateway [{gateway_role}] tools ({len(tools)} = {len(gateway_tools)} gw + {len(clickhouse_stdio_tools)} stdio + {len(integration_tools)} integ, allowlist={'on' if tool_allowlist is not None else 'off'}): {tool_names}")
 
             # ADR-031: resolver override (custom agent) OR built-in SKILL_BASE; + dynamic tools + account directive
             if system_prompt_override:

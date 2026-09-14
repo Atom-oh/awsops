@@ -1,8 +1,10 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import SchedulePanel from './SchedulePanel';
 import SubscribersPanel from './SubscribersPanel';
 import ReportSections from './ReportSections';
+import ReportHandoff from './ReportHandoff';
+import { invariantCoverage, type ReportHandoffData } from '@/lib/report-handoff';
 import IntentPanel from './IntentPanel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { localeOf } from '@/lib/i18n';
@@ -49,15 +51,6 @@ interface ReportSummary {
   [k: string]: unknown;
 }
 
-interface InvariantCoverage {
-  total: number;
-  assessed: number;
-  passed: number;
-  failed: number;
-  unassessed: number;
-}
-const COVERAGE_FIELDS = ['total', 'assessed', 'passed', 'failed', 'unassessed'] as const;
-
 function verdictRows(value: unknown): DriftVerdict[] {
   if (!Array.isArray(value)) return [];
   return value.filter(v => v && typeof v === 'object' && !Array.isArray(v)).map(v => ({
@@ -67,19 +60,6 @@ function verdictRows(value: unknown): DriftVerdict[] {
     severity: typeof v.severity === 'string' ? v.severity : undefined,
     observed: typeof v.observed === 'string' ? v.observed : undefined,
   }));
-}
-
-function invariantCoverage(summary: ReportSummary, drift: DriftVerdict[], unassessed: DriftVerdict[]): InvariantCoverage | null {
-  const raw = summary.invariant_coverage;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)
-      || !Array.isArray(summary.drift) || !Array.isArray(summary.unassessed)
-      || summary.drift.length !== drift.length || summary.unassessed.length !== unassessed.length) return null;
-  const values = raw as Record<string, unknown>;
-  if (!COVERAGE_FIELDS.every(k => typeof values[k] === 'number'
-      && Number.isSafeInteger(values[k]) && (values[k] as number) >= 0)) return null;
-  const c = raw as InvariantCoverage;
-  return c.total === c.assessed + c.unassessed && c.assessed === c.passed + c.failed
-    && c.failed === drift.length && c.unassessed === unassessed.length ? c : null;
 }
 
 const SEV_CLASS: Record<string, string> = {
@@ -116,7 +96,9 @@ export default function DiagnosisView() {
   }, [lang, reportLangTouched]);
 
   const [reports, setReports] = useState<ReportRow[]>([]);
+  const [handoff, setHandoff] = useState<{ id: number; data: ReportHandoffData | null } | null>(null);
   const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress; title?: string | null; tags?: string[]; can_edit?: boolean; tier?: string; created_at?: string; finished_at?: string | null } | null>(null);
+  const selectedReport = useRef<number | null>(null);
   const [titleDraft, setTitleDraft] = useState<string | null>(null); // non-null while editing the title
   const [tagDraft, setTagDraft] = useState('');
   const [submitting, setSubmitting] = useState(false); // brief: the POST round-trip only
@@ -132,10 +114,14 @@ export default function DiagnosisView() {
     if (r.ok) setReports((await r.json()).reports);
   }, []);
 
-  const open = useCallback(async (id: number) => {
+  const open = useCallback(async (id: number, refresh = false) => {
+    if (refresh && selectedReport.current !== id) return;
+    if (!refresh) selectedReport.current = id; // selection intent changes before the request finishes
     const r = await fetch(`/api/diagnosis/${id}`);
     if (r.ok) {
       const j = await r.json();
+      if (selectedReport.current !== id) return;
+      setHandoff({ id, data: j.handoff ?? null });
       setActive({
         id, markdown: j.markdown, summary: (j.report?.summary as ReportSummary) ?? null,
         status: j.report?.status, error: j.report?.error ?? null, progress: j.report?.progress,
@@ -152,6 +138,7 @@ export default function DiagnosisView() {
     if (!window.confirm(tt('이 리포트를 삭제할까요? (목록에서 숨겨집니다)'))) return;
     const r = await fetch(`/api/diagnosis/${id}`, { method: 'DELETE' });
     if (r.ok) {
+      if (selectedReport.current === id) selectedReport.current = null;
       setActive((a) => (a?.id === id ? null : a));
       await loadList();
     }
@@ -164,9 +151,13 @@ export default function DiagnosisView() {
     });
     if (r.ok) {
       setActive((a) => (a && a.id === id ? { ...a, ...meta } : a));
+      if (selectedReport.current === id) {
+        setHandoff(h => h?.id === id ? null : h);
+        await open(id, true); // A background refresh must never re-select a report.
+      }
       await loadList();
     }
-  }, [loadList]);
+  }, [loadList, open]);
 
   useEffect(() => {
     loadList();
@@ -231,6 +222,7 @@ export default function DiagnosisView() {
         await open(posted.report_id);
         return;
       }
+      selectedReport.current = null;
       setActive(null);  // clear any opened report so the new running one shows its progress
       await loadList(); // the poll effect takes over while the new report is 'running'
     } finally {
@@ -367,6 +359,9 @@ export default function DiagnosisView() {
         <div className="mb-4">
           <IntentPanel />
         </div>
+        {view && view.status !== 'running' && (
+          <ReportHandoff key={view.id} handoff={handoff?.id === view.id ? handoff.data : null} />
+        )}
         {view?.markdown ? (
           <>
             {/* Title — editable inline by owner/admin; read-only otherwise. Plain text (React-escaped). */}
@@ -605,7 +600,7 @@ function ReportInsights({ summary }: { summary: ReportSummary }) {
   const { tt } = useI18n();
   const drift = verdictRows(summary.drift);
   const unassessed = verdictRows(summary.unassessed);
-  const coverage = invariantCoverage(summary, drift, unassessed);
+  const coverage = invariantCoverage(summary);
   const regressions = verdictRows(summary.diff?.regressions);
   const improvements = Array.isArray(summary.diff?.improvements) ? summary.diff.improvements : [];
   return (

@@ -1,6 +1,6 @@
 ---
 sidebar_position: 7
-title: Datasources
+title: Superseded datasource reference
 description: External datasource management (Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 ---
 
@@ -8,7 +8,15 @@ import Screenshot from '@site/src/components/Screenshot';
 import DatasourceFlow from '@site/src/components/diagrams/DatasourceFlow';
 import DatasourceExploreFlow from '@site/src/components/diagrams/DatasourceExploreFlow';
 
-# Datasources
+# Superseded datasource reference
+
+:::warning
+This page preserves older, mixed-version instructions and illustrations for reference. They are not current operating guidance. Use the [current datasource guide](../observability/datasources) for supported APIs, authentication, status and execution steps.
+:::
+
+<details>
+<summary>Historical content — do not follow for current operations</summary>
+
 
 A Grafana-style datasource management page for integrating external monitoring and observability systems with AWSops.
 
@@ -334,3 +342,5 @@ Keywords recognized by the AI assistant: **prometheus**, **loki**, **tempo**, **
 - [Monitoring Dashboard](./monitoring.md) - System monitoring overview
 - [CloudWatch](./cloudwatch) - AWS CloudWatch metrics
 - [AI Assistant](../overview/ai-assistant) - AI analysis features
+
+</details>

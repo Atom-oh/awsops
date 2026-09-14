@@ -16,7 +16,7 @@
 //
 // SOURCE OF TRUTH lockstep (mcp-presets.test.ts): every slug here must be a member of both
 // INTEGRATION_KINDS_EGRESS and KNOWN_CONNECTOR_SLUGS.
-import { KNOWN_CONNECTOR_SLUGS } from '@/lib/integration-credentials';
+import type { KNOWN_CONNECTOR_SLUGS } from '@/lib/integration-credentials';
 
 export interface McpPreset {
   slug: (typeof KNOWN_CONNECTOR_SLUGS)[number];
@@ -45,8 +45,8 @@ export const MCP_PRESETS: McpPreset[] = [
     slug: 'notion',
     label: 'Notion',
     official: false,
-    help: 'notion.so/my-integrations 에서 내부 통합을 만들고 토큰을 붙여넣으세요.',
-    docsUrl: 'https://developers.notion.com/docs/get-started-with-mcp',
+    help: 'Notion 내부 통합 토큰을 등록하고, 읽을 페이지의 연결 메뉴에서 해당 통합에 접근 권한을 부여하세요.',
+    docsUrl: 'https://developers.notion.com/docs/create-a-notion-integration',
     readOnlyNote: '읽기 전용',
   },
   {

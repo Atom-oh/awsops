@@ -1,83 +1,77 @@
-# E2E observability implementation plan / E2E 관측성 구현 계획
+# Observability Evidence and Limits
 
-**Goal / 목표:** Connect workload evidence, execution state, changes and cost without treating
-missing observations as healthy. 관측 부재를 정상으로 판정하지 않고 워크로드의 실행 상태,
-근거, 변경과 비용을 연결한다.
+Policy: [BASELINE](../decisions/BASELINE.md). This reference separates implemented
+evidence paths from incomplete producer integration; it does not claim a deployed
+end-to-end outcome from an interface or unit fixture alone.
 
-**Architecture / 설계:** Keep the existing read-only datasource adapters, Aurora materialized
-graphs and asynchronous workers. Normalize identity and collection coverage before building
-graphs or evaluating invariants. 기존 읽기 전용 수집기·Aurora 그래프·비동기 워커를 유지하고,
-그래프 생성과 진단에 앞서 식별자와 수집 범위를 정규화한다.
+## Trace and graph evidence
 
-**Tech stack:** Next.js/TypeScript, Python, PostgreSQL, existing ClickHouse/Tempo/Prometheus/Mimir
-connectors. No new telemetry backend or AWS-mutating tool.
+[trace-source.ts](../../web/lib/trace-source.ts) returns `SourceRead<T>` with
+items, status, source ID, safe reason codes, and the exact read window. Missing
+configuration, query failure, truncation, malformed rows, and successful empty
+results must remain distinguishable. Reasons exclude raw exceptions/credentials.
+[graph-sources.ts](../../web/lib/graph-sources.ts) resolves registered adapters;
+a registry error is evidence failure, not a silent successful fallback.
 
-## Constraints / 제약
+[trace-graph.ts](../../web/lib/trace-graph.ts) preserves source/trace/span identity,
+cloud and Kubernetes scope, and asynchronous links. Service names alone do not
+establish identity. Metric counts and sampled spans remain separate evidence.
+[trace-evidence.ts](../../web/lib/trace-evidence.ts) marks messaging destinations
+as telemetry claims; even a destination ARN is not AWS-verified queue attribution.
+Do not infer the queue's account from the reporting workload or attach an inventory
+reference without independent evidence.
 
-- Preserve ADR-005: diagnosis and remediation proposals only. AWS mutation stays frozen.
-- Use `terraform/v2/foundation/`; merged migration bodies and `-- since:` headers stay immutable.
-- Keep origin CI, production configuration, deployment roles and branch strategy.
-- Preserve origin decision bodies, review documents, branding and existing private-document links.
-- Distinguish observed zero, successful empty, unavailable, failed, partial and stale observations.
-- Keep bounded queries; a cap or failed source must be visible to API, UI and diagnosis consumers.
+[graph-store.ts](../../web/lib/graph-store.ts) collects one shared 60-minute window,
+requests up to 1,000 spans per adapter, and caps materialization at 200 nodes and
+500 edges. Caps, orphans, invalid spans, unresolved messaging, and missing infra
+coverage make results partial. A failed/unavailable source retains the prior
+snapshot while recording the failed attempt; complete empty collection may publish
+an empty graph. Attempt ordering and the trace advisory lock prevent older results
+from replacing newer state.
 
-## Delivery and verification / 구현 및 검증
+[graph-state.ts](../../web/lib/graph-state.ts) exposes status and freshness through
+`/api/graph`, including empty graphs. Missing state is unknown/stale. Freshness uses
+the capture timestamp and a threshold of at least 15 minutes or twice the configured
+rebuild interval; errors/unavailability/retained snapshots are stale independently.
+Do not replace a missing timestamp with the current clock.
 
-1. **Source integration / 원본 통합**
-   - Backport reviewed product changes from `samples/dev` to the matching `origin/main` baseline.
-   - Include the merged Tempo query fix; copy content without importing public git ancestry.
-   - Verify source parity, migration immutability, origin exclusions, web/worker tests and build.
+## Diagnosis trust
 
-2. **Evidence and identity / 근거와 식별자**
-   - `SourceRead<T>` carries items, status, source ID, reason codes and the exact time window.
-   - Normalize cloud account/region, deployment environment, service namespace and Kubernetes scope.
-   - Index spans by source, trace and span identity; preserve asynchronous span links.
-   - Keep metric and sampled-span evidence distinguishable.
-   - Record graph collection attempts; keep the last successful graph when a source fails.
-   - Expose partial/stale/unavailable states alongside graph data, including empty graphs.
-   - Regressions: identical service names in different scopes, missing parents, span links, source
-     failure versus successful empty, bounded/truncated reads, and malformed observations.
+[sources.py](../../scripts/v2/workers/diagnosis/sources.py) currently supplies
+unresolved X-Ray `to_ref` edges and no inventory `unencrypted` aggregate.
+[invariants.py](../../scripts/v2/workers/diagnosis/invariants.py) requires a different
+normalized shape. Current collectors therefore leave the implemented invariant
+kinds unknown; positive/zero unit fixtures prove the evaluator contract, not live
+collector coverage. Producer adapters and collector-to-verdict integration remain
+incomplete. Empty drift/improvement lists are not evidence of health.
 
-3. **Diagnosis trust / 진단 신뢰성**
-   - Carry collector status into deterministic invariant evaluation.
-   - Return unknown when an absence-based conclusion lacks complete evidence.
-   - The normalized evaluator contract supports positive violations and valid numeric zero.
-     This is unit-fixture/direct-caller coverage, not live collector integration.
-   - **Pending producer integration:** current X-Ray edges contain `to_ref`, not resolved `to`,
-     and inventory has no `unencrypted` aggregate. All six live invariant kinds therefore
-     remain `unknown`; empty regressions/improvements do not certify health. The producer
-     adapters and collector-to-verdict validation are incomplete.
-   - **생성기 연결 미완료:** 현재 X-Ray의 `to_ref`는 `to`로 해석되지 않고 암호화 집계도
-     없으므로 운영 불변식 6종은 모두 `unknown`이다. 정규화된 단위 테스트가 운영 지원을
-     의미하지 않으며, 빈 회귀·개선 목록을 정상으로 해석하지 않는다.
-   - Persist assessed/unassessed counts and unknown reasons independently of the model.
-     Render Intended vs Actual deterministically in the report/export, and expose the same
-     coverage in the UI; legacy reports without coverage must remain visibly unassessed.
-   - 미평가 건수·사유를 모델과 별개로 저장하고 본문·내보내기·화면에 표시한다.
-     평가 기록이 없는 과거 보고서를 정상이나 개선으로 해석하지 않는다.
-   - Treat missing confidence conservatively; keep the incident feature gate unchanged.
-   - Port upstream PDF request isolation into the v2 worker.
-   - Regressions: degraded/empty/partial observations and externally referenced report content.
+[report.py](../../scripts/v2/workers/diagnosis/report.py) persists assessed/unassessed
+coverage and renders Intended vs Actual deterministically, independently of the
+model. [DiagnosisView](../../web/components/diagnosis/DiagnosisView.tsx) displays
+coverage and treats legacy reports without it as unassessed. Valid normalized
+violations can be reported with partial evidence; a pass requires complete usable
+evidence. Preserve `test_invariants.py` and `test_intended_vs_actual.py` semantics.
 
-4. **Representative workload / 대표 워크로드**
-   - Use AWSops asynchronous diagnosis jobs as the first workload.
-   - Preserve correlation across enqueue, dispatch and worker completion.
-   - Show queue time, execution time, terminal state and evidence coverage.
-   - Validate success, delay, retry and failure without mutating customer resources.
+[exporters.py](../../scripts/v2/workers/diagnosis/exporters.py) sanitizes PDF HTML
+and renders with JavaScript disabled, service workers blocked, offline browser
+context, and context-wide request blocking. Export failure is isolated from the
+primary Markdown report. Browser resource-request tests verify isolation where
+Chromium is available; a skipped browser test does not prove it ran.
 
-5. **Operational outcomes / 운영 성과**
-   - Keep SLO attainment, deployment/change context and allocated cost tied to a workload and window.
-   - Label allocated/estimated cost and separate recommendation disappearance from verified savings.
-   - Evaluate cause candidates and abstention against labeled scenarios; routing accuracy alone is
-     not a measure of diagnosis quality.
+## Job timing and outcomes
 
-## Acceptance / 완료 기준
+[Job observability](../../web/app/api/jobs/observability/route.ts) is ownership/admin
+scoped. It accepts a 1–168 hour window, samples at most 2,000 rows with a count from
+the same query snapshot, and returns the latest 50 jobs. Incomplete samples or
+missing timestamps suppress complete-coverage attainment/percentile claims.
 
-The origin backport must preserve origin deployment behavior and existing ownership checks.
-The P0 regressions must be covered by executable tests. E2E and outcome capabilities are complete
-only when their producers, read APIs and operator views are connected and tested; interfaces or
-documentation alone do not establish completion.
+[job-observability.ts](../../web/lib/job-observability.ts) measures acceptance to
+first worker start and first start to terminal state, including retries. This is
+worker lifecycle time, not CPU time or pure queue delivery latency. Migration-owned
+`started_at`/`finished_at` preserve terminal timing; unknown legacy timestamps remain
+unknown. The `/jobs` view consumes these explicit coverage fields.
 
-origin 역이식은 origin 배포 동작과 기존 소유권 검사를 보존해야 한다. P0 회귀는 실행 가능한 테스트로
-검증한다. E2E·성과 기능은 데이터 생성·조회 API·운영 화면이 연결되어 검증되어야 완료이며,
-인터페이스나 문서만 추가한 상태는 완료로 간주하지 않는다.
+Workload-wide deployment/change correlation, allocated-cost outcomes, and causal
+quality evaluation still require connected producers and validation. Routing
+accuracy or disappearance of a recommendation does not establish diagnosis quality
+or verified savings.

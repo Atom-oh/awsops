@@ -1,66 +1,36 @@
 ---
 sidebar_position: 2
 title: 自定义代理
-description: 管理 AI 助手的代理、技能、集成与工具配置的管理员界面
+description: 注册诊断角色、关联可复用技能，并在聊天中选择
 ---
 
-import Screenshot from '@site/src/components/Screenshot';
+# 自定义代理与技能
 
-# 自定义代理
+通过**集成 → Agents & Skills → Custom Agents & Skills** 管理，需要管理员权限。代理定义诊断角色及现有网关；技能提供可复用的 Markdown 指令。注册不会安装执行代码，也不会自动连接外部托管代理。
 
-此页面可直接配置 AI 助手如何运作的代理、技能、集成与工具。
+## 从注册到使用
 
-<Screenshot src="/screenshots/operations/custom-agents.png" alt="自定义代理 & 技能" />
+1. 在 **New Agent** 中输入 kebab-case 名称、描述、角色指令、网关和路由关键词。也可选择外部可观测性网关 `observability`。
+2. 在 **New Skill** 中输入名称、描述及 Markdown 指令，明确证据使用条件及未知范围的呈现方式。
+3. 新建或替换的自定义记录默认 **Disabled**。先启用技能，再从代理的技能选择框中关联。列表按组合顺序显示已关联的技能。
+4. 启用代理。如果账号存在 **Agent Space**，还需将代理加入该账号的选择。账号工具上限可缩小可用工具范围；注册不会授予新的基础设施权限。 UI 创建的指令型技能在没有工具声明或保留限制时使用现有网关只读工具，账户上限进一步缩小范围。已声明或已撤销限制的交集为空时拒绝所有工具，并在聊天中说明。策略允许的工具数不代表实时发现或部署数量。 点击 **Save Agent Space** 保存选择。
+5. 在启用混合路由的部署中，输入 `/`，选择当前账号已启用的自定义代理，再发送问题。也支持关键词自动选择。更改账号范围会清除已选择的自定义命令；发送时服务器会重新检查可用性。
 
-:::info 仅限管理员
-只有**管理员**才能访问此页面（Cognito 管理员组或 SSM 管理员允许列表）。无权限的用户将看到访问被拒绝的界面。
-:::
+内置记录不能在此页面替换或切换状态。使用已有的自定义名称保存会替换定义并将其禁用，请重新审核后再启用。
 
-## 主要功能
+## 推荐的起始角色
 
-### New Agent（新建代理）
-创建定义助手响应方式的新代理。
+| 目的 | 网关 | 应包含的指令 |
+|---|---|---|
+| SRE 调查 | `ops` | 引用证据和观测时间，区分假设、影响及后续只读检查。 |
+| IAM 审查 | `security` | 说明信任边界与权限证据，标明尚未评估的控制项。 |
+| FinOps 审查 | `cost` | 估算节省前核实账单周期、利用率与承诺用量。 |
 
-- **name**：代理名称（kebab-case）
-- **description**：代理说明
-- **persona**：系统提示词（代理的语气·视角）
-- **gateway**：负责领域 — **network**、**container**、**iac**、**data**、**security**、**monitoring**、**cost**、**ops**
-- **routing keywords**：将问题路由到此代理的路由关键词（逗号分隔）
-- **agent type**：角色类型 — **generic**、**on_demand**、**triage**、**rca**、**mitigation**、**evaluation**
+这些是 AWSops 内部角色。AWS DevOps Agent 和 AWS Security Agent 是独立服务，不会因注册角色而创建或调用。
 
-### New Skill（新建技能）
-创建可供多个代理共享的可复用技能。
+## 数据与知识连接
 
-- **name** / **description**：技能名称与说明
-- **instructions**：技能执行指令
-- **agent types (targeting)**：应用此技能的目标代理类型（复选框多选）
+通过**集成 → Datasources** 注册 Datadog、Dynatrace 等数据源。通过 **Connectors** 管理 Notion 凭证及受支持的 hosted MCP 预配置。保存凭证不等于连接已验证。注册自定义代理不会启用任意 MCP 端点或自主基础设施变更。 此页面的 **Integrations (advanced)** 仍支持受认可类型的 egress/ingress 注册及启用/禁用。新记录默认禁用；凭证、公开工具、来源允许列表和 incident/write 开关需要单独配置。不能注册或启用 `custom_mcp`。普通数据源和 Notion 连接仍在集成中心管理。
 
-### Agents / Skills 列表
-- 新建的代理和技能以**禁用（Disabled）**状态开始，需在列表中切换开关来启用。
-- 内置项目会显示 **built-in** 标签，不属于切换对象。
-
-### Integrations (advanced)
-只读可观测性数据源（**Prometheus**、**Loki**、**Tempo**、**Mimir**、**ClickHouse**）和连接器（**Notion** 等）现在不在此页面，而是在**集成（Integrations）中心**（`/integrations`）的**数据源** / **连接器**标签页中管理连接、凭证注册和 schema 缓存。此部分仅保留用于直接注册不属于上述范畴的**自定义 egress/ingress 集成**的 **Register integration**。
-
-### Agent Space
-选择要在账户中启用的代理、技能、集成以及**工具允许列表（tool allowlist）**后保存。每次保存版本号都会递增。
-
-## 使用方法
-1. 通过侧边栏**集成**（`/integrations`）→ **Agents & Skills** 标签页中的链接进入此页面（`/customization`）（不在侧边栏直接显示）
-2. 在 **New Agent** 中输入 name、description、persona，选择 **gateway** 和 **agent type**，填写路由关键词后创建
-3. 如有需要，在 **New Skill** 中创建技能并选择要应用的 **agent types**
-4. 在下方 **Agents** / **Skills** 列表中切换新项目的开关以启用
-5. 数据源和连接器的连接在侧边栏**集成**（`/integrations`）中进行 — 此页面的 **Integrations (advanced)** 部分用于注册该范畴之外的自定义集成
-6. 在 **Agent Space** 中选择要启用的项目和工具允许列表，并通过 **Save Agent Space** 保存
-
-:::tip 以禁用状态开始
-新建的代理和技能不会自动启用。需要在列表中切换开关，并将其纳入 **Agent Space** 保存后才会反映到助手中。
-:::
-
-:::info 凭证不会再次显示
-集成凭证保存后不会显示在界面上。如需变更，请重新输入值并 **Update**。
-:::
-
-## 相关页面
-- [数据源浏览](../observability/datasources) - 浏览在集成中心连接的可观测性数据源
-- [AI 助手](../overview/assistant) - 与配置好的代理对话
+- [数据源管理](../observability/datasources)
+- [AI 助手](../overview/assistant)

@@ -43,4 +43,8 @@ def execute(action, inputs, allowlist, *, get_secret, http_post, dry_run=False):
     if not token:
         raise ValueError("slack executor: no token in secret")
     resp = http_post(channel, text, token)
+    # HTTP success alone is not message acceptance. Do not persist a succeeded job for
+    # an API rejection or malformed response; the existing workflow handles the failure.
+    if not isinstance(resp, dict) or resp.get("ok") is not True:
+        raise RuntimeError("slack executor: API did not acknowledge message")
     return {"dry_run": False, "posted": True, "redactions": redactions, "response": resp}
