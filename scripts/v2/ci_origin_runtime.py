@@ -364,7 +364,7 @@ class Runtime:
     def worker_contract(self):
         self.definition()
         self.definition(self.project + "-worker")  # SFN consumes the latest ACTIVE family revision.
-        response = self.aws("states", "describe-state-machine", "--state-machine-arn", self.c["state_machine_arn"])
+        response = self.aws("stepfunctions", "describe-state-machine", "--state-machine-arn", self.c["state_machine_arn"])
         require(response.get("stateMachineArn") == self.c["state_machine_arn"] and response.get("status") == "ACTIVE",
                 "worker_state_machine_invalid")
         definition = decode_json(response.get("definition", ""))
