@@ -16,6 +16,7 @@ remain separate.
 | Login and authorization | [Auth and identity](02-auth.md) | `auth.tf`, edge template, `web/lib/auth.ts` |
 | Persistent state | [Aurora](03-data-aurora.md) | `data.tf`, migrations, application DB clients |
 | Request handling | [Web BFF](04-web-bff.md) | `web/`, `workload.tf`, deploy script |
+| Operator CI bootstrap | [GitHub Actions access](github-actions-access.md) | `github-actions.tf`, `modules/github-actions-release/` |
 | AI tools and routing | [AgentCore](05-agentcore.md) | provisioner catalog, `agent/`, chat handler |
 | Async execution | [Workers](06-workers.md) | `workers.tf`, `scripts/v2/workers/` |
 | Cluster access | [EKS](07-eks.md) | `eks.tf`, registry, Kubernetes proxy |

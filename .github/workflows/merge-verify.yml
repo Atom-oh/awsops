@@ -63,7 +63,7 @@ jobs:
         run: |
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
-          terraform test -filter=tests/runtime_iam.tftest.hcl
+          terraform test -filter=tests/runtime_iam.tftest.hcl -filter=tests/github_actions_release.tftest.hcl
 
   # Pre-merge mirror of deploy-guide.yml's deck gates, so a sensitive-content
   # leak or generator drift in the committed pptx is caught BEFORE the binary

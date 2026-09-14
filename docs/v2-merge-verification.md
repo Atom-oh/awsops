@@ -43,7 +43,7 @@ The Terraform stage runs `terraform -chdir=terraform/v2/foundation fmt -check` w
 available, and also runs `validate` when `terraform/v2/foundation/.terraform` exists. Missing
 Terraform tooling is reported as `SKIP`; Terraform diagnostics are non-blocking in this runner.
 CI separately pins Terraform 1.15.7 and requires backend-free init, validate and
-`terraform test -filter=tests/runtime_iam.tftest.hcl`. Providers are mocked, credentials are
+`terraform test -filter=tests/runtime_iam.tftest.hcl -filter=tests/github_actions_release.tftest.hcl`. Providers are mocked, credentials are
 not supplied, and the lock records Linux amd64/arm64 checksums. These required checks cannot
 be skipped by the local advisory stage.
 
