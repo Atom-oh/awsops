@@ -179,3 +179,60 @@ def test_notion_unknown_page_cannot_be_certified_by_empty_blocks(page):
             patch.object(notion, "_http_json", side_effect=[(200, page), (200, {"results": [], "has_more": False})]):
         out = notion.lambda_handler({"tool_name": "notion_fetch_page", "arguments": {"page_id": PAGE["id"]}}, None)
     assert receipt("notion_fetch_page", out) == "unverified"
+
+
+@pytest.mark.parametrize("tool", ["loki_query", "loki_query_range"])
+@pytest.mark.parametrize("mode,expected", [
+    ("empty", "empty"), ("rows", "success"), ("default_cap", "partial"),
+    ("custom_cap", "partial"), ("below_custom_cap", "success"), ("missing_status", "unverified"),
+    ("missing_kind", "unverified"), ("malformed_values", "unverified"), ("missing_data", "unverified"),
+    ("vector", "success"), ("matrix", "success"), ("malformed_matrix", "unverified"), ("pending", "error"),
+])
+def test_loki_query_source_status_and_server_line_cap(tool, mode, expected):
+    row = {"stream": {"job": "fixture"}, "values": [["1700000000000000000", "PRIVATE log"]]}
+    data = {"status": "success", "data": {"resultType": "streams", "result": []}}
+    args = {"query": "PRIVATE query"}
+    if mode in ("rows", "default_cap", "custom_cap", "below_custom_cap", "malformed_values"):
+        data["data"]["result"] = [copy.deepcopy(row)]
+    if mode == "default_cap":
+        data["data"]["result"][0]["values"] *= 100
+    elif mode in ("custom_cap", "below_custom_cap"):
+        args["limit"] = 1 if mode == "custom_cap" else 2
+    elif mode == "missing_status":
+        del data["status"]
+    elif mode == "missing_kind":
+        del data["data"]["resultType"]
+    elif mode == "malformed_values":
+        data["data"]["result"][0]["values"] = [["1700000000000000000", None]]
+    elif mode == "missing_data":
+        del data["data"]
+    elif mode in ("vector", "matrix", "malformed_matrix"):
+        values = {"value": [1, "2"]} if mode == "vector" else {"values": [[1, "2"]]}
+        data["data"] = {"resultType": "matrix" if mode == "malformed_matrix" else mode, "result": [{"metric": {}, **values}]}
+        if mode == "malformed_matrix":
+            data["data"]["result"][0]["values"][0][1] = None
+        args["limit"] = 1  # the Loki log-line limit does not cap metric results
+    elif mode == "pending":
+        data["status"] = "running"
+    with patch.object(loki, "_ds", return_value={"endpoint": "https://fixture.invalid"}), \
+            patch.object(loki, "http_json", return_value=(200, data)) as http:
+        out = loki.lambda_handler({"tool_name": tool, "arguments": args}, None)
+    http.assert_called_once()
+    assert receipt(tool, out) == expected
+    if out["statusCode"] == 200:
+        body = json.loads(out["body"])
+        assert body["collectionStatus"] in ("ok", "empty", "partial", "unknown")
+        if mode in ("rows", "default_cap", "custom_cap", "below_custom_cap"):
+            assert body["result"][0]["values"][0] == row["values"][0]
+
+
+@pytest.mark.parametrize("values", [[], [{"Value": "PRIVATE service"}]])
+def test_cost_dimension_actual_producer_drops_continuation_but_receipt_stays_partial(values):
+    import aws_cost_mcp as cost
+    from unittest.mock import Mock
+    client = Mock()
+    client.get_dimension_values.return_value = {"DimensionValues": values, "NextPageToken": "PRIVATE token"}
+    with patch.object(cost, "get_client", return_value=client):
+        out = cost.lambda_handler({"tool_name": "get_dimension_values", "arguments": {}}, None)
+    client.get_dimension_values.assert_called_once()
+    assert receipt("get_dimension_values", out) == "partial"
