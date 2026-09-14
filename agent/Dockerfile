@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir \
 COPY streamable_http_sigv4.py .
 COPY account_utils.py .
 COPY agent.py .
+COPY tool_receipts.py .
 COPY readiness.py .
 # Dark-path agent loop (flag-gated, default OFF) — see ADR-008 (amended) / BASELINE §2.
 COPY anthropic_loop.py .
