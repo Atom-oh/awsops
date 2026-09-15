@@ -19,6 +19,7 @@ ERROR_CODE = "unsupported_review_format"
 FENCE = re.compile(r"(`{3,}|~{3,})([^\r\n]*)$")
 REFERENCE = re.compile(r"(?:[\w./:$@#*+\[\]\\-]+(?:\(\))?)\Z", re.UNICODE)
 TICKS = re.compile(r"`+")
+ASSIGNMENT_TAIL = re.compile(r"(?P<spacing>\s*)(?P<operator>[:=])(?P<rhs>[^\r\n]*)")
 # Legacy shell adapters have no shared Python credential policy. Structured
 # adapters pass their existing sensitive-key pattern explicitly instead.
 DEFAULT_SENSITIVE_KEY = (
@@ -28,12 +29,23 @@ DEFAULT_SENSITIVE_KEY = (
 )
 
 
+def is_assignment(match):
+    """A bare section label or Setext underline contains no assignment value."""
+    if match["operator"] == ":" and re.fullmatch(r"[ \t*_~]*", match["rhs"]):
+        return False
+    if (match["operator"] == "=" and any(c in match["spacing"] for c in "\r\n")
+            and re.fullmatch(r"=*[ \t]*", match["rhs"])):
+        return False
+    return True
+
+
 def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
     """Return a static failure code; never include external text in diagnostics.
 
     Only explicit markup and sensitive assignments are classified. Ordinary
     unmarked prose is not parsed as a programming language. Callers supply the
-    existing confidentiality policy's sensitive-key regex.
+    existing confidentiality policy's sensitive-key regex when they have one;
+    legacy shell adapters use the default pattern above.
     """
     sensitive_pattern = re.compile(sensitive_pattern)
     fence = None
@@ -71,8 +83,8 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
             if not REFERENCE.fullmatch(reference):
                 return ERROR_CODE
             # Formatting only the key does not make an unfenced assignment safe.
-            if (sensitive_pattern.search(reference)
-                    and re.match(r"\s*[:=]", text[line_start + closing.end():])):
+            following = ASSIGNMENT_TAIL.match(text, line_start + closing.end())
+            if sensitive_pattern.search(reference) and following and is_assignment(following):
                 return ERROR_CODE
             prose.append(body[cursor:opening.start()])
             prose.append("\0")
@@ -81,9 +93,9 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
     if fence is not None:
         return ERROR_CODE
     assignment = re.compile(
-        sensitive_pattern.pattern + r"""(?:\\?["'])?\s*[:=]""",
+        sensitive_pattern.pattern + r"""(?:\\?["'])?""" + ASSIGNMENT_TAIL.pattern,
         sensitive_pattern.flags)
-    if assignment.search("".join(prose)):
+    if any(is_assignment(match) for match in assignment.finditer("".join(prose))):
         return ERROR_CODE
     return None
 

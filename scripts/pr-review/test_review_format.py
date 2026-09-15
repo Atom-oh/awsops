@@ -29,6 +29,14 @@ class FormatTests(unittest.TestCase):
         body = "Checked `validate()`.\n```sh\npassword='synthetic'\n```\nNo findings."
         self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
 
+    def test_section_labels_and_setext_underlines_are_prose(self):
+        for body in ("Authorization:\nThe caller is checked.",
+                     "**Authorization:**\nThe caller is checked.",
+                     "See `Authorization`:\nThe caller is checked.",
+                     "Checked `token`\n===\nThe caller is checked."):
+            with self.subTest(body=body):
+                self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
+
     def test_filter_damage_cannot_credit_a_panel(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

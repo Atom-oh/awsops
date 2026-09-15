@@ -2,7 +2,6 @@
 from pathlib import Path
 import sys
 import re
-from review_format import FORMAT_INSTRUCTIONS
 
 ROLES = {
     "codex": ("L2", "correctness", "Trace logic, state transitions, edge cases and regression tests."),
@@ -12,6 +11,8 @@ ROLES = {
 
 
 def prompt(tag, directory):
+    from review_format import FORMAT_INSTRUCTIONS
+
     lens, role, focus = ROLES[tag]
     base = (Path(directory) / f"{lens}.txt").read_text()
     base = re.sub(
