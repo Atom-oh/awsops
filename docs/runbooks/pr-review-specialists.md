@@ -25,6 +25,10 @@ Review prose is English. Inline code is limited to single-line, whitespace-free
 symbol/path references. Executable/configuration examples require closed top-level
 backtick or tilde fences starting at column one; do not nest them in lists or blockquotes. Use synthetic
 values only. A longer outer fence can quote an example containing a fence.
+Ordinary path/line citations, Markdown links and same-line prose labels remain
+valid. Assignment checks inspect bare configuration keys, not path or URL
+substrings. Quoted values, authorization schemes and equals assignments still
+require fences.
 
 The shared format validator checks decoded panel prose and chair output before
 and after scrubbing, and checks the final review at the coverage gate. Unsupported

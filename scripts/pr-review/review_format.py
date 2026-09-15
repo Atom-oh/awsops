@@ -20,8 +20,9 @@ FENCE = re.compile(r"(`{3,}|~{3,})([^\r\n]*)$")
 REFERENCE = re.compile(r"(?:[\w./:$@#*+\[\]\\-]+(?:\(\))?)\Z", re.UNICODE)
 TICKS = re.compile(r"`+")
 ASSIGNMENT_TAIL = re.compile(r"(?P<spacing>\s*)(?P<operator>[:=])(?P<rhs>[^\r\n]*)")
-# Legacy shell adapters have no shared Python credential policy. Structured
-# adapters pass their existing sensitive-key pattern explicitly instead.
+# Inspect complete configuration-key tokens, never substrings of paths or URLs.
+CONFIG_KEY = r"[A-Za-z_][A-Za-z0-9_-]*"
+KEY_TOKEN = re.compile(r"(?<![\w./:\\-])(" + CONFIG_KEY + r")(?![\w./\\-])")
 DEFAULT_SENSITIVE_KEY = (
     r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_.:-]*(?:password|passwd|pwd|dsn|api[_-]?key|"
     r"secret|token|credential|passphrase|private[_-]?key|cookie|authorization|auth(?![A-Za-z])|dockerconfigjson|"
@@ -30,9 +31,17 @@ DEFAULT_SENSITIVE_KEY = (
 
 
 def is_assignment(match):
-    """A bare section label or Setext underline contains no assignment value."""
-    if match["operator"] == ":" and re.fullmatch(r"[ \t*_~]*", match["rhs"]):
-        return False
+    """Distinguish prose labels from explicit configuration values."""
+    if match["operator"] == ":":
+        rhs = match["rhs"].strip()
+        if re.fullmatch(r"[*_~]*", rhs):
+            return False
+        # A same-line prose clause after a label is not a configuration example.
+        # Quoted/structured values and authorization schemes remain examples,
+        # including values containing spaces.
+        if (len(rhs.split()) > 1 and rhs[0] not in "\"'[{"
+                and not re.match(r"(?i)(?:Bearer|Basic|Digest)\s", rhs)):
+            return False
     if (match["operator"] == "=" and any(c in match["spacing"] for c in "\r\n")
             and re.fullmatch(r"=*[ \t]*", match["rhs"])):
         return False
@@ -84,7 +93,8 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
                 return ERROR_CODE
             # Formatting only the key does not make an unfenced assignment safe.
             following = ASSIGNMENT_TAIL.match(text, line_start + closing.end())
-            if sensitive_pattern.search(reference) and following and is_assignment(following):
+            if (re.fullmatch(CONFIG_KEY, reference) and sensitive_pattern.search(reference)
+                    and following and is_assignment(following)):
                 return ERROR_CODE
             prose.append(body[cursor:opening.start()])
             prose.append("\0")
@@ -92,11 +102,17 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
         prose.append(body[cursor:] + "\n")
     if fence is not None:
         return ERROR_CODE
-    assignment = re.compile(
-        sensitive_pattern.pattern + r"""(?:\\?["'])?""" + ASSIGNMENT_TAIL.pattern,
-        sensitive_pattern.flags)
-    if any(is_assignment(match) for match in assignment.finditer("".join(prose))):
-        return ERROR_CODE
+    plain = "".join(prose)
+    for token in KEY_TOKEN.finditer(plain):
+        if not sensitive_pattern.search(token[1]):
+            continue
+        tail_start = token.end()
+        quote = re.match(r"""\\?["']""", plain[tail_start:tail_start + 2])
+        if quote:
+            tail_start += quote.end()
+        following = ASSIGNMENT_TAIL.match(plain, tail_start)
+        if following and is_assignment(following):
+            return ERROR_CODE
     return None
 
 

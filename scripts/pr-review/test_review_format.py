@@ -53,6 +53,32 @@ class FormatTests(unittest.TestCase):
             self.assertFalse(responded.exists())
             self.assertNotIn("synthetic-private", result.stdout + result.stderr)
 
+    def test_review_citations_and_same_line_labels_are_prose(self):
+        for body in (
+            "See [auth.ts](web/lib/auth.ts:42) for the missing guard.",
+            "Authorization: The caller is checked.",
+            "**Authorization:** The caller is checked.",
+            "Checked `web/lib/token.ts`: the guard is missing.",
+            "Per `docs/decisions/002-auth-and-login.md`: signup is closed.",
+            "The guard at web/lib/auth.ts:42 is missing.",
+            "Checked `Authorization`: The caller is checked.",
+            "See https://example.invalid/auth:443/path for details.",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
+
+    def test_bare_configuration_assignments_still_require_fences(self):
+        for body in (
+            "password: synthetic",
+            "AWS_SESSION_TOKEN = synthetic",
+            '{"api_key": "synthetic"}',
+            "`password`: 'synthetic value'",
+            "Authorization: Bearer synthetic",
+            "password = synthetic value",
+        ):
+            with self.subTest(body=body), self.assertRaisesRegex(ValueError, "unsupported_review_format"):
+                decode_report(frame(body), "L2", NONCE)
+
     def test_final_gate_rejects_invalid_format_despite_complete_coverage(self):
         review = ("Run `echo hello`.\nCOVERAGE: COMPLETE\nVERDICT: PASS\n")
         result, reason = decision(review, b"diff", b"diff", " ".join(expected_cells()))
