@@ -109,6 +109,32 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
     expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace'")).rowCount).toBe(2);
   });
 
+  it.each(['all-empty', 'mixed'])('does not sweep prior trace rows for %s child fetch coverage', async mode => {
+    await trace();
+    const previous = await state('trace');
+    const nodes = (await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows;
+    const end = new Date(previous.attempted_at).getTime() + 1;
+    const child = { batches: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'new-service' } }] },
+      scopeSpans: [{ spans: [{ traceId: '2', spanId: '0000000000000001', kind: 1,
+        startTimeUnixNano: String(BigInt(end - 1000) * 1_000_000n),
+        endTimeUnixNano: String(BigInt(end - 500) * 1_000_000n) }] }] }] };
+    producer.invoke.mockReset()
+      .mockResolvedValueOnce({ collectionStatus: 'ok', traces: [{ traceID: '1' }, { traceID: '2' }] })
+      .mockResolvedValueOnce({ batches: [] })
+      .mockResolvedValueOnce(mode === 'mixed' ? child : { batches: [] });
+    const source = new TempoTraceSource(7), observed = vi.spyOn(source, 'recentSpans');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(end);
+    try { expect(await rebuildTraceGraph(pool, [source])).toMatchObject({ published: 0, retained: 1 }); }
+    finally { clock.mockRestore(); }
+    const read = await observed.mock.results[0].value;
+    expect(read).toMatchObject({ status: 'partial', canSweep: false, reasons: ['incomplete_collection'] });
+    expect(read.items).toHaveLength(mode === 'mixed' ? 1 : 0);
+    const after = await state('trace');
+    expect(after).toMatchObject({ status: 'partial', retainedPrevious: true, captured_at: previous.captured_at });
+    expect(after.sources[0].itemCount).toBe(mode === 'mixed' ? 1 : 0);
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows).toEqual(nodes);
+  });
+
   it.each(['flow', 'infra'])('%s discovers a first-empty member from real participation snapshots', async cls => {
     const account = '111122223333';
     await pool.query(`INSERT INTO accounts(account_id,alias,external_id,all_regions)
