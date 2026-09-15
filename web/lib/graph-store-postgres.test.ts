@@ -116,8 +116,8 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
     const end = new Date(previous.attempted_at).getTime() + 1;
     const child = { batches: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'new-service' } }] },
       scopeSpans: [{ spans: [{ traceId: '2', spanId: '0000000000000001', kind: 1,
-        startTimeUnixNano: String(BigInt(end - 1000) * 1_000_000n),
-        endTimeUnixNano: String(BigInt(end - 500) * 1_000_000n) }] }] }] };
+        startTimeUnixNano: String(BigInt(end - 1000) * BigInt(1_000_000)),
+        endTimeUnixNano: String(BigInt(end - 500) * BigInt(1_000_000)) }] }] }] };
     producer.invoke.mockReset()
       .mockResolvedValueOnce({ collectionStatus: 'ok', traces: [{ traceID: '1' }, { traceID: '2' }] })
       .mockResolvedValueOnce({ batches: [] })
@@ -147,11 +147,11 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
       .mockRejectedValueOnce(new Error('fixture unavailable'))
       .mockResolvedValueOnce({ batches: [{ resource: { attributes: [] }, scopeSpans: [{ spans: [{
         traceId: '2', spanId: '0000000000000001',
-        startTimeUnixNano: String(BigInt(end - 1000) * 1_000_000n),
-        endTimeUnixNano: String(BigInt(end - 500) * 1_000_000n),
+        startTimeUnixNano: String(BigInt(end - 1000) * BigInt(1_000_000)),
+        endTimeUnixNano: String(BigInt(end - 500) * BigInt(1_000_000)),
       }] }] }] });
     const source = new TempoTraceSource(7), observed = vi.spyOn(source, 'recentSpans');
-    const healthy = { calls: async (mins: number, endMs = end) => ({
+    const healthy = { available: async () => true, calls: async (mins: number, endMs = end) => ({
       sourceId: 'metrics:healthy', items: [{ client: 'new', server: 'cache', count: 2 }],
       status: 'ok' as const, reasons: [], windowStartMs: endMs - mins * 60_000, windowEndMs: endMs,
     }) };
