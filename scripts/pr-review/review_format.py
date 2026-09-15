@@ -25,8 +25,9 @@ TICKS = re.compile(r"`+")
 ASSIGNMENT_TAIL = re.compile(r"(?P<spacing>\s*)(?P<operator>[:=])(?P<rhs>[^\r\n]*)")
 # Inspect complete configuration-key tokens, never substrings of paths or URLs.
 CONFIG_KEY = r"[A-Za-z_][A-Za-z0-9_-]*"
-KEY_TOKEN = re.compile(r"(?<![\w./:\\-])(" + CONFIG_KEY + r")(?![\w./\\-])")
-REDACTION = re.compile(r"\[REDACTED(?:-[A-Z-]+)?\](?=$|\s|[.,;:])")
+KEY_TOKEN = re.compile(r"(?<![\w./:\\?&-])(" + CONFIG_KEY + r")(?![\w./\\-])")
+# Scrubbing preserves surrounding Markdown, punctuation and trailing prose.
+REDACTION = re.compile(r"\[REDACTED(?:-[A-Z-]+)?\]")
 URI = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s<>]+")
 DEFAULT_SENSITIVE_KEY = (
     r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_.:-]*(?:password|passwd|pwd|dsn|api[_-]?key|"

@@ -69,6 +69,8 @@ class FormatTests(unittest.TestCase):
             "Authorization: [See the guard](web/lib/auth.ts:42).",
             "Authorization: [guard][auth-check].",
             "See [docs](https://example.invalid/?token=ttl) for details.",
+            "See [docs](../guide.md?token=ttl&auth=reference) for details.",
+            "[auth-guide]: ../guide.md?token=ttl",
         ):
             with self.subTest(body=body):
                 self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
@@ -105,11 +107,14 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
 
     def test_redaction_preserves_panel_and_chair_format_acceptance(self):
-        for key, value in (("aws_session_token", "synthetic" * 8),
-                           ("api_key", "sk-" + "synthetic" * 8)):
-            body = f"{key}: {value} was present.\nNo findings."
+        cases = [(key, value, suffix)
+                 for key, value in (("aws_session_token", "synthetic" * 8),
+                                    ("api_key", "sk-" + "synthetic" * 8))
+                 for suffix in (" was present.", "**", "_", "]", '"', ")", "}", "*", "=", "/")]
+        for key, value, suffix in cases:
+            body = f"{key}: {value}{suffix}\nNo findings."
             self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
-            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+            with self.subTest(key=key, suffix=suffix), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 slot, responded, chair = root / "panel.txt", root / "responded.txt", root / "chair.txt"
                 slot.write_text(frame(body))
