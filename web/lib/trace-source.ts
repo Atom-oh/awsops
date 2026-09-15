@@ -9,7 +9,7 @@ export interface SourceRead<T> {
   reasons: string[];
   windowStartMs: number;
   windowEndMs: number;
-  /** A successful sibling read cannot authorize deletion after a missing child. */
+  /** A successful sibling cannot authorize deletion after an unconfirmed source or child. */
   canSweep?: false;
 }
 
@@ -91,6 +91,8 @@ function readResult<T>(
   const unique = [...new Set(reasons)];
   return {
     items, sourceId, ...window, reasons: unique,
+    ...(unique.some(reason => reason === 'empty_not_confirmed' || reason === 'trace_fetch_failed')
+      ? { canSweep: false as const } : {}),
     status: status ?? (unique.length === 0 ? 'ok' :
       items.length > 0 || unique.every((r) => r === 'cap_reached' || r === 'incomplete_collection' || r === 'empty_not_confirmed') ? 'partial' : 'error'),
   };

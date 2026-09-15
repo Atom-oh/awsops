@@ -87,7 +87,6 @@ Positive outcomes require a recognized tool and its validated producer envelope:
 | ENI lookup/configuration | The current IPv4 lookup's typed identity and matching counts, or explicit SG/NACL/route collections with configuration completeness and route selection |
 | Topology | Graph class, bounded nodes/edges and matching counts, selection/truncation, and non-stale source/publication metadata together |
 | Notion | Identified records, observed results/pagination, `collectionStatus`, and separate `blocksCollectionStatus` for page children |
-| ClickHouse | Query completion requires an observed data list and column metadata; exceptions, missing envelopes and saturated row limits cannot certify an empty collection. Deploy the producer with the graph consumer. |
 | Prometheus/Mimir | Bounded vector/matrix envelopes and named labels/series require upstream-derived `collectionStatus`; upstream query warnings remain partial |
 | Tempo | Trace search requires an observed list and `collectionStatus`; hitting the explicit request limit (default 20) or reported unfinished jobs remains partial; existing OTLP `batches` handling remains separate |
 | Loki | Validated streams/vector/matrix query envelopes and named label/value collections require upstream-derived `collectionStatus`; hitting a query's line limit remains partial |
@@ -100,6 +99,11 @@ component `error`) before coercion can erase upstream evidence. Missing or non-l
 cannot become confirmed empty lists. Named Prometheus/Mimir/Loki lists also require an upstream
 success status. Tempo search treats an omitted protobuf-style `traces` field as unknown, while
 retaining returned metrics and bounded trace data.
+
+For graph consumers, ClickHouse query completion requires an observed data list and column
+metadata; exceptions, missing envelopes and saturated row limits cannot certify an empty
+collection. Deploy its producer with the graph consumer. ClickHouse chat receipts remain
+unverified because no positive Runtime receipt handler is registered for these SQL tools.
 
 OpenSearch search must retain nullable `timedOut` and `failedShards` fields plus `collectionStatus`;
 absent or malformed flags are unknown, never false/zero. Timeouts, failed shards and omitted hits

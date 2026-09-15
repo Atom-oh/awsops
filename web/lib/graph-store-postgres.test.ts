@@ -135,6 +135,36 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
     expect((await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows).toEqual(nodes);
   });
 
+  it.each(['unconfirmed-empty', 'failed-child'])('a healthy sibling cannot override %s source coverage', async mode => {
+    await trace();
+    const previous = await state('trace');
+    const nodes = (await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows;
+    const end = new Date(previous.attempted_at).getTime() + 1;
+    producer.invoke.mockReset();
+    if (mode === 'unconfirmed-empty') producer.invoke.mockResolvedValue({ traces: [] });
+    else producer.invoke
+      .mockResolvedValueOnce({ collectionStatus: 'ok', traces: [{ traceID: '1' }, { traceID: '2' }] })
+      .mockRejectedValueOnce(new Error('fixture unavailable'))
+      .mockResolvedValueOnce({ batches: [{ resource: { attributes: [] }, scopeSpans: [{ spans: [{
+        traceId: '2', spanId: '0000000000000001',
+        startTimeUnixNano: String(BigInt(end - 1000) * 1_000_000n),
+        endTimeUnixNano: String(BigInt(end - 500) * 1_000_000n),
+      }] }] }] });
+    const source = new TempoTraceSource(7), observed = vi.spyOn(source, 'recentSpans');
+    const healthy = { calls: async (mins: number, endMs = end) => ({
+      sourceId: 'metrics:healthy', items: [{ client: 'new', server: 'cache', count: 2 }],
+      status: 'ok' as const, reasons: [], windowStartMs: endMs - mins * 60_000, windowEndMs: endMs,
+    }) };
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(end);
+    try { expect(await rebuildTraceGraph(pool, [source], undefined, [healthy]))
+      .toMatchObject({ published: 0, retained: 1 }); }
+    finally { clock.mockRestore(); }
+    expect(await observed.mock.results[0].value).toMatchObject({ status: 'partial', canSweep: false });
+    expect(await state('trace')).toMatchObject({ status: 'partial', retainedPrevious: true,
+      captured_at: previous.captured_at });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows).toEqual(nodes);
+  });
+
   it.each(['flow', 'infra'])('%s discovers a first-empty member from real participation snapshots', async cls => {
     const account = '111122223333';
     await pool.query(`INSERT INTO accounts(account_id,alias,external_id,all_regions)
