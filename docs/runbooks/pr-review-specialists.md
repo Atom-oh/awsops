@@ -31,6 +31,10 @@ keys, not path or URL substrings. Colon configuration examples use quoted or
 structured values; those, authorization schemes and equals assignments require
 fences. Ambiguous unquoted colon text is treated as prose. Credential scrubbing
 remains an independent check, not a responsibility of this presentation heuristic.
+URI query parameters are citation text. The scrubber's redaction placeholders
+remain valid prose, so masking a value cannot discard a completed review. The
+unmarked-prose detector only classifies credential-named keys; instructions still
+request fences for all code examples.
 
 The shared format validator checks decoded panel prose and chair output before
 and after scrubbing, and checks the final review at the coverage gate. Unsupported

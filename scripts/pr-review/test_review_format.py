@@ -68,6 +68,7 @@ class FormatTests(unittest.TestCase):
             "Hardcoded credentials: none.",
             "Authorization: [See the guard](web/lib/auth.ts:42).",
             "Authorization: [guard][auth-check].",
+            "See [docs](https://example.invalid/?token=ttl) for details.",
         ):
             with self.subTest(body=body):
                 self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
@@ -101,6 +102,37 @@ class FormatTests(unittest.TestCase):
 
     def test_longer_outer_fence_can_quote_an_indented_shorter_fence(self):
         body = "````text\n ```\npassword=synthetic\n ```\n````\nNo findings."
+        self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
+
+    def test_redaction_preserves_panel_and_chair_format_acceptance(self):
+        for key, value in (("aws_session_token", "synthetic" * 8),
+                           ("api_key", "sk-" + "synthetic" * 8)):
+            body = f"{key}: {value} was present.\nNo findings."
+            self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                slot, responded, chair = root / "panel.txt", root / "responded.txt", root / "chair.txt"
+                slot.write_text(frame(body))
+                panel = subprocess.run(
+                    ["bash", "-c", 'source "$1"; record_result "$2" codex/L2 "$3" "$4"',
+                     "fixture", str(MODULE / "lib.sh"), str(slot), str(responded), NONCE],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(panel.returncode, 0, panel.stderr)
+                self.assertTrue(responded.exists(), "Redaction must retain the completed panel")
+                self.assertIn("REDACTED", slot.read_text())
+                self.assertNotIn(value, slot.read_text() + panel.stdout + panel.stderr)
+                result = subprocess.run(
+                    ["bash", "-c", 'set -o pipefail; source "$1"; review_format_filter | scrub_secrets > "$2"; review_format_valid "$2"',
+                     "fixture", str(MODULE / "lib.sh"), str(chair)],
+                    input=body, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("REDACTED", chair.read_text())
+                self.assertNotIn(value, chair.read_text() + result.stdout + result.stderr)
+
+    def test_fence_language_may_have_horizontal_padding(self):
+        body = "``` python \npassword='synthetic'\n```\nNo findings."
         self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
 
     def test_final_gate_rejects_invalid_format_despite_complete_coverage(self):

@@ -26,6 +26,8 @@ ASSIGNMENT_TAIL = re.compile(r"(?P<spacing>\s*)(?P<operator>[:=])(?P<rhs>[^\r\n]
 # Inspect complete configuration-key tokens, never substrings of paths or URLs.
 CONFIG_KEY = r"[A-Za-z_][A-Za-z0-9_-]*"
 KEY_TOKEN = re.compile(r"(?<![\w./:\\-])(" + CONFIG_KEY + r")(?![\w./\\-])")
+REDACTION = re.compile(r"\[REDACTED(?:-[A-Z-]+)?\](?=$|\s|[.,;:])")
+URI = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s<>]+")
 DEFAULT_SENSITIVE_KEY = (
     r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_.:-]*(?:password|passwd|pwd|dsn|api[_-]?key|"
     r"secret|token|credential|passphrase|private[_-]?key|cookie|authorization|auth(?![A-Za-z])|dockerconfigjson|"
@@ -38,6 +40,9 @@ def is_assignment(match):
     if match["operator"] == ":":
         rhs = match["rhs"].strip()
         if re.fullmatch(r"[*_~]*", rhs):
+            return False
+        # Scrubbing an accepted prose value must not turn it into rejected code.
+        if REDACTION.match(rhs):
             return False
         # Formatting is not a credential detector. Unquoted labels (including
         # one-word statuses) cannot be distinguished from bare scalar values.
@@ -80,7 +85,7 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
                 return ERROR_CODE
             continue
         if marker:
-            if not re.fullmatch(r"[A-Za-z0-9_.+-]*[ \t]*", marker[2]):
+            if not re.fullmatch(r"[ \t]*[A-Za-z0-9_.+-]*[ \t]*", marker[2]):
                 return ERROR_CODE
             fence = marker[1]
             prose.append("\0")
@@ -110,7 +115,7 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
         prose.append(body[cursor:] + "\n")
     if fence is not None:
         return ERROR_CODE
-    plain = "".join(prose)
+    plain = URI.sub("\0", "".join(prose))
     for token in KEY_TOKEN.finditer(plain):
         if not sensitive_pattern.search(token[1]):
             continue

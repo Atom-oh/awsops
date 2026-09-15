@@ -207,7 +207,7 @@ class ReviewScopeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             exported = dict(line.split("=", 1) for line in (root / "environment").read_text().splitlines())
             control = Path(exported["REVIEW_CONTROL"])
-            for name in ("review_scope.py", "report_frame.py", "codex_events.py", "specialist_roles.py",
+            for name in ("review_scope.py", "review_format.py", "report_frame.py", "codex_events.py", "specialist_roles.py",
                          "kiro-safety.sh", "preflight-aws-session.py", "agents/pr-review-readonly.json"):
                 self.assertTrue((control / name).is_file(), name)
                 self.assertFalse((control / name).stat().st_mode & 0o222, name)
