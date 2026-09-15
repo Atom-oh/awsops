@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sys
 import unicodedata
+from review_format import format_violation
 
 
 ANSI = re.compile(
@@ -67,6 +68,8 @@ def decode_report(text, lens, nonce, kiro=False):
     visible = CONTROLS.sub("", ANSI.sub("", report))
     if not any(not c.isspace() and unicodedata.category(c)[0] in "LNPS" for c in visible):
         raise ValueError("report has no visible content")
+    if format_violation(visible):
+        raise ValueError("unsupported_review_format")
     return report
 
 

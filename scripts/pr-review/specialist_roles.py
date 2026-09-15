@@ -11,6 +11,8 @@ ROLES = {
 
 
 def prompt(tag, directory):
+    from review_format import FORMAT_INSTRUCTIONS
+
     lens, role, focus = ROLES[tag]
     base = (Path(directory) / f"{lens}.txt").read_text()
     base = re.sub(
@@ -26,7 +28,8 @@ def prompt(tag, directory):
         base += "\nOperational documentation and contracts:\n" + docs
     return (f"SPECIALIST ROLE: {role}\n{focus}\n"
             "Review the entire supplied diff through this role. Cite concrete evidence and impact.\n"
-            "Legacy lens IDs identify completion frames, not additional model calls.\n\n" + base)
+            "Legacy lens IDs identify completion frames, not additional model calls.\n"
+            + FORMAT_INSTRUCTIONS + "\n\n" + base)
 
 
 if __name__ == "__main__":
