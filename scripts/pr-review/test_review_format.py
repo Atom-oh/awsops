@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -63,13 +64,24 @@ class FormatTests(unittest.TestCase):
             "The guard at web/lib/auth.ts:42 is missing.",
             "Checked `Authorization`: The caller is checked.",
             "See https://example.invalid/auth:443/path for details.",
+            "Authorization: None.",
+            "Hardcoded credentials: none.",
+            "Authorization: [See the guard](web/lib/auth.ts:42).",
+            "Authorization: [guard][auth-check].",
         ):
             with self.subTest(body=body):
                 self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
+                filtered = subprocess.run(
+                    [sys.executable, str(MODULE / "review_format.py"), "filter"],
+                    input=body, capture_output=True, text=True,
+                )
+                self.assertEqual(filtered.returncode, 0, filtered.stderr)
+                self.assertEqual(filtered.stdout, body)
 
     def test_bare_configuration_assignments_still_require_fences(self):
         for body in (
-            "password: synthetic",
+            "password: 'synthetic'",
+            'secret: ["synthetic"]',
             "AWS_SESSION_TOKEN = synthetic",
             '{"api_key": "synthetic"}',
             "`password`: 'synthetic value'",
@@ -78,6 +90,18 @@ class FormatTests(unittest.TestCase):
         ):
             with self.subTest(body=body), self.assertRaisesRegex(ValueError, "unsupported_review_format"):
                 decode_report(frame(body), "L2", NONCE)
+
+    def test_indented_closers_cannot_hide_following_prose(self):
+        for fence in ("```", "~~~"):
+            for indent in (" ", "  ", "   "):
+                body = (f"{fence}text\nfirst block\n{indent}{fence}\n"
+                        f"password=synthetic\n{fence}text\nsecond block\n{fence}\n")
+                with self.subTest(fence=fence, indent=indent), self.assertRaisesRegex(ValueError, "unsupported_review_format"):
+                    decode_report(frame(body), "L2", NONCE)
+
+    def test_longer_outer_fence_can_quote_an_indented_shorter_fence(self):
+        body = "````text\n ```\npassword=synthetic\n ```\n````\nNo findings."
+        self.assertEqual(decode_report(frame(body), "L2", NONCE), body)
 
     def test_final_gate_rejects_invalid_format_despite_complete_coverage(self):
         review = ("Run `echo hello`.\nCOVERAGE: COMPLETE\nVERDICT: PASS\n")

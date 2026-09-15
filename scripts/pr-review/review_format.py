@@ -8,11 +8,14 @@ import sys
 
 FORMAT_INSTRUCTIONS = (
     "Use English prose. Inline backticks are only for single-line, whitespace-free "
-    "symbol/path references (an empty () suffix is allowed). Put all executable "
+    "symbol/path references using letters/digits, underscore, . / : $ @ # * + [ ] "
+    "backslash or hyphen (an empty () suffix is allowed). Put all executable "
     "or configuration examples in closed top-level fenced code blocks, starting "
     "and ending on their own lines at column one. Use a longer outer fence if the example contains "
     "a fence. Do not nest example fences in lists or blockquotes. Use synthetic "
-    "values only; never copy credentials. Unsupported examples fail review coverage."
+    "values only; never copy credentials. Colon configuration values must be quoted "
+    "or structured; unquoted colon text and Markdown links are prose labels. "
+    "Unsupported examples fail review coverage."
 )
 
 ERROR_CODE = "unsupported_review_format"
@@ -36,11 +39,12 @@ def is_assignment(match):
         rhs = match["rhs"].strip()
         if re.fullmatch(r"[*_~]*", rhs):
             return False
-        # A same-line prose clause after a label is not a configuration example.
-        # Quoted/structured values and authorization schemes remain examples,
-        # including values containing spaces.
-        if (len(rhs.split()) > 1 and rhs[0] not in "\"'[{"
-                and not re.match(r"(?i)(?:Bearer|Basic|Digest)\s", rhs)):
+        # Formatting is not a credential detector. Unquoted labels (including
+        # one-word statuses) cannot be distinguished from bare scalar values.
+        # Explicit quoted/structured values and auth schemes remain examples.
+        if re.match(r"!?\[[^\]\r\n]+\](?:\([^\r\n]*\)|\[[^\]\r\n]*\])(?:[.,;:]|\s|$)", rhs):
+            return False
+        if rhs[0] not in "\"'[{" and not re.match(r"(?i)(?:Bearer|Basic|Digest)\s", rhs):
             return False
     if (match["operator"] == "=" and any(c in match["spacing"] for c in "\r\n")
             and re.fullmatch(r"=*[ \t]*", match["rhs"])):
@@ -70,6 +74,10 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
                     and len(marker[1]) >= len(fence) and not marker[2].strip()):
                 fence = None
                 prose.append("\0")
+            elif (body != body.lstrip(" \t")
+                    and re.fullmatch(re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*",
+                                     body.lstrip(" \t"))):
+                return ERROR_CODE
             continue
         if marker:
             if not re.fullmatch(r"[A-Za-z0-9_.+-]*[ \t]*", marker[2]):
