@@ -407,8 +407,8 @@ class ReviewCompletion(unittest.TestCase):
     def test_decoded_escaped_controls_are_removed_before_credentials_reach_logs_or_chair(self):
         key = "AKIA" + "1" * 16
         token = "fixtureSession" + "9" * 100
-        report = ("MAJOR: diagnostic evidence\n" + key[:10] + "\x1b[31m" + key[10:]
-                  + "\x1b[0m\nAWS_SESSION_TOKEN=" + token[:20] + "\x07" + token[20:] + "\n")
+        report = ("MAJOR: diagnostic evidence\n```text\n" + key[:10] + "\x1b[31m" + key[10:]
+                  + "\x1b[0m\nAWS_SESSION_TOKEN=" + token[:20] + "\x07" + token[20:] + "\n```\n")
         (self.work / "kiro-opus-L2.report-input").write_text(report)
         self.plan({"kiro-opus-L2": ["report"]})
         result = self.panel()
@@ -504,7 +504,8 @@ class ReviewCompletion(unittest.TestCase):
             ("> Earlier draft findings.\nReading file: more.py (using tool: read)\n"
              "Tool output: several diff lines\n> REVIEW_COMPLETE: L2\n" + usage, False),
             ("> " + report_frame("The parser mishandles (using tool: read) in quoted findings.\n"
-                                "A finding may quote `(using tool: fs_read)` without starting a tool.\n")
+                                "The following example does not start a tool:\n"
+                                "```text\n(using tool: fs_read)\n```\n")
              + usage, True),
             ("> I'll search the base.\nSearching for pattern: foo (using tool: grep)\n"
              "Tool output: foo\n> REVIEW_COMPLETE: L2\n" + usage, False),
@@ -588,11 +589,16 @@ class ReviewCompletion(unittest.TestCase):
                         "> " + report_frame("MAJOR: The parser misses this CLI status.\n"
                                            f"The captured line is {quote}{quoted}{quote}.\n"
                                            "Require a completed report after actual tool use.\n")
-                        + " ▸ Time: 6.25s\n", True,
+                        + " ▸ Time: 6.25s\n", quote != "`",
                     )
+            self.assert_kiro_report(
+                "> " + report_frame("MAJOR: The parser misses this CLI status.\n"
+                                     "```text\n" + header + "\n```\n"
+                                     "Require a completed report after actual tool use.\n"), True)
         self.assert_kiro_report(
             KIRO_TOOL_TRANSCRIPTS["batch"]
-            + "> " + report_frame('MAJOR: Quoted `(using tool: read)` is report content.\n'
+            + "> " + report_frame('MAJOR: The following quoted text is report content.\n'
+                                  '```text\n(using tool: read)\n```\n'
                                   'The string "Searching for files: * (using tool: glob)" is an example.\n'), True,
         )
 

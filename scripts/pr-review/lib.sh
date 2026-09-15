@@ -29,6 +29,14 @@ panel_report_valid() {
   panel_report_decode "$1" "$2" "${3:-}" --check
 }
 
+review_format_valid() {
+  python3 "$(dirname "${BASH_SOURCE[0]}")/review_format.py" check "$1"
+}
+
+review_format_filter() {
+  python3 "$(dirname "${BASH_SOURCE[0]}")/review_format.py" filter
+}
+
 # A rejected JSON payload can encode controls inside a credential. Do not log its
 # transport spelling; keep only bounded, scrubbed chatter and a frame placeholder.
 # This is diagnostic masking only and never decides whether a report completed.
@@ -43,7 +51,8 @@ panel_rejected_preview() {
 # Pipeline failure leaves an empty slot. No tool chatter or JSON envelope reaches the chair.
 record_result() {
   local slot="$1" label="$2" responded="$3" nonce="${4:-}" accepted="$1.accepted"
-  if panel_report_decode "$slot" "${label##*/}" "$nonce" | strip_controls | scrub_secrets > "$accepted"; then
+  if panel_report_decode "$slot" "${label##*/}" "$nonce" | strip_controls | scrub_secrets > "$accepted" \
+      && review_format_valid "$accepted"; then
     mv "$accepted" "$slot" || { : > "$slot"; return 1; }
     echo "[preview] $label: $(head -c 200 "$slot" | tr '\n' ' ')" >&2
     echo "$label" >> "$responded"

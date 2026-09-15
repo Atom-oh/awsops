@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import re
+from review_format import FORMAT_INSTRUCTIONS
 
 ROLES = {
     "codex": ("L2", "correctness", "Trace logic, state transitions, edge cases and regression tests."),
@@ -26,7 +27,8 @@ def prompt(tag, directory):
         base += "\nOperational documentation and contracts:\n" + docs
     return (f"SPECIALIST ROLE: {role}\n{focus}\n"
             "Review the entire supplied diff through this role. Cite concrete evidence and impact.\n"
-            "Legacy lens IDs identify completion frames, not additional model calls.\n\n" + base)
+            "Legacy lens IDs identify completion frames, not additional model calls.\n"
+            + FORMAT_INSTRUCTIONS + "\n\n" + base)
 
 
 if __name__ == "__main__":

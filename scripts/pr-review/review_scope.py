@@ -7,6 +7,7 @@ import re
 import stat
 import subprocess
 import sys
+from review_format import format_violation
 
 MAX_LINES = 3000
 CELLS = {f"{model}/L{lens}" for model in ("codex", "kiro-opus", "kiro-gpt") for lens in range(2, 6)}
@@ -91,6 +92,8 @@ def decision(review, full, panel, responded, *, partial=False, omitted=False, fa
         return "fail", f"Incomplete panel coverage: all {len(expected)} configured reports are required"
     if failed:
         return "fail", "Review phases did not complete successfully"
+    if format_violation(review):
+        return "fail", "Review format contract failed; code examples require fenced blocks"
     # A nonempty Kiro transcript is not evidence of a completed findings report.
     if re.findall(r"^COVERAGE:.*$", review, re.M) != ["COVERAGE: COMPLETE"]:
         return "fail", "Semantic cell coverage incomplete or unverified by chair"

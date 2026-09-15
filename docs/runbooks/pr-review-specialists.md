@@ -19,7 +19,19 @@ Arguments remain `run-panel.sh DIFF LENSES WORK` and
 `synthesize.sh DIFF WORK PR TITLE OUT`. Each cell retains its fresh 32-hex nonce
 and unique final `REVIEW_COMPLETE: <lens> <nonce> {"report":"..."}` frame.
 Wrong, duplicated, incomplete or tool-only frames and failed CLI exits do not
-count. Decoding, control stripping and secret scrubbing remain unchanged.
+count. Frame identity, control stripping and secret scrubbing remain mandatory.
+
+Review prose is English. Inline code is limited to single-line, whitespace-free
+symbol/path references. Executable/configuration examples require closed top-level
+backtick or tilde fences starting at column one; do not nest them in lists or blockquotes. Use synthetic
+values only. A longer outer fence can quote an example containing a fence.
+
+The shared format validator checks decoded panel prose and chair output before
+and after scrubbing, and checks the final review at the coverage gate. Unsupported
+inline examples, malformed fences and sensitive assignments outside fences fail
+coverage. Invalid output is not repaired into PASS. The streamed chair guard
+buffers in memory until validation completes; it creates no raw-output file.
+Metadata frames and model/budget settings retain their existing validation.
 
 Kiro retains full-diff **file delivery**, base-checkout access and a validated
 `pr-review-readonly` agent allowing only `read` and `grep`, with no MCP/resources.

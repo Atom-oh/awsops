@@ -112,6 +112,7 @@ class ReviewScopeTests(unittest.TestCase):
             historical.mkdir()  # No helper exists in this old checkout.
             control = root / "trusted-control.py"
             shutil.copyfile(Path(__file__).with_name("review_scope.py"), control)
+            shutil.copyfile(Path(__file__).with_name("review_format.py"), root / "review_format.py")
             (root / "responses.json").write_text(json.dumps(self.responses))
             (root / "event.json").write_text(json.dumps(self.event))
             (root / "gh").write_text(

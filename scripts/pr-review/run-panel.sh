@@ -102,6 +102,9 @@ try_panel() {
 cell_prompt() {
   local base="$1" lens="$2" nonce="$3"
   printf '%s\n\n' "$base"
+  if [ "${ROLE_REVIEW:-0}" != 1 ]; then
+    python3 "$DIR/review_format.py" instructions || return 1
+  fi
   cat <<EOF
 After reading the diff and completing this lens, return one final physical line using this cell identity:
 Review lens: $lens
