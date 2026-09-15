@@ -532,13 +532,39 @@ describe('SourceRead provenance and bounds', () => {
     ['mimir', () => new MetricsCallsSource(7, 'mimir', 'x[{window}m]').calls(30, END_MS), { resultType: 'vector', result: [] }],
   ] as const;
 
+  it.each(['all-empty', 'mixed'])('does not use a completed search to certify %s child trace fetches', async mode => {
+    configure('tempo');
+    invokeMcpLambdaTool.mockResolvedValueOnce({ collectionStatus: 'ok', traces: [{ traceID: '1' }, { traceID: '2' }] })
+      .mockResolvedValueOnce({ batches: [] })
+      .mockResolvedValueOnce(mode === 'mixed' ? tempoTrace([tempoSpan({ traceId: '2' })]) : { batches: [] });
+    const result = await new TempoTraceSource(7).recentSpans(30, 10, END_MS);
+    expect(result).toMatchObject({ status: 'partial', reasons: ['incomplete_collection'], canSweep: false });
+    expect(result.items).toHaveLength(mode === 'mixed' ? 1 : 0);
+  });
+  it('distinguishes valid spans outside the requested window from empty child payloads', async () => {
+    configure('tempo');
+    invokeMcpLambdaTool.mockResolvedValueOnce({ collectionStatus: 'ok', traces: [{ traceID: '1' }] })
+      .mockResolvedValueOnce(tempoTrace([tempoSpan({
+        startTimeUnixNano: String(BigInt(END_MS - 3_600_000) * BigInt(1_000_000)),
+        endTimeUnixNano: String(BigInt(END_MS - 3_599_000) * BigInt(1_000_000)),
+      })]));
+    const result = await new TempoTraceSource(7).recentSpans(30, 10, END_MS);
+    expect(result).toMatchObject({ items: [], status: 'ok', reasons: [] });
+    expect(result.canSweep).not.toBe(false);
+  });
+
   it.each(factories)('%s returns ok with exact window for successful empty data', async (kind, read, payload) => {
     configure(kind);
-    invokeMcpLambdaTool.mockResolvedValue(payload);
+    invokeMcpLambdaTool.mockResolvedValue({ ...payload, collectionStatus: 'empty' });
     expect(await read()).toEqual({
       items: [], status: 'ok', sourceId: `${kind}:7`, reasons: [],
       windowStartMs: END_MS - 1_800_000, windowEndMs: END_MS,
     });
+  });
+  it.each(factories)('%s retains unmarked legacy empty data as unconfirmed', async (kind, read, payload) => {
+    configure(kind);
+    invokeMcpLambdaTool.mockResolvedValue(payload);
+    expect(await read()).toMatchObject({ items: [], status: 'partial', reasons: ['empty_not_confirmed'] });
   });
 
   it.each(factories)('%s never turns errors/malformed payloads/truncation into valid empty data', async (kind, read) => {
@@ -809,7 +835,10 @@ describe('metrics identity and query provenance', () => {
     expect(result.items).toHaveLength(1);
     expect(result.status).toBe('partial');
     expect(result.reasons).toEqual(expect.arrayContaining(['malformed_rows', 'payload_truncated']));
-    invokeMcpLambdaTool.mockResolvedValue({ resultType: 'vector', result: [{ ...valid, value: [0, '0'] }] });
+    const zero = { resultType: 'vector', result: [{ ...valid, value: [0, '0'] }] };
+    invokeMcpLambdaTool.mockResolvedValue(zero);
+    expect(await source.calls(30, END_MS)).toMatchObject({ items: [], status: 'partial', reasons: ['empty_not_confirmed'] });
+    invokeMcpLambdaTool.mockResolvedValue({ ...zero, collectionStatus: 'ok' });
     expect(await source.calls(30, END_MS)).toMatchObject({ items: [], status: 'ok', reasons: [] });
     invokeMcpLambdaTool.mockResolvedValue({ resultType: 'matrix', result: [] });
     expect(await source.calls(30, END_MS)).toMatchObject({ items: [], status: 'error' });

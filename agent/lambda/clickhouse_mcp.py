@@ -165,9 +165,24 @@ def _run_sql(sql, max_rows, trusted=False, max_execution_time=None):
     if status >= 400:
         snippet = data.get("raw") or data.get("exception") or data
         return err(f"ClickHouse query failed ({status}): {str(snippet)[:300]}")
-    rows = data.get("data", []) if isinstance(data, dict) else []
+    raw = data.get("data") if isinstance(data, dict) else None
+    meta = data.get("meta") if isinstance(data, dict) else None
+    rows = raw if isinstance(raw, list) else []
+    truncated = len(rows) >= max_rows
+    valid_meta = isinstance(meta, list) and bool(meta) and all(
+        isinstance(column, dict) and isinstance(column.get("name"), str)
+        and bool(column["name"]) and isinstance(column.get("type"), str)
+        and bool(column["type"]) for column in meta)
+    if isinstance(data, dict) and data.get("exception") is not None:
+        state = "error"
+    elif not isinstance(raw, list) or not valid_meta:
+        state = "unknown"
+    elif truncated or not all(isinstance(row, dict) for row in rows):
+        state = "partial"
+    else:
+        state = "ok" if rows else "empty"
     return ok({"rowCount": len(rows[:max_rows]), "rows": rows[:max_rows],
-               "meta": data.get("meta") if isinstance(data, dict) else None})
+               "meta": meta, "truncated": truncated, "collectionStatus": state})
 
 
 def clickhouse_query(args):

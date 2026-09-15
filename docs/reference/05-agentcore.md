@@ -100,6 +100,11 @@ cannot become confirmed empty lists. Named Prometheus/Mimir/Loki lists also requ
 success status. Tempo search treats an omitted protobuf-style `traces` field as unknown, while
 retaining returned metrics and bounded trace data.
 
+For graph consumers, ClickHouse query completion requires an observed data list and column
+metadata; exceptions, missing envelopes and saturated row limits cannot certify an empty
+collection. Deploy its producer with the graph consumer. ClickHouse chat receipts remain
+unverified because no positive Runtime receipt handler is registered for these SQL tools.
+
 OpenSearch search must retain nullable `timedOut` and `failedShards` fields plus `collectionStatus`;
 absent or malformed flags are unknown, never false/zero. Timeouts, failed shards and omitted hits
 prevent a complete result. Notion must independently record page and block collection: valid page

@@ -95,6 +95,99 @@ describe.skipIf(!socket)('inventory graph publication on PostgreSQL', () => {
         reasons: [], windowStartMs: endMs - mins * 60_000, windowEndMs: endMs }),
     }]);
 
+  it('retains trace rows while a legacy empty producer has no collection marker', async () => {
+    await trace();
+    const previous = await state('trace');
+    producer.invoke.mockResolvedValue({ traces: [] });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(new Date(previous.attempted_at).getTime() + 1);
+    try {
+      expect(await rebuildTraceGraph(pool, [new TempoTraceSource(7)]))
+        .toMatchObject({ published: 0, retained: 1 });
+    } finally { clock.mockRestore(); }
+    expect(await state('trace')).toMatchObject({ status: 'partial', retainedPrevious: true,
+      captured_at: previous.captured_at });
+    expect((await pool.query("SELECT * FROM topology_nodes WHERE class='trace'")).rowCount).toBe(2);
+  });
+
+  it.each(['all-empty', 'mixed'])('does not sweep prior trace rows for %s child fetch coverage', async mode => {
+    await trace();
+    const previous = await state('trace');
+    const nodes = (await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows;
+    const end = new Date(previous.attempted_at).getTime() + 1;
+    const child = { batches: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'new-service' } }] },
+      scopeSpans: [{ spans: [{ traceId: '2', spanId: '0000000000000001', kind: 1,
+        startTimeUnixNano: String(BigInt(end - 1000) * BigInt(1_000_000)),
+        endTimeUnixNano: String(BigInt(end - 500) * BigInt(1_000_000)) }] }] }] };
+    producer.invoke.mockReset()
+      .mockResolvedValueOnce({ collectionStatus: 'ok', traces: [{ traceID: '1' }, { traceID: '2' }] })
+      .mockResolvedValueOnce({ batches: [] })
+      .mockResolvedValueOnce(mode === 'mixed' ? child : { batches: [] });
+    const source = new TempoTraceSource(7), observed = vi.spyOn(source, 'recentSpans');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(end);
+    try { expect(await rebuildTraceGraph(pool, [source])).toMatchObject({ published: 0, retained: 1 }); }
+    finally { clock.mockRestore(); }
+    const read = await observed.mock.results[0].value;
+    expect(read).toMatchObject({ status: 'partial', canSweep: false, reasons: ['incomplete_collection'] });
+    expect(read.items).toHaveLength(mode === 'mixed' ? 1 : 0);
+    const after = await state('trace');
+    expect(after).toMatchObject({ status: 'partial', retainedPrevious: true, captured_at: previous.captured_at });
+    expect(after.sources[0].itemCount).toBe(mode === 'mixed' ? 1 : 0);
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows).toEqual(nodes);
+  });
+
+  it.each(['unconfirmed-empty', 'failed-child'])('a healthy sibling cannot override %s source coverage', async mode => {
+    await trace();
+    const previous = await state('trace');
+    const nodes = (await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows;
+    const end = new Date(previous.attempted_at).getTime() + 1;
+    producer.invoke.mockReset();
+    if (mode === 'unconfirmed-empty') producer.invoke.mockResolvedValue({ traces: [] });
+    else producer.invoke
+      .mockResolvedValueOnce({ collectionStatus: 'ok', traces: [{ traceID: '1' }, { traceID: '2' }] })
+      .mockRejectedValueOnce(new Error('fixture unavailable'))
+      .mockResolvedValueOnce({ batches: [{ resource: { attributes: [] }, scopeSpans: [{ spans: [{
+        traceId: '2', spanId: '0000000000000001',
+        startTimeUnixNano: String(BigInt(end - 1000) * BigInt(1_000_000)),
+        endTimeUnixNano: String(BigInt(end - 500) * BigInt(1_000_000)),
+      }] }] }] });
+    const source = new TempoTraceSource(7), observed = vi.spyOn(source, 'recentSpans');
+    const healthy = { available: async () => true, calls: async (mins: number, endMs = end) => ({
+      sourceId: 'metrics:healthy', items: [{ client: 'new', server: 'cache', count: 2 }],
+      status: 'ok' as const, reasons: [], windowStartMs: endMs - mins * 60_000, windowEndMs: endMs,
+    }) };
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(end);
+    try { expect(await rebuildTraceGraph(pool, [source], undefined, [healthy]))
+      .toMatchObject({ published: 0, retained: 1 }); }
+    finally { clock.mockRestore(); }
+    expect(await observed.mock.results[0].value).toMatchObject({ status: 'partial', canSweep: false });
+    expect(await state('trace')).toMatchObject({ status: 'partial', retainedPrevious: true,
+      captured_at: previous.captured_at });
+    expect((await pool.query("SELECT id FROM topology_nodes WHERE class='trace' ORDER BY id")).rows).toEqual(nodes);
+  });
+
+  it.each(['flow', 'infra'])('%s discovers a first-empty member from real participation snapshots', async cls => {
+    const account = '111122223333';
+    await pool.query(`INSERT INTO accounts(account_id,alias,external_id,all_regions)
+      VALUES ($1,'fixture','fixture-only',true)`, [account]);
+    await pool.query(`INSERT INTO inventory_snapshots(account_id,captured_at,resource_type,resource_count)
+      SELECT $1,$2,t,0 FROM unnest($3::text[]) t`,
+    [account, recent, requiredTypes.filter(t => !HOST_ONLY_TREND_TYPES.has(t))]);
+    expect((await pool.query('SELECT * FROM inventory_resources')).rowCount).toBe(0);
+    await build(cls);
+    expect(await state(cls, account)).toMatchObject({ status: 'empty', retainedPrevious: false });
+    expect((await state(cls, account)).captured_at).not.toBeNull();
+  });
+
+  it('discovers an enabled member without inventing participation or empty proof', async () => {
+    const account = '111122223333';
+    await pool.query(`INSERT INTO accounts(account_id,alias,external_id,all_regions)
+      VALUES ($1,'fixture','fixture-only',true)`, [account]);
+    expect(await inventoryAccounts(pool, 'infra', INFRA_TYPES)).toContain(account);
+    await build('infra');
+    expect((await state('infra', account)).status).not.toBe('empty');
+    expect((await state('infra', account)).captured_at).toBeNull();
+  });
+
   it.each(tempoContracts)('Tempo producer $name preserves the graph unless empty is confirmed', async fixture => {
     await trace();
     const previous = await state('trace');
