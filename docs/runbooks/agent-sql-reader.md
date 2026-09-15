@@ -91,12 +91,20 @@ cannot prove SQL parses; execute affected migrations against disposable PostgreS
 
 ### Trace queue projection
 
-`01M279W0J9HNG1QT0MAS60KV8K_topology_graph_collection_state.sql` adds graph evidence;
-`01M27B0000C6QWJ50NRJ8YAH9D_trace_queue_claim_provenance.sql` supersedes its node projection.
+`01M279W0J9HNG1QT0MAS60KV8K_topology_graph_collection_state.sql` introduces graph evidence;
+`01M2FV44NER7VC3CTX2ZMT9FZG_topology_inventory_evidence.sql` adds bounded inventory source clocks and provenance;
+`01M2GRW64VTMC9AC8M7T9MZKQ4_graph_attempt_disclosure.sql` owns the current collection-state
+projection with explicit not-attempted and count-reconciliation reasons;
+`01M27B0000C6QWJ50NRJ8YAH9D_trace_queue_claim_provenance.sql` supersedes the earlier topology-node projection.
 After migration, inspect trace queue views: `claimedAccountId`/`claimedRegion` come only from parsed
 destination ARN qualifiers, including retained rows. Malformed/non-ARN destinations have null claims,
 without reporter fallback. `identityProvenance` is `telemetry_claim`; real-account fields, `infra_ref`,
 and whole-row copies stay absent. Only the view receives SELECT.
+
+The writer records flow, infra and trace collection state. Node `captured_at` is
+materialization time; use `sql_reader.topology_graph_state` for source clocks, retained
+evidence and bounded source reasons. Trace sources also expose query windows. Missing
+state, qualifiers or timestamps never establish complete or empty coverage.
 
 `scripts/v2/workers/test_graph_collection.py` covers reapplication and grants on disposable PostgreSQL.
 AI tool behavior also requires deploying the updated inventory Lambda; see

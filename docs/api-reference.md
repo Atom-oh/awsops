@@ -129,7 +129,19 @@ Deployment readiness requires admin or deployment-verifiers, a bounded nonce/acc
 and a process cooldown. Inventory summary `collection.scope=aggregate` describes the
 whole collection job; selected account/region counts do not turn it into per-account health.
 
-## Trace collection disclosure
+## Graph collection disclosure
+
+`GET /api/graph` returns collection evidence for flow, infra and trace. Older responses
+without this envelope remain unknown. An `__all__` union has `coverage: unknown` and a
+null top-level publication clock; a host state cannot establish union coverage.
+
+Optional source `producerStatus`, `attemptedAtMs` and `finishedAtMs` describe the
+inventory job, not graph publication time or per-account success proof. Top-level
+`windowStartMs/windowEndMs` describe a graph-attempt window. The bounded
+`failureReason` identifies `publication_failed`, `source_read_failed`, or API-only
+`state_read_failed` or `not_attempted`.
+An explicit `sourceAttempted: false` means this bounded rebuild did not start the source read;
+it does not advance the saved graph clock.
 
 The `GraphCollection` / `GraphCollectionSource` TypeScript contract is defined in
 `web/components/topology/GraphCollectionStatus.tsx`; runtime input is still normalized.

@@ -83,6 +83,18 @@ function search(value: string) {
 }
 
 describe('ServiceNetworkTopology', () => {
+  it('recovers a busy trace read without starting a network query', async () => {
+    let calls = 0;
+    const http = serve({ service: () => ++calls === 1
+      ? json({ collection: { readStatus: 'unavailable', readReason: 'busy' } }, 503)
+      : json(snapshot) });
+    render(<ServiceNetworkTopology {...props} />);
+    search('checkout-service');
+    expect(await screen.findByRole('button', { name: '선택: checkout-service' })).toBeTruthy();
+    expect(calls).toBe(2);
+    expect(http.queries()).toHaveLength(0);
+  });
+
   it('still alerts on an actual inventory error even when the collection status is unknown', () => {
     serve();
     render(<ServiceNetworkTopology {...props} account="123456789012" configuration={{
