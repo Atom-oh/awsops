@@ -10,6 +10,7 @@ Preserve this qualification; do not recast it as unanimous approval or a new ove
 
 Transport attribution corrected **2026-07-31** following the **2026-07-22** pentest; remote-MCP
 controls reconciled **2026-08-05/06** under ADR-017. Repository evidence checked **2026-09-13**.
+Amended **2026-10-29**: governed `custom_mcp` (owner clarification **2026-10-11**) and §6 transport rows.
 
 ## Context
 
@@ -20,8 +21,9 @@ egress, credential, disclosure, and approval controls without reopening AWS-reso
 
 - ADR-005 continues to freeze AWS-resource mutation/autonomous mitigation. This ADR governs external
   data, not infrastructure execution. Models propose inputs; they do not gain independent write authority.
-- Permit admin-registered, typed, curated connectors. Arbitrary `custom_mcp`/BYO-MCP registration stays
-  retired. Existing read integrations and hosted vendor presets do not authorize arbitrary endpoints.
+- Permit admin-registered, typed, curated connectors. Ungoverned (arbitrary-form) BYO-MCP registration
+  stays retired. Existing read integrations and hosted vendor presets do not authorize arbitrary endpoints.
+  The administrator-only `custom_mcp` kind is a governed connector under this ADR (see below).
 - Keep notification and broad-write controls separate. `diagnosis_notify_enabled` gates the single-topic
   SNS communication tier (ADR-013); `integrations_write_enabled` gates broader knowledge/comms writes.
   Both default false. The baseline's dated notification ON observation is not proof of current deployment
@@ -29,6 +31,29 @@ egress, credential, disclosure, and approval controls without reopening AWS-reso
 - Broad writes use an independent flag, kill-switch, and no-AWS-mutation IAM, while reusing the shared
   action/workflow controls. They require `agentcore_enabled`, `integrations_enabled`, and `workers_enabled`.
   They must not enable frozen SSM/Change Manager remediation.
+
+### Governed `custom_mcp` (amended 2026-10-29; owner clarification 2026-10-11)
+
+Per the owner clarification of **2026-10-11**, administrator `custom_mcp` registration is a governed
+external connector, distinct from the arbitrary BYO-MCP that legacy ADR-041 dropped. Its controls are
+what make it governed and are mandatory:
+
+- administrator-only registration;
+- per-account enablement (`agent_spaces.enabled_integration_ids`);
+- an administrator `exposedTools` ceiling — an empty ceiling exposes nothing;
+- a credential the agent resolves through Secrets Manager at connect time, never a value in the request;
+- connect-time SSRF checks (see §6).
+
+Runtime activation is gated by the `CUSTOM_MCP_ENABLED` env (`web/lib/custom-mcp-policy.ts`,
+`agent/agent.py` `validate_custom_mcp_spec`), which no Terraform variable sets, so it is off in every
+Terraform-managed stack (checked against public `samples/dev` @ `5bac16f2`, 2026-10-24). Activation is not
+accepted: enabling it requires a final panel review, dated owner acceptance and invocation-trust
+evidence, then a separately reviewed activation release. Known gap: the registration route stores `credentialsRef`
+without validating it as the derived Secrets Manager name (`web/app/api/integrations/route.ts`); the
+readiness and agent connect paths fail closed on a mismatch. This clarification does not relax the
+ADR-017 per-preset host pins, does not authorize AWS-resource mutation or autonomous remediation
+(ADR-005), and does not activate gated external writes. Any change that weakens one of these controls,
+or an external MCP endpoint path that bypasses them, stays prohibited.
 
 ### Broad-write governance
 
@@ -55,8 +80,8 @@ protection belong to the selected transport; do not conflate the following paths
 
 | Path | Actual boundary / remaining limitation |
 |---|---|
-| `agent/lambda/datasource_http.py` observation reads | HTTP or HTTPS; private destinations supported without a separate private opt-in; always-blocked addresses and redirects rejected; connects to validated IPs with original Host/SNI |
-| `agent.py:_connect_integration` general egress **read** | HTTPS, DNS resolve/recheck, metadata blocking, private opt-in; the residual connect-time rebinding gap is not the pinned datasource transport |
+| `agent/lambda/datasource_http.py` observation reads | HTTP or HTTPS; private destinations supported without a separate private opt-in; always-blocked addresses and redirects rejected; connects to validated IPs with original Host/SNI. Amended 2026-10-29: connection tests run a bounded real query rather than a public health endpoint, explicit instance reads require ID-bound credentials, and response bodies are byte-capped |
+| `agent.py:_connect_integration` general egress **read** | Gated by `validate_custom_mcp_spec` (default off); HTTPS, DNS resolve with metadata/always-blocked and private opt-in checks. Amended 2026-10-29: the session connects to the validated IPs, pinned, with original Host/SNI and certificate verification, closing the earlier connect-time rebinding gap |
 | Broad external **write** executor | Separate Lambda action executor; it does not call `_assert_host_allowed` from the general read path. Assess destination/DLP/approval controls on the write path itself |
 | Hosted vendor MCP (ADR-017) | Catalog host restriction, exact endpoint acknowledgement, runtime fail-closed tool allowlist; managed egress does not inherit in-house IP pinning |
 
@@ -79,7 +104,8 @@ connector failures and explicit draft-only fallback.
 
 ## Evidence
 
-`agent/agent.py`, `agent/lambda/datasource_http.py`, `terraform/v2/foundation/{variables,remediation}.tf`,
+`agent/agent.py`, `agent/lambda/datasource_http.py`, `web/lib/custom-mcp-policy.ts`,
+`web/app/api/integrations/route.ts`, `terraform/v2/foundation/{variables,remediation}.tf` (public: `terraform/foundation/`),
 `scripts/v2/agentcore/{catalog,provision}.py`, ADR-005/013/017, the legacy mapping, and
 [external-write ratification](../history/reviews/2026-06-14-external-write-unfreeze-consensus.md).
 The ratification pointer does not remove the PARTIAL re-scope qualification above.

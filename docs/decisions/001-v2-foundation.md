@@ -4,6 +4,7 @@
 
 Accepted **2026-06-22**. Consolidates legacy ADRs 001, 005, 024, 030, and 037.
 Inventory rollout clarified **2026-08-31** by ADR-021. Repository evidence checked **2026-09-13**.
+Amended **2026-10-29**: implementation of record moved to the public product repository (see Decision).
 
 ## Context
 
@@ -13,7 +14,10 @@ The legacy Fargate proposal's CDK/service layout was not the implemented archite
 
 ## Decision
 
-- This checkout's foundation root is `terraform/v2/foundation/`. Use Terraform with a partial S3 backend
+- Amended 2026-10-29: the implementation of record is the public product repository
+  (`aws-samples/sample-awsops`, branch `dev`), foundation root `terraform/foundation/`. This private
+  repository keeps decisions and history; its `terraform/v2/foundation/` copy is archival.
+  Use Terraform with a partial S3 backend
   and `use_lockfile`; shared-infrastructure changes use a reviewed saved plan, never auto-approve.
   CDK is historical foundation infrastructure; target-account onboarding templates are separate.
 - Serve Next.js at `/` on arm64 Fargate. The web BFF handles authenticated requests and bounded reads;
@@ -49,5 +53,5 @@ Sustainability: bounded asynchronous work, arm64, and explicit feature gates.
 
 ## Evidence
 
-`terraform/v2/foundation/{backend,network,edge,workload,data,workers}.tf`, `web/lib/db.ts`,
+Public `terraform/foundation/{backend,network,edge,workload,data,workers}.tf`, `web/lib/db.ts`,
 `web/lib/aws-data.ts`, `scripts/v2/agentcore/catalog.py`, and ADR-009/021.

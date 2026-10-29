@@ -43,5 +43,8 @@ of dynamic user data. Operational Excellence: explicit language/freshness owners
 
 ## Evidence
 
-`terraform/v2/foundation/edge.tf`, `web/lib/{i18n,aws-data,agentcore}.ts`,
+`terraform/v2/foundation/edge.tf`, `web/lib/{i18n,agentcore,bedrock-direct,synthesize}.ts`,
 `web/app/api/chat/route.ts`, `agent/agent.py`, and `scripts/v2/workers/diagnosis/`.
+Amended 2026-10-29: `web/lib/aws-data.ts` was replaced in this list because its live path is
+disabled (`steampipeAvailable()` returns false); `bedrock-direct.ts` and `synthesize.ts` carry
+`responseLanguage` on live paths.

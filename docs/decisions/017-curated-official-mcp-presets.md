@@ -55,7 +55,10 @@ connection; failure retains them. Those dark implementation details are not an e
 
 Keep Tempo's existing Lambda target and datasource registration. Jaeger's Lambda does not by itself
 create a chat gateway target. Grafana/Splunk hosted connector cards and the old self-hosted presets
-are removed; arbitrary `custom_mcp` remains retired. Future routing changes must match actual target
+are removed. Ungoverned BYO-MCP stays excluded (ADR-005). Amended 2026-10-29: the
+administrator-only `custom_mcp` integration kind is a governed external connector under ADR-007
+(owner clarification 2026-10-11; default-off `CUSTOM_MCP_ENABLED`), not a preset; preset host pins
+are unchanged. Future routing changes must match actual target
 membership, not obsolete Tempo cutover instructions. Residual stored credentials/configuration from
 removed presets do not prove active tools; cleanup is an operator task.
 

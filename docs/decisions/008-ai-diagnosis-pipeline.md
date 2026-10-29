@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted **2026-06-22**; amended **2026-06-24** and **2026-08-11**.
+Accepted **2026-06-22**; amended **2026-06-24**, **2026-08-11** and **2026-10-29** (grounding and
+output-contract markers; model policy wording).
 Consolidates legacy ADRs 013, 016, 019, 021, 033, and 045.
 Repository evidence checked **2026-09-13**.
 
@@ -21,11 +22,22 @@ rather than historical v1 implementations or the separate chat agent loop.
 - Run report generation in the asynchronous worker tier. `diagnosis/report.py` uses direct boto3
   Bedrock `invoke_model`; it is not a Strands agent. Render sections with bounded concurrency,
   timeouts, deterministic ordering, and partial-result handling.
-- Model choices follow latency/depth and budget. Sonnet is the worker default; deep reports may
-  explicitly select Opus. Classification/query generation uses its own configured lightweight model.
-  Exact IDs and inference profiles come from `report.py`, `agent.py`, and Terraform; they are not
-  permanent policy constants. Preserve `global.*` profile/invocation-log attribution until a measured
-  change justifies another configuration.
+- Model choices follow latency/depth and budget. A Sonnet-class model is the worker default for every
+  tier; only the Deep tier may explicitly select an Opus-class model. Classification/query generation
+  uses its own configured lightweight model. Exact IDs and inference profiles come from
+  `scripts/v2/workers/diagnosis/report.py`, `agent.py`, and Terraform; they are not permanent policy
+  constants. Preserve `global.*` profile/invocation-log attribution until a measured change justifies
+  another configuration. Amended 2026-10-29: a move to the Claude 5.5 generation is pending on an
+  unmerged branch; current-generation models reject `temperature`, and thinking tokens count toward
+  section budgets, so a model change must keep sections within their output budgets.
+- Amended 2026-10-29 — grounding and output contract. Every section prompt carries the run time,
+  scope, region and tier plus each source's collection status and window; failed, empty or
+  scope-limited sources are reported as such, never as healthy. The root-cause table is required.
+  A missing table, a `max_tokens` truncation, or a change/mutating command in the text is marked in the
+  section rather than silently accepted; remediation advice names console paths, not executable change
+  commands. Per-section output budgets are tier-sized, with floors for long sections and an absolute
+  output cap; truncation is disclosed. AI-proposed invariants are schema-validated drafts stamped
+  `status='draft'`, `provenance='ai_proposed'` for administrator review; the model never activates one.
 - Markdown is the report source. Generate/upload DOCX and PDF best effort; export failure does not
   fail a completed Markdown report. Use the same report structure for the export surfaces.
 - Chat SSE progress is separate from diagnosis section-token streaming. The worker persists section
@@ -60,6 +72,6 @@ read-only recommendations and governed datasource access.
 
 ## Evidence
 
-`scripts/v2/workers/diagnosis/{report,sections,sources,invariants,exporters}.py`,
+`scripts/v2/workers/diagnosis/{report,sections,sources,invariants,exporters,propose}.py`,
 `scripts/v2/workers/handlers.py`, `agent/agent.py`, `agent/anthropic_loop.py`, `web/lib/agentcore.ts`,
 `web/app/api/chat/route.ts`, and ADR-009/012/018.

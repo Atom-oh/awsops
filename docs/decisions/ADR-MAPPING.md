@@ -57,3 +57,16 @@ legacy citations. Phase labels describe provenance and do not prove deployment.
 | 044 | Multi-domain chat | ADR-003 |
 | 045 | Parallel diagnosis/streaming | ADR-008; section-output streaming remains unimplemented |
 | 046 | DevOps RCA orchestrator | [Historical brainstorm](../history/brainstorm/046-devops-rca-eog-PROPOSED.md); not an accepted decision |
+
+## Ambiguous legacy numbers
+
+Some legacy numbers split across current decisions; choose the destination from the citing context:
+legacy 039 → ADR-004 (platform) or ADR-007 (external data governance); legacy 031 → ADR-004,
+ADR-005 (mutating tools FROZEN) or ADR-007; legacy 036 → ADR-005 or ADR-009; legacy 037 → ADR-001 or
+ADR-009; legacy 001 → ADR-001 or ADR-021; legacy 009 → ADR-006 or ADR-008; legacy 043 → the BASELINE
+deferred option (no current ADR); legacy 022 (webhook authentication) → ADR-013. An unqualified
+ADR-001..021 in older code can be either numbering; check the topic before treating it as current.
+
+Amended 2026-10-29: a context-reviewed replacement of legacy citations in the public implementation
+is planned. It excludes the frozen `schema.sql`, checksummed migrations, CHANGELOG history and
+release notes, which stay historical.

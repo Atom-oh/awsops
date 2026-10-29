@@ -31,6 +31,9 @@ is absent from the repository (ADR-019 uses Athena for Flow Logs).
   Graviton/Spot/tag-coverage guards or CE-call accounting as implemented rules.
 - Provide recommendation/IaC text only. No resize, purchase, execution button, or other AWS-resource
   mutation is authorized. ADR-005 remains unchanged.
+- Amended 2026-10-29: Compute Optimizer inputs are read in the worker's host region only; every
+  finding carries `coverage: host-region-only`, and other regions are not evaluated. This is a
+  coverage limit, not a no-findings result (public `terraform/foundation/variables.tf`, `finops_baseline_enabled`).
 
 ## Consequences
 

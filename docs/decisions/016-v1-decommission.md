@@ -55,6 +55,11 @@ As of the last recorded correction (**2026-08-27**), remaining orphan Lambda/Age
 cleanup required a corrected-list dry-run and verified rerun. **No new AWS verification was performed
 on 2026-09-13.** Do not infer ALL CLEAR from code removal, an earlier incomplete script, or this rewrite.
 
+Amended 2026-10-29: Phase 4.4/4.5 remains unconfirmed; no AWS verification was performed for this
+amendment. Phase 6 (archival banners on docs-site pages that still describe v1 procedures as
+current, all locales) is open and unaudited; the v1-decommission runbook owns its progress. Phase 6
+is documentation work and authorizes no AWS action.
+
 ## Consequences
 
 Retirement removes duplicate operating burden while preserving explicit rollback/evidence boundaries.

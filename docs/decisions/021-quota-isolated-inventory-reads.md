@@ -31,6 +31,16 @@ The Phase 2 reader contract rejects silent live-API fallback when inventory is s
 return evidence with freshness and last-success timestamps. Existing direct domain tools are not a
 new policy violation merely because the future cutover has been accepted.
 
+### Collector account scope
+
+Amended 2026-10-29 (implementation added 2026-09-15): `inventory_host_only` (default false) restricts
+the collector to its verified host account, omits only the collector's cross-account AssumeRole and
+rejects new account onboarding while active. Explicit `runtime_verification_targets` (at most five
+distinct accounts; EC2 and CloudFront identifiers only) scope collector AssumeRole to exact target role
+ARNs for dev runtime release proof, and members are read through a bounded identity-only member route.
+Agent MCP multi-account grants are unchanged. These are collection-scope controls in public
+`terraform/foundation/runtime-read-scope.tf`, not deployment evidence.
+
 ### Batch versus live Steampipe
 
 `steampipe_enabled` defaults false and gates the warm Fargate Steampipe service plus sync Lambda.

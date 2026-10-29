@@ -4,7 +4,7 @@
 
 Accepted **2026-06-22**. Consolidates legacy ADRs 009, 032, 034, and 035 after the
 **2026-06-11** owner/panel reversal of autonomous mitigation (ADR-005).
-Repository evidence checked **2026-09-13**.
+Repository evidence checked **2026-09-13**; amended **2026-10-29** (RCA orchestrator gate).
 
 ## Context
 
@@ -32,6 +32,16 @@ mitigation. Historical workflow stages and write-back roles depended on the now-
 - Manual entry and ADR-013's authenticated alert ingress remain supported trigger designs. The webhook
   returns disabled status when the lifecycle gate is off; retained authentication code does not prove activation.
 
+### Amended 2026-10-29: EoG RCA orchestrator
+
+`agent/rca_orchestrator.py` (evidence-graph node labelling over governed gateway MCP read tools)
+is an analysis-only RCA implementation behind the `RCA_ORCHESTRATOR_ENABLED` runtime env. No
+Terraform variable sets it, so it is off in every Terraform-managed stack (checked against public
+`samples/dev` @ `5bac16f2`, 2026-10-24). It produces evidence-labelled hypotheses only and is bound
+by this ADR's no-mutation and untrusted-alert rules. Legacy ADR-046 remains a historical brainstorm,
+not an accepted decision; enabling this path needs a reviewed Terraform gate. Labels are not
+deterministic on current models (ADR-003); treat them as hypotheses. RCA write-back remains blocked.
+
 ### §5 K8sGPT compatibility gap
 
 The accepted operator-role constraint remains get/list/watch only, with
@@ -56,4 +66,5 @@ correlation, RCA timelines, and explicit uncertainty. Security: no mutation rout
 ## Evidence
 
 `terraform/v2/foundation/{variables,incidents,writeback,k8sgpt}.tf`,
-`web/app/api/incidents/webhook/route.ts`, `scripts/v2/workers/dispatcher.py`, and ADR-005/009/013.
+`web/app/api/incidents/webhook/route.ts`, `scripts/v2/workers/dispatcher.py`,
+`agent/rca_orchestrator.py`, and ADR-005/009/013. The public checkout uses `terraform/foundation/`.
