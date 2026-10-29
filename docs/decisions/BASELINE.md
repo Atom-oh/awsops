@@ -5,6 +5,12 @@ in `docs/reference/`, operating procedures in `docs/runbooks/`, and historical e
 Code/defaults were checked on **2026-09-13** against the worktree based on **4234dadf**. This audit
 made no AWS deployment query or change. Declared defaults below are not claims about live settings.
 
+Amended 2026-10-29: the implementation of record is the public `aws-samples/sample-awsops` `dev`
+tree (checked at `5bac16f2`, 2026-10-24), which receives this repository's content as squashed
+imports. Its Terraform root is `terraform/foundation/` (this archive's `terraform/v2/foundation/`).
+Evidence paths that exist only here (`docs/history/`, `docs/superpowers/`, teardown scripts) are
+private provenance, not public implementation. The 2026-10-29 re-check made no AWS query or change.
+
 ## §0 North Star
 
 Help operators run AWS workloads safely through evidence-based diagnosis and remediation proposals,
@@ -25,7 +31,9 @@ section agents, and governed data integrations. Large/risky features have explic
   ADR-019 defines the constrained Athena query case inside this invariant.
 - **FROZEN** means do not enable. Reversal requires a new ADR, multi-AI panel review, and a dated
   owner override. Disabled remediation code/tables are retained intentionally; their presence is
-  not activation. Arbitrary BYO-MCP and mutating tools stay frozen.
+  not activation. Ungoverned BYO-MCP and mutating tools stay frozen. Amended 2026-10-29: the
+  administrator-only `custom_mcp` integration kind is a governed external connector under ADR-007
+  (owner clarification 2026-10-11; default-off `CUSTOM_MCP_ENABLED`), not BYO-MCP.
 - **One narrow mutation exception:** ADR-015, owner Junseok Oh, **2026-07-01**, after PR #114's
   **2026-06-29** panel. Only `ecs:UpdateService(forceNewDeployment=True)` for the host's own web
   service on its own Aurora master-secret rotation, unchanged task definition/image, one-service
@@ -35,8 +43,8 @@ section agents, and governed data integrations. Large/risky features have explic
   are satisfied. It does not mean live, nor does it waive a frozen dependency.
 - Custom policy/catalog read failure denies custom candidates, never grants Phase-1 access.
   Built-in routing and product help remain usable under ADR-003/004; custom pins are not silently substituted.
-- Verify defaults in `terraform/v2/foundation/variables.tf`, `ai.tf`, `secret-rotation.tf`, `runtime-read-scope.tf`, and
-  runtime/provisioner sources. Disabled feature resources can be absent while shared infrastructure
+- Verify defaults in the public `terraform/foundation/variables.tf`, `ai.tf`, `secret-rotation.tf`,
+  `runtime-read-scope.tf`, `ci-migrations.tf`, and runtime/provisioner sources. Disabled feature resources can be absent while shared infrastructure
   still costs money; a false flag does not guarantee a whole-stack no-change plan.
 - New ADRs or gate changes require a same-change update to this index/register. Accepted policy,
   repository implementation, and deployed state are separate facts.
@@ -47,8 +55,11 @@ section agents, and governed data integrations. Large/risky features have explic
 
 ## §2 Gate register
 
-Terraform booleans below default **false**, except the explicit migration switch. Runtime env gates
-also default false. Consult the linked ADR and source for complete dependencies.
+Feature-gate Terraform booleans below default **false**, except the explicit migration switch and the
+network/DNS switches marked default **true**. Runtime env gates also default false. Consult the linked
+ADR and source for complete dependencies. Amended 2026-10-29: re-based on the public
+`terraform/foundation/`; the archive-only `github_actions_*` rows were removed (no such variables in
+the public implementation) and the public CI/network switches were added.
 
 | Classification | Gate / capability | Boundary and dependencies | Decision |
 |---|---|---|---|
@@ -78,9 +89,14 @@ also default false. Consult the linked ADR and source for complete dependencies.
 | Migration switch, default **true** | `legacy_email_owner_match` | Temporary verified-email matching for reads and report PATCH/DELETE. Complete reviewed ownership backfill and confirm zero residual legacy rows before disabling | ADR-002, ADR-009 |
 | GATED collector scope | `inventory_host_only` / `INVENTORY_HOST_ONLY` | Default off; require one verified enabled host, reject onboarding while active and omit only collector AssumeRole. Agent MCP multi-account grants remain; bounded identity retries and serialized fatal stop/restart apply. No deployment state is inferred. | ADR-005, ADR-011, ADR-021 |
 | GATED verifier provisioning | `ci_readiness_enabled` | Default off; create deployment-verifiers application group without IAM role. Private operators manage membership; no admin promotion. | ADR-002, BASELINE §2 |
-| GATED operator CI bootstrap | `github_actions_enabled` | Default off; existing-provider lookup and exact origin/production OIDC trust, scoped ECR/ECS permissions, own Aurora metadata and verifier-secret metadata. Migration-secret access is optional and requires an identified reachable private executor; KMS decrypt is limited to explicit keys and approved secrets. No Terraform state, S3, CloudFront or product mutation authority. The separate manual web workflow defaults to check; UpdateService residual field authority is documented. | ADR-005 operator boundary; [access contract](../reference/github-actions-access.md); [web releases](../runbooks/production-actions.md) |
-| GATED operator private migrations | `github_actions_migration = null` | Default absent; dedicated ARM64 Fargate migration task/roles in existing private networking. The designed path keeps approved database credentials in the task. Source/digest/exit/nonce evidence gates success; IAM cleanup requires CI migration tags. Owner Junseok Oh (Atom-oh), 2026-09-14: manual authorized production dispatch plus reviewed main, without a duplicate environment-reviewer step; residual DB administration authority is documented. No product mutation/autonomy path. | ADR-005 operator boundary; [access decision](../reference/github-actions-access.md#trust-and-existing-provider); [runbook](../runbooks/private-ci-migrations.md) |
-| GATED operator runtime releases | `github_actions_runtime_enabled` | Default off; manual origin/main production workflow, check by default, separate runtime role and protected nonsecret metadata. ARM64 image and actual AgentCore/worker/Steampipe consumption proofs; AgentCore requires a verified private migration receipt. No state reads, direct database-secret grants, SG/DNS changes or product mutation authority. Existing component gates remain unchanged; residual IAM field authority is documented. | ADR-005 operator boundary; [runtime handoff](../../terraform/v2/foundation/modules/github-actions-runtime/README.md) |
+| GATED operator private migrations | `ci_migrations_enabled` | Default off; provisions a private one-off ARM64 migration task template that only the saved-plan Terraform workflow creates; dev CI reads `CI_MIGRATIONS_ENABLED_DEV`. Nothing schedules or starts it; its `migration_job` output is consumed by operator CI. Operator CI, not product autonomy or an ADR-005 exception. The owner's 2026-09-14 approval of manual authorized migration dispatch (previously recorded on the archive-only `github_actions_migration` row) is preserved. | ADR-005 operator boundary |
+| CI plan metadata | `ci_runtime_profile_enabled`, `ci_runtime_rollout`, `ci_domain_rollout` | Default false; saved-plan markers written by explicit dev CI dispatches (runtime profile, private-DNS rollout, domain rollout). Apply derives scope from the saved marker. Not feature gates and not deployment evidence. | BASELINE §2 only |
+| Network switch, default **true** | `create_network` | `true` creates a VPC, subnets and NAT for a new adopter; `false` reuses `existing_vpc_id`/subnets. Owner-operated stacks must reuse their assigned VPC and set `false`. | ADR-001 |
+| Network switch, default **true** | `allow_vpc_db_access` | Adds Aurora 5432 ingress from the whole VPC CIDR for an in-VPC migration host (dev use). Disable where no in-VPC migration host is needed. | ADR-001 |
+| DNS switch, default **true** | `publish_service_dns` | Publishes Route53 service aliases to CloudFront; `false` defers only service DNS. Separate from CI's `allow_dns_changes` (default false). | ADR-001 |
+| Demo provisioning | `create_demo_user` | Default off (fail-closed); dev-tier stacks opt in. Also required for managed deployment-verifiers membership. | ADR-002 |
+| Cost tag switch | `ecs_cost_tag_active` | Default off; activates the ECS cluster cost-allocation tag once tagged usage exists. | ADR-012 |
+| GATED connectivity | `istio_vpc_enabled` | Requires agentcore; attaches the istio-read Lambda to private subnets for private-only EKS endpoints. Read-only; not an external connector. | ADR-004 |
 | Controlled operator request | `POST /api/deployment/readiness` / `deployment_readiness` | Admin or deployment-verifiers; single in-flight probe, process cooldown; runtime mode additionally defaults off via DEPLOYMENT_READINESS_ENABLED, enabled only by applied ci_readiness_enabled. Bounded identity/config/inventory/model evidence; no AWS-resource remediation. | ADR-002, ADR-004, ADR-005 |
 | Ungated user request | Explore `POST /api/datasources/generate` | Authenticated draft generation; never executes/dry-runs/caches generated queries | ADR-018 |
 | Deferred option | Neptune / alternate graph store | Postgres-first; legacy ADR-043 is provenance, not adoption | ADR-MAPPING |
@@ -118,14 +134,14 @@ separately dated v1 cleanup and ADR-021 for implementation-versus-rollout limits
 | [007](007-external-data-integration-governance.md) | Governed external data reads/writes; curated connectors | Security, Operations |
 | [008](008-ai-diagnosis-pipeline.md) | Evidence collection, direct Bedrock report rendering, formats and cost controls | Operations, Cost |
 | [009](009-async-worker-backbone.md) | Durable async execution and ownership-scoped submission | Reliability, Security |
-| [010](010-inventory-resource-model.md) | Batch inventory model, failure/freshness disclosure, hydrate fallback | Reliability |
+| [010](010-inventory-resource-model.md) | Batch inventory model, failure/freshness disclosure, hydrate fallback; persisted resource graph (Neptune deferred) | Reliability |
 | [011](011-multi-account.md) | Read-only STS federation and explicit trust requirements | Security |
 | [012](012-cost-finops.md) | Cost Explorer availability, FinOps tools, AI usage attribution | Cost |
 | [013](013-alerting-notification.md) | Machine ingress, single-topic notifications, authenticated downloads | Operations, Security |
 | [014](014-cross-cutting-cache-i18n-cdn.md) | Application caching, UI/report language, dynamic CDN caching disabled | Performance |
 | [015](015-operational-self-healing.md) | Dated own-secret rotation restart exception; no general self-healing permission | Reliability, Security |
 | [016](016-v1-decommission.md) | Owner-directed v1 retirement and bounded historical evidence | Cost, Operations |
-| [017](017-curated-official-mcp-presets.md) | Gated hosted presets; frozen ClickHouse stdio | Security, Operations |
+| [017](017-curated-official-mcp-presets.md) | Gated hosted presets; frozen ClickHouse stdio; governed `custom_mcp` cross-reference | Security, Operations |
 | [018](018-llm-query-generation.md) | Separate contracts for worker fallbacks and user-requested drafts | Security, Cost |
 | [019](019-athena-flow-log-query-classification.md) | Isolated SELECT-only Athena queries inside the read-only invariant | Security, Cost |
 | [020](020-finops-baseline-recommendations.md) | Deterministic savings findings; optional LLM explanation | Cost |

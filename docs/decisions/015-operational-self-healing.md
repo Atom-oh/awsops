@@ -39,6 +39,8 @@ The **only** authorized autonomous mutation is an own-Aurora-master-secret rotat
    This is a rolling restart, not authorization for a code deployment or remediation executor.
 5. Event delivery depends on a CloudTrail management-event trail. Skip paths are logged/alarmed;
    the trail and alarm delivery must be operationally verified before relying on the feature.
+   Amended 2026-10-29: skip logs omit unrelated secret identifiers (fixed reason only); correlate
+   the source event in CloudTrail. This remains the sole ADR-005 exception.
 
 The exception does not cover other services, unrelated secrets, generic self-healing, or customer
 infrastructure. A list-shaped implementation or stale expansion comment is not authority to widen it.

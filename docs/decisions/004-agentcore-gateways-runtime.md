@@ -5,7 +5,8 @@
 Accepted **2026-06-22**. Consolidates legacy ADRs 004, 018, 027, 031 (platform phases), and 039
 (platform/egress-read phases). Owner approved observability routing **2026-06-24**. SQL-reader boundary
 corrected **2026-07-31**; hosted MCP controls reconciled **2026-08-05/06** under ADR-017.
-Repository evidence checked **2026-09-13**.
+Repository evidence checked **2026-09-13**. Gateway inbound auth and governed `custom_mcp`
+amended **2026-10-29**.
 
 ## Context
 
@@ -21,6 +22,11 @@ Define gateway/target membership in `scripts/v2/agentcore/catalog.py`; provision
 `external-obs`; canonical and discovered `v2-` keys intentionally coexist. Direct domain
 targets still coexist with the Aurora inventory reader under ADR-021.
 
+Amended 2026-10-29: gateways use `AWS_IAM` inbound auth (Runtime-role SigV4). The authorizer type
+is immutable after creation; a deployed `NONE` gateway is reported `gateway_auth_replacement_required`
+and needs the documented manual replacement, never automatic recreation. `CREATED`/`UPDATED` mean
+request acceptance and `EXISTS` means configuration match, not readiness.
+
 ### §2 Runtime customization substrate
 
 Aurora agent/skill catalogs and account-scoped Agent Spaces drive resolver-selected personas,
@@ -31,10 +37,12 @@ Implementation clarification **2026-09-13**: custom candidates and their once-re
 
 ### §3 Integration read substrate
 
-Arbitrary BYO-MCP, mutating tools and AWS-resource execution remain frozen (ADR-005).
+Ungoverned (arbitrary) BYO-MCP, mutating tools and AWS-resource execution remain frozen (ADR-005).
 Curated external data uses ADR-007. Lambda schemas bound exposed tools; hosted vendor targets
 instead need ADR-017's runtime fail-closed allowlist in both chat loops. Endpoint acknowledgement
-alone is insufficient; managed egress does not inherit in-house connect-time IP pinning. Curated egress/ingress registration and toggles remain available to admins; `custom_mcp` is excluded. Registry enablement does not enable incident/write gates or AWS mutation.
+alone is insufficient; managed egress does not inherit in-house connect-time IP pinning. Curated egress/ingress registration and toggles remain available to admins. Amended 2026-10-29
+(owner clarification 2026-10-11): the administrator-only `custom_mcp` kind is a governed connector
+under ADR-007, not ungoverned BYO-MCP; its activation stays gated by default-off `CUSTOM_MCP_ENABLED`. Registry enablement does not enable incident/write gates or AWS mutation.
 
 ### §4 Memory and conversation isolation
 
@@ -88,5 +96,7 @@ and isolated memory/interpreter failures. Performance/Cost: focused tool surface
 ## Evidence
 
 `agent/agent.py`, `agent/anthropic_loop.py`, `agent/lambda/{aws_rds_mcp,inventory_read_mcp}.py`,
-`scripts/v2/agentcore/{catalog,provision}.py`, `terraform/v2/foundation/ai.tf`, and
-`terraform/v2/foundation/migrations/01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql`.
+`scripts/v2/agentcore/{catalog,provision}.py`, public `terraform/foundation/ai.tf`, and
+`terraform/foundation/migrations/01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql`; later ULID
+migrations own the current `sql_reader` view definitions, and
+`agent/lambda/test_inventory_view_contract.py` pins the inventory projection.

@@ -4,7 +4,7 @@
 
 Accepted **2026-06-22**. Consolidates legacy ADRs 020, 023, and 042.
 Public-path/PWA description amended **2026-08-19**; report shell exclusion recorded **2026-09-01**.
-Repository evidence checked **2026-09-13**. The former baseline records `admin_only` recovery merged
+Repository evidence checked **2026-09-13**; BFF carve-outs amended **2026-10-29**. The former baseline records `admin_only` recovery merged
 **2026-08-04** and applied **2026-08-11**; this is dated evidence, not a new deployment verification.
 
 ## Context
@@ -20,7 +20,7 @@ Cognito identities reach the private origin through CloudFront viewer-request La
 RS256 against JWKS and validate issuer, audience, token use, and expiry. Keep the
 `awsops_token` cookie Secure, HttpOnly, SameSite=Lax, and scoped to `/`.
 
-`terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl:is_public()` defines the exact public paths
+`terraform/foundation/edge-lambda/cognito_edge.py.tftpl:is_public()` defines the exact public paths
 and `/_next/static/*` prefix. Login, health, signout, approved static assets, and the separately
 authenticated incident webhook are intentional exceptions. Any allowlist widening needs review.
 The public manifest must remain constant, without user/session/environment data.
@@ -49,9 +49,10 @@ per-container cache; changing that list is not itself a token-claim update.
 ### BFF authorization
 
 Every data-returning/billable user route must call `verifyUser()` and enforce its own authorization
-and ownership. The recorded carve-outs are `/api/db` (diagnostic metadata), `/api/stream` (ticks), and
+and ownership. The recorded carve-outs are `/api/db` (diagnostic metadata, edge-authenticated only) and
 `/api/incidents/webhook` (separate machine authentication, ADR-013). These are not permission for
-new routes to omit verification. Public login/signout/health/static handlers have their own contracts.
+new routes to omit verification. Amended 2026-10-29: `/api/stream` requires `verifyUser()` since
+public PR #173; `web/app/api/route-auth.test.ts` locks the exception list. Public login/signout/health/static handlers have their own contracts.
 
 ### §2-4 Session revocation
 
@@ -96,5 +97,6 @@ Reliability and Operational Excellence: bounded revocation failure behavior and 
 
 ## Evidence
 
-`web/lib/{auth,admin}.ts`, `web/app/api/auth/`, `terraform/v2/foundation/{auth,edge,workload}.tf`,
-`terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl`, and ADR-009/013.
+`web/lib/{auth,admin}.ts`, `web/app/api/auth/`, `web/app/api/route-auth.test.ts`,
+public `terraform/foundation/{auth,edge,workload}.tf`,
+`terraform/foundation/edge-lambda/cognito_edge.py.tftpl`, and ADR-009/013.

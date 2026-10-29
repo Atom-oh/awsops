@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: bbc5a8e493d3 · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0cb99a541ee4 · generated-at: 2026-10-29 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 # Decisions — Reviewer Context
 
@@ -8,12 +8,13 @@ are evidence of their time, not current enforcement or permission.
 
 - Keep decision docs concise and English-only. Preserve acceptance dates, rationale, owner overrides,
   and evidence limits. Distinguish policy, checked-in code, defaults, and dated deployment observations.
-- Verify the reviewed checkout: this checkout uses `terraform/v2/foundation/`. Resolve current
+- Implementation evidence comes from the public `aws-samples/sample-awsops` `dev` tree
+  (`terraform/foundation/`; this archive's `terraform/v2/foundation/`). Resolve current
   `ADR-NNN` separately from `legacy ADR-NNN` / `ADR-NNN[legacy MMM]`; do not read legacy tag bodies
   without an explicit request.
 - New ADR = highest existing number plus one, with a same-change BASELINE index/register update.
   Report policy/code conflicts explicitly; neither existing code nor stale prose reverses a decision.
-- **ADR-005 FROZEN:** AWS-resource mutation/autonomous mitigation, arbitrary BYO-MCP, mutating tools.
+- **ADR-005 FROZEN:** AWS-resource mutation/autonomous mitigation, ungoverned BYO-MCP, mutating tools.
   Disabled substrate is intentional. Reversal needs a new ADR, multi-AI panel, and dated owner override.
 - **ADR-015 exception:** own-Aurora-secret rotation restart of the host web service only, default-off.
   No general self-healing permission. Current web IAM DB auth makes password-injection rationale historical.
@@ -21,6 +22,8 @@ are evidence of their time, not current enforcement or permission.
   frozen remediation to satisfy the current dependency.
 - **ADR-007:** governed external data reads/writes are permitted. Single-topic SNS and broad writes
   have separate controls. Attribute transport/DLP/approval controls to their actual call paths.
+  Admin-only `custom_mcp` is a governed connector (2026-10-11, default-off `CUSTOM_MCP_ENABLED`);
+  flag changes that weaken its controls.
 - **ADR-017:** hosted presets are gated behind endpoint acknowledgement and runtime tool allowlists;
   ClickHouse stdio remains frozen.
 - **ADR-021:** bounded batch inventory is supported while live BFF Steampipe execution stays disabled.

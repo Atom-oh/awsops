@@ -4,7 +4,7 @@
 
 Accepted **2026-06-22**. Consolidates legacy ADRs 002, 025, 038, and 044.
 Repository evidence checked **2026-09-13**; historical accuracy/cache measurements are not current
-pass criteria or proof that a deployment enabled a flag.
+pass criteria or proof that a deployment enabled a flag. Determinism rule amended **2026-10-29**.
 
 ## Context
 
@@ -25,6 +25,11 @@ pins, product help, custom agents, disabled agents, and per-turn context.
   matches retain precedence and can preserve other domain candidates.
 - Classifier output is validated, bounded, and advisory; it never grants authorization. Keep prompt
   boundaries, timeout/backoff, and the exact model's scoped IAM. The default classifier timeout is 3500ms.
+- Amended 2026-10-29: routing determinism does not depend on sampling settings. It replaces
+  legacy ADR-038's `temperature=0` requirement, which current Bedrock Claude and GPT models reject
+  (live-verified 2026-10-28). Determinism is held by regex fast-path precedence, the validated
+  bounded classifier output, the golden-routing fixture tests, and the tool allowlist enforced
+  outside the model (ADR-004 §2). Do not reintroduce a sampling parameter a model rejects.
 - `hybrid_routing_enabled` defaults false. Its recorded rollout criterion is golden-set accuracy
   at least 85% and improvement at least 15 percentage points over regex; rerun against the reviewed
   code/fixture instead of relying on historical scores.
@@ -61,4 +66,5 @@ bounded fan-out, and agent prompt caching (ADR-008).
 ## Evidence
 
 `web/lib/{route,classifier,synthesize,assistant,sections}.ts`, `web/app/api/chat/route.ts`,
-`web/lib/fixtures/golden-routing.json`, `scripts/v2/routing-accuracy.mjs`, `agent/agent.py`.
+`web/lib/fixtures/golden-routing.json`, `web/lib/golden-routing.test.ts`, `scripts/v2/routing-accuracy.mjs`,
+`agent/agent.py`.

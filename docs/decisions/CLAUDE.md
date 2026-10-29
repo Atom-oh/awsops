@@ -10,8 +10,10 @@ resolves legacy numbers; an old plan, review, or implementation comment is not c
   rationale, explicit owner overrides, and the limits of dated evidence.
 - Distinguish accepted policy, checked-in implementation, declared defaults, and observed deployment.
   A merged change or a default value does not prove deployment. Date live observations and cite evidence.
-- Verify paths in the reviewed checkout. This checkout uses `terraform/v2/foundation/`.
-  Do not import paths or ADR numbering from another repository or historical branch.
+- Verify paths in the reviewed checkout. The implementation of record is the public
+  `aws-samples/sample-awsops` `dev` tree, whose Terraform root is `terraform/foundation/`
+  (this archive's `terraform/v2/foundation/`). Cite public paths for implementation evidence;
+  archive-only paths are private provenance. Do not import ADR numbering from a historical branch.
 - Cite current decisions as `ADR-NNN`; qualify provenance as `legacy ADR-NNN` or
   `ADR-NNN[legacy MMM]`. Legacy bodies are preserved at `adr-legacy-2026-06-22`; do not read
   them without an explicit request. Historical records remain historical.
@@ -23,14 +25,16 @@ resolves legacy numbers; an old plan, review, or implementation comment is not c
 
 ## Boundaries that reviewers must preserve
 
-- ADR-005 freezes AWS-resource mutation/autonomous mitigation and arbitrary BYO-MCP. Retained
+- ADR-005 freezes AWS-resource mutation/autonomous mitigation and ungoverned BYO-MCP. Retained
   disabled code is intentional. Unfreezing requires a new ADR, multi-AI review, and a dated owner override.
 - ADR-015 grants exactly the own-Aurora-secret rotation restart of the host web service. It is an
   explicit exception, not general self-healing permission. Its flag defaults false; the BFF now uses IAM DB auth.
 - ADR-006 gates analysis-only incident/RCA/K8sGPT paths. RCA write-back cannot enable its frozen
   remediation dependency; it needs an independent role first.
 - ADR-007 permits governed external data reads/writes. SNS notifications and broad integration
-  writes have separate controls; arbitrary MCP registration stays prohibited.
+  writes have separate controls. The administrator-only `custom_mcp` kind is a governed connector
+  under ADR-007 (owner clarification 2026-10-11; default-off `CUSTOM_MCP_ENABLED`); ungoverned
+  BYO-MCP registration stays prohibited. Flag changes that weaken its controls.
 - ADR-017's hosted presets are gated with a runtime tool allowlist; ClickHouse stdio stays frozen.
 - ADR-021 permits bounded batch inventory ingestion. Live BFF Steampipe execution remains disabled;
   direct domain MCP tools still coexist with the Aurora reader pending the accepted cutover.
