@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0cb99a541ee4 · generated-at: 2026-10-29 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 9afa7cec74f6 · generated-at: 2026-10-29 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 # Decisions — Reviewer Context
 
@@ -22,8 +22,8 @@ are evidence of their time, not current enforcement or permission.
   frozen remediation to satisfy the current dependency.
 - **ADR-007:** governed external data reads/writes are permitted. Single-topic SNS and broad writes
   have separate controls. Attribute transport/DLP/approval controls to their actual call paths.
-  Admin-only `custom_mcp` is a governed connector (2026-10-11, default-off `CUSTOM_MCP_ENABLED`);
-  flag changes that weaken its controls.
+  Admin-only `custom_mcp` is a governed connector (2026-10-11); `CUSTOM_MCP_ENABLED` stays off until
+  panel, dated owner acceptance, trust evidence and reviewed activation. Flag weakened controls.
 - **ADR-017:** hosted presets are gated behind endpoint acknowledgement and runtime tool allowlists;
   ClickHouse stdio remains frozen.
 - **ADR-021:** bounded batch inventory is supported while live BFF Steampipe execution stays disabled.

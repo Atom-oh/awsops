@@ -33,7 +33,8 @@ section agents, and governed data integrations. Large/risky features have explic
   owner override. Disabled remediation code/tables are retained intentionally; their presence is
   not activation. Ungoverned BYO-MCP and mutating tools stay frozen. Amended 2026-10-29: the
   administrator-only `custom_mcp` integration kind is a governed external connector under ADR-007
-  (owner clarification 2026-10-11; default-off `CUSTOM_MCP_ENABLED`), not BYO-MCP.
+  (owner clarification 2026-10-11), not BYO-MCP. `CUSTOM_MCP_ENABLED` stays default-off; activation
+  requires a final panel, dated owner acceptance, trust evidence and a reviewed activation release.
 - **One narrow mutation exception:** ADR-015, owner Junseok Oh, **2026-07-01**, after PR #114's
   **2026-06-29** panel. Only `ecs:UpdateService(forceNewDeployment=True)` for the host's own web
   service on its own Aurora master-secret rotation, unchanged task definition/image, one-service

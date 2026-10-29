@@ -33,8 +33,9 @@ resolves legacy numbers; an old plan, review, or implementation comment is not c
   remediation dependency; it needs an independent role first.
 - ADR-007 permits governed external data reads/writes. SNS notifications and broad integration
   writes have separate controls. The administrator-only `custom_mcp` kind is a governed connector
-  under ADR-007 (owner clarification 2026-10-11; default-off `CUSTOM_MCP_ENABLED`); ungoverned
-  BYO-MCP registration stays prohibited. Flag changes that weaken its controls.
+  under ADR-007 (owner clarification 2026-10-11); ungoverned BYO-MCP registration stays prohibited.
+  `CUSTOM_MCP_ENABLED` stays default-off until a final panel, dated owner acceptance, trust
+  evidence and a reviewed activation release. Flag changes that weaken its controls.
 - ADR-017's hosted presets are gated with a runtime tool allowlist; ClickHouse stdio stays frozen.
 - ADR-021 permits bounded batch inventory ingestion. Live BFF Steampipe execution remains disabled;
   direct domain MCP tools still coexist with the Aurora reader pending the accepted cutover.

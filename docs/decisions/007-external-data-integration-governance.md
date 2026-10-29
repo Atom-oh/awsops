@@ -46,8 +46,9 @@ what make it governed and are mandatory:
 
 Runtime activation is gated by the `CUSTOM_MCP_ENABLED` env (`web/lib/custom-mcp-policy.ts`,
 `agent/agent.py` `validate_custom_mcp_spec`), which no Terraform variable sets, so it is off in every
-Terraform-managed stack (checked against public `samples/dev` @ `5bac16f2`, 2026-10-24). Enabling it
-needs a reviewed Terraform gate and release. Known gap: the registration route stores `credentialsRef`
+Terraform-managed stack (checked against public `samples/dev` @ `5bac16f2`, 2026-10-24). Activation is not
+accepted: enabling it requires a final panel review, dated owner acceptance and invocation-trust
+evidence, then a separately reviewed activation release. Known gap: the registration route stores `credentialsRef`
 without validating it as the derived Secrets Manager name (`web/app/api/integrations/route.ts`); the
 readiness and agent connect paths fail closed on a mismatch. This clarification does not relax the
 ADR-017 per-preset host pins, does not authorize AWS-resource mutation or autonomous remediation
